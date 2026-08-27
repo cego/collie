@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
-import { installBaseline, runWorkflow } from "./support/engine";
+import { installBaseline, plannedRun, runWorkflow } from "./support/engine";
 import { writeDef } from "./support/defs";
 
 let rig: Rig;
@@ -16,8 +16,7 @@ beforeEach(async () => {
   bin = new FakeBin(join(rig.root, "bin"));
   bin.add("glab", `exit 1`);
   bin.add("git", `echo main`);
-  mkdirSync(join(rig.projectDir, "tasks", "add-picker"), { recursive: true });
-  writeFileSync(join(rig.projectDir, "tasks", "add-picker", "PLAN.md"), "# plan\n");
+  plannedRun(rig, "add-picker");
 });
 
 afterEach(async () => {
@@ -107,9 +106,9 @@ test("parallel reviewers get one tab each, named after step, harness and model",
     .filter((c) => c.cmd === "tab create")
     .map((c) => c.argv!.at(-2));
   expect(labels).toEqual([
-    "implement-tasks-add-picker-plan-md/review/claude-opus",
-    "implement-tasks-add-picker-plan-md/review/claude-sonnet",
-    "implement-tasks-add-picker-plan-md/verify",
+    "implement-add-picker/review/claude-opus",
+    "implement-add-picker/review/claude-sonnet",
+    "implement-add-picker/verify",
   ]);
 
   const reviewer = join(run.dir, "personas", "reviewer.md");
@@ -127,9 +126,9 @@ test("parallel reviewers get one tab each, named after step, harness and model",
 
   const marks = rig.calls().filter((c) => c.cmd === "tab rename");
   expect(marks.map((c) => c.argv![3]).filter((l) => l!.startsWith("✓"))).toEqual([
-    "✓ implement-tasks-add-picker-plan-md/review/claude-opus",
-    "✓ implement-tasks-add-picker-plan-md/review/claude-sonnet",
-    "✓ implement-tasks-add-picker-plan-md/verify",
+    "✓ implement-add-picker/review/claude-opus",
+    "✓ implement-add-picker/review/claude-sonnet",
+    "✓ implement-add-picker/verify",
   ]);
 });
 

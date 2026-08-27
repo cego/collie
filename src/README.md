@@ -9,7 +9,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `definitions.ts` | Layers, `use:` embedding, validation |
 | `yaml.ts` | The frontmatter subset, so the binary needs no dependency |
 | `harness.ts` | Per-harness start, model flag, effort flag and persona injection |
-| `inputs.ts` | Input inference from branch, cwd, `tasks/` and glab |
+| `inputs.ts` | Input inference from branch, cwd, earlier runs and glab |
 | `engine.ts` | Tabs, agents, prompts, waits, gates and the fix loop |
 | `output.ts` | The Output schema and fan-in |
 | `run.ts` | The run directory: audit trail and resume state |

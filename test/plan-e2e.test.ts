@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Rig } from "./support/recorder";
 import { installBaseline, runWorkflow } from "./support/engine";
+import { writeDef } from "./support/defs";
 import { filterItems, renderList } from "../src/picker";
 
 let rig: Rig;
@@ -60,7 +61,9 @@ test("plan runs one step in the status pane's tab and records the run", async ()
   );
   const prompt = readFileSync(promptPath, "utf8");
   expect(prompt).toContain("Add a picker");
-  expect(prompt).toContain("tasks/<slug>/PLAN.md");
+  expect(prompt).toContain(`${run.dir}/plan/SPEC.md`);
+  // A headingless body is the prompt, not the prompt twice.
+  expect(prompt.split("Interview me about this goal")).toHaveLength(2);
   expect(prompt).toContain(`OUTPUT_PATH: ${join(run.dir, "steps", "plan", "plan.json")}`);
 
   expect(rig.calls().find((c) => c.cmd === "pane rename")!.argv).toEqual([
@@ -217,4 +220,44 @@ test("agent names stay inside herdr's 32-character lowercase limit", async () =>
   expect(long).toMatch(/^[a-z][a-z0-9_-]*$/);
   expect(agentName("9lives", "s", null, 1)).toMatch(/^[a-z]/);
   expect(stepLabel("plan-x", "review", "codex-gpt-5-codex")).toBe("plan-x/review/codex-gpt-5-codex");
+});
+
+test("{{run.dir}} is substituted in every step's prompt", async () => {
+  writeDef(
+    rig.baselineDir,
+    "workflows",
+    "artefacts",
+    `---
+name: artefacts
+steps:
+  - id: spec
+    persona: planner
+    output: spec.json
+  - id: tickets
+    persona: planner
+    agent: spec
+    output: tickets.json
+---
+Run dir: {{run.dir}}
+
+## spec
+Write the spec to {{run.dir}}/plan/SPEC.md
+
+## tickets
+Write the tickets to {{run.dir}}/plan/issues/
+`,
+  );
+  rig.queueOutputs([
+    { verdict: "clean", findings: [] },
+    { verdict: "clean", findings: [] },
+  ]);
+
+  const { run, status } = await runWorkflow(rig, "artefacts", {});
+
+  expect(status).toBe("done");
+  for (const step of ["spec", "tickets"]) {
+    const prompt = readFileSync(join(run.dir, "steps", step, "prompt-1.md"), "utf8");
+    expect(prompt).toContain(`Run dir: ${run.dir}`);
+    expect(prompt).toContain(`${run.dir}/plan`);
+  }
 });

@@ -1,9 +1,10 @@
-// Input inference: branch, cwd, tasks/ and the open MR. The human is asked only
-// when inference fails (docs/SPEC.md).
+// Input inference: branch, cwd, earlier Runs and the open MR. The human is asked
+// only when inference fails (docs/SPEC.md).
 
-import { existsSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { InputStrategy } from "./definitions";
+import { RunStore } from "./run";
 
 export interface Resolution {
   name: string;
@@ -13,10 +14,14 @@ export interface Resolution {
   /** True when nothing could be inferred and the human must supply it. */
   needsAsking: boolean;
   question: string;
+  /** A short name for this value, when the value itself would name the Run badly. */
+  label?: string;
 }
 
 export interface InferContext {
   cwd: string;
+  /** The plugin state dir, so earlier Runs can be searched for a plan. */
+  stateDir?: string;
   run?: (cmd: string, args: string[], cwd: string) => Promise<{ code: number; stdout: string }>;
 }
 
@@ -48,15 +53,17 @@ export async function inferInput(
     case "goal":
       return { ...base, value: "", source: "ask", needsAsking: true, question: "What is the goal?" };
 
-    case "plan-file": {
-      const plan = newestPlan(ctx.cwd);
-      if (plan) return { ...base, value: plan, source: `newest ${plan}` };
+    case "plan-dir": {
+      const plan = ctx.stateDir ? newestPlanDir(ctx.stateDir, ctx.cwd) : null;
+      if (plan) {
+        return { ...base, value: plan.dir, source: `plan run ${plan.runId}`, label: plan.label };
+      }
       return {
         ...base,
         value: "",
         source: "ask",
         needsAsking: true,
-        question: "Path to the plan file (no tasks/**/PLAN.md found)",
+        question: "Path to the plan directory (no finished run has planned this project yet)",
       };
     }
 
@@ -125,24 +132,24 @@ async function defaultBase(
   return null;
 }
 
-/** Newest `tasks/<slug>/PLAN.md` under cwd, relative to cwd. */
-export function newestPlan(cwd: string): string | null {
-  const tasks = join(cwd, "tasks");
-  if (!existsSync(tasks)) return null;
-  let best: { path: string; mtime: number } | null = null;
-  const walk = (dir: string, depth: number) => {
-    if (depth > 3) return;
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) walk(path, depth + 1);
-      else if (entry.name === "PLAN.md") {
-        const mtime = statSync(path).mtimeMs;
-        if (!best || mtime > best.mtime) best = { path, mtime };
-      }
-    }
-  };
-  walk(tasks, 0);
-  return best ? relative(cwd, (best as { path: string }).path) : null;
+/**
+ * The newest finished Run for this repo that wrote a plan. Any workflow may write
+ * one (`plan`, `ticket`, `architecture`), so having `plan/SPEC.md` is the test,
+ * not the workflow's name (ADR-0002).
+ */
+export function newestPlanDir(
+  stateDir: string,
+  cwd: string,
+): { dir: string; runId: string; label: string } | null {
+  for (const run of new RunStore(stateDir).list()) {
+    if (run.record.cwd !== cwd || run.record.status !== "done") continue;
+    const dir = join(run.dir, "plan");
+    if (!existsSync(join(dir, "SPEC.md"))) continue;
+    const prefix = `${run.record.workflow}-`;
+    const slug = run.record.slug;
+    return { dir, runId: run.id, label: slug.startsWith(prefix) ? slug.slice(prefix.length) : slug };
+  }
+  return null;
 }
 
 export function confirmLine(workflow: string, resolutions: Resolution[]): string {

@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join } from "node:path";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
-import { installBaseline } from "./support/engine";
+import { installBaseline, plannedRun } from "./support/engine";
 import { loadDefaults } from "../src/config";
 import { layers, loadDefinitions, resolveWorkflow } from "../src/definitions";
 import { executeRun } from "../src/engine";
@@ -12,6 +12,7 @@ import { RunStore, type Run } from "../src/run";
 
 let rig: Rig;
 let bin: FakeBin;
+let planDir: string;
 
 beforeEach(async () => {
   rig = new Rig();
@@ -20,8 +21,7 @@ beforeEach(async () => {
   bin = new FakeBin(join(rig.root, "bin"));
   bin.add("glab", `exit 1`);
   bin.add("git", `echo main`);
-  mkdirSync(join(rig.projectDir, "tasks", "p"), { recursive: true });
-  writeFileSync(join(rig.projectDir, "tasks", "p", "PLAN.md"), "# plan\n");
+  planDir = plannedRun(rig, "add-picker");
 });
 
 afterEach(async () => {
@@ -40,11 +40,11 @@ function interruptedRun(): Run {
   const run = store.create({
     workflow: "implement",
     cwd: env.cwd,
-    inputs: { plan: "tasks/p/PLAN.md", target: "worktree", post: "false" },
-    inputSources: { plan: "newest tasks/p/PLAN.md", target: "working tree", post: "default" },
+    inputs: { plan: planDir, target: "worktree", post: "false" },
+    inputSources: { plan: "plan run", target: "working tree", post: "default" },
     stepIds: wf.steps.map((s) => s.id),
     maxIterations: wf.maxIterations,
-    primaryInput: "tasks/p/PLAN.md",
+    primaryInput: "add-picker",
   });
   const build = run.step("build");
   build.status = "done";
@@ -55,7 +55,7 @@ function interruptedRun(): Run {
       model: "sonnet",
       effort: null,
       agent: "dead-build-agent",
-      label: "implement-tasks-p-plan-md/build",
+      label: "implement-add-picker/build",
       tabId: null,
       paneId: "9-9",
       status: "done",
@@ -134,7 +134,7 @@ test("a step that borrowed a skipped step's agent starts its own instead", async
 
   const fix = run.step("fix").variants[0]!;
   expect(fix.agent).not.toBe("dead-build-agent");
-  expect(fix.agent).toBe("implement-tasks-p-plan-md-fix-r1");
+  expect(fix.agent).toBe("implement-add-picker-fix-r2");
   expect(fix.paneId).not.toBe("9-9");
   const starts = rig.calls().filter((c) => c.cmd === "agent start").map((c) => c.argv![2]);
   expect(starts).toContain(fix.agent);
@@ -160,5 +160,5 @@ test("a resumed run toasts when it finishes and records the new status", async (
   expect(record.finished_at).not.toBeNull();
   expect(record.steps.every((s: { status: string }) => s.status === "done")).toBe(true);
   const toast = rig.calls().filter((c) => c.cmd === "notification show").at(-1)!.argv!;
-  expect(toast[2]).toBe("implement-tasks-p-plan-md finished");
+  expect(toast[2]).toBe("implement-add-picker finished");
 });

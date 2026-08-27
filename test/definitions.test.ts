@@ -186,7 +186,7 @@ c prompt
   const errors = validateWorkflow(resolveWorkflow("w", defs, defaults), defs, defaults);
 
   expect(errors).toEqual([
-    'workflow "w" input "goal": unknown strategy "interview" (known: goal, plan-file, diff-target, ticket, flag)',
+    'workflow "w" input "goal": unknown strategy "interview" (known: goal, plan-dir, diff-target, ticket, flag)',
     'workflow "w" step "a": unknown persona "ghost" (known: reviewer)',
     'workflow "w" step "b": no prompt (add a "## b" section to w.md)',
     'workflow "w" step "b": agent "nowhere" is not an earlier step',

@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { confirmLine, inferInput, inferInputs, newestPlan } from "../src/inputs";
+import { confirmLine, inferInput, inferInputs } from "../src/inputs";
+import { RunStore } from "../src/run";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 
@@ -106,27 +107,6 @@ test("a missing glab or git does not throw", async () => {
   });
 });
 
-test("plan-file takes the newest tasks/**/PLAN.md, else asks", async () => {
-  expect(await inferInput("plan", "plan-file", ctx())).toMatchObject({
-    needsAsking: true,
-    question: "Path to the plan file (no tasks/**/PLAN.md found)",
-  });
-
-  mkdirSync(join(rig.projectDir, "tasks", "old"), { recursive: true });
-  mkdirSync(join(rig.projectDir, "tasks", "new"), { recursive: true });
-  writeFileSync(join(rig.projectDir, "tasks", "old", "PLAN.md"), "old");
-  writeFileSync(join(rig.projectDir, "tasks", "new", "PLAN.md"), "new");
-  const past = new Date(Date.now() - 60_000);
-  utimesSync(join(rig.projectDir, "tasks", "old", "PLAN.md"), past, past);
-
-  expect(newestPlan(rig.projectDir)).toBe("tasks/new/PLAN.md");
-  expect(await inferInput("plan", "plan-file", ctx())).toMatchObject({
-    value: "tasks/new/PLAN.md",
-    source: "newest tasks/new/PLAN.md",
-    needsAsking: false,
-  });
-});
-
 test("ticket comes from the branch name and is optional", async () => {
   bin.add("git", `echo feature/ABC-123-add-picker`);
   expect(await inferInput("ticket", "ticket", ctx())).toMatchObject({
@@ -164,4 +144,48 @@ test("the confirm line shows every input with where it came from", async () => {
   expect(confirmLine("review", resolutions)).toBe(
     "review: target=worktree [working tree]  post=false [default]",
   );
+});
+
+test("plan-dir takes the newest finished run with a SPEC in this repo, else asks", async () => {
+  const store = new RunStore(rig.stateDir);
+  const ctxWithState = () => ({ cwd: rig.projectDir, stateDir: rig.stateDir });
+
+  expect(await inferInput("plan", "plan-dir", ctxWithState())).toMatchObject({
+    needsAsking: true,
+    value: "",
+  });
+
+  const make = (slug: string, cwd: string, status: string, spec: boolean, created: string) => {
+    const run = store.create({
+      workflow: "plan",
+      cwd,
+      inputs: { goal: slug },
+      inputSources: { goal: "asked" },
+      stepIds: ["grill"],
+      maxIterations: 5,
+      primaryInput: slug,
+    });
+    run.record.status = status as "done";
+    run.record.created_at = created;
+    run.save();
+    if (spec) {
+      mkdirSync(join(run.dir, "plan"), { recursive: true });
+      writeFileSync(join(run.dir, "plan", "SPEC.md"), "# spec\n");
+    }
+    return run;
+  };
+
+  make("other-repo", "/somewhere/else", "done", true, "2026-08-27T12:00:00.000Z");
+  make("unfinished", rig.projectDir, "blocked", true, "2026-08-27T11:00:00.000Z");
+  make("no-spec", rig.projectDir, "done", false, "2026-08-27T10:00:00.000Z");
+  const older = make("older-goal", rig.projectDir, "done", true, "2026-08-27T08:00:00.000Z");
+  const newest = make("newest-goal", rig.projectDir, "done", true, "2026-08-27T09:00:00.000Z");
+
+  expect(await inferInput("plan", "plan-dir", ctxWithState())).toMatchObject({
+    value: join(newest.dir, "plan"),
+    source: `plan run ${newest.id}`,
+    label: "newest-goal",
+    needsAsking: false,
+  });
+  expect(older.record.slug).toBe("plan-older-goal");
 });

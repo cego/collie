@@ -85,7 +85,7 @@ name: implement
 title: implement — build from a plan, review in parallel, fix until clean
 description: One line for the picker.
 inputs:
-  plan: plan-file          # goal | plan-file | diff-target | ticket | flag
+  plan: plan-dir           # goal | plan-dir | diff-target | ticket | flag
 max_iterations: 5
 steps:
   - id: build
@@ -110,7 +110,7 @@ Text before the first heading is prepended to every step's prompt.
 
 One `## <step-id>` section per step. Templates: `{{inputs.<name>}}`,
 `{{outputs.<step>}}`, `{{findings}}`, `{{iteration}}`, `{{max_iterations}}`,
-`{{cwd}}`, `{{run_dir}}`, `{{output_path}}`, `{{harness}}`, `{{model}}`,
+`{{cwd}}`, `{{run.dir}}`, `{{output_path}}`, `{{harness}}`, `{{model}}`,
 `{{effort}}`.
 ```
 
@@ -129,6 +129,10 @@ a loop gate can always read it:
 ```
 
 ## Runs
+
+Plans are never written into the repository (ADR-0002): `plan` writes `SPEC.md` and
+its tickets into `{{run.dir}}/plan`, and `plan-dir` inference hands that directory to
+`implement` — the newest finished run that planned this project.
 
 Every run is recorded under the plugin state dir: `runs/<id>/run.json` with the
 inputs and where each came from, `steps/<step>[/<variant>]/` with the exact prompt

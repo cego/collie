@@ -1,4 +1,5 @@
-import { cpSync } from "node:fs";
+import { cpSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { loadDefaults, type Defaults } from "../../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../../src/definitions";
 import { executeRun } from "../../src/engine";
@@ -12,6 +13,28 @@ export function installBaseline(rig: Rig): void {
   const root = new URL("../../", import.meta.url).pathname;
   cpSync(`${root}workflows`, `${rig.baselineDir}/workflows`, { recursive: true });
   cpSync(`${root}personas`, `${rig.baselineDir}/personas`, { recursive: true });
+}
+
+/** A finished `plan` Run with a SPEC, i.e. what `plan-dir` inference looks for. */
+export function plannedRun(rig: Rig, goal: string): string {
+  const env = rig.pluginEnv();
+  const run = new RunStore(env.stateDir).create({
+    workflow: "plan",
+    cwd: env.cwd,
+    inputs: { goal },
+    inputSources: { goal: "asked" },
+    stepIds: ["grill"],
+    maxIterations: 5,
+    primaryInput: goal,
+  });
+  run.step("grill").status = "done";
+  run.record.status = "done";
+  run.save();
+  const dir = join(run.dir, "plan");
+  mkdirSync(join(dir, "issues"), { recursive: true });
+  writeFileSync(join(dir, "SPEC.md"), `# ${goal}\n`);
+  writeFileSync(join(dir, "issues", "01-first.md"), "# 01: first\n");
+  return dir;
 }
 
 export interface RanRun {
@@ -40,7 +63,7 @@ export async function runWorkflow(
   const errors = validateWorkflow(wf, defs, defaults);
   if (errors.length > 0) throw new Error(errors.join("\n"));
 
-  const inferred = await inferInputs(wf.inputs, { cwd: env.cwd });
+  const inferred = await inferInputs(wf.inputs, { cwd: env.cwd, stateDir: env.stateDir });
   const merged: Record<string, string> = {};
   const sources: Record<string, string> = {};
   for (const r of inferred) {
@@ -55,7 +78,10 @@ export async function runWorkflow(
     inputSources: sources,
     stepIds: wf.steps.map((s) => s.id),
     maxIterations: wf.maxIterations,
-    primaryInput: Object.values(merged).find((v) => v !== "") ?? "run",
+    primaryInput:
+      inferred.find((r) => merged[r.name] !== "")?.label ??
+      Object.values(merged).find((v) => v !== "") ??
+      "run",
   });
 
   const lines: string[] = [];

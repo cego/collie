@@ -14,7 +14,7 @@ export interface Layer {
   dir: string;
 }
 
-export const INPUT_STRATEGIES = ["goal", "plan-file", "diff-target", "ticket", "flag"] as const;
+export const INPUT_STRATEGIES = ["goal", "plan-dir", "diff-target", "ticket", "flag"] as const;
 export type InputStrategy = (typeof INPUT_STRATEGIES)[number];
 
 export interface Variant {
@@ -291,7 +291,8 @@ function expand(
     out.push({
       ...step,
       origin: wf.name,
-      preamble,
+      // A body with no headings IS the prompt, so it must not also be the preamble.
+      preamble: single ? "" : preamble,
       prompt: single ? wf.body : (sections.get(step.id) ?? ""),
     });
   }

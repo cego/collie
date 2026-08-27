@@ -1,9 +1,9 @@
 ---
 name: implement
 title: implement — build from a plan, review in parallel, fix until clean
-description: Builds from tasks/<slug>/PLAN.md, fans out to parallel reviewers, and loops on findings.
+description: Builds from a plan dir, fans out to parallel reviewers, and loops on findings.
 inputs:
-  plan: plan-file
+  plan: plan-dir
 max_iterations: 5
 steps:
   - id: build
@@ -33,18 +33,20 @@ steps:
     use: review
     fresh: true
 ---
-Plan file: {{inputs.plan}}
+Plan directory: {{inputs.plan}}
 Project root: {{cwd}}
+This run's directory: {{run.dir}}
 
 ## build
 
-Read the plan at {{inputs.plan}} and build it. Work task by task, verifying each
-one before you start the next. Run the project's tests and report what they said.
+Read `{{inputs.plan}}/SPEC.md` and the tickets in `{{inputs.plan}}/issues/`, then
+build them. Work ticket by ticket, verifying each one before you start the next.
+Run the project's tests and report what they said.
 
 Do not commit yet.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "tasks_done":
-["task title", ...], "tests": "what you ran and what it said"}`.
+Then write the Output JSON: `{"verdict": "clean", "findings": [], "tickets_done":
+["ticket title", ...], "tests": "what you ran and what it said"}`.
 
 ## fix
 
@@ -67,7 +69,7 @@ disagree"}], "tests": "what you ran and what it said"}`.
 The reviews are clean. Commit the work on a branch:
 
 - create a branch if we are still on the default branch
-- one commit per plan task where that is honest, otherwise one commit
+- one commit per ticket where that is honest, otherwise one commit
 - messages say why, in the imperative, no tool attribution
 
 Do not push and do not open a merge request.

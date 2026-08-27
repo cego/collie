@@ -370,7 +370,7 @@ function buildPrompt(
       ]),
     ),
     findings: formatFindings(lastFindings(o, step, outputs)),
-    run_dir: o.run.dir,
+    run: { dir: o.run.dir, id: o.run.id, slug: o.run.record.slug },
     output_path: outputPath,
     iteration: String(o.run.record.iteration),
     max_iterations: String(o.run.record.max_iterations),

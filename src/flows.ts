@@ -69,7 +69,7 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
     return await bail([`${resolved.name} is not runnable:`, ...errors.map((e) => `  ${e}`)].join("\n"));
   }
 
-  const resolutions = await inferInputs(resolved.inputs, { cwd: env.cwd });
+  const resolutions = await inferInputs(resolved.inputs, { cwd: env.cwd, stateDir: env.stateDir });
   for (const r of resolutions) {
     if (!r.needsAsking) continue;
     const answer = await ask(r.question);
@@ -223,7 +223,9 @@ export async function runnerFlow(herdr: Herdr, env: PluginEnv): Promise<number> 
 
 function primaryInput(resolutions: Resolution[]): string {
   const first = resolutions.find((r) => r.value !== "");
-  return first ? `${first.value}` : "run";
+  if (!first) return "run";
+  // A path value would slug the whole path, so a strategy may offer a short name.
+  return first.label ?? first.value;
 }
 
 async function bail(message: string, extra?: string): Promise<number> {
