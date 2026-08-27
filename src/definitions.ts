@@ -68,6 +68,8 @@ export interface StepDef {
   /** A body section other than the step's own id; see ADR-0002 workflows design. */
   promptSection?: string;
   choices?: ChoiceDef[];
+  /** Only run this step when its workflow is the one being run, not when embedded. */
+  standalone?: boolean;
   repeat?: { from: string; max?: number };
 }
 
@@ -146,6 +148,7 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
       });
     }
     if (typeof s.prompt === "string") step.promptSection = s.prompt;
+    if (s.standalone === true) step.standalone = true;
     if (Array.isArray(s.choices)) step.choices = s.choices.map(parseChoice);
     if (s.repeat && typeof s.repeat === "object") {
       const r = s.repeat as Record<string, unknown>;
@@ -328,6 +331,9 @@ function expand(
   const out: ResolvedStep[] = [];
 
   for (const step of wf.steps) {
+    // A Choice needs the human, and an embedding workflow decides what comes next,
+    // so a standalone step is dropped as soon as this workflow is embedded.
+    if (step.standalone && chain.length > 1) continue;
     if (step.use) {
       if (chain.includes(step.use)) {
         throw new DefinitionError(`workflow "${chain[0]}" embeds "${step.use}" in a cycle: ${[...chain, step.use].join(" -> ")}`);
