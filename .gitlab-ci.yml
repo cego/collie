@@ -1,0 +1,55 @@
+# Tag a version to publish the runner binaries the manifest's build step fetches.
+stages: [test, build, release]
+
+default:
+  image: oven/bun:1.3
+
+test:
+  stage: test
+  script:
+    - bun install --frozen-lockfile
+    - bun test
+    - bunx tsc --noEmit
+
+build:
+  stage: build
+  rules:
+    - if: $CI_COMMIT_TAG
+  parallel:
+    matrix:
+      - TARGET: [linux-x64, linux-arm64, darwin-x64, darwin-arm64]
+  script:
+    - bun install --frozen-lockfile
+    - bun build --compile --target=bun-$TARGET --outfile herdr-workflows-$TARGET src/main.ts
+    - |
+      curl --fail --silent --show-error \
+        --header "JOB-TOKEN: $CI_JOB_TOKEN" \
+        --upload-file herdr-workflows-$TARGET \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-$TARGET"
+  artifacts:
+    paths: [herdr-workflows-*]
+    expire_in: 1 week
+
+release:
+  stage: release
+  image: registry.gitlab.com/gitlab-org/release-cli:latest
+  rules:
+    - if: $CI_COMMIT_TAG
+  script: ["echo publishing $CI_COMMIT_TAG"]
+  release:
+    tag_name: $CI_COMMIT_TAG
+    description: "herdr-plugin $CI_COMMIT_TAG"
+    assets:
+      links:
+        - name: herdr-workflows-linux-x64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-linux-x64"
+          filepath: /herdr-workflows-linux-x64
+        - name: herdr-workflows-linux-arm64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-linux-arm64"
+          filepath: /herdr-workflows-linux-arm64
+        - name: herdr-workflows-darwin-x64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-darwin-x64"
+          filepath: /herdr-workflows-darwin-x64
+        - name: herdr-workflows-darwin-arm64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-darwin-arm64"
+          filepath: /herdr-workflows-darwin-arm64

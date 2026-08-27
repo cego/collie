@@ -15,6 +15,7 @@ import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
 import { confirmLine, inferInputs, type Resolution } from "./inputs";
 import { ask, confirm, nextKey, pick, releaseKeyboard, type PickItem } from "./picker";
+import { forkDefinition, type DefinitionKind } from "./fork";
 import { RunStore } from "./run";
 
 export type Mode = "pick" | "resume" | "fork";
@@ -107,6 +108,46 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
     // Only a popup can close itself; running the picker in a plain pane is fine.
   }
   return 0;
+}
+
+export async function forkFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
+  const defs = loadDefinitions(layers(env));
+  const sources = new Map<string, { kind: DefinitionKind; path: string }>();
+  const items: PickItem[] = [];
+
+  for (const wf of [...defs.workflows.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    sources.set(`workflow:${wf.name}`, { kind: "workflows", path: wf.path });
+    items.push({ id: `workflow:${wf.name}`, title: `workflow ${wf.name}`, subtitle: `[${wf.layer}]` });
+  }
+  for (const persona of [...defs.personas.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    sources.set(`persona:${persona.name}`, { kind: "personas", path: persona.path });
+    items.push({ id: `persona:${persona.name}`, title: `persona ${persona.name}`, subtitle: `[${persona.layer}]` });
+  }
+
+  if (items.length === 0) return await bail("Nothing to fork.", banner(defs));
+
+  const chosen = await pick(items, {
+    header: "Fork a definition",
+    footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
+    banner: banner(defs),
+  });
+  if (!chosen) return 0;
+
+  const layerDirs = layers(env);
+  const targets: PickItem[] = [
+    { id: "user", title: "my layer", subtitle: layerDirs[1]!.dir },
+    { id: "project", title: "this project", subtitle: layerDirs[2]!.dir },
+  ];
+  const target = await pick(targets, {
+    header: `Fork ${chosen.title} into`,
+    footer: "↑↓ move · Enter fork · Esc cancel",
+  });
+  if (!target) return 0;
+
+  const source = sources.get(chosen.id)!;
+  const dir = target.id === "user" ? layerDirs[1]!.dir : layerDirs[2]!.dir;
+  const result = forkDefinition(source.path, source.kind, dir);
+  return await bail(`${chosen.title}: ${result.message}`);
 }
 
 export async function resumeFlow(herdr: Herdr, env: PluginEnv): Promise<number> {

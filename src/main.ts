@@ -1,6 +1,6 @@
 import { readEnv } from "./env";
 import { Herdr, HerdrError } from "./herdr";
-import { openPicker, pickFlow, resumeFlow, runnerFlow, type Mode } from "./flows";
+import { forkFlow, openPicker, pickFlow, resumeFlow, runnerFlow, type Mode } from "./flows";
 
 const USAGE = "herdr-workflows <pick|resume|fork|picker|runner>";
 
@@ -19,7 +19,8 @@ async function main(): Promise<number> {
       const mode = (process.env.HERDR_WORKFLOWS_MODE ?? "pick") as Mode;
       if (mode === "pick") return await pickFlow(herdr, env);
       if (mode === "resume") return await resumeFlow(herdr, env);
-      console.error(`${mode} is not implemented yet`);
+      if (mode === "fork") return await forkFlow(herdr, env);
+      console.error(`unknown picker mode "${mode}"`);
       return 2;
     }
 

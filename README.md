@@ -10,6 +10,11 @@ git clone git@gitlab.cego.dk:cego/herdr-plugin.git ~/.herdr-plugin
 herdr plugin link ~/.herdr-plugin
 ```
 
+`herdr plugin link` runs `install.sh`, which downloads the prebuilt runner for your
+platform from the matching tag's release. You do not need bun. (If bun happens to be
+installed — because you are working on the plugin itself — `install.sh` builds from
+source when there is no release asset.)
+
 Add a keybinding in `~/.config/herdr/config.toml`:
 
 ```toml
@@ -19,6 +24,17 @@ type = "plugin_action"
 command = "cego.workflows.pick"
 ```
 
+## Actions
+
+| Action | What it does |
+| --- | --- |
+| `cego.workflows.pick` | Popup picker of workflows; infers inputs, asks for the rest, then runs |
+| `cego.workflows.resume` | Popup picker of runs with unfinished steps; finished steps are skipped |
+| `cego.workflows.fork` | Copy a workflow or persona into your layer or this project's |
+
+Each action opens a pane, because that is where a terminal is: `picker` (popup) does
+the choosing, `runner` (tab) is the run's status pane and drives the run.
+
 ## Layers
 
 Definitions are markdown files with YAML frontmatter. Same name in a later layer wins:
@@ -27,6 +43,90 @@ Definitions are markdown files with YAML frontmatter. Same name in a later layer
 2. `$(herdr plugin config-dir cego.workflows)` (yours)
 3. `.herdr/workflows`, `.herdr/personas` in the project you're in
 
-`fork` copies a baseline definition into layer 2 or 3 for editing.
+`fork` copies a baseline definition into layer 2 or 3 for editing. `use:` resolves
+through the same lookup, so overriding `review.md` changes every workflow that embeds
+it — including `implement`.
 
-See `CONTEXT.md` for the vocabulary and `docs/adr/` for decisions.
+## Your defaults
+
+`config.json` in your config dir (layer 2), all keys optional:
+
+```json
+{
+  "harness": "claude",
+  "model": "sonnet",
+  "max_iterations": 5,
+  "handoff_timeout_ms": 7200000,
+  "models": { "opencode": ["mycorp/local-model"] }
+}
+```
+
+`models` adds models the harness adapter table does not already accept. An unknown
+harness or model fails validation before a single tab opens.
+
+## Writing a workflow
+
+```markdown
+---
+name: implement
+title: implement — build from a plan, review in parallel, fix until clean
+description: One line for the picker.
+inputs:
+  plan: plan-file          # goal | plan-file | diff-target | ticket | flag
+max_iterations: 5
+steps:
+  - id: build
+    persona: implementer
+    output: build.json
+  - id: review
+    use: review            # embeds another workflow by reference
+    fresh: true            # start a new agent each iteration
+    parallel:
+      - { harness: claude, model: sonnet }
+      - { harness: codex, model: gpt-5-codex }
+  - id: fix
+    agent: build           # keep the implementer's context
+    persona: implementer
+    output: fix.json
+    repeat:
+      from: review         # loop back while that step reports findings
+---
+Text before the first heading is prepended to every step's prompt.
+
+## build
+
+One `## <step-id>` section per step. Templates: `{{inputs.<name>}}`,
+`{{outputs.<step>}}`, `{{findings}}`, `{{iteration}}`, `{{max_iterations}}`,
+`{{cwd}}`, `{{run_dir}}`, `{{output_path}}`.
+```
+
+A step is finished when its `output:` file exists, not when the agent goes quiet — an
+interviewing agent goes quiet waiting for you. Until the file appears you get one
+toast and the runner keeps waiting.
+
+Outputs are JSON. One carrying a `verdict` is validated against the review schema, so
+a loop gate can always read it:
+
+```json
+{"verdict": "clean" | "findings",
+ "findings": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
+               "title": "one line", "detail": "what goes wrong"}],
+ "disputed": []}
+```
+
+## Runs
+
+Every run is recorded under the plugin state dir: `runs/<id>/run.json` with the
+inputs and where each came from, `steps/<step>[/<variant>]/` with the exact prompt
+sent and the Output written, `personas/` with the persona as injected, and `log.txt`.
+That is the audit trail and what `resume` reads.
+
+## Working on the plugin
+
+```sh
+bun install
+bun test
+bun run build          # bin/herdr-workflows for this platform
+```
+
+See `CONTEXT.md` for the vocabulary and `docs/` for the spec and decisions.
