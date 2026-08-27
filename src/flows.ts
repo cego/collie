@@ -109,6 +109,42 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   return 0;
 }
 
+export async function resumeFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
+  const store = new RunStore(env.stateDir);
+  const runs = store.resumable();
+  if (runs.length === 0) return await bail("No runs with unfinished steps.");
+
+  const items: PickItem[] = runs.map((run) => {
+    const left = run.unfinished().map((s) => s.id).join(", ");
+    return {
+      id: run.id,
+      title: run.record.slug,
+      subtitle: `${run.record.status} · left: ${left} · ${run.record.created_at.slice(0, 16).replace("T", " ")}`,
+    };
+  });
+
+  const chosen = await pick(items, {
+    header: "Resume a run",
+    footer: "↑↓ move · type to filter · Enter resume · Esc cancel",
+  });
+  if (!chosen) return 0;
+
+  const run = store.load(chosen.id);
+  await herdr.pluginPaneOpen({
+    entrypoint: "runner",
+    env: { HERDR_WORKFLOWS_RUN: run.id, HERDR_WORKFLOWS_CWD: run.record.cwd },
+    focus: true,
+    workspaceId: env.workspaceId,
+    cwd: run.record.cwd,
+  });
+  try {
+    await herdr.popupClose();
+  } catch {
+    // Only a popup can close itself; running the picker in a plain pane is fine.
+  }
+  return 0;
+}
+
 export async function runnerFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const runId = process.env.HERDR_WORKFLOWS_RUN;
   if (!runId) {

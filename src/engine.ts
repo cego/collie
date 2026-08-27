@@ -40,9 +40,15 @@ interface VariantOutcome {
 export async function executeRun(o: EngineOptions): Promise<RunStatus> {
   const { herdr, run, wf, out } = o;
   const viewSource = `${VIEW_SOURCE_PREFIX}${run.id}`;
-  const panes: string[] = collectPanes(run);
+  // Only panes this process created: a resumed run's recorded panes are gone.
+  const panes: string[] = [];
   const outputs = new Map<string, VariantOutcome[]>();
+  const ran = new Set<string>();
   let host = o.hostPaneId;
+
+  run.record.status = "running";
+  run.record.finished_at = null;
+  run.save();
 
   const indexOf = (id: string) => wf.steps.findIndex((s) => s.id === id);
   const repeats = wf.steps
@@ -69,7 +75,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
 
     let outcomes: VariantOutcome[];
     try {
-      outcomes = await runStep(o, step, variants, multi, outputs, panes, host, viewSource);
+      outcomes = await runStep(o, step, variants, multi, outputs, panes, host, viewSource, ran);
     } catch (e) {
       record.status = "failed";
       record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
@@ -79,6 +85,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     }
     // Only the very first pane splits off the status pane.
     host = null;
+    ran.add(step.id);
 
     record.variants = outcomes.map((v) => v.record);
     outputs.set(step.id, outcomes);
@@ -152,16 +159,19 @@ async function runStep(
   panes: string[],
   host: string | null,
   viewSource: string,
+  ran: Set<string>,
 ): Promise<VariantOutcome[]> {
   const { herdr, run } = o;
-  const previous = run.step(step.id).variants;
+  // A step that has not run in this process gets fresh agents: a resumed Run
+  // never reattaches, and the recorded panes may not exist any more.
+  const previous = ran.has(step.id) ? run.step(step.id).variants : [];
   const records: VariantRecord[] = [];
 
   // Start (or reuse) every agent first, then prompt them all, so they work at once.
   for (const [i, variant] of variants.entries()) {
     const key = multi ? `${variant.harness}-${variant.model}` : null;
     const label = stepLabel(run.record.slug, step.id, key);
-    const prior = previous[i] ?? borrowedAgent(o, step, outputs);
+    const prior = previous[i] ?? borrowedAgent(o, step, ran);
     const record: VariantRecord = {
       harness: variant.harness,
       model: variant.model,
@@ -309,21 +319,24 @@ async function collect(
       return { record, output: parsed, review: null };
     }
     review = result.value;
-    o.run.record.disputed.push(...review.disputed);
+    // A re-run step must not double-report what it disputed last time.
+    for (const finding of review.disputed) {
+      const key = `${finding.file ?? ""}:${finding.line ?? ""}:${finding.title}`;
+      const seen = o.run.record.disputed.some(
+        (d) => `${d.file ?? ""}:${d.line ?? ""}:${d.title}` === key,
+      );
+      if (!seen) o.run.record.disputed.push(finding);
+    }
   }
 
   record.status = "done";
   return { record, output: parsed, review };
 }
 
-function borrowedAgent(
-  o: EngineOptions,
-  step: ResolvedStep,
-  outputs: Map<string, VariantOutcome[]>,
-): VariantRecord | null {
-  if (!step.agent) return null;
-  const source = o.run.step(step.agent).variants[0] ?? outputs.get(step.agent)?.[0]?.record;
-  return source ?? null;
+/** The agent of an earlier step, but only one this process actually started. */
+function borrowedAgent(o: EngineOptions, step: ResolvedStep, ran: Set<string>): VariantRecord | null {
+  if (!step.agent || !ran.has(step.agent)) return null;
+  return o.run.step(step.agent).variants[0] ?? null;
 }
 
 function personaBody(o: EngineOptions, step: ResolvedStep): string {
@@ -404,14 +417,6 @@ async function markTab(herdr: Herdr, record: VariantRecord, mark: string): Promi
   const label = `${mark} ${record.label}`;
   if (record.tabId) await herdr.tabRename(record.tabId, label);
   else if (record.paneId) await herdr.paneRename(record.paneId, label);
-}
-
-function collectPanes(run: Run): string[] {
-  const panes: string[] = [];
-  for (const step of run.record.steps) {
-    for (const v of step.variants) if (v.paneId) panes.push(v.paneId);
-  }
-  return panes;
 }
 
 async function setView(o: EngineOptions, source: string, panes: string[]): Promise<void> {
