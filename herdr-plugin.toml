@@ -1,0 +1,29 @@
+id = "cego.workflows"
+name = "cego workflows"
+version = "0.0.1"
+min_herdr_version = "0.7.5"
+description = "Pick and run codified agent workflows (plan, implement, review) as multi-tab orchestrations."
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["sh", "install.sh"]
+
+[[actions]]
+id = "pick"
+title = "Run a workflow"
+contexts = ["global", "workspace", "pane"]
+command = ["bin/herdr-workflows", "pick"]
+
+[[actions]]
+id = "resume"
+title = "Resume a workflow run"
+contexts = ["global", "workspace"]
+command = ["bin/herdr-workflows", "resume"]
+
+[[panes]]
+id = "picker"
+title = "Workflows"
+placement = "popup"
+width = "70%"
+height = "60%"
+command = ["bin/herdr-workflows", "picker"]
