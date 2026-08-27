@@ -55,14 +55,27 @@ it — including `implement`.
 {
   "harness": "claude",
   "model": "sonnet",
+  "effort": "high",
   "max_iterations": 5,
   "handoff_timeout_ms": 7200000,
   "models": { "opencode": ["mycorp/local-model"] }
 }
 ```
 
-`models` adds models the harness adapter table does not already accept. An unknown
-harness or model fails validation before a single tab opens.
+`models` adds models the harness adapter table does not already accept. `effort` is
+optional — leave it out and each harness uses its own default. An unknown harness,
+model or effort fails validation before a single tab opens.
+
+## Harnesses
+
+| Harness | Model flag | Persona | Effort |
+| --- | --- | --- | --- |
+| `claude` | `--model` | `--append-system-prompt-file` | `--effort low\|medium\|high\|xhigh\|max` |
+| `codex` | `-m` | prompt prefix | — |
+| `opencode` | `--model <provider/model>` | prompt prefix | — |
+
+The baseline `implement` reviews with two claude reviewers, `opus` and `sonnet`, both
+at `xhigh`. Mixing in codex or opencode is a fork away.
 
 ## Writing a workflow
 
@@ -82,8 +95,8 @@ steps:
     use: review            # embeds another workflow by reference
     fresh: true            # start a new agent each iteration
     parallel:
-      - { harness: claude, model: sonnet }
-      - { harness: codex, model: gpt-5-codex }
+      - { harness: claude, model: opus, effort: xhigh }
+      - { harness: claude, model: sonnet, effort: xhigh }
   - id: fix
     agent: build           # keep the implementer's context
     persona: implementer
@@ -97,7 +110,8 @@ Text before the first heading is prepended to every step's prompt.
 
 One `## <step-id>` section per step. Templates: `{{inputs.<name>}}`,
 `{{outputs.<step>}}`, `{{findings}}`, `{{iteration}}`, `{{max_iterations}}`,
-`{{cwd}}`, `{{run_dir}}`, `{{output_path}}`.
+`{{cwd}}`, `{{run_dir}}`, `{{output_path}}`, `{{harness}}`, `{{model}}`,
+`{{effort}}`.
 ```
 
 A step is finished when its `output:` file exists, not when the agent goes quiet — an

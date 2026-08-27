@@ -6,6 +6,8 @@ import { join } from "node:path";
 export interface Defaults {
   harness: string;
   model: string;
+  /** Reasoning effort for every step that does not name its own; unset means the harness decides. */
+  effort?: string;
   maxIterations: number;
   /** How long a Step may wait for the human after the agent hands off. */
   handoffTimeoutMs: number;
@@ -33,6 +35,7 @@ export function loadDefaults(configDir: string): Defaults {
   return {
     harness: typeof raw.harness === "string" ? raw.harness : FALLBACK_DEFAULTS.harness,
     model: typeof raw.model === "string" ? raw.model : FALLBACK_DEFAULTS.model,
+    ...(typeof raw.effort === "string" ? { effort: raw.effort } : {}),
     maxIterations:
       typeof raw.max_iterations === "number" ? raw.max_iterations : FALLBACK_DEFAULTS.maxIterations,
     handoffTimeoutMs:

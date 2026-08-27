@@ -8,7 +8,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `herdr.ts` | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest |
 | `definitions.ts` | Layers, `use:` embedding, validation |
 | `yaml.ts` | The frontmatter subset, so the binary needs no dependency |
-| `harness.ts` | Per-harness start, model flag and persona injection |
+| `harness.ts` | Per-harness start, model flag, effort flag and persona injection |
 | `inputs.ts` | Input inference from branch, cwd, `tasks/` and glab |
 | `engine.ts` | Tabs, agents, prompts, waits, gates and the fix loop |
 | `output.ts` | The Output schema and fan-in |

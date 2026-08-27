@@ -20,6 +20,7 @@ export type InputStrategy = (typeof INPUT_STRATEGIES)[number];
 export interface Variant {
   harness: string;
   model: string;
+  effort?: string;
 }
 
 export interface StepDef {
@@ -27,6 +28,7 @@ export interface StepDef {
   persona?: string;
   harness?: string;
   model?: string;
+  effort?: string;
   fresh?: boolean;
   output?: string;
   /** Continue the agent started by this earlier step instead of starting a new one. */
@@ -97,6 +99,7 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
     if (typeof s.persona === "string") step.persona = s.persona;
     if (typeof s.harness === "string") step.harness = s.harness;
     if (typeof s.model === "string") step.model = s.model;
+    if (typeof s.effort === "string") step.effort = s.effort;
     if (typeof s.fresh === "boolean") step.fresh = s.fresh;
     if (typeof s.output === "string") step.output = s.output;
     if (typeof s.agent === "string") step.agent = s.agent;
@@ -104,7 +107,9 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
     if (Array.isArray(s.parallel)) {
       step.parallel = s.parallel.map((v) => {
         const o = (v ?? {}) as Record<string, unknown>;
-        return { harness: str(o.harness), model: str(o.model) };
+        const variant: Variant = { harness: str(o.harness), model: str(o.model) };
+        if (typeof o.effort === "string") variant.effort = o.effort;
+        return variant;
       });
     }
     if (s.repeat && typeof s.repeat === "object") {
@@ -273,6 +278,7 @@ function expand(
           persona: step.persona ?? child.persona,
           harness: step.harness ?? child.harness,
           model: step.model ?? child.model,
+          effort: step.effort ?? child.effort,
           fresh: step.fresh ?? child.fresh,
           output: step.output ?? child.output,
           parallel: step.parallel ?? child.parallel,
@@ -340,6 +346,15 @@ export function validateWorkflow(
           `${where(step.id)}: unknown model "${combo.model}" for harness "${combo.harness}" (known: ${modelHint(adapter, extra)})`,
         );
       }
+      if (combo.effort !== undefined) {
+        if (!adapter.effortArgs) {
+          errors.push(`${where(step.id)}: harness "${combo.harness}" has no effort setting`);
+        } else if (!(adapter.efforts ?? []).includes(combo.effort)) {
+          errors.push(
+            `${where(step.id)}: unknown effort "${combo.effort}" for harness "${combo.harness}" (known: ${(adapter.efforts ?? []).join(", ")})`,
+          );
+        }
+      }
     }
 
     if (step.agent && !earlier(wf, step, step.agent)) {
@@ -361,13 +376,39 @@ function earlier(wf: ResolvedWorkflow, step: ResolvedStep, id: string): boolean 
   return wf.steps.slice(0, at).some((s) => s.id === id);
 }
 
-/** Every harness/model pair a step will run, one per parallel variant. */
+/** Every harness/model/effort combination a step will run, one per parallel variant. */
 export function stepVariants(step: StepDef, defaults: Defaults): Variant[] {
+  const effortOf = (own?: string) => own ?? step.effort ?? defaults.effort;
   if (step.parallel && step.parallel.length > 0) {
-    return step.parallel.map((v) => ({
-      harness: v.harness || step.harness || defaults.harness,
-      model: v.model || step.model || defaults.model,
-    }));
+    return step.parallel.map((v) => withEffort(
+      {
+        harness: v.harness || step.harness || defaults.harness,
+        model: v.model || step.model || defaults.model,
+      },
+      effortOf(v.effort),
+    ));
   }
-  return [{ harness: step.harness ?? defaults.harness, model: step.model ?? defaults.model }];
+  return [
+    withEffort(
+      { harness: step.harness ?? defaults.harness, model: step.model ?? defaults.model },
+      effortOf(undefined),
+    ),
+  ];
+}
+
+function withEffort(variant: Variant, effort: string | undefined): Variant {
+  return effort === undefined ? variant : { ...variant, effort };
+}
+
+/**
+ * The name that distinguishes one parallel variant from another in tabs and agent
+ * names. Harness and model are enough almost always; effort joins in when two
+ * variants would otherwise share a name.
+ */
+export function variantKeys(variants: Variant[]): (string | null)[] {
+  if (variants.length < 2) return variants.map(() => null);
+  const base = variants.map((v) => `${v.harness}-${v.model}`);
+  const withEfforts = variants.map((v, i) => (v.effort ? `${base[i]}-${v.effort}` : base[i]!));
+  const keys = base.some((k, i) => base.indexOf(k) !== i) ? withEfforts : base;
+  return keys.map((key, i) => (keys.indexOf(key) === i ? key : `${key}-${i + 1}`));
 }

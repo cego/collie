@@ -107,30 +107,28 @@ test("parallel reviewers get one tab each, named after step, harness and model",
     .filter((c) => c.cmd === "tab create")
     .map((c) => c.argv!.at(-2));
   expect(labels).toEqual([
+    "implement-tasks-add-picker-plan-md/review/claude-opus",
     "implement-tasks-add-picker-plan-md/review/claude-sonnet",
-    "implement-tasks-add-picker-plan-md/review/codex-gpt-5-codex",
     "implement-tasks-add-picker-plan-md/verify",
   ]);
 
+  const reviewer = join(run.dir, "personas", "reviewer.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
-  expect(starts.map((c) => [c.argv![4], c.argv!.at(-2), c.argv!.at(-1)])).toEqual([
-    ["claude", "--append-system-prompt-file", join(run.dir, "personas", "implementer.md")],
-    ["claude", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
-    ["codex", "-m", "gpt-5-codex"],
-    ["claude", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
+  expect(starts.map((c) => c.argv!.slice(7))).toEqual([
+    ["--", "--model", "sonnet", "--append-system-prompt-file", join(run.dir, "personas", "implementer.md")],
+    ["--", "--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
+    ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
+    ["--", "--model", "sonnet", "--append-system-prompt-file", reviewer],
   ]);
-
-  // codex has no system-prompt flag, so its persona rides in the prompt file.
-  const codexPrompt = readFileSync(
-    join(run.dir, "steps", "review", "codex-gpt-5-codex", "prompt-1.md"),
-    "utf8",
-  );
-  expect(codexPrompt.startsWith("You are a reviewer.")).toBe(true);
+  expect(run.step("review").variants.map((v) => [v.model, v.effort])).toEqual([
+    ["opus", "xhigh"],
+    ["sonnet", "xhigh"],
+  ]);
 
   const marks = rig.calls().filter((c) => c.cmd === "tab rename");
   expect(marks.map((c) => c.argv![3]).filter((l) => l!.startsWith("✓"))).toEqual([
+    "✓ implement-tasks-add-picker-plan-md/review/claude-opus",
     "✓ implement-tasks-add-picker-plan-md/review/claude-sonnet",
-    "✓ implement-tasks-add-picker-plan-md/review/codex-gpt-5-codex",
     "✓ implement-tasks-add-picker-plan-md/verify",
   ]);
 });

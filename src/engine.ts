@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { Definitions, ResolvedStep, ResolvedWorkflow, Variant } from "./definitions";
-import { stepVariants } from "./definitions";
+import { stepVariants, variantKeys } from "./definitions";
 import type { Defaults } from "./config";
 import type { Herdr } from "./herdr";
 import { HerdrError } from "./herdr";
@@ -67,15 +67,15 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     }
 
     const variants = stepVariants(step, o.defaults);
-    const multi = variants.length > 1;
+    const keys = variantKeys(variants);
     record.status = "running";
     record.iteration = run.record.iteration;
     run.save();
-    out(`▶ ${step.id}${multi ? ` (${variants.length} in parallel)` : ""} — iteration ${run.record.iteration}`);
+    out(`▶ ${step.id}${variants.length > 1 ? ` (${variants.length} in parallel)` : ""} — iteration ${run.record.iteration}`);
 
     let outcomes: VariantOutcome[];
     try {
-      outcomes = await runStep(o, step, variants, multi, outputs, panes, host, viewSource, ran);
+      outcomes = await runStep(o, step, variants, keys, outputs, panes, host, viewSource, ran);
     } catch (e) {
       record.status = "failed";
       record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
@@ -154,7 +154,7 @@ async function runStep(
   o: EngineOptions,
   step: ResolvedStep,
   variants: Variant[],
-  multi: boolean,
+  keys: (string | null)[],
   outputs: Map<string, VariantOutcome[]>,
   panes: string[],
   host: string | null,
@@ -169,12 +169,13 @@ async function runStep(
 
   // Start (or reuse) every agent first, then prompt them all, so they work at once.
   for (const [i, variant] of variants.entries()) {
-    const key = multi ? `${variant.harness}-${variant.model}` : null;
+    const key = keys[i]!;
     const label = stepLabel(run.record.slug, step.id, key);
     const prior = previous[i] ?? borrowedAgent(o, step, ran);
     const record: VariantRecord = {
       harness: variant.harness,
       model: variant.model,
+      effort: variant.effort ?? null,
       agent: prior?.agent ?? agentName(run.record.slug, step.id, key, run.record.seq),
       label: prior?.label ?? label,
       tabId: prior?.tabId ?? null,
@@ -211,7 +212,7 @@ async function runStep(
         name: record.agent,
         kind: adapter.kind,
         paneId: record.paneId!,
-        args: startArgs(adapter, variant.model, personaFile(o, step)),
+        args: startArgs(adapter, variant.model, personaFile(o, step), variant.effort),
       });
       if (record.paneId) {
         panes.push(record.paneId);
@@ -224,7 +225,7 @@ async function runStep(
 
   for (const [i, record] of records.entries()) {
     const variant = variants[i]!;
-    const key = multi ? `${variant.harness}-${variant.model}` : null;
+    const key = keys[i]!;
     // A multi-line prompt cannot be typed into a harness reliably, so the prompt
     // goes to a file in the run dir and the agent is pointed at it.
     const path = join(run.stepDir(step.id, key), `prompt-${run.record.iteration}.md`);
@@ -235,8 +236,7 @@ async function runStep(
 
   const outcomes: VariantOutcome[] = [];
   for (const [i, record] of records.entries()) {
-    const variant = variants[i]!;
-    const key = multi ? `${variant.harness}-${variant.model}` : null;
+    const key = keys[i]!;
     try {
       // The agent may settle before herdr reports `working`; that is not an error.
       await o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 });
@@ -378,6 +378,7 @@ function buildPrompt(
     step: step.id,
     harness: variant.harness,
     model: variant.model,
+    effort: variant.effort ?? "",
   };
 
   const parts: string[] = [];

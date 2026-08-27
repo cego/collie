@@ -14,9 +14,11 @@ steps:
     fresh: true
     parallel:
       - harness: claude
+        model: opus
+        effort: xhigh
+      - harness: claude
         model: sonnet
-      - harness: codex
-        model: gpt-5-codex
+        effort: xhigh
   - id: fix
     agent: build
     persona: implementer

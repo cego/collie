@@ -53,6 +53,7 @@ function interruptedRun(): Run {
     {
       harness: "claude",
       model: "sonnet",
+      effort: null,
       agent: "dead-build-agent",
       label: "implement-tasks-p-plan-md/build",
       tabId: null,

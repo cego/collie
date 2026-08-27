@@ -31,3 +31,19 @@ test("model checks accept the alias list, the harness pattern and user extras", 
   expect(knownModel(HARNESSES.opencode!, "anthropic/claude-sonnet-4")).toBe(true);
   expect(knownModel(HARNESSES.opencode!, "sonnet", ["sonnet"])).toBe(true);
 });
+
+test("effort is a flag only where the harness has one", () => {
+  expect(startArgs(HARNESSES.claude!, "opus", "/p/reviewer.md", "xhigh")).toEqual([
+    "--model",
+    "opus",
+    "--effort",
+    "xhigh",
+    "--append-system-prompt-file",
+    "/p/reviewer.md",
+  ]);
+  expect(HARNESSES.claude!.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+
+  // codex and opencode have none, so asking for one is a validation error, not a flag.
+  expect(HARNESSES.codex!.effortArgs).toBeUndefined();
+  expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/reviewer.md", "xhigh")).toEqual(["-m", "gpt-5"]);
+});

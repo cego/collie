@@ -11,6 +11,7 @@ export type RunStatus = "running" | "done" | "blocked" | "failed";
 export interface VariantRecord {
   harness: string;
   model: string;
+  effort: string | null;
   agent: string;
   /** The readable tab/pane name; the agent name is length-constrained. */
   label: string;

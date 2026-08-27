@@ -8,6 +8,7 @@ import {
   resolveWorkflow,
   stepVariants,
   validateWorkflow,
+  variantKeys,
   DefinitionError,
 } from "../src/definitions";
 import { FALLBACK_DEFAULTS, loadDefaults } from "../src/config";
@@ -234,4 +235,102 @@ test("user defaults come from config.json in the config layer", () => {
     handoffTimeoutMs: 60_000,
     models: { opencode: ["local/foo"] },
   });
+});
+
+test("effort resolves from the variant, the step, then the user default", () => {
+  writeDef(rig.baselineDir, "workflows", "w", `---
+name: w
+steps:
+  - id: a
+    persona: reviewer
+    effort: high
+  - id: b
+    persona: reviewer
+    parallel:
+      - { harness: claude, model: opus, effort: xhigh }
+      - { harness: claude, model: sonnet }
+  - id: c
+    persona: reviewer
+---
+## a
+a
+
+## b
+b
+
+## c
+c
+`);
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+  const defs = loadDefinitions(ls());
+  const withDefault = { ...defaults, effort: "medium" };
+  const wf = resolveWorkflow("w", defs, withDefault);
+
+  expect(stepVariants(wf.steps[0]!, withDefault)).toEqual([
+    { harness: "claude", model: "sonnet", effort: "high" },
+  ]);
+  expect(stepVariants(wf.steps[1]!, withDefault)).toEqual([
+    { harness: "claude", model: "opus", effort: "xhigh" },
+    { harness: "claude", model: "sonnet", effort: "medium" },
+  ]);
+  expect(stepVariants(wf.steps[2]!, withDefault)).toEqual([
+    { harness: "claude", model: "sonnet", effort: "medium" },
+  ]);
+  // No default set means the harness decides, so no flag is passed at all.
+  expect(stepVariants(wf.steps[2]!, defaults)).toEqual([{ harness: "claude", model: "sonnet" }]);
+  expect(validateWorkflow(wf, defs, withDefault)).toEqual([]);
+});
+
+test("validation names the step for a bad effort and for a harness without one", () => {
+  writeDef(rig.baselineDir, "workflows", "w", `---
+name: w
+steps:
+  - id: a
+    persona: reviewer
+    effort: ludicrous
+  - id: b
+    persona: reviewer
+    harness: codex
+    model: gpt-5
+    effort: xhigh
+---
+## a
+a
+
+## b
+b
+`);
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+  const defs = loadDefinitions(ls());
+  const errors = validateWorkflow(resolveWorkflow("w", defs, defaults), defs, defaults);
+
+  expect(errors).toEqual([
+    'workflow "w" step "a": unknown effort "ludicrous" for harness "claude" (known: low, medium, high, xhigh, max)',
+    'workflow "w" step "b": harness "codex" has no effort setting',
+  ]);
+});
+
+test("variant names take in effort only when harness and model would collide", () => {
+  expect(variantKeys([{ harness: "claude", model: "opus", effort: "xhigh" }])).toEqual([null]);
+  expect(
+    variantKeys([
+      { harness: "claude", model: "opus", effort: "xhigh" },
+      { harness: "claude", model: "sonnet", effort: "xhigh" },
+    ]),
+  ).toEqual(["claude-opus", "claude-sonnet"]);
+  expect(
+    variantKeys([
+      { harness: "claude", model: "opus", effort: "high" },
+      { harness: "claude", model: "opus", effort: "xhigh" },
+    ]),
+  ).toEqual(["claude-opus-high", "claude-opus-xhigh"]);
+  // Genuinely identical variants still get distinct names rather than clashing.
+  expect(
+    variantKeys([
+      { harness: "claude", model: "opus" },
+      { harness: "claude", model: "opus" },
+    ]),
+  ).toEqual(["claude-opus", "claude-opus-2"]);
 });

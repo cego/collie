@@ -11,8 +11,11 @@ export interface HarnessAdapter {
    * arguments it cannot encode for the shell, so this takes a path, not the text.
    */
   personaArgs?(personaFile: string): string[];
+  /** Present when the harness lets a Step ask for a reasoning effort level. */
+  effortArgs?(effort: string): string[];
   models: string[];
   modelPattern?: RegExp;
+  efforts?: string[];
 }
 
 export const HARNESSES: Record<string, HarnessAdapter> = {
@@ -21,8 +24,10 @@ export const HARNESSES: Record<string, HarnessAdapter> = {
     kind: "claude",
     modelArgs: (model) => ["--model", model],
     personaArgs: (file) => ["--append-system-prompt-file", file],
+    effortArgs: (effort) => ["--effort", effort],
     models: ["opus", "sonnet", "haiku", "opusplan"],
     modelPattern: /^claude-[a-z0-9.-]+$/,
+    efforts: ["low", "medium", "high", "xhigh", "max"],
   },
   codex: {
     id: "codex",
@@ -59,8 +64,17 @@ export function modelHint(harness: HarnessAdapter, extra: string[] = []): string
 }
 
 /** Args for `herdr agent start ... -- <args>`. */
-export function startArgs(harness: HarnessAdapter, model: string, personaFile: string): string[] {
-  return [...harness.modelArgs(model), ...(harness.personaArgs?.(personaFile) ?? [])];
+export function startArgs(
+  harness: HarnessAdapter,
+  model: string,
+  personaFile: string,
+  effort?: string,
+): string[] {
+  return [
+    ...harness.modelArgs(model),
+    ...(effort ? (harness.effortArgs?.(effort) ?? []) : []),
+    ...(harness.personaArgs?.(personaFile) ?? []),
+  ];
 }
 
 /** Persona text to prepend to the first prompt when the harness has no flag for it. */

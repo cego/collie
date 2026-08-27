@@ -48,8 +48,10 @@ collected.
 
 **05 — implement loop.** `repeat: {from, max}` on a step: the reviewers' verdicts at
 `from` are the gate; all clean skips the repeating step, otherwise the union of every
-reviewer's findings goes into the fix prompt and the loop runs again. Reviewers fan
-out to one tab each (`<run>/review/<harness>-<model>`), restart fresh every iteration;
+reviewer's findings goes into the fix prompt and the loop runs again. The baseline
+reviews with two claude reviewers, `opus` and `sonnet`, both at `xhigh` effort.
+Reviewers fan out to one tab each (`<run>/review/<harness>-<model>`), restart fresh
+every iteration;
 the implementer keeps its pane and context via `agent: build`. The sidebar is filtered
 to the run's panes and cleared at the end. Disputed findings land in the summary.
 
@@ -88,13 +90,17 @@ Verified live, inside this herdr 0.7.5 session:
 - `install.sh` on a fresh clone under `env -i` with bun and mise stripped from PATH,
   fetching `herdr-workflows-linux-x64` and running it.
 - All four cross-compile targets producing the right binaries.
+- `herdr agent start --kind claude -- --model opus --effort xhigh
+  --append-system-prompt-file <path>`, which booted as "Opus 5 with xhigh effort" —
+  the exact shape the baseline's reviewers use.
 
 Verified by tests only (fake herdr):
 
 - The `implement` fix loop — terminating on clean and on `max_iterations`, per-variant
-  tabs, `fresh` restarting agents, the finding union and the disputed list. Real
-  multi-harness fan-out was not run live because codex is not installed on this
-  machine; the loop's every observable herdr call and file is asserted instead.
+  tabs, `fresh` restarting agents, the finding union and the disputed list. The loop
+  itself has not been run against live agents; every observable herdr call and file it
+  produces is asserted instead. The reviewers' exact `agent start` arguments *were*
+  verified live, one agent at a time.
 - Resume's skip-and-restart behaviour.
 - `diff-target` inference (fake `glab`/`git` in front of PATH) — the merge-request
   branch was not exercised against a real GitLab.
@@ -145,6 +151,10 @@ Each is noted in the ticket it belongs to.
   does not list.
 - **Model validation** accepts the adapter's alias list, the adapter's pattern
   (`opencode` requires `provider/model`), or a user-listed extra.
+- **`effort` is a step or variant key**, resolving variant → step → `config.json`
+  default → unset (the harness decides). A parallel variant's name stays
+  `<harness>-<model>` and only takes in the effort when two variants would otherwise
+  collide, so tabs stay short but agent names can never clash.
 - **An embedded workflow's Inputs are inherited**, with the embedder's own declared
   first (the first input names the run) and winning on conflict.
 - **`install.sh` falls back to building with bun** when there is no release asset and
@@ -158,15 +168,11 @@ Each is noted in the ticket it belongs to.
   `git push` + tag will be the first test of `.gitlab-ci.yml`. `oven/bun:1.3` needs to
   be reachable from cego runners, and the release job needs the generic package
   registry enabled on the project.
-- **The baseline `implement` names codex.** Its two parallel reviewers are
-  `claude/sonnet` and `codex/gpt-5-codex`, which is the multi-harness review the spec
-  asks for, but a teammate without codex gets a failing step with a clear error. The
-  fix is a one-line fork; the README says so. If codex is not actually standard on the
-  team, mk should decide whether the baseline should be single-harness instead — that
-  is a team call, not mine.
-- **`opencode --model` is unverified.** It is in the adapter table because the goal
-  named it. claude's flags were verified live; codex's `-m` and opencode's `--model`
-  were not (neither is installed in a usable state here).
+- **`codex -m` and `opencode --model` are unverified.** Both are in the adapter table
+  because the goal named them, and neither is installed in a usable state here. The
+  baseline uses claude only, so nobody hits them until they fork a workflow to add one.
+  Neither harness has an effort flag, and asking one for `effort` is a validation
+  error rather than a silently dropped argument.
 - **The plugin version is still `0.0.1`.** `install.sh` derives the release URL from
   it, so the first tag must match whatever the manifest says.
 - **Model lists will age.** `src/harness.ts` carries alias lists and patterns so an

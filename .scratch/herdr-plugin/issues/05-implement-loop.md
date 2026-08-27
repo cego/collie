@@ -30,3 +30,12 @@ belongs to (spec story 38). Agent names are separate and length-limited; see tic
 `agent start` sees a shell prompt again; without it the same agent is re-prompted.
 `agent: <step>` borrows an earlier step's agent, which is how `fix` and `commit` keep
 the implementer's context.
+
+**Follow-up (mk, same session):** codex is not standard on the team, so the baseline's
+two parallel reviewers are now `claude/opus` and `claude/sonnet`, both at `xhigh`
+effort. That needed `effort` as a new step/variant key: `claude` declares
+`--effort <low|medium|high|xhigh|max>` in the adapter table, harnesses without one
+reject `effort` in validation instead of dropping it silently, and a variant's name
+only takes in the effort when harness+model would otherwise collide. Verified live
+that `agent start --kind claude -- --model opus --effort xhigh
+--append-system-prompt-file <path>` boots as "Opus 5 with xhigh effort".
