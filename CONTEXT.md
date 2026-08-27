@@ -26,3 +26,11 @@
 - `plan` — interviews the human, writes `tasks/<slug>/PLAN.md`.
 - `implement` — build from plan → parallel `review` (multi-harness/model) → fix loop, max 5 → clean review on a committed branch. MR creation is a separate appendable step.
 - `review` — standalone; target inferred MR → branch diff → working tree; writes Output + summary; posting to GitLab is opt-in.
+
+**Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice either chains to another Workflow (`run`) or prompts a named agent.
+
+**Chain** — Starting a Workflow from a Choice, with Inputs forwarded. The new Run is a child of the current one.
+
+**Plan directory** — The `plan/` folder inside a Run: SPEC.md and the ticket files. It is the hand-off from `plan` to `implement` and never lives in the repository.
+
+**Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
