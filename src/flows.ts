@@ -147,7 +147,7 @@ export async function forkFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const source = sources.get(chosen.id)!;
   const dir = target.id === "user" ? layerDirs[1]!.dir : layerDirs[2]!.dir;
   const result = forkDefinition(source.path, source.kind, dir);
-  return await bail(`${chosen.title}: ${result.message}`);
+  return await notice(`${chosen.title}: ${result.message}`, result.ok ? 0 : 1);
 }
 
 export async function resumeFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
@@ -227,9 +227,13 @@ function primaryInput(resolutions: Resolution[]): string {
 }
 
 async function bail(message: string, extra?: string): Promise<number> {
+  return await notice(message, 1, extra);
+}
+
+async function notice(message: string, code: number, extra?: string): Promise<number> {
   process.stdout.write(`\x1b[2J\x1b[H${extra ? `${extra}\n\n` : ""}${message}\n\nPress any key to close.\n`);
   await anyKey();
-  return 1;
+  return code;
 }
 
 async function hold(): Promise<void> {

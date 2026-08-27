@@ -99,10 +99,6 @@ switch (cmd) {
       agent: { agent_status: process.env.FAKE_HERDR_AGENT_STATUS ?? "idle" },
     };
     break;
-  case "agent read":
-    saveState(state);
-    process.stdout.write(process.env.FAKE_HERDR_AGENT_TEXT ?? "");
-    process.exit(0);
   default:
     result = { type: "ok" };
 }

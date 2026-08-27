@@ -98,7 +98,6 @@ export class Rig {
       "FAKE_HERDR_LOG",
       "FAKE_HERDR_OUTPUTS",
       "FAKE_HERDR_FAIL",
-      "FAKE_HERDR_AGENT_TEXT",
       "FAKE_HERDR_AGENT_STATUS",
     ]) {
       if (env[k]) process.env[k] = env[k];

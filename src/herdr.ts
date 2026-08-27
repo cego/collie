@@ -163,11 +163,6 @@ export class Herdr {
     await this.cli(["pane", "close", paneId]);
   }
 
-  async agentRead(target: string, lines = 40): Promise<string> {
-    const res = await this.cli(["agent", "read", target, "--source", "recent", "--lines", String(lines)]);
-    return typeof res === "string" ? res : (res?.result?.text ?? "");
-  }
-
   async notify(title: string, body?: string, sound: "none" | "done" | "request" = "done"): Promise<void> {
     const args = ["notification", "show", title, "--sound", sound];
     if (body) args.push("--body", body);
