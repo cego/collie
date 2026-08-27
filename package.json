@@ -1,0 +1,13 @@
+{
+  "name": "herdr-workflows",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "build": "bun build --compile --outfile bin/herdr-workflows src/main.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}

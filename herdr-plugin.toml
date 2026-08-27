@@ -20,6 +20,12 @@ title = "Resume a workflow run"
 contexts = ["global", "workspace"]
 command = ["bin/herdr-workflows", "resume"]
 
+[[actions]]
+id = "fork"
+title = "Fork a workflow or persona"
+contexts = ["global", "workspace"]
+command = ["bin/herdr-workflows", "fork"]
+
 [[panes]]
 id = "picker"
 title = "Workflows"
@@ -27,3 +33,10 @@ placement = "popup"
 width = "70%"
 height = "60%"
 command = ["bin/herdr-workflows", "picker"]
+
+# The run's status pane; every action's interactive part happens in a pane.
+[[panes]]
+id = "runner"
+title = "Workflow run"
+placement = "tab"
+command = ["bin/herdr-workflows", "runner"]
