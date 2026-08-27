@@ -22,7 +22,10 @@ import {
   type ReviewOutput,
 } from "./output";
 import { agentName, shellQuote, stepLabel } from "./naming";
+import { inferInputs } from "./inputs";
+import { RunStore } from "./run";
 import { renderTemplate } from "./template";
+import { resolveWorkflow } from "./definitions";
 import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 
 export const VIEW_SOURCE_PREFIX = "cego.workflows:";
@@ -102,7 +105,14 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
         return await finish(o, "blocked", viewSource, `${step.id} needs you`);
       }
       // A chained Run takes over from here, so the parent stops where it is.
-      if (result.chained) return await finish(o, "done", viewSource, result.note ?? undefined);
+      if (result.chained) {
+        for (const s of wf.steps.slice(index + 1)) {
+          const rec = run.step(s.id);
+          if (rec.status === "pending") rec.note = `not run: ${result.note}`;
+        }
+        run.save();
+        return await finish(o, "done", viewSource, result.note ?? undefined);
+      }
       index += 1;
       continue;
     }
@@ -340,7 +350,17 @@ async function runChoiceStep(
     run.save();
     out(`  ▸ ${choice.title}`);
 
-    if (choice.stop || choice.run) return { status: "done", note: `chose "${choice.title}"` };
+    if (choice.stop) return { status: "done", note: `chose "${choice.title}"` };
+
+    if (choice.run) {
+      const child = await chain(o, choice, prompts);
+      if (!child) continue;
+      return {
+        status: "done",
+        note: `chose "${choice.title}" → ${choice.run} run ${child}`,
+        chained: true,
+      };
+    }
 
     if (choice.config) await ensureConfig(o, prompts, choice.config);
 
@@ -371,6 +391,73 @@ async function runChoiceStep(
       }
     }
   }
+}
+
+/**
+ * Starts the chosen Workflow as a child Run in this workspace and links it to this
+ * one. Returns null when the human abandoned it at a question, so the menu comes back.
+ */
+async function chain(
+  o: EngineOptions,
+  choice: ChoiceDef,
+  prompts: EnginePrompts,
+): Promise<string | null> {
+  const { run, out } = o;
+  const child = resolveWorkflow(choice.run!, o.defs, o.defaults);
+  const vars = { run: { dir: run.dir, id: run.id, slug: run.record.slug }, inputs: run.record.inputs, cwd: run.record.cwd };
+  const forwarded: Record<string, string> = {};
+  for (const [key, value] of Object.entries(choice.inputs ?? {})) {
+    forwarded[key] = renderTemplate(value, vars).text;
+  }
+
+  const inputs: Record<string, string> = {};
+  const sources: Record<string, string> = {};
+  for (const r of await inferInputs(child.inputs, { cwd: run.record.cwd, stateDir: o.env.stateDir })) {
+    if (forwarded[r.name] !== undefined) {
+      inputs[r.name] = forwarded[r.name]!;
+      sources[r.name] = `chained from ${run.id}`;
+      continue;
+    }
+    if (!r.needsAsking) {
+      inputs[r.name] = r.value;
+      sources[r.name] = r.source;
+      continue;
+    }
+    const answer = await prompts.ask(r.question);
+    if (answer === null || answer.trim() === "") {
+      out(`  ${choice.run} needs "${r.name}" — nothing started`);
+      return null;
+    }
+    inputs[r.name] = answer.trim();
+    sources[r.name] = "asked";
+  }
+
+  // The parent already names the work, so the child inherits its name.
+  const prefix = `${run.record.workflow}-`;
+  const tail = run.record.slug.startsWith(prefix) ? run.record.slug.slice(prefix.length) : run.record.slug;
+  const childRun = new RunStore(o.env.stateDir).create({
+    workflow: child.name,
+    cwd: run.record.cwd,
+    inputs,
+    inputSources: sources,
+    stepIds: child.steps.map((s) => s.id),
+    maxIterations: child.maxIterations,
+    primaryInput: tail,
+    parent: run.id,
+  });
+  childRun.log(`chained from ${run.id}`);
+  run.record.children.push(childRun.id);
+  run.save();
+  out(`  ▸ ${child.name} run ${childRun.id}`);
+
+  await o.herdr.pluginPaneOpen({
+    entrypoint: "runner",
+    env: { HERDR_WORKFLOWS_RUN: childRun.id, HERDR_WORKFLOWS_CWD: run.record.cwd },
+    focus: true,
+    workspaceId: o.env.workspaceId,
+    cwd: run.record.cwd,
+  });
+  return childRun.id;
 }
 
 /** One agent round inside a Choice: a Step in every way except its own id. */

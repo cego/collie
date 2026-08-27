@@ -143,7 +143,10 @@ A step with `choices:` asks you instead of running an agent:
 
 Each choice needs a `title` and exactly one of `run`, `prompt` or `stop`. A `prompt`
 choice offers the menu again as soon as its round has written its Output, so `Refine`
-can be taken as often as you like; `run` and `stop` end the step. Esc leaves the step
+can be taken as often as you like; `run` and `stop` end the step. `run` starts that
+workflow as a child run in the same workspace — forwarded inputs first, the rest
+inferred, anything left over asked here — and the parent finishes once the child has
+its own runner pane. `resume` then lists the two runs independently. Esc leaves the step
 unfinished, so `resume` finds the run again. `config: {key, question}` asks for a value
 once and keeps it in `config.json`, where prompts read it as `{{config.<key>}}`.
 
