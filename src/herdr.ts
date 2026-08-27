@@ -31,7 +31,7 @@ export class Herdr {
     const proc = Bun.spawn([this.env.binPath, ...args], {
       stdout: "pipe",
       stderr: "pipe",
-      env: process.env as Record<string, string>,
+      env: { ...process.env } as Record<string, string>,
     });
     const [stdout, stderr, code] = await Promise.all([
       new Response(proc.stdout).text(),

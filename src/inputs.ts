@@ -22,7 +22,13 @@ export interface InferContext {
 
 async function shell(cmd: string, args: string[], cwd: string): Promise<{ code: number; stdout: string }> {
   try {
-    const proc = Bun.spawn([cmd, ...args], { cwd, stdout: "pipe", stderr: "ignore" });
+    // The env must be passed explicitly or PATH changes are not honoured.
+    const proc = Bun.spawn([cmd, ...args], {
+      cwd,
+      stdout: "pipe",
+      stderr: "ignore",
+      env: { ...process.env } as Record<string, string>,
+    });
     const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
     return { code, stdout };
   } catch {

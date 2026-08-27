@@ -1,0 +1,64 @@
+import { expect, test } from "bun:test";
+import { formatFindings, parseReviewOutput, unionFindings } from "../src/output";
+
+const ok = (text: string) => {
+  const r = parseReviewOutput(text, "review.json");
+  if (!r.ok) throw new Error(r.error);
+  return r.value;
+};
+const err = (text: string) => {
+  const r = parseReviewOutput(text, "review.json");
+  return r.ok ? "(no error)" : r.error;
+};
+
+test("a clean verdict needs no findings", () => {
+  expect(ok(`{"verdict": "clean"}`)).toEqual({ verdict: "clean", findings: [], disputed: [] });
+});
+
+test("findings keep file, line, severity, title and detail", () => {
+  expect(
+    ok(`{"verdict": "findings", "findings": [{"file": "a.ts", "line": 3, "severity": "major", "title": "leak", "detail": "d"}]}`),
+  ).toEqual({
+    verdict: "findings",
+    findings: [{ file: "a.ts", line: 3, severity: "major", title: "leak", detail: "d" }],
+    disputed: [],
+  });
+});
+
+test("the schema rejects what a gate could not read", () => {
+  expect(err("nope")).toContain("review.json: not valid JSON");
+  expect(err("[]")).toBe("review.json: expected a JSON object");
+  expect(err(`{"verdict": "ok"}`)).toBe('review.json: verdict must be "clean" or "findings", got "ok"');
+  expect(err(`{"verdict": "findings", "findings": []}`)).toBe(
+    'review.json: verdict "findings" with an empty findings list',
+  );
+  expect(err(`{"verdict": "clean", "findings": {}}`)).toBe("review.json: findings: expected an array");
+  expect(err(`{"verdict": "clean", "findings": [{"severity": "major"}]}`)).toBe(
+    "review.json: findings[0]: title is required",
+  );
+  expect(err(`{"verdict": "clean", "findings": [{"title": "t"}]}`)).toBe(
+    "review.json: findings[0]: severity is required",
+  );
+  expect(err(`{"verdict": "clean", "disputed": [{"title": "t"}]}`)).toBe(
+    "review.json: disputed[0]: severity is required",
+  );
+});
+
+test("fan-in unions findings and drops duplicates", () => {
+  const a = ok(`{"verdict": "findings", "findings": [{"file": "a.ts", "line": 1, "severity": "major", "title": "x"}]}`);
+  const b = ok(
+    `{"verdict": "findings", "findings": [{"file": "a.ts", "line": 1, "severity": "minor", "title": "x"}, {"file": "b.ts", "severity": "blocker", "title": "y"}]}`,
+  );
+
+  expect(unionFindings([a, b]).map((f) => f.title)).toEqual(["x", "y"]);
+});
+
+test("findings format as a readable list for the fix prompt", () => {
+  expect(formatFindings([])).toBe("(none)");
+  expect(
+    formatFindings([
+      { file: "a.ts", line: 3, severity: "major", title: "leak", detail: "closes late" },
+      { severity: "minor", title: "typo" },
+    ]),
+  ).toBe("- [major] leak (a.ts:3)\n  closes late\n- [minor] typo");
+});
