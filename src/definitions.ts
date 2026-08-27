@@ -14,7 +14,7 @@ export interface Layer {
   dir: string;
 }
 
-export const INPUT_STRATEGIES = ["goal", "plan-dir", "diff-target", "ticket", "flag"] as const;
+export const INPUT_STRATEGIES = ["goal", "plan-dir", "diff-target", "ticket", "issue", "flag"] as const;
 export type InputStrategy = (typeof INPUT_STRATEGIES)[number];
 
 export interface Variant {
@@ -351,12 +351,17 @@ function expand(
             known: [...innerSections.keys()],
           }
         : {};
+      // Prefixed ids mean the embedded steps' own back-references must move too.
+      const ids = new Map(
+        embedded.map((child) => [child.id, embedded.length === 1 ? step.id : `${step.id}.${child.id}`]),
+      );
+      const rebase = (id: string | undefined) => (id !== undefined ? (ids.get(id) ?? id) : undefined);
       for (const child of embedded) {
         out.push({
           ...child,
           ...override,
           // The embedding step's own settings win over the embedded defaults.
-          id: embedded.length === 1 ? step.id : `${step.id}.${child.id}`,
+          id: ids.get(child.id)!,
           persona: step.persona ?? child.persona,
           harness: step.harness ?? child.harness,
           model: step.model ?? child.model,
@@ -364,8 +369,9 @@ function expand(
           fresh: step.fresh ?? child.fresh,
           output: step.output ?? child.output,
           parallel: step.parallel ?? child.parallel,
-          repeat: step.repeat ?? child.repeat,
-          agent: step.agent ?? child.agent,
+          repeat: step.repeat ?? rebaseRepeat(child.repeat, rebase),
+          agent: step.agent ?? rebase(child.agent),
+          ...(child.choices ? { choices: child.choices.map((c) => rebaseChoice(c, rebase)) } : {}),
         });
       }
       continue;
@@ -382,6 +388,25 @@ function expand(
     });
   }
   return out;
+}
+
+type Rebase = (id: string | undefined) => string | undefined;
+
+function rebaseRepeat(repeat: StepDef["repeat"], rebase: Rebase): StepDef["repeat"] {
+  if (!repeat) return undefined;
+  return { ...repeat, from: rebase(repeat.from)! };
+}
+
+function rebaseRound(round: RoundDef, rebase: Rebase): RoundDef {
+  return round.agent ? { ...round, agent: rebase(round.agent)! } : round;
+}
+
+function rebaseChoice(choice: ChoiceDef, rebase: Rebase): ChoiceDef {
+  return {
+    ...choice,
+    ...(choice.round ? { round: rebaseRound(choice.round, rebase) } : {}),
+    ...(choice.followUp ? { followUp: rebaseRound(choice.followUp, rebase) } : {}),
+  };
 }
 
 function resolveRound(round: RoundDef, sections: Map<string, string>): RoundDef {

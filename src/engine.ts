@@ -92,10 +92,20 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     if ((step.choices?.length ?? 0) > 0) {
       record.status = "running";
       record.iteration = run.record.iteration;
+      record.note = null;
       record.variants = [];
       run.save();
       out(`▶ ${step.id} — over to you`);
-      const result = await runChoiceStep(o, step, outputs, panes, host, viewSource, ran);
+      let result: ChoiceResult;
+      try {
+        result = await runChoiceStep(o, step, outputs, panes, host, viewSource, ran);
+      } catch (e) {
+        record.status = "failed";
+        record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
+        run.save();
+        out(`✗ ${step.id} — ${record.note}`);
+        return await finish(o, "failed", viewSource);
+      }
       host = null;
       ran.add(step.id);
       record.status = result.status;
@@ -121,6 +131,8 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     const keys = variantKeys(variants);
     record.status = "running";
     record.iteration = run.record.iteration;
+    // A step that failed and is being tried again must not keep the old note.
+    record.note = null;
     run.save();
     out(`▶ ${step.id}${variants.length > 1 ? ` (${variants.length} in parallel)` : ""} — iteration ${run.record.iteration}`);
 

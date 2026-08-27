@@ -189,3 +189,19 @@ test("plan-dir takes the newest finished run with a SPEC in this repo, else asks
   });
   expect(older.record.slug).toBe("plan-older-goal");
 });
+
+test("issue takes a Linear id from the branch, else asks for the id or URL", async () => {
+  bin.add("git", `echo feature/ENG-42-add-picker`);
+  expect(await inferInput("goal", "issue", ctx())).toMatchObject({
+    value: "ENG-42",
+    source: "branch feature/ENG-42-add-picker",
+    needsAsking: false,
+  });
+
+  bin.add("git", `echo master`);
+  expect(await inferInput("goal", "issue", ctx())).toMatchObject({
+    value: "",
+    needsAsking: true,
+    question: "Which Linear issue? (id or URL)",
+  });
+});

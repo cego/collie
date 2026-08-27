@@ -163,3 +163,17 @@ test("a resumed run toasts when it finishes and records the new status", async (
   const toast = rig.calls().filter((c) => c.cmd === "notification show").at(-1)!.argv!;
   expect(toast[2]).toBe("implement-add-picker finished");
 });
+
+test("a step that failed and then succeeds does not keep the failure note", async () => {
+  const run = interruptedRun();
+  const review = run.step("review");
+  review.status = "failed";
+  review.note = "herdr agent start failed (exit 1): blocked during startup";
+  run.save();
+
+  await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN]);
+
+  expect(run.step("review").status).toBe("done");
+  expect(run.step("review").note).toBeNull();
+  expect(run.record.summary).not.toContain("blocked during startup");
+});

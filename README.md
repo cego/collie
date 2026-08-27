@@ -1,6 +1,6 @@
 # herdr-plugin
 
-Codified agent workflows for herdr: `plan`, `implement`, `review` — deterministic multi-tab orchestrations you pick from a popup.
+Codified agent workflows for herdr: `plan`, `ticket`, `implement`, `review`, `architecture` — deterministic multi-tab orchestrations you pick from a popup.
 A shared starting point, not a restriction: fork any workflow or persona into your own layer.
 
 ## Install (local link, no GitHub needed)
@@ -85,7 +85,7 @@ name: implement
 title: implement — build from a plan, review in parallel, fix until clean
 description: One line for the picker.
 inputs:
-  plan: plan-dir           # goal | plan-dir | diff-target | ticket | flag
+  plan: plan-dir           # goal | plan-dir | diff-target | ticket | issue | flag
 max_iterations: 5
 steps:
   - id: build
@@ -171,7 +171,9 @@ a loop gate can always read it:
 
 Plans are never written into the repository (ADR-0002): `plan` writes `SPEC.md` and
 its tickets into `{{run.dir}}/plan`, and `plan-dir` inference hands that directory to
-`implement` — the newest finished run that planned this project.
+`implement` — the newest finished run that planned this project. `plan` ends with a menu:
+implement now, get a second opinion, offload to Linear, or refine. Esc there leaves the
+run open for `resume`.
 
 Every run is recorded under the plugin state dir: `runs/<id>/run.json` with the
 inputs and where each came from, `steps/<step>[/<variant>]/` with the exact prompt

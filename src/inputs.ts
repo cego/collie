@@ -82,15 +82,36 @@ export async function inferInput(
     }
 
     case "ticket": {
-      const branch = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout.trim();
-      const m = /([A-Z][A-Z0-9]+-\d+)/.exec(branch);
-      if (m) return { ...base, value: m[1]!, source: `branch ${branch}` };
-      return { ...base, value: "", source: "none" };
+      const found = await ticketFromBranch(run, ctx.cwd);
+      return found ? { ...base, ...found } : { ...base, value: "", source: "none" };
+    }
+
+    // Like `ticket`, but the workflow cannot start without one.
+    case "issue": {
+      const found = await ticketFromBranch(run, ctx.cwd);
+      return found
+        ? { ...base, ...found }
+        : {
+            ...base,
+            value: "",
+            source: "ask",
+            needsAsking: true,
+            question: "Which Linear issue? (id or URL)",
+          };
     }
 
     case "flag":
       return { ...base, value: "false", source: "default" };
   }
+}
+
+async function ticketFromBranch(
+  run: NonNullable<InferContext["run"]>,
+  cwd: string,
+): Promise<{ value: string; source: string } | null> {
+  const branch = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).stdout.trim();
+  const m = /([A-Z][A-Z0-9]+-\d+)/.exec(branch);
+  return m ? { value: m[1]!, source: `branch ${branch}` } : null;
 }
 
 export async function inferInputs(
