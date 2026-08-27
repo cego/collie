@@ -334,3 +334,77 @@ test("variant names take in effort only when harness and model would collide", (
     ]),
   ).toEqual(["claude-opus", "claude-opus-2"]);
 });
+
+const ARCH = `---
+name: arch
+steps:
+  - id: arch
+    persona: reviewer
+    prompt: attended
+    output: arch.json
+---
+Project: {{cwd}}
+
+## attended
+Run the real interview.
+
+## unattended
+Apply Strong candidates only, top first, at most two passes.
+`;
+
+test("a step may name a body section other than its id, and an embedder may pick another", () => {
+  writeDef(rig.baselineDir, "workflows", "arch", ARCH);
+  writeDef(
+    rig.baselineDir,
+    "workflows",
+    "outer",
+    `---
+name: outer
+steps:
+  - id: build
+    persona: reviewer
+    output: build.json
+  - id: arch
+    use: arch
+    prompt: unattended
+    agent: build
+---
+## build
+build it
+`,
+  );
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+  const defs = loadDefinitions(ls());
+
+  const standalone = resolveWorkflow("arch", defs, defaults);
+  expect(standalone.steps[0]!.prompt).toBe("Run the real interview.");
+  expect(validateWorkflow(standalone, defs, defaults)).toEqual([]);
+
+  const outer = resolveWorkflow("outer", defs, defaults);
+  expect(outer.steps[1]!.prompt).toBe("Apply Strong candidates only, top first, at most two passes.");
+  expect(outer.steps[1]!.preamble).toBe("Project: {{cwd}}");
+  expect(outer.steps[1]!.origin).toBe("arch");
+  expect(outer.steps[1]!.agent).toBe("build");
+  expect(validateWorkflow(outer, defs, defaults)).toEqual([]);
+});
+
+test("an unknown prompt section names the file and the sections it does have", () => {
+  writeDef(rig.baselineDir, "workflows", "arch", ARCH.replace("prompt: attended", "prompt: nowhere"));
+  writeDef(
+    rig.baselineDir,
+    "workflows",
+    "outer",
+    "---\nname: outer\nsteps:\n  - id: arch\n    use: arch\n    prompt: elsewhere\n---\nx",
+  );
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+  const defs = loadDefinitions(ls());
+
+  expect(validateWorkflow(resolveWorkflow("arch", defs, defaults), defs, defaults)).toEqual([
+    'workflow "arch" step "arch": unknown prompt section "nowhere" in arch.md (known: attended, unattended)',
+  ]);
+  expect(validateWorkflow(resolveWorkflow("outer", defs, defaults), defs, defaults)).toEqual([
+    'workflow "outer" step "arch": unknown prompt section "elsewhere" in arch.md (known: attended, unattended)',
+  ]);
+});

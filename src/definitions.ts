@@ -341,9 +341,20 @@ function expand(
       }
       for (const [key, strategy] of Object.entries(inner.inputs)) inherited[key] = strategy;
       const embedded = expand(inner, defs, [...chain, inner.name], inherited);
+      // The embedder may pick a different section of the embedded body, so one
+      // workflow can carry an attended and an unattended prompt.
+      const innerSections = bodySections(inner.body).sections;
+      const override = step.promptSection
+        ? {
+            promptSection: step.promptSection,
+            prompt: innerSections.get(step.promptSection) ?? "",
+            known: [...innerSections.keys()],
+          }
+        : {};
       for (const child of embedded) {
         out.push({
           ...child,
+          ...override,
           // The embedding step's own settings win over the embedded defaults.
           id: embedded.length === 1 ? step.id : `${step.id}.${child.id}`,
           persona: step.persona ?? child.persona,
