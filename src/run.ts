@@ -46,6 +46,8 @@ export interface RunRecord {
   input_sources: Record<string, string>;
   steps: StepRecord[];
   disputed: Finding[];
+  /** Findings still open when a fix loop hit max_iterations. */
+  outstanding: Finding[];
   summary: string | null;
 }
 
@@ -127,6 +129,7 @@ export class RunStore {
       input_sources: opts.inputSources,
       steps: opts.stepIds.map((id) => ({ id, status: "pending", iteration: 0, note: null, variants: [] })),
       disputed: [],
+      outstanding: [],
       summary: null,
     };
     const run = new Run(join(this.root, id), record);

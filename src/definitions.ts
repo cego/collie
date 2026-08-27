@@ -223,12 +223,17 @@ export function resolveWorkflow(
   }
   const inherited: Record<string, InputStrategy> = {};
   const steps = expand(wf, defs, [wf.name], inherited);
+  // An embedded workflow brings its own Inputs, but the embedder's come first and
+  // win: the first one names the Run.
+  const inputs: Record<string, InputStrategy> = { ...wf.inputs };
+  for (const [key, strategy] of Object.entries(inherited)) {
+    if (!(key in inputs)) inputs[key] = strategy;
+  }
   return {
     name: wf.name,
     title: wf.title,
     description: wf.description,
-    // An embedded workflow brings its own Inputs; the embedder's declaration wins.
-    inputs: { ...inherited, ...wf.inputs },
+    inputs,
     maxIterations: wf.maxIterations ?? defaults.maxIterations,
     steps,
     layer: wf.layer,

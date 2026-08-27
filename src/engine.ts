@@ -128,9 +128,13 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
         index = mine.from;
         continue;
       }
-      out(`  max_iterations (${mine.max}) reached — moving on`);
-      run.step(step.id).note = `loop stopped at max_iterations ${mine.max}`;
+      // Committing work the reviewers still object to would be worse than stopping.
+      const still = verdictOf(outputs.get(wf.steps[mine.from]!.id) ?? []);
+      run.record.outstanding = still.findings;
+      run.step(step.id).note = `stopped at max_iterations ${mine.max} with ${still.findings.length} finding(s)`;
       run.save();
+      out(`  max_iterations (${mine.max}) reached with ${still.findings.length} finding(s)`);
+      return await finish(o, "blocked", viewSource, `max_iterations reached with findings`);
     }
 
     index += 1;
@@ -464,6 +468,9 @@ export function summarise(o: EngineOptions, status: RunStatus): string {
       .map((v) => `\n    ${v.label}: ${v.error}`)
       .join("");
     lines.push(`  ${marks[step.status]} ${step.id}${detail}${errors}`);
+  }
+  if (run.record.outstanding.length > 0) {
+    lines.push("", "Findings still open:", formatFindings(run.record.outstanding));
   }
   if (run.record.disputed.length > 0) {
     lines.push("", "Disputed findings (the implementer did not apply these):", formatFindings(run.record.disputed));
