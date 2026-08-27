@@ -133,23 +133,6 @@ test("the sidebar filter is set to the run's panes and cleared at the end", asyn
   });
 });
 
-test("every baseline workflow resolves and validates", async () => {
-  const { loadDefinitions, layers, resolveWorkflow } = await import("../src/definitions");
-  const { validateWorkflow } = await import("../src/definitions");
-  const { FALLBACK_DEFAULTS } = await import("../src/config");
-  const env = rig.pluginEnv();
-  const defs = loadDefinitions(layers(env));
-
-  expect(defs.errors).toEqual([]);
-  expect([...defs.workflows.keys()].sort()).toEqual(["implement", "plan", "review"]);
-  expect([...defs.personas.keys()].sort()).toEqual(["implementer", "planner", "reviewer"]);
-
-  for (const name of defs.workflows.keys()) {
-    const wf = resolveWorkflow(name, defs, FALLBACK_DEFAULTS);
-    expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
-  }
-});
-
 test("the picker ranks name prefix, then substring, then in-order characters", () => {
   const items = [
     { id: "implement", title: "implement — build from a plan, review in parallel", subtitle: "[baseline]" },

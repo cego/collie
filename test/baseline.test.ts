@@ -41,3 +41,30 @@ test("no baseline definition mentions tasks/ or .scratch/ — plans live in the 
 
   expect(offenders).toEqual([]);
 });
+
+test("the baseline personas are the four the design names, and each names its skills", () => {
+  const defs = baseline();
+
+  expect([...defs.personas.keys()].sort()).toEqual(["architect", "implementer", "planner", "reviewer"]);
+  for (const persona of defs.personas.values()) {
+    expect(persona.description).not.toBe("");
+    expect(persona.body).toMatch(/`\/[a-z-]+`/);
+  }
+  // The reviewer runs both review skills and merges them into one Output.
+  const reviewer = defs.personas.get("reviewer")!.body;
+  expect(reviewer).toContain("`/code-review`");
+  expect(reviewer).toContain("`/code-review-and-quality`");
+  expect(defs.personas.get("planner")!.body).toContain("`/wayfinder`");
+  expect(defs.personas.get("architect")!.body).toContain("`/improve-codebase-architecture`");
+});
+
+test("every persona ends with the Output contract and a skill-missing fallback", () => {
+  for (const persona of baseline().personas.values()) {
+    const headings = [...persona.body.matchAll(/^## (.+)$/gm)].map((m) => m[1]);
+    expect(headings.slice(-2)).toEqual(["Output", "Fallback"]);
+    const fallback = persona.body.slice(persona.body.lastIndexOf("## Fallback")).trim();
+    expect(fallback.split("\n").length).toBeGreaterThan(1);
+    expect(fallback).toContain("skill");
+    expect(persona.body).toContain("OUTPUT_PATH");
+  }
+});
