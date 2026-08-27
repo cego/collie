@@ -24,6 +24,19 @@ type = "plugin_action"
 command = "cego.workflows.pick"
 ```
 
+## Workflows
+
+| Workflow | What it does |
+| --- | --- |
+| `plan` | Grills you, writes `SPEC.md` and tickets into the run dir, then a menu: implement now, second opinion, offload to Linear, refine |
+| `ticket` | `plan`, with a Linear issue id or URL as the goal |
+| `implement` | Builds the plan on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models, loops on findings up to five times |
+| `review` | Reviews an MR, a branch diff or the working tree with two models and writes one verdict each |
+| `architecture` | Runs the architect over the project, reports into the run dir, then a menu: implement now or stop |
+
+`plan` and `architecture` can chain `implement`, which embeds `review` and the
+unattended half of `architecture`. Any of them is a fork away from being yours.
+
 ## Actions
 
 | Action | What it does |
@@ -102,7 +115,8 @@ steps:
     persona: implementer
     output: fix.json
     repeat:
-      from: review         # loop back while that step reports findings
+      from: review         # the gate: loop while that step reports findings
+      back_to: simplify    # where the next round starts (default: from)
 ---
 Text before the first heading is prepended to every step's prompt.
 

@@ -1,5 +1,14 @@
 # Baseline workflows & personas — design (2026-08-27)
 
+**Status: implemented.** All eight tickets of workflows v2 shipped on `master`; this file
+is the design as settled, and `.scratch/workflows-v2/issues/` records the decisions taken
+where it was silent. The engine additions below exist as `choices:` (with `run`, `prompt`
+and `stop`), `{{run.dir}}`, the `plan-dir` and `issue` Input strategies, chaining with a
+`parent`/`children` link, `prompt: <section>` overrides, `standalone:` steps and
+`repeat.back_to`. What the design left open and the implementation had to name:
+a `stop` choice, `follow_up` and `config` on a choice, and `standalone` for a menu that
+must not be embedded.
+
 Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001, ADR-0002.
 
 ## Principles

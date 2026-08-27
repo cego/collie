@@ -60,13 +60,27 @@ interface VariantOutcome {
   review: ReviewOutput | null;
 }
 
+/** What one execution accumulates as it goes: only this process's panes and agents. */
+interface RunCtx {
+  outputs: Map<string, VariantOutcome[]>;
+  /** Panes this process created; a resumed run's recorded panes are gone. */
+  panes: string[];
+  ran: Set<string>;
+  /** One agent per `agent:` group, so a resumed run still keeps one implementer. */
+  groups: Map<string, VariantRecord>;
+  viewSource: string;
+}
+
 export async function executeRun(o: EngineOptions): Promise<RunStatus> {
   const { herdr, run, wf, out } = o;
   const viewSource = `${VIEW_SOURCE_PREFIX}${run.id}`;
-  // Only panes this process created: a resumed run's recorded panes are gone.
-  const panes: string[] = [];
-  const outputs = new Map<string, VariantOutcome[]>();
-  const ran = new Set<string>();
+  const ctx: RunCtx = {
+    outputs: new Map(),
+    panes: [],
+    ran: new Set(),
+    groups: new Map(),
+    viewSource,
+  };
   let host = o.hostPaneId;
 
   run.record.status = "running";
@@ -75,8 +89,18 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
 
   const indexOf = (id: string) => wf.steps.findIndex((s) => s.id === id);
   const repeats = wf.steps
-    .map((s, at) => (s.repeat ? { at, from: indexOf(s.repeat.from), max: s.repeat.max ?? wf.maxIterations } : null))
-    .filter((r): r is { at: number; from: number; max: number } => r !== null);
+    .map((s, at) =>
+      s.repeat
+        ? {
+            at,
+            from: indexOf(s.repeat.from),
+            // The gate is `from`; the loop restarts at `back_to`, which may be earlier.
+            back: indexOf(s.repeat.back_to ?? s.repeat.from),
+            max: s.repeat.max ?? wf.maxIterations,
+          }
+        : null,
+    )
+    .filter((r): r is { at: number; from: number; back: number; max: number } => r !== null);
 
   let index = 0;
   while (index < wf.steps.length) {
@@ -98,7 +122,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
       out(`▶ ${step.id} — over to you`);
       let result: ChoiceResult;
       try {
-        result = await runChoiceStep(o, step, outputs, panes, host, viewSource, ran);
+        result = await runChoiceStep(o, step, ctx, host);
       } catch (e) {
         record.status = "failed";
         record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
@@ -107,7 +131,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
         return await finish(o, "failed", viewSource);
       }
       host = null;
-      ran.add(step.id);
+      ctx.ran.add(step.id);
       record.status = result.status;
       record.note = result.note;
       run.save();
@@ -138,7 +162,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
 
     let outcomes: VariantOutcome[];
     try {
-      outcomes = await runStep(o, step, variants, keys, outputs, panes, host, viewSource, ran);
+      outcomes = await runStep(o, step, variants, keys, ctx, host);
     } catch (e) {
       record.status = "failed";
       record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
@@ -148,10 +172,10 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     }
     // Only the very first pane splits off the status pane.
     host = null;
-    ran.add(step.id);
+    ctx.ran.add(step.id);
 
     record.variants = outcomes.map((v) => v.record);
-    outputs.set(step.id, outcomes);
+    ctx.outputs.set(step.id, outcomes);
 
     const blocked = outcomes.filter((v) => v.record.status !== "done");
     record.status = blocked.length > 0 ? "blocked" : "done";
@@ -188,18 +212,18 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     if (mine) {
       if (run.record.iteration < mine.max) {
         run.record.iteration += 1;
-        for (const s of wf.steps.slice(mine.from, index + 1)) {
+        for (const s of wf.steps.slice(mine.back, index + 1)) {
           const rec = run.step(s.id);
           rec.status = "pending";
           rec.note = null;
         }
         run.save();
-        out(`  looping back to ${wf.steps[mine.from]!.id} (iteration ${run.record.iteration})`);
-        index = mine.from;
+        out(`  looping back to ${wf.steps[mine.back]!.id} (iteration ${run.record.iteration})`);
+        index = mine.back;
         continue;
       }
       // Committing work the reviewers still object to would be worse than stopping.
-      const still = verdictOf(outputs.get(wf.steps[mine.from]!.id) ?? []);
+      const still = verdictOf(ctx.outputs.get(wf.steps[mine.from]!.id) ?? []);
       run.record.outstanding = still.findings;
       run.step(step.id).note = `stopped at max_iterations ${mine.max} with ${still.findings.length} finding(s)`;
       run.save();
@@ -218,24 +242,21 @@ async function runStep(
   step: ResolvedStep,
   variants: Variant[],
   keys: (string | null)[],
-  outputs: Map<string, VariantOutcome[]>,
-  panes: string[],
+  ctx: RunCtx,
   host: string | null,
-  viewSource: string,
-  ran: Set<string>,
   extraVars?: Record<string, unknown>,
 ): Promise<VariantOutcome[]> {
   const { herdr, run } = o;
   // A step that has not run in this process gets fresh agents: a resumed Run
   // never reattaches, and the recorded panes may not exist any more.
-  const previous = ran.has(step.id) ? run.step(step.id).variants : [];
+  const previous = ctx.ran.has(step.id) ? run.step(step.id).variants : [];
   const records: VariantRecord[] = [];
 
   // Start (or reuse) every agent first, then prompt them all, so they work at once.
   for (const [i, variant] of variants.entries()) {
     const key = keys[i]!;
     const label = stepLabel(run.record.slug, step.id, key);
-    const prior = previous[i] ?? borrowedAgent(o, step, ran);
+    const prior = previous[i] ?? borrowedAgent(o, step, ctx);
     const record: VariantRecord = {
       harness: variant.harness,
       model: variant.model,
@@ -279,9 +300,11 @@ async function runStep(
         args: startArgs(adapter, variant.model, personaFile(o, step), variant.effort),
       });
       if (record.paneId) {
-        panes.push(record.paneId);
-        await setView(o, viewSource, panes);
+        ctx.panes.push(record.paneId);
+        await setView(o, ctx.viewSource, ctx.panes);
       }
+      // The first step of an `agent:` group lends its agent to the rest of it.
+      if (step.agent && !ctx.groups.has(step.agent)) ctx.groups.set(step.agent, record);
     }
 
     records.push(record);
@@ -293,7 +316,7 @@ async function runStep(
     // A multi-line prompt cannot be typed into a harness reliably, so the prompt
     // goes to a file in the run dir and the agent is pointed at it.
     const path = join(run.stepDir(step.id, key), `prompt-${run.record.iteration}.md`);
-    writeFileSync(path, `${buildPrompt(o, step, variant, key, outputs, extraVars)}\n`);
+    writeFileSync(path, `${buildPrompt(o, step, variant, key, ctx.outputs, extraVars)}\n`);
     run.log(`prompt ${record.agent} -> ${relative(run.dir, path)}`);
     await herdr.agentPrompt(record.agent, `Your task for this step is in ${path} — read it and follow it.`);
   }
@@ -330,11 +353,8 @@ interface ChoiceResult {
 async function runChoiceStep(
   o: EngineOptions,
   step: ResolvedStep,
-  outputs: Map<string, VariantOutcome[]>,
-  panes: string[],
+  ctx: RunCtx,
   host: string | null,
-  viewSource: string,
-  ran: Set<string>,
 ): Promise<ChoiceResult> {
   const { run, out } = o;
   const prompts = o.prompts;
@@ -378,7 +398,7 @@ async function runChoiceStep(
 
     const round = choice.round!;
     const key = `${slugify(choice.title)}-${taken(choice.title)}`;
-    const first = await runRound(o, step, round, key, outputs, panes, hostPane, viewSource, ran);
+    const first = await runRound(o, step, round, key, ctx, hostPane);
     hostPane = null;
     if (first.record.status !== "done") {
       out(`  ⚠ ${first.record.label} — ${first.record.error ?? "did not finish"}`);
@@ -386,18 +406,9 @@ async function runChoiceStep(
     }
     const findings = first.review?.findings ?? [];
     if (choice.followUp && findings.length > 0) {
-      const next = await runRound(
-        o,
-        step,
-        choice.followUp,
-        `${key}-then`,
-        outputs,
-        panes,
-        null,
-        viewSource,
-        ran,
-        { findings: formatFindings(findings) },
-      );
+      const next = await runRound(o, step, choice.followUp, `${key}-then`, ctx, null, {
+        findings: formatFindings(findings),
+      });
       if (next.record.status !== "done") {
         out(`  ⚠ ${next.record.label} — ${next.record.error ?? "did not finish"}`);
       }
@@ -478,11 +489,8 @@ async function runRound(
   step: ResolvedStep,
   round: RoundDef,
   key: string,
-  outputs: Map<string, VariantOutcome[]>,
-  panes: string[],
+  ctx: RunCtx,
   host: string | null,
-  viewSource: string,
-  ran: Set<string>,
   extraVars?: Record<string, unknown>,
 ): Promise<VariantOutcome> {
   const synth: ResolvedStep = {
@@ -496,10 +504,10 @@ async function runRound(
     choices: undefined,
   };
   const variant = roundVariant(round, step, o.defaults);
-  const outcomes = await runStep(o, synth, [variant], [key], outputs, panes, host, viewSource, ran, extraVars);
+  const outcomes = await runStep(o, synth, [variant], [key], ctx, host, extraVars);
   const outcome = outcomes[0]!;
   o.run.step(step.id).variants.push(outcome.record);
-  outputs.set(step.id, [outcome]);
+  ctx.outputs.set(step.id, [outcome]);
   o.run.save();
   const mark = outcome.record.status === "done" ? "✓" : "⚠";
   await markTab(o.herdr, outcome.record, mark);
@@ -622,9 +630,11 @@ function collectList(o: EngineOptions, key: "deferred", parsed: unknown): void {
 }
 
 /** The agent of an earlier step, but only one this process actually started. */
-function borrowedAgent(o: EngineOptions, step: ResolvedStep, ran: Set<string>): VariantRecord | null {
-  if (!step.agent || !ran.has(step.agent)) return null;
-  return o.run.step(step.agent).variants[0] ?? null;
+function borrowedAgent(o: EngineOptions, step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
+  if (!step.agent) return null;
+  if (ctx.ran.has(step.agent)) return o.run.step(step.agent).variants[0] ?? null;
+  // On a resumed run the named step is long gone; the group's first agent stands in.
+  return ctx.groups.get(step.agent) ?? null;
 }
 
 function personaBody(o: EngineOptions, step: ResolvedStep): string {

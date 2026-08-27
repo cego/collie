@@ -20,13 +20,14 @@ afterEach(async () => {
   await rig.close();
 });
 
-function promptOf(run: { dir: string }): string {
-  return readFileSync(join(run.dir, "steps", "review", "prompt-1.md"), "utf8");
+/** review fans out to opus and sonnet, so a prompt lives under its variant. */
+function promptOf(run: { dir: string }, variant = "claude-opus"): string {
+  return readFileSync(join(run.dir, "steps", "review", variant, "prompt-1.md"), "utf8");
 }
 
 test("review runs standalone on the inferred target with post off by default", async () => {
   bin.add("glab", `echo '{"iid": 12, "state": "opened"}'`);
-  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+  rig.queueOutputs([{ verdict: "clean", findings: [] }, { verdict: "clean", findings: [] }]);
 
   const { run, status } = await runWorkflow(rig, "review", {});
 
@@ -37,17 +38,23 @@ test("review runs standalone on the inferred target with post off by default", a
   const prompt = promptOf(run);
   expect(prompt).toContain("Review target: mr:12");
   expect(prompt).toContain("Post to GitLab: false");
-  expect(prompt).toContain(`OUTPUT_PATH: ${join(run.dir, "steps", "review", "review.json")}`);
+  expect(prompt).toContain(
+    `OUTPUT_PATH: ${join(run.dir, "steps", "review", "claude-opus", "review.json")}`,
+  );
 
-  const start = rig.calls().find((c) => c.cmd === "agent start")!.argv!;
-  expect(start[11]).toBe(join(run.dir, "personas", "reviewer.md"));
-  expect(readFileSync(start[11]!, "utf8")).toContain("You are a reviewer");
+  // Same persona, two models: that is the whole difference between the variants.
+  const starts = rig.calls().filter((c) => c.cmd === "agent start");
+  expect(starts.map((c) => c.argv!.slice(8))).toEqual([
+    ["--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
+    ["--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
+  ]);
+  expect(readFileSync(join(run.dir, "personas", "reviewer.md"), "utf8")).toContain("You are a reviewer");
 });
 
 test("post is only true when the human asks for it", async () => {
   bin.add("glab", `exit 1`);
   bin.add("git", `echo main`);
-  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+  rig.queueOutputs([{ verdict: "clean", findings: [] }, { verdict: "clean", findings: [] }]);
 
   const { run } = await runWorkflow(rig, "review", { post: "true" });
 
@@ -58,39 +65,40 @@ test("post is only true when the human asks for it", async () => {
 test("findings are recorded and the run still finishes; review is not a gate on its own", async () => {
   bin.add("glab", `exit 1`);
   bin.add("git", `echo main`);
-  rig.queueOutputs([
-    {
-      verdict: "findings",
-      findings: [{ file: "cli.js", line: 4, severity: "blocker", title: "no exit code", detail: "returns 1" }],
-    },
-  ]);
+  const finding = {
+    verdict: "findings",
+    findings: [{ file: "cli.js", line: 4, severity: "blocker", title: "no exit code", detail: "returns 1" }],
+  };
+  rig.queueOutputs([finding, finding]);
 
   const { run, status } = await runWorkflow(rig, "review", {});
 
   expect(status).toBe("done");
-  const output = JSON.parse(readFileSync(join(run.dir, "steps", "review", "review.json"), "utf8"));
+  const output = JSON.parse(
+    readFileSync(join(run.dir, "steps", "review", "claude-opus", "review.json"), "utf8"),
+  );
   expect(output.findings[0].title).toBe("no exit code");
-  expect(run.record.steps[0]!.variants[0]!.output).toBe("steps/review/review.json");
+  expect(run.record.steps[0]!.variants[0]!.output).toBe("steps/review/claude-opus/review.json");
 });
 
 test("a review.json that breaks the Output schema fails the step with the schema error", async () => {
   bin.add("glab", `exit 1`);
   bin.add("git", `echo main`);
-  rig.queueOutputs([{ verdict: "findings", findings: [] }]);
+  rig.queueOutputs([{ verdict: "findings", findings: [] }, { verdict: "clean", findings: [] }]);
 
   const { run, status } = await runWorkflow(rig, "review", {});
 
   expect(status).toBe("blocked");
   expect(run.record.steps[0]!.variants[0]!.status).toBe("failed");
   expect(run.record.steps[0]!.variants[0]!.error).toBe(
-    'steps/review/review.json: verdict "findings" with an empty findings list',
+    'steps/review/claude-opus/review.json: verdict "findings" with an empty findings list',
   );
 });
 
 test("the working tree is the last resort target", async () => {
   bin.add("glab", `exit 1`);
   bin.add("git", `echo main`);
-  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+  rig.queueOutputs([{ verdict: "clean", findings: [] }, { verdict: "clean", findings: [] }]);
 
   const { run } = await runWorkflow(rig, "review", {});
 

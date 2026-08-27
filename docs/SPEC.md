@@ -1,6 +1,12 @@
 # Spec — herdr-plugin: codified agent workflows
 
-Status: draft, local only (2026-08-27). Vocabulary: see `CONTEXT.md`. Respects ADR-0001.
+Status: v1, shipped and partly superseded (2026-08-27). Vocabulary: see `CONTEXT.md`.
+Respects ADR-0001.
+
+ADR-0002 moved plan artefacts out of the repository, so the `tasks/<slug>/PLAN.md` story
+and the `plan-file` strategy below are gone — a plan lives in the Run directory and
+`plan-dir` inference finds it. `docs/WORKFLOWS-DESIGN.md` is the
+current design for the baseline workflows and personas.
 
 ## Problem Statement
 

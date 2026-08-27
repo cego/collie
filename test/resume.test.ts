@@ -95,7 +95,12 @@ test("resumable lists only runs that still have unfinished steps", () => {
   const run = interruptedRun();
 
   expect(store.resumable().map((r) => r.id)).toEqual([run.id]);
-  expect(store.resumable()[0]!.unfinished().map((s) => s.id)).toEqual(["review", "fix", "commit", "verify"]);
+  expect(store.resumable()[0]!.unfinished().map((s) => s.id)).toEqual([
+    "architecture",
+    "simplify",
+    "review",
+    "fix",
+  ]);
 
   for (const step of run.record.steps) step.status = "done";
   run.record.status = "done";
@@ -123,22 +128,25 @@ test("resuming skips the finished step and never reattaches to its agent", async
   expect(rig.calls().flatMap((c) => c.argv ?? [])).not.toContain("9-9");
 });
 
-test("a step that borrowed a skipped step's agent starts its own instead", async () => {
+test("the steps that borrowed the dead agent share one new agent instead", async () => {
   const run = interruptedRun();
   const FINDING = {
     verdict: "findings",
     findings: [{ file: "cli.js", severity: "major", title: "no exit code" }],
   };
 
-  // Findings make the fix step run; it declares `agent: build`, which is gone.
-  await resume(run, [FINDING, FINDING, CLEAN, CLEAN, CLEAN, CLEAN, CLEAN]);
+  // architecture, simplify and fix all declare `agent: build`, which is gone.
+  await resume(run, [CLEAN, CLEAN, FINDING, FINDING, CLEAN, CLEAN, CLEAN, CLEAN]);
 
-  const fix = run.step("fix").variants[0]!;
-  expect(fix.agent).not.toBe("dead-build-agent");
-  expect(fix.agent).toBe("implement-add-picker-fix-r2");
-  expect(fix.paneId).not.toBe("9-9");
+  const architect = run.step("architecture").variants[0]!;
+  expect(architect.agent).toBe("implement-add-pi-architecture-r2");
+  expect(architect.paneId).not.toBe("9-9");
+  for (const step of ["simplify", "fix"]) {
+    expect(run.step(step).variants[0]!.agent).toBe(architect.agent);
+  }
   const starts = rig.calls().filter((c) => c.cmd === "agent start").map((c) => c.argv![2]);
-  expect(starts).toContain(fix.agent);
+  expect(starts.filter((a) => a === architect.agent)).toHaveLength(1);
+  expect(starts).not.toContain("dead-build-agent");
 });
 
 test("the first unfinished step takes the status pane's tab", async () => {
@@ -148,7 +156,7 @@ test("the first unfinished step takes the status pane's tab", async () => {
 
   const split = rig.calls().find((c) => c.cmd === "pane split")!.argv!;
   expect(split.slice(0, 3)).toEqual(["pane", "split", "1-0"]);
-  expect(run.step("review").variants[0]!.paneId).toBe("1-1");
+  expect(run.step("architecture").variants[0]!.paneId).toBe("1-1");
 });
 
 test("a resumed run toasts when it finishes and records the new status", async () => {

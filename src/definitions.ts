@@ -70,7 +70,8 @@ export interface StepDef {
   choices?: ChoiceDef[];
   /** Only run this step when its workflow is the one being run, not when embedded. */
   standalone?: boolean;
-  repeat?: { from: string; max?: number };
+  /** `from` is the gate; `back_to` is the earliest step to run again (default `from`). */
+  repeat?: { from: string; back_to?: string; max?: number };
 }
 
 export interface WorkflowDef {
@@ -153,6 +154,7 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
     if (s.repeat && typeof s.repeat === "object") {
       const r = s.repeat as Record<string, unknown>;
       step.repeat = { from: str(r.from) };
+      if (typeof r.back_to === "string") step.repeat.back_to = r.back_to;
       if (typeof r.max === "number") step.repeat.max = r.max;
     }
     return step;
@@ -400,7 +402,11 @@ type Rebase = (id: string | undefined) => string | undefined;
 
 function rebaseRepeat(repeat: StepDef["repeat"], rebase: Rebase): StepDef["repeat"] {
   if (!repeat) return undefined;
-  return { ...repeat, from: rebase(repeat.from)! };
+  return {
+    ...repeat,
+    from: rebase(repeat.from)!,
+    ...(repeat.back_to ? { back_to: rebase(repeat.back_to)! } : {}),
+  };
 }
 
 function rebaseRound(round: RoundDef, rebase: Rebase): RoundDef {
@@ -477,6 +483,9 @@ export function validateWorkflow(
     }
     if (step.repeat && !earlier(wf, step, step.repeat.from)) {
       errors.push(`${where(step.id)}: repeat.from "${step.repeat.from}" is not an earlier step`);
+    }
+    if (step.repeat?.back_to && !earlier(wf, step, step.repeat.back_to)) {
+      errors.push(`${where(step.id)}: repeat.back_to "${step.repeat.back_to}" is not an earlier step`);
     }
     if (step.agent && step.fresh) {
       errors.push(`${where(step.id)}: agent and fresh are mutually exclusive`);

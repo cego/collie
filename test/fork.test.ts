@@ -45,7 +45,7 @@ test("forking a persona into the project layer changes every workflow that uses 
   expect(after.personas.get("reviewer")!.body).toContain("Project reviewer.");
   // implement embeds review, which uses the reviewer persona.
   const wf = resolveWorkflow("implement", after, FALLBACK_DEFAULTS);
-  expect(wf.steps.filter((s) => s.persona === "reviewer")).toHaveLength(2);
+  expect(wf.steps.filter((s) => s.persona === "reviewer")).toHaveLength(1);
 });
 
 test("forking never overwrites an existing fork", () => {
