@@ -32,11 +32,11 @@ title = "Workflows"
 placement = "popup"
 width = "70%"
 height = "60%"
-command = ["bin/herdr-workflows", "picker"]
+command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/herdr-workflows" picker']
 
 # The run's status pane; every action's interactive part happens in a pane.
 [[panes]]
 id = "runner"
 title = "Workflow run"
 placement = "tab"
-command = ["bin/herdr-workflows", "runner"]
+command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/herdr-workflows" runner']

@@ -43,7 +43,10 @@ const state = loadState();
 // Whatever a step asks its agent to write, the fake writes for it: the queue in
 // FAKE_HERDR_OUTPUTS stands in for real agent work.
 if (cmd === "agent prompt") {
-  const text = argv[3] ?? "";
+  const line = argv[3] ?? "";
+  // The runner points the agent at a prompt file; read it the way an agent would.
+  const ref = /is in (\S+\.md) /.exec(line);
+  const text = ref && existsSync(ref[1]!) ? readFileSync(ref[1]!, "utf8") : line;
   const match = /^OUTPUT_PATH: (.+)$/m.exec(text);
   const queuePath = process.env.FAKE_HERDR_OUTPUTS;
   if (match && queuePath && existsSync(queuePath)) {
@@ -53,7 +56,21 @@ if (cmd === "agent prompt") {
     if (next !== undefined && next !== null) {
       const path = match[1]!.trim();
       mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, typeof next === "string" ? next : JSON.stringify(next, null, 2));
+      const delayed = next as { __delay_ms?: number; output?: unknown };
+      if (typeof delayed?.__delay_ms === "number") {
+        // Stands in for an agent that finishes after handing off to the human.
+        const body = JSON.stringify(delayed.output ?? {});
+        Bun.spawn(
+          [
+            "bun",
+            "-e",
+            `await Bun.sleep(${delayed.__delay_ms}); await Bun.write(${JSON.stringify(path)}, ${JSON.stringify(body)});`,
+          ],
+          { stdout: "ignore", stderr: "ignore", stdin: "ignore" },
+        ).unref();
+      } else {
+        writeFileSync(path, typeof next === "string" ? next : JSON.stringify(next, null, 2));
+      }
     }
   }
 }
@@ -75,6 +92,12 @@ switch (cmd) {
   }
   case "agent start":
     result = { type: "agent_started" };
+    break;
+  case "agent get":
+    result = {
+      type: "agent",
+      agent: { agent_status: process.env.FAKE_HERDR_AGENT_STATUS ?? "idle" },
+    };
     break;
   case "agent read":
     saveState(state);

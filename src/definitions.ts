@@ -221,12 +221,14 @@ export function resolveWorkflow(
     const known = [...defs.workflows.keys()].sort().join(", ") || "none";
     throw new DefinitionError(`unknown workflow "${name}" (known: ${known})`);
   }
-  const steps = expand(wf, defs, [wf.name]);
+  const inherited: Record<string, InputStrategy> = {};
+  const steps = expand(wf, defs, [wf.name], inherited);
   return {
     name: wf.name,
     title: wf.title,
     description: wf.description,
-    inputs: wf.inputs,
+    // An embedded workflow brings its own Inputs; the embedder's declaration wins.
+    inputs: { ...inherited, ...wf.inputs },
     maxIterations: wf.maxIterations ?? defaults.maxIterations,
     steps,
     layer: wf.layer,
@@ -234,7 +236,12 @@ export function resolveWorkflow(
   };
 }
 
-function expand(wf: WorkflowDef, defs: Definitions, chain: string[]): ResolvedStep[] {
+function expand(
+  wf: WorkflowDef,
+  defs: Definitions,
+  chain: string[],
+  inherited: Record<string, InputStrategy>,
+): ResolvedStep[] {
   const { preamble, sections } = bodySections(wf.body);
   const single = wf.steps.length === 1 && sections.size === 0;
   const out: ResolvedStep[] = [];
@@ -251,7 +258,8 @@ function expand(wf: WorkflowDef, defs: Definitions, chain: string[]): ResolvedSt
           `workflow "${wf.name}" step "${step.id}" uses unknown workflow "${step.use}" (known: ${known})`,
         );
       }
-      const embedded = expand(inner, defs, [...chain, inner.name]);
+      for (const [key, strategy] of Object.entries(inner.inputs)) inherited[key] = strategy;
+      const embedded = expand(inner, defs, [...chain, inner.name], inherited);
       for (const child of embedded) {
         out.push({
           ...child,

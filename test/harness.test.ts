@@ -10,16 +10,16 @@ test("the adapter table covers claude, codex and opencode with model flags", () 
   ]);
 });
 
-test("a persona goes in as a flag where the harness has one, else as a prompt prefix", () => {
-  expect(startArgs(HARNESSES.claude!, "sonnet", "You review.")).toEqual([
+test("a persona goes in as a file flag where the harness has one, else as a prompt prefix", () => {
+  expect(startArgs(HARNESSES.claude!, "sonnet", "/run/personas/reviewer.md")).toEqual([
     "--model",
     "sonnet",
-    "--append-system-prompt",
-    "You review.",
+    "--append-system-prompt-file",
+    "/run/personas/reviewer.md",
   ]);
   expect(personaPrefix(HARNESSES.claude!, "You review.")).toBe("");
 
-  expect(startArgs(HARNESSES.codex!, "gpt-5", "You review.")).toEqual(["-m", "gpt-5"]);
+  expect(startArgs(HARNESSES.codex!, "gpt-5", "/run/personas/reviewer.md")).toEqual(["-m", "gpt-5"]);
   expect(personaPrefix(HARNESSES.codex!, "You review.")).toBe("You review.");
 });
 

@@ -6,8 +6,11 @@ export interface HarnessAdapter {
   /** herdr agent kind, i.e. the canonical executable. */
   kind: string;
   modelArgs(model: string): string[];
-  /** Present when the harness can take a persona as a flag instead of a prompt prefix. */
-  personaArgs?(persona: string): string[];
+  /**
+   * Present when the harness takes a persona file as a flag. herdr rejects agent
+   * arguments it cannot encode for the shell, so this takes a path, not the text.
+   */
+  personaArgs?(personaFile: string): string[];
   models: string[];
   modelPattern?: RegExp;
 }
@@ -17,7 +20,7 @@ export const HARNESSES: Record<string, HarnessAdapter> = {
     id: "claude",
     kind: "claude",
     modelArgs: (model) => ["--model", model],
-    personaArgs: (persona) => ["--append-system-prompt", persona],
+    personaArgs: (file) => ["--append-system-prompt-file", file],
     models: ["opus", "sonnet", "haiku", "opusplan"],
     modelPattern: /^claude-[a-z0-9.-]+$/,
   },
@@ -56,8 +59,8 @@ export function modelHint(harness: HarnessAdapter, extra: string[] = []): string
 }
 
 /** Args for `herdr agent start ... -- <args>`. */
-export function startArgs(harness: HarnessAdapter, model: string, persona: string): string[] {
-  return [...harness.modelArgs(model), ...(harness.personaArgs?.(persona) ?? [])];
+export function startArgs(harness: HarnessAdapter, model: string, personaFile: string): string[] {
+  return [...harness.modelArgs(model), ...(harness.personaArgs?.(personaFile) ?? [])];
 }
 
 /** Persona text to prepend to the first prompt when the harness has no flag for it. */

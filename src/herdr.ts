@@ -118,6 +118,10 @@ export class Herdr {
     return res?.result?.pane?.pane_id ?? "";
   }
 
+  async paneRun(paneId: string, command: string): Promise<void> {
+    await this.cli(["pane", "run", paneId, command]);
+  }
+
   async paneRename(paneId: string, label: string): Promise<void> {
     await this.cli(["pane", "rename", paneId, label]);
   }
@@ -135,15 +139,9 @@ export class Herdr {
     await this.cli(args);
   }
 
-  async agentPrompt(
-    target: string,
-    text: string,
-    opts: { until?: AgentStatus[]; timeoutMs?: number } = {},
-  ): Promise<void> {
-    const args = ["agent", "prompt", target, text, "--wait"];
-    for (const s of opts.until ?? []) args.push("--until", s);
-    if (opts.timeoutMs) args.push("--timeout", String(opts.timeoutMs));
-    await this.cli(args);
+  /** Submits without waiting so several agents can work at once. */
+  async agentPrompt(target: string, text: string): Promise<void> {
+    await this.cli(["agent", "prompt", target, text]);
   }
 
   async agentWait(
@@ -154,6 +152,15 @@ export class Herdr {
     for (const s of opts.until ?? []) args.push("--until", s);
     if (opts.timeoutMs) args.push("--timeout", String(opts.timeoutMs));
     await this.cli(args);
+  }
+
+  async agentStatus(target: string): Promise<AgentStatus> {
+    const res = await this.cli(["agent", "get", target]);
+    return (res?.result?.agent?.agent_status as AgentStatus) ?? "unknown";
+  }
+
+  async paneClose(paneId: string): Promise<void> {
+    await this.cli(["pane", "close", paneId]);
   }
 
   async agentRead(target: string, lines = 40): Promise<string> {
@@ -171,9 +178,13 @@ export class Herdr {
     entrypoint: string;
     env?: Record<string, string>;
     focus?: boolean;
+    /** Only for non-popup placements: popups and overlays target the active pane. */
+    workspaceId?: string | null;
+    cwd?: string;
   }): Promise<void> {
     const args = ["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", opts.entrypoint];
-    if (this.env.workspaceId) args.push("--workspace", this.env.workspaceId);
+    if (opts.workspaceId) args.push("--workspace", opts.workspaceId);
+    if (opts.cwd) args.push("--cwd", opts.cwd);
     for (const [k, v] of Object.entries(opts.env ?? {})) args.push("--env", `${k}=${v}`);
     args.push(opts.focus === false ? "--no-focus" : "--focus");
     await this.cli(args);

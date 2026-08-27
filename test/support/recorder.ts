@@ -93,7 +93,7 @@ export class Rig {
   pluginEnv(overrides: Record<string, string> = {}): PluginEnv {
     const env = this.env(overrides);
     // The fake CLI reads its own config from the ambient environment.
-    for (const k of ["FAKE_HERDR_LOG", "FAKE_HERDR_OUTPUTS", "FAKE_HERDR_FAIL", "FAKE_HERDR_AGENT_TEXT"]) {
+    for (const k of ["FAKE_HERDR_LOG", "FAKE_HERDR_OUTPUTS", "FAKE_HERDR_FAIL", "FAKE_HERDR_AGENT_TEXT", "FAKE_HERDR_AGENT_STATUS"]) {
       if (env[k]) process.env[k] = env[k];
     }
     return readEnv(env);

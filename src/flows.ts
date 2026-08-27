@@ -1,0 +1,168 @@
+// What each plugin action does. Actions have no tty, so they only open a pane;
+// the interactive work happens in the `picker` and `runner` pane entrypoints.
+
+import { loadDefaults } from "./config";
+import {
+  DefinitionError,
+  layers,
+  loadDefinitions,
+  resolveWorkflow,
+  validateWorkflow,
+  type Definitions,
+} from "./definitions";
+import { executeRun } from "./engine";
+import type { PluginEnv } from "./env";
+import type { Herdr } from "./herdr";
+import { confirmLine, inferInputs, type Resolution } from "./inputs";
+import { ask, confirm, nextKey, pick, releaseKeyboard, type PickItem } from "./picker";
+import { RunStore } from "./run";
+
+export type Mode = "pick" | "resume" | "fork";
+
+/** An action: open the popup that does the actual work. */
+export async function openPicker(herdr: Herdr, env: PluginEnv, mode: Mode): Promise<number> {
+  console.log(`${mode}: opening the picker in ${env.cwd}`);
+  await herdr.pluginPaneOpen({
+    entrypoint: "picker",
+    env: { HERDR_WORKFLOWS_MODE: mode, HERDR_WORKFLOWS_CWD: env.cwd },
+    focus: true,
+  });
+  return 0;
+}
+
+function banner(defs: Definitions): string | undefined {
+  if (defs.errors.length === 0) return undefined;
+  return ["Definitions with errors (skipped):", ...defs.errors.map((e) => `  ${e}`)].join("\n");
+}
+
+export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
+  const defs = loadDefinitions(layers(env));
+  const defaults = loadDefaults(env.configDir);
+
+  const items: PickItem[] = [...defs.workflows.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((wf) => ({ id: wf.name, title: wf.title, subtitle: `[${wf.layer}]` }));
+
+  if (items.length === 0) {
+    return await bail("No workflows found. Check the plugin's workflows/ directory.", banner(defs));
+  }
+
+  const chosen = await pick(items, {
+    header: `Workflows — ${env.cwd}`,
+    footer: "↑↓ move · type to filter · Enter run · Esc cancel",
+    banner: banner(defs),
+  });
+  if (!chosen) return 0;
+
+  let resolved;
+  try {
+    resolved = resolveWorkflow(chosen.id, defs, defaults);
+  } catch (e) {
+    if (!(e instanceof DefinitionError)) throw e;
+    return await bail(e.message);
+  }
+
+  // Nothing opens until the whole workflow is valid.
+  const errors = validateWorkflow(resolved, defs, defaults);
+  if (errors.length > 0) {
+    return await bail([`${resolved.name} is not runnable:`, ...errors.map((e) => `  ${e}`)].join("\n"));
+  }
+
+  const resolutions = await inferInputs(resolved.inputs, { cwd: env.cwd });
+  for (const r of resolutions) {
+    if (!r.needsAsking) continue;
+    const answer = await ask(r.question);
+    if (answer === null) return 0;
+    r.value = answer.trim();
+    r.source = "asked";
+    if (r.value === "") return await bail(`${resolved.name} needs an input for "${r.name}".`);
+  }
+
+  const line = confirmLine(resolved.name, resolutions);
+  if (!(await confirm(line))) return 0;
+
+  const store = new RunStore(env.stateDir);
+  const run = store.create({
+    workflow: resolved.name,
+    cwd: env.cwd,
+    inputs: Object.fromEntries(resolutions.map((r) => [r.name, r.value])),
+    inputSources: Object.fromEntries(resolutions.map((r) => [r.name, r.source])),
+    stepIds: resolved.steps.map((s) => s.id),
+    maxIterations: resolved.maxIterations,
+    primaryInput: primaryInput(resolutions),
+  });
+  run.log(`created from ${resolved.path} (${resolved.layer} layer)`);
+  run.log(line);
+
+  await herdr.pluginPaneOpen({
+    entrypoint: "runner",
+    env: { HERDR_WORKFLOWS_RUN: run.id, HERDR_WORKFLOWS_CWD: env.cwd },
+    focus: true,
+    workspaceId: env.workspaceId,
+    cwd: env.cwd,
+  });
+  try {
+    await herdr.popupClose();
+  } catch {
+    // Only a popup can close itself; running the picker in a plain pane is fine.
+  }
+  return 0;
+}
+
+export async function runnerFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
+  const runId = process.env.HERDR_WORKFLOWS_RUN;
+  if (!runId) {
+    console.error("HERDR_WORKFLOWS_RUN is not set; open this pane through the picker.");
+    return 2;
+  }
+  const store = new RunStore(env.stateDir);
+  const run = store.load(runId);
+  const defs = loadDefinitions(layers({ ...env, cwd: run.record.cwd }));
+  const defaults = loadDefaults(env.configDir);
+  const wf = resolveWorkflow(run.record.workflow, defs, defaults);
+
+  if (env.tabId) await herdr.tabRename(env.tabId, `⚙ ${run.record.slug}`);
+  console.log(`${run.id}\n${wf.title}\n`);
+  for (const [name, value] of Object.entries(run.record.inputs)) {
+    console.log(`  ${name} = ${value || "(empty)"} [${run.record.input_sources[name] ?? "?"}]`);
+  }
+  console.log("");
+
+  const status = await executeRun({
+    herdr,
+    defs,
+    defaults,
+    wf,
+    run,
+    hostPaneId: env.paneId,
+    out: (line) => console.log(line),
+    handoffTimeoutMs: defaults.handoffTimeoutMs,
+  });
+
+  console.log(`\nRun dir: ${run.dir}`);
+  await hold();
+  return status === "done" ? 0 : 1;
+}
+
+function primaryInput(resolutions: Resolution[]): string {
+  const first = resolutions.find((r) => r.value !== "");
+  return first ? `${first.value}` : "run";
+}
+
+async function bail(message: string, extra?: string): Promise<number> {
+  process.stdout.write(`\x1b[2J\x1b[H${extra ? `${extra}\n\n` : ""}${message}\n\nPress any key to close.\n`);
+  await anyKey();
+  return 1;
+}
+
+async function hold(): Promise<void> {
+  if (!process.stdin.isTTY) return;
+  process.stdout.write("\nPress any key to close this pane.\n");
+  await anyKey();
+}
+
+async function anyKey(): Promise<void> {
+  if (!process.stdin.isTTY) return;
+  await nextKey();
+  releaseKeyboard();
+}

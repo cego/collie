@@ -218,13 +218,20 @@ test("user defaults come from config.json in the config layer", () => {
   expect(loadDefaults(rig.configDir)).toEqual(FALLBACK_DEFAULTS);
   writeFileSync(
     join(rig.configDir, "config.json"),
-    JSON.stringify({ harness: "codex", model: "gpt-5", max_iterations: 2, models: { opencode: ["local/foo"] } }),
+    JSON.stringify({
+      harness: "codex",
+      model: "gpt-5",
+      max_iterations: 2,
+      handoff_timeout_ms: 60_000,
+      models: { opencode: ["local/foo"] },
+    }),
   );
 
   expect(loadDefaults(rig.configDir)).toEqual({
     harness: "codex",
     model: "gpt-5",
     maxIterations: 2,
+    handoffTimeoutMs: 60_000,
     models: { opencode: ["local/foo"] },
   });
 });
