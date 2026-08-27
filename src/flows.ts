@@ -211,9 +211,15 @@ export async function runnerFlow(herdr: Herdr, env: PluginEnv): Promise<number> 
     defaults,
     wf,
     run,
+    env,
     hostPaneId: env.paneId,
     out: (line) => console.log(line),
     handoffTimeoutMs: defaults.handoffTimeoutMs,
+    // A Choice step asks in this pane, which is where the terminal is.
+    prompts: {
+      menu: (items, opts) => pick(items, opts),
+      ask: (question) => ask(question),
+    },
   });
 
   console.log(`\nRun dir: ${run.dir}`);

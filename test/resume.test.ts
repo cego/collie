@@ -82,6 +82,7 @@ async function resume(run: Run, queue: unknown[]) {
     defaults,
     wf,
     run,
+    env,
     hostPaneId: "1-0",
     out: (line) => lines.push(line),
   });

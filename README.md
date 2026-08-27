@@ -110,9 +110,45 @@ Text before the first heading is prepended to every step's prompt.
 
 One `## <step-id>` section per step. Templates: `{{inputs.<name>}}`,
 `{{outputs.<step>}}`, `{{findings}}`, `{{iteration}}`, `{{max_iterations}}`,
-`{{cwd}}`, `{{run.dir}}`, `{{output_path}}`, `{{harness}}`, `{{model}}`,
-`{{effort}}`.
+`{{cwd}}`, `{{run.dir}}`, `{{config.<key>}}`, `{{output_path}}`, `{{harness}}`,
+`{{model}}`, `{{effort}}`.
 ```
+
+### Choices
+
+A step with `choices:` asks you instead of running an agent:
+
+```yaml
+  - id: next
+    choices:
+      - title: Implement now        # chain: a child run of another workflow
+        run: implement
+        inputs:
+          plan: "{{run.dir}}/plan"
+      - title: Second opinion       # one agent round, then the menu again
+        prompt: second-opinion      # sends the "## second-opinion" section
+        persona: reviewer
+        model: opus
+        effort: xhigh
+        fresh: true
+        output: opinion.json
+        max: 2                      # how often this choice may be taken
+        follow_up:                  # only when that round reported findings
+          agent: grill
+          prompt: revise
+          output: revise.json
+      - title: Stop here
+        stop: true
+```
+
+Each choice needs a `title` and exactly one of `run`, `prompt` or `stop`. A `prompt`
+choice offers the menu again as soon as its round has written its Output, so `Refine`
+can be taken as often as you like; `run` and `stop` end the step. Esc leaves the step
+unfinished, so `resume` finds the run again. `config: {key, question}` asks for a value
+once and keeps it in `config.json`, where prompts read it as `{{config.<key>}}`.
+
+A step may also set `prompt: <section>` to send a section other than its own id —
+that is how one workflow carries an attended and an unattended body.
 
 A step is finished when its `output:` file exists, not when the agent goes quiet — an
 interviewing agent goes quiet waiting for you. Until the file appears you get one

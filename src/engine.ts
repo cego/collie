@@ -3,18 +3,35 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import type { Definitions, ResolvedStep, ResolvedWorkflow, Variant } from "./definitions";
-import { stepVariants, variantKeys } from "./definitions";
+import type { ChoiceDef, Definitions, ResolvedStep, ResolvedWorkflow, RoundDef, Variant } from "./definitions";
+import { roundVariant, stepVariants, variantKeys } from "./definitions";
 import type { Defaults } from "./config";
+import { configValue, readConfig, writeConfigValue } from "./config";
+import type { PluginEnv } from "./env";
+import type { PickItem } from "./picker";
+import { slugify } from "./template";
 import type { Herdr } from "./herdr";
 import { HerdrError } from "./herdr";
 import { HARNESSES, personaPrefix, startArgs } from "./harness";
-import { formatFindings, parseReviewOutput, unionFindings, type Finding, type ReviewOutput } from "./output";
+import {
+  formatFindings,
+  parseFindings,
+  parseReviewOutput,
+  unionFindings,
+  type Finding,
+  type ReviewOutput,
+} from "./output";
 import { agentName, shellQuote, stepLabel } from "./naming";
 import { renderTemplate } from "./template";
 import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 
 export const VIEW_SOURCE_PREFIX = "cego.workflows:";
+
+/** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
+export interface EnginePrompts {
+  menu(items: PickItem[], opts: { header: string; footer?: string }): Promise<PickItem | null>;
+  ask(question: string): Promise<string | null>;
+}
 
 export interface EngineOptions {
   herdr: Herdr;
@@ -22,6 +39,7 @@ export interface EngineOptions {
   defaults: Defaults;
   wf: ResolvedWorkflow;
   run: Run;
+  env: PluginEnv;
   /** The Run's status pane; the first Step splits off it. */
   hostPaneId: string | null;
   out: (line: string) => void;
@@ -29,6 +47,8 @@ export interface EngineOptions {
   /** How long to keep waiting for an Output after the agent hands off to the human. */
   handoffTimeoutMs?: number;
   outputPollMs?: number;
+  /** Required by any Workflow with a Choice step. */
+  prompts?: EnginePrompts;
 }
 
 interface VariantOutcome {
@@ -62,6 +82,27 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
 
     if (record.status === "done") {
       out(`✓ ${step.id} — already done, skipped`);
+      index += 1;
+      continue;
+    }
+
+    if ((step.choices?.length ?? 0) > 0) {
+      record.status = "running";
+      record.iteration = run.record.iteration;
+      record.variants = [];
+      run.save();
+      out(`▶ ${step.id} — over to you`);
+      const result = await runChoiceStep(o, step, outputs, panes, host, viewSource, ran);
+      host = null;
+      ran.add(step.id);
+      record.status = result.status;
+      record.note = result.note;
+      run.save();
+      if (result.status !== "done") {
+        return await finish(o, "blocked", viewSource, `${step.id} needs you`);
+      }
+      // A chained Run takes over from here, so the parent stops where it is.
+      if (result.chained) return await finish(o, "done", viewSource, result.note ?? undefined);
       index += 1;
       continue;
     }
@@ -160,6 +201,7 @@ async function runStep(
   host: string | null,
   viewSource: string,
   ran: Set<string>,
+  extraVars?: Record<string, unknown>,
 ): Promise<VariantOutcome[]> {
   const { herdr, run } = o;
   // A step that has not run in this process gets fresh agents: a resumed Run
@@ -229,7 +271,7 @@ async function runStep(
     // A multi-line prompt cannot be typed into a harness reliably, so the prompt
     // goes to a file in the run dir and the agent is pointed at it.
     const path = join(run.stepDir(step.id, key), `prompt-${run.record.iteration}.md`);
-    writeFileSync(path, `${buildPrompt(o, step, variant, key, outputs)}\n`);
+    writeFileSync(path, `${buildPrompt(o, step, variant, key, outputs, extraVars)}\n`);
     run.log(`prompt ${record.agent} -> ${relative(run.dir, path)}`);
     await herdr.agentPrompt(record.agent, `Your task for this step is in ${path} — read it and follow it.`);
   }
@@ -250,6 +292,138 @@ async function runStep(
     outcomes.push(await collect(o, step, record, key));
   }
   return outcomes;
+}
+
+interface ChoiceResult {
+  status: StepStatus;
+  note: string | null;
+  /** True when a child Run took over, so the parent should stop. */
+  chained?: boolean;
+}
+
+/**
+ * A Choice step: a menu in the runner pane instead of an agent. A `prompt` choice
+ * runs one agent round and offers the menu again; `run` and `stop` end the step.
+ */
+async function runChoiceStep(
+  o: EngineOptions,
+  step: ResolvedStep,
+  outputs: Map<string, VariantOutcome[]>,
+  panes: string[],
+  host: string | null,
+  viewSource: string,
+  ran: Set<string>,
+): Promise<ChoiceResult> {
+  const { run, out } = o;
+  const prompts = o.prompts;
+  if (!prompts) {
+    return { status: "failed", note: `${step.id} needs a menu, and this run has no terminal` };
+  }
+  const choices = step.choices ?? [];
+  let hostPane = host;
+
+  for (;;) {
+    const taken = (title: string) =>
+      run.record.choices.filter((c) => c.step === step.id && c.title === title).length;
+    const items: PickItem[] = choices
+      .filter((c) => c.max === undefined || taken(c.title) < c.max)
+      .map((c) => ({ id: c.title, title: c.title, subtitle: choiceHint(c) }));
+
+    const picked = await prompts.menu(items, {
+      header: `${run.record.slug} — ${step.id}`,
+      footer: "↑↓ move · Enter choose · Esc leave the run open",
+    });
+    if (!picked) return { status: "blocked", note: "no choice taken" };
+
+    const choice = choices.find((c) => c.title === picked.id)!;
+    run.record.choices.push({ step: step.id, title: choice.title, at: new Date().toISOString() });
+    run.save();
+    out(`  ▸ ${choice.title}`);
+
+    if (choice.stop || choice.run) return { status: "done", note: `chose "${choice.title}"` };
+
+    if (choice.config) await ensureConfig(o, prompts, choice.config);
+
+    const round = choice.round!;
+    const key = `${slugify(choice.title)}-${taken(choice.title)}`;
+    const first = await runRound(o, step, round, key, outputs, panes, hostPane, viewSource, ran);
+    hostPane = null;
+    if (first.record.status !== "done") {
+      out(`  ⚠ ${first.record.label} — ${first.record.error ?? "did not finish"}`);
+      continue;
+    }
+    const findings = first.review?.findings ?? [];
+    if (choice.followUp && findings.length > 0) {
+      const next = await runRound(
+        o,
+        step,
+        choice.followUp,
+        `${key}-then`,
+        outputs,
+        panes,
+        null,
+        viewSource,
+        ran,
+        { findings: formatFindings(findings) },
+      );
+      if (next.record.status !== "done") {
+        out(`  ⚠ ${next.record.label} — ${next.record.error ?? "did not finish"}`);
+      }
+    }
+  }
+}
+
+/** One agent round inside a Choice: a Step in every way except its own id. */
+async function runRound(
+  o: EngineOptions,
+  step: ResolvedStep,
+  round: RoundDef,
+  key: string,
+  outputs: Map<string, VariantOutcome[]>,
+  panes: string[],
+  host: string | null,
+  viewSource: string,
+  ran: Set<string>,
+  extraVars?: Record<string, unknown>,
+): Promise<VariantOutcome> {
+  const synth: ResolvedStep = {
+    ...round,
+    id: step.id,
+    persona: round.persona ?? step.persona,
+    origin: step.origin,
+    preamble: step.preamble,
+    prompt: round.prompt,
+    known: step.known,
+    choices: undefined,
+  };
+  const variant = roundVariant(round, step, o.defaults);
+  const outcomes = await runStep(o, synth, [variant], [key], outputs, panes, host, viewSource, ran, extraVars);
+  const outcome = outcomes[0]!;
+  o.run.step(step.id).variants.push(outcome.record);
+  outputs.set(step.id, [outcome]);
+  o.run.save();
+  const mark = outcome.record.status === "done" ? "✓" : "⚠";
+  await markTab(o.herdr, outcome.record, mark);
+  return outcome;
+}
+
+function choiceHint(choice: ChoiceDef): string {
+  if (choice.run) return `runs ${choice.run}`;
+  if (choice.stop) return "ends here";
+  return choice.round?.agent ? `prompts ${choice.round.agent}` : "a fresh agent";
+}
+
+/** A value the human is asked for once and that stays in config.json. */
+async function ensureConfig(
+  o: EngineOptions,
+  prompts: EnginePrompts,
+  cfg: { key: string; question: string },
+): Promise<void> {
+  if (configValue(readConfig(o.env.configDir), cfg.key) !== undefined) return;
+  const answer = await prompts.ask(cfg.question);
+  if (answer === null || answer.trim() === "") return;
+  writeConfigValue(o.env.configDir, cfg.key, answer.trim());
+  o.out(`  saved ${cfg.key} in config.json`);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -319,6 +493,7 @@ async function collect(
       return { record, output: parsed, review: null };
     }
     review = result.value;
+    collectList(o, "deferred", parsed);
     // A re-run step must not double-report what it disputed last time.
     for (const finding of review.disputed) {
       const key = `${finding.file ?? ""}:${finding.line ?? ""}:${finding.title}`;
@@ -331,6 +506,20 @@ async function collect(
 
   record.status = "done";
   return { record, output: parsed, review };
+}
+
+/** Appends an Output's `deferred` entries to the run, without repeating one. */
+function collectList(o: EngineOptions, key: "deferred", parsed: unknown): void {
+  const raw = (parsed as Record<string, unknown>)[key];
+  if (!Array.isArray(raw)) return;
+  const result = parseFindings(raw, `${key}`);
+  if (!result.ok) return;
+  for (const finding of result.value) {
+    const id = `${finding.file ?? ""}:${finding.title}`;
+    if (!o.run.record[key].some((f) => `${f.file ?? ""}:${f.title}` === id)) {
+      o.run.record[key].push(finding);
+    }
+  }
 }
 
 /** The agent of an earlier step, but only one this process actually started. */
@@ -358,6 +547,7 @@ function buildPrompt(
   variant: Variant,
   variantKey: string | null,
   outputs: Map<string, VariantOutcome[]>,
+  extraVars?: Record<string, unknown>,
 ): string {
   const adapter = HARNESSES[variant.harness]!;
   const outputPath = step.output ? o.run.outputPath(step.id, variantKey, step.output) : "";
@@ -379,6 +569,8 @@ function buildPrompt(
     harness: variant.harness,
     model: variant.model,
     effort: variant.effort ?? "",
+    config: readConfig(o.env.configDir),
+    ...extraVars,
   };
 
   const parts: string[] = [];
@@ -477,6 +669,15 @@ export function summarise(o: EngineOptions, status: RunStatus): string {
   }
   if (run.record.outstanding.length > 0) {
     lines.push("", "Findings still open:", formatFindings(run.record.outstanding));
+  }
+  if (run.record.choices.length > 0) {
+    lines.push("", "Choices:", ...run.record.choices.map((c) => `  ${c.step}: ${c.title}`));
+  }
+  if (run.record.children.length > 0) {
+    lines.push("", `Chained: ${run.record.children.join(", ")}`);
+  }
+  if (run.record.deferred.length > 0) {
+    lines.push("", "Deferred (the architect did not apply these):", formatFindings(run.record.deferred));
   }
   if (run.record.disputed.length > 0) {
     lines.push("", "Disputed findings (the implementer did not apply these):", formatFindings(run.record.disputed));

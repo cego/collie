@@ -23,6 +23,36 @@ export interface Variant {
   effort?: string;
 }
 
+/** What one agent round of a Choice runs; `prompt:` names the body section. */
+export interface RoundDef {
+  section: string;
+  /** The section's text, filled in when the workflow is resolved. */
+  prompt: string;
+  agent?: string;
+  persona?: string;
+  harness?: string;
+  model?: string;
+  effort?: string;
+  fresh?: boolean;
+  output?: string;
+}
+
+export interface ChoiceDef {
+  title: string;
+  /** Exactly one of these three: chain a Workflow, prompt an agent, or just end. */
+  run?: string;
+  round?: RoundDef;
+  stop?: boolean;
+  /** Inputs forwarded to a chained Workflow; values are templated. */
+  inputs?: Record<string, string>;
+  /** How often this choice may be taken in one Run. */
+  max?: number;
+  /** A config.json value the round needs; asked once, then remembered. */
+  config?: { key: string; question: string };
+  /** Run only when the first round reported findings. */
+  followUp?: RoundDef;
+}
+
 export interface StepDef {
   id: string;
   persona?: string;
@@ -35,6 +65,9 @@ export interface StepDef {
   agent?: string;
   parallel?: Variant[];
   use?: string;
+  /** A body section other than the step's own id; see ADR-0002 workflows design. */
+  promptSection?: string;
+  choices?: ChoiceDef[];
   repeat?: { from: string; max?: number };
 }
 
@@ -112,6 +145,8 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
         return variant;
       });
     }
+    if (typeof s.prompt === "string") step.promptSection = s.prompt;
+    if (Array.isArray(s.choices)) step.choices = s.choices.map(parseChoice);
     if (s.repeat && typeof s.repeat === "object") {
       const r = s.repeat as Record<string, unknown>;
       step.repeat = { from: str(r.from) };
@@ -131,6 +166,40 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
     path,
     layer,
   };
+}
+
+function parseRound(raw: Record<string, unknown>): RoundDef | undefined {
+  if (typeof raw.prompt !== "string") return undefined;
+  const round: RoundDef = { section: raw.prompt, prompt: "" };
+  for (const key of ["agent", "persona", "harness", "model", "effort", "output"] as const) {
+    if (typeof raw[key] === "string") round[key] = raw[key] as string;
+  }
+  if (typeof raw.fresh === "boolean") round.fresh = raw.fresh;
+  return round;
+}
+
+function parseChoice(raw: unknown): ChoiceDef {
+  const c = (raw ?? {}) as Record<string, unknown>;
+  const choice: ChoiceDef = { title: str(c.title) };
+  if (typeof c.run === "string") choice.run = c.run;
+  if (c.stop === true) choice.stop = true;
+  if (typeof c.max === "number") choice.max = c.max;
+  const round = parseRound(c);
+  if (round) choice.round = round;
+  if (c.inputs && typeof c.inputs === "object") {
+    const inputs: Record<string, string> = {};
+    for (const [k, v] of Object.entries(c.inputs as Record<string, unknown>)) inputs[k] = str(v);
+    choice.inputs = inputs;
+  }
+  if (c.config && typeof c.config === "object") {
+    const cfg = c.config as Record<string, unknown>;
+    choice.config = { key: str(cfg.key), question: str(cfg.question) };
+  }
+  if (c.follow_up && typeof c.follow_up === "object") {
+    const follow = parseRound(c.follow_up as Record<string, unknown>);
+    if (follow) choice.followUp = follow;
+  }
+  return choice;
 }
 
 function parsePersona(path: string, layer: LayerName): PersonaDef {
@@ -201,6 +270,8 @@ export interface ResolvedStep extends StepDef {
   origin: string;
   prompt: string;
   preamble: string;
+  /** Section names the origin body offers, for the error message when one is missing. */
+  known: string[];
 }
 
 export interface ResolvedWorkflow {
@@ -288,15 +359,30 @@ function expand(
       }
       continue;
     }
+    const section = step.promptSection ?? step.id;
     out.push({
       ...step,
       origin: wf.name,
       // A body with no headings IS the prompt, so it must not also be the preamble.
       preamble: single ? "" : preamble,
-      prompt: single ? wf.body : (sections.get(step.id) ?? ""),
+      prompt: single ? wf.body : (sections.get(section) ?? ""),
+      known: [...sections.keys()],
+      ...(step.choices ? { choices: step.choices.map((c) => resolveChoice(c, sections)) } : {}),
     });
   }
   return out;
+}
+
+function resolveRound(round: RoundDef, sections: Map<string, string>): RoundDef {
+  return { ...round, prompt: sections.get(round.section) ?? "" };
+}
+
+function resolveChoice(choice: ChoiceDef, sections: Map<string, string>): ChoiceDef {
+  return {
+    ...choice,
+    ...(choice.round ? { round: resolveRound(choice.round, sections) } : {}),
+    ...(choice.followUp ? { followUp: resolveRound(choice.followUp, sections) } : {}),
+  };
 }
 
 export function validateWorkflow(
@@ -322,41 +408,27 @@ export function validateWorkflow(
     if (seen.has(step.id)) errors.push(`${where(step.id)}: duplicate step id`);
     seen.add(step.id);
 
+    const isChoice = (step.choices?.length ?? 0) > 0;
     const personaName = step.persona;
-    if (!personaName) errors.push(`${where(step.id)}: no persona`);
-    else if (!defs.personas.has(personaName)) {
+    if (!personaName && !isChoice) errors.push(`${where(step.id)}: no persona`);
+    else if (personaName && !defs.personas.has(personaName)) {
       const known = [...defs.personas.keys()].sort().join(", ") || "none";
       errors.push(`${where(step.id)}: unknown persona "${personaName}" (known: ${known})`);
     }
 
-    if (step.prompt.trim() === "") {
-      errors.push(`${where(step.id)}: no prompt (add a "## ${step.id}" section to ${step.origin}.md)`);
+    // A Choice step's "prompt" is its menu, so it needs no section of its own.
+    if (step.prompt.trim() === "" && !isChoice) {
+      errors.push(
+        step.promptSection
+          ? `${where(step.id)}: unknown prompt section "${step.promptSection}" in ${step.origin}.md (known: ${step.known.join(", ") || "none"})`
+          : `${where(step.id)}: no prompt (add a "## ${step.id}" section to ${step.origin}.md)`,
+      );
     }
 
     for (const combo of stepVariants(step, defaults)) {
-      const adapter = HARNESSES[combo.harness];
-      if (!adapter) {
-        errors.push(
-          `${where(step.id)}: unknown harness "${combo.harness}" (known: ${harnessNames().join(", ")})`,
-        );
-        continue;
-      }
-      const extra = defaults.models[combo.harness] ?? [];
-      if (!knownModel(adapter, combo.model, extra)) {
-        errors.push(
-          `${where(step.id)}: unknown model "${combo.model}" for harness "${combo.harness}" (known: ${modelHint(adapter, extra)})`,
-        );
-      }
-      if (combo.effort !== undefined) {
-        if (!adapter.effortArgs) {
-          errors.push(`${where(step.id)}: harness "${combo.harness}" has no effort setting`);
-        } else if (!(adapter.efforts ?? []).includes(combo.effort)) {
-          errors.push(
-            `${where(step.id)}: unknown effort "${combo.effort}" for harness "${combo.harness}" (known: ${(adapter.efforts ?? []).join(", ")})`,
-          );
-        }
-      }
+      errors.push(...variantErrors(where(step.id), combo, defaults));
     }
+    if (isChoice) errors.push(...choiceErrors(wf, step, defs, defaults));
 
     if (step.agent && !earlier(wf, step, step.agent)) {
       errors.push(`${where(step.id)}: agent "${step.agent}" is not an earlier step`);
@@ -370,6 +442,104 @@ export function validateWorkflow(
   }
 
   return errors;
+}
+
+function variantErrors(where: string, combo: Variant, defaults: Defaults): string[] {
+  const adapter = HARNESSES[combo.harness];
+  if (!adapter) {
+    return [`${where}: unknown harness "${combo.harness}" (known: ${harnessNames().join(", ")})`];
+  }
+  const errors: string[] = [];
+  const extra = defaults.models[combo.harness] ?? [];
+  if (!knownModel(adapter, combo.model, extra)) {
+    errors.push(
+      `${where}: unknown model "${combo.model}" for harness "${combo.harness}" (known: ${modelHint(adapter, extra)})`,
+    );
+  }
+  if (combo.effort !== undefined) {
+    if (!adapter.effortArgs) {
+      errors.push(`${where}: harness "${combo.harness}" has no effort setting`);
+    } else if (!(adapter.efforts ?? []).includes(combo.effort)) {
+      errors.push(
+        `${where}: unknown effort "${combo.effort}" for harness "${combo.harness}" (known: ${(adapter.efforts ?? []).join(", ")})`,
+      );
+    }
+  }
+  return errors;
+}
+
+function choiceErrors(
+  wf: ResolvedWorkflow,
+  step: ResolvedStep,
+  defs: Definitions,
+  defaults: Defaults,
+): string[] {
+  const errors: string[] = [];
+  for (const [i, choice] of (step.choices ?? []).entries()) {
+    const at = choice.title ? `choice "${choice.title}"` : `choice ${i + 1}`;
+    const where = `workflow "${wf.name}" step "${step.id}" ${at}`;
+    if (!choice.title) errors.push(`${where}: needs a title`);
+    const forms = [choice.run, choice.round, choice.stop].filter((f) => f !== undefined).length;
+    if (forms !== 1) errors.push(`${where}: needs exactly one of run, prompt or stop`);
+
+    for (const round of [choice.round, choice.followUp]) {
+      if (!round) continue;
+      if (round.prompt.trim() === "") {
+        errors.push(
+          `${where}: unknown prompt section "${round.section}" in ${step.origin}.md (known: ${step.known.join(", ") || "none"})`,
+        );
+      }
+      const persona = round.persona ?? step.persona;
+      if (!round.agent && !persona) errors.push(`${where}: needs a persona or an agent`);
+      if (persona && !defs.personas.has(persona)) {
+        const known = [...defs.personas.keys()].sort().join(", ") || "none";
+        errors.push(`${where}: unknown persona "${persona}" (known: ${known})`);
+      }
+      if (round.agent && !earlier(wf, step, round.agent)) {
+        errors.push(`${where}: agent "${round.agent}" is not an earlier step`);
+      }
+      if (!round.output) errors.push(`${where}: needs an output, so the round can finish`);
+      errors.push(...variantErrors(where, roundVariant(round, step, defaults), defaults));
+    }
+
+    if (choice.config && (!choice.config.key || !choice.config.question)) {
+      errors.push(`${where}: config needs a key and a question`);
+    }
+    if (choice.max !== undefined && choice.max < 1) errors.push(`${where}: max must be at least 1`);
+    if (choice.run) errors.push(...chainErrors(where, choice, defs, defaults));
+  }
+  return errors;
+}
+
+/** Chaining is checked here so a broken menu cannot open a single tab. */
+function chainErrors(
+  where: string,
+  choice: ChoiceDef,
+  defs: Definitions,
+  defaults: Defaults,
+): string[] {
+  let child: ResolvedWorkflow;
+  try {
+    child = resolveWorkflow(choice.run!, defs, defaults);
+  } catch (e) {
+    return [`${where}: ${(e as Error).message}`];
+  }
+  const unknown = Object.keys(choice.inputs ?? {}).filter((k) => !(k in child.inputs));
+  return unknown.length === 0
+    ? []
+    : [
+        `${where}: workflow "${child.name}" has no input(s) ${unknown.join(", ")} (known: ${Object.keys(child.inputs).join(", ") || "none"})`,
+      ];
+}
+
+/** The harness/model/effort one Choice round runs with. */
+export function roundVariant(round: RoundDef, step: ResolvedStep, defaults: Defaults): Variant {
+  const effort = round.effort ?? step.effort ?? defaults.effort;
+  const variant: Variant = {
+    harness: round.harness ?? step.harness ?? defaults.harness,
+    model: round.model ?? step.model ?? defaults.model,
+  };
+  return effort === undefined ? variant : { ...variant, effort };
 }
 
 function earlier(wf: ResolvedWorkflow, step: ResolvedStep, id: string): boolean {

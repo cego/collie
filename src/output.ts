@@ -41,7 +41,7 @@ export function parseReviewOutput(text: string, where: string): Parsed<ReviewOut
   return { ok: true, value: { verdict: obj.verdict, findings: findings.value, disputed: disputed.value } };
 }
 
-function parseFindings(raw: unknown, where: string): Parsed<Finding[]> {
+export function parseFindings(raw: unknown, where: string): Parsed<Finding[]> {
   if (raw === undefined || raw === null) return { ok: true, value: [] };
   if (!Array.isArray(raw)) return { ok: false, error: `${where}: expected an array` };
   const out: Finding[] = [];

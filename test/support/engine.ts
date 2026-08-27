@@ -7,12 +7,44 @@ import { Herdr } from "../../src/herdr";
 import { inferInputs } from "../../src/inputs";
 import { RunStore, type Run } from "../../src/run";
 import type { Rig } from "./recorder";
+import type { EnginePrompts } from "../../src/engine";
+import type { PickItem } from "../../src/picker";
 
 /** Copies the repo's real baseline definitions into the rig's baseline layer. */
 export function installBaseline(rig: Rig): void {
   const root = new URL("../../", import.meta.url).pathname;
   cpSync(`${root}workflows`, `${rig.baselineDir}/workflows`, { recursive: true });
   cpSync(`${root}personas`, `${rig.baselineDir}/personas`, { recursive: true });
+}
+
+/** A menu and a keyboard the tests drive: picks by title, answers in order. */
+export function scriptedPrompts(
+  picks: (string | null)[],
+  answers: string[] = [],
+): EnginePrompts & { offered: string[][]; asked: string[] } {
+  const offered: string[][] = [];
+  const asked: string[] = [];
+  return {
+    offered,
+    asked,
+    async menu(items: PickItem[]) {
+      offered.push(items.map((i) => i.title));
+      if (picks.length === 0) {
+        throw new Error(`menu offered [${items.map((i) => i.title).join(", ")}] with no scripted pick left`);
+      }
+      const want = picks.shift()!;
+      if (want === null) return null;
+      const found = items.find((i) => i.title === want);
+      if (!found) {
+        throw new Error(`scripted pick "${want}" was not offered (offered: ${items.map((i) => i.title).join(", ")})`);
+      }
+      return found;
+    },
+    async ask(question: string) {
+      asked.push(question);
+      return answers.shift() ?? null;
+    },
+  };
 }
 
 /** A finished `plan` Run with a SPEC, i.e. what `plan-dir` inference looks for. */
@@ -53,6 +85,7 @@ export async function runWorkflow(
     defaults?: Partial<Defaults>;
     handoffTimeoutMs?: number;
     outputPollMs?: number;
+    prompts?: EnginePrompts;
   } = {},
 ): Promise<RanRun> {
   const env = rig.pluginEnv();
@@ -95,6 +128,8 @@ export async function runWorkflow(
     out: (line) => lines.push(line),
     handoffTimeoutMs: opts.handoffTimeoutMs,
     outputPollMs: opts.outputPollMs,
+    prompts: opts.prompts,
+    env,
   });
   return { run, status, lines };
 }

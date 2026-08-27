@@ -23,6 +23,12 @@ export interface VariantRecord {
   error: string | null;
 }
 
+export interface ChoiceRecord {
+  step: string;
+  title: string;
+  at: string;
+}
+
 export interface StepRecord {
   id: string;
   status: StepStatus;
@@ -46,7 +52,14 @@ export interface RunRecord {
   inputs: Record<string, string>;
   input_sources: Record<string, string>;
   steps: StepRecord[];
+  /** Set when this Run was chained from a Choice in another Run. */
+  parent: string | null;
+  /** Runs chained from a Choice in this one. */
+  children: string[];
+  choices: ChoiceRecord[];
   disputed: Finding[];
+  /** Architecture candidates the architect did not apply. */
+  deferred: Finding[];
   /** Findings still open when a fix loop hit max_iterations. */
   outstanding: Finding[];
   summary: string | null;
@@ -109,6 +122,7 @@ export class RunStore {
     stepIds: string[];
     maxIterations: number;
     primaryInput: string;
+    parent?: string;
   }): Run {
     const slug = `${opts.workflow}-${slugify(opts.primaryInput)}`;
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
@@ -129,7 +143,11 @@ export class RunStore {
       inputs: opts.inputs,
       input_sources: opts.inputSources,
       steps: opts.stepIds.map((id) => ({ id, status: "pending", iteration: 0, note: null, variants: [] })),
+      parent: opts.parent ?? null,
+      children: [],
+      choices: [],
       disputed: [],
+      deferred: [],
       outstanding: [],
       summary: null,
     };
@@ -151,7 +169,13 @@ export class RunStore {
     const dir = join(this.root, id);
     const path = join(dir, "run.json");
     if (!existsSync(path)) throw new Error(`no run "${id}" in ${this.root}`);
-    return new Run(dir, JSON.parse(readFileSync(path, "utf8")) as RunRecord);
+    const record = JSON.parse(readFileSync(path, "utf8")) as RunRecord;
+    // A run recorded by an older version has fewer lists than this one expects.
+    record.children ??= [];
+    record.choices ??= [];
+    record.deferred ??= [];
+    record.parent ??= null;
+    return new Run(dir, record);
   }
 
   /** Newest first. */
