@@ -3,7 +3,6 @@ import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 
 import { join } from "node:path";
 import { Rig } from "./support/recorder";
 import { claudeTrust } from "../src/trust";
-import { trustFlow } from "../src/flows";
 
 let rig: Rig;
 
@@ -110,21 +109,3 @@ test("a config that is not JSON is left exactly as it is", () => {
   expect(readFileSync(path, "utf8")).toBe("{ not json");
 });
 
-test("the trust subcommand records a directory before anyone runs in it", () => {
-  claudeConfig({});
-  const lines: string[] = [];
-
-  const code = trustFlow(rig.pluginEnv(), [rig.projectDir, "/no/such/dir"], (l) => lines.push(l));
-
-  expect(code).toBe(1);
-  expect(lines).toEqual([
-    `claude: trusted ${rig.projectDir} for claude (previous config saved to ${join(rig.stateDir, "claude.json.bak")})`,
-    "/no/such/dir: no such directory",
-  ]);
-  expect(claudeTrust(rig.root, rig.stateDir).state(rig.projectDir)).toBe("trusted");
-
-  // With no directory given it takes the one the plugin was invoked in.
-  lines.length = 0;
-  expect(trustFlow(rig.pluginEnv(), [], (l) => lines.push(l))).toBe(0);
-  expect(lines).toEqual([`claude: ${rig.projectDir} is already trusted`]);
-});

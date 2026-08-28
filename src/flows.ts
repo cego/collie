@@ -1,8 +1,6 @@
 // What each plugin action does. Actions have no tty, so they only open a pane;
 // the interactive work happens in the `picker` and `runner` pane entrypoints.
 
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
 import { loadDefaults } from "./config";
 import {
   DefinitionError,
@@ -18,7 +16,6 @@ import type { Herdr } from "./herdr";
 import { confirmLine, inferInputs, type Resolution } from "./inputs";
 import { ask, confirm, nextKey, pick, releaseKeyboard, type PickItem } from "./picker";
 import { forkDefinition, type DefinitionKind } from "./fork";
-import { HARNESSES } from "./harness";
 import { RunStore } from "./run";
 
 export type Mode = "pick" | "resume" | "fork";
@@ -151,35 +148,6 @@ export async function forkFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const dir = target.id === "user" ? layerDirs[1]!.dir : layerDirs[2]!.dir;
   const result = forkDefinition(source.path, source.kind, dir);
   return await notice(`${chosen.title}: ${result.message}`, result.ok ? 0 : 1);
-}
-
-/**
- * `herdr-workflows trust [dir…]` — records, in advance, that the harnesses may work in
- * those directories, so no run ever stops on a first-run dialog. Not a plugin action:
- * it is for a shell, and for a loop over the repos a team already has checked out.
- */
-export function trustFlow(
-  env: PluginEnv,
-  dirs: string[],
-  out: (line: string) => void = console.log,
-): number {
-  let code = 0;
-  for (const dir of dirs.length > 0 ? dirs : [env.cwd]) {
-    const path = resolve(dir);
-    if (!existsSync(path)) {
-      out(`${path}: no such directory`);
-      code = 1;
-      continue;
-    }
-    for (const [name, adapter] of Object.entries(HARNESSES)) {
-      const trust = adapter.trust?.(env.home, env.stateDir);
-      if (!trust) continue;
-      const result = trust.grant(path);
-      out(`${name}: ${result.message}`);
-      if (!result.ok) code = 1;
-    }
-  }
-  return code;
 }
 
 export async function resumeFlow(herdr: Herdr, env: PluginEnv): Promise<number> {

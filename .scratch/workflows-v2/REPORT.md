@@ -2,7 +2,7 @@
 
 All eight tickets are `done` and committed on `master` (local only, never pushed), plus
 three follow-ups mk asked for afterwards (convergence, workarounds for the two harness
-facts below, and pre-trusting). `bun test` is green: 129 tests, 19 files. `bunx tsc --noEmit` is clean, and
+facts below, and pre-trusting). `bun test` is green: 128 tests, 19 files. `bunx tsc --noEmit` is clean, and
 the runner still compiles.
 
 ```
@@ -149,9 +149,8 @@ Verified by tests only (fake herdr):
    "Is this a project you trust?" dialog.
    **Avoided, and survivable when it happens.** The run now asks *before* it opens a
    tab — "claude has not worked in <cwd> before: trust it now, or let claude ask me in
-   its tab" — and on yes records the answer where claude keeps it. Directories can also
-   be trusted ahead of time with `herdr-workflows trust <dir…>`, and `trust` in
-   `config.json` (`ask` | `auto` | `never`) settles it once. If claude does end up
+   its tab" — and on yes records the answer where claude keeps it, once per directory.
+   `trust` in `config.json` (`ask` | `auto` | `never`) answers it in advance. If claude does end up
    asking, that is no longer a failure either: `agent get` shows the agent exists and is
    `blocked`, and it goes `idle` under the same name the moment a person answers, so the
    runner names the pane, toasts, and waits within the handoff budget. It does *not*
@@ -193,7 +192,7 @@ this, the loop would have finished at iteration 2 instead of burning to 5.
 **The two harness facts are handled (`6686f76`).** See the section above — a startup block
 now waits for the human instead of failing the run, and a step can drive a user-only skill.
 
-**Directories are trusted before the harness asks (`e303ecc`).** There is no `claude trust`
+**Directories are trusted before the harness asks (`e303ecc`, `716bd0a`).** There is no `claude trust`
 command, so this writes the key claude's own dialog writes —
 `projects[<dir>].hasTrustDialogAccepted` in `~/.claude.json` — and that file is 219 KB of
 claude's state, not ours. So: nothing is written without a yes in the runner's menu or an

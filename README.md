@@ -196,14 +196,9 @@ which is where claude keeps the answer to its own dialog — atomically, leaving
 project and setting untouched, and with the previous file copied to
 `claude.json.bak` in the plugin state dir. Nothing else in the file is read or changed.
 
-To do it in advance, for as many repos as you like:
-
-```sh
-bin/herdr-workflows trust ~/work/repo-a ~/work/repo-b   # no argument: the current directory
-```
-
-`trust` in `config.json` decides what a run does when it meets an untrusted directory:
-`ask` (default), `auto` (trust it and say so), or `never` (leave it to claude).
+It asks once per directory, the first time you run a workflow there. `trust` in
+`config.json` answers it in advance: `ask` (default), `auto` (trust it and say so in the
+runner), or `never` (leave the dialog to claude).
 
 If you do let claude ask, nothing breaks: `agent start` reports the agent blocked, which is
 not a failure, so the runner says which pane wants you, toasts, and waits. It cannot answer

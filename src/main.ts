@@ -1,8 +1,8 @@
 import { readEnv } from "./env";
 import { Herdr, HerdrError } from "./herdr";
-import { forkFlow, openPicker, pickFlow, resumeFlow, runnerFlow, trustFlow, type Mode } from "./flows";
+import { forkFlow, openPicker, pickFlow, resumeFlow, runnerFlow, type Mode } from "./flows";
 
-const USAGE = "herdr-workflows <pick|resume|fork|picker|runner> | trust [dir…]";
+const USAGE = "herdr-workflows <pick|resume|fork|picker|runner>";
 
 async function main(): Promise<number> {
   const [command] = process.argv.slice(2);
@@ -26,10 +26,6 @@ async function main(): Promise<number> {
 
     case "runner":
       return await runnerFlow(herdr, env);
-
-    // Not an action: a shell command, for trusting directories before anyone runs in them.
-    case "trust":
-      return trustFlow(env, process.argv.slice(3));
 
     default:
       console.error(USAGE);
