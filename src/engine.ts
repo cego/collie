@@ -24,8 +24,9 @@ import {
   type ReviewOutput,
 } from "./output";
 import { agentName, shellQuote, stepLabel } from "./naming";
-import { classifyWorkSource, inferInputs, resolveWorkSource, type InputPrompts } from "./inputs";
+import { classifyWorkSource, inferInputs, resolveWorkSource, shell as shellRun, type InputPrompts } from "./inputs";
 import { RunStore } from "./run";
+import { gitlabReadiness, mrFacts, type MrFacts } from "./mr";
 import { renderTemplate } from "./template";
 import { resolveWorkflow } from "./definitions";
 import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
@@ -114,6 +115,30 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
       continue;
     }
 
+    // A step that needs something this machine or repo does not have is not a
+    // failure: it is work that cannot be done here, and the run carries on.
+    let extras: Record<string, unknown> | undefined;
+    if (step.requires === "gitlab") {
+      const ready = await gitlabReadiness(run.record.cwd, shellRun);
+      if (!ready.ok) {
+        record.status = "done";
+        record.note = `skipped: ${ready.reason}`;
+        run.save();
+        out(`◦ ${step.id} — skipped: ${ready.reason}`);
+        index += 1;
+        continue;
+      }
+      const facts = await mrFacts(
+        {
+          cwd: run.record.cwd,
+          inputs: run.record.inputs,
+          configuredAssignee: configValue(readConfig(o.env.configDir), "gitlab.assignee"),
+        },
+        shellRun,
+      );
+      extras = mrVars(facts);
+    }
+
     if ((step.choices?.length ?? 0) > 0) {
       record.status = "running";
       record.iteration = run.record.iteration;
@@ -163,7 +188,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
 
     let outcomes: VariantOutcome[];
     try {
-      outcomes = await runStep(o, step, variants, keys, ctx, host);
+      outcomes = await runStep(o, step, variants, keys, ctx, host, extras);
     } catch (e) {
       record.status = "failed";
       record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
@@ -711,6 +736,7 @@ async function collect(
     }
     review = result.value;
     collectList(o, "deferred", parsed);
+    collectMr(o, parsed);
     // A re-run step must not double-report what it disputed last time.
     for (const finding of review.disputed) {
       const key = findingKey(finding);
@@ -722,6 +748,31 @@ async function collect(
 
   record.status = "done";
   return { record, output: parsed, review };
+}
+
+/** The MR step reports what it opened; the summary is where the human looks for it. */
+function collectMr(o: EngineOptions, parsed: unknown): void {
+  const obj = parsed as Record<string, unknown>;
+  if (typeof obj.mr_url === "string" && obj.mr_url.trim() !== "") o.run.record.mr_url = obj.mr_url.trim();
+  if (Array.isArray(obj.linear_issues)) {
+    for (const id of obj.linear_issues) {
+      if (typeof id === "string" && id !== "" && !o.run.record.linear_issues.includes(id)) {
+        o.run.record.linear_issues.push(id);
+      }
+    }
+  }
+}
+
+/** What the MR prompt is given: never null, so a missing value reads as a gap, not "undefined". */
+function mrVars(facts: MrFacts): Record<string, unknown> {
+  return {
+    mr: {
+      assignee: facts.assignee ?? "",
+      template: facts.template ?? "",
+      issues: facts.issues.join(", "),
+      has_issues: facts.issues.length > 0 ? "yes" : "no",
+    },
+  };
 }
 
 /** Appends an Output's `deferred` entries to the run, without repeating one. */
@@ -906,6 +957,10 @@ export function summarise(o: EngineOptions, status: RunStatus): string {
   }
   if (run.record.children.length > 0) {
     lines.push("", `Chained: ${run.record.children.join(", ")}`);
+  }
+  if (run.record.mr_url) {
+    const tickets = run.record.linear_issues.length > 0 ? ` (${run.record.linear_issues.join(", ")})` : "";
+    lines.push("", `Merge request: ${run.record.mr_url}${tickets}`);
   }
   if (run.record.deferred.length > 0) {
     lines.push("", "Deferred (the architect did not apply these):", formatFindings(run.record.deferred));

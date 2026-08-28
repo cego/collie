@@ -28,7 +28,7 @@
 
 ## Baseline Workflows
 - `plan` — interviews the human, writes `tasks/<slug>/PLAN.md`.
-- `implement` — build from plan → parallel `review` (multi-harness/model) → fix loop, max 5 → clean review on a committed branch. MR creation is a separate appendable step.
+- `implement` — build from plan → parallel `review` (multi-harness/model) → fix loop, max 5 → clean review on a committed branch → `mr`, which pushes and opens the merge request. That last step is skipped where there is no GitLab to open one on.
 - `review` — standalone; target inferred MR → branch diff → working tree; writes Output + summary; posting to GitLab is opt-in.
 
 **Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice either chains to another Workflow (`run`) or prompts a named agent.

@@ -62,7 +62,8 @@ export interface InferContext {
   run?: (cmd: string, args: string[], cwd: string) => Promise<{ code: number; stdout: string }>;
 }
 
-async function shell(cmd: string, args: string[], cwd: string): Promise<{ code: number; stdout: string }> {
+/** The one place a subprocess is started for inference; the MR step borrows it too. */
+export async function shell(cmd: string, args: string[], cwd: string): Promise<{ code: number; stdout: string }> {
   try {
     // The env must be passed explicitly or PATH changes are not honoured.
     const proc = Bun.spawn([cmd, ...args], {

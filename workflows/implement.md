@@ -1,7 +1,7 @@
 ---
 name: implement
 title: implement — build the plan, tidy it, review it, fix until clean
-description: Builds from a plan dir, a Linear issue or a description, improves the architecture it touched, simplifies, fans out to reviewers and loops on findings.
+description: Builds from a plan dir, a Linear issue or a description, improves the architecture it touched, simplifies, fans out to reviewers, loops on findings, then opens the merge request.
 inputs:
   plan: work-source
 max_iterations: 5
@@ -29,6 +29,12 @@ steps:
     repeat:
       from: review
       back_to: simplify
+  - id: mr
+    persona: implementer
+    agent: build
+    requires: gitlab
+    output: mr.json
+
 ---
 Work source ({{inputs.plan_kind}}): {{inputs.plan}}
 Project root: {{cwd}}
@@ -90,3 +96,49 @@ Then write the Output JSON: `{"verdict": "clean", "findings": [], "disputed":
 [{"file": "path", "severity": "minor", "title": "the finding", "detail": "why I
 disagree"}], "fixed": ["what you changed", ...], "tests": "what you ran and what it
 said"}`.
+
+## mr
+
+The branch is reviewed and the loop is clean. Push it and open the merge request.
+
+- Assignee: `{{mr.assignee}}`
+- MR template: `{{mr.template}}`
+- Linear tickets: `{{mr.issues}}`
+
+Push the branch with upstream tracking. This is the only step in the whole run allowed
+to touch the remote, and pushing is all it may do. Never merge the MR, and never pass a
+merge flag to `glab`; opening it is the entire job.
+
+Write the description to a file in `{{run.dir}}` first, then create the MR with
+`glab mr create --assignee {{mr.assignee}}` and that file as the description. `glab` does
+not pre-fill the repo's template, so you fill it yourself.
+
+**When the MR template path above is not empty**, read that file and answer every section
+it has — it is a CIATF change-management assessment. Keep it short and plain:
+
+- One or two ordinary sentences per section. No headings inside a section, no tables, no
+  risk matrices, no lists of hypotheticals.
+- Confidentiality, Integrity, Availability, Traceability and Fairness each ask whether
+  this change makes that worse. For most changes the honest answer is `No impact.` —
+  write exactly that and move on. Say something only where there is something to say.
+- Description and Reason are a short paragraph each: what changed, and why it was worth
+  doing.
+- Category is `feature` or `bugfix`. Use `bugfix` only when the spec says you were fixing
+  a defect.
+- Where the template asks for a Trello card, put the Linear ticket links there instead —
+  one link per ticket listed above. With no tickets, write `None.`
+
+The whole description should read in under a minute. If you are writing more than that,
+you are over-explaining it.
+
+**When the template path is empty**, write a plain description instead: a short paragraph
+saying what changed and why, plus the ticket links if there are any.
+
+Then, for each Linear ticket listed above, comment the MR URL on that issue with the
+Linear MCP. If the MCP is not configured, skip it and say so in your Output.
+
+Never write the company package scope with a leading at-sign — in the MR, in a commit
+message, or anywhere else. Write it as a bare name.
+
+Then write the Output JSON: `{"verdict": "clean", "findings": [], "mr_url": "<url>",
+"linear_issues": [<the ids you linked>], "branch": "<what you pushed>"}`.

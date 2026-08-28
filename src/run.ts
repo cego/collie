@@ -62,6 +62,10 @@ export interface RunRecord {
   deferred: Finding[];
   /** Findings still open when a fix loop hit max_iterations. */
   outstanding: Finding[];
+  /** The merge request the `mr` step opened, when it ran. */
+  mr_url: string | null;
+  /** Linear tickets this run answered, as the MR step resolved them. */
+  linear_issues: string[];
   summary: string | null;
 }
 
@@ -149,6 +153,8 @@ export class RunStore {
       disputed: [],
       deferred: [],
       outstanding: [],
+      mr_url: null,
+      linear_issues: [],
       summary: null,
     };
     const run = new Run(join(this.root, id), record);
@@ -174,6 +180,8 @@ export class RunStore {
     record.children ??= [];
     record.choices ??= [];
     record.deferred ??= [];
+    record.mr_url ??= null;
+    record.linear_issues ??= [];
     record.parent ??= null;
     return new Run(dir, record);
   }

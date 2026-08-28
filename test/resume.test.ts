@@ -100,6 +100,7 @@ test("resumable lists only runs that still have unfinished steps", () => {
     "simplify",
     "review",
     "fix",
+    "mr",
   ]);
 
   for (const step of run.record.steps) step.status = "done";

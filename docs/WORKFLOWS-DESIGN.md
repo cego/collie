@@ -73,6 +73,17 @@ agent (`agent: build`) for build/architecture/simplify/fix.
 5. `fix` — `repeat: {from: review}`, max 5: apply union of findings, `disputed` allowed,
    fixup commits; then loop back through `simplify` → `review` (simplify IS in the loop,
    architecture is not).
+6. `mr` — the same implementer pushes the branch and opens the merge request with `glab`,
+   assigned to `gitlab.assignee` from `config.json` or whoever `glab api user` says. The
+   description follows the repo's own template
+   (`.gitlab/merge_request_templates/default.md`, the CIATF assessment) filled in by the
+   agent, because `glab` does not pre-fill templates: one or two plain sentences per
+   section, `No impact.` where that is the honest answer, no tables or matrices. Linear
+   tickets come from the work source, the branch name and whatever a `plan` run offloaded,
+   deduplicated; their links replace the template's Trello line and the MR URL is
+   commented back onto each issue. Never merges. `push` is the run's only remote side
+   effect. The step declares `requires: gitlab` and is skipped with a note where `glab`
+   or a GitLab remote is missing.
 Blocked at max with open findings (unchanged).
 
 ### review

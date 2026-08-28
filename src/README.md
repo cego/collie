@@ -17,5 +17,6 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `picker.ts` | The minimal TUI |
 | `fork.ts` | Copy a definition into a later layer |
 | `trust.ts` | Whether a harness will work in a directory, or stop and ask first |
+| `mr.ts` | Whether GitLab is reachable, who to assign, and which Linear tickets a branch answers |
 | `template.ts` | `{{a.b}}` prompt substitution |
 | `config.ts` | User defaults and remembered values in `config.json` |

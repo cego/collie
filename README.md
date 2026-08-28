@@ -48,7 +48,7 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
 | Workflow | What it does |
 | --- | --- |
 | `plan` | Grills you, writes `SPEC.md` and tickets into the run dir, then a menu: implement now, second opinion, offload to Linear, refine |
-| `implement` | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models, loops on findings up to five times |
+| `implement` | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models, loops on findings up to five times, then pushes and opens the merge request |
 | `review` | Reviews an MR, a branch diff or the working tree with two models and writes one verdict each |
 | `architecture` | Runs the architect over the project, reports into the run dir, then a menu: implement now or stop |
 

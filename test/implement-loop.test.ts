@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join, relative } from "node:path";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { installBaseline, plannedRun, runWorkflow } from "./support/engine";
@@ -48,8 +48,8 @@ test("implement is build, architecture, simplify, review, fix — and no commit 
   const defs = loadDefinitions(layers(rig.pluginEnv()));
   const wf = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
 
-  expect(wf.steps.map((s) => s.id)).toEqual(["build", "architecture", "simplify", "review", "fix"]);
-  expect(wf.steps.map((s) => s.agent)).toEqual([undefined, "build", "build", undefined, "build"]);
+  expect(wf.steps.map((s) => s.id)).toEqual(["build", "architecture", "simplify", "review", "fix", "mr"]);
+  expect(wf.steps.map((s) => s.agent)).toEqual([undefined, "build", "build", undefined, "build", "build"]);
   expect(wf.steps[4]!.repeat).toEqual({ from: "review", back_to: "simplify" });
   expect(wf.maxIterations).toBe(5);
   expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
@@ -95,6 +95,8 @@ test("findings loop fix → simplify → review, and architecture stays out of t
     ["simplify", "done", null],
     ["review", "done", null],
     ["fix", "done", "skipped: reviews clean"],
+    // No glab in the rig, so the MR step is skipped rather than failing the run.
+    ["mr", "done", "skipped: glab is not installed"],
   ]);
   expect(lines).toContain("  2 finding(s) to fix");
   expect(lines).toContain("  looping back to simplify (iteration 2)");
@@ -283,3 +285,86 @@ test("review's inputs are the embedder's when it is embedded, so implement never
   expect(review.inputs.target).toBe("diff-target");
   expect(review.embeddedInputs).toEqual([]);
 });
+
+/** glab and git as they look in a repo that really is on GitLab. */
+function onGitLab(branch: string) {
+  bin.add(
+    "glab",
+    `case "$1 $2" in
+      "--version ") echo "glab 1.40.0" ;;
+      "api user") echo '{"username": "mk"}' ;;
+      *) exit 1 ;;
+    esac`,
+  );
+  bin.add(
+    "git",
+    `case "$1 $2" in
+      "remote -v") echo "origin\tgit@gitlab.cego.dk:cego/herdr-plugin.git (fetch)" ;;
+      "rev-parse --abbrev-ref") echo ${branch} ;;
+      "status --porcelain") echo "" ;;
+      *) echo main ;;
+    esac`,
+  );
+}
+
+test("the mr step is skipped, not failed, when this repo cannot have a merge request", async () => {
+  bin.add("glab", `echo "glab 1.40.0"`);
+  bin.add("git", `case "$1 $2" in "remote -v") echo "origin\tgit@github.com:me/x.git (fetch)" ;; *) echo main ;; esac`);
+  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN]);
+
+  const { run, status, lines } = await runWorkflow(rig, "implement", {});
+
+  expect(status).toBe("done");
+  expect(run.step("mr").status).toBe("done");
+  expect(run.step("mr").note).toBe("skipped: no GitLab remote");
+  expect(lines).toContain("◦ mr — skipped: no GitLab remote");
+  expect(run.record.mr_url).toBeNull();
+});
+
+test("on GitLab the mr step gets the assignee, the tickets and a short CIATF brief", async () => {
+  onGitLab("FRO-149-modal");
+  rig.queueOutputs([
+    CLEAN,
+    CLEAN,
+    CLEAN,
+    CLEAN,
+    CLEAN,
+    { verdict: "clean", findings: [], mr_url: "https://gitlab.cego.dk/x/-/merge_requests/7", linear_issues: ["FRO-149"] },
+  ]);
+
+  const { run, status } = await runWorkflow(rig, "implement", {});
+
+  expect(status).toBe("done");
+  const prompt = readFileSync(join(run.dir, "steps", "mr", "prompt-1.md"), "utf8");
+  expect(prompt).toContain("Assignee: `mk`");
+  // The branch names the ticket, so the MR has something to link.
+  expect(prompt).toContain("Linear tickets: `FRO-149`");
+  // Short by instruction, in the words mk asked for.
+  expect(prompt).toContain("One or two ordinary sentences per section");
+  expect(prompt).toContain("`No impact.`");
+  expect(prompt).toContain("no tables, no");
+  expect(prompt).toContain("Never merge the MR");
+  expect(prompt).toContain("Where the template asks for a Trello card");
+  // Nothing in a prompt or a description may carry the scope with a leading at-sign.
+  // Built rather than written, so the literal is absent from the repo too.
+  expect(prompt).not.toContain(`@${"cego"}`);
+
+  // What it reported reaches the run record and the summary.
+  expect(run.record.mr_url).toBe("https://gitlab.cego.dk/x/-/merge_requests/7");
+  expect(run.record.linear_issues).toEqual(["FRO-149"]);
+  expect(run.record.summary).toContain("Merge request: https://gitlab.cego.dk/x/-/merge_requests/7 (FRO-149)");
+}, 20_000);
+
+test("with a template in the repo the prompt points at it instead of the plain fallback", async () => {
+  onGitLab("add-a-picker");
+  mkdirSync(join(rig.projectDir, ".gitlab", "merge_request_templates"), { recursive: true });
+  writeFileSync(join(rig.projectDir, ".gitlab", "merge_request_templates", "default.md"), "## Description\n");
+  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, { verdict: "clean", findings: [] }]);
+
+  const { run } = await runWorkflow(rig, "implement", {});
+
+  const prompt = readFileSync(join(run.dir, "steps", "mr", "prompt-1.md"), "utf8");
+  expect(prompt).toContain("MR template: `.gitlab/merge_request_templates/default.md`");
+  // No ticket anywhere this time, so the prompt says so rather than inventing one.
+  expect(prompt).toContain("Linear tickets: ``");
+}, 20_000);

@@ -15,6 +15,10 @@ export interface Layer {
 }
 
 export const INPUT_STRATEGIES = ["goal", "plan-dir", "work-source", "diff-target", "ticket", "flag"] as const;
+
+/** What a step may declare it needs before it is worth starting. */
+export const STEP_REQUIREMENTS = ["gitlab"] as const;
+export type StepRequirement = (typeof STEP_REQUIREMENTS)[number];
 export type InputStrategy = (typeof INPUT_STRATEGIES)[number];
 
 export interface Variant {
@@ -73,6 +77,8 @@ export interface StepDef {
   choices?: ChoiceDef[];
   /** Only run this step when its workflow is the one being run, not when embedded. */
   standalone?: boolean;
+  /** Skipped, with a note, when the environment cannot support it. */
+  requires?: StepRequirement;
   /** `from` is the gate; `back_to` is the earliest step to run again (default `from`). */
   repeat?: { from: string; back_to?: string; max?: number };
 }
@@ -154,6 +160,7 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
     }
     if (typeof s.prompt === "string") step.promptSection = s.prompt;
     if (s.standalone === true) step.standalone = true;
+    if (typeof s.requires === "string") step.requires = s.requires as StepRequirement;
     if (Array.isArray(s.choices)) step.choices = s.choices.map(parseChoice);
     if (s.repeat && typeof s.repeat === "object") {
       const r = s.repeat as Record<string, unknown>;
@@ -448,6 +455,14 @@ export function validateWorkflow(
 ): string[] {
   const errors: string[] = [];
   const where = (stepId: string) => `workflow "${wf.name}" step "${stepId}"`;
+
+  for (const step of wf.steps) {
+    if (step.requires && !(STEP_REQUIREMENTS as readonly string[]).includes(step.requires)) {
+      errors.push(
+        `${where(step.id)}: unknown requires "${step.requires}" (known: ${STEP_REQUIREMENTS.join(", ")})`,
+      );
+    }
+  }
 
   for (const [input, strategy] of Object.entries(wf.inputs)) {
     if (!(INPUT_STRATEGIES as readonly string[]).includes(strategy)) {
