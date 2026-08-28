@@ -1,10 +1,20 @@
 # workflows v2 — implementation report
 
-All eight tickets are `done` and committed on `master` (local only, never pushed), plus
-three follow-ups mk asked for afterwards (convergence, workarounds for the two harness
-facts below, and pre-trusting). Everything up to that point is this section; tickets 09,
-10 and 11 came after it, by another session, and are recorded in their own sections at the
-end. Where they changed something described here, their sections say so.
+**Tickets 01–21 are `done`** and committed on `master` (local only, never pushed). The
+report is written in the order the work happened, one section per ticket, and a later
+section says so where it changed something an earlier one describes. Read the section for
+the ticket you care about; this first one covers 01–08 and the three follow-ups mk asked
+for afterwards (convergence, workarounds for the two harness facts below, and
+pre-trusting).
+
+The shape as it stands: four workflows (`plan`, `implement`, `review`, `architecture`) and
+four personas; a **Control Plane** tab per workspace as the only pane this plugin keeps
+open; runs driven by detached processes that report into their run directories; and layer
+files that `extends:` the baseline rather than copying it.
+
+All eight tickets of the first round are described below; tickets 09, 10 and 11 came after
+it, by another session, and are recorded in their own sections. Where they changed something
+described here, their sections say so.
 
 At the time of writing, the repo is green: 159 tests across 19 files, `bunx tsc --noEmit`
 clean, and the runner still compiles.
@@ -1143,6 +1153,43 @@ branch:master...smoke-help is not a merge request` — the pre-ticket behaviour,
 That copy is exactly what ticket 17 exists to convert, so 17's live smoke was done at that
 point instead, and this ticket's smoke continued on the 9-line stub that replaced it.
 
+### What the menu did
+
+With the implementer still live, the board showed the run as `⚠ Review · smoke-help   post —
+your turn` and the question **indented under that run**:
+
+```
+      review-smoke-help — post
+      ❯ Send to implementer       to the implementer already working here
+        Don't post                ends here
+      ↑↓ move · Enter choose · Esc leave the run open
+
+answering Review · smoke-help
+```
+
+`Send to implementer` first and **`Fix findings` absent** — one implementer per Session, seen
+rather than argued. Enter took it, and the implementer's own pane received `A review of this
+branch is ready in …/review.md and its findings as JSON in …/synthesized.json … fix what it
+found, commit as you go, and where you disagree with a finding …`. The review run recorded
+`chose "Send to implementer" — sent review-smoke-help's review to
+implement-add-a-help-f-build-r33` with a `sent` hand-off naming the implement run, and the
+implement run recorded the matching `received` one.
+
+That screen also verifies ticket 20 live: the question reached the board through `choice.json`,
+was rendered under its run, and the board's keys answered it.
+
+Open, and worth knowing:
+
+- **`Fix findings` has never been taken live.** That it is *absent* while an implementer is
+  live is verified live; the chain it starts, the `review` work-source kind and the three
+  checkout rules are verified by transcript only.
+- **The plan → implementer hand-off is transcript-only too.** It needs a plan run and an
+  implementer building from that same plan dir in one session, which no live smoke has set up.
+- **The last full review of the session was still reviewing when this was written.** The pi
+  reviewer took longer than the run before it; the menu was reached by reopening the earlier
+  run's `post` step and resuming onto it, which is real in everything except that its reviewers
+  had already finished.
+
 
 # Ticket 17 — a layer file may change one part
 
@@ -1189,3 +1236,73 @@ Open, and worth knowing:
 - **A stub cannot be stale, and is not checked.** Only a full copy carries a hash.
 - **Nothing rewrites a full copy into a stub.** Converting mk's was a hand edit, which is
   what the live smoke was.
+
+
+# Where this session leaves the tree
+
+`bun test` is green, `bunx tsc --noEmit` is clean, and the runner compiles. The baseline is
+four workflows (`plan`, `implement`, `review`, `architecture`) and four personas.
+
+What a workspace looks like now, end to end: press `prefix+f`, answer what could not be
+inferred, and the **Control Plane** tab — always the workspace's first — opens or is reused.
+It is the only pane this plugin keeps: the run itself is a detached driver reporting into its
+run directory, and the board renders that, lists every live agent of this session's runs, and
+is where every question a run asks is answered. Run tabs hold agents and nothing else, named
+`⚙ Implement` and `⚙ Review`, with panes named `Opus` and `gpt-5.6-sol` and a lone pane named
+nothing at all.
+
+Everything a definition says about a skill is `{{skill:name}}`, and each harness spells it its
+own way. An MR target carries its project, so someone else's merge request can be reviewed and
+commented on from a directory that is not a checkout. A layer file `extends:` the baseline
+instead of copying it. And runs in one session hand work to each other's agents rather than
+starting a second implementer.
+
+## Everything still open
+
+Carried forward from the sections above, in one place:
+
+**Never done for real**
+- No review has been posted to a real merge request; `glab mr note` has only run against a
+  fake and, once, been deliberately declined at the menu.
+- The `mr` step has never opened a real merge request, and now also has an untested branch:
+  updating an existing MR instead of opening one.
+- `Fix findings` has never been taken, so the `review` work-source kind and its three checkout
+  rules are transcript-only.
+- The plan → implementer hand-off is transcript-only: no live session has had a plan run and an
+  implementer building from that same plan dir.
+- Linear is unverified end to end, as it has been since v1: no MCP is configured for these
+  harnesses.
+- `codex` and `opencode` have never been started. `pi` now has, repeatedly.
+
+**Rough edges**
+- `k` and `l` act on the newest run; with several runs in a workspace there is no way to pick.
+- A stopped driver leaves its agents running, deliberately — the panes are the evidence — so
+  `k` frees the run, not the machine.
+- A driver that dies without running its own error path leaves the run `⚠ abandoned` after a
+  minute and the log stops mid-sentence.
+- The board re-reads every run dir in the state dir on each refresh, and shows only the last
+  progress line of the run it is describing.
+- The merged body of an `extends:` definition is normalised, so a diff against the original
+  shows whitespace changes.
+- Validation checks that a skill's directory exists, not that the skill in it loads.
+- The Control Plane is bound to the cwd of the first run that opened it; a workspace holding
+  two checkouts gets one board naming the first.
+
+**Facts about the tools, worth knowing before blaming the plugin**
+- `bun build --compile` writes the binary in place, so building during a run kills that run.
+  `bun run build` and `install.sh` now compile beside it and rename over it.
+- Closing a pane sends SIGHUP to the whole process group; `nohup` protects only the process it
+  wraps, not the `herdr` commands it spawns. The driver needs a session of its own.
+- `agent start` can lose a race with a pane split moments earlier (`agent_pane_busy`). It is
+  retried now; it killed two live runs before that.
+- herdr 0.8.2 has no `tab move` on the CLI and no session id anywhere. `tab.move` is on the
+  socket; the session's identity is its socket path.
+- A skill marked `disable-model-invocation` cannot be started by an agent, which is why a step
+  names the skill it drives and the engine sends it as the human's own command.
+- A pi agent has written malformed JSON into an Output twice; the schema caught it both times.
+
+**Still true from v1**
+- No remote, no tag, no release. `.gitlab-ci.yml` is still unrun.
+- The claude trust key is claude's internal shape, not a supported interface.
+- Old sandbox runs are still in the plugin state dir; they are the evidence for these sections
+  and can be deleted whenever you like.

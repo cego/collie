@@ -19,7 +19,7 @@ Hand-offs:
 - [x] plan-change transcript: diff of plan/ delivered to the implementer once per change
 - [x] cross-workspace and cross-repo runs never see each other's agents (tested)
 - [x] README + docs/WORKFLOWS-DESIGN.md + CONTEXT.md (term: Session) updated; bun test + tsc green
-- [ ] live smoke: implement (can be stopped after build) then review on the same repo → Send to implementer appears and the implementer receives the prompt
+- [x] live smoke: implement (can be stopped after build) then review on the same repo → Send to implementer appears and the implementer receives the prompt
 
 ## Decisions where the design was silent
 
@@ -68,3 +68,41 @@ plan's business.
 is live as `<agent>` in pane `<pane>`, ask it like this" or "there is no planner, stop and ask
 me", so the prompt body has no conditional in it. It is resolved only for a step whose body
 actually mentions `{{session.`, so most steps cost no extra herdr call.
+
+## Verified live
+
+One workspace on the smoke worktree, in order: `implement` started and its `build` agent
+registered as the Session's `implementer`; its driver stopped from the board with `k`, leaving
+that agent alive; `review` started from the board's own `p` key.
+
+Two runs were lost before the menu — a `agent_pane_busy` race at the fan-in step (now
+retried, see the REPORT) and mk's 89-line user-layer copy of `review.md` still shadowing the
+new menu (converted, which is ticket 17's smoke). On the stub that replaced it, with the
+implementer still live, the board showed:
+
+```
+  ⚠ Review · smoke-help           post — your turn
+      review-smoke-help — post
+      ❯ Send to implementer       to the implementer already working here
+        Don't post                ends here
+      ↑↓ move · Enter choose · Esc leave the run open
+
+answering Review · smoke-help
+```
+
+**Send to implementer first and Fix findings absent**, because an implementer is live — the
+amendment's "never both", seen. Enter took it, and:
+
+- the implementer's own pane received `A review of this branch is ready in …/review.md and its
+  findings as JSON in …/synthesized.json … fix what it found, commit as you go, and where you
+  disagree with a finding …`;
+- the review run recorded `chose "Send to implementer" — sent review-smoke-help's review to
+  implement-add-a-help-f-build-r33` and a `sent` hand-off naming the implement run;
+- the implement run recorded the matching `received` hand-off naming the review run.
+
+The question itself was rendered by the Control Plane under the run asking it, through
+`choice.json` — so ticket 20's headless choice round-trip is verified live by the same screen.
+
+**Fix findings has not been taken live.** Its absence with an implementer live is verified
+live; the chain it starts, the `review` work-source kind and the checkout rules are verified by
+transcript only.
