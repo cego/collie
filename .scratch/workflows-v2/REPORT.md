@@ -618,3 +618,113 @@ reviewers with `--model opus`/`--model sonnet` at `xhigh`, exactly as before.
 `bun test` and `bunx tsc --noEmit` are green, and `codex` and `opencode` remain unverified
 as ever — `model: default` is accepted for them and drops their model flag, but no run has
 ever started one.
+
+
+# Ticket 16 — one `workflows` tab per workspace, and no more per-run status strip
+
+Every run used to fold the runner's own pane into a thin `status` strip along the bottom of
+its first step's tab. That is gone. Instead each workspace has one tab labelled
+`workflows` — always its **first** tab — holding a board over this Session's runs and
+agents, and each run's own pane moves in underneath that board. Run tabs now hold agents
+and nothing else.
+
+## What is on the board
+
+`workspace.ts` builds a view and renders it; `flows.ts` runs the loop. Three plain lists
+and a key line, no boxes:
+
+- **Agents** — the long-lived agents this Session still has, by the Persona they run
+  (`implementer`, `planner`), with their state as herdr reports it and a number that
+  focuses that agent's pane.
+- **Runs** — what is going on now, with the step and iteration each run is at, or
+  `<step> — your turn` when a run is waiting for the human.
+- **Finished** — the five newest finished runs of this workspace and repo, with their
+  outcome and any findings still open.
+- **Keys** — `1`–`9` focus an agent, `p`/`u`/`f` open the picker in pick/resume/fork mode,
+  `s` hands the newest review to a live implementer, `q` closes the tab.
+
+The board drives nothing. It re-reads the run dirs and the register every 1.5s, asks herdr
+what is still alive, and redraws only when the rendering changed. Closing it — or the whole
+tab — costs nothing, and the next run opens it again in first position. That was verified
+by doing exactly that: `q` closed the board, its tab went with it, and the next run created
+a new tab at index 0.
+
+## Where a run's questions appear
+
+The runner's own pane is `pane move`d into the `workflows` tab, under the board at 40/60,
+and renamed after the run (`review-smoke-tab-16`). Every Choice menu, and the trust
+question, renders there — zoomed over the whole tab while it is open, as before — and
+before it asks, the runner sets `awaiting` on the run, toasts, and `tab focus`es the board.
+So a menu cannot be left unseen in a tab nobody is looking at, and the board itself shows
+`⚠ … — your turn` for the same run.
+
+**`tab move` exists only on the socket.** herdr 0.8.2's CLI has `tab list/create/get/focus/
+rename/close` and no `move`; the socket API has `tab.move {tab_id, insert_index}`. It is
+now the third method this plugin reaches over the socket, beside `agent.view.set/clear`,
+and it is called with `insert_index: 0` on every run start rather than only on create —
+"already first" is not worth a round trip to find out.
+
+**The register ships here too.** The board cannot list live agents without something to
+read, so `registry.ts` and the engine's side of it are in this ticket: one file per
+workspace + repo under the state dir, and the head of an `agent:` group — the step that
+later steps continue — is registered under its Persona's name with its pane id. A lookup
+checks the agent name *and* the pane, because herdr's ids compact when panes close, and
+drops what does not match. Ticket 15 is what reads it.
+
+## Verified live
+
+In a throwaway worktree of this repo (`smoke-tab-16`, one commit adding a 13-line
+`smoke.js`), in its own workspace, with the real picker and two real claude reviewers:
+
+- `tab list` showed `workflows` at **index 0** and the workspace's own tab after it, with
+  the board pane (`workflows`) and the run's pane (`review-smoke-tab-16`) in it.
+- The run's tab, `⚙ review · smoke-tab-16`, held `opus` and `sonnet` and nothing else — no
+  `status` pane anywhere in the session.
+- The board rendered the run live: `⚙ review · smoke-tab-16   review · iteration 1/5`,
+  then moved it to **Finished** with its outcome when it ended. `Agents` read
+  `(none live here)`, which is correct — `review` has no `agent:` group, so it registers
+  nobody. Ticket 15's smoke is where an implementer shows up.
+- The trust question for the fresh worktree appeared **in the run's pane in the board's
+  tab**, and answering it there let the run carry on.
+
+Two things the smoke turned up, both recorded rather than papered over:
+
+**Rebuilding the binary under a running run kills it.** `bun build --compile` writes
+`bin/herdr-workflows` in place, and a runner executing that file dies when it is replaced.
+The first smoke run lost its pane that way, mid-review. Obvious in hindsight, easy to do by
+accident, and worth knowing before blaming the engine: build between runs, not during one.
+
+**`agent start` can lose a race with the pane it was just given.** That first run also
+recorded `synthesize failed — agent_pane_busy: agent target pane w13:p7 is not an available
+shell`: the fan-in pane had been split and `cd`-ed but its shell was not ready yet. The
+path is unchanged by this ticket (ticket 13 verified it live), the second run went through
+it cleanly, and nothing waits for a new pane's shell today — see "Open" below.
+
+## Where this leaves the tree
+
+`bun test` is green at 187 tests across 21 files (a new `test/workspace-tab.test.ts` with
+9), `bunx tsc --noEmit` is clean, and the runner compiles. The transcript tests changed
+shape rather than count: a run's first step now opens a tab like every other step, so
+`review` is one `tab create` where it was none and `implement` is two where it was one, and
+`pane swap` is gone from every transcript.
+
+`run.json` gained five fields — `workspace`, `target_label`, `awaiting`, `synthesis`,
+`handoffs` — so the board reads facts instead of inferring them. `RunStore.load` defaults
+each, so runs recorded by an older version still list.
+
+Open, and worth knowing:
+
+- **Nothing waits for a freshly split pane's shell.** See `agent_pane_busy` above. A
+  `pane wait-output` for the prompt, or one retry, would close it; neither is in.
+- **One `workflows` tab per workspace, and it is bound to one repo.** The board is opened
+  with the first run's cwd and shows that repo. A workspace holding two checkouts would get
+  one board naming the first of them, while the register keeps them properly apart.
+- **A killed runner leaves its run `running` on the board.** Nothing marks a run whose
+  process died, so it sits under Runs until it is resumed. Pre-existing; newly visible,
+  because the board is where you now look.
+- **The board re-reads every run dir in the state dir on each refresh.** Fine at a few
+  dozen runs, and it filters by Session afterwards; it is not a paged list.
+- **Quick actions open the picker in the board's pane, not as a popup.** A popup lands on
+  whatever pane herdr has focused, which is rarely the workspace the board is for — the
+  first live attempt opened a picker in *this* session's workspace, against the wrong repo.
+  Splitting the board's own pane fixes it and makes the mode and cwd the board's.

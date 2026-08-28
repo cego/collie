@@ -164,7 +164,7 @@ a variant is named after the harness (`claude`) rather than a model.
 
 The baseline `implement` builds on `model: default` at `effort: medium` — one implementer
 agent for `build`, `architecture`, `simplify`, `fix` and `mr` — and reviews with two
-claude reviewers, `opus` and `sonnet`, both at `xhigh`; the synthesiser takes the
+claude reviewers, `opus` at `medium` and `sonnet` at `xhigh`; the synthesiser takes the
 implementer's setting because it names none of its own. Mixing in codex or opencode is a
 fork away.
 
@@ -186,7 +186,7 @@ steps:
     use: review            # embeds another workflow by reference
     fresh: true            # start a new agent each iteration
     parallel:
-      - { harness: claude, model: opus, effort: xhigh }
+      - { harness: claude, model: opus, effort: medium }
       - { harness: claude, model: sonnet, effort: xhigh }
   - id: synthesize
     persona: reviewer

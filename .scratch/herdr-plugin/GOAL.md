@@ -10,6 +10,6 @@ Work the tickets in dependency order (01 → 02 → 03 → 04 → 05 → 06; 07 
 3. Verify live where the ticket says so: `herdr plugin link <repo>` then `herdr plugin action invoke` (you are inside herdr, HERDR_ENV=1; the `herdr` skill/CLI is available — inspect `herdr api schema --json` for exact params). Use `herdr plugin log` when an action fails.
 4. Tick the acceptance criteria in the ticket file and set its Status to `done`, then commit.
 
-Constraints: Bun/TypeScript, no other runtime; comments say only why, very short; never mention the company npm scope with an @ in commit text (a hook blocks it); keep the tool surface to the plugin actions `pick`, `resume`, `fork` and the popup `picker` — no extra CLI. Harness adapter table must cover at least claude, codex, opencode with model flags (`claude --model`, `codex -m`, `opencode --model`).
+Constraints: Bun/TypeScript, no other runtime; comments say only why, very short; never mention the company npm scope with an @ in commit text (a hook blocks it); keep the tool surface to the plugin actions `pick`, `resume`, `fork` and the popup `picker` — no extra CLI. Harness adapter table covers claude, codex, opencode, pi with model flags (`claude --model`, `codex -m`, `opencode --model`).
 
 Finish by writing `.scratch/herdr-plugin/REPORT.md`: what shipped per ticket, what was verified live vs. only by tests, and anything left open. Stop when all seven tickets are done or when you are blocked on something only mk can decide.
