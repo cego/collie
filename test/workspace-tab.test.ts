@@ -182,6 +182,23 @@ test("the second run reuses that tab and re-asserts its position", async () => {
   expect(later.filter((c) => c.cmd === "pane move")).toHaveLength(1);
 });
 
+test("a second run of the same workflow adds the target to tell the tabs apart", async () => {
+  rig.queueOutputs([CLEAN, CLEAN]);
+
+  await runWorkflow(rig, "solo", { goal: "one" });
+  const first = rig.calls().length;
+  await runWorkflow(rig, "solo", { goal: "two" });
+
+  const created = rig.calls().filter((c) => c.cmd === "tab create").map((c) => c.argv!.at(-2));
+  // The first tab is the plain word; the second cannot be, so it says which run it is.
+  expect(created).toEqual(["⚙ Solo", "⚙ Solo · two"]);
+  // The rename that follows keeps the name the tab was given, and moves the glyph.
+  const later = rig.calls().slice(first).filter((c) => c.cmd === "tab rename").map((c) => c.argv!.at(-1));
+  expect(later).toContain("⚙ Solo · two");
+  expect(later).toContain("✓ Solo · two");
+  expect(later).not.toContain("✓ Solo");
+});
+
 test("a run with no workspace keeps its own pane and opens no tab", async () => {
   rig.queueOutputs([CLEAN]);
 

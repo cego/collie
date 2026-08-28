@@ -69,24 +69,41 @@ board, not an engine: it watches the run dirs and the register of live agents an
 draws what it finds, so closing it loses nothing — the next run opens it again.
 
 ```
-workflows — herdr-plugin
+Control Plane — herdr-plugin
 /home/mk/work/cego/herdr-plugin
 
 Agents
-  1  implementer working  implement-add-a-picker-20260828-093012
+  1  Implementer           working  implement-add-a-picker-20260828-093012
+  2  Review · Opus         idle     review-2367-20260828-112336
+  3  Review · gpt-5.6-sol  done     review-2367-20260828-112336
 
 Runs
-  ⚙ implement · add-a-picker    fix · iteration 3/5
+  ⚙ Implement · add-a-picker    fix · iteration 3/5
 
 Finished
-  ✓ review · smoke-synth        done
+  ✓ Review · !2367              done
+  ⚠ Review · worktree           abandoned
 
 1-9 focus that agent · p run a workflow · u resume · f fork · s send the last review to the implementer · q close this tab
 ```
 
+**Agents** is every agent of this session's runs that herdr still has — reviewers and
+synthesisers as well as the implementer and the planner. The ones a hand-off can name
+are called by their role and come first; the rest are called by their step and model.
+A role is a label, not a filter.
+
+**Runs** is what is going on now. A run whose runner died — no agent of its own left and
+nothing written for a minute — moves to **Finished** as `⚠ abandoned` rather than sitting
+there pretending to work.
+
 `p`, `u` and `f` open the same picker the keybindings do, in this tab and for this
 workspace's repo; `1`–`9` focus that agent's pane; `s` hands the newest review in this
-session to a live implementer; `q` closes the tab.
+session to a live implementer; `q` closes the tab. The focus keys are offered only when
+there is an agent to focus.
+
+The board shows this session's work and nothing else: one herdr session, one workspace,
+one repo. Another workspace's runs never appear, even for the same repo, and a workspace
+id that herdr has since given to a different workspace is caught by its label.
 
 Every menu a run asks you about renders in that run's pane in this tab, and the runner
 toasts and brings the tab to the front before it asks, so a menu is never left unseen

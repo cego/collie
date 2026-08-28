@@ -71,13 +71,21 @@ open. The tab is created by the first Run in the workspace, found by its label a
 reused by every Run after it, and moved to the front of the workspace on every Run start
 so it is always `prefix+1`. Closing it loses nothing — the next Run recreates it.
 
-Tabs read `<glyph> <workflow> · <target>`: `!123`, a branch name (never a sha) or
-`worktree` for `review`, the run's slug for the rest, and never a run id, harness or
-model. `⚙` working, `⚠` waiting for the human, `✓` done — only when every pane in the tab
-is — `✗` stopped. Panes are the model where variants differ (`opus`, `codex gpt-5`), the
-step id where one runs alone, the workflow on its own pane in the Control Plane tab.
-Agent names stay herdr-legal and
-unique, and are never what a label shows.
+Labels are the word a human would say. A tab reads `<glyph> <name>`, where the name is
+the workflow for a run's own first tab and the step for every tab after it — `⚙ Implement`,
+`⚙ Review` — with no target, slug, run id, harness or model. Only where a live tab in the
+same workspace already carries that name does the newer one take ` · <target>` (`!123`, a
+branch name, `worktree`, else the run's slug): disambiguation on collision, never by
+default. `⚙` working, `⚠` waiting for the human, `✓` done — only when every pane in the tab
+is — `✗` stopped.
+
+A pane says only what its tab cannot: a pane alone in its tab has no label, parallel
+variants take the model with its provider stripped (`Opus`, `gpt-5.6-sol`) or the harness
+where the model is `default`, and a pane sharing a tab with the panes it came from takes
+its step (`Synthesize`). A run's own pane on the Control Plane takes the workflow. What a
+human reads is Capitalized; ids, file names and model ids that are not words keep their
+own casing. Agent names and run slugs stay herdr-legal, unique and internal, and are never
+what a label shows.
 
 ## Workflows
 
