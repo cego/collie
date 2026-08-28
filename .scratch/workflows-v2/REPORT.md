@@ -2,10 +2,11 @@
 
 All eight tickets are `done` and committed on `master` (local only, never pushed), plus
 three follow-ups mk asked for afterwards (convergence, workarounds for the two harness
-facts below, and pre-trusting). `bun test` is green: 128 tests, 19 files. `bunx tsc --noEmit` is clean, and
-the runner still compiles.
+facts below, and pre-trusting). `bun test` is green: 128 tests, 19 files. `bunx tsc --noEmit` is clean, and the runner
+still compiles.
 
 ```
+bd58133 Drop the trust subcommand
 e303ecc Trust a directory before the harness has to ask
 6686f76 Work around a harness that will not start or will not be told
 4c5879f Let a disputed finding settle the argument
@@ -192,7 +193,7 @@ this, the loop would have finished at iteration 2 instead of burning to 5.
 **The two harness facts are handled (`6686f76`).** See the section above — a startup block
 now waits for the human instead of failing the run, and a step can drive a user-only skill.
 
-**Directories are trusted before the harness asks (`e303ecc`, `716bd0a`).** There is no `claude trust`
+**Directories are trusted before the harness asks (`e303ecc`).** There is no `claude trust`
 command, so this writes the key claude's own dialog writes —
 `projects[<dir>].hasTrustDialogAccepted` in `~/.claude.json` — and that file is 219 KB of
 claude's state, not ours. So: nothing is written without a yes in the runner's menu or an
@@ -202,6 +203,10 @@ was; the new file is renamed into place rather than written over; and the result
 back before it counts as done. A missing or unreadable config is left alone and reported.
 Checked on the real file: 72 top-level keys and 69 existing project entries came through
 byte-identical, with two entries added.
+
+There is no separate CLI for it: a directory only needs trusting where a workflow actually
+runs, so the runner's own question covers it, and `"trust": "auto"` covers anyone who never
+wants to be asked. The plugin surface stays the three actions and two panes.
 
 ## Left open
 
