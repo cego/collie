@@ -178,7 +178,7 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
   // takes the step. No target, no slug, no model — and the review step keeps its
   // tab across both iterations.
   const created = rig.calls().filter((c) => c.cmd === "tab create");
-  expect(created.map((c) => c.argv!.at(-2))).toEqual(["⚙ implement", "⚙ review"]);
+  expect(created.map((c) => c.argv!.at(-2))).toEqual(["⚙ Implement", "⚙ Review"]);
   expect(new Set(run.step("review").variants.map((v) => v.tabId)).size).toBe(1);
 
   // The second variant sits beside the first, each taking half the tab. A restart
@@ -195,11 +195,11 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
   // pane on the board says the workflow, and no pane anywhere names the run.
   const renames = rig.calls().filter((c) => c.cmd === "pane rename");
   const agentPanes = renames.filter((c) => c.argv![2] !== "1-0").map((c) => c.argv!.at(-1));
-  expect(agentPanes).toContain("opus");
-  expect(agentPanes).toContain("sonnet");
-  expect(agentPanes).toContain("synthesize");
+  expect(agentPanes).toContain("Opus");
+  expect(agentPanes).toContain("Sonnet");
+  expect(agentPanes).toContain("Synthesize");
   expect(renames.some((c) => c.argv!.at(-1)!.includes("add-picker"))).toBe(false);
-  expect(renames.find((c) => c.argv![2] === "1-0")!.argv!.at(-1)).toBe("implement");
+  expect(renames.find((c) => c.argv![2] === "1-0")!.argv!.at(-1)).toBe("Implement");
 
   const reviewer = join(run.dir, "personas", "reviewer.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
@@ -472,7 +472,7 @@ test("build, architecture, simplify and fix are one unlabelled pane in one tab",
     .calls()
     .filter((c) => c.cmd === "tab rename" && c.argv![2] === itsTab)
     .map((c) => c.argv!.at(-1));
-  expect(new Set(tabNames)).toEqual(new Set(["⚙ implement", "✓ implement"]));
+  expect(new Set(tabNames)).toEqual(new Set(["⚙ Implement", "✓ Implement"]));
 
   // Two tabs for the whole run: the implementer's and the reviewers'.
   expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(2);

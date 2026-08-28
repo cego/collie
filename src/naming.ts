@@ -43,7 +43,18 @@ export const GLYPH = { running: "⚙", waiting: "⚠", done: "✓", failed: "✗
  * The Session's own tab, and the label on the view pane inside it. One per
  * workspace: the runner reuses it, and recreates it when it has been closed.
  */
-export const WORKSPACE_TAB = "workflows";
+export const WORKSPACE_TAB = "Workflows";
+
+/**
+ * Everything a human reads is Capitalized. A model id that is not a word keeps
+ * its own casing (`gpt-5.6-sol`), and a target keeps whatever it actually is —
+ * a branch is not a branch any more once it has been prettied up.
+ */
+export function displayName(name: string): string {
+  const [head = "", ...rest] = name.split(" · ");
+  const word = /^[a-z][a-z-]*$/.test(head) ? `${head[0]!.toUpperCase()}${head.slice(1)}` : head;
+  return [word, ...rest].join(" · ");
+}
 
 /** A sha, or `HEAD`, names nothing a human recognises on a tab. */
 function opaque(ref: string): boolean {
@@ -75,7 +86,7 @@ export function targetLabel(workflow: string, slug: string, inputs: Record<strin
  * live tabs would otherwise read the same.
  */
 export function tabLabel(glyph: string, name: string): string {
-  return `${glyph} ${name}`;
+  return `${glyph} ${displayName(name)}`;
 }
 
 /** The name part of a tab label, i.e. what a collision is judged on. */
@@ -107,9 +118,11 @@ export function paneLabel(
 ): string | null {
   if (variantCount > 1) {
     // On the harness's own default there is no model to name, so the harness is the name.
-    return variant.model === DEFAULT_MODEL ? variant.harness : shortModel(variant.model);
+    const name = variant.model === DEFAULT_MODEL ? variant.harness : shortModel(variant.model);
+    return displayName(name);
   }
-  return sharesTab ? stepId : null;
+  // `use:` prefixes an embedded step's id; the prefix is bookkeeping, not a name.
+  return sharesTab ? displayName(stepId.slice(stepId.lastIndexOf(".") + 1)) : null;
 }
 
 /** Splitting N panes evenly: the i-th split leaves the left pane 1/N of the tab. */

@@ -37,6 +37,7 @@ import {
 import {
   agentName,
   disambiguate,
+  displayName,
   evenRatio,
   GLYPH,
   paneLabel,
@@ -736,7 +737,7 @@ async function ensureWorkspaceTab(o: EngineOptions): Promise<string | null> {
         direction: "down",
         ratio: VIEW_TOP,
       });
-      await o.herdr.paneRename(o.hostPaneId, o.run.record.workflow);
+      await o.herdr.paneRename(o.hostPaneId, displayName(o.run.record.workflow));
     }
     return view.tabId;
   } catch (e) {
@@ -1028,7 +1029,8 @@ async function freeTabName(o: EngineOptions, ctx: RunCtx, step: ResolvedStep): P
     // Without the list a plain name is the better guess than a decorated one.
     o.run.log(`tab names: ${(e as Error).message}`);
   }
-  if (!taken.includes(plain)) return plain;
+  // Compared as a human reads them, so the capitalisation cannot hide a collision.
+  if (!taken.includes(displayName(plain))) return plain;
   return disambiguate(plain, runTarget(o.wf, o.run.record));
 }
 

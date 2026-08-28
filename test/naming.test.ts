@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import {
   agentName,
   disambiguate,
+  displayName,
   evenRatio,
   GLYPH,
   paneLabel,
@@ -34,11 +35,11 @@ test("workflows with no target are named by their slug, without repeating the wo
   expect(targetLabel("implement", "something-else", {})).toBe("something-else");
 });
 
-test("a tab is a glyph and one word: the workflow, or the step", () => {
-  expect(tabLabel(GLYPH.running, "implement")).toBe("⚙ implement");
-  expect(tabLabel(GLYPH.running, "review")).toBe("⚙ review");
-  expect(tabLabel(GLYPH.waiting, "plan")).toBe("⚠ plan");
-  expect(tabLabel(GLYPH.done, "review")).toBe("✓ review");
+test("a tab is a glyph and one Capitalized word: the workflow, or the step", () => {
+  expect(tabLabel(GLYPH.running, "implement")).toBe("⚙ Implement");
+  expect(tabLabel(GLYPH.running, "review")).toBe("⚙ Review");
+  expect(tabLabel(GLYPH.waiting, "plan")).toBe("⚠ Plan");
+  expect(tabLabel(GLYPH.done, "review")).toBe("✓ Review");
   for (const label of [tabLabel(GLYPH.running, "review"), tabLabel(GLYPH.done, "implement")]) {
     expect(label).not.toMatch(/\d{8}-\d{6}/); // no run-id stamp
     expect(label).not.toContain("claude");
@@ -52,27 +53,43 @@ test("the target is appended only to break a collision, and read back off the la
   // Nothing to disambiguate with is still the plain name, never a dangling separator.
   expect(disambiguate("plan", "")).toBe("plan");
 
+  // The workflow is Capitalized; the target stays whatever it actually is, because
+  // a branch prettied up is no longer the branch's name.
+  expect(tabLabel(GLYPH.running, disambiguate("review", "!123"))).toBe("⚙ Review · !123");
+  expect(tabLabel(GLYPH.done, disambiguate("implement", "add-picker"))).toBe("✓ Implement · add-picker");
+
   // A collision is judged on the name, so the glyph a tab is wearing cannot hide one.
-  expect(tabNameOf("⚙ review")).toBe("review");
-  expect(tabNameOf("✓ review · !123")).toBe("review · !123");
-  expect(tabNameOf("workflows")).toBe("workflows");
+  expect(tabNameOf("⚙ Review")).toBe("Review");
+  expect(tabNameOf("✓ Review · !123")).toBe("Review · !123");
+  expect(tabNameOf("Workflows")).toBe("Workflows");
+});
+
+test("a display name Capitalizes a word and leaves an id that is not one alone", () => {
+  expect(displayName("implement")).toBe("Implement");
+  expect(displayName("code-review")).toBe("Code-review");
+  expect(displayName("gpt-5.6-sol")).toBe("gpt-5.6-sol");
+  expect(displayName("Workflows")).toBe("Workflows");
+  expect(displayName("")).toBe("");
 });
 
 test("a pane names the model, or the step, or nothing at all", () => {
   const opus = { harness: "claude", model: "opus" };
   const pi = { harness: "pi", model: "openai-codex/gpt-5.6-sol" };
 
-  // Parallel variants: the model alone, with the provider stripped off it.
-  expect(paneLabel(opus, "review", 2, false)).toBe("opus");
+  // Parallel variants: the model alone, with the provider stripped off it. A model
+  // id that is not a word keeps its own casing.
+  expect(paneLabel(opus, "review", 2, false)).toBe("Opus");
   expect(paneLabel(pi, "review", 2, false)).toBe("gpt-5.6-sol");
   // The harness names the pane only where there is no model to name.
-  expect(paneLabel({ harness: "claude", model: "default" }, "review", 2, false)).toBe("claude");
-  expect(paneLabel({ harness: "pi", model: "default" }, "review", 2, false)).toBe("pi");
+  expect(paneLabel({ harness: "claude", model: "default" }, "review", 2, false)).toBe("Claude");
+  expect(paneLabel({ harness: "pi", model: "default" }, "review", 2, false)).toBe("Pi");
 
   // Alone in a tab, the tab has already said it.
   expect(paneLabel(opus, "build", 1, false)).toBeNull();
-  // Sharing a tab with the panes it came from, it says which step it is.
-  expect(paneLabel(opus, "synthesize", 1, true)).toBe("synthesize");
+  // Sharing a tab with the panes it came from, it says which step it is — and the
+  // prefix `use:` gave that step's id is bookkeeping, not part of the name.
+  expect(paneLabel(opus, "synthesize", 1, true)).toBe("Synthesize");
+  expect(paneLabel(opus, "review.synthesize", 1, true)).toBe("Synthesize");
 });
 
 test("even splits leave every one of N panes the same width", () => {
