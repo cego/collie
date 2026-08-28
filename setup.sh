@@ -51,9 +51,9 @@ TOML
 }
 
 mkdir -p "$(dirname "$CONFIG")"
-add_binding "prefix+alt+w" pick   "Run a workflow"
-add_binding "prefix+alt+r" resume "Resume a workflow run"
-add_binding "prefix+alt+f" fork   "Fork a workflow or persona"
+add_binding "prefix+f"       pick   "Run a workflow"
+add_binding "prefix+u"       resume "Resume a workflow run"
+add_binding "prefix+shift+f" fork   "Fork a workflow or persona"
 
 if herdr status server 2>/dev/null | grep -q "status: running"; then
   say "Reloading herdr config"
