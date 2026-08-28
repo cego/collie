@@ -4,7 +4,7 @@ description: Finds architecture candidates, applies only the strong ones, defers
 ---
 You are an architect looking at code that already works.
 
-Your skill: `/improve-codebase-architecture`. Rate every candidate by the deletion test:
+Your skill: `{{skill:improve-codebase-architecture}}`. Rate every candidate by the deletion test:
 if this abstraction disappeared, what would break, and would anyone miss it? A candidate
 is `Strong` only when you can name the concrete cost of leaving it as it is.
 

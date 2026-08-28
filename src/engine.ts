@@ -395,7 +395,7 @@ async function runStep(
         name: record.agent,
         kind: adapter.kind,
         paneId: record.paneId!,
-        args: startArgs(adapter, variant.model, personaFile(o, step), variant.effort),
+        args: startArgs(adapter, variant.model, personaFile(o, step, variant.harness), variant.effort),
       });
       if (record.paneId) {
         ctx.panes.push(record.paneId);
@@ -428,7 +428,7 @@ async function runStep(
     run.log(`prompt ${record.agent} -> ${relative(run.dir, path)}`);
     // A skill marked `disable-model-invocation` refuses an agent that invokes it
     // itself; `agent prompt` is the human's channel, so a slash command here runs.
-    const command = step.skill ? `/${step.skill} ` : "";
+    const command = step.skill ? `${skillFor(variants[i]!.harness).call(null, step.skill)} ` : "";
     await herdr.agentPrompt(
       record.agent,
       `${command}Your task for this step is in ${path} — read it and follow it.`,
@@ -1115,17 +1115,30 @@ function borrowedAgent(o: EngineOptions, step: ResolvedStep, ctx: RunCtx): Varia
   return ctx.groups.get(step.agent) ?? null;
 }
 
-function personaBody(o: EngineOptions, step: ResolvedStep): string {
-  return step.persona ? (o.defs.personas.get(step.persona)?.body ?? "") : "";
+/** A Persona as the harness that will read it sees it, skills and all. */
+function personaBody(o: EngineOptions, step: ResolvedStep, harness: string): string {
+  const raw = step.persona ? (o.defs.personas.get(step.persona)?.body ?? "") : "";
+  if (raw === "") return "";
+  return renderTemplate(raw, {}, { skill: skillFor(harness) }).text;
 }
 
-/** The Persona as a file, since herdr will not pass multi-line agent arguments. */
-function personaFile(o: EngineOptions, step: ResolvedStep): string {
+/**
+ * The Persona as a file, since herdr will not pass multi-line agent arguments. One
+ * file per harness: the same persona asks for its skills in that harness's syntax,
+ * and the run dir should show what each agent was actually given.
+ */
+function personaFile(o: EngineOptions, step: ResolvedStep, harness: string): string {
   const dir = join(o.run.dir, "personas");
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${step.persona ?? "none"}.md`);
-  writeFileSync(path, `${personaBody(o, step)}\n`);
+  const path = join(dir, `${step.persona ?? "none"}.${harness}.md`);
+  writeFileSync(path, `${personaBody(o, step, harness)}\n`);
   return path;
+}
+
+/** How one harness is asked for a skill; unknown harnesses fall back to claude's. */
+function skillFor(harness: string): (name: string) => string {
+  const adapter = HARNESSES[harness];
+  return (name) => (adapter ? adapter.skillRef(name) : `/${name}`);
 }
 
 function buildPrompt(
@@ -1165,9 +1178,13 @@ function buildPrompt(
   };
 
   const parts: string[] = [];
-  const prefix = personaPrefix(adapter, personaBody(o, step));
+  const prefix = personaPrefix(adapter, personaBody(o, step, variant.harness));
   if (prefix) parts.push(prefix);
-  const rendered = renderTemplate([step.preamble, step.prompt].filter((p) => p.trim()).join("\n\n"), vars);
+  const rendered = renderTemplate(
+    [step.preamble, step.prompt].filter((p) => p.trim()).join("\n\n"),
+    vars,
+    { skill: skillFor(variant.harness) },
+  );
   if (rendered.missing.length > 0) {
     o.run.log(`unknown template keys in ${step.id}: ${rendered.missing.join(", ")}`);
   }

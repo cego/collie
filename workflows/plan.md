@@ -63,12 +63,12 @@ This run's plan directory: {{run.dir}}/plan
 If the goal above is a Linear issue id or a Linear URL, fetch it first with the Linear
 MCP and treat what it says as the goal.
 
-This prompt arrives as `/grill-with-docs`, so the skill is already running: one question
+This prompt arrives as `{{skill:grill-with-docs}}`, so the skill is already running: one question
 at a time, until you can state the plan back to me and I agree with it. Write no spec and
 no tickets in this step.
 
 If you cannot see the destination from here, or this is more than one session of work,
-say so and stop: ask me to run `/wayfinder` in this tab, and set `"wayfinder": true` in
+say so and stop: ask me to run `{{skill:wayfinder}}` in this tab, and set `"wayfinder": true` in
 your Output. You cannot start that skill yourself — only I can — and the map belongs at
 `{{run.dir}}/plan/MAP.md`.
 
@@ -81,7 +81,7 @@ Then write the Output JSON: `{"verdict": "clean", "findings": [], "slug":
 
 ## spec
 
-This prompt arrives as `/to-spec`. Write the spec to `{{run.dir}}/plan/SPEC.md`. It has the problem in one
+This prompt arrives as `{{skill:to-spec}}`. Write the spec to `{{run.dir}}/plan/SPEC.md`. It has the problem in one
 paragraph, what is explicitly out of scope, the ordered work with the seams that want
 tests, and how we will know the whole thing works.
 
@@ -90,7 +90,7 @@ Then write the Output JSON: `{"verdict": "clean", "findings": [], "spec":
 
 ## tickets
 
-This prompt arrives as `/to-tickets`. Cut the spec into tickets: one file each at
+This prompt arrives as `{{skill:to-tickets}}`. Cut the spec into tickets: one file each at
 `{{run.dir}}/plan/issues/NN-<slug>.md`, numbered in the order they can land. Each says
 what to build, what blocks it, and criteria someone else can check.
 

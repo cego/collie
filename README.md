@@ -177,6 +177,33 @@ harness uses its own default. An unknown harness, model or effort fails validati
 before a single tab opens. `trust` is what a run does
 about a directory the harness has not been trusted with: see "The first run in a repo".
 
+## Skills
+
+Workflows and personas name the skills they drive, and the harness decides how to ask:
+
+| Harness | `{{skill:code-review}}` renders as |
+| --- | --- |
+| `claude` | `/code-review` |
+| `pi` | `/skill:code-review` |
+| `codex`, `opencode` | `the "code-review" skill` — they surface skills by description, so a slash would just be text |
+
+The skills themselves are shared: one set in `~/.agents/skills`, installed by `skills.sh`
+(`npx skills add <name>`), and every harness reads the same files. So a definition never
+spells a slash command — write `{{skill:name}}` and the same body works on every harness,
+including the `skill:` key a step uses to drive one.
+
+They are a **prerequisite, like the harness binary**. A workflow that names a skill you have
+not installed fails validation before a tab opens, naming the skill and the command that
+installs it:
+
+```
+implement step "build": the skill "implement" is not installed — run `npx skills add implement`
+```
+
+`.agents/skills` in the project you are in is checked first, then `~/.agents/skills`. Each
+persona still ends with a fallback paragraph for a harness where the skill is missing at
+runtime rather than at validation.
+
 ## Harnesses
 
 | Harness | Model flag | Persona | Effort |

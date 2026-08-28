@@ -107,7 +107,7 @@ test("the deferred list reaches the run record and the summary", async () => {
 
   const prompt = readFileSync(join(run.dir, "steps", "architecture", "prompt-1.md"), "utf8");
   expect(prompt).toContain(`${run.dir}/plan/ARCHITECTURE.md`);
-  expect(existsSync(join(run.dir, "personas", "architect.md"))).toBe(true);
+  expect(existsSync(join(run.dir, "personas", "architect.claude.md"))).toBe(true);
 });
 
 test("Implement now chains implement with the plan the grill wrote", async () => {

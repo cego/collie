@@ -90,7 +90,7 @@ test("plan runs one step in a tab of its own and records the run", async () => {
   ]);
   expect(start.slice(8, 10)).toEqual(["--model", "sonnet"]);
   expect(start[10]).toBe("--append-system-prompt-file");
-  expect(start[11]).toBe(join(run.dir, "personas", "planner.md"));
+  expect(start[11]).toBe(join(run.dir, "personas", "planner.claude.md"));
   expect(readFileSync(start[11]!, "utf8")).toContain("You are a planner");
 
   // The prompt goes to a file: a multi-line prompt cannot be typed into a harness.

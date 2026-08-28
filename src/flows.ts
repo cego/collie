@@ -8,6 +8,7 @@ import {
   layers,
   loadDefinitions,
   resolveWorkflow,
+  skillDirs,
   validateWorkflow,
   type Definitions,
 } from "./definitions";
@@ -120,7 +121,7 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   }
 
   // Nothing opens until the whole workflow is valid.
-  const errors = validateWorkflow(resolved, defs, defaults);
+  const errors = validateWorkflow(resolved, defs, defaults, skillDirs(env));
   if (errors.length > 0) {
     return await bail([`${resolved.name} is not runnable:`, ...errors.map((e) => `  ${e}`)].join("\n"));
   }

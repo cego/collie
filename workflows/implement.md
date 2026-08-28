@@ -63,8 +63,8 @@ The work source above is one of three kinds. Do the one that matches
   text does not say enough to build from, stop and say what you need — do not guess.
 
 Branch off the default branch first, named after the spec's slug — short, kebab-case,
-no ticket number unless the spec has one. This prompt arrives as `/implement`, so build
-the tickets in their order, one at a time: `/tdd` at the seams the spec names, the
+no ticket number unless the spec has one. This prompt arrives as `{{skill:implement}}`, so build
+the tickets in their order, one at a time: `{{skill:tdd}}` at the seams the spec names, the
 project's tests green, and one commit per ticket. There is no separate commit step.
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "branch": "<branch>",
@@ -75,7 +75,7 @@ you ran and what it said"}`.
 
 Iteration {{iteration}} of at most {{max_iterations}}.
 
-Run `/code-simplification` over what this branch changed. Behaviour stays identical:
+Run `{{skill:code-simplification}}` over what this branch changed. Behaviour stays identical:
 the tests you ran in `build` still pass, and you say what you ran. Do not touch code
 this branch did not.
 

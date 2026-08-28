@@ -1007,3 +1007,57 @@ Open, and worth knowing:
 - **Nothing reads `progress.jsonl` back on resume.** A resumed run appends to it, so the file
   is the whole history across drivers, which is right; but the board only ever shows the last
   line of it.
+
+
+# Ticket 21 — a skill is named, and the harness spells it
+
+Personas and bodies hardcoded Claude Code's syntax. In pi a bare `/name` is a prompt
+template, not a skill — skills there are `/skill:<name>` — so every persona this plugin
+handed a pi agent was asking for something that does not exist. The skills themselves were
+never the problem: one set in `~/.agents/skills`, installed by skills.sh, shared by every
+harness.
+
+**Definitions now name skills**: `{{skill:code-review}}`. The harness adapter owns the
+spelling — `/code-review` for claude, `/skill:code-review` for pi, and `the "code-review"
+skill` for codex and opencode, which surface skills by description and would treat a slash
+as text. The `skill:` step key goes through the same function, and so does every step body
+and every persona. All ten skills the baseline names were replaced; a test greps for both
+slash forms in `personas/` and `workflows/` and fails on either.
+
+**A persona is now one file per harness** — `personas/<persona>.<harness>.md` in the run
+dir. The same persona renders two ways in a run with two harnesses, and the run dir should
+show what each agent was actually given rather than whichever variant wrote last.
+
+**A missing skill fails validation before a tab opens**, naming the skill, what asked for
+it, and the command that installs it:
+
+```
+implement step "build": the skill "implement" is not installed — run `npx skills add implement`
+```
+
+`.agents/skills` in the project is checked first, then `~/.agents/skills` — the same order
+the definition layers use. Skills are a prerequisite like the harness binary, so this is a
+refusal to start, not a warning; the personas keep their skill-missing fallback paragraphs
+for the case where a harness cannot load an installed skill at runtime.
+
+## Verified live
+
+One `review` run with mk's user-layer definition (claude `opus` + pi
+`openai-codex/gpt-5.6-sol`) produced both files from the one baseline `reviewer` persona:
+`reviewer.claude.md` asking for `` `/code-review` `` and `` `/code-review-and-quality` ``,
+and `reviewer.pi.md` asking for `` `/skill:code-review` `` and
+`` `/skill:code-review-and-quality` ``. Both agents started with their own file. All ten
+skills are installed on this machine, so validation ran and passed rather than being
+skipped.
+
+Open, and worth knowing:
+
+- **The pi and codex spellings are taken on documentation, not observed.** claude's
+  `/name` and pi's `/skill:name` are both seen live; that codex and opencode do better with
+  a sentence than a slash is a judgment about how they surface skills, and no run has
+  compared the two.
+- **Validation checks a directory exists, not that the skill inside it is loadable.** A
+  half-installed skill passes.
+- **`skills.sh` is not in this repo.** The install command in the error is
+  `npx skills add <name>`, which is what skills.sh runs; nothing here verifies that command
+  is the right one for a given skill's source.

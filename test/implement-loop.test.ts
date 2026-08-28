@@ -6,6 +6,7 @@ import { FakeBin } from "./support/bin";
 import { installBaseline, plannedRun, runWorkflow } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { FALLBACK_DEFAULTS } from "../src/config";
+import { skillsIn } from "../src/template";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
 
 let rig: Rig;
@@ -83,7 +84,8 @@ test("implement is build, architecture, simplify, review, fix — and no commit 
   const build = wf.steps[0]!.prompt;
   expect(build).toContain("Branch off the default branch");
   expect(build).toContain("one commit per ticket");
-  expect(build).toContain("/tdd");
+  // The skill is named, not spelled: the harness decides whether that is `/tdd`.
+  expect(skillsIn(build)).toContain("tdd");
   expect(wf.steps.some((s) => /commit the work|commit step/i.test(s.prompt) && s.id !== "build")).toBe(false);
 });
 
@@ -202,12 +204,12 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
   expect(renames.some((n) => n!.includes("add-picker"))).toBe(false);
   expect(renames[0]).toBe("Control Plane");
 
-  const reviewer = join(run.dir, "personas", "reviewer.md");
+  const reviewer = join(run.dir, "personas", "reviewer.claude.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
   // The implementer and the synthesiser take the harness's own model at medium: no
   // `--model` flag at all. The reviewers name their own models and efforts and keep them.
   expect(starts.map((c) => c.argv!.slice(7))).toEqual([
-    ["--", "--effort", "medium", "--append-system-prompt-file", join(run.dir, "personas", "implementer.md")],
+    ["--", "--effort", "medium", "--append-system-prompt-file", join(run.dir, "personas", "implementer.claude.md")],
     ["--", "--model", "opus", "--effort", "medium", "--append-system-prompt-file", reviewer],
     ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
     ["--", "--effort", "medium", "--append-system-prompt-file", reviewer],

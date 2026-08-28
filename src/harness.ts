@@ -23,6 +23,12 @@ export interface HarnessAdapter {
   effortArgs?(effort: string): string[];
   /** Present when the harness asks before it will work in a directory. */
   trust?(home: string, backupDir: string): Trust;
+  /**
+   * How this harness is asked for a skill. The skills themselves are shared —
+   * `~/.agents/skills`, installed by skills.sh — so only the syntax differs, and a
+   * harness with no slash form is asked for it in words.
+   */
+  skillRef(name: string): string;
   models: string[];
   modelPattern?: RegExp;
   efforts?: string[];
@@ -32,6 +38,7 @@ export const HARNESSES: Record<string, HarnessAdapter> = {
   claude: {
     id: "claude",
     kind: "claude",
+    skillRef: (name) => `/${name}`,
     modelArgs: (model) => ["--model", model],
     personaArgs: (file) => ["--append-system-prompt-file", file],
     effortArgs: (effort) => ["--effort", effort],
@@ -43,6 +50,7 @@ export const HARNESSES: Record<string, HarnessAdapter> = {
   codex: {
     id: "codex",
     kind: "codex",
+    skillRef: (name) => `the ${JSON.stringify(name)} skill`,
     modelArgs: (model) => ["-m", model],
     models: ["gpt-5-codex", "gpt-5", "gpt-5-mini"],
     modelPattern: /^(?:gpt|o)[0-9][a-z0-9.-]*$/,
@@ -50,6 +58,7 @@ export const HARNESSES: Record<string, HarnessAdapter> = {
   pi: {
     id: "pi",
     kind: "pi",
+    skillRef: (name) => `/skill:${name}`,
     modelArgs: (model) => ["--model", model],
     // pi reads a path here as file contents, so the persona file can be passed directly.
     personaArgs: (file) => ["--append-system-prompt", file],
@@ -62,6 +71,7 @@ export const HARNESSES: Record<string, HarnessAdapter> = {
   opencode: {
     id: "opencode",
     kind: "opencode",
+    skillRef: (name) => `the ${JSON.stringify(name)} skill`,
     modelArgs: (model) => ["--model", model],
     // opencode models are provider-qualified, so the shape is the check.
     models: [],

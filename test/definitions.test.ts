@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   bodySections,
@@ -525,4 +526,56 @@ test("an unknown prompt section names the file and the sections it does have", (
   expect(validateWorkflow(resolveWorkflow("outer", defs, defaults), defs, defaults)).toEqual([
     'workflow "outer" step "arch": unknown prompt section "elsewhere" in arch.md (known: attended, unattended)',
   ]);
+});
+
+test("a skill a definition asks for and nothing installed is a validation error", () => {
+  const dir = mkdtempSync(join(tmpdir(), "hw-skills-"));
+  writeDef(
+    dir,
+    "personas",
+    "reviewer",
+    `---
+name: reviewer
+description: reviews
+---
+Your skills: {{skill:code-review}} and {{skill:not-installed}}.
+`,
+  );
+  writeDef(
+    dir,
+    "workflows",
+    "w",
+    `---
+name: w
+steps:
+  - id: a
+    persona: reviewer
+    skill: to-spec
+---
+## a
+Run {{skill:tdd}}.
+`,
+  );
+  const defs = loadDefinitions(layerSet(dir, join(dir, "user"), join(dir, "project")));
+  const wf = resolveWorkflow("w", defs, FALLBACK_DEFAULTS);
+
+  // Two skills are installed; the other two are not, and each is named once with the
+  // command that installs it. A missing skill is a prerequisite, not a definition bug.
+  const skills = join(dir, "installed");
+  for (const name of ["code-review", "tdd"]) mkdirSync(join(skills, name), { recursive: true });
+
+  const errors = validateWorkflow(wf, defs, FALLBACK_DEFAULTS, [skills]);
+  expect(errors).toEqual([
+    'w step "a": the skill "to-spec" is not installed — run `npx skills add to-spec`',
+    'persona "reviewer": the skill "not-installed" is not installed — run `npx skills add not-installed`',
+  ]);
+
+  // Everything installed, and the workflow validates.
+  for (const name of ["to-spec", "not-installed"]) mkdirSync(join(skills, name), { recursive: true });
+  expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS, [skills])).toEqual([]);
+
+  // Either dir counts, and no dirs at all means the check is not made.
+  expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS, ["/nowhere", skills])).toEqual([]);
+  expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
+  rmSync(dir, { recursive: true, force: true });
 });

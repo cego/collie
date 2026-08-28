@@ -3,6 +3,7 @@
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { skillsIn } from "./template";
 import { parseDocument, YamlError } from "./yaml";
 import { HARNESSES, harnessNames, knownModel, modelHint } from "./harness";
 import type { Defaults } from "./config";
@@ -111,6 +112,15 @@ export interface Definitions {
   workflows: Map<string, WorkflowDef>;
   personas: Map<string, PersonaDef>;
   errors: string[];
+}
+
+/**
+ * Where the skills themselves live. They are shared across harnesses and installed
+ * by skills.sh, so a missing one is a missing prerequisite — like the harness binary
+ * — not a definition error to work around.
+ */
+export function skillDirs(env: { home: string; cwd: string }): string[] {
+  return [join(env.cwd, ".agents", "skills"), join(env.home, ".agents", "skills")];
 }
 
 export function layers(env: { pluginRoot: string; configDir: string; cwd: string }): Layer[] {
@@ -312,6 +322,31 @@ export interface ResolvedWorkflow {
   path: string;
 }
 
+/**
+ * Every skill this Workflow asks for that is not installed. Named one per line with
+ * the command that installs it: a run that starts without them wastes an agent's
+ * whole turn discovering the same thing.
+ */
+function missingSkills(wf: ResolvedWorkflow, defs: Definitions, dirs: string[]): string[] {
+  const asked = new Map<string, string>();
+  const note = (name: string, by: string) => {
+    if (!asked.has(name)) asked.set(name, by);
+  };
+  for (const step of wf.steps) {
+    if (step.skill) note(step.skill, `${wf.name} step "${step.id}"`);
+    for (const name of skillsIn(`${step.preamble}\n${step.prompt}`)) note(name, `${wf.name} step "${step.id}"`);
+    const persona = step.persona ? defs.personas.get(step.persona) : undefined;
+    if (persona) for (const name of skillsIn(persona.body)) note(name, `persona "${persona.name}"`);
+  }
+
+  const errors: string[] = [];
+  for (const [name, by] of asked) {
+    if (dirs.some((dir) => existsSync(join(dir, name)))) continue;
+    errors.push(`${by}: the skill "${name}" is not installed — run \`npx skills add ${name}\``);
+  }
+  return errors;
+}
+
 export class DefinitionError extends Error {}
 
 export function resolveWorkflow(
@@ -467,9 +502,13 @@ export function validateWorkflow(
   wf: ResolvedWorkflow,
   defs: Definitions,
   defaults: Defaults,
+  /** Where installed skills live; omit to skip the check (tests without a fixture). */
+  skills?: string[],
 ): string[] {
   const errors: string[] = [];
   const where = (stepId: string) => `workflow "${wf.name}" step "${stepId}"`;
+
+  if (skills) errors.push(...missingSkills(wf, defs, skills));
 
   for (const step of wf.steps) {
     for (const need of step.requires ?? []) {

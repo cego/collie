@@ -13,9 +13,13 @@ reconciles several parallel Outputs into one.
 Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001, ADR-0002.
 
 ## Principles
-- Skills are installed via skills.sh on every harness, so Personas name skills directly
-  (grill-with-docs, to-spec, to-tickets, wayfinder, implement, tdd, code-review,
-  code-review-and-quality, code-simplification, improve-codebase-architecture).
+- Skills are installed once, in `~/.agents/skills` (skills.sh), and shared by every
+  harness, so Personas name skills — `{{skill:code-review}}` — and the harness adapter
+  decides the syntax: `/name` for claude, `/skill:name` for pi, a sentence for the
+  harnesses with no slash form. The ten the baseline uses are grill-with-docs, to-spec,
+  to-tickets, wayfinder, implement, tdd, code-review, code-review-and-quality,
+  code-simplification, improve-codebase-architecture; a named skill that is not installed
+  fails validation before a tab opens.
 - Personas are thin: "run skill X under these constraints, then write the Output JSON",
   plus a one-paragraph fallback for a harness where the skill is missing.
 - Nothing planning-related is written into the repo. Spec, tickets and reports live in

@@ -113,8 +113,8 @@ test("a second opinion is a fresh opus reviewer whose findings go back to the pl
 
   const reviewers = rig.calls().filter((c) => c.cmd === "agent start").slice(1);
   expect(reviewers.map((c) => c.argv!.slice(8))).toEqual([
-    ["--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
-    ["--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
+    ["--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.claude.md")],
+    ["--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.claude.md")],
   ]);
   const opinion = readFileSync(join(run.dir, "steps", "next", "second-opinion-1", "prompt-1.md"), "utf8");
   expect(opinion).toContain("Review the plan, not the code");

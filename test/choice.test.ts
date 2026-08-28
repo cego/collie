@@ -137,7 +137,7 @@ test("a fresh reviewer choice gets its own tab and its findings prompt the follo
     "--effort",
     "xhigh",
     "--append-system-prompt-file",
-    join(run.dir, "personas", "reviewer.md"),
+    join(run.dir, "personas", "reviewer.claude.md"),
   ]);
 
   const followUp = readFileSync(join(run.dir, "steps", "next", "second-opinion-1-then", "prompt-1.md"), "utf8");

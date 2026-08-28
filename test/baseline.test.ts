@@ -5,6 +5,7 @@ import { expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { FALLBACK_DEFAULTS } from "../src/config";
+import { skillsIn } from "../src/template";
 import { layerSet } from "./support/defs";
 import { loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
 
@@ -48,14 +49,16 @@ test("the baseline personas are the four the design names, and each names its sk
   expect([...defs.personas.keys()].sort()).toEqual(["architect", "implementer", "planner", "reviewer"]);
   for (const persona of defs.personas.values()) {
     expect(persona.description).not.toBe("");
-    expect(persona.body).toMatch(/`\/[a-z-]+`/);
+    // A skill is named, never spelled: the syntax belongs to the harness.
+    expect(skillsIn(persona.body).length).toBeGreaterThan(0);
   }
   // The reviewer runs both review skills and merges them into one Output.
-  const reviewer = defs.personas.get("reviewer")!.body;
-  expect(reviewer).toContain("`/code-review`");
-  expect(reviewer).toContain("`/code-review-and-quality`");
-  expect(defs.personas.get("planner")!.body).toContain("`/wayfinder`");
-  expect(defs.personas.get("architect")!.body).toContain("`/improve-codebase-architecture`");
+  expect(skillsIn(defs.personas.get("reviewer")!.body)).toEqual([
+    "code-review",
+    "code-review-and-quality",
+  ]);
+  expect(skillsIn(defs.personas.get("planner")!.body)).toContain("wayfinder");
+  expect(skillsIn(defs.personas.get("architect")!.body)).toContain("improve-codebase-architecture");
 });
 
 test("every persona ends with the Output contract and a skill-missing fallback", () => {
@@ -67,6 +70,37 @@ test("every persona ends with the Output contract and a skill-missing fallback",
     expect(fallback).toContain("skill");
     expect(persona.body).toContain("OUTPUT_PATH");
   }
+});
+
+test("no definition spells a skill in one harness's syntax", () => {
+  const defs = baseline();
+  const bodies = [
+    ...[...defs.personas.values()].map((p) => [`persona ${p.name}`, p.body] as const),
+    ...[...defs.workflows.values()].map((w) => [`workflow ${w.name}`, w.body] as const),
+  ];
+  // Every skill the design names. `/name` and `/skill:name` are a harness's own
+  // spelling; `{{skill:name}}` is the only way a definition may ask for one.
+  const skills = [
+    "grill-with-docs",
+    "wayfinder",
+    "to-spec",
+    "to-tickets",
+    "implement",
+    "tdd",
+    "code-review",
+    "code-review-and-quality",
+    "code-simplification",
+    "improve-codebase-architecture",
+  ];
+  const offenders: string[] = [];
+  for (const [what, body] of bodies) {
+    for (const name of skills) {
+      for (const form of [`/${name}`, `/skill:${name}`]) {
+        if (body.includes(form)) offenders.push(`${what}: ${form}`);
+      }
+    }
+  }
+  expect(offenders).toEqual([]);
 });
 
 test("every step that names a user-only skill invokes it as a slash command", () => {
@@ -85,7 +119,7 @@ test("every step that names a user-only skill invokes it as a slash command", ()
   for (const name of defs.workflows.keys()) {
     const wf = resolveWorkflow(name, defs, FALLBACK_DEFAULTS);
     for (const step of wf.steps) {
-      const named = [...step.prompt.matchAll(/`\/([a-z-]+)`/g)].map((m) => m[1]!);
+      const named = skillsIn(step.prompt);
       const blocked = named.filter((skill) => userOnly.has(skill));
       if (blocked.length > 0 && !blocked.includes(step.skill ?? "")) {
         offenders.push(`${name}.${step.id} names ${blocked.join(", ")} but skill: is ${step.skill ?? "unset"}`);

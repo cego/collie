@@ -6,9 +6,34 @@ export interface Rendered {
   missing: string[];
 }
 
-export function renderTemplate(text: string, vars: Record<string, unknown>): Rendered {
+export interface RenderOptions {
+  /**
+   * How this harness is asked for a skill. Bodies name skills by name — the syntax
+   * is the harness's business, not the definition's.
+   */
+  skill?: (name: string) => string;
+}
+
+/** Every skill a body asks for, in the order it asks. */
+export function skillsIn(text: string): string[] {
+  const names: string[] = [];
+  for (const [, name] of text.matchAll(SKILL)) if (name && !names.includes(name)) names.push(name);
+  return names;
+}
+
+const SKILL = /\{\{\s*skill:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
+
+export function renderTemplate(
+  text: string,
+  vars: Record<string, unknown>,
+  opts: RenderOptions = {},
+): Rendered {
   const missing: string[] = [];
-  const out = text.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (_all, path: string) => {
+  // Skills first, so `{{skill:x}}` is never mistaken for a missing variable.
+  const withSkills = text.replace(SKILL, (all, name: string) =>
+    opts.skill ? opts.skill(name) : all,
+  );
+  const out = withSkills.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (_all, path: string) => {
     const value = lookup(vars, path.split("."));
     if (value === undefined || value === null) {
       if (!missing.includes(path)) missing.push(path);
