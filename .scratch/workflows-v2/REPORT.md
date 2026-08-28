@@ -1,11 +1,12 @@
 # workflows v2 — implementation report
 
 All eight tickets are `done` and committed on `master` (local only, never pushed), plus
-two follow-ups mk asked for afterwards (convergence, and workarounds for the two harness
-facts below). `bun test` is green: 116 tests, 17 files. `bunx tsc --noEmit` is clean, and
+three follow-ups mk asked for afterwards (convergence, workarounds for the two harness
+facts below, and pre-trusting). `bun test` is green: 129 tests, 19 files. `bunx tsc --noEmit` is clean, and
 the runner still compiles.
 
 ```
+e303ecc Trust a directory before the harness has to ask
 6686f76 Work around a harness that will not start or will not be told
 4c5879f Let a disputed finding settle the argument
 a81ab87 Build, tidy, review, fix — implement v2                (08)
@@ -146,15 +147,20 @@ Verified by tests only (fake herdr):
 1. **`agent start` fails in a directory claude has not been trusted with**:
    `agent_not_ready … blocked during startup`, because claude is sitting on its
    "Is this a project you trust?" dialog.
-   **Worked around.** `agent get` shows the agent exists and is `blocked`, and it goes
-   `idle` under the same name the moment a person answers — so a startup block is no
-   longer a failure. The runner names the pane, toasts, and waits within the handoff
-   budget, exactly as a step waits for an interviewing agent's Output; when the agent
-   reports ready the run carries on. It does *not* answer the dialog itself: the options
-   are shuffled between runs — the second probe put "No, exit" first, and a blind Enter
-   quit claude — so there is no safe key to send. Verified live: `review` in a fresh
-   untrusted repo printed "⏸ … is waiting for you in its pane", then "▸ … is ready" after
-   the dialog was answered, and finished `done`.
+   **Avoided, and survivable when it happens.** The run now asks *before* it opens a
+   tab — "claude has not worked in <cwd> before: trust it now, or let claude ask me in
+   its tab" — and on yes records the answer where claude keeps it. Directories can also
+   be trusted ahead of time with `herdr-workflows trust <dir…>`, and `trust` in
+   `config.json` (`ask` | `auto` | `never`) settles it once. If claude does end up
+   asking, that is no longer a failure either: `agent get` shows the agent exists and is
+   `blocked`, and it goes `idle` under the same name the moment a person answers, so the
+   runner names the pane, toasts, and waits within the handoff budget. It does *not*
+   answer the dialog itself: the options are shuffled between runs — the second probe put
+   "No, exit" first, and a blind Enter quit claude — so there is no safe key to send.
+   Verified live both ways: a fresh untrusted repo printed "⏸ … is waiting for you in its
+   pane" then "▸ … is ready" after the dialog was answered; and a second fresh repo was
+   trusted from the runner's own menu, after which both reviewers started with no dialog
+   at all and the run finished `done`.
 2. **A skill marked `disable-model-invocation` cannot be run by an agent.** This is not
    one skill but most of them: `grill-with-docs`, `to-spec`, `to-tickets`, `wayfinder`,
    `implement` and `improve-codebase-architecture` all refuse, with "Ask the user to run
@@ -187,6 +193,17 @@ this, the loop would have finished at iteration 2 instead of burning to 5.
 **The two harness facts are handled (`6686f76`).** See the section above — a startup block
 now waits for the human instead of failing the run, and a step can drive a user-only skill.
 
+**Directories are trusted before the harness asks (`e303ecc`).** There is no `claude trust`
+command, so this writes the key claude's own dialog writes —
+`projects[<dir>].hasTrustDialogAccepted` in `~/.claude.json` — and that file is 219 KB of
+claude's state, not ours. So: nothing is written without a yes in the runner's menu or an
+explicit `"trust": "auto"`; the previous file is copied to `claude.json.bak` in the plugin
+state dir first; the merge keeps every other project and top-level setting exactly as it
+was; the new file is renamed into place rather than written over; and the result is read
+back before it counts as done. A missing or unreadable config is left alone and reported.
+Checked on the real file: 72 top-level keys and 69 existing project entries came through
+byte-identical, with two entries added.
+
 ## Left open
 
 - **The sandbox runs are still in the plugin state dir** — `plan-…-121724`,
@@ -200,6 +217,19 @@ now waits for the human instead of failing the run, and a step can drive a user-
   created an issue: the Linear MCP is not configured for the harnesses here. Same for
   `ticket`'s issue fetch.
 - **`codex` and `opencode` remain unverified**, as in v1. The baseline is claude-only.
+  That includes trust: only the claude adapter knows where its harness records the answer,
+  so the other two would still stop on whatever they ask on a first run — and be waited
+  for, which is the fallback that covers every harness.
+- **The trust key is claude's internal shape, not a supported interface.** `claude project`
+  offers only `purge`, and there is no flag for it, so a future release could rename or
+  move `hasTrustDialogAccepted`. If it does, `state()` starts answering "untrusted"
+  forever: the menu appears every run, and granting stops taking effect (it verifies, so
+  it reports the failure rather than lying). Nothing breaks — it degrades to the waiting
+  behaviour — but that is the thing to check first if the menu will not stay away.
+- **A read-modify-write of `~/.claude.json` can still lose a concurrent write.** The window
+  is one file read and a rename, at most once per directory, and the backup makes it
+  recoverable, but a claude session that saves in exactly that window would have its change
+  overwritten. `"trust": "never"` avoids the write entirely.
 - **A resumed Choice step forgets which choices were taken in the previous session's
   process, but not the record**: the count behind `max:` comes from `run.json`, so a
   resumed run still honours it. Nothing verifies that live.
