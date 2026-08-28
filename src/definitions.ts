@@ -14,7 +14,7 @@ export interface Layer {
   dir: string;
 }
 
-export const INPUT_STRATEGIES = ["goal", "plan-dir", "diff-target", "ticket", "issue", "flag"] as const;
+export const INPUT_STRATEGIES = ["goal", "plan-dir", "work-source", "diff-target", "ticket", "flag"] as const;
 export type InputStrategy = (typeof INPUT_STRATEGIES)[number];
 
 export interface Variant {

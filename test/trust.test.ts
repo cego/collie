@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { Rig } from "./support/recorder";
 import { claudeTrust } from "../src/trust";
@@ -109,3 +117,12 @@ test("a config that is not JSON is left exactly as it is", () => {
   expect(readFileSync(path, "utf8")).toBe("{ not json");
 });
 
+
+test("granting leaves the config's permissions alone — they are not ours either", () => {
+  const path = claudeConfig({ "/other/repo": { mcpServers: {} } });
+  chmodSync(path, 0o600);
+
+  expect(trust().grant(rig.projectDir).ok).toBe(true);
+
+  expect(statSync(path).mode & 0o777).toBe(0o600);
+});

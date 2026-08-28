@@ -24,7 +24,7 @@ import {
   type ReviewOutput,
 } from "./output";
 import { agentName, shellQuote, stepLabel } from "./naming";
-import { inferInputs } from "./inputs";
+import { classifyWorkSource, inferInputs, resolveWorkSource, type InputPrompts } from "./inputs";
 import { RunStore } from "./run";
 import { renderTemplate } from "./template";
 import { resolveWorkflow } from "./definitions";
@@ -33,10 +33,7 @@ import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 export const VIEW_SOURCE_PREFIX = "cego.workflows:";
 
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
-export interface EnginePrompts {
-  menu(items: PickItem[], opts: { header: string; footer?: string }): Promise<PickItem | null>;
-  ask(question: string): Promise<string | null>;
-}
+export type EnginePrompts = InputPrompts;
 
 export interface EngineOptions {
   herdr: Herdr;
@@ -459,20 +456,33 @@ async function chain(
     if (forwarded[r.name] !== undefined) {
       inputs[r.name] = forwarded[r.name]!;
       sources[r.name] = `chained from ${run.id}`;
+      // A forwarded work-source still owes the prompts its kind; the parent wrote a plan dir.
+      if (r.strategy === "work-source") inputs[`${r.name}_kind`] = classifyWorkSource(forwarded[r.name]!).kind;
       continue;
     }
-    if (!r.needsAsking) {
-      inputs[r.name] = r.value;
-      sources[r.name] = r.source;
-      continue;
+    if (r.needsAsking) {
+      // A work-source is chosen from what this repo offers; everything else is typed.
+      if (r.candidates) {
+        if (!(await resolveWorkSource(r, prompts))) {
+          out(`  ${choice.run} needs "${r.name}" — nothing started`);
+          return null;
+        }
+      } else {
+        const answer = await prompts.ask(r.question);
+        if (answer === null || answer.trim() === "") {
+          out(`  ${choice.run} needs "${r.name}" — nothing started`);
+          return null;
+        }
+        r.value = answer.trim();
+        r.source = "asked";
+      }
     }
-    const answer = await prompts.ask(r.question);
-    if (answer === null || answer.trim() === "") {
-      out(`  ${choice.run} needs "${r.name}" — nothing started`);
-      return null;
+    inputs[r.name] = r.value;
+    sources[r.name] = r.source;
+    if (r.kind) {
+      inputs[`${r.name}_kind`] = r.kind;
+      sources[`${r.name}_kind`] = r.source;
     }
-    inputs[r.name] = answer.trim();
-    sources[r.name] = "asked";
   }
 
   // The parent already names the work, so the child inherits its name.
@@ -516,7 +526,6 @@ async function runRound(
   const synth: ResolvedStep = {
     ...round,
     id: step.id,
-    skill: round.skill,
     persona: round.persona ?? step.persona,
     origin: step.origin,
     preamble: step.preamble,

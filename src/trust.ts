@@ -3,7 +3,16 @@
 // command for it, so this writes the key it looks for — carefully, because that
 // file is claude's, not ours, and it holds far more than this.
 
-import { copyFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 export type TrustState = "trusted" | "untrusted" | "unknown";
@@ -71,9 +80,11 @@ export function claudeTrust(home: string, backupDir: string): Trust {
 
       const backup = join(backupDir, "claude.json.bak");
       copyFileSync(path, backup);
-      // Rename so a reader never sees a half-written config.
+      // Rename so a reader never sees a half-written config — and carry the original
+      // mode over with it, because a rename replaces the file, permissions and all.
       const tmp = `${path}.herdr-${process.pid}`;
       writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`);
+      chmodSync(tmp, statSync(path).mode & 0o777);
       renameSync(tmp, path);
 
       if (this.state(cwd) !== "trusted") {

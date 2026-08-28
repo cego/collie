@@ -93,3 +93,19 @@ test("a finding the implementer already disputed is settled, unless a reviewer a
   expect(split.rebutted.map((f) => f.title)).toEqual(["no engines field"]);
   expect(splitDisputed(raised, []).live).toHaveLength(3);
 });
+
+test("a rebuttal survives whichever reviewer raised the finding first", () => {
+  const plain = ok(`{"verdict": "findings", "findings": [{"file": "cli.js", "severity": "major", "title": "x"}]}`);
+  const answered = ok(
+    `{"verdict": "findings", "findings": [{"file": "cli.js", "line": 9, "severity": "major", "title": "x", "rebuttal": "the reason misreads the spec"}]}`,
+  );
+  const disputed = [{ file: "cli.js", severity: "major", title: "x", detail: "the spec says so" }];
+
+  // Whichever order the reviewers are listed in, the rebuttal has to count.
+  for (const reviews of [[plain, answered], [answered, plain]]) {
+    const union = unionFindings(reviews);
+    expect(union).toHaveLength(1);
+    expect(union[0]!.rebuttal).toBe("the reason misreads the spec");
+    expect(splitDisputed(union, disputed).rebutted).toHaveLength(1);
+  }
+});

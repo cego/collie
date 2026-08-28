@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
+import { writeDef } from "./support/defs";
 import { FALLBACK_DEFAULTS } from "../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
 import { RunStore } from "../src/run";
@@ -139,12 +140,28 @@ test("offloading to Linear asks for the team once and keeps it in config.json", 
   expect(offload).toContain("ONE issue");
 });
 
-test("ticket plans a Linear issue through the same steps, with the references rebased", () => {
+test("a workflow embedding plan gets the same steps with the references rebased", () => {
   const env = rig.pluginEnv();
+  // The baseline no longer embeds `plan`, but a user layer still may.
+  writeDef(
+    join(env.cwd, ".herdr"),
+    "workflows",
+    "embeds-plan",
+    `---
+name: embeds-plan
+title: embeds-plan — plan, embedded
+inputs:
+  goal: goal
+steps:
+  - id: plan
+    use: plan
+---
+`,
+  );
   const defs = loadDefinitions(layers(env));
-  const wf = resolveWorkflow("ticket", defs, FALLBACK_DEFAULTS);
+  const wf = resolveWorkflow("embeds-plan", defs, FALLBACK_DEFAULTS);
 
-  expect(wf.inputs).toEqual({ goal: "issue", ticket: "ticket" });
+  expect(wf.inputs).toEqual({ goal: "goal", ticket: "ticket" });
   expect(wf.steps.map((s) => s.id)).toEqual([
     "plan.grill",
     "plan.spec",

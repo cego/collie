@@ -13,7 +13,14 @@ import {
 import { executeRun } from "./engine";
 import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
-import { confirmLine, inferInputs, type Resolution } from "./inputs";
+import {
+  confirmLine,
+  inferInputs,
+  inputSources,
+  inputValues,
+  resolveWorkSource,
+  type Resolution,
+} from "./inputs";
 import { ask, confirm, nextKey, pick, releaseKeyboard, type PickItem } from "./picker";
 import { forkDefinition, type DefinitionKind } from "./fork";
 import { RunStore } from "./run";
@@ -72,6 +79,11 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const resolutions = await inferInputs(resolved.inputs, { cwd: env.cwd, stateDir: env.stateDir });
   for (const r of resolutions) {
     if (!r.needsAsking) continue;
+    // A work-source is chosen from what this repo offers; everything else is typed.
+    if (r.candidates) {
+      if (!(await resolveWorkSource(r, { menu: pick, ask }))) return 0;
+      continue;
+    }
     const answer = await ask(r.question);
     if (answer === null) return 0;
     r.value = answer.trim();
@@ -86,8 +98,8 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const run = store.create({
     workflow: resolved.name,
     cwd: env.cwd,
-    inputs: Object.fromEntries(resolutions.map((r) => [r.name, r.value])),
-    inputSources: Object.fromEntries(resolutions.map((r) => [r.name, r.source])),
+    inputs: inputValues(resolutions),
+    inputSources: inputSources(resolutions),
     stepIds: resolved.steps.map((s) => s.id),
     maxIterations: resolved.maxIterations,
     primaryInput: primaryInput(resolutions),

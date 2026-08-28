@@ -3,7 +3,7 @@
 **Status: implemented.** All eight tickets of workflows v2 shipped on `master`; this file
 is the design as settled, and `.scratch/workflows-v2/issues/` records the decisions taken
 where it was silent. The engine additions below exist as `choices:` (with `run`, `prompt`
-and `stop`), `{{run.dir}}`, the `plan-dir` and `issue` Input strategies, chaining with a
+and `stop`), `{{run.dir}}`, the `plan-dir` and `work-source` Input strategies, chaining with a
 `parent`/`children` link, `prompt: <section>` overrides, `standalone:` steps and
 `repeat.back_to`. What the design left open and the implementation had to name:
 a `stop` choice, `follow_up` and `config` on a choice, and `standalone` for a menu that
@@ -27,7 +27,8 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
    `plan: {{run.dir}}/plan`) or `prompt: <text>` (send to a named agent, then re-offer the
    menu after its Output). Selecting a choice records it in the run.
 2. **Run-dir artefacts** — `{{run.dir}}` in prompts; `plan-dir` Input strategy = newest
-   finished `plan` Run for this repo with `plan/SPEC.md`, else ask.
+   finished `plan` Run for this repo with `plan/SPEC.md`, else ask. `work-source` widens
+   that to the three newest plus a Linear id from the branch, and asks with a menu.
 3. **Chaining** — `run:` creates a child Run linked to the parent; tabs go in the same
    workspace; parent finishes when the child is launched.
 4. **Summaries** carry `disputed` (implementer) and `deferred` (architect) lists.
@@ -56,14 +57,14 @@ Steps (one agent throughout, `agent: grill`):
    - **Refine** → prompt planner "the human wants changes; ask what", rewrite, menu again.
      No cap.
 
-### ticket
-`use: plan` with `goal` inferred from a Linear issue id/URL (agent fetches via MCP).
-
 ### implement
-Inputs: `plan` (plan-dir). One implementer agent (`agent: build`) for build/architecture/
-simplify/fix.
+Inputs: `plan` (work-source: a plan dir, a Linear issue or free text). One implementer
+agent (`agent: build`) for build/architecture/simplify/fix.
 1. `build` — implementer; branch off default branch as `<slug>`; `/implement` over the
    tickets with `/tdd` at the spec's seams; commit per ticket. No separate commit step.
+   The prompt branches on `{{inputs.plan_kind}}`: a plan dir is read as today; a Linear
+   issue is fetched via MCP and a description is taken as given, and both are written to
+   `{{run.dir}}/plan/` as SPEC + tasks before building.
 2. `architecture` — `use: architecture` (unattended body): `/improve-codebase-architecture`
    scoped to the changed area; apply `Strong` candidates only, top first, re-scan, max 2
    passes; report saved to `{{run.dir}}`, never opened; others → `deferred`.

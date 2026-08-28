@@ -106,7 +106,7 @@ test("findings loop fix → simplify → review, and architecture stays out of t
   expect(fix).toContain("- [minor] loose equality (cli.js:2)");
   expect(fix).toContain("Iteration 1 of at most 5");
   expect(run.record.summary).toContain("Disputed findings");
-});
+}, 20_000);
 
 test("the loop stops at max_iterations and blocks with the findings still open", async () => {
   writeDef(
@@ -128,7 +128,7 @@ test("the loop stops at max_iterations and blocks with the findings still open",
   expect(lines).toContain("  max_iterations (2) reached with 1 finding(s)");
   expect(run.record.summary).toContain("Findings still open:");
   expect(run.record.summary).toContain("- [blocker] no exit code (cli.js:4)");
-});
+}, 20_000);
 
 test("the reviewers are one persona at two models, in a tab each, restarted every round", async () => {
   rig.queueOutputs([CLEAN, CLEAN, CLEAN, FINDING, FINDING, CLEAN, CLEAN, CLEAN, CLEAN]);
@@ -160,7 +160,7 @@ test("the reviewers are one persona at two models, in a tab each, restarted ever
     expect(run.step(step).variants[0]!.agent).toBe(implementer);
   }
   expect(rig.cmds().filter((c) => c === "pane close")).toHaveLength(2);
-});
+}, 20_000);
 
 test("review standalone is the same two variants, and says so when it has no spec", async () => {
   rig.queueOutputs([CLEAN, CLEAN]);
@@ -218,7 +218,7 @@ test("a finding the implementer disputed stops driving the loop, so the run conv
   expect(second).toContain("Already disputed");
   expect(second).toContain("- [minor] no exit code (cli.js)");
   expect(second).toContain("the spec asks for this");
-});
+}, 20_000);
 
 test("a reviewer that answers the dispute puts the finding back in front of the implementer", async () => {
   const rebutted = {

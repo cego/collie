@@ -1,9 +1,9 @@
 ---
 name: implement
 title: implement — build the plan, tidy it, review it, fix until clean
-description: Builds from a plan dir, improves the architecture it touched, simplifies, fans out to reviewers and loops on findings.
+description: Builds from a plan dir, a Linear issue or a description, improves the architecture it touched, simplifies, fans out to reviewers and loops on findings.
 inputs:
-  plan: plan-dir
+  plan: work-source
 max_iterations: 5
 steps:
   - id: build
@@ -30,13 +30,24 @@ steps:
       from: review
       back_to: simplify
 ---
-Plan directory: {{inputs.plan}}
+Work source ({{inputs.plan_kind}}): {{inputs.plan}}
 Project root: {{cwd}}
 This run's directory: {{run.dir}}
 
 ## build
 
-Read `{{inputs.plan}}/SPEC.md` and every ticket in `{{inputs.plan}}/issues/`.
+The work source above is one of three kinds. Do the one that matches
+`{{inputs.plan_kind}}` and ignore the other two.
+
+- **plan-dir** — a plan is already written. Read `{{inputs.plan}}/SPEC.md` and every
+  ticket in `{{inputs.plan}}/issues/`, and build those tickets.
+- **linear** — a Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat
+  its description as the spec. Before building, write that spec to
+  `{{run.dir}}/plan/SPEC.md` and a short task list to `{{run.dir}}/plan/issues/NN-*.md`,
+  one file per slice, so the run records what you decided to build.
+- **text** — the work in the human's own words. Same as `linear` without the fetch:
+  write `{{run.dir}}/plan/SPEC.md` and the task list from the text, then build. If the
+  text does not say enough to build from, stop and say what you need — do not guess.
 
 Branch off the default branch first, named after the spec's slug — short, kebab-case,
 no ticket number unless the spec has one. This prompt arrives as `/implement`, so build

@@ -1,10 +1,32 @@
 // Input inference: branch, cwd, earlier Runs and the open MR. The human is asked
 // only when inference fails (docs/SPEC.md).
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
 import type { InputStrategy } from "./definitions";
+import type { PickItem } from "./picker";
 import { RunStore } from "./run";
+
+/** Where the work to be done was described. */
+export type WorkSourceKind = "plan-dir" | "linear" | "text";
+
+export interface WorkSourceCandidate {
+  kind: WorkSourceKind;
+  value: string;
+  source: string;
+  label?: string;
+}
+
+/** How a work-source reaches the human; the picker and the runner pane both supply it. */
+export interface InputPrompts {
+  menu(items: PickItem[], opts: { header: string; footer?: string }): Promise<PickItem | null>;
+  ask(question: string): Promise<string | null>;
+}
+
+/** More than this and the oldest plans would bury the branch's own ticket. */
+const PLAN_DIR_CANDIDATES = 3;
+const WORK_SOURCE_QUESTION = "What should be built?";
+const TYPE_IT = "type";
 
 export interface Resolution {
   name: string;
@@ -16,6 +38,10 @@ export interface Resolution {
   question: string;
   /** A short name for this value, when the value itself would name the Run badly. */
   label?: string;
+  /** Where the work is described, for a `work-source`. */
+  kind?: WorkSourceKind;
+  /** What the human may pick from, when a `work-source` could not be inferred. */
+  candidates?: WorkSourceCandidate[];
 }
 
 export interface InferContext {
@@ -54,9 +80,9 @@ export async function inferInput(
       return { ...base, value: "", source: "ask", needsAsking: true, question: "What is the goal?" };
 
     case "plan-dir": {
-      const plan = ctx.stateDir ? newestPlanDir(ctx.stateDir, ctx.cwd) : null;
+      const plan = ctx.stateDir ? planDirs(ctx.stateDir, ctx.cwd, 1)[0] : undefined;
       if (plan) {
-        return { ...base, value: plan.dir, source: `plan run ${plan.runId}`, label: plan.label };
+        return { ...base, value: plan.value, source: plan.source, label: plan.label };
       }
       return {
         ...base,
@@ -86,18 +112,11 @@ export async function inferInput(
       return found ? { ...base, ...found } : { ...base, value: "", source: "none" };
     }
 
-    // Like `ticket`, but the workflow cannot start without one.
-    case "issue": {
-      const found = await ticketFromBranch(run, ctx.cwd);
-      return found
-        ? { ...base, ...found }
-        : {
-            ...base,
-            value: "",
-            source: "ask",
-            needsAsking: true,
-            question: "Which Linear issue? (id or URL)",
-          };
+    case "work-source": {
+      const candidates = await workSourceCandidates(ctx);
+      // One candidate is an answer; none or several are a question for the human.
+      if (candidates.length === 1) return { ...base, ...candidates[0]! };
+      return { ...base, value: "", source: "ask", needsAsking: true, question: WORK_SOURCE_QUESTION, candidates };
     }
 
     case "flag":
@@ -154,28 +173,141 @@ async function defaultBase(
 }
 
 /**
- * The newest finished Run for this repo that wrote a plan. Any workflow may write
- * one (`plan`, `ticket`, `architecture`), so having `plan/SPEC.md` is the test,
- * not the workflow's name (ADR-0002).
+ * The newest finished Runs for this repo that wrote a plan, newest first. Any
+ * workflow may write one (`plan`, `architecture`), so having `plan/SPEC.md` is the
+ * test, not the workflow's name (ADR-0002).
  */
-export function newestPlanDir(
-  stateDir: string,
-  cwd: string,
-): { dir: string; runId: string; label: string } | null {
+export function planDirs(stateDir: string, cwd: string, limit: number): WorkSourceCandidate[] {
+  const found: WorkSourceCandidate[] = [];
   for (const run of new RunStore(stateDir).list()) {
+    if (found.length >= limit) break;
     if (run.record.cwd !== cwd || run.record.status !== "done") continue;
     const dir = join(run.dir, "plan");
     if (!existsSync(join(dir, "SPEC.md"))) continue;
     const prefix = `${run.record.workflow}-`;
     const slug = run.record.slug;
-    return { dir, runId: run.id, label: slug.startsWith(prefix) ? slug.slice(prefix.length) : slug };
+    found.push({
+      kind: "plan-dir",
+      value: dir,
+      source: `plan run ${run.id}`,
+      label: slug.startsWith(prefix) ? slug.slice(prefix.length) : slug,
+    });
   }
-  return null;
+  return found;
+}
+
+/** Everything that could describe the work here: the recent plans, then the branch's ticket. */
+export async function workSourceCandidates(ctx: InferContext): Promise<WorkSourceCandidate[]> {
+  const candidates = ctx.stateDir ? planDirs(ctx.stateDir, ctx.cwd, PLAN_DIR_CANDIDATES) : [];
+  const ticket = await ticketFromBranch(ctx.run ?? shell, ctx.cwd);
+  if (ticket) candidates.push({ kind: "linear", value: ticket.value, source: ticket.source });
+  return candidates;
+}
+
+/** What the human typed: a plan directory, a Linear issue, or the work in their own words. */
+export function classifyWorkSource(typed: string): WorkSourceCandidate {
+  const text = typed.trim();
+  const source = "typed";
+
+  const url = /linear\.app\/[^/\s]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/.exec(text);
+  if (url) return { kind: "linear", value: url[1]!.toUpperCase(), source };
+
+  if (/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(text)) return { kind: "linear", value: text.toUpperCase(), source };
+
+  if (isPlanDir(text)) return { kind: "plan-dir", value: text, source, label: textLabel(basename(text)) };
+
+  return { kind: "text", value: text, source, label: textLabel(text) };
+}
+
+/**
+ * Settles a work-source the human has to choose: the candidates as a menu, plus
+ * "Type it…" for a Linear issue or a description. False when they backed out.
+ */
+export async function resolveWorkSource(r: Resolution, prompts: InputPrompts): Promise<boolean> {
+  const candidates = r.candidates ?? [];
+  const items: PickItem[] = candidates.map((c, i) => ({
+    id: String(i),
+    title: c.label ?? c.value,
+    subtitle: `${c.kind} · ${c.source}`,
+  }));
+  items.push({ id: TYPE_IT, title: "Type it…", subtitle: "a Linear id or URL, or the work in your own words" });
+
+  const chosen = await prompts.menu(items, {
+    header: WORK_SOURCE_QUESTION,
+    footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
+  });
+  if (!chosen) return false;
+
+  if (chosen.id !== TYPE_IT) {
+    settle(r, candidates[Number(chosen.id)]!);
+    return true;
+  }
+
+  const typed = await prompts.ask("Linear id or URL, or the work in your own words");
+  if (typed === null || typed.trim() === "") return false;
+  settle(r, classifyWorkSource(typed));
+  return true;
+}
+
+function settle(r: Resolution, candidate: WorkSourceCandidate): void {
+  r.value = candidate.value;
+  r.kind = candidate.kind;
+  r.source = candidate.source;
+  r.label = candidate.label;
+  r.needsAsking = false;
+  delete r.candidates;
+}
+
+function isPlanDir(path: string): boolean {
+  try {
+    return statSync(path).isDirectory() && existsSync(join(path, "SPEC.md"));
+  } catch {
+    return false;
+  }
+}
+
+/** A few words, enough to name the Run after work that has no shorter name. */
+function textLabel(text: string): string {
+  const words = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter(Boolean);
+  let label = "";
+  for (const word of words) {
+    const next = label ? `${label}-${word}` : word;
+    if (next.length > 24) break;
+    label = next;
+  }
+  return label || "work";
+}
+
+/** Inputs as the prompts see them: a work-source also exposes `<name>_kind`. */
+export function inputValues(resolutions: Resolution[]): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const r of resolutions) {
+    values[r.name] = r.value;
+    if (r.kind) values[`${r.name}_kind`] = r.kind;
+  }
+  return values;
+}
+
+export function inputSources(resolutions: Resolution[]): Record<string, string> {
+  const sources: Record<string, string> = {};
+  for (const r of resolutions) {
+    sources[r.name] = r.source;
+    if (r.kind) sources[`${r.name}_kind`] = r.source;
+  }
+  return sources;
 }
 
 export function confirmLine(workflow: string, resolutions: Resolution[]): string {
   const parts = resolutions
     .filter((r) => r.value !== "" || r.strategy !== "ticket")
-    .map((r) => `${r.name}=${r.value || "(empty)"} [${r.source}]`);
+    .map((r) => {
+      const where = r.kind ? `${r.kind} · ${r.source}` : r.source;
+      return `${r.name}=${abbreviate(r.value) || "(empty)"} [${where}]`;
+    });
   return `${workflow}: ${parts.join("  ")}`;
+}
+
+/** Free text is a whole sentence; the confirm line only has room for the start of it. */
+function abbreviate(value: string): string {
+  return value.length > 60 ? `${value.slice(0, 57)}...` : value;
 }

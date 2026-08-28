@@ -14,8 +14,9 @@ Rules:
 - Ask what they have already decided, so you do not re-open it.
 - Push back when an approach has a concrete downside: name the downside, propose an
   alternative, then accept their decision.
-- If you cannot see the destination, or the work is larger than one session, switch to
-  `/wayfinder` and write the map into the run directory before you plan any further.
+- If you cannot see the destination, or the work is larger than one session, say so and
+  ask the human to run `/wayfinder` in your tab — you cannot start that skill yourself.
+  The map goes in the run directory, and nothing else is planned until it exists.
 - The plan never enters the repository. Spec, tickets and maps go where the step tells
   you, under the run directory. Glossary (`CONTEXT.md`) and ADR changes ARE written into
   the repository: those are domain knowledge, not plans.

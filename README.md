@@ -1,6 +1,6 @@
 # herdr-plugin
 
-Codified agent workflows for herdr: `plan`, `ticket`, `implement`, `review`, `architecture` — deterministic multi-tab orchestrations you pick from a popup.
+Codified agent workflows for herdr: `plan`, `implement`, `review`, `architecture` — deterministic multi-tab orchestrations you pick from a popup.
 A shared starting point, not a restriction: fork any workflow or persona into your own layer.
 
 ## Install
@@ -47,8 +47,7 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
 | Workflow | What it does |
 | --- | --- |
 | `plan` | Grills you, writes `SPEC.md` and tickets into the run dir, then a menu: implement now, second opinion, offload to Linear, refine |
-| `ticket` | `plan`, with a Linear issue id or URL as the goal |
-| `implement` | Builds the plan on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models, loops on findings up to five times |
+| `implement` | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models, loops on findings up to five times |
 | `review` | Reviews an MR, a branch diff or the working tree with two models and writes one verdict each |
 | `architecture` | Runs the architect over the project, reports into the run dir, then a menu: implement now or stop |
 
@@ -118,7 +117,7 @@ name: implement
 title: implement — build from a plan, review in parallel, fix until clean
 description: One line for the picker.
 inputs:
-  plan: plan-dir           # goal | plan-dir | diff-target | ticket | issue | flag
+  plan: work-source        # goal | plan-dir | work-source | diff-target | ticket | flag
 max_iterations: 5
 steps:
   - id: build
@@ -242,10 +241,19 @@ puts the finding back in front of the implementer.
 ## Runs
 
 Plans are never written into the repository (ADR-0002): `plan` writes `SPEC.md` and
-its tickets into `{{run.dir}}/plan`, and `plan-dir` inference hands that directory to
-`implement` — the newest finished run that planned this project. `plan` ends with a menu:
-implement now, get a second opinion, offload to Linear, or refine. Esc there leaves the
-run open for `resume`.
+its tickets into `{{run.dir}}/plan`. `plan` ends with a menu: implement now, get a
+second opinion, offload to Linear, or refine. Esc there leaves the run open for
+`resume`.
+
+`implement` does not need a plan run, though. Its `plan` input is a **work-source**, and
+inference gathers what this repo offers: the three newest finished runs that planned it,
+and a Linear issue id in the branch name. One candidate is taken as the answer; none or
+several bring up a menu of them plus **Type it…**, where a Linear id or URL, a path to a
+plan directory, or a plain description of the work are all accepted. What was resolved is
+recorded with its kind, and the `build` prompt reads both: `{{inputs.plan}}` and
+`{{inputs.plan_kind}}` (`plan-dir` | `linear` | `text`). For `linear` and `text` the
+implementer writes the spec and a task list into `{{run.dir}}/plan/` before it builds,
+so every run leaves the same audit trail.
 
 Every run is recorded under the plugin state dir: `runs/<id>/run.json` with the
 inputs and where each came from, `steps/<step>[/<variant>]/` with the exact prompt

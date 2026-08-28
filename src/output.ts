@@ -78,17 +78,20 @@ export function findingKey(f: Finding): string {
 
 /** Fan-in: the union of every reviewer's findings, deduplicated. */
 export function unionFindings(outputs: ReviewOutput[]): Finding[] {
-  const seen = new Set<string>();
-  const out: Finding[] = [];
+  const byKey = new Map<string, Finding>();
   for (const o of outputs) {
     for (const f of o.findings) {
       const key = findingKey(f);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(f);
+      const kept = byKey.get(key);
+      if (!kept) {
+        byKey.set(key, f);
+      } else if (!kept.rebuttal && f.rebuttal) {
+        // Any reviewer's rebuttal counts, whoever happened to raise the finding first.
+        byKey.set(key, { ...kept, rebuttal: f.rebuttal });
+      }
     }
   }
-  return out;
+  return [...byKey.values()];
 }
 
 export interface Split {
