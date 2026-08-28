@@ -3,44 +3,31 @@
 Codified agent workflows for herdr: `plan`, `ticket`, `implement`, `review`, `architecture` — deterministic multi-tab orchestrations you pick from a popup.
 A shared starting point, not a restriction: fork any workflow or persona into your own layer.
 
-## Install (local link, no GitHub needed)
+## Install
+
+One command, safe to re-run:
 
 ```sh
-git clone git@gitlab.cego.dk:cego/herdr-plugin.git ~/.herdr-plugin
-herdr plugin link ~/.herdr-plugin
+git clone git@gitlab.cego.dk:cego/herdr-plugin.git ~/.herdr-plugin && ~/.herdr-plugin/setup.sh
 ```
 
-`herdr plugin link` runs `install.sh`, which downloads the prebuilt runner for your
-platform from the matching tag's release. You do not need bun. (If bun happens to be
-installed — because you are working on the plugin itself — `install.sh` builds from
-source when there is no release asset.)
+`setup.sh` links the plugin (`herdr plugin link`, which runs `install.sh` to fetch the
+prebuilt runner — no bun needed; with bun present it builds from source instead), adds
+the three keybindings below to `~/.config/herdr/config.toml` if they are missing, and
+reloads the running herdr. Run it again after a `git pull` to pick up changes; from a
+non-checkout location it clones/updates `~/.herdr-plugin` itself (`HERDR_PLUGIN_DIR`,
+`HERDR_PLUGIN_REPO` and `HERDR_CONFIG` override the defaults).
 
-Add keybindings in `~/.config/herdr/config.toml`, then `herdr server reload-config`
-(or `prefix+shift+r`). Keys are suggestions; `prefix` is `ctrl+b` by default:
+Keys it adds (`prefix` is `ctrl+b` by default; edit them in `config.toml` afterwards):
 
-```toml
-[[keys.command]]
-key = "prefix+alt+w"
-type = "plugin_action"
-command = "cego.workflows.pick"
-description = "Run a workflow"
+| Key | Action |
+| --- | --- |
+| `prefix+alt+w` | `cego.workflows.pick` — run a workflow |
+| `prefix+alt+r` | `cego.workflows.resume` — resume a run with unfinished steps |
+| `prefix+alt+f` | `cego.workflows.fork` — copy a workflow or persona into your layer |
 
-[[keys.command]]
-key = "prefix+alt+r"
-type = "plugin_action"
-command = "cego.workflows.resume"
-description = "Resume a workflow run"
-
-[[keys.command]]
-key = "prefix+alt+f"
-type = "plugin_action"
-command = "cego.workflows.fork"
-description = "Fork a workflow or persona"
-```
-
-`description` makes them show up in herdr's keybind help (`prefix+?`). Without a
-binding, any action still runs from a shell inside herdr:
-`herdr plugin action invoke cego.workflows.pick`.
+They show up in herdr's keybind help (`prefix+?`). Without a binding, any action still
+runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`.
 
 ## Using it
 
