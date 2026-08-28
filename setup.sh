@@ -62,4 +62,4 @@ else
   say "herdr is not running; the bindings apply on next start"
 fi
 
-say "Done. Inside herdr: prefix+alt+w picks a workflow, prefix+alt+r resumes, prefix+alt+f forks."
+say "Done. Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f forks."

@@ -18,27 +18,29 @@ reloads the running herdr. Run it again after a `git pull` to pick up changes; f
 non-checkout location it clones/updates `~/.herdr-plugin` itself (`HERDR_PLUGIN_DIR`,
 `HERDR_PLUGIN_REPO` and `HERDR_CONFIG` override the defaults).
 
-Keys it adds (`prefix` is `ctrl+b` by default; edit them in `config.toml` afterwards):
+Keys it adds (`prefix` is `ctrl+b` by default; edit them in `config.toml` afterwards).
+Plain letters on purpose: `alt` chords after the prefix are not delivered reliably over
+SSH or through some terminals, and herdr's own config notes the same.
 
 | Key | Action |
 | --- | --- |
-| `prefix+alt+w` | `cego.workflows.pick` — run a workflow |
-| `prefix+alt+r` | `cego.workflows.resume` — resume a run with unfinished steps |
-| `prefix+alt+f` | `cego.workflows.fork` — copy a workflow or persona into your layer |
+| `prefix+f` | `cego.workflows.pick` — run a workflow |
+| `prefix+u` | `cego.workflows.resume` — resume a run with unfinished steps |
+| `prefix+shift+f` | `cego.workflows.fork` — copy a workflow or persona into your layer |
 
 They show up in herdr's keybind help (`prefix+?`). Without a binding, any action still
 runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`.
 
 ## Using it
 
-1. Focus a pane in the workspace of the repo you want to work on and press `prefix+alt+w`.
+1. Focus a pane in the workspace of the repo you want to work on and press `prefix+f`.
 2. Pick a workflow in the popup (type to filter, Enter).
 3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only
    for what could not be inferred, and shown one confirm line.
 4. A `runner` tab opens as the status pane; each step gets its own tab, marked
    `✓`/`⚠`/`✗` as it finishes. A toast tells you when a run is done or needs you.
 5. `plan` and `architecture` end in a menu; "Implement now" chains straight into
-   `implement`. `prefix+alt+r` picks up any run with unfinished steps.
+   `implement`. `prefix+u` picks up any run with unfinished steps.
 
 ## Workflows
 
