@@ -8,14 +8,17 @@ inputs:
 steps:
   - id: grill
     persona: planner
+    skill: grill-with-docs
     output: grill.json
   - id: spec
     persona: planner
     agent: grill
+    skill: to-spec
     output: spec.json
   - id: tickets
     persona: planner
     agent: grill
+    skill: to-tickets
     output: tickets.json
   - id: next
     choices:
@@ -60,11 +63,14 @@ This run's plan directory: {{run.dir}}/plan
 If the goal above is a Linear issue id or a Linear URL, fetch it first with the Linear
 MCP and treat what it says as the goal.
 
-Grill me about it with `/grill-with-docs`: one question at a time, until you can state
-the plan back to me and I agree with it. Write no spec and no tickets in this step.
+This prompt arrives as `/grill-with-docs`, so the skill is already running: one question
+at a time, until you can state the plan back to me and I agree with it. Write no spec and
+no tickets in this step.
 
 If you cannot see the destination from here, or this is more than one session of work,
-switch to `/wayfinder` and write the map to `{{run.dir}}/plan/MAP.md` before you carry on.
+say so and stop: ask me to run `/wayfinder` in this tab, and set `"wayfinder": true` in
+your Output. You cannot start that skill yourself — only I can — and the map belongs at
+`{{run.dir}}/plan/MAP.md`.
 
 Glossary (`CONTEXT.md`) and ADR changes we agree on go into the repository as we agree
 them — they are domain knowledge. Nothing else does.
@@ -75,7 +81,7 @@ Then write the Output JSON: `{"verdict": "clean", "findings": [], "slug":
 
 ## spec
 
-Write the spec with `/to-spec` to `{{run.dir}}/plan/SPEC.md`. It has the problem in one
+This prompt arrives as `/to-spec`. Write the spec to `{{run.dir}}/plan/SPEC.md`. It has the problem in one
 paragraph, what is explicitly out of scope, the ordered work with the seams that want
 tests, and how we will know the whole thing works.
 
@@ -84,7 +90,7 @@ Then write the Output JSON: `{"verdict": "clean", "findings": [], "spec":
 
 ## tickets
 
-Cut the spec into tickets with `/to-tickets`: one file each at
+This prompt arrives as `/to-tickets`. Cut the spec into tickets: one file each at
 `{{run.dir}}/plan/issues/NN-<slug>.md`, numbered in the order they can land. Each says
 what to build, what blocks it, and criteria someone else can check.
 

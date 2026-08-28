@@ -11,7 +11,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `harness.ts` | Per-harness start, model flag, effort flag and persona injection |
 | `inputs.ts` | Input inference from branch, cwd, earlier runs and glab |
 | `engine.ts` | Tabs, agents, prompts, waits, gates, choices and the fix loop |
-| `output.ts` | The Output schema and fan-in |
+| `output.ts` | The Output schema, fan-in, and which findings the loop still owns |
 | `run.ts` | The run directory: audit trail and resume state |
 | `naming.ts` | herdr-legal agent names vs readable tab labels |
 | `picker.ts` | The minimal TUI |

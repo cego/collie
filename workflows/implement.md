@@ -8,6 +8,7 @@ max_iterations: 5
 steps:
   - id: build
     persona: implementer
+    skill: implement
     output: build.json
   - id: architecture
     use: architecture
@@ -38,9 +39,9 @@ This run's directory: {{run.dir}}
 Read `{{inputs.plan}}/SPEC.md` and every ticket in `{{inputs.plan}}/issues/`.
 
 Branch off the default branch first, named after the spec's slug — short, kebab-case,
-no ticket number unless the spec has one. Then build the tickets in their order with
-`/implement`, one at a time: `/tdd` at the seams the spec names, the project's tests
-green, and one commit per ticket. There is no separate commit step.
+no ticket number unless the spec has one. This prompt arrives as `/implement`, so build
+the tickets in their order, one at a time: `/tdd` at the seams the spec names, the
+project's tests green, and one commit per ticket. There is no separate commit step.
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "branch": "<branch>",
 "tickets_done": ["ticket title", ...], "commits": ["<subject>", ...], "tests": "what

@@ -29,6 +29,7 @@ export interface RoundDef {
   /** The section's text, filled in when the workflow is resolved. */
   prompt: string;
   agent?: string;
+  skill?: string;
   persona?: string;
   harness?: string;
   model?: string;
@@ -63,6 +64,8 @@ export interface StepDef {
   output?: string;
   /** Continue the agent started by this earlier step instead of starting a new one. */
   agent?: string;
+  /** Send the prompt as `/<skill> …`, which is the only way to run a user-only skill. */
+  skill?: string;
   parallel?: Variant[];
   use?: string;
   /** A body section other than the step's own id; see ADR-0002 workflows design. */
@@ -139,6 +142,7 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
     if (typeof s.fresh === "boolean") step.fresh = s.fresh;
     if (typeof s.output === "string") step.output = s.output;
     if (typeof s.agent === "string") step.agent = s.agent;
+    if (typeof s.skill === "string") step.skill = s.skill;
     if (typeof s.use === "string") step.use = s.use;
     if (Array.isArray(s.parallel)) {
       step.parallel = s.parallel.map((v) => {
@@ -176,7 +180,7 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
 function parseRound(raw: Record<string, unknown>): RoundDef | undefined {
   if (typeof raw.prompt !== "string") return undefined;
   const round: RoundDef = { section: raw.prompt, prompt: "" };
-  for (const key of ["agent", "persona", "harness", "model", "effort", "output"] as const) {
+  for (const key of ["agent", "persona", "harness", "model", "effort", "output", "skill"] as const) {
     if (typeof raw[key] === "string") round[key] = raw[key] as string;
   }
   if (typeof raw.fresh === "boolean") round.fresh = raw.fresh;
@@ -379,6 +383,7 @@ function expand(
           parallel: step.parallel ?? child.parallel,
           repeat: step.repeat ?? rebaseRepeat(child.repeat, rebase),
           agent: step.agent ?? rebase(child.agent),
+          skill: step.skill ?? child.skill,
           ...(child.choices ? { choices: child.choices.map((c) => rebaseChoice(c, rebase)) } : {}),
         });
       }

@@ -68,3 +68,30 @@ test("every persona ends with the Output contract and a skill-missing fallback",
     expect(persona.body).toContain("OUTPUT_PATH");
   }
 });
+
+test("every step that names a user-only skill invokes it as a slash command", () => {
+  const defs = baseline();
+  // These refuse `disable-model-invocation`, so an agent cannot start them itself.
+  const userOnly = new Set([
+    "grill-with-docs",
+    "to-spec",
+    "to-tickets",
+    "wayfinder",
+    "implement",
+    "improve-codebase-architecture",
+  ]);
+
+  const offenders: string[] = [];
+  for (const name of defs.workflows.keys()) {
+    const wf = resolveWorkflow(name, defs, FALLBACK_DEFAULTS);
+    for (const step of wf.steps) {
+      const named = [...step.prompt.matchAll(/`\/([a-z-]+)`/g)].map((m) => m[1]!);
+      const blocked = named.filter((skill) => userOnly.has(skill));
+      if (blocked.length > 0 && !blocked.includes(step.skill ?? "")) {
+        offenders.push(`${name}.${step.id} names ${blocked.join(", ")} but skill: is ${step.skill ?? "unset"}`);
+      }
+    }
+  }
+
+  expect(offenders).toEqual([]);
+});

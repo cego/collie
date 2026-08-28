@@ -47,8 +47,9 @@ test("architecture is attended when it runs on its own, and ends with a menu", (
 
   expect(wf.steps.map((s) => s.id)).toEqual(["architecture", "next"]);
   expect(wf.steps[0]!.persona).toBe("architect");
-  expect(wf.steps[0]!.prompt).toContain("with the real grill");
+  expect(wf.steps[0]!.prompt).toContain("ask me about the parts you cannot judge");
   expect(wf.steps[0]!.prompt).not.toContain("Nobody is watching");
+  expect(wf.steps[0]!.skill).toBe("improve-codebase-architecture");
   expect(wf.steps[1]!.choices!.map((c) => c.title)).toEqual(["Implement now", "Stop here"]);
   expect(wf.steps[1]!.choices![1]!.stop).toBe(true);
   expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
@@ -84,6 +85,8 @@ build it
   expect(wf.steps.map((s) => s.id)).toEqual(["build", "architecture"]);
   expect(wf.steps[1]!.prompt).toContain("Nobody is watching");
   expect(wf.steps[1]!.prompt).toContain("Strong");
+  // The embedded step still runs the skill as a slash command.
+  expect(wf.steps[1]!.skill).toBe("improve-codebase-architecture");
   expect(wf.steps[1]!.persona).toBe("implementer");
   expect(wf.steps[1]!.agent).toBe("build");
   expect(wf.steps[1]!.output).toBe("architecture.json");

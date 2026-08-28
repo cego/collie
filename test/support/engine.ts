@@ -86,9 +86,10 @@ export async function runWorkflow(
     handoffTimeoutMs?: number;
     outputPollMs?: number;
     prompts?: EnginePrompts;
+    env?: Record<string, string>;
   } = {},
 ): Promise<RanRun> {
-  const env = rig.pluginEnv();
+  const env = rig.pluginEnv(opts.env);
   const herdr = new Herdr(env);
   const defs = loadDefinitions(layers(env));
   const defaults = { ...loadDefaults(env.configDir), ...opts.defaults };

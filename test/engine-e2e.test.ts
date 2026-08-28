@@ -264,3 +264,68 @@ Write the tickets to {{run.dir}}/plan/issues/
     expect(prompt).toContain(`${run.dir}/plan`);
   }
 });
+
+test("an agent blocked on a first-run prompt waits for the human instead of failing", async () => {
+  rig.queueOutputs([{ verdict: "clean", findings: [], slug: "s" }]);
+
+  const { run, status, lines } = await runWorkflow(
+    rig,
+    "solo",
+    { goal: "Add a picker" },
+    { env: { FAKE_HERDR_BLOCK_START: "2" }, handoffTimeoutMs: 10_000, outputPollMs: 20 },
+  );
+
+  expect(status).toBe("done");
+  expect(run.step("solo").variants[0]!.status).toBe("done");
+  // The agent is registered and blocked, so it is started once and then waited for.
+  expect(rig.cmds().filter((c) => c === "agent start")).toHaveLength(1);
+  expect(lines.some((l) => l.includes("is waiting for you in its pane"))).toBe(true);
+  const toast = rig.calls().find((c) => c.cmd === "notification show")!.argv!;
+  expect(toast[2]).toBe("solo-add-a-picker needs you");
+  expect(toast).toContain("solo: answer the prompt in its pane");
+});
+
+test("an agent that never becomes ready still fails the step, with herdr's own error", async () => {
+  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+
+  const { run, status } = await runWorkflow(
+    rig,
+    "solo",
+    { goal: "g" },
+    { env: { FAKE_HERDR_BLOCK_START: "9999" }, handoffTimeoutMs: 300, outputPollMs: 20 },
+  );
+
+  expect(status).toBe("failed");
+  expect(run.step("solo").note).toContain("agent_not_ready");
+});
+
+test("a step with skill: is prompted as the slash command, so a user-only skill runs", async () => {
+  writeDef(
+    rig.baselineDir,
+    "workflows",
+    "grill",
+    `---
+name: grill
+inputs:
+  goal: goal
+steps:
+  - id: grill
+    persona: planner
+    skill: grill-with-docs
+    output: grill.json
+---
+Grill me about {{inputs.goal}}.
+`,
+  );
+  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+
+  const { run, status } = await runWorkflow(rig, "grill", { goal: "Add a picker" });
+
+  expect(status).toBe("done");
+  const prompt = join(run.dir, "steps", "grill", "prompt-1.md");
+  // The slash command has to be the first thing on the line, and the line has to stay
+  // one line: herdr types it into the harness the way a human would.
+  expect(rig.calls().find((c) => c.cmd === "agent prompt")!.argv![3]).toBe(
+    `/grill-with-docs Your task for this step is in ${prompt} — read it and follow it.`,
+  );
+});

@@ -167,9 +167,22 @@ once and keeps it in `config.json`, where prompts read it as `{{config.<key>}}`.
 A step may also set `prompt: <section>` to send a section other than its own id —
 that is how one workflow carries an attended and an unattended body.
 
+`skill: <name>` sends the step's prompt as `/<name> …`. Many skills are marked
+`disable-model-invocation` — `/grill-with-docs`, `/to-spec`, `/to-tickets`, `/implement`,
+`/wayfinder`, `/improve-codebase-architecture` — and an agent that tries to start one is
+refused and told to ask you. `agent prompt` is your channel, so a slash command sent that
+way runs the skill exactly as if you had typed it. The baseline sets `skill:` on every
+step that drives one.
+
 A step is finished when its `output:` file exists, not when the agent goes quiet — an
 interviewing agent goes quiet waiting for you. Until the file appears you get one
 toast and the runner keeps waiting.
+
+The same holds at the other end: the first time a harness runs in a directory it may
+stop on a prompt of its own — claude asks whether it may work there — and `agent start`
+reports the agent blocked. That is not a failure, so the runner says which pane wants you,
+toasts, and waits for you to answer it. (It cannot answer for you: the dialog shuffles its
+options, so there is no safe key to send.)
 
 Outputs are JSON. One carrying a `verdict` is validated against the review schema, so
 a loop gate can always read it:

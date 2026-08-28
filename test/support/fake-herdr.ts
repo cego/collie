@@ -13,10 +13,12 @@ interface State {
   tabs: number;
   panes: number;
   outputs: number;
+  /** How many `agent get` calls have seen the agent blocked at startup. */
+  blocked: number;
 }
 
 function loadState(): State {
-  if (!existsSync(statePath)) return { tabs: 0, panes: 0, outputs: 0 };
+  if (!existsSync(statePath)) return { tabs: 0, panes: 0, outputs: 0, blocked: 0 };
   return JSON.parse(readFileSync(statePath, "utf8")) as State;
 }
 
@@ -39,6 +41,21 @@ if (failures[cmd]) {
 }
 
 const state = loadState();
+
+// Stands in for a harness stopped on a first-run prompt: `agent start` refuses, and
+// the agent stays blocked until someone answers it in the pane.
+const blockFor = Number.parseInt(process.env.FAKE_HERDR_BLOCK_START ?? "0", 10);
+if (blockFor > 0 && cmd === "agent start" && state.blocked === 0) {
+  state.blocked = 1;
+  saveState(state);
+  process.stdout.write(
+    `${JSON.stringify({
+      id: "cli:agent:start",
+      error: { code: "agent_not_ready", message: `agent ${argv[2]} is blocked during startup and is not ready for prompts` },
+    })}\n`,
+  );
+  process.exit(1);
+}
 
 // Whatever a step asks its agent to write, the fake writes for it: the queue in
 // FAKE_HERDR_OUTPUTS stands in for real agent work.
@@ -93,12 +110,15 @@ switch (cmd) {
   case "agent start":
     result = { type: "agent_started" };
     break;
-  case "agent get":
-    result = {
-      type: "agent",
-      agent: { agent_status: process.env.FAKE_HERDR_AGENT_STATUS ?? "idle" },
-    };
+  case "agent get": {
+    let status = process.env.FAKE_HERDR_AGENT_STATUS ?? "idle";
+    if (state.blocked > 0 && state.blocked <= blockFor) {
+      status = "blocked";
+      state.blocked += 1;
+    }
+    result = { type: "agent", agent: { agent_status: status } };
     break;
+  }
   default:
     result = { type: "ok" };
 }

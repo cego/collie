@@ -305,7 +305,7 @@ async function runStep(
       if (record.paneId) await herdr.paneRun(record.paneId, `cd ${shellQuote(run.record.cwd)}`);
 
       const adapter = HARNESSES[variant.harness]!;
-      await herdr.agentStart({
+      await startAgent(o, step, {
         name: record.agent,
         kind: adapter.kind,
         paneId: record.paneId!,
@@ -330,7 +330,13 @@ async function runStep(
     const path = join(run.stepDir(step.id, key), `prompt-${run.record.iteration}.md`);
     writeFileSync(path, `${buildPrompt(o, step, variant, key, ctx.outputs, extraVars)}\n`);
     run.log(`prompt ${record.agent} -> ${relative(run.dir, path)}`);
-    await herdr.agentPrompt(record.agent, `Your task for this step is in ${path} — read it and follow it.`);
+    // A skill marked `disable-model-invocation` refuses an agent that invokes it
+    // itself; `agent prompt` is the human's channel, so a slash command here runs.
+    const command = step.skill ? `/${step.skill} ` : "";
+    await herdr.agentPrompt(
+      record.agent,
+      `${command}Your task for this step is in ${path} — read it and follow it.`,
+    );
   }
 
   const outcomes: VariantOutcome[] = [];
@@ -508,6 +514,7 @@ async function runRound(
   const synth: ResolvedStep = {
     ...round,
     id: step.id,
+    skill: round.skill,
     persona: round.persona ?? step.persona,
     origin: step.origin,
     preamble: step.preamble,
@@ -546,6 +553,51 @@ async function ensureConfig(
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** herdr says this when the harness stopped on a prompt before it was ready to work. */
+function blockedAtStartup(e: unknown): boolean {
+  return e instanceof HerdrError && /agent_not_ready|blocked during startup/.test(e.detail);
+}
+
+/**
+ * A harness may stop on a first-run prompt — claude asks before it will work in a
+ * directory it has not been trusted with, and the dialog cannot be answered from here:
+ * it shuffles its options, so there is no safe key to send. The agent exists and is
+ * blocked, so this waits for the human exactly as a Step waits for an Output.
+ */
+async function startAgent(
+  o: EngineOptions,
+  step: ResolvedStep,
+  opts: { name: string; kind: string; paneId: string; args: string[] },
+): Promise<void> {
+  try {
+    await o.herdr.agentStart(opts);
+    return;
+  } catch (e) {
+    if (!blockedAtStartup(e)) throw e;
+    const budget = o.handoffTimeoutMs ?? 0;
+    o.out(`  ⏸ ${opts.name} is waiting for you in its pane — answer the prompt there`);
+    o.run.log(`${opts.name}: blocked at startup, waiting for the human`);
+    try {
+      await o.herdr.notify(
+        `${o.run.record.slug} needs you`,
+        `${step.id}: answer the prompt in its pane`,
+        "request",
+      );
+    } catch {
+      /* a missing toast must not fail the run */
+    }
+    const deadline = Date.now() + budget;
+    while (Date.now() < deadline) {
+      await sleep(Math.min(o.outputPollMs ?? 2000, Math.max(1, deadline - Date.now())));
+      if ((await o.herdr.agentStatus(opts.name)) !== "blocked") {
+        o.out(`  ▸ ${opts.name} is ready`);
+        return;
+      }
+    }
+    throw e;
+  }
+}
 
 /**
  * A settled agent does not mean a finished Step: an interviewing agent goes idle

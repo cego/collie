@@ -99,6 +99,7 @@ export class Rig {
       "FAKE_HERDR_OUTPUTS",
       "FAKE_HERDR_FAIL",
       "FAKE_HERDR_AGENT_STATUS",
+      "FAKE_HERDR_BLOCK_START",
     ]) {
       if (env[k]) process.env[k] = env[k];
       else delete process.env[k];

@@ -6,6 +6,7 @@ steps:
   - id: architecture
     persona: architect
     prompt: attended
+    skill: improve-codebase-architecture
     output: architecture.json
   - id: next
     standalone: true
@@ -22,9 +23,9 @@ Report: {{run.dir}}/plan/ARCHITECTURE.md
 
 ## attended
 
-Run `/improve-codebase-architecture` over `{{cwd}}` with the real grill: ask me about
-the parts you cannot judge from the code, one question at a time, and rate every
-candidate by the deletion test.
+This prompt arrives as `/improve-codebase-architecture`, over `{{cwd}}`, with the real
+grill: ask me about the parts you cannot judge from the code, one question at a time, and
+rate every candidate by the deletion test.
 
 Write the report to `{{run.dir}}/plan/ARCHITECTURE.md`. Never open a browser and never
 write into the repository in this step.
@@ -43,7 +44,8 @@ Nobody is watching this step. Do not ask questions and do not wait.
 Scope: only the area this run has changed — `git diff` against the branch point, plus
 the files that change with it. Leave the rest of the project alone.
 
-Run `/improve-codebase-architecture` over that scope. Apply `Strong` candidates only,
+This prompt arrives as `/improve-codebase-architecture`, scoped to that. Apply `Strong`
+candidates only,
 largest first, then re-scan and go again; at most two passes. Behaviour stays identical
 and the project's tests stay green — say what you ran. Never open a browser.
 
