@@ -28,7 +28,7 @@ command = ["bin/herdr-workflows", "fork"]
 
 [[panes]]
 id = "picker"
-title = "Workflows"
+title = "Pick a Workflow"
 placement = "popup"
 width = "70%"
 height = "60%"

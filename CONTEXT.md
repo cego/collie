@@ -22,11 +22,20 @@
 
 **Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents.
 
-**Session** — One herdr workspace and one repo cwd, taken together. Runs in the same
-Session share a Control Plane tab and a register of each other's long-lived agents; runs in
-another workspace, or another checkout, never see them.
+**Session** — One herdr session, one workspace and one repo cwd, taken together. Runs in
+the same Session share a Control Plane tab and a register of each other's long-lived agents,
+and hand work to them; runs in another workspace, another checkout, or another herdr session
+never see them. There is only ever one agent per role in a Session.
 
-**Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking copies a baseline definition into a Layer.
+**Hand-off** — Giving one Run's result to another Run's live agent instead of starting a
+second one. `review` → the live implementer (its findings as a fix round), or, when none is
+live, a new `implement` run on the reviewed target. `plan` → the implementer building from
+that plan, whenever the plan changes under it. `implement` → the planner, for a decision the
+plan does not cover. Both Runs record it.
+
+**Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking takes a baseline definition into a Layer.
+
+**Override** — A definition that declares `extends: <name>` and changes only what it names: steps matched by id, inputs merged by name, scalars and `## sections` replaced where given, and everything else still following the parent in the Layer below. A file without `extends:` replaces the whole definition, and a full copy records `forked_from_hash` so a parent that has moved on can be marked stale.
 
 **Fan-in** — Combining several parallel Outputs into one. A Step declares `fan_in: <step>`, is given that Step's Output files, and reconciles them itself; it sits in that Step's tab. The engine no longer unions findings.
 

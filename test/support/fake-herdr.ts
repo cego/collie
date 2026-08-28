@@ -116,7 +116,22 @@ if (cmd === "agent prompt") {
     if (next !== undefined && next !== null) {
       const path = match[1]!.trim();
       mkdirSync(dirname(path), { recursive: true });
-      const delayed = next as { __delay_ms?: number; output?: unknown };
+      const delayed = next as {
+        __delay_ms?: number;
+        __write?: Record<string, string>;
+        output?: unknown;
+      };
+      // Stands in for an agent that leaves artefacts behind, not just an Output:
+      // paths are relative to the run dir, found by walking up to its run.json.
+      if (delayed?.__write) {
+        let dir = dirname(match[1]!.trim());
+        while (dir !== "/" && !existsSync(`${dir}/run.json`)) dir = dirname(dir);
+        for (const [rel, body] of Object.entries(delayed.__write)) {
+          const path = `${dir}/${rel}`;
+          mkdirSync(dirname(path), { recursive: true });
+          writeFileSync(path, body);
+        }
+      }
       if (typeof delayed?.__delay_ms === "number") {
         // Stands in for an agent that finishes after handing off to the human.
         const body = JSON.stringify(delayed.output ?? {});
@@ -128,6 +143,8 @@ if (cmd === "agent prompt") {
           ],
           { stdout: "ignore", stderr: "ignore", stdin: "ignore" },
         ).unref();
+      } else if (delayed?.__write) {
+        writeFileSync(path, JSON.stringify(delayed.output ?? {}, null, 2));
       } else {
         writeFileSync(path, typeof next === "string" ? next : JSON.stringify(next, null, 2));
       }

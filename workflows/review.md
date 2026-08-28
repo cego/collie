@@ -17,10 +17,19 @@ steps:
     output: synthesized.json
   - id: post
     standalone: true
-    requires: [mr-target, gitlab]
     choices:
+      # One implementer per workspace: the first of these two is offered, never both.
+      - title: Send to implementer
+        handoff: implementer
+      - title: Fix findings
+        run: implement
+        unless: implementer
+        inputs:
+          plan: "{{run.dir}}"
+          target: "{{inputs.target}}"
       - title: Post to MR
         post: true
+        requires: [mr-target, gitlab]
       - title: Don't post
         stop: true
 ---

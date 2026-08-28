@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
-import { installBaseline, plannedRun, runWorkflow } from "./support/engine";
+import { installBaseline, plannedRun, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { FALLBACK_DEFAULTS } from "../src/config";
 import { skillsIn } from "../src/template";
@@ -82,7 +82,7 @@ test("implement is build, architecture, simplify, review, fix — and no commit 
   expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
 
   const build = wf.steps[0]!.prompt;
-  expect(build).toContain("Branch off the default branch");
+  expect(build).toContain("branch off the default branch first");
   expect(build).toContain("one commit per ticket");
   // The skill is named, not spelled: the harness decides whether that is `/tdd`.
   expect(skillsIn(build)).toContain("tdd");
@@ -240,7 +240,9 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
 test("review standalone is the same two variants, and says so when it has no spec", async () => {
   rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
 
-  const { run, status } = await runWorkflow(rig, "review", {});
+  const { run, status } = await runWorkflow(rig, "review", {}, {
+    prompts: scriptedPrompts(["Don't post"]),
+  });
 
   expect(status).toBe("done");
   expect(run.record.steps[0]!.variants.map((v) => [v.harness, v.model, v.effort])).toEqual([

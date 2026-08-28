@@ -76,13 +76,15 @@ export function reviewPrompt(run: Run): string {
 }
 
 /**
- * Sends the newest review in this Session to its live implementer. Both sides
- * record it: the review run because that is where the review came from, and the
- * message itself so the implementer's own run dir is not the only trace.
+ * Sends one Run's review to the Session's live implementer. Both sides record it:
+ * the review run because that is where the review came from, and the implementer's
+ * because a prompt that arrived from somewhere else is otherwise invisible in its
+ * own audit trail.
  */
-export async function sendReviewToImplementer(session: Session): Promise<HandoffResult> {
-  const run = lastReviewRun(session);
-  if (!run) return { ok: false, message: "no run here has produced a review yet" };
+export async function sendReview(session: Session, run: Run): Promise<HandoffResult> {
+  if (!existsSync(join(run.dir, REVIEW_FILE))) {
+    return { ok: false, message: `${run.record.slug} has no ${REVIEW_FILE} to send` };
+  }
   const target = await liveRole(session, "implementer");
   if (!target) return { ok: false, message: "no implementer is live in this workspace" };
 
@@ -93,4 +95,79 @@ export async function sendReviewToImplementer(session: Session): Promise<Handoff
   }
   record(session, run, target, `sent ${REVIEW_FILE} to the ${target.role}`);
   return { ok: true, message: `sent ${run.record.slug}'s review to ${target.agent}` };
+}
+
+/**
+ * The live implementer that is building from this plan, if there is one. Not just
+ * any implementer: the hand-off is only meaningful to the run whose work source is
+ * the plan that changed.
+ */
+export async function implementerOfPlan(session: Session, planDir: string): Promise<AgentEntry | null> {
+  const target = await liveRole(session, "implementer");
+  if (!target) return null;
+  try {
+    const run = new RunStore(session.stateDir).load(target.runId);
+    return run.record.inputs.plan === planDir ? target : null;
+  } catch {
+    // Its run dir is gone; nothing can be said about what it is building.
+    return null;
+  }
+}
+
+/**
+ * Tells the implementer that the plan under it has moved. It is already building,
+ * so this is a reconciliation, not a restart: finish what is unaffected, adjust
+ * what is, and say what now conflicts.
+ */
+export async function sendPlanChange(
+  session: Session,
+  run: Run,
+  opts: { planDir: string; diff: string; changelog: string },
+): Promise<HandoffResult> {
+  const target = await implementerOfPlan(session, opts.planDir);
+  if (!target) return { ok: false, message: "no implementer is building from this plan" };
+
+  const text = [
+    `The plan you are building from has changed.${opts.changelog ? ` ${opts.changelog}` : ""}`,
+    `The diff of ${opts.planDir} is in ${opts.diff}.`,
+    "Reconcile: finish what it does not affect, adjust what it does, and where the change",
+    "conflicts with work you have already committed, say so in your Output rather than",
+    "quietly undoing either side.",
+  ].join(" ");
+
+  try {
+    await session.herdr.agentPrompt(target.agent, text);
+  } catch (e) {
+    return { ok: false, message: `${target.agent} would not take the prompt: ${(e as Error).message}` };
+  }
+  record(session, run, target, "sent the plan change to the implementer");
+  return { ok: true, message: `told ${target.agent} the plan changed` };
+}
+
+/**
+ * What an implementer is told about asking for a decision the plan does not cover:
+ * the planner's own pane when one is live, and otherwise to stop and ask the human.
+ */
+export async function askRoute(session: Session): Promise<string> {
+  const planner = await liveRole(session, "planner");
+  if (!planner) {
+    return [
+      "There is no planner live for this work. If you need a decision the plan does not",
+      "cover, stop, ask me in your own pane, and say in your Output that you are waiting.",
+    ].join(" ");
+  }
+  return [
+    `The planner that wrote this plan is still live as agent \`${planner.agent}\` in pane`,
+    `\`${planner.paneId}\`. If you need a decision the plan does not cover, ask it rather than`,
+    `stopping: \`herdr agent prompt ${planner.agent} "<your question>"\`, then read the answer`,
+    `with \`herdr agent read ${planner.agent} --lines 40\`. Only stop and ask me if it cannot`,
+    "answer.",
+  ].join(" ");
+}
+
+/** The board's own version: the newest review in this Session, to its implementer. */
+export async function sendReviewToImplementer(session: Session): Promise<HandoffResult> {
+  const run = lastReviewRun(session);
+  if (!run) return { ok: false, message: "no run here has produced a review yet" };
+  return await sendReview(session, run);
 }

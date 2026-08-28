@@ -1061,3 +1061,131 @@ Open, and worth knowing:
 - **`skills.sh` is not in this repo.** The install command in the error is
   `npx skills add <name>`, which is what skills.sh runs; nothing here verifies that command
   is the right one for a given skill's source.
+
+
+# Ticket 15 — runs in one session hand off to each other
+
+A Session is one herdr session, one workspace and one repo cwd. Runs in the same Session
+know about each other's long-lived agents — the register from ticket 16 — and hand work over
+instead of starting a second agent that knows none of the history. There is one implementer
+and one planner per Session, which is what makes "hand it to the implementer" unambiguous.
+
+## Three hand-offs, and the menu that chooses between two of them
+
+**A review, to whoever can act on it.** `review`'s end menu now offers exactly one of:
+
+- **Send to implementer** — first, so Enter takes it. The live implementer is prompted with
+  `review.md` and `synthesized.json` and applies them as a fix round, `disputed` and all.
+- **Fix findings** — offered only when no implementer is live. It chains `implement` with the
+  review run itself as the work source (a new work-source kind, `review`: `review.md` is the
+  spec, the findings are the tickets) and forwards the reviewed target, so the implementer
+  works **where the review was pointed**: `git checkout` for a branch, `glab mr checkout <iid>
+  --repo …` for a merge request, stay put for a working tree. The later `mr` step then updates
+  that merge request rather than opening a second one for the same branch.
+
+Never both, because a Session has one implementer. `Post to MR` and `Don't post` are
+unchanged.
+
+**A plan that changes under an implementer.** The run dir's `plan/` is copied before each
+Choice round and `git diff --no-index`ed after it. A round that actually changed it — Refine,
+a second opinion, the human talking to the planner — sends the live implementer the diff (as a
+file in the run dir) plus the planner's own `changelog`, and asks it to reconcile: finish what
+is unaffected, adjust what is, flag what conflicts. Once per change, and only to the
+implementer whose own `plan` input is that plan dir.
+
+**A decision the plan does not cover.** `{{session.ask}}` in the build prompt renders either
+the live planner's agent and pane with the commands to ask it and read the answer, or "there
+is no planner, stop and ask me". One variable, no conditional in the body, and it is resolved
+only for a step whose body mentions it.
+
+## The mechanism
+
+Two new keys on a Choice: `handoff: <role>`, a fifth form beside `run`/`prompt`/`post`/`stop`,
+offered only when that role is live; and `unless: <role>`, offered only when it is not.
+`requires:` now works on a choice as it does on a step, which is how `Post to MR` carries
+`[mr-target, gitlab]` itself instead of the step being skipped whole and taking Fix findings
+with it. And a menu **reduced** to endings is skipped with a note naming what was unavailable,
+while a menu **written** as endings is still asked — the rule fires only when a non-`stop`
+choice was filtered out.
+
+Both sides of every hand-off record it: `handoffs` on the run that sent it and on the run that
+received it, so neither audit trail has a prompt appearing out of nowhere.
+
+## Verified live
+
+In one workspace on the smoke worktree, in this order:
+
+- `implement` was started with a typed work source. Its `build` agent came up and the register
+  recorded it: `role: implementer`, agent `implement-add-a-help-f-build-r33`, pane `w18:p4`,
+  workspace `w18`. The board listed it as `1 Implementer working`.
+- Its driver was stopped from the board with `k` — `stopped Implement ·
+  add-a-help-flag-to-smoke` — leaving the agent alive, which is exactly the "implement, can be
+  stopped after build" the ticket asks for. That is also `k`'s live verification.
+- `review` was then started **from the board's own `p` key**, which opened the picker in the
+  board's tab against the right repo — the fix made after the first live attempt opened a
+  picker in the wrong workspace.
+
+Two runs were lost on the way to the menu, and both are recorded below rather than smoothed
+over. What the menu did is in the section after that.
+
+### What went wrong twice, and what was done about it
+
+**`agent start` losing a race with a pane it was just given.** The fan-in step failed with
+`agent_pane_busy: agent target pane w18:p8 is not an available shell` — the second time that
+has happened in this project, both times at `synthesize`, which is the one step that starts an
+agent in a pane split moments earlier. It was an open item after ticket 16; two failures out
+of six live runs is a flake, not a footnote, so `agent start` now retries up to six times, a
+second apart, on that error alone. The resume after it started the synthesiser first time.
+
+**mk's user-layer `review.md` was an 89-line full copy**, so both of those runs used the *old*
+end menu: the copy shadowed every baseline change, and the step was skipped with `skipped:
+branch:master...smoke-help is not a merge request` — the pre-ticket behaviour, faithfully.
+That copy is exactly what ticket 17 exists to convert, so 17's live smoke was done at that
+point instead, and this ticket's smoke continued on the 9-line stub that replaced it.
+
+
+# Ticket 17 — a layer file may change one part
+
+mk's user layer held an 89-line copy of `review.md` to change two lines of it. That copy
+shadowed every baseline improvement to that workflow — and did so silently, which is how two
+live smokes in this session came to be run against a menu that no longer existed in the
+baseline. `extends:` is the fix.
+
+A file that declares `extends: <name>` is the definition below it with the child laid over:
+steps matched by `id`, inputs merged by name, scalars the child names winning, each `##
+<section>` the child writes replacing that section of the parent, and the child's preamble
+replacing the parent's only when it has one. `parallel:` and `choices:` are replaced whole
+rather than merged entry by entry, because they are lists a human reasons about whole. A child
+step with an id the parent does not have is new work, appended after the parent's. A file with
+no `extends:` still replaces the whole definition, as before.
+
+Unknown parents and cycles are errors that name the file, and a definition that cannot resolve
+is absent rather than half-merged. Within one layer, a child whose parent is a sibling file
+resolves that sibling first, with a visited set — the only place a cycle can occur.
+
+**`fork` writes a stub by default.** It asks whether you want a stub or a full copy, and for a
+stub of a workflow it asks which step, then copies that step's prompt into the stub so the
+file has something in it to edit. A full copy records `forked_from_hash`; at load time a copy
+is given the current hash of the definition it shadows, and the pickers mark the difference
+`(stale — the original has changed since this copy)`.
+
+## Verified live
+
+mk's 89-line copy was replaced — the original kept beside it as `review.md.full-copy.bak` —
+with a nine-line stub naming only the two reviewers. A real run from that stub started `Opus`
+and `gpt-5.6-sol` in one tab and ran the baseline's `synthesize` after them; the target input,
+the synthesis, the end menu and every prompt body came from the baseline. Ticket 18's tab
+collision rule showed up in the same run: an older `⚙ Review` tab was still open, so the new
+one read `⚙ Review · smoke-help`.
+
+Open, and worth knowing:
+
+- **The merged body is normalised.** Sections are merged as a map and the body rewritten, so
+  blank-line details between sections are not preserved. Nothing reads a body except through
+  `bodySections`, but a diff of a merged body against the original will show whitespace.
+- **"The child named no title" is inferred**, not recorded: a workflow with no `title:` is
+  parsed as titled after itself, and that is what the merge treats as absent. A child that
+  deliberately titles itself exactly its own name gets the parent's title instead.
+- **A stub cannot be stale, and is not checked.** Only a full copy carries a hash.
+- **Nothing rewrites a full copy into a stub.** Converting mk's was a hand edit, which is
+  what the live smoke was.

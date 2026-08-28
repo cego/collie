@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
+import { writeDef } from "./support/defs";
 import { REVIEW_FILE } from "../src/output";
 
 let rig: Rig;
@@ -104,7 +105,9 @@ test("the synthesiser is handed every reviewer's Output and writes one review", 
   };
   rig.queueOutputs([opus, sonnet, synthesized]);
 
-  const { run, status, lines } = await runWorkflow(rig, "review", {});
+  const { run, status, lines } = await runWorkflow(rig, "review", {}, {
+    prompts: scriptedPrompts(["Don't post"]),
+  });
 
   expect(status).toBe("done");
   // The prompt names both reviews by path; the synthesiser reads them itself.
@@ -181,7 +184,7 @@ test("an MR target offers the post choice, and Post sends review.md as one note"
   const { run, status, lines } = await runWorkflow(rig, "review", {}, { prompts });
 
   expect(status).toBe("done");
-  expect(prompts.offered).toEqual([["Post to MR", "Don't post"]]);
+  expect(prompts.offered).toEqual([["Fix findings", "Post to MR", "Don't post"]]);
   const where = "gitlab.cego.dk/cego/herdr-plugin!12";
   expect(run.step("post").note).toBe(`chose "Post to MR" — posted the review to ${where}`);
   expect(lines).toContain(`  posted the review to ${where}`);
@@ -220,7 +223,7 @@ test("someone else's MR can be reviewed and posted to from a directory that is n
   // The step is offered — its readiness is glab's login for that host, not this
   // directory's remotes, which is what used to fail with "not a git worktree".
   expect(status).toBe("done");
-  expect(prompts.offered).toEqual([["Post to MR", "Don't post"]]);
+  expect(prompts.offered).toEqual([["Fix findings", "Post to MR", "Don't post"]]);
   expect(run.step("post").note).toBe(
     `chose "Post to MR" — posted the review to gitlab.cego.dk/cego/other-project!7`,
   );
@@ -259,20 +262,59 @@ test("a note that will not send re-offers the menu instead of ending the step", 
   expect(prompts.offered).toHaveLength(2);
 });
 
-test("a branch target writes the review and skips the choice entirely", async () => {
+test("a branch target cannot be posted to, so the menu offers what it can", async () => {
   bin.add("glab", `exit 1`);
   bin.add("git", `case "$1 $2" in "rev-parse --abbrev-ref") echo feature ;; *) echo main ;; esac`);
   rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
+  const prompts = scriptedPrompts(["Don't post"]);
 
-  const { run, status, lines } = await runWorkflow(rig, "review", {});
+  const { run, status, lines } = await runWorkflow(rig, "review", {}, { prompts });
 
   expect(status).toBe("done");
   expect(run.record.inputs.target_kind).toBe("branch");
-  expect(run.step("post").note).toBe("skipped: branch:main...feature is not a merge request");
-  expect(lines).toContain("◦ post — skipped: branch:main...feature is not a merge request");
+  // No merge request to post to, and no implementer live, so the two that are left.
+  expect(prompts.offered).toEqual([["Fix findings", "Don't post"]]);
+  expect(run.step("post").note).toBe(`chose "Don't post"`);
   // The review is still written, and still printed for the human.
   expect(readFileSync(join(run.dir, REVIEW_FILE), "utf8")).toContain("Nothing to fix.");
   expect(lines.join("\n")).toContain("Nothing to fix.");
+});
+
+test("a menu with nothing but an ending left is skipped, not asked", async () => {
+  // Nothing here can post and nothing is live, so the only choice left is `stop` —
+  // and a menu whose every option is an ending is not a question worth asking.
+  writeDef(
+    rig.baselineDir,
+    "workflows",
+    "endings",
+    `---
+name: endings
+inputs:
+  target: diff-target
+steps:
+  - id: next
+    choices:
+      - title: Post to MR
+        post: true
+        requires: [mr-target, gitlab]
+      - title: Hand it over
+        handoff: implementer
+      - title: Don't post
+        stop: true
+---
+Target: {{inputs.target}}
+`,
+  );
+  bin.add("glab", `exit 1`);
+  bin.add("git", `case "$1 $2" in "rev-parse --abbrev-ref") echo feature ;; *) echo main ;; esac`);
+
+  const { run, status, lines } = await runWorkflow(rig, "endings", {}, { prompts: scriptedPrompts([]) });
+
+  expect(status).toBe("done");
+  expect(run.step("next").note).toContain("skipped: nothing to decide");
+  expect(run.step("next").note).toContain("Post to MR");
+  expect(run.step("next").note).toContain("Hand it over");
+  expect(lines.some((l) => l.startsWith("◦ next — nothing to decide"))).toBe(true);
 });
 
 test("a review.json that breaks the Output schema fails the step with the schema error", async () => {

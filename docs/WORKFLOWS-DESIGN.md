@@ -61,7 +61,20 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
    actions (pick, resume, fork, send the last review to the implementer). It reads the
    run dirs and the live-agent register and holds no engine state of its own. Runs
    register their long-lived agents there — see **Session**.
-10. **An MR target carries its project** — `mr:<host>/<group>/<project>!<iid>`, from the URL
+10. **Hand-offs** — a Choice may be `handoff: <role>`, offered only when that role is live
+    in the Session, or carry `unless: <role>`, offered only when it is not; `requires:` works
+    on a choice as it does on a step, and a menu whose every remaining choice is an ending is
+    skipped rather than asked. `review`'s end menu is **Send to implementer** or **Fix
+    findings** — never both, because a Session has one implementer. A plan that changes under
+    a live implementer sends it the diff of `plan/` and the planner's `changelog`, once per
+    change. An implementer's prompt names the live planner to ask instead of blocking.
+11. **Partial overrides** — a Layer file may `extends:` a definition resolved through the
+    Layers below it and change only what it names: steps by `id`, inputs by name, scalars
+    and `## sections` where given, `parallel`/`choices` replaced whole, a new step id
+    appended. Unknown parents and cycles are validation errors naming the file. `fork`
+    writes such a stub by default; a full copy records `forked_from_hash` and is marked
+    stale once the parent changes.
+12. **An MR target carries its project** — `mr:<host>/<group>/<project>!<iid>`, from the URL
     when one is pasted and from the directory's remote for a bare iid. Every glab call takes
     `--repo`, so reviewing and commenting on someone else's merge request works from a
     directory that is not a checkout of it. The label stays `!<iid>`.

@@ -1,8 +1,11 @@
-// Forking: copy a baseline definition into a later Layer so it can be edited
-// without touching the team baseline.
+// Forking: take a baseline definition into a later Layer so it can be edited
+// without touching the team baseline. Two shapes, and the first is the default:
+// a stub that `extends:` the parent and names only what you came to change, or a
+// full copy that stops tracking the parent altogether.
 
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { contentHash } from "./definitions";
 
 export type DefinitionKind = "workflows" | "personas";
 
@@ -12,8 +15,22 @@ export interface ForkResult {
   message: string;
 }
 
+export interface ForkOptions {
+  /** A whole copy instead of an `extends:` stub: it stops following the parent. */
+  full?: boolean;
+  /** The step a workflow stub names, so there is something to edit in it. */
+  step?: string;
+  /** The parent's body, so a stub can carry the section it is overriding. */
+  section?: string;
+}
+
 /** Never overwrites: an existing fork is the one you already edited. */
-export function forkDefinition(source: string, kind: DefinitionKind, targetDir: string): ForkResult {
+export function forkDefinition(
+  source: string,
+  kind: DefinitionKind,
+  targetDir: string,
+  opts: ForkOptions = {},
+): ForkResult {
   const dir = join(targetDir, kind);
   const path = join(dir, basename(source));
 
@@ -25,6 +42,41 @@ export function forkDefinition(source: string, kind: DefinitionKind, targetDir: 
   }
 
   mkdirSync(dir, { recursive: true });
-  copyFileSync(source, path);
-  return { ok: true, path, message: `copied to ${path}` };
+  if (opts.full) {
+    // A full copy records what it copied, so a parent that moves on can be spotted.
+    const text = readFileSync(source, "utf8");
+    writeFileSync(path, stamped(text, contentHash(text)));
+    return { ok: true, path, message: `copied to ${path} (a full copy: it no longer follows the original)` };
+  }
+  writeFileSync(path, stub(basename(source, ".md"), kind, opts));
+  return { ok: true, path, message: `wrote ${path} — it extends the original and changes only what you add` };
+}
+
+/** `forked_from_hash` goes in the frontmatter, which is the first block of the file. */
+function stamped(text: string, hash: string): string {
+  const lines = text.split("\n");
+  if (lines[0]?.trim() !== "---") return `---\nforked_from_hash: ${hash}\n---\n\n${text}`;
+  lines.splice(1, 0, `forked_from_hash: ${hash}`);
+  return lines.join("\n");
+}
+
+/**
+ * The smallest file that changes one thing. Everything not named here is still the
+ * parent's, so the stub is what the fork is actually for, and nothing else.
+ */
+function stub(name: string, kind: DefinitionKind, opts: ForkOptions): string {
+  const head = ["---", `name: ${name}`, `extends: ${name}`];
+  const body: string[] = [];
+  if (kind === "workflows" && opts.step) {
+    head.push("steps:", `  - id: ${opts.step}`, `    # Only the keys you change; the rest stay the original's.`);
+    body.push(`## ${opts.step}`, "", opts.section?.trim() || "Your version of this step's prompt.");
+  } else {
+    head.push("# Add the keys you are changing; the rest stay the original's.");
+    body.push(
+      "Add a `## <section>` for each part of the original you are replacing; every",
+      "section you leave out is still the original's.",
+    );
+  }
+  head.push("---");
+  return `${[head.join("\n"), body.join("\n")].filter((p) => p.trim()).join("\n\n")}\n`;
 }

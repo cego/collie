@@ -1,8 +1,8 @@
 // Executes a Run: one tab per Step, agents started with the right Harness,
 // Model and Persona, gates and loops driven by Output files.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join, relative } from "node:path";
 import type {
   ChoiceDef,
   Definitions,
@@ -49,9 +49,17 @@ import {
   CONTROL_PLANE,
 } from "./naming";
 import { registerAgent, registryPath, scopeFor } from "./registry";
-import { classifyWorkSource, inferInputs, resolveWorkSource, shell as shellRun, type InputPrompts } from "./inputs";
+import {
+  classifyWorkSource,
+  inferInputs,
+  resolveWorkSource,
+  shell as shellRun,
+  targetKind,
+  type InputPrompts,
+} from "./inputs";
 import { RunStore } from "./run";
 import { gitlabForProject, gitlabReadiness, mrFacts, parseMrTarget, repoArgs, type MrFacts } from "./mr";
+import { askRoute, liveRole, sendPlanChange, sendReview, type Session } from "./handoff";
 import { renderTemplate } from "./template";
 import { resolveWorkflow } from "./definitions";
 import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
@@ -418,13 +426,18 @@ async function runStep(
   for (const record of records) if (!recorded.includes(record)) recorded.push(record);
   run.save();
 
+  // Only when a body asks: this costs herdr a round trip, and most steps do not.
+  const vars = /\{\{\s*session\./.test(`${step.preamble}\n${step.prompt}`)
+    ? { ...extraVars, session: { ask: await askRoute(sessionOf(o)) } }
+    : extraVars;
+
   for (const [i, record] of records.entries()) {
     const variant = variants[i]!;
     const key = keys[i]!;
     // A multi-line prompt cannot be typed into a harness reliably, so the prompt
     // goes to a file in the run dir and the agent is pointed at it.
     const path = join(run.stepDir(step.id, key), `prompt-${run.record.iteration}.md`);
-    writeFileSync(path, `${buildPrompt(o, step, variant, key, ctx.outputs, extraVars)}\n`);
+    writeFileSync(path, `${buildPrompt(o, step, variant, key, ctx.outputs, vars)}\n`);
     run.log(`prompt ${record.agent} -> ${relative(run.dir, path)}`);
     // A skill marked `disable-model-invocation` refuses an agent that invokes it
     // itself; `agent prompt` is the human's channel, so a slash command here runs.
@@ -479,9 +492,27 @@ async function runChoiceStep(
   for (;;) {
     const taken = (title: string) =>
       run.record.choices.filter((c) => c.step === step.id && c.title === title).length;
-    const items: PickItem[] = choices
-      .filter((c) => c.max === undefined || taken(c.title) < c.max)
-      .map((c) => ({ id: c.title, title: c.title, subtitle: choiceHint(c) }));
+    // What this Session and this environment can actually offer right now: a
+    // hand-off needs its agent live, `unless:` needs it not to be, and `requires:`
+    // is the same vocabulary a step uses.
+    const offered: ChoiceDef[] = [];
+    for (const choice of choices) {
+      if (choice.max !== undefined && taken(choice.title) >= choice.max) continue;
+      if (choice.handoff && !(await liveRole(sessionOf(o), choice.handoff))) continue;
+      if (choice.unless && (await liveRole(sessionOf(o), choice.unless))) continue;
+      if (choice.requires && (await unmetRequirement(o, choice.requires))) continue;
+      offered.push(choice);
+    }
+    // Everything that could have done something is unavailable, so the only choices
+    // left are endings: that is not a question worth asking. A menu authored as
+    // endings — "stop here" or "carry on" — still is one.
+    const lost = choices.filter((c) => !c.stop && !offered.includes(c));
+    if (offered.every((c) => c.stop) && lost.length > 0) {
+      const why = lost.map((c) => c.title).join(", ");
+      out(`◦ ${step.id} — nothing to decide (not available: ${why})`);
+      return { status: "done", note: `skipped: nothing to decide (${why})` };
+    }
+    const items: PickItem[] = offered.map((c) => ({ id: c.title, title: c.title, subtitle: choiceHint(c) }));
 
     await callAttention(o, ctx, `${step.id}: pick what happens next`, step.id);
     const picked = await prompts.menu(items, {
@@ -492,12 +523,21 @@ async function runChoiceStep(
     run.save();
     if (!picked) return { status: "blocked", note: "no choice taken" };
 
-    const choice = choices.find((c) => c.title === picked.id)!;
+    const choice = offered.find((c) => c.title === picked.id)!;
     run.record.choices.push({ step: step.id, title: choice.title, at: new Date().toISOString() });
     run.save();
     out(`  ▸ ${choice.title}`);
 
     if (choice.stop) return { status: "done", note: `chose "${choice.title}"` };
+
+    if (choice.handoff) {
+      const result = await handOff(o, choice.handoff);
+      out(`  ${result.message}`);
+      run.log(result.message);
+      // A hand-off that did not land is not an answer, so the menu comes back.
+      if (!result.ok) continue;
+      return { status: "done", note: `chose "${choice.title}" — ${result.message}` };
+    }
 
     if (choice.post) {
       const result = await postReview(o);
@@ -522,11 +562,14 @@ async function runChoiceStep(
 
     const round = choice.round!;
     const key = `${slugify(choice.title)}-${taken(choice.title)}`;
+    // A round that rewrites the plan has to tell whoever is building from it.
+    const before = snapshotPlan(o, key);
     const first = await runRound(o, step, round, key, ctx);
     if (first.record.status !== "done") {
       out(`  ⚠ ${first.record.label} — ${first.record.error ?? "did not finish"}`);
       continue;
     }
+    await reportPlanChange(o, before, first.output);
     const findings = first.review?.findings ?? [];
     if (choice.followUp && findings.length > 0) {
       const next = await runRound(o, step, choice.followUp, `${key}-then`, ctx, {
@@ -562,8 +605,10 @@ async function chain(
     if (forwarded[r.name] !== undefined) {
       inputs[r.name] = forwarded[r.name]!;
       sources[r.name] = `chained from ${run.id}`;
-      // A forwarded work-source still owes the prompts its kind; the parent wrote a plan dir.
+      // A forwarded Input still owes the prompts its kind, exactly as the picker would
+      // have recorded it: the child's own body branches on it.
       if (r.strategy === "work-source") inputs[`${r.name}_kind`] = classifyWorkSource(forwarded[r.name]!).kind;
+      if (r.strategy === "diff-target") inputs[`${r.name}_kind`] = targetKind(forwarded[r.name]!);
       continue;
     }
     if (r.needsAsking) {
@@ -678,8 +723,70 @@ async function postReview(o: EngineOptions): Promise<{ ok: boolean; message: str
 function choiceHint(choice: ChoiceDef): string {
   if (choice.run) return `runs ${choice.run}`;
   if (choice.post) return "one note on the merge request";
+  if (choice.handoff) return `to the ${choice.handoff} already working here`;
   if (choice.stop) return "ends here";
   return choice.round?.agent ? `prompts ${choice.round.agent}` : "a fresh agent";
+}
+
+const PLAN_DIR = "plan";
+
+/**
+ * A copy of the plan directory before a round touches it, so a change can be shown
+ * as a diff afterwards. Null when this run has no plan of its own to change.
+ */
+function snapshotPlan(o: EngineOptions, key: string): string | null {
+  const plan = join(o.run.dir, PLAN_DIR);
+  if (!existsSync(plan)) return null;
+  const before = join(o.run.dir, "steps", "plan-before", key);
+  try {
+    rmSync(before, { recursive: true, force: true });
+    mkdirSync(before, { recursive: true });
+    cpSync(plan, before, { recursive: true });
+    return before;
+  } catch (e) {
+    o.run.log(`plan snapshot: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+/**
+ * Once per change, and only when someone is building from this plan: the diff of
+ * `plan/` and whatever the planner said it did.
+ */
+async function reportPlanChange(o: EngineOptions, before: string | null, output: unknown): Promise<void> {
+  if (!before) return;
+  const plan = join(o.run.dir, PLAN_DIR);
+  // `git diff --no-index` exits 1 when the two differ, which is how "changed" is read.
+  const diff = await shellRun(
+    "git",
+    ["diff", "--no-index", "--no-color", "--", before, plan],
+    o.run.record.cwd,
+  );
+  if (diff.code === 0 || diff.stdout.trim() === "") return;
+
+  const path = join(before, "..", `${basename(before)}.patch`);
+  writeFileSync(path, diff.stdout);
+  const changelog = typeof (output as Record<string, unknown>)?.changelog === "string"
+    ? ((output as Record<string, string>).changelog as string)
+    : "";
+  const result = await sendPlanChange(sessionOf(o), o.run, { planDir: plan, diff: path, changelog });
+  o.run.log(`plan changed: ${result.message}`);
+  if (result.ok) o.out(`  ▸ ${result.message}`);
+}
+
+/** This Run's Session, as the register and the hand-offs key it. */
+function sessionOf(o: EngineOptions): Session {
+  return {
+    herdr: o.herdr,
+    stateDir: o.env.stateDir,
+    ...scopeFor(o.env, o.run.record.cwd),
+  };
+}
+
+/** Gives this Run's review to the Session's live agent for that role. */
+async function handOff(o: EngineOptions, role: string): Promise<{ ok: boolean; message: string }> {
+  if (role !== "implementer") return { ok: false, message: `nothing to hand to a ${role}` };
+  return await sendReview(sessionOf(o), o.run);
 }
 
 /** A value the human is asked for once and that stays in config.json. */
@@ -842,6 +949,15 @@ function blockedAtStartup(e: unknown): boolean {
 }
 
 /**
+ * herdr says this when the pane exists but its shell has not come up yet. A pane
+ * split and `cd`-ed a moment ago is sometimes still starting, which killed two live
+ * runs at the fan-in step before this was here.
+ */
+function paneNotReady(e: unknown): boolean {
+  return e instanceof HerdrError && /agent_pane_busy|not an available shell/.test(e.detail);
+}
+
+/**
  * A harness may stop on a first-run prompt — claude asks before it will work in a
  * directory it has not been trusted with, and the dialog cannot be answered from here:
  * it shuffles its options, so there is no safe key to send. The agent exists and is
@@ -853,7 +969,7 @@ async function startAgent(
   opts: { name: string; kind: string; paneId: string; args: string[] },
 ): Promise<void> {
   try {
-    await o.herdr.agentStart(opts);
+    await startWhenReady(o, opts);
     return;
   } catch (e) {
     if (!blockedAtStartup(e)) throw e;
@@ -882,6 +998,24 @@ async function startAgent(
       }
     }
     throw e;
+  }
+}
+
+/** `agent start`, waiting out a pane whose shell is still coming up. */
+async function startWhenReady(
+  o: EngineOptions,
+  opts: { name: string; kind: string; paneId: string; args: string[] },
+): Promise<void> {
+  const tries = 6;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await o.herdr.agentStart(opts);
+      return;
+    } catch (e) {
+      if (!paneNotReady(e) || attempt === tries) throw e;
+      o.run.log(`${opts.name}: pane ${opts.paneId} is not a shell yet, retrying (${attempt}/${tries})`);
+      await sleep(Math.min(o.outputPollMs ?? 1000, 1000));
+    }
   }
 }
 

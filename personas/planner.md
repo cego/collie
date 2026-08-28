@@ -24,6 +24,12 @@ Rules:
   their own.
 - Do not write code.
 
+An implementer may already be building from the plan you are changing. So whenever you
+rewrite the spec or the tickets after they were first written, put a short `changelog` in
+your Output — one or two sentences on what actually changed — because it is sent to that
+implementer with the diff, and it is what tells it whether the change touches the ticket it
+is on.
+
 ## Output
 
 Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there

@@ -225,8 +225,8 @@ a prompt
     'workflow "w" step "a": unknown requires "moonlight" (known: gitlab, mr-target)',
     'workflow "w" step "a": fan_in "later" is not an earlier step',
     'workflow "w" step "a": fan_in needs an output, so the synthesis can be read',
-    'workflow "w" step "b" choice "Both": needs exactly one of run, prompt, post or stop',
-    'workflow "w" step "b" choice "Neither": needs exactly one of run, prompt, post or stop',
+    'workflow "w" step "b" choice "Both": needs exactly one of run, prompt, post, handoff or stop',
+    'workflow "w" step "b" choice "Neither": needs exactly one of run, prompt, post, handoff or stop',
   ]);
 });
 
@@ -578,4 +578,135 @@ Run {{skill:tdd}}.
   expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS, ["/nowhere", skills])).toEqual([]);
   expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("extends changes only what it names", () => {
+  writeDef(
+    rig.baselineDir,
+    "personas",
+    "reviewer",
+    "---\nname: reviewer\ndescription: base\n---\nBase reviewer.",
+  );
+  writeDef(
+    rig.baselineDir,
+    "workflows",
+    "review",
+    `---
+name: review
+title: review — the baseline one
+description: base description
+inputs:
+  target: diff-target
+max_iterations: 5
+steps:
+  - id: review
+    persona: reviewer
+    output: review.json
+    parallel:
+      - { harness: claude, model: opus, effort: xhigh }
+      - { harness: claude, model: sonnet, effort: xhigh }
+  - id: synthesize
+    persona: reviewer
+    fan_in: review
+    output: synthesized.json
+---
+Shared preamble.
+
+## review
+The baseline review body.
+
+## synthesize
+The baseline synthesis body.
+`,
+  );
+  // The canonical use: different reviewers, everything else untouched.
+  writeDef(
+    rig.configDir,
+    "workflows",
+    "review",
+    `---
+name: review
+extends: review
+inputs:
+  extra: goal
+steps:
+  - id: review
+    parallel:
+      - { harness: claude, model: opus, effort: medium }
+      - { harness: pi, model: openai-codex/gpt-5.6-sol, effort: medium }
+  - id: afterwards
+    persona: reviewer
+    output: after.json
+---
+## review
+My review body.
+
+## afterwards
+Something new.
+`,
+  );
+
+  const defs = loadDefinitions(layers(rig.pluginEnv()));
+  const wf = defs.workflows.get("review")!;
+
+  // Scalars the child did not name are still the parent's.
+  expect(wf.layer).toBe("user");
+  expect(wf.extends).toBe("review");
+  expect(wf.title).toBe("review — the baseline one");
+  expect(wf.description).toBe("base description");
+  expect(wf.maxIterations).toBe(5);
+  // Inputs merge by name.
+  expect(wf.inputs).toEqual({ target: "diff-target", extra: "goal" });
+
+  // Steps match by id; a new id is appended after the parent's.
+  expect(wf.steps.map((step) => step.id)).toEqual(["review", "synthesize", "afterwards"]);
+  // `parallel` is replaced whole, not merged entry by entry.
+  expect(wf.steps[0]!.parallel).toEqual([
+    { harness: "claude", model: "opus", effort: "medium" },
+    { harness: "pi", model: "openai-codex/gpt-5.6-sol", effort: "medium" },
+  ]);
+  // Keys the child's step did not name survive from the parent's.
+  expect(wf.steps[0]!.persona).toBe("reviewer");
+  expect(wf.steps[0]!.output).toBe("review.json");
+  expect(wf.steps[1]!.fanIn).toBe("review");
+
+  // Sections: replaced by name, new ones appended, and an empty child preamble
+  // leaves the parent's alone.
+  const body = bodySections(wf.body);
+  expect(body.preamble).toBe("Shared preamble.");
+  expect(body.sections.get("review")).toBe("My review body.");
+  expect(body.sections.get("synthesize")).toBe("The baseline synthesis body.");
+  expect(body.sections.get("afterwards")).toBe("Something new.");
+});
+
+test("a child preamble replaces the parent's, but only when it has one", () => {
+  writeDef(rig.baselineDir, "personas", "p", "---\nname: p\n---\nBase persona.\n\n## Output\nBase output.");
+  writeDef(rig.configDir, "personas", "p", "---\nname: p\nextends: p\n---\nMine.\n\n## Output\nMine too.");
+
+  const mine = loadDefinitions(layers(rig.pluginEnv())).personas.get("p")!;
+  expect(bodySections(mine.body).preamble).toBe("Mine.");
+  expect(bodySections(mine.body).sections.get("Output")).toBe("Mine too.");
+});
+
+test("an unknown parent and a cycle are errors that name the file", () => {
+  writeDef(rig.configDir, "workflows", "orphan", "---\nname: orphan\nextends: nobody\n---\n## a\nx");
+  writeDef(rig.configDir, "workflows", "a", "---\nname: a\nextends: b\n---\n## a\nx");
+  writeDef(rig.configDir, "workflows", "b", "---\nname: b\nextends: a\n---\n## a\nx");
+
+  const defs = loadDefinitions(layers(rig.pluginEnv()));
+
+  expect(defs.errors.some((e) => e.includes("orphan.md") && e.includes('extends "nobody"'))).toBe(true);
+  expect(defs.errors.some((e) => e.includes("extends cycle"))).toBe(true);
+  // Nothing half-merged goes in: a definition that could not resolve is simply absent.
+  expect(defs.workflows.has("orphan")).toBe(false);
+});
+
+test("a file with no extends still replaces the whole definition", () => {
+  writeDef(rig.baselineDir, "workflows", "w", "---\nname: w\ntitle: base\ninputs:\n  a: goal\n---\n## s\nbase");
+  writeDef(rig.configDir, "workflows", "w", "---\nname: w\n---\n## s\nmine");
+
+  const wf = loadDefinitions(layers(rig.pluginEnv())).workflows.get("w")!;
+  expect(wf.title).toBe("w");
+  expect(wf.inputs).toEqual({});
+  expect(bodySections(wf.body).sections.get("s")).toBe("mine");
 });

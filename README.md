@@ -150,9 +150,42 @@ Definitions are markdown files with YAML frontmatter. Same name in a later layer
 2. `$(herdr plugin config-dir cego.workflows)` (yours)
 3. `.herdr/workflows`, `.herdr/personas` in the project you're in
 
-`fork` copies a baseline definition into layer 2 or 3 for editing. `use:` resolves
-through the same lookup, so overriding `workflows/review.md` changes every workflow that embeds
-it — including `implement`.
+`use:` resolves through the same lookup, so overriding `workflows/review.md` changes every
+workflow that embeds it — including `implement`.
+
+### `extends:` — change one part, follow the rest
+
+A file that declares `extends: <name>` is not a replacement: it is the definition below it
+with your changes laid over. Steps match by `id`, inputs merge by name, scalars you name
+win, and each `## <section>` you write replaces that section of the parent. Everything you
+leave out keeps following the original, so a baseline improvement reaches your fork.
+
+The canonical use — two different reviewers, and nothing else changed:
+
+```markdown
+---
+name: review
+extends: review
+steps:
+  - id: review
+    parallel:
+      - { harness: claude, model: opus, effort: medium }
+      - { harness: pi, model: openai-codex/gpt-5.6-sol, effort: medium }
+---
+```
+
+Nine lines instead of ninety. The target input, the synthesis step, the end menu and every
+prompt body are still the baseline's.
+
+`parallel:` and `choices:` are lists a human reasons about whole, so naming either replaces
+it rather than merging entries. A child step with an id the parent does not have is new work,
+appended after the parent's steps. An unknown parent, or a cycle, is a validation error
+naming the file.
+
+`fork` writes one of these stubs by default — it asks which step you are changing and copies
+that step's prompt in so there is something to edit. **A full copy** is the other option: it
+stops following the original and records `forked_from_hash`, so when the baseline moves on
+the picker marks it `(stale — the original has changed since this copy)`.
 
 ## Your defaults
 
@@ -395,6 +428,34 @@ on the next round and stops driving the loop: the two of them cannot settle it, 
 run finishes and you decide, instead of spending rounds re-arguing it. A reviewer who
 can answer the reason raises it again with a `rebuttal`, which clears the dispute and
 puts the finding back in front of the implementer.
+
+## Hand-offs between runs
+
+Runs in the same **session** — one herdr session, one workspace, one repo — know about each
+other's long-lived agents, and hand work over rather than starting a second one. There is
+only ever one implementer and one planner per session.
+
+**A review, to whoever can act on it.** After the synthesis, a standalone review's menu
+offers exactly one of these, never both:
+
+- **Send to implementer** — when an implementer is already working here. It is the first
+  option, so Enter takes it: that agent is prompted with `review.md` and the findings JSON
+  and applies them as a fix round, `disputed` and all. Both runs record the hand-off.
+- **Fix findings** — when none is. It chains `implement` with the review itself as the work
+  source: `review.md` is the spec, the findings are the tickets, and the implementer works
+  **where the review was pointed** — checking out the branch, or `glab mr checkout` for a
+  merge request, so the fixes land on that MR's own branch and its `mr` step updates that
+  merge request instead of opening a second one.
+
+**A plan that changes under an implementer.** The planner keeps its tab after its run ends.
+If you Refine the plan, take a second opinion, or just talk to the planner, and an
+implementer is building from that plan, the runner sends it the diff of `plan/` and the
+planner's own `changelog` — once per change — and asks it to reconcile: finish what is
+unaffected, adjust what is, and flag what now conflicts.
+
+**A decision the plan does not cover.** The implementer's prompt names the live planner's
+agent and pane and tells it to ask there (`herdr agent prompt …`, then `herdr agent read …`)
+rather than stopping. With no planner live, the same prompt tells it to stop and ask you.
 
 ## Reviewing someone else's merge request
 

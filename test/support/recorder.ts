@@ -27,6 +27,7 @@ export class Rig {
   readonly baselineDir: string;
   readonly projectDir: string;
   private server: Server | null = null;
+  private readonly gone: string[] = [];
 
   constructor() {
     this.root = mkdtempSync(join(tmpdir(), "hw-test-"));
@@ -41,6 +42,21 @@ export class Rig {
       mkdirSync(d, { recursive: true });
     }
     writeFileSync(this.binPath, `#!/bin/sh\nexec bun ${FAKE_HERDR} "$@"\n`, { mode: 0o755 });
+  }
+
+  /** An agent herdr already has, as though an earlier run had started it. */
+  addAgent(name: string, paneId: string): void {
+    const path = `${this.logPath}.state.json`;
+    const state = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+    state.agents = [...(state.agents ?? []), { name, pane_id: paneId }];
+    writeFileSync(path, JSON.stringify(state));
+  }
+
+  /** An agent herdr has forgotten: its pane closed and it went with it. */
+  dropAgent(name: string): void {
+    const gone = (process.env.FAKE_HERDR_AGENTS_GONE ?? "").split(",").filter((n) => n);
+    process.env.FAKE_HERDR_AGENTS_GONE = [...gone, name].join(",");
+    this.gone.push(name);
   }
 
   /** Stands in for the agents: each queue entry is written for the next prompt. */
@@ -72,6 +88,7 @@ export class Rig {
 
   env(overrides: Record<string, string> = {}): Record<string, string> {
     return {
+      ...(this.gone.length > 0 ? { FAKE_HERDR_AGENTS_GONE: this.gone.join(",") } : {}),
       HOME: this.root,
       PATH: process.env.PATH!,
       HERDR_ENV: "1",
@@ -104,6 +121,7 @@ export class Rig {
       if (env[k]) process.env[k] = env[k];
       else delete process.env[k];
     }
+    if (this.gone.length > 0) process.env.FAKE_HERDR_AGENTS_GONE = this.gone.join(",");
     return readEnv(env);
   }
 

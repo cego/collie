@@ -11,12 +11,60 @@ Hand-offs:
 
 **Blocked by:** 14 (engine files), 16 (menus and registry render in the workspace tab)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] registry write/lookup/stale-drop tested with fake herdr (pane gone ⇒ entry dropped, option absent)
-- [ ] review transcript with NO live implementer: menu offers Fix findings (not Send); choosing it chains implement with work-source kind review; branch/MR/worktree checkout rules in the build prompt (tested)
-- [ ] review transcript with a live implementer: menu default is Send to implementer; prompt delivered; recorded on both runs
-- [ ] plan-change transcript: diff of plan/ delivered to the implementer once per change
-- [ ] cross-workspace and cross-repo runs never see each other's agents (tested)
-- [ ] README + docs/WORKFLOWS-DESIGN.md + CONTEXT.md (term: Session) updated; bun test + tsc green
+- [x] registry write/lookup/stale-drop tested with fake herdr (pane gone ⇒ entry dropped, option absent)
+- [x] review transcript with NO live implementer: menu offers Fix findings (not Send); choosing it chains implement with work-source kind review; branch/MR/worktree checkout rules in the build prompt (tested)
+- [x] review transcript with a live implementer: menu default is Send to implementer; prompt delivered; recorded on both runs
+- [x] plan-change transcript: diff of plan/ delivered to the implementer once per change
+- [x] cross-workspace and cross-repo runs never see each other's agents (tested)
+- [x] README + docs/WORKFLOWS-DESIGN.md + CONTEXT.md (term: Session) updated; bun test + tsc green
 - [ ] live smoke: implement (can be stopped after build) then review on the same repo → Send to implementer appears and the implementer receives the prompt
+
+## Decisions where the design was silent
+
+**Two new keys on a Choice, each doing one thing.** `handoff: <role>` is a fifth choice form
+beside `run`, `prompt`, `post` and `stop`, and is offered only when that role is live;
+`unless: <role>` is offered only when it is not. "Send to implementer or Fix findings, never
+both" then falls out of the definition rather than being enforced in code, and `handoff` with
+`unless` on the same choice is a validation error because it says the same thing twice.
+
+**`requires:` moved onto the choice.** `review`'s end step used to be skipped whole when the
+target was not a merge request, which would have taken Fix findings with it. The step now has
+no requirements and `Post to MR` carries `[mr-target, gitlab]` itself.
+
+**A menu reduced to endings is skipped; a menu written as endings is asked.** The rule fires
+only when a non-`stop` choice was filtered out — "everything that could have done something
+is unavailable". A workflow whose menu is deliberately two endings is still a question.
+
+**The register ships in 16, the hand-offs here.** Registration, scoping and the stale-drop
+were needed for the Control Plane to list agents at all, so they are in ticket 16 and its
+follow-up; this ticket is what reads them. The scoping is a Session — herdr session,
+workspace and repo cwd — re-validated against the live workspace, and an agent herdr places
+in another workspace is never this Session's whatever a record claims.
+
+**`Fix findings` forwards the target as well as the review.** The child `implement` run gets
+`plan: {{run.dir}}` (the review run itself, classified as the new `review` work-source kind)
+and `target: {{inputs.target}}`, and chaining now forwards a `diff-target`'s kind the same way
+it already forwarded a work-source's — otherwise the child could not tell a branch from an MR
+and would not know what to check out.
+
+**The reviewed target decides where the fixes go**, in the build prompt: `git checkout` the
+branch's head, `glab mr checkout <iid> --repo …` for a merge request — which creates the local
+branch, so the later `mr` step updates that merge request instead of opening a second one —
+and stay put for a working tree. The `mr` step is told to check for an existing MR on the
+branch and comment on it rather than create another.
+
+**A plan change is judged by the files, not by the agent's word.** The run dir's `plan/` is
+copied before a Choice round and `git diff --no-index`ed after; a round that changed nothing
+sends nothing, however enthusiastic its Output. The diff is written into the run dir so the
+audit trail has it, and the planner's `changelog` is passed along as the human-readable half.
+
+**It reaches only the implementer building from that plan.** The register gives a live
+implementer; its run's `plan` input has to be this plan dir, or the hand-off is not this
+plan's business.
+
+**The planner route is one template variable.** `{{session.ask}}` renders either "the planner
+is live as `<agent>` in pane `<pane>`, ask it like this" or "there is no planner, stop and ask
+me", so the prompt body has no conditional in it. It is resolved only for a step whose body
+actually mentions `{{session.`, so most steps cost no extra herdr call.

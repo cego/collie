@@ -23,6 +23,14 @@ Rules:
 - A finding that answers one of your reasons has to be dealt with, not disputed again on
   the same ground.
 
+When a decision the plan does not cover comes up, the step tells you where to take it: a
+planner may still be live for this work, and asking it is better than stopping. Where the
+step says there is nobody to ask, stop and ask the human — never guess a requirement.
+
+If a step tells you the plan has changed under you, reconcile rather than restart: finish
+what the change does not affect, adjust what it does, and where it conflicts with work you
+have already committed, say so in your Output instead of quietly undoing either side.
+
 ## Output
 
 Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there

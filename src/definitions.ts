@@ -1,6 +1,7 @@
 // Workflow and Persona definitions across the three Layers: baseline (this repo),
 // the user's plugin config dir, and the project's .herdr/. Later wins by name.
 
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { skillsIn } from "./template";
@@ -45,12 +46,18 @@ export interface RoundDef {
 
 export interface ChoiceDef {
   title: string;
-  /** Exactly one of these four: chain a Workflow, prompt an agent, post the run's
-   * review to the merge request it reviewed, or just end. */
+  /** Exactly one of these five: chain a Workflow, prompt an agent, post the run's
+   * review to the merge request it reviewed, hand it to a live agent, or just end. */
   run?: string;
   round?: RoundDef;
   stop?: boolean;
   post?: boolean;
+  /** Give this Run's result to the Session's live agent for that role. */
+  handoff?: string;
+  /** Offer this only when no agent for that role is live in this Session. */
+  unless?: string;
+  /** What the environment has to provide for this choice to be offered at all. */
+  requires?: StepRequirement[];
   /** Inputs forwarded to a chained Workflow; values are templated. */
   inputs?: Record<string, string>;
   /** How often this choice may be taken in one Run. */
@@ -88,7 +95,19 @@ export interface StepDef {
   repeat?: { from: string; back_to?: string; max?: number };
 }
 
-export interface WorkflowDef {
+/** What every definition carries about where it came from and what it is built on. */
+export interface Provenance {
+  path: string;
+  layer: LayerName;
+  /** The definition this one changes only part of, resolved through the layers below. */
+  extends?: string;
+  /** For a full copy: the parent's content hash when the copy was taken. */
+  forkedFromHash?: string;
+  /** The parent's content hash now, so a stale full copy can be spotted. */
+  parentHash?: string;
+}
+
+export interface WorkflowDef extends Provenance {
   name: string;
   title: string;
   description: string;
@@ -96,16 +115,21 @@ export interface WorkflowDef {
   maxIterations: number | null;
   steps: StepDef[];
   body: string;
-  path: string;
-  layer: LayerName;
 }
 
-export interface PersonaDef {
+export interface PersonaDef extends Provenance {
   name: string;
   description: string;
   body: string;
-  path: string;
-  layer: LayerName;
+}
+
+/** A full copy whose parent has changed since: what it copied is no longer what it forked. */
+export function isStale(def: Provenance): boolean {
+  return Boolean(def.forkedFromHash && def.parentHash && def.forkedFromHash !== def.parentHash);
+}
+
+export function contentHash(text: string): string {
+  return createHash("sha1").update(text).digest("hex").slice(0, 12);
 }
 
 export interface Definitions {
@@ -174,10 +198,8 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
     }
     if (typeof s.prompt === "string") step.promptSection = s.prompt;
     if (s.standalone === true) step.standalone = true;
-    if (typeof s.requires === "string") step.requires = [s.requires as StepRequirement];
-    else if (Array.isArray(s.requires)) {
-      step.requires = s.requires.filter((r) => typeof r === "string") as StepRequirement[];
-    }
+    const requires = parseRequires(s.requires);
+    if (requires) step.requires = requires;
     if (typeof s.fan_in === "string") step.fanIn = s.fan_in;
     if (Array.isArray(s.choices)) step.choices = s.choices.map(parseChoice);
     if (s.repeat && typeof s.repeat === "object") {
@@ -199,6 +221,8 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
     body,
     path,
     layer,
+    ...(typeof data.extends === "string" ? { extends: data.extends } : {}),
+    ...(typeof data.forked_from_hash === "string" ? { forkedFromHash: data.forked_from_hash } : {}),
   };
 }
 
@@ -212,12 +236,23 @@ function parseRound(raw: Record<string, unknown>): RoundDef | undefined {
   return round;
 }
 
+/** `requires: gitlab` and `requires: [mr-target, gitlab]` are the same thing. */
+function parseRequires(raw: unknown): StepRequirement[] | undefined {
+  if (typeof raw === "string") return [raw as StepRequirement];
+  if (Array.isArray(raw)) return raw.filter((r) => typeof r === "string") as StepRequirement[];
+  return undefined;
+}
+
 function parseChoice(raw: unknown): ChoiceDef {
   const c = (raw ?? {}) as Record<string, unknown>;
   const choice: ChoiceDef = { title: str(c.title) };
   if (typeof c.run === "string") choice.run = c.run;
   if (c.stop === true) choice.stop = true;
   if (c.post === true) choice.post = true;
+  if (typeof c.handoff === "string") choice.handoff = c.handoff;
+  if (typeof c.unless === "string") choice.unless = c.unless;
+  const requires = parseRequires(c.requires);
+  if (requires) choice.requires = requires;
   if (typeof c.max === "number") choice.max = c.max;
   const round = parseRound(c);
   if (round) choice.round = round;
@@ -242,6 +277,8 @@ function parsePersona(path: string, layer: LayerName): PersonaDef {
   return {
     name: str(data.name, basename(path, ".md")),
     description: str(data.description),
+    ...(typeof data.extends === "string" ? { extends: data.extends } : {}),
+    ...(typeof data.forked_from_hash === "string" ? { forkedFromHash: data.forked_from_hash } : {}),
     body,
     path,
     layer,
@@ -254,25 +291,143 @@ export function loadDefinitions(ls: Layer[]): Definitions {
   const errors: string[] = [];
 
   for (const layer of ls) {
-    for (const path of markdownFiles(join(layer.dir, "workflows"))) {
-      try {
-        const wf = parseWorkflow(path, layer.name);
-        workflows.set(wf.name, wf);
-      } catch (e) {
-        errors.push(`${path}: ${e instanceof YamlError ? e.message : (e as Error).message}`);
-      }
-    }
-    for (const path of markdownFiles(join(layer.dir, "personas"))) {
-      try {
-        const persona = parsePersona(path, layer.name);
-        personas.set(persona.name, persona);
-      } catch (e) {
-        errors.push(`${path}: ${e instanceof YamlError ? e.message : (e as Error).message}`);
-      }
-    }
+    loadLayer(workflows, layer, "workflows", parseWorkflow, mergeWorkflow, errors);
+    loadLayer(personas, layer, "personas", parsePersona, mergePersona, errors);
   }
 
   return { workflows, personas, errors };
+}
+
+/**
+ * One layer of one kind. A file that names no parent replaces what the layers below
+ * had; a file with `extends:` changes only what it names, and is resolved in
+ * dependency order so a parent in the same layer is merged before its child.
+ */
+function loadLayer<T extends Provenance & { name: string }>(
+  into: Map<string, T>,
+  layer: Layer,
+  kind: "workflows" | "personas",
+  parse: (path: string, layer: LayerName) => T,
+  merge: (parent: T, child: T) => T,
+  errors: string[],
+): void {
+  const parsed = new Map<string, T>();
+  for (const path of markdownFiles(join(layer.dir, kind))) {
+    try {
+      const def = parse(path, layer.name);
+      parsed.set(def.name, def);
+    } catch (e) {
+      errors.push(`${path}: ${e instanceof YamlError ? e.message : (e as Error).message}`);
+    }
+  }
+
+  const settled = new Set<string>();
+  const resolve = (name: string, chain: string[]): void => {
+    if (settled.has(name)) return;
+    const def = parsed.get(name);
+    if (!def) return;
+    settled.add(name);
+
+    // What this file is built on, before it goes in: the same name from a lower
+    // layer is the usual case, and another name in this layer is resolved first.
+    const parentName = def.extends;
+    if (!parentName) {
+      into.set(name, withParentHash(def, into));
+      return;
+    }
+    if (chain.includes(parentName)) {
+      errors.push(`${def.path}: extends cycle (${[...chain, parentName].join(" → ")})`);
+      return;
+    }
+    if (parsed.has(parentName) && parentName !== name) resolve(parentName, [...chain, name]);
+
+    const parent = into.get(parentName);
+    if (!parent) {
+      errors.push(`${def.path}: extends "${parentName}", which no layer below this one defines`);
+      return;
+    }
+    into.set(name, withParentHash(merge(parent, def), into));
+  };
+  for (const name of parsed.keys()) resolve(name, []);
+}
+
+/**
+ * The hash of the file this definition shadows, so a full copy whose original has
+ * moved on can be spotted. Only a full copy carries a hash to compare against.
+ */
+function withParentHash<T extends Provenance & { name: string }>(def: T, into: Map<string, T>): T {
+  if (!def.forkedFromHash) return def;
+  const shadowed = into.get(def.name);
+  const parentHash = shadowed ? readHash(shadowed.path) : undefined;
+  return parentHash ? { ...def, parentHash } : def;
+}
+
+function readHash(path: string): string | undefined {
+  try {
+    return contentHash(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/** The parent with the child's frontmatter and sections laid over it. */
+function mergeWorkflow(parent: WorkflowDef, child: WorkflowDef): WorkflowDef {
+  const byId = new Map(child.steps.map((s) => [s.id, s]));
+  const steps: StepDef[] = parent.steps.map((step) => {
+    const over = byId.get(step.id);
+    byId.delete(step.id);
+    // `parallel` and `choices` are lists a human reasons about whole, so a child
+    // that names either replaces it rather than merging entries positionally.
+    return over ? { ...step, ...over } : step;
+  });
+  // A child step with an id the parent does not have is new work, appended in order.
+  for (const step of child.steps) if (byId.has(step.id)) steps.push(step);
+
+  return {
+    ...parent,
+    ...pick(child, ["name", "path", "layer", "extends", "forkedFromHash"]),
+    // A file with no `title:` is parsed as titled after itself, so that is what
+    // "the child did not name one" looks like here.
+    title: child.title && child.title !== child.name ? child.title : parent.title,
+    description: child.description || parent.description,
+    inputs: { ...parent.inputs, ...child.inputs },
+    maxIterations: child.maxIterations ?? parent.maxIterations,
+    steps,
+    body: mergeBody(parent.body, child.body),
+  };
+}
+
+function mergePersona(parent: PersonaDef, child: PersonaDef): PersonaDef {
+  return {
+    ...parent,
+    ...pick(child, ["name", "path", "layer", "extends", "forkedFromHash"]),
+    description: child.description || parent.description,
+    body: mergeBody(parent.body, child.body),
+  };
+}
+
+function pick<T, K extends keyof T>(from: T, keys: K[]): Partial<T> {
+  const out: Partial<T> = {};
+  for (const key of keys) if (from[key] !== undefined) out[key] = from[key];
+  return out;
+}
+
+/**
+ * Section by section: a child's `## <name>` replaces the parent's of the same name,
+ * new ones are appended, and the preamble is replaced only when the child has one.
+ * The result is rebuilt rather than spliced, so the merged body is normalised —
+ * which is what every reader of it already assumes.
+ */
+function mergeBody(parent: string, child: string): string {
+  const a = bodySections(parent);
+  const b = bodySections(child);
+  const sections = new Map(a.sections);
+  for (const [name, text] of b.sections) sections.set(name, text);
+
+  const preamble = b.preamble.trim() === "" ? a.preamble : b.preamble;
+  const parts = [preamble.trim()];
+  for (const [name, text] of sections) parts.push(`## ${name}\n\n${text}`);
+  return `${parts.filter((p) => p !== "").join("\n\n")}\n`;
 }
 
 /** Body split into a shared preamble plus one section per `## <step-id>` heading. */
@@ -614,8 +769,19 @@ function choiceErrors(
     const at = choice.title ? `choice "${choice.title}"` : `choice ${i + 1}`;
     const where = `workflow "${wf.name}" step "${step.id}" ${at}`;
     if (!choice.title) errors.push(`${where}: needs a title`);
-    const forms = [choice.run, choice.round, choice.stop, choice.post].filter((f) => f !== undefined).length;
-    if (forms !== 1) errors.push(`${where}: needs exactly one of run, prompt, post or stop`);
+    const forms = [choice.run, choice.round, choice.stop, choice.post, choice.handoff].filter(
+      (f) => f !== undefined,
+    ).length;
+    if (forms !== 1) {
+      errors.push(`${where}: needs exactly one of run, prompt, post, handoff or stop`);
+    }
+    for (const need of choice.requires ?? []) {
+      if (!(STEP_REQUIREMENTS as readonly string[]).includes(need)) {
+        errors.push(`${where}: unknown requires "${need}" (known: ${STEP_REQUIREMENTS.join(", ")})`);
+      }
+    }
+    // `handoff` is already "when that role is live"; saying it twice is a mistake.
+    if (choice.handoff && choice.unless) errors.push(`${where}: handoff is already conditional on a live agent`);
 
     for (const round of [choice.round, choice.followUp]) {
       if (!round) continue;

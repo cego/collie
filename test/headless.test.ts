@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Rig } from "./support/recorder";
-import { installBaseline, runWorkflow } from "./support/engine";
+import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
 import {
   answerChoice,
@@ -88,7 +88,9 @@ function board(now?: number) {
 test("a review is one run tab of agent panes, and the plugin keeps one pane", async () => {
   rig.queueOutputs([CLEAN, CLEAN, { ...CLEAN, summary: "nothing to fix", dropped: [] }]);
 
-  const { run, status } = await runWorkflow(rig, "review", {});
+  const { run, status } = await runWorkflow(rig, "review", {}, {
+    prompts: scriptedPrompts(["Don't post"]),
+  });
 
   expect(status).toBe("done");
   // One tab for the run — the reviewers' — plus the Control Plane's, and no pane of

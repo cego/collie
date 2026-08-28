@@ -6,7 +6,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `flows.ts` | What each action and pane entrypoint does |
 | `env.ts` | The plugin environment herdr provides |
 | `herdr.ts` | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest |
-| `definitions.ts` | Layers, `use:` embedding, validation |
+| `definitions.ts` | Layers, `extends:` overrides, `use:` embedding, validation |
 | `yaml.ts` | The frontmatter subset, so the binary needs no dependency |
 | `harness.ts` | Per-harness start, model flag, effort flag and persona injection |
 | `inputs.ts` | Input inference from branch, cwd, earlier runs and glab |
@@ -19,7 +19,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `run.ts` | The run directory: audit trail and resume state |
 | `naming.ts` | herdr-legal agent names vs readable tab and pane labels |
 | `picker.ts` | The minimal TUI |
-| `fork.ts` | Copy a definition into a later layer |
+| `fork.ts` | Take a definition into a later layer: an `extends:` stub, or a full copy |
 | `trust.ts` | Whether a harness will work in a directory, or stop and ask first |
 | `mr.ts` | Whether GitLab is reachable, who to assign, and which Linear tickets a branch answers |
 | `template.ts` | `{{a.b}}` prompt substitution |

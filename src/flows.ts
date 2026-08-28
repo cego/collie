@@ -4,13 +4,16 @@
 import { spawn } from "node:child_process";
 import { loadDefaults } from "./config";
 import {
+  bodySections,
   DefinitionError,
+  isStale,
   layers,
   loadDefinitions,
   resolveWorkflow,
   skillDirs,
   validateWorkflow,
   type Definitions,
+  type Provenance,
 } from "./definitions";
 import { executeRun } from "./engine";
 import type { PluginEnv } from "./env";
@@ -99,7 +102,7 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
 
   const items: PickItem[] = [...defs.workflows.values()]
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((wf) => ({ id: wf.name, title: wf.title, subtitle: `[${wf.layer}]` }));
+    .map((wf) => ({ id: wf.name, title: wf.title, subtitle: layerOf(wf) }));
 
   if (items.length === 0) {
     return await bail("No workflows found. Check the plugin's workflows/ directory.", banner(defs));
@@ -198,16 +201,21 @@ export function spawnDriver(env: PluginEnv, runId: string, cwd: string): void {
 
 export async function forkFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const defs = loadDefinitions(layers(env));
-  const sources = new Map<string, { kind: DefinitionKind; path: string }>();
+  const sources = new Map<string, { kind: DefinitionKind; path: string; steps: string[]; body: string }>();
   const items: PickItem[] = [];
 
   for (const wf of [...defs.workflows.values()].sort((a, b) => a.name.localeCompare(b.name))) {
-    sources.set(`workflow:${wf.name}`, { kind: "workflows", path: wf.path });
-    items.push({ id: `workflow:${wf.name}`, title: `workflow ${wf.name}`, subtitle: `[${wf.layer}]` });
+    sources.set(`workflow:${wf.name}`, {
+      kind: "workflows",
+      path: wf.path,
+      steps: wf.steps.map((step) => step.id),
+      body: wf.body,
+    });
+    items.push({ id: `workflow:${wf.name}`, title: `workflow ${wf.name}`, subtitle: layerOf(wf) });
   }
   for (const persona of [...defs.personas.values()].sort((a, b) => a.name.localeCompare(b.name))) {
-    sources.set(`persona:${persona.name}`, { kind: "personas", path: persona.path });
-    items.push({ id: `persona:${persona.name}`, title: `persona ${persona.name}`, subtitle: `[${persona.layer}]` });
+    sources.set(`persona:${persona.name}`, { kind: "personas", path: persona.path, steps: [], body: persona.body });
+    items.push({ id: `persona:${persona.name}`, title: `persona ${persona.name}`, subtitle: layerOf(persona) });
   }
 
   if (items.length === 0) return await bail("Nothing to fork.", banner(defs));
@@ -231,9 +239,42 @@ export async function forkFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   if (!target) return 0;
 
   const source = sources.get(chosen.id)!;
+  const how = await pick(
+    [
+      { id: "extends", title: "change one part", subtitle: "extends the original; everything else follows it" },
+      { id: "full", title: "a full copy", subtitle: "stops following the original" },
+    ],
+    { header: `Fork ${chosen.title} how`, footer: "↑↓ move · Enter fork · Esc cancel" },
+  );
+  if (!how) return 0;
+
+  // A stub needs to name something, or there is nothing in the file to edit.
+  let step: string | undefined;
+  if (how.id === "extends" && source.steps.length > 0) {
+    const which = await pick(
+      source.steps.map((id) => ({ id, title: id })),
+      { header: `Which step of ${chosen.title}`, footer: "↑↓ move · Enter choose · Esc cancel" },
+    );
+    if (!which) return 0;
+    step = which.id;
+  }
+
   const dir = target.id === "user" ? layerDirs[1]!.dir : layerDirs[2]!.dir;
-  const result = forkDefinition(source.path, source.kind, dir);
+  const result = forkDefinition(source.path, source.kind, dir, {
+    full: how.id === "full",
+    step,
+    section: step ? bodySections(source.body).sections.get(step) : undefined,
+  });
   return await notice(`${chosen.title}: ${result.message}`, result.ok ? 0 : 1);
+}
+
+/** The layer a definition came from, and whether a full copy has fallen behind. */
+function layerOf(def: Provenance): string {
+  const parts = [`[${def.layer}]`];
+  if (def.extends) parts.push(`extends ${def.extends}`);
+  // A full copy whose parent has moved on is not the fork you took.
+  if (isStale(def)) parts.push("(stale — the original has changed since this copy)");
+  return parts.join(" ");
 }
 
 export async function resumeFlow(herdr: Herdr, env: PluginEnv): Promise<number> {

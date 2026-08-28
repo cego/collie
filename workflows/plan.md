@@ -115,7 +115,9 @@ Fix the spec and the tickets where you agree. Where you do not, leave them and r
 why under `disputed`.
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "disputed": [...],
-"changed": ["what you changed", ...]}`.
+"changed": ["what you changed", ...], "changelog": "one or two sentences on what changed
+in the plan"}`. The `changelog` is sent to an implementer already building from this plan,
+with the diff, so write it for that reader.
 
 ## offload
 
@@ -132,4 +134,6 @@ I want changes to the plan. Ask me what, one question at a time, then rewrite
 `{{run.dir}}/plan/SPEC.md` and the tickets in `{{run.dir}}/plan/issues/` to match.
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "changed": ["what you
-changed", ...]}`.
+changed", ...], "changelog": "one or two sentences on what changed in the plan"}`. The
+`changelog` is sent to an implementer already building from this plan, with the diff, so
+write it for that reader.

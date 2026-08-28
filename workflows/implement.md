@@ -49,11 +49,25 @@ This run's directory: {{run.dir}}
 
 ## build
 
-The work source above is one of three kinds. Do the one that matches
-`{{inputs.plan_kind}}` and ignore the other two.
+The work source above is one of four kinds. Do the one that matches
+`{{inputs.plan_kind}}` and ignore the others.
 
 - **plan-dir** — a plan is already written. Read `{{inputs.plan}}/SPEC.md` and every
   ticket in `{{inputs.plan}}/issues/`, and build those tickets.
+- **review** — a review of work that already exists. `{{inputs.plan}}/review.md` is the
+  spec and `{{inputs.plan}}/steps/synthesize/synthesized.json` has the same findings as
+  JSON; the tickets are those findings, worst severity first. You are fixing an existing
+  change, so **do not branch off the default branch** — work where the review was pointed:
+  - `{{inputs.target_kind}}` is `branch` — check out its head:
+    `git checkout <head of {{inputs.target}}>`.
+  - `{{inputs.target_kind}}` is `mr` — `glab mr checkout <iid> {{target_repo}}`, which
+    creates the local branch for you, so the fixes land on that merge request's own branch
+    and it is updated rather than replaced.
+  - `{{inputs.target_kind}}` is `worktree` — stay on the branch you are on.
+  Write the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket per
+  finding under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix.
+  A finding you disagree with is `disputed` with a reason, exactly as in a fix round —
+  never silently skipped.
 - **linear** — a Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat
   its description as the spec. Before building, write that spec to
   `{{run.dir}}/plan/SPEC.md` and a short task list to `{{run.dir}}/plan/issues/NN-*.md`,
@@ -62,10 +76,13 @@ The work source above is one of three kinds. Do the one that matches
   write `{{run.dir}}/plan/SPEC.md` and the task list from the text, then build. If the
   text does not say enough to build from, stop and say what you need — do not guess.
 
-Branch off the default branch first, named after the spec's slug — short, kebab-case,
+Unless the kind above says otherwise, branch off the default branch first, named after
+the spec's slug — short, kebab-case,
 no ticket number unless the spec has one. This prompt arrives as `{{skill:implement}}`, so build
 the tickets in their order, one at a time: `{{skill:tdd}}` at the seams the spec names, the
 project's tests green, and one commit per ticket. There is no separate commit step.
+
+{{session.ask}}
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "branch": "<branch>",
 "tickets_done": ["ticket title", ...], "commits": ["<subject>", ...], "tests": "what
@@ -117,6 +134,14 @@ The branch is reviewed and the loop is clean. Push it and open the merge request
 Push the branch with upstream tracking. This is the only step in the whole run allowed
 to touch the remote, and pushing is all it may do. Never merge the MR, and never pass a
 merge flag to `glab`; opening it is the entire job.
+
+**First check whether this branch already has a merge request** — it does when this run
+was started from a review of one (`{{inputs.plan_kind}}` is `review` and
+`{{inputs.target_kind}}` is `mr`), and `glab mr view {{target_repo}}` tells you either
+way. If it has one, that MR is the one being fixed: push, and say so in a short note on it
+(`glab mr note <iid> {{target_repo}}`) listing what you changed. Do **not** open a second
+merge request for the same branch. Report its URL as `mr_url` exactly as if you had opened
+it.
 
 Write the description to a file in `{{run.dir}}` first, then create the MR with
 `glab mr create --assignee {{mr.assignee}}` and that file as the description. `glab` does

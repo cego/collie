@@ -9,7 +9,7 @@ import { RunStore } from "./run";
 import { mrTarget, parseMrTarget, projectHere } from "./mr";
 
 /** Where the work to be done was described. */
-export type WorkSourceKind = "plan-dir" | "linear" | "text";
+export type WorkSourceKind = "plan-dir" | "linear" | "text" | "review";
 
 /** What a review is pointed at. */
 export type TargetKind = "mr" | "branch" | "worktree";
@@ -345,13 +345,22 @@ export function classifyWorkSource(typed: string): WorkSourceCandidate {
   const source = "typed";
 
   const url = /linear\.app\/[^/\s]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/.exec(text);
-  if (url) return { kind: "linear", value: url[1]!.toUpperCase(), source };
+  if (url) return { kind: "linear", source, value: url[1]!.toUpperCase() };
 
   if (/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(text)) return { kind: "linear", value: text.toUpperCase(), source };
+
+  // A review run's own dir: the findings are the spec, and the reviewed target is
+  // what the work happens on.
+  if (isReviewRun(text)) return { kind: "review", value: text, source, label: textLabel(basename(text)) };
 
   if (isPlanDir(text)) return { kind: "plan-dir", value: text, source, label: textLabel(basename(text)) };
 
   return { kind: "text", value: text, source, label: textLabel(text) };
+}
+
+/** A run dir that produced a review, which is a thing `implement` can be pointed at. */
+function isReviewRun(path: string): boolean {
+  return path !== "" && existsSync(join(path, "review.md")) && existsSync(join(path, "run.json"));
 }
 
 /** What one Input's menu says, so the two of them share the machinery below. */
