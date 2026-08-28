@@ -240,3 +240,59 @@ wants to be asked. The plugin surface stays the three actions and two panes.
 - **Findings are still unioned, never reconciled between reviewers** — two reviewers who
   disagree with *each other* both reach the implementer (v1 by design). What is now
   reconciled is the implementer's side of the argument; see below.
+
+
+# Tickets 09–11 — a second round
+
+## 09 — implement takes a plan dir, a Linear ticket, or free text
+
+`implement`'s `plan` input is a **work-source**. The runner gathers candidates — up to the
+three newest finished plan runs for this repo, plus a Linear id found in the branch name.
+One candidate is inferred silently; none or several open a menu that always ends in
+"Type it…", where a Linear id, a Linear URL or a plain description is classified on the
+way in (`plan-dir` | `linear` | `text`). The kind is recorded next to the value and reaches
+prompts as `{{inputs.plan_kind}}`, which the `build` step branches on: read the SPEC and
+tickets, fetch the issue over MCP, or take the human's words — the latter two writing
+`{{run.dir}}/plan/` themselves before building. The `ticket` workflow and the `issue`
+Input strategy are gone; `plan`'s optional `ticket` input stays.
+
+**Verified live, in this herdr session**, against this repo — which has no plan run of its
+own and sits on `master`, so it is exactly the zero-candidate case the ticket asks for.
+The picker was opened as a split pane (`herdr plugin pane open … --entrypoint picker`) so
+the TUI could be driven and read:
+
+- The workflow list renders four entries, `ticket` no longer among them.
+- Picking `implement` opens the work-source menu — header "What should be built?", the
+  single entry "Type it…", because nothing here could be inferred.
+- Typing `https://linear.app/cego/issue/FRO-149/prmpt-modal-skal-rettes` produced the
+  confirm line `implement: plan=FRO-149 [linear · typed]  target=worktree [working tree]
+  post=false [default]` — the URL classified to its id, and the kind shown in the line.
+- Esc cancelled without creating a run. `herdr plugin log` shows the action itself exiting
+  0 with `pick: opening the picker in …/herdr-plugin`.
+
+**One real defect found and fixed while closing this out.** The test rig's `runWorkflow`
+built a run's inputs by hand instead of going through `inputValues`/`inputSources` the way
+`flows.ts` does, so `plan_kind` was never set in any engine test: every `implement` test
+rendered `Work source ():` and told the implementer to match a kind of `` — while
+production was fine. The suite could not have caught a regression there. The rig now goes
+through the same funnel, and a test asserts the build prompt names its kind, keeps all
+three branches, and leaves no unknown template keys in the run log. 141 pass, 0 fail;
+`bunx tsc --noEmit` clean.
+
+## A note on this round's history, for whoever reads the log
+
+The commit subjects in this range do not describe their contents, and one of them swept up
+another session's work:
+
+| Commit | Subject says | Actually contains |
+| --- | --- | --- |
+| `5d55921` | Ticket 09 implementation | `GOAL-09.md` and the ticket 09 file, nothing else |
+| `4e7d25d` | Ticket 10 | ticket **09**'s implementation, plus six files of unrelated review fixes from another session, plus the ticket 10 file |
+| `4476c0b` | Ticket 11 | the ticket 11 file, plus this round's test-rig fix above |
+| `a39ef57` | Ticket 11 CIATF | the ticket 11 file's amendment, nothing else |
+
+The pattern is that each commit is named after the ticket file it *adds*, and a
+`git add -A` alongside it takes whatever else happened to be uncommitted in the tree at
+that moment. Nothing was lost — every swept file's content is in history and was verified
+there by the session that wrote it — but `git log --oneline` reads as though 10 and 11
+have shipped, and neither has been started. Staging by path avoids it.

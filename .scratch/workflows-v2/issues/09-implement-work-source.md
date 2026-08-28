@@ -4,11 +4,24 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `work-source` in INPUT_STRATEGIES; `issue` and workflows/ticket.md gone, no dangling references (grep clean)
-- [ ] one candidate → inferred, confirm line shows kind (tested)
-- [ ] none/several → menu with candidates + "Type it…"; free text and Linear id/URL both classified correctly (tested; URL like https://linear.app/<team>/issue/ABC-123/... → linear)
-- [ ] `{{inputs.plan_kind}}` substituted; build prompt has the three branches
-- [ ] README + docs/WORKFLOWS-DESIGN.md updated; `bun test` and `bunx tsc --noEmit` green
-- [ ] live smoke: pick implement in a repo with no plan run and a non-ticket branch → menu appears
+- [x] `work-source` in INPUT_STRATEGIES; `issue` and workflows/ticket.md gone, no dangling references (grep clean)
+- [x] one candidate → inferred, confirm line shows kind (tested)
+- [x] none/several → menu with candidates + "Type it…"; free text and Linear id/URL both classified correctly (tested; URL like https://linear.app/<team>/issue/ABC-123/... → linear)
+- [x] `{{inputs.plan_kind}}` substituted; build prompt has the three branches
+- [x] README + docs/WORKFLOWS-DESIGN.md updated; `bun test` and `bunx tsc --noEmit` green
+- [x] live smoke: pick implement in a repo with no plan run and a non-ticket branch → menu appears
+
+## Decisions where the design was silent
+
+- **A `work-source` candidate list is capped at the three newest plan dirs**, so an old
+  plan cannot bury the branch's own ticket in the menu.
+- **`text` is the fallback classification, not an error.** A path that has no `SPEC.md`
+  is prose as far as the menu is concerned, because that is what it reads like.
+- **The kind travels as a separate input, `<name>_kind`**, rather than being encoded into
+  the value: the value keeps the shape the prompts already used.
+- **The test rig goes through `inputValues`/`inputSources`** like `flows.ts` does. It used
+  to build a run's inputs by hand, so `{{inputs.plan_kind}}` rendered empty in every
+  engine test and the build prompt told the implementer to match a kind of `` — a
+  regression the suite could not have caught. Fixed with the test that now asserts it.
