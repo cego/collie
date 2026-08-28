@@ -248,7 +248,7 @@ wants to be asked. The plugin surface stays the three actions and two panes.
   reconciled is the implementer's side of the argument; see below.
 
 
-# Tickets 09–11 — a second round
+# Tickets 09–12 — a second round
 
 ## 09 — implement takes a plan dir, a Linear ticket, or free text
 
@@ -369,9 +369,52 @@ The company package scope never appears with a leading at-sign in any commit mes
 prompt or description. The one test that asserts its absence builds the string from parts,
 so `git grep` for the literal is clean across the whole tree.
 
-## Where these three left things
 
-`bun test` is green at 159 tests across 19 files, `bunx tsc --noEmit` is clean, and the
+## 12 — one tab per step, variants side by side, a thin status strip
+
+The run's topology stops being one tab per pane. The runner's own pane is split down at
+0.85 and swapped underneath the first step's agent, so it becomes a full-width `status`
+strip along the bottom of the run's first tab and never sits beside an agent. A step's
+parallel variants are equal side-by-side splits inside that step's own tab — two reviewers
+are one tab of two panes instead of two tabs — and a step that continues an earlier agent
+opens nothing at all: it renames the pane it inherited, so one pane reads `build`, then
+`architecture`, then `simplify`, then `fix`. A full `implement` run is therefore two tabs,
+not six.
+
+Labels stop leaking internals. A tab is `<glyph> <workflow> · <target>`: `!123` for an MR,
+the branch by name, `worktree`, or the run's slug where the workflow has no target of its
+own — never a sha, never a run id, never a harness or model. `⚙` working, `⚠` your turn,
+`✓` done (only once every pane in the tab is), `✗` stopped. Panes carry the model where
+variants differ and the step id where one runs alone. Agent names are still built by
+`naming.ts` to stay herdr-legal and unique, and are now never what a label shows.
+
+Two things fell out of the work rather than the ticket. **herdr's `--ratio` sizes the
+first pane's slot**, and the original pane keeps the top slot, so the obvious
+`--direction down --ratio 0.15` puts the strip on top; `pane swap` moves occupants and not
+slot sizes, so the strip is made by splitting at 0.85 and swapping. That was probed live
+against a scratch tab before any of it was written. And **a target only names the run
+where the workflow owns that input** — `implement` inherits `target` from the `review` it
+embeds, so it would otherwise have been `implement · worktree` rather than what it is
+building. Ticket 10's `embeddedInputs` already knew the difference.
+
+**Verified live**, in a throwaway worktree on `smoke-layout-12` with one commit to review,
+running two real claude reviewers:
+
+- One tab, `⚙ review · smoke-layout-12`, holding all three panes.
+- `opus` at x=36 and `sonnet` at x=198, 162 and 161 columns wide — an even half each.
+- `status` full width at y=76, 13 rows out of 88, along the bottom.
+- The splits herdr recorded for that tab: `down 0.85`, then `right 0.5`.
+- Two older runs still open in other workspaces showed the previous shape beside it —
+  `⚙ review-2367` plus a second tab `✓ review-2367/review/claude-sonnet` — which is the
+  before-and-after in one screen.
+
+The run was stopped by closing its tab once the layout was confirmed; the worktree and
+branch are gone. The zoom path is verified by transcript rather than by eye: a Choice
+menu zooms the strip on and off in pairs, which the choice test asserts.
+
+## Where these four left things
+
+`bun test` is green at 166 tests across 20 files, `bunx tsc --noEmit` is clean, and the
 runner still compiles. The baseline is four workflows (`plan`, `implement`, `review`,
 `architecture`) and four personas; `ticket` is gone, folded into `implement`'s work source.
 
@@ -387,6 +430,12 @@ Open, and worth knowing:
 - **`codex` and `opencode` remain unverified.** The baseline is still claude-only.
 - **The `mr` step assumes one branch, one MR.** A run that somehow ends on the default
   branch would try to open an MR from it; nothing checks that yet.
+- **Every tab of a run shares a name.** With `agent:` reuse that means two tabs for
+  `implement` and one for `review`, so it has not bitten — but a workflow with several
+  independent multi-variant steps would show identically named tabs telling apart only by
+  glyph. The step is on the panes if that ever matters.
+- **The layout was verified on one terminal size.** 88 rows made the strip 13; on a short
+  terminal 15% may round to something unusably thin, and nothing enforces a floor.
 
 ## A note on this round's history, for whoever reads the log
 
