@@ -38,7 +38,7 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
 3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only
    for what could not be inferred, and shown one confirm line. Two inputs offer a menu
    instead of a guess: `implement`'s work source, and `review`'s target.
-4. The workspace's **`workflows` tab** opens, and it is always the workspace's *first*
+4. The workspace's **Control Plane** tab opens, and it is always the workspace's *first*
    tab, so `prefix+1` lands on it — the first run creates it, every run after it reuses
    it and puts it back at the front. It lists the live agents this session has by role
    (`implementer`, `planner`) with a key that focuses each one, the runs going on now
@@ -47,7 +47,7 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
    asks you about appears there** — the runner toasts and jumps you to the tab before it
    asks, so a menu is never left unseen in a tab you are not looking at. Deleting the
    tab is harmless: it drives nothing and remembers nothing, and the next run opens it
-   again. See "The workflows tab" below.
+   again. See "The Control Plane" below.
 5. The run's own tabs hold agents and nothing else: one tab per step, a step's
    parallel variants side by side in it with an even share each, a step that
    reconciles them (`fan_in:`) underneath them in the same tab, and a step that
@@ -61,7 +61,7 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
    is open and hands it back afterwards; "Implement now" chains straight into
    `implement`. `prefix+u` picks up any run with unfinished steps.
 
-## The workflows tab
+## The Control Plane
 
 One tab per workspace, created by the first run and reused by every run after it, and
 moved to the front of the workspace each time so it is always `prefix+1`. It is a

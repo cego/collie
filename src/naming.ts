@@ -43,7 +43,7 @@ export const GLYPH = { running: "⚙", waiting: "⚠", done: "✓", failed: "✗
  * The Session's own tab, and the label on the view pane inside it. One per
  * workspace: the runner reuses it, and recreates it when it has been closed.
  */
-export const WORKSPACE_TAB = "Workflows";
+export const CONTROL_PLANE = "Control Plane";
 
 /**
  * Everything a human reads is Capitalized. A model id that is not a word keeps

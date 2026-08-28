@@ -35,6 +35,7 @@ import {
 import { forkDefinition, type DefinitionKind } from "./fork";
 import { RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
+import { scopeFor } from "./registry";
 import { agentForKey, buildView, renderWorkspace, type WorkspaceView } from "./workspace";
 
 export type Mode = "pick" | "resume" | "fork";
@@ -48,6 +49,20 @@ export async function openPicker(herdr: Herdr, env: PluginEnv, mode: Mode): Prom
     focus: true,
   });
   return 0;
+}
+
+/**
+ * The workspace a Run is started in, by name as well as by id: ids compact, so the
+ * label is what tells a recycled id from the workspace the Run actually belongs to.
+ */
+async function workspaceLabel(herdr: Herdr, env: PluginEnv): Promise<string | null> {
+  if (!env.workspaceId) return null;
+  try {
+    return (await herdr.workspaceList()).find((w) => w.workspaceId === env.workspaceId)?.label ?? null;
+  } catch {
+    // Without a label the Run is still scoped by session, workspace id and cwd.
+    return null;
+  }
 }
 
 function banner(defs: Definitions): string | undefined {
@@ -112,7 +127,9 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const run = store.create({
     workflow: resolved.name,
     cwd: env.cwd,
+    session: env.socketPath,
     workspace: env.workspaceId,
+    workspaceLabel: await workspaceLabel(herdr, env),
     inputs: inputValues(resolutions),
     inputSources: inputSources(resolutions),
     stepIds: resolved.steps.map((s) => s.id),
@@ -267,18 +284,13 @@ const TICK_MS = 120;
 const CLEAR = "\x1b[2J\x1b[H";
 
 /**
- * The `workflows` tab: the Session's control surface. It watches the run dirs
+ * The Control Plane tab: the Session's control surface. It watches the run dirs
  * and the register and draws them; the quick actions are the plugin's own
  * actions and one hand-off. It drives no run and holds no engine state, so
  * closing it loses nothing.
  */
 export async function workspaceFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
-  const session: Session = {
-    herdr,
-    stateDir: env.stateDir,
-    workspaceId: env.workspaceId,
-    cwd: env.cwd,
-  };
+  const session: Session = { herdr, ...scopeFor(env, env.cwd), stateDir: env.stateDir };
   startKeyboard();
   let view = await load(session);
   const open = (mode: Mode) => openMode(herdr, env, mode);
@@ -340,7 +352,7 @@ async function act(
     if (!agent) return null;
     try {
       await session.herdr.agentFocus(agent.agent);
-      return `focused ${agent.role} (${agent.agent})`;
+      return `focused ${agent.name} (${agent.agent})`;
     } catch (e) {
       return `${agent.agent}: ${(e as Error).message}`;
     }
@@ -361,17 +373,17 @@ async function act(
 
 async function load(session: Session): Promise<WorkspaceView> {
   let alive: Awaited<ReturnType<Herdr["agentList"]>> = [];
+  let label: string | null = null;
   try {
     alive = await session.herdr.agentList();
+    // The live label is how a run recorded against a since-recycled workspace id
+    // is kept out; without it the board falls back to the id alone.
+    label =
+      (await session.herdr.workspaceList()).find((w) => w.workspaceId === session.workspaceId)?.label ?? null;
   } catch {
     // A herdr that will not answer means "nothing verified live", not a crash.
   }
-  return buildView({
-    stateDir: session.stateDir,
-    workspaceId: session.workspaceId,
-    cwd: session.cwd,
-    alive,
-  });
+  return buildView({ ...session, stateDir: session.stateDir, workspaceLabel: label, alive });
 }
 
 function primaryInput(resolutions: Resolution[]): string {

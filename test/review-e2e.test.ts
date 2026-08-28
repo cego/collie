@@ -155,7 +155,7 @@ test("the synthesis pane opens under the reviewers, in their tab", async () => {
   expect(split.argv!.slice(3, 7)).toEqual(["--direction", "down", "--ratio", "0.5"]);
   // One tab for the whole run: the reviewers', which the synthesis joins.
   expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(1);
-  expect(rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1))).toContain("synthesize");
+  expect(rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1))).toContain("Synthesize");
 });
 
 test("a synthesis without a summary, or a dropped finding without a reason, fails the step", async () => {

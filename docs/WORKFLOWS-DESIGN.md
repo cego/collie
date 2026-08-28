@@ -49,7 +49,7 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
 8. **The harness's own model** — `model: default`, at a Step or as the user's default,
    passes no model flag, so the harness starts on whatever it would start on by itself.
    Every harness accepts it, and a pane for such a variant is named after the harness.
-9. **The workspace tab** — one `workflows` tab per workspace as the Session's control
+9. **The Control Plane** — one tab per workspace as the Session's control
    surface: live agents by role with a key that focuses each, active Runs with their
    step and iteration, this Session's finished Runs with their outcome, and quick
    actions (pick, resume, fork, send the last review to the implementer). It reads the
@@ -64,7 +64,7 @@ reconciles, so the synthesis sits under the reviews it came from. A Step
 that continues an earlier agent (`agent: <step>`) opens no tab and no pane — it renames
 the pane it inherited to its own id. Run tabs hold agents and nothing else.
 
-The runner's own pane is not in them. One tab per workspace, labelled `workflows`, holds
+The runner's own pane is not in them. One tab per workspace, labelled `Control Plane`, holds
 the Session's board, and each Run's own pane moves in underneath it (40/60): that is
 where the Run reports and where every Choice menu it opens appears, zoomed while it is
 open. The tab is created by the first Run in the workspace, found by its label and
@@ -75,7 +75,7 @@ Tabs read `<glyph> <workflow> · <target>`: `!123`, a branch name (never a sha) 
 `worktree` for `review`, the run's slug for the rest, and never a run id, harness or
 model. `⚙` working, `⚠` waiting for the human, `✓` done — only when every pane in the tab
 is — `✗` stopped. Panes are the model where variants differ (`opus`, `codex gpt-5`), the
-step id where one runs alone, the run's slug on its own pane in the `workflows` tab.
+step id where one runs alone, the workflow on its own pane in the Control Plane tab.
 Agent names stay herdr-legal and
 unique, and are never what a label shows.
 

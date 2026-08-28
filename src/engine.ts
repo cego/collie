@@ -46,9 +46,9 @@ import {
   tabLabel,
   tabNameOf,
   targetLabel,
-  WORKSPACE_TAB,
+  CONTROL_PLANE,
 } from "./naming";
-import { registerAgent, registryPath } from "./registry";
+import { registerAgent, registryPath, scopeFor } from "./registry";
 import { classifyWorkSource, inferInputs, resolveWorkSource, shell as shellRun, type InputPrompts } from "./inputs";
 import { RunStore } from "./run";
 import { gitlabReadiness, mrFacts, type MrFacts } from "./mr";
@@ -58,7 +58,7 @@ import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 
 export const VIEW_SOURCE_PREFIX = "cego.workflows:";
 
-/** The share of the `workflows` tab its view keeps; a run's own pane takes the rest. */
+/** The share of the Control Plane tab its board keeps; a run's own pane takes the rest. */
 const VIEW_TOP = 0.4;
 
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
@@ -71,7 +71,7 @@ export interface EngineOptions {
   wf: ResolvedWorkflow;
   run: Run;
   env: PluginEnv;
-  /** The runner's own pane, which moves into the `workflows` tab and asks there. */
+  /** The runner's own pane, which moves into the Control Plane tab and asks there. */
   hostPaneId: string | null;
   out: (line: string) => void;
   stepTimeoutMs?: number;
@@ -97,7 +97,7 @@ interface RunCtx {
   /** One agent per `agent:` group, so a resumed run still keeps one implementer. */
   groups: Map<string, VariantRecord>;
   viewSource: string;
-  /** The `workflows` tab this run asks its questions in, when there is one. */
+  /** The Control Plane tab this run asks its questions in, when there is one. */
   workspaceTabId: string | null;
   /** Each of this run's tabs and the name it was given; the glyph is what moves. */
   tabNames: Map<string, string>;
@@ -596,7 +596,10 @@ async function chain(
   const childRun = new RunStore(o.env.stateDir).create({
     workflow: child.name,
     cwd: run.record.cwd,
+    session: o.env.socketPath,
     workspace: o.env.workspaceId,
+    // A child starts where its parent is, so it inherits the workspace it recorded.
+    workspaceLabel: run.record.workspace_label,
     inputs,
     inputSources: sources,
     stepIds: child.steps.map((s) => s.id),
@@ -694,12 +697,13 @@ function groupHead(wf: ResolvedWorkflow, stepId: string): boolean {
 
 /** Puts one long-lived agent on the Session's register, for a later Run to find. */
 function register(o: EngineOptions, step: ResolvedStep, record: VariantRecord): void {
-  const path = registryPath(o.env.stateDir, o.env.workspaceId, o.run.record.cwd);
+  const path = registryPath(o.env.stateDir, scopeFor(o.env, o.run.record.cwd));
   try {
     registerAgent(path, {
       role: step.persona ?? step.id,
       agent: record.agent,
       paneId: record.paneId!,
+      workspaceId: o.env.workspaceId,
       runId: o.run.id,
       workflow: o.run.record.workflow,
       at: new Date().toISOString(),
@@ -761,20 +765,20 @@ async function findOrOpenView(o: EngineOptions): Promise<{ tabId: string; paneId
       env: { HERDR_WORKFLOWS_CWD: o.run.record.cwd },
     });
     if (!opened.paneId) return null;
-    await o.herdr.paneRename(opened.paneId, WORKSPACE_TAB);
+    await o.herdr.paneRename(opened.paneId, CONTROL_PLANE);
     return opened;
   };
 
-  const tab = (await o.herdr.tabList()).find((t) => t.label === WORKSPACE_TAB);
+  const tab = (await o.herdr.tabList()).find((t) => t.label === CONTROL_PLANE);
   if (!tab) {
     const opened = await open("tab");
     if (!opened?.tabId) return null;
-    await o.herdr.tabRename(opened.tabId, WORKSPACE_TAB);
+    await o.herdr.tabRename(opened.tabId, CONTROL_PLANE);
     return opened;
   }
   // The tab is there; its view pane may not be, if someone closed just that pane.
   const panes = (await o.herdr.paneList()).filter((p) => p.tabId === tab.tabId);
-  const view = panes.find((p) => p.label === WORKSPACE_TAB);
+  const view = panes.find((p) => p.label === CONTROL_PLANE);
   if (view) return { tabId: tab.tabId, paneId: view.paneId };
   if (panes.length === 0) return null;
   const opened = await open("split", panes[0]!.paneId);

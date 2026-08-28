@@ -77,7 +77,7 @@ test("plan runs one step in a tab of its own and records the run", async () => {
   // Two renames, not three: the board's pane and the run's own. The agent's pane
   // is alone in its tab, so the tab says what it is and the pane says nothing.
   expect(rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1))).toEqual([
-    "Workflows",
+    "Control Plane",
     "Solo",
   ]);
   expect(rig.calls().filter((c) => c.cmd === "tab rename").at(-1)!.argv!.at(-1)).toBe("✓ Solo");
@@ -114,7 +114,7 @@ test("plan runs one step in a tab of its own and records the run", async () => {
   // the run. The agent's pane is left unlabelled: its tab already says `solo`.
   const renames = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2));
   expect(renames).toEqual([
-    ["1-1", "Workflows"],
+    ["1-1", "Control Plane"],
     ["1-0", "Solo"],
   ]);
 

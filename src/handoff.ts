@@ -6,14 +6,12 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { Herdr } from "./herdr";
 import { REVIEW_FILE } from "./output";
-import { liveAgent, registryPath, type AgentEntry } from "./registry";
+import { liveAgent, registryPath, type AgentEntry, type RegistryScope } from "./registry";
 import { RunStore, type Run } from "./run";
 
-export interface Session {
+export interface Session extends RegistryScope {
   herdr: Herdr;
   stateDir: string;
-  workspaceId: string | null;
-  cwd: string;
 }
 
 export interface HandoffResult {
@@ -46,7 +44,7 @@ export function record(session: Session, from: Run, target: AgentEntry, note: st
 /** The live agent for a role in this Session, or null. Stale entries are dropped. */
 export async function liveRole(session: Session, role: string): Promise<AgentEntry | null> {
   const alive = await session.herdr.agentList();
-  return liveAgent(registryPath(session.stateDir, session.workspaceId, session.cwd), alive, role);
+  return liveAgent(registryPath(session.stateDir, session), alive, role);
 }
 
 /** The newest Run in this Session that rendered a review. */

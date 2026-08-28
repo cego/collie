@@ -56,8 +56,12 @@ export interface RunRecord {
   slug: string;
   workflow: string;
   cwd: string;
-  /** The herdr workspace the Run was started in; a Session is workspace + cwd. */
+  /** The herdr session the Run was started in, as its socket path. */
+  session: string | null;
+  /** The workspace it was started in; a Session is session + workspace + cwd. */
   workspace: string | null;
+  /** That workspace's label, so a recycled workspace id is caught. */
+  workspace_label: string | null;
   created_at: string;
   finished_at: string | null;
   status: RunStatus;
@@ -149,7 +153,9 @@ export class RunStore {
     maxIterations: number;
     primaryInput: string;
     parent?: string;
+    session?: string | null;
     workspace?: string | null;
+    workspaceLabel?: string | null;
   }): Run {
     const slug = `${opts.workflow}-${slugify(opts.primaryInput)}`;
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
@@ -162,7 +168,9 @@ export class RunStore {
       slug,
       workflow: opts.workflow,
       cwd: opts.cwd,
+      session: opts.session ?? null,
       workspace: opts.workspace ?? null,
+      workspace_label: opts.workspaceLabel ?? null,
       created_at: new Date().toISOString(),
       finished_at: null,
       status: "running",
@@ -207,7 +215,9 @@ export class RunStore {
     // A run recorded by an older version has fewer lists than this one expects.
     record.children ??= [];
     record.choices ??= [];
+    record.session ??= null;
     record.workspace ??= null;
+    record.workspace_label ??= null;
     record.awaiting ??= null;
     record.handoffs ??= [];
     record.deferred ??= [];

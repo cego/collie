@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "bun test",
-    "build": "bun build --compile --outfile bin/herdr-workflows src/main.ts"
+    "build": "bun build --compile --outfile bin/herdr-workflows.new src/main.ts && mv -f bin/herdr-workflows.new bin/herdr-workflows"
   },
   "devDependencies": {
     "@types/bun": "latest",

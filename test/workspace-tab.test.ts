@@ -4,10 +4,11 @@ import { join } from "node:path";
 import { Rig } from "./support/recorder";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
-import { WORKSPACE_TAB } from "../src/naming";
-import { registerAgent, registryPath, liveEntries, pruneRegistry, readRegistry } from "../src/registry";
+import { CONTROL_PLANE } from "../src/naming";
+import { registerAgent, registryPath, liveEntries, pruneRegistry, readRegistry, scopeFor } from "../src/registry";
 import { buildView, renderWorkspace } from "../src/workspace";
-import { RunStore } from "../src/run";
+import { RunStore, type Run } from "../src/run";
+import type { AgentInfo } from "../src/herdr";
 
 let rig: Rig;
 
@@ -52,6 +53,63 @@ afterEach(async () => {
   await rig.close();
 });
 
+/** The Session the rig runs in, as the register and the board key it. */
+function scope(env = rig.pluginEnv()) {
+  return scopeFor(env, env.cwd);
+}
+
+function live(name: string, paneId: string, status: AgentInfo["status"] = "idle"): AgentInfo {
+  return { name, paneId, workspaceId: rig.pluginEnv().workspaceId, status };
+}
+
+/** A run in this Session, with whatever the test needs on top. */
+function seed(opts: {
+  workflow: string;
+  primaryInput: string;
+  stepIds: string[];
+  cwd?: string;
+  workspace?: string | null;
+  workspaceLabel?: string | null;
+  session?: string | null;
+  maxIterations?: number;
+}): Run {
+  const env = rig.pluginEnv();
+  return new RunStore(env.stateDir).create({
+    workflow: opts.workflow,
+    cwd: opts.cwd ?? env.cwd,
+    session: opts.session === undefined ? env.socketPath : opts.session,
+    workspace: opts.workspace === undefined ? env.workspaceId : opts.workspace,
+    workspaceLabel: opts.workspaceLabel === undefined ? "test" : opts.workspaceLabel,
+    inputs: {},
+    inputSources: {},
+    stepIds: opts.stepIds,
+    maxIterations: opts.maxIterations ?? 1,
+    primaryInput: opts.primaryInput,
+  });
+}
+
+/** A variant record as the engine writes one. */
+function variant(agent: string, paneId: string, label: string, model = "sonnet") {
+  return {
+    harness: "claude",
+    model,
+    effort: null,
+    agent,
+    label,
+    tabId: "1:2",
+    paneId,
+    status: "done" as const,
+    output: null,
+    error: null,
+  };
+}
+
+/** The board as the Control Plane pane would build it, for a given set of live agents. */
+function board(alive: AgentInfo[], now?: number) {
+  const env = rig.pluginEnv();
+  return buildView({ ...scope(env), stateDir: env.stateDir, workspaceLabel: "test", alive, now });
+}
+
 /** The `plugin pane open` calls for one entrypoint. */
 function opened(entrypoint: string): string[][] {
   return rig
@@ -74,10 +132,10 @@ test("the first run opens the workflows tab, puts it first, and moves its own pa
   expect(view[0]!).toContain("--placement");
   expect(view[0]![view[0]!.indexOf("--placement") + 1]).toBe("tab");
   const renames = rig.calls().filter((c) => c.cmd === "tab rename").map((c) => c.argv!.slice(2));
-  expect(renames[0]).toEqual(["1:1", WORKSPACE_TAB]);
+  expect(renames[0]).toEqual(["1:1", CONTROL_PLANE]);
   expect(
     rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1)),
-  ).toContain(WORKSPACE_TAB);
+  ).toContain(CONTROL_PLANE);
 
   // First tab of the workspace, over the socket: there is no CLI for it.
   const move = rig.calls().filter((c) => c.cmd === "tab.move");
@@ -186,8 +244,7 @@ Tidy it.
   rig.queueOutputs([CLEAN, CLEAN]);
 
   const { run } = await runWorkflow(rig, "pair", { goal: "g" });
-  const env = rig.pluginEnv();
-  const path = registryPath(env.stateDir, env.workspaceId, env.cwd);
+  const path = registryPath(rig.stateDir, scope());
   const entries = readRegistry(path);
 
   // The head of the `agent:` group, by its Persona — not the step that borrows it.
@@ -200,18 +257,27 @@ Tidy it.
     workflow: "pair",
   });
 
-  const alive = [{ name: entries[0]!.agent, paneId: entries[0]!.paneId, status: "idle" as const }];
+  const alive = [live(entries[0]!.agent, entries[0]!.paneId)];
   expect(liveEntries(entries, alive)).toHaveLength(1);
   // Both are checked: ids compact, so a name on a different pane is a different agent.
   expect(liveEntries(entries, [{ ...alive[0]!, paneId: "1-99" }])).toHaveLength(0);
+  // And an agent herdr puts in another workspace is not this Session's either.
+  expect(liveEntries(entries, [{ ...alive[0]!, workspaceId: "9" }])).toHaveLength(0);
   expect(pruneRegistry(path, [])).toEqual([]);
   expect(readRegistry(path)).toEqual([]);
 });
 
 test("one agent per role: a second implementer replaces the first", () => {
-  const env = rig.pluginEnv();
-  const path = registryPath(env.stateDir, env.workspaceId, env.cwd);
-  const entry = { role: "implementer", agent: "a", paneId: "1-2", runId: "r1", workflow: "implement", at: "t" };
+  const path = registryPath(rig.stateDir, scope());
+  const entry = {
+    role: "implementer",
+    agent: "a",
+    paneId: "1-2",
+    workspaceId: "1",
+    runId: "r1",
+    workflow: "implement",
+    at: "t",
+  };
 
   registerAgent(path, entry);
   const after = registerAgent(path, { ...entry, agent: "b", paneId: "1-3", runId: "r2" });
@@ -220,60 +286,32 @@ test("one agent per role: a second implementer replaces the first", () => {
   expect(after[0]!.agent).toBe("b");
 });
 
-test("the view lists this session's agents and runs, and nobody else's", () => {
-  const env = rig.pluginEnv();
-  const store = new RunStore(env.stateDir);
-
-  const running = store.create({
-    workflow: "implement",
-    cwd: env.cwd,
-    workspace: env.workspaceId,
-    inputs: { plan: "p" },
-    inputSources: { plan: "asked" },
-    stepIds: ["build", "review"],
-    maxIterations: 5,
-    primaryInput: "add-a-picker",
-  });
+test("the board lists this Session's agents and runs, and nobody else's", () => {
+  const running = seed({ workflow: "implement", primaryInput: "add-a-picker", stepIds: ["build", "review"], maxIterations: 5 });
   running.record.target_label = "add-a-picker";
   running.step("build").status = "running";
+  running.step("build").variants.push(variant("impl-1", "1-4", "implement-add-a-picker/build"));
   running.save();
 
-  const finished = store.create({
-    workflow: "review",
-    cwd: env.cwd,
-    workspace: env.workspaceId,
-    inputs: { target: "worktree" },
-    inputSources: { target: "inferred" },
-    stepIds: ["review"],
-    maxIterations: 1,
-    primaryInput: "worktree",
-  });
+  const finished = seed({ workflow: "review", primaryInput: "worktree", stepIds: ["review"] });
+  finished.record.target_label = "worktree";
   finished.record.status = "blocked";
   finished.record.outstanding = [{ severity: "major", title: "t", file: "f", line: 1, detail: "d" }];
   finished.save();
 
-  // Another repo in the same workspace, and the same repo in another workspace.
-  for (const other of [
-    { cwd: "/elsewhere", workspace: env.workspaceId },
-    { cwd: env.cwd, workspace: "9" },
-  ]) {
-    store.create({
-      workflow: "plan",
-      cwd: other.cwd,
-      workspace: other.workspace,
-      inputs: { goal: "g" },
-      inputSources: { goal: "asked" },
-      stepIds: ["grill"],
-      maxIterations: 1,
-      primaryInput: "not-mine",
-    });
-  }
+  // Another repo in this workspace; the same repo in another workspace; the same
+  // workspace id in another herdr session; and the same id under another label.
+  seed({ workflow: "plan", primaryInput: "not-mine", stepIds: ["grill"], cwd: "/elsewhere" });
+  seed({ workflow: "plan", primaryInput: "not-mine", stepIds: ["grill"], workspace: "9" });
+  seed({ workflow: "plan", primaryInput: "not-mine", stepIds: ["grill"], session: "/other.sock" });
+  seed({ workflow: "plan", primaryInput: "not-mine", stepIds: ["grill"], workspaceLabel: "recycled" });
 
-  const path = registryPath(env.stateDir, env.workspaceId, env.cwd);
+  const path = registryPath(rig.stateDir, scope());
   registerAgent(path, {
     role: "implementer",
     agent: "impl-1",
     paneId: "1-4",
+    workspaceId: "1",
     runId: running.id,
     workflow: "implement",
     at: "t",
@@ -282,54 +320,90 @@ test("the view lists this session's agents and runs, and nobody else's", () => {
     role: "planner",
     agent: "gone-1",
     paneId: "1-9",
+    workspaceId: "1",
     runId: "old",
     workflow: "plan",
     at: "t",
   });
 
-  const view = buildView({
-    stateDir: env.stateDir,
-    workspaceId: env.workspaceId,
-    cwd: env.cwd,
-    alive: [{ name: "impl-1", paneId: "1-4", status: "working" }],
-  });
+  const view = board([live("impl-1", "1-4", "working")]);
 
   expect(view.agents).toEqual([
-    { key: "1", role: "implementer", agent: "impl-1", status: "working", run: running.id },
+    { key: "1", name: "Implementer", agent: "impl-1", status: "working", run: running.id },
   ]);
-  expect(view.active.map((r) => r.title)).toEqual(["implement · add-a-picker"]);
+  expect(view.active.map((r) => r.title)).toEqual(["Implement · add-a-picker"]);
   expect(view.active[0]!.detail).toBe("build · iteration 1/5");
-  expect(view.recent.map((r) => r.title)).toEqual(["review · worktree"]);
+  expect(view.recent.map((r) => r.title)).toEqual(["Review · worktree"]);
   expect(view.recent[0]!.detail).toBe("blocked · 1 finding(s) open");
 
   const text = renderWorkspace(view, "sent the review");
-  expect(text.split("\n")[0]).toBe(`${WORKSPACE_TAB} — ${env.cwd.split("/").at(-1)}`);
-  expect(text).toContain("1  implementer working");
-  expect(text).toContain("⚙ implement · add-a-picker");
-  expect(text).toContain("⚠ review · worktree");
+  expect(text.split("\n")[0]).toBe(`${CONTROL_PLANE} — ${rig.projectDir.split("/").at(-1)}`);
+  expect(text).toContain("1  Implementer");
+  expect(text).toContain("⚙ Implement · add-a-picker");
+  expect(text).toContain("⚠ Review · worktree");
   expect(text).not.toContain("not-mine");
+  expect(text).toContain("1-9 focus that agent");
   expect(text).toContain("s send the last review to the implementer");
   expect(text.trimEnd().split("\n").at(-1)).toBe("sent the review");
   // One screen: a normal session must not need scrolling.
   expect(text.split("\n").length).toBeLessThan(24);
 });
 
+test("every live agent of this Session's runs is listed, role or no role", () => {
+  const run = seed({ workflow: "review", primaryInput: "worktree", stepIds: ["review", "synthesize"] });
+  run.step("review").variants.push(
+    variant("rev-opus", "1-4", "review-worktree/review/claude-opus", "opus"),
+    variant("rev-pi", "1-5", "review-worktree/review/pi-gpt", "openai-codex/gpt-5.6-sol"),
+  );
+  run.step("synthesize").variants.push(variant("synth-1", "1-6", "review-worktree/synthesize"));
+  run.save();
+
+  // Nobody is registered: a reviewer is not a role, and it still has to be listed.
+  const view = board([
+    live("rev-opus", "1-4", "working"),
+    live("rev-pi", "1-5", "done"),
+    live("synth-1", "1-6"),
+  ]);
+
+  expect(view.agents.map((a) => [a.key, a.name, a.status])).toEqual([
+    ["1", "Review · Opus", "working"],
+    ["2", "Review · gpt-5.6-sol", "done"],
+    ["3", "Synthesize", "idle"],
+  ]);
+  // An agent herdr no longer has is not listed, and neither is one it puts elsewhere.
+  expect(board([live("rev-opus", "1-4")]).agents.map((a) => a.agent)).toEqual(["rev-opus"]);
+  expect(board([{ ...live("rev-opus", "1-4"), workspaceId: "9" }]).agents).toEqual([]);
+  expect(renderWorkspace(board([])).includes("1-9 focus that agent")).toBe(false);
+});
+
+test("a running run whose agents are all gone is abandoned, not active", () => {
+  const run = seed({ workflow: "review", primaryInput: "worktree", stepIds: ["review"] });
+  run.record.target_label = "worktree";
+  run.step("review").status = "running";
+  run.step("review").variants.push(variant("rev-1", "1-4", "review-worktree/review"));
+  run.save();
+
+  // Its agent is still alive: work in progress, whatever the clock says.
+  const busy = board([live("rev-1", "1-4", "working")], Date.now() + 3_600_000);
+  expect(busy.active.map((r) => r.title)).toEqual(["Review · worktree"]);
+  expect(busy.recent).toEqual([]);
+
+  // Nothing alive, and nothing written for a while: the runner is gone.
+  const gone = board([], Date.now() + 3_600_000);
+  expect(gone.active).toEqual([]);
+  expect(gone.recent.map((r) => [r.glyph, r.detail])).toEqual([["⚠", "abandoned"]]);
+  expect(renderWorkspace(gone)).toContain("⚠ Review · worktree");
+
+  // A run that has only just been created is not abandoned, it is starting.
+  expect(board([]).active.map((r) => r.title)).toEqual(["Review · worktree"]);
+});
+
 test("a run waiting on the human says so on the board", () => {
-  const env = rig.pluginEnv();
-  const run = new RunStore(env.stateDir).create({
-    workflow: "plan",
-    cwd: env.cwd,
-    workspace: env.workspaceId,
-    inputs: { goal: "g" },
-    inputSources: { goal: "asked" },
-    stepIds: ["grill", "next"],
-    maxIterations: 1,
-    primaryInput: "add-a-picker",
-  });
+  const run = seed({ workflow: "plan", primaryInput: "add-a-picker", stepIds: ["grill", "next"] });
   run.record.awaiting = "next";
   run.save();
 
-  const view = buildView({ stateDir: env.stateDir, workspaceId: env.workspaceId, cwd: env.cwd, alive: [] });
+  const view = board([]);
 
   expect(view.active[0]!.glyph).toBe("⚠");
   expect(view.active[0]!.detail).toBe("next — your turn");
@@ -337,11 +411,10 @@ test("a run waiting on the human says so on the board", () => {
 });
 
 test("an empty state dir renders the board rather than nothing", () => {
-  const env = rig.pluginEnv();
-  mkdirSync(join(env.stateDir, "runs"), { recursive: true });
-  writeFileSync(join(env.stateDir, "runs", "half-written"), "not a run dir");
+  mkdirSync(join(rig.stateDir, "runs"), { recursive: true });
+  writeFileSync(join(rig.stateDir, "runs", "half-written"), "not a run dir");
 
-  const view = buildView({ stateDir: env.stateDir, workspaceId: env.workspaceId, cwd: env.cwd, alive: [] });
+  const view = board([]);
   const text = renderWorkspace(view);
 
   expect(view.active).toEqual([]);

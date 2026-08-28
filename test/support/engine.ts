@@ -87,6 +87,7 @@ export async function runWorkflow(
     outputPollMs?: number;
     prompts?: EnginePrompts;
     env?: Record<string, string>;
+    workspaceLabel?: string;
   } = {},
 ): Promise<RanRun> {
   const env = rig.pluginEnv(opts.env);
@@ -113,7 +114,9 @@ export async function runWorkflow(
   const run = new RunStore(env.stateDir).create({
     workflow: wf.name,
     cwd: env.cwd,
+    session: env.socketPath,
     workspace: env.workspaceId,
+    workspaceLabel: opts.workspaceLabel ?? "test",
     inputs: merged,
     inputSources: sources,
     stepIds: wf.steps.map((s) => s.id),

@@ -26,6 +26,11 @@ export interface TabInfo {
   label: string;
 }
 
+export interface WorkspaceInfo {
+  workspaceId: string;
+  label: string;
+}
+
 export interface PaneInfo {
   paneId: string;
   tabId: string;
@@ -36,6 +41,8 @@ export interface PaneInfo {
 export interface AgentInfo {
   name: string;
   paneId: string;
+  /** Which workspace herdr says it is in; scoping never trusts a record over this. */
+  workspaceId: string | null;
   status: AgentStatus;
 }
 
@@ -119,6 +126,12 @@ export class Herdr {
 
   async tabRename(tabId: string, label: string): Promise<void> {
     await this.cli(["tab", "rename", tabId, label]);
+  }
+
+  async workspaceList(): Promise<WorkspaceInfo[]> {
+    const res = await this.cli(["workspace", "list"]);
+    const spaces = res?.result?.workspaces ?? [];
+    return spaces.map((w: any) => ({ workspaceId: w.workspace_id ?? "", label: w.label ?? "" }));
   }
 
   async tabList(): Promise<TabInfo[]> {
@@ -231,6 +244,7 @@ export class Herdr {
       .map((a: any) => ({
         name: a.name as string,
         paneId: (a.pane_id as string) ?? "",
+        workspaceId: (a.workspace_id as string) ?? null,
         status: (a.agent_status as AgentStatus) ?? "unknown",
       }));
   }

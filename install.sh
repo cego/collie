@@ -27,7 +27,10 @@ rm -f bin/herdr-workflows.new
 if command -v bun >/dev/null 2>&1; then
   echo "no release asset at ${BASE}/${ASSET}; building from source with bun"
   bun install --frozen-lockfile >/dev/null
-  bun build --compile --outfile bin/herdr-workflows src/main.ts >/dev/null
+  # Build beside the binary and rename over it: replacing a running runner's own
+  # file in place kills the process executing it.
+  bun build --compile --outfile bin/herdr-workflows.new src/main.ts >/dev/null
+  mv -f bin/herdr-workflows.new bin/herdr-workflows
   exit 0
 fi
 
