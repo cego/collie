@@ -125,8 +125,8 @@ test("a fresh reviewer choice gets its own tab and its findings prompt the follo
   const labels = rig.calls().filter((c) => c.cmd === "tab create").map((c) => c.argv!.at(-2));
   expect(labels).toEqual(["⚙ choose · g", "⚙ choose · g"]);
 
-  // The strip is fifteen percent of a tab, so a menu takes the whole tab while it
-  // is open and gives it back afterwards — once per time the menu was shown.
+  // The run's own pane is the smaller half of the board's tab, so a menu takes the
+  // whole tab while it is open and gives it back afterwards — once per menu shown.
   const zooms = rig.calls().filter((c) => c.cmd === "pane zoom").map((c) => c.argv!.slice(2));
   expect(zooms.length).toBeGreaterThan(0);
   expect(zooms.length % 2).toBe(0);

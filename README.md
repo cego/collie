@@ -38,10 +38,16 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
 3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only
    for what could not be inferred, and shown one confirm line. Two inputs offer a menu
    instead of a guess: `implement`'s work source, and `review`'s target.
-4. The workspace's **`workflows` tab** opens — always the first tab, so `prefix+1`
-   lands on it — and the run's own pane joins it underneath the board. That pane is
-   where the run reports and where every menu it shows you appears; see "The
-   workflows tab" below.
+4. The workspace's **`workflows` tab** opens, and it is always the workspace's *first*
+   tab, so `prefix+1` lands on it — the first run creates it, every run after it reuses
+   it and puts it back at the front. It lists the live agents this session has by role
+   (`implementer`, `planner`) with a key that focuses each one, the runs going on now
+   with the step and iteration each is at, and the runs that have finished with their
+   outcome. The run's own pane joins it underneath that board, and **every menu a run
+   asks you about appears there** — the runner toasts and jumps you to the tab before it
+   asks, so a menu is never left unseen in a tab you are not looking at. Deleting the
+   tab is harmless: it drives nothing and remembers nothing, and the next run opens it
+   again. See "The workflows tab" below.
 5. The run's own tabs hold agents and nothing else: one tab per step, a step's
    parallel variants side by side in it with an even share each, a step that
    reconciles them (`fan_in:`) underneath them in the same tab, and a step that
@@ -77,6 +83,10 @@ Finished
 
 1-9 focus that agent · p run a workflow · u resume · f fork · s send the last review to the implementer · q close this tab
 ```
+
+`p`, `u` and `f` open the same picker the keybindings do, in this tab and for this
+workspace's repo; `1`–`9` focus that agent's pane; `s` hands the newest review in this
+session to a live implementer; `q` closes the tab.
 
 Every menu a run asks you about renders in that run's pane in this tab, and the runner
 toasts and brings the tab to the front before it asks, so a menu is never left unseen

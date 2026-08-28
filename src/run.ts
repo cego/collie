@@ -23,11 +23,14 @@ export interface VariantRecord {
   error: string | null;
 }
 
-/** A prompt this Run handed to another Run's live agent. */
+/** A prompt one Run handed to another Run's live agent. Both Runs record it. */
 export interface HandoffRecord {
-  /** The role it went to: `implementer`, `planner`. */
-  to: string;
+  direction: "sent" | "received";
+  /** The role at the other end: `implementer`, `planner`. */
+  role: string;
   agent: string;
+  /** The other Run in the exchange. */
+  run: string;
   at: string;
   note: string;
 }

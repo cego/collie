@@ -283,6 +283,7 @@ export async function workspaceFlow(herdr: Herdr, env: PluginEnv): Promise<numbe
   };
   startKeyboard();
   let view = await load(session);
+  const open = (mode: Mode) => openMode(herdr, env, mode);
   let note: string | null = null;
   let drawn = "";
   let read = Date.now();
@@ -299,7 +300,7 @@ export async function workspaceFlow(herdr: Herdr, env: PluginEnv): Promise<numbe
         releaseKeyboard();
         return 0;
       }
-      note = await act(session, view, key);
+      note = await act(session, view, key, open);
       view = await load(session);
       read = Date.now();
       continue;
@@ -312,8 +313,30 @@ export async function workspaceFlow(herdr: Herdr, env: PluginEnv): Promise<numbe
   }
 }
 
+/**
+ * The picker, opened in the board's own pane rather than as a popup: a popup lands
+ * on whatever pane herdr has focused, which is rarely the workspace this board is
+ * for, and the mode and cwd have to be this board's.
+ */
+async function openMode(herdr: Herdr, env: PluginEnv, mode: Mode): Promise<void> {
+  await herdr.pluginPaneOpen({
+    entrypoint: "picker",
+    placement: "split",
+    targetPaneId: env.paneId ?? undefined,
+    direction: "down",
+    cwd: env.cwd,
+    env: { HERDR_WORKFLOWS_MODE: mode, HERDR_WORKFLOWS_CWD: env.cwd },
+    focus: true,
+  });
+}
+
 /** What one keypress does. Returns the line to show under the lists, if any. */
-async function act(session: Session, view: WorkspaceView, key: string): Promise<string | null> {
+async function act(
+  session: Session,
+  view: WorkspaceView,
+  key: string,
+  open: (mode: Mode) => Promise<void>,
+): Promise<string | null> {
   if (/^[1-9]$/.test(key)) {
     const agent = agentForKey(view, key);
     if (!agent) return null;
@@ -324,13 +347,14 @@ async function act(session: Session, view: WorkspaceView, key: string): Promise<
       return `${agent.agent}: ${(e as Error).message}`;
     }
   }
-  const actions: Record<string, string> = { p: "pick", u: "resume", f: "fork" };
-  if (actions[key]) {
+  const modes: Record<string, Mode> = { p: "pick", u: "resume", f: "fork" };
+  const mode = modes[key];
+  if (mode) {
     try {
-      await session.herdr.actionInvoke(actions[key]!);
+      await open(mode);
       return null;
     } catch (e) {
-      return `${actions[key]}: ${(e as Error).message}`;
+      return `${mode}: ${(e as Error).message}`;
     }
   }
   if (key === "s") return (await sendReviewToImplementer(session)).message;

@@ -239,11 +239,6 @@ export class Herdr {
     await this.cli(["agent", "focus", target]);
   }
 
-  /** Runs one of this plugin's own actions, which is how the tab offers them. */
-  async actionInvoke(actionId: string): Promise<void> {
-    await this.cli(["plugin", "action", "invoke", actionId, "--plugin", PLUGIN_ID]);
-  }
-
   async agentStatus(target: string): Promise<AgentStatus> {
     const res = await this.cli(["agent", "get", target]);
     return (res?.result?.agent?.agent_status as AgentStatus) ?? "unknown";

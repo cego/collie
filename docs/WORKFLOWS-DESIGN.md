@@ -114,7 +114,7 @@ agent (`agent: build`) for build/architecture/simplify/fix.
    scoped to the changed area; apply `Strong` candidates only, top first, re-scan, max 2
    passes; report saved to `{{run.dir}}`, never opened; others → `deferred`.
 3. `simplify` — `/code-simplification`, behaviour-preserving, tests must stay green.
-4. `review` — `use: review`, `fresh: true`, parallel variants opus/xhigh + sonnet/xhigh.
+4. `review` — `use: review`, `fresh: true`, parallel variants opus/medium + sonnet/xhigh.
    The embedding step also carries `model: default` at `effort: medium`, which the named
    variants override and `synthesize` — which names none — takes.
 5. `fix` — `repeat: {from: review.synthesize}`, max 5: apply the one synthesised review's
