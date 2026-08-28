@@ -738,3 +738,108 @@ Open, and worth knowing:
 - **The baseline's opus reviewer moved to `effort: medium`** (`acfd896`, another session)
   while this ticket was in flight. Four assertions naming the baseline's own variants were
   following the old `xhigh` and were updated here; nothing in this ticket depends on it.
+
+
+## Ticket 16, second pass — the board was showing the wrong thing
+
+Three faults, all found by mk looking at a real workspace (`wX`, label `mr-2367`) rather
+than at a test.
+
+**The Agents list was a register dump, not the agents.** Only the head of an `agent:`
+group is ever registered, so a `review` run — which has no group at all — put nobody on
+the board: the tab read `(none live here)` while herdr had two live reviewers in that
+workspace, and the `1`–`9` keys had nothing to act on. The board now takes its agents from
+the **run records** — every variant of every step of every run in this Session — and keeps
+the ones herdr still has. The register is only how an agent gets *called*: an agent with a
+role shows its role and sorts first, because those are the ones a hand-off can name;
+everything else shows its step and model (`Review · Opus`, `Review · gpt-5.6-sol`,
+`Synthesize`). Roles label agents; they never decide which appear.
+
+**Runs that nobody was running still read as running.** Three `Review · worktree … iteration
+1/5` entries sat under Runs from runners that had long since died. Nothing marks such a run
+— the process that would have is the one that died — so the board now decides for itself:
+a run still marked `running`, with no agent of its own left alive and nothing written to
+`run.json` for a minute, is **abandoned** and shows under Finished as `⚠ abandoned`. The
+minute of quiet is what keeps a run that has just been created out of it, and a run whose
+agents are alive stays active however long it has been thinking.
+
+**The key line offered keys that did nothing.** `1-9 focus that agent` is printed only when
+there is an agent to focus.
+
+### And the scoping the board judges "this Session" by
+
+mk's amendment: the board is scoped to its own workspace within the current herdr session,
+keyed by (session, workspace, cwd), re-validated live because ids compact. That is now:
+
+- **Session** is the herdr socket path (`HERDR_SOCKET_PATH`). herdr 0.8.2 exposes no session
+  id — `api snapshot` has none and `session list` names sessions by their socket — so the
+  socket is the identity available, and it is exactly as stable as the session.
+- **Workspace** is the id *and* the label the run was created under. Ids compact; a label
+  that no longer matches the live workspace means a different workspace is wearing the id,
+  and the run is not this one's.
+- A run recorded against **another** workspace never appears, even for the same repo.
+- A run recorded **before** workspaces were noted (`workspace: null`) appears only if one of
+  its agents is alive in this workspace, which is the only proof available for it. That is
+  what removed the three stale rows in `wX`: nothing alive, no recorded workspace, so not
+  this board's business.
+- Agents are filtered by the workspace **herdr** reports for them, never by what a run
+  record claims.
+
+`run.json` gained `session` and `workspace_label`; the register's file name is now hashed
+from session + workspace + cwd, and an entry records the workspace it was started in.
+
+**Verified live in `wX`, on the workspace that produced the report.** With the board
+restarted on the new binary: Agents listed `1 Review · Opus idle`, `2 Review · gpt-5.6-sol
+idle`, `3 Synthesize idle`, all three from one run's record and none of them registered;
+Runs read `(none running)`; Finished read `✓ Review · !2367 done`; and the three stale rows
+were gone. Pressing `3` moved the focus to the synthesiser's pane and printed `focused
+Synthesize (review-2367-synthesize-r23)`; pressing `2` moved it to the pi reviewer's. The
+focus keys work.
+
+**Two other things fixed on the way.**
+
+*A stray NUL byte in `src/registry.ts`* — written by a heredoc that mangled
+`${a} ${b}` when the file was first created — made git treat the file as binary (the commit
+that added it reads `Bin 0 -> 3154 bytes`). Harmless to behaviour, since it sat inside a
+hash input, and gone now.
+
+*The build no longer kills a running run.* `bun build --compile --outfile bin/herdr-workflows`
+writes the file in place, and a runner executing it dies when it is replaced — which is how
+the first live smoke lost its run. `bun run build` and `install.sh` now compile to
+`bin/herdr-workflows.new` and `mv` it over, so a running process keeps the inode it started
+with. That is what made it safe to rebuild while mk's own review run was live in `wX`.
+
+
+# Ticket 18 — plain names
+
+Every label is now the word a human would say, Capitalized.
+
+**Tabs.** `<glyph> <name>`: the workflow for a run's own first tab, the step for every tab
+after it. A full `implement` run is `⚙ Implement` and `⚙ Review`; a standalone review is
+`⚙ Review`. No target, no slug, no run id, no harness, no model. The target comes back only
+to break a collision: before creating a tab the runner asks `tab list` whether the plain
+name is already on a tab in this workspace, and if it is, the new one takes ` · <target>`.
+Each tab remembers the name it was given, so the glyph moves without the name changing.
+
+**Panes.** A pane alone in its tab has no label at all — the tab already said it, which is
+why a full `implement` run's implementer pane is now unlabelled through `build`,
+`architecture`, `simplify`, `fix` and `mr` instead of being renamed four times. Parallel
+variants take the model with the provider stripped (`Opus`, `Sonnet`, `gpt-5.6-sol`), or the
+harness where the model is `default`. A pane that shares a tab with the panes it came from
+takes its step (`Synthesize` — and the `use:` prefix on an embedded step's id is bookkeeping,
+so `review.synthesize` still reads `Synthesize`). A run's own pane on the Control Plane
+takes the workflow, never the run: slugs and agent names stay internal.
+
+**Capitalization is a display rule and nothing else.** `displayName` capitalizes a token
+that is a word (letters and hyphens) and leaves anything else alone, so `implement` reads
+`Implement`, `gpt-5.6-sol` stays `gpt-5.6-sol`, and a collision target keeps whatever it
+actually is — a branch prettied up is no longer that branch's name. Workflow ids, file names,
+step ids, run slugs and agent names are untouched.
+
+**A finished tab still counts as a collision.** The check is "is that name on a tab in this
+workspace", not "is another run live": a finished run's tab is still open and still in the
+way, so the second run of the same workflow is disambiguated even when the first has ended.
+
+Also gone: the runner no longer renames the tab it was opened in. That tab exists for the
+seconds before the pane moves onto the Control Plane, and naming it put a run's name on a
+tab nobody ever sees.
