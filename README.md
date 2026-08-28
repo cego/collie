@@ -40,14 +40,14 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
    instead of a guess: `implement`'s work source, and `review`'s target.
 4. The workspace's **Control Plane** tab opens, and it is always the workspace's *first*
    tab, so `prefix+1` lands on it — the first run creates it, every run after it reuses
-   it and puts it back at the front. It lists the live agents this session has by role
-   (`implementer`, `planner`) with a key that focuses each one, the runs going on now
-   with the step and iteration each is at, and the runs that have finished with their
-   outcome. The run's own pane joins it underneath that board, and **every menu a run
-   asks you about appears there** — the runner toasts and jumps you to the tab before it
-   asks, so a menu is never left unseen in a tab you are not looking at. Deleting the
-   tab is harmless: it drives nothing and remembers nothing, and the next run opens it
-   again. See "The Control Plane" below.
+   it and puts it back at the front. It is the **only pane this plugin keeps open**: the
+   run itself is driven by a background process with no pane at all, which reports into
+   its run directory. The board lists the live agents this session has, the runs going on
+   now with the step and iteration each is at and the last thing each said, and the runs
+   that have finished with their outcome. **Every question a run asks appears there**,
+   under the run asking it — the driver toasts and jumps you to the tab first, so a
+   question is never left unseen. Deleting the tab is harmless: it drives nothing and
+   remembers nothing, and the next run opens it again. See "The Control Plane" below.
 5. The run's own tabs hold agents and nothing else: one tab per step, a step's
    parallel variants side by side in it with an even share each, a step that
    reconciles them (`fan_in:`) underneath them in the same tab, and a step that
@@ -98,8 +98,14 @@ there pretending to work.
 
 `p`, `u` and `f` open the same picker the keybindings do, in this tab and for this
 workspace's repo; `1`–`9` focus that agent's pane; `s` hands the newest review in this
-session to a live implementer; `q` closes the tab. The focus keys are offered only when
-there is an agent to focus.
+session to a live implementer; `l` opens a run's `runner.log` in a temporary pane; `k`
+stops the newest run — closing a pane no longer does that, because the run has none; `q`
+closes the tab. Keys are offered only when there is something to act on.
+
+When a run asks you something, its options appear indented under its row and the keys
+become that question's — `↑↓`, Enter, Esc, or just type where it wants text. The question
+lives in the run's directory, so closing this tab, reopening it, or resuming later shows
+you the same question again rather than losing it.
 
 The board shows this session's work and nothing else: one herdr session, one workspace,
 one repo. Another workspace's runs never appear, even for the same repo, and a workspace
@@ -129,8 +135,12 @@ unattended half of `architecture`. Any of them is a fork away from being yours.
 | `cego.workflows.resume` | Popup picker of runs with unfinished steps; finished steps are skipped |
 | `cego.workflows.fork` | Copy a workflow or persona into your layer or this project's |
 
-Each action opens a pane, because that is where a terminal is: `picker` (popup) does
-the choosing, `runner` (tab) is the run's status pane and drives the run.
+Each action opens the `picker` popup, because that is where a terminal is. The run itself
+is not a pane: the picker starts a detached `drive` process that outlives it and writes
+what it is doing into the run directory (`progress.jsonl`, `runner.log`), and the Control
+Plane is what renders that. A run therefore survives the picker closing, the Control Plane
+closing, and the terminal being detached; `resume` reads a pid file and refuses to start a
+second driver for a run something is already driving.
 
 ## Layers
 

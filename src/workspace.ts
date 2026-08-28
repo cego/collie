@@ -289,6 +289,7 @@ export function renderWorkspace(
         "f fork",
         "s send the last review to the implementer",
         "l open a run's log",
+        "k stop the newest run",
         "q close this tab",
       ];
 

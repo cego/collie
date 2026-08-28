@@ -125,15 +125,9 @@ test("a fresh reviewer choice gets its own tab and its findings prompt the follo
   const labels = rig.calls().filter((c) => c.cmd === "tab create").map((c) => c.argv!.at(-2));
   expect(labels).toEqual(["⚙ Choose", "⚙ Next"]);
 
-  // The run's own pane is the smaller half of the board's tab, so a menu takes the
-  // whole tab while it is open and gives it back afterwards — once per menu shown.
-  const zooms = rig.calls().filter((c) => c.cmd === "pane zoom").map((c) => c.argv!.slice(2));
-  expect(zooms.length).toBeGreaterThan(0);
-  expect(zooms.length % 2).toBe(0);
-  for (const [i, z] of zooms.entries()) {
-    expect(z[0]).toBe("1-0");
-    expect(z[1]).toBe(i % 2 === 0 ? "--on" : "--off");
-  }
+  // A menu zooms nothing: the run has no pane, and the Control Plane renders the
+  // question inline under the run it belongs to.
+  expect(rig.cmds()).not.toContain("pane zoom");
 
   const start = rig.calls().filter((c) => c.cmd === "agent start").at(-1)!.argv!;
   expect(start.slice(7)).toEqual([

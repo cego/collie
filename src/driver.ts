@@ -108,21 +108,39 @@ export function clearPid(dir: string): void {
   rmSync(join(dir, RUNNER_PID), { force: true });
 }
 
-/**
- * Whether something is still driving this run. A pid file left behind by a killed
- * driver is not a driver, so the process is asked as well as the file.
- */
-export function driverAlive(dir: string): boolean {
+/** The driver's pid, if a live one is recorded for this run. */
+export function driverPid(dir: string): number | null {
   const path = join(dir, RUNNER_PID);
-  if (!existsSync(path)) return false;
+  if (!existsSync(path)) return null;
   const pid = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
-  if (!Number.isInteger(pid) || pid <= 0) return false;
+  if (!Number.isInteger(pid) || pid <= 0) return null;
   try {
     process.kill(pid, 0);
-    return true;
+    return pid;
+  } catch {
+    // A pid file left behind by a killed driver is not a driver.
+    return null;
+  }
+}
+
+export function driverAlive(dir: string): boolean {
+  return driverPid(dir) !== null;
+}
+
+/**
+ * Stops a run. Closing a pane used to be how you did this; a detached driver has
+ * no pane to close, so the board asks it to stop and the pid file goes with it.
+ */
+export function stopDriver(dir: string): boolean {
+  const pid = driverPid(dir);
+  if (pid === null) return false;
+  try {
+    process.kill(pid, "SIGTERM");
   } catch {
     return false;
   }
+  clearPid(dir);
+  return true;
 }
 
 /**

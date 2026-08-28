@@ -1,6 +1,7 @@
 // What each plugin action does. Actions have no tty, so they only open a pane;
 // the interactive work happens in the `picker` and `runner` pane entrypoints.
 
+import { spawn } from "node:child_process";
 import { loadDefaults } from "./config";
 import {
   DefinitionError,
@@ -44,6 +45,7 @@ import {
   lastProgress,
   readChoice,
   RUNNER_LOG,
+  stopDriver,
   writePid,
   type PendingChoice,
 } from "./driver";
@@ -170,21 +172,26 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
 
 /**
  * The run driver, detached: it outlives this pane, because the picker closes the
- * moment it has started one and a run takes hours. `nohup` is what keeps the
- * hang-up that closing a pane sends from taking the run with it.
+ * moment it has started one and a run takes hours.
+ *
+ * `detached` is the load-bearing word. Closing a pane sends SIGHUP to the whole
+ * process group, and `nohup` protects only the process it wraps — the driver's own
+ * `herdr` calls died with `exit 129` the first time this was tried. A session of its
+ * own is what actually takes the driver out of the terminal's reach.
  */
 export function spawnDriver(env: PluginEnv, runId: string, cwd: string): void {
-  const command = (process.env.HERDR_WORKFLOWS_DRIVER ?? `${env.pluginRoot}/bin/herdr-workflows`).split(" ");
-  Bun.spawn(["nohup", ...command, "drive"], {
+  const [command = "", ...rest] = (
+    process.env.HERDR_WORKFLOWS_DRIVER ?? `${env.pluginRoot}/bin/herdr-workflows`
+  ).split(" ");
+  spawn(command, [...rest, "drive"], {
     cwd,
     env: {
       ...process.env,
       HERDR_WORKFLOWS_RUN: runId,
       HERDR_WORKFLOWS_CWD: cwd,
     } as Record<string, string>,
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
+    detached: true,
+    stdio: "ignore",
   }).unref();
 }
 
@@ -489,7 +496,19 @@ async function act(
   }
   if (key === "s") return (await sendReviewToImplementer(session)).message;
   if (key === "l") return await openLog(session, view);
+  if (key === "k") return stopRun(view);
   return null;
+}
+
+/**
+ * Stops the newest run. A run used to stop when you closed its pane; the driver has
+ * no pane now, so this replaces that. Its agents are left where they are: their
+ * panes are the transcript of what happened.
+ */
+function stopRun(view: WorkspaceView): string {
+  const run = view.active[0];
+  if (!run) return "nothing running here to stop";
+  return stopDriver(run.dir) ? `stopped ${run.title}` : `${run.title} has no driver to stop`;
 }
 
 /**
@@ -497,7 +516,7 @@ async function act(
  * this is the only place its detail can be read, and a temporary pane is the
  * cheapest way to read it without leaving the board.
  */
-async function openLog(session: Session, view: WorkspaceView): Promise<string | null> {
+export async function openLog(session: Session, view: WorkspaceView): Promise<string | null> {
   const run = view.active[0] ?? view.recent[0];
   if (!run) return "no run here to open a log for";
   const path = `${run.dir}/${RUNNER_LOG}`;

@@ -47,8 +47,13 @@ another workspace, or another checkout, never see them.
 
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
-**Control Plane** — The tab a Session keeps as its control surface, one per workspace: live
-agents by role, active Runs with their step, this Session's finished Runs, and quick
-actions. It is a view over the run dirs and the register, always the workspace's first
-tab, and holds no state of its own; each Run's own pane sits in it, which is where that
-Run reports and where its Choice menus appear.
+**Control Plane** — The tab a Session keeps as its control surface, one per workspace, and
+the only pane this plugin keeps open: live agents, active Runs with their step and last
+line, this Session's finished Runs, quick actions, and any question a Run is waiting on,
+rendered under that Run. It is a view over the run dirs and the register, always the
+workspace's first tab, and holds no state of its own.
+
+**Driver** — The process that executes a Run. It has no pane: it is detached from whatever
+started it, writes its progress and any failure into the Run directory, and asks its
+questions through files there. A pid file says whether one is still running, so `resume`
+never starts a second.

@@ -193,13 +193,14 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
   expect(rightSplits.length - sideBySide.length).toBe(3);
   // Parallel panes say which model they are, and nothing else does: the run's own
   // pane on the board says the workflow, and no pane anywhere names the run.
-  const renames = rig.calls().filter((c) => c.cmd === "pane rename");
-  const agentPanes = renames.filter((c) => c.argv![2] !== "1-0").map((c) => c.argv!.at(-1));
-  expect(agentPanes).toContain("Opus");
-  expect(agentPanes).toContain("Sonnet");
-  expect(agentPanes).toContain("Synthesize");
-  expect(renames.some((c) => c.argv!.at(-1)!.includes("add-picker"))).toBe(false);
-  expect(renames.find((c) => c.argv![2] === "1-0")!.argv!.at(-1)).toBe("Implement");
+  const renames = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1));
+  expect(renames).toContain("Opus");
+  expect(renames).toContain("Sonnet");
+  expect(renames).toContain("Synthesize");
+  // Nothing names the run: the implementer's pane is unlabelled and the run has no
+  // pane of its own, so the only other rename is the board's.
+  expect(renames.some((n) => n!.includes("add-picker"))).toBe(false);
+  expect(renames[0]).toBe("Control Plane");
 
   const reviewer = join(run.dir, "personas", "reviewer.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
@@ -479,11 +480,8 @@ test("build, architecture, simplify and fix are one unlabelled pane in one tab",
   // Two tabs for the whole run: the implementer's and the reviewers'.
   expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(2);
 
-  // The runner's own pane is on the board, and never becomes an agent's pane.
-  const moved = rig.calls().filter((c) => c.cmd === "pane move");
-  expect(moved).toHaveLength(1);
-  expect(moved[0]!.argv![2]).toBe("1-0");
-  expect(panes[0]).not.toBe("1-0");
+  // The run has no pane of its own to move, swap or name `status`.
+  for (const cmd of ["pane move", "pane swap"]) expect(rig.cmds()).not.toContain(cmd);
   expect(
     rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1)),
   ).not.toContain("status");

@@ -929,3 +929,81 @@ from mk's user-layer `review.md`, a full copy of the old baseline that still say
 diff <iid>`; the claude reviewer coped by `cd`-ing into a checkout it found under the group
 folder. The baseline's new wording is verified by transcript, and ticket 17 is what replaces
 that copy with an `extends:` stub.
+
+
+# Ticket 20 — the runner is headless
+
+A run no longer has a pane. `pick` (or `resume`) starts a **detached driver** —
+`herdr-workflows drive` with `HERDR_WORKFLOWS_RUN` set — and closes; the driver writes what
+it is doing into the run dir and asks its questions there, and the Control Plane is the only
+pane this plugin keeps open in a workspace. A `review` run is therefore one tab of two agent
+panes plus the board, and nothing else.
+
+## What the run dir carries now
+
+- `progress.jsonl` — one JSON line per thing the driver said, which is what the board reads.
+- `runner.log` — the same lines as plain text, plus the stack of anything that went wrong.
+  `l` on the board opens it in a temporary pane (`less +G`).
+- `runner.pid` — who is driving. `resume` filters out runs something is already driving and
+  refuses to start a second, and a pid file left by a dead driver is not a driver: the
+  process is asked, not just the file.
+- `choice.json` / `choice-answer.json` — the question a Choice step is waiting on and the
+  answer it is waiting for.
+
+## Questions, without a terminal to ask in
+
+A Choice step writes its menu into `choice.json` and polls for an answer. The Control Plane
+renders it **indented under the run asking it**, toasts `<run> needs you` and brings its own
+tab to the front, and while a question is up the board's keys are that question's — `↑↓`,
+Enter, Esc, or typed characters for a question that wants text. The answer goes back through
+`choice-answer.json` and the driver carries on.
+
+Because the question is a file, closing the Control Plane and reopening it — or resuming
+later — renders the same question again rather than losing it. An answer carries the
+question's id, so an answer to an earlier question cannot settle a later one. An unanswered
+question is bounded by the same `handoff_timeout_ms` as every other wait for a human: the
+step is left unfinished and the run stays resumable, which is what Esc already did.
+
+## `detached`, and why `nohup` was not enough
+
+The first attempt wrapped the driver in `nohup`. The run then started its agents but never
+got a Control Plane tab, and the run log said why:
+`workspace tab: herdr tab list failed (exit 129)`. 129 is 128 + SIGHUP — closing the picker
+pane sent SIGHUP to the whole process group, and `nohup` protects only the process it wraps,
+not the `herdr` commands that process spawns. The driver now goes through
+`node:child_process` `spawn(..., { detached: true, stdio: "ignore" })`, which gives it a
+session of its own. Both behaviours were seen live, before and after.
+
+**And a run can now be stopped.** Closing a run's pane used to be how you stopped one, and
+there is no pane any more, so `k` sends SIGTERM to the newest run's driver and clears its pid
+file. Not in the ticket; leaving no way at all would have been a regression. Its agents are
+left where they are — their panes are the transcript of what happened.
+
+## Verified live
+
+In a workspace on the smoke worktree, started through the real picker:
+
+- **Exactly one plugin pane**: `Control Plane` at tab index 0 with one pane in it, and the
+  run's own tab `⚙ Review` holding `Opus` and `gpt-5.6-sol` and nothing else. No runner
+  pane, nothing moved, nothing swapped.
+- The picker pane closed the moment the run started and **the run carried on** — which is
+  the detachment, seen rather than argued.
+- The board showed the run's progress read out of `progress.jsonl`:
+  `⚙ Review · smoke-tab-16   review · iteration 1/5 · ▶ review (2 in parallel) — iteration 1`,
+  with both agents listed and keyed.
+- The earlier `nohup` attempt's orphaned driver was stopped by hand, and the board moved
+  that run to `⚠ Review · smoke-tab-16 abandoned` — the abandoned rule from the 16 fix,
+  also seen live.
+
+Open, and worth knowing:
+
+- **`k` targets the newest run**, like `l`. With several runs going in one workspace there is
+  no way to pick which; a selectable run list is the obvious next step and is not in.
+- **The driver's own crash is only in `runner.log`.** It toasts and marks the run failed, but
+  if it dies without running its own error path — killed, or out of memory — the run is
+  `⚠ abandoned` on the board after a minute and the log stops mid-sentence.
+- **A stopped driver leaves its agents running.** That is deliberate (the panes are the
+  evidence) but it means `k` frees the run, not the machine.
+- **Nothing reads `progress.jsonl` back on resume.** A resumed run appends to it, so the file
+  is the whole history across drivers, which is right; but the board only ever shows the last
+  line of it.

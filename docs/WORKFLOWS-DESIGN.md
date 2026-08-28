@@ -70,12 +70,19 @@ reconciles, so the synthesis sits under the reviews it came from. A Step
 that continues an earlier agent (`agent: <step>`) opens no tab and no pane — it renames
 the pane it inherited to its own id. Run tabs hold agents and nothing else.
 
-The runner's own pane is not in them. One tab per workspace, labelled `Control Plane`, holds
-the Session's board, and each Run's own pane moves in underneath it (40/60): that is
-where the Run reports and where every Choice menu it opens appears, zoomed while it is
-open. The tab is created by the first Run in the workspace, found by its label and
-reused by every Run after it, and moved to the front of the workspace on every Run start
-so it is always `prefix+1`. Closing it loses nothing — the next Run recreates it.
+A Run has no pane of its own at all. It is driven by a detached process with no terminal,
+which writes its progress into the Run directory (`progress.jsonl`, `runner.log`) and asks
+its questions there (`choice.json` / `choice-answer.json`). One tab per workspace, labelled
+`Control Plane`, holds the Session's board — the only pane this plugin keeps open — and it
+renders both: a Run's row carries its step, iteration and last line, and a pending question
+is rendered under that row with the board's keys temporarily belonging to it. The tab is
+created by the first Run in the workspace, found by its label, reused by every Run after
+it, and moved to the front of the workspace on every Run start so it is always `prefix+1`.
+Closing it loses nothing — the question is a file, and the next Run recreates the tab.
+
+A Run whose driver is gone (nothing on its pid file, no agent of its own alive, and quiet
+for a minute) is `⚠ abandoned` on the board rather than shown as work in progress, and
+`resume` refuses to start a second driver for one that is still alive.
 
 Labels are the word a human would say. A tab reads `<glyph> <name>`, where the name is
 the workflow for a run's own first tab and the step for every tab after it — `⚙ Implement`,

@@ -11,7 +11,8 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `harness.ts` | Per-harness start, model flag, effort flag and persona injection |
 | `inputs.ts` | Input inference from branch, cwd, earlier runs and glab |
 | `engine.ts` | Tabs, agents, prompts, waits, gates, choices and the fix loop |
-| `workspace.ts` | The `workflows` tab: what the Session's board shows, and how it reads |
+| `workspace.ts` | The Control Plane: what the Session's board shows, and how it reads |
+| `driver.ts` | The run dir as the channel to a detached driver: progress, pid and questions |
 | `registry.ts` | Which long-lived agents this Session still has, per workspace + repo |
 | `handoff.ts` | Giving one Run's result to another Run's live agent |
 | `output.ts` | The Output and Synthesis schemas, `review.md`, and which findings the loop still owns |
