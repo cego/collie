@@ -1,10 +1,9 @@
 ---
 name: review
 title: review — an MR, a branch diff, or the working tree
-description: You pick the target — an MR, a branch diff or the working tree — and both review skills write one verdict. Posts to GitLab only when asked.
+description: You pick the target — an MR, a branch diff or the working tree — two models review it, one review comes out, and posting it to the merge request is your call.
 inputs:
   target: diff-target
-  post: flag
 steps:
   - id: review
     persona: reviewer
@@ -12,6 +11,18 @@ steps:
     parallel:
       - { harness: claude, model: opus, effort: xhigh }
       - { harness: claude, model: sonnet, effort: xhigh }
+  - id: synthesize
+    persona: reviewer
+    fan_in: review
+    output: synthesized.json
+  - id: post
+    standalone: true
+    requires: [mr-target, gitlab]
+    choices:
+      - title: Post to MR
+        post: true
+      - title: Don't post
+        stop: true
 ---
 Review target: {{inputs.target}}
 Project root: {{cwd}}
@@ -30,6 +41,8 @@ The spec above is a directory when this review has one: read `SPEC.md` and the t
 in `issues/` and hold the change to them. When it is empty there is no spec, and the
 spec axis says exactly that.
 
+## review
+
 Review against the project's own standards too — `CLAUDE.md`, `CONTEXT.md`, `README.md`
 and the code around the change.
 
@@ -42,5 +55,35 @@ can, raise it with a `"rebuttal"` saying why that reason does not hold; that put
 in front of the implementer. If you cannot, leave it alone — it is the human's call now,
 not another round's.
 
-Post to GitLab: {{inputs.post}} — only if that is `true` may you post a review comment
-with `glab`. Otherwise change nothing outside your Output file.
+Change nothing outside your Output file.
+
+## synthesize
+
+The reviewing is done; do not run the review skills again. Every reviewer has written
+their own review of this change:
+
+{{fan_in}}
+
+Read all of them, then read the target yourself, and write the one review this change
+gets — the review a careful colleague would leave on it.
+
+- One entry per problem. Where two reviewers found the same thing, say it once, in
+  whichever of their words is clearer.
+- Where they disagree, settle it against the diff. A finding only one of them raised
+  survives only if you can defend it from the diff yourself.
+- Everything you do not carry goes in `dropped` with a one-line `reason`. Nothing is
+  dropped silently.
+- Order the findings `blocker`, then `major`, then `minor`.
+- Each finding is one or two plain sentences, with the `file` and `line` it is at. Say
+  what goes wrong and what it costs. Never say which model or which skill found it.
+- `summary` is two sentences: what this change does, and what is wrong with it.
+- A finding that arrives with a `"rebuttal"` keeps it word for word. It answers a
+  dispute the implementer has already made, and dropping it would end that argument
+  without anyone deciding it.
+- Do not edit files, commit, push, or comment anywhere. This Output is the whole job.
+
+Then write the Output JSON: `{"verdict": "clean" | "findings", "summary": "two
+sentences", "findings": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
+"title": "one line", "detail": "what goes wrong and what it costs", "rebuttal": "kept
+from the reviewer that wrote it"}], "dropped": [{"file": "path", "severity": "minor",
+"title": "what one reviewer raised", "reason": "why it did not survive"}]}`.

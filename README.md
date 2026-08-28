@@ -40,8 +40,9 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
    instead of a guess: `implement`'s work source, and `review`'s target.
 4. A `runner` tab opens. Its own pane drops to a thin `status` strip along the bottom
    and the first step's agent takes the space above it. After that, one tab per step:
-   a step's parallel variants sit side by side in it, an even share each, and a step
-   that continues an earlier agent opens nothing — it renames that pane to itself, so
+   a step's parallel variants sit side by side in it, an even share each, a step that
+   reconciles them (`fan_in:`) opens underneath them in the same tab, and a step that
+   continues an earlier agent opens nothing — it renames that pane to itself, so
    `build` becomes `architecture`, then `simplify`, then `fix`. Tabs are named
    `⚙ <workflow> · <target>` and carry the run's state: `⚙` working, `⚠` your turn,
    `✓` done — only once every pane in the tab is — and `✗` stopped. Panes are named for
@@ -55,8 +56,8 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
 | Workflow | What it does |
 | --- | --- |
 | `plan` | Grills you, writes `SPEC.md` and tickets into the run dir, then a menu: implement now, second opinion, offload to Linear, refine |
-| `implement` | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models, loops on findings up to five times, then pushes and opens the merge request |
-| `review` | Reviews an MR, a branch diff or the working tree with two models and writes one verdict each |
+| `implement` | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models into one synthesised review, loops on its findings up to five times, then pushes and opens the merge request |
+| `review` | Reviews an MR, a branch diff or the working tree with two models, synthesises them into one review, and offers to post it to the merge request |
 | `architecture` | Runs the architect over the project, reports into the run dir, then a menu: implement now or stop |
 
 `plan` and `architecture` can chain `implement`, which embeds `review` and the
@@ -82,7 +83,7 @@ Definitions are markdown files with YAML frontmatter. Same name in a later layer
 3. `.herdr/workflows`, `.herdr/personas` in the project you're in
 
 `fork` copies a baseline definition into layer 2 or 3 for editing. `use:` resolves
-through the same lookup, so overriding `review.md` changes every workflow that embeds
+through the same lookup, so overriding `workflows/review.md` changes every workflow that embeds
 it — including `implement`.
 
 ## Your defaults
@@ -137,12 +138,16 @@ steps:
     parallel:
       - { harness: claude, model: opus, effort: xhigh }
       - { harness: claude, model: sonnet, effort: xhigh }
+  - id: synthesize
+    persona: reviewer
+    fan_in: review         # reconciles that step's parallel Outputs into one
+    output: synthesized.json
   - id: fix
     agent: build           # keep the implementer's context
     persona: implementer
     output: fix.json
     repeat:
-      from: review         # the gate: loop while that step reports findings
+      from: synthesize     # the gate: loop while that step reports findings
       back_to: simplify    # where the next round starts (default: from)
 ---
 Text before the first heading is prepended to every step's prompt.
@@ -150,10 +155,15 @@ Text before the first heading is prepended to every step's prompt.
 ## build
 
 One `## <step-id>` section per step. Templates: `{{inputs.<name>}}`,
-`{{outputs.<step>}}`, `{{findings}}`, `{{iteration}}`, `{{max_iterations}}`,
-`{{cwd}}`, `{{run.dir}}`, `{{config.<key>}}`, `{{output_path}}`, `{{harness}}`,
-`{{model}}`, `{{effort}}`.
+`{{outputs.<step>}}`, `{{findings}}`, `{{fan_in}}`, `{{iteration}}`,
+`{{max_iterations}}`, `{{cwd}}`, `{{run.dir}}`, `{{config.<key>}}`, `{{output_path}}`,
+`{{harness}}`, `{{model}}`, `{{effort}}`.
 ```
+
+A step may also declare `requires:` — one name or a list of them. `gitlab` means glab
+and a GitLab remote; `mr-target` means this run is pointed at a merge request. A
+requirement this machine or this run cannot meet is a skip with a note that names the
+gap, never a failed run.
 
 ### Choices
 
@@ -178,13 +188,18 @@ A step with `choices:` asks you instead of running an agent:
           agent: grill
           prompt: revise
           output: revise.json
+      - title: Post to MR           # the engine sends review.md as one glab mr note
+        post: true
       - title: Stop here
         stop: true
 ```
 
-Each choice needs a `title` and exactly one of `run`, `prompt` or `stop`. A `prompt`
-choice offers the menu again as soon as its round has written its Output, so `Refine`
-can be taken as often as you like; `run` and `stop` end the step. `run` starts that
+Each choice needs a `title` and exactly one of `run`, `prompt`, `post` or `stop`. A
+`prompt` choice offers the menu again as soon as its round has written its Output, so
+`Refine` can be taken as often as you like; `run`, `post` and `stop` end the step. A
+`post` choice sends this run's `review.md` to the merge request it reviewed, verbatim
+and as a single note — the engine runs `glab mr note`, so what you read in the strip is
+exactly what lands on the MR. A note that will not send re-offers the menu. `run` starts that
 workflow as a child run in the same workspace — forwarded inputs first, the rest
 inferred, anything left over asked here — and the parent finishes once the child has
 its own runner pane. `resume` then lists the two runs independently. Esc leaves the step
@@ -237,6 +252,29 @@ If you do let claude ask, nothing breaks: `agent start` reports the agent blocke
 not a failure, so the runner says which pane wants you, toasts, and waits. It cannot answer
 for you — the dialog shuffles its options between runs, so there is no safe key to send.
 
+### Fan-in, and the one review that comes out
+
+Two reviewers produce two `review.json` files. A step with `fan_in: <that step>` is
+handed their paths as `{{fan_in}}`, opens in their tab, and writes the one review the
+change gets: findings deduplicated across models, disagreements settled against the diff,
+and anything it cannot defend from the diff itself listed under `dropped` with a reason —
+nothing is dropped silently. Its Output is a review plus `summary` and `dropped`:
+
+```json
+{"verdict": "findings",
+ "summary": "Two sentences: what the change does, and what is wrong with it.",
+ "findings": [{"file": "cli.js", "line": 4, "severity": "blocker",
+               "title": "Exits 1 on success", "detail": "A caller cannot tell it worked."}],
+ "dropped": [{"file": "pkg.json", "severity": "minor", "title": "no engines field",
+              "reason": "one reviewer only, and the diff does not support it"}]}
+```
+
+The engine renders that to `review.md` in the run dir — the summary, then the findings
+under their severity, and nothing about the process or the models — and prints it in the
+status strip. That file is what a `post` choice sends to the merge request, and inside
+`implement` it is what the fix step is given: one reconciled review per round, never the
+reviewers' raw union.
+
 Outputs are JSON. One carrying a `verdict` is validated against the review schema, so
 a loop gate can always read it:
 
@@ -273,7 +311,8 @@ so every run leaves the same audit trail.
 
 Every run is recorded under the plugin state dir: `runs/<id>/run.json` with the
 inputs and where each came from, `steps/<step>[/<variant>]/` with the exact prompt
-sent and the Output written, `personas/` with the persona as injected, and `log.txt`.
+sent and the Output written, `personas/` with the persona as injected, `review.md`
+where the run produced one, and `log.txt`.
 That is the audit trail and what `resume` reads.
 
 ## Working on the plugin

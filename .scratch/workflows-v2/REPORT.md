@@ -454,3 +454,130 @@ The pattern is that each commit is named after the ticket file it *adds*, and a
 that moment. Nothing was lost — every swept file's content is in history and was verified
 there by the session that wrote it — but `git log --oneline` reads as though 10 and 11
 have shipped, and neither has been started. Staging by path avoids it.
+
+
+# Ticket 13 — one review comes out of the reviewers, and you decide where it goes
+
+`review` stops handing you two reviews and a union. Its parallel variants are followed by
+a `synthesize` step that reads both `review.json` files and the diff and writes the one
+review this change gets: findings deduplicated across models, disagreements settled
+against the diff, and anything only one reviewer raised that the synthesiser cannot defend
+from the diff itself listed under `dropped` with a one-line reason. The engine renders that
+to `{{run.dir}}/review.md` — the summary, then the findings under their severity, nothing
+about the process or the models — prints it in the status strip, and for a standalone
+review pointed at a merge request offers **Post to MR** / **Don't post**. Posting is one
+`glab mr note` with that file verbatim. `implement`'s fix step now consumes the synthesis
+instead of the union, and the `post` flag input is gone.
+
+## The mechanism is `fan_in:`, not a special step
+
+A step declares `fan_in: <earlier step>` and gets two things from that one field, because
+they are the same relationship: that step's Output files as `{{fan_in}}`, and a pane in
+that step's tab. Its own Output is then held to the Synthesis schema — a review plus a
+required `summary` and a `dropped` list where every entry needs a `reason` — and the engine
+renders `review.md` from it. `Fan-in` was already the word for this in `CONTEXT.md`; what
+changed is that the engine no longer does it. `unionFindings` is gone rather than kept as a
+fallback, so a gate reads exactly the findings of the step it points at.
+
+**The engine renders `review.md`, the agent does not.** The ticket asks for a fixed shape —
+summary, verdict, findings by severity, no preamble, under ~25 lines — and asking an agent
+to hold a format across every run is the least reliable way to get one. It matters more
+than usual here: "post review.md verbatim" is only a promise worth making if the file is
+deterministic. So the synthesiser writes the prose (`summary`, `title`, `detail`) and
+`renderReview()` decides the shape, which also makes the whole rendering testable with no
+agent in the loop. The verdict is rendered as words: a clean synthesis says `Nothing to
+fix.` under its summary, and one with findings says nothing at all beyond the severity
+groups, because "Verdict: findings" above a list of findings is the report line the ticket
+asks not to write.
+
+**Posting is the engine's job.** `post: true` is a fourth Choice form beside `run`,
+`prompt` and `stop`: the engine reads the file and runs
+`glab mr note <iid> --message <the file>`. A note that will not send prints its exit code
+and re-offers the menu, the way a `prompt` round that never finishes already does.
+
+**"Standalone MR targets only" needed no new idea.** The choice step is `standalone: true`,
+so embedding `review` in `implement` drops it, and `requires:` — which now takes a list —
+carries `[mr-target, gitlab]`. `mr-target` reads the `target_kind` ticket 10 already
+records, and is listed first so a branch target is told what it actually is instead of
+"glab is not installed".
+
+**One embedding rule changed.** `review` has more than one step now, so `use: review` would
+have renamed the reviewers to `review.review`. A child whose id equals the embedding step's
+id *is* that step, so only its siblings take the prefix: `implement`'s steps are `review`
+and `review.synthesize`, and every existing run dir, prompt path and test keeps its name.
+
+**A fan-in pane splits down, not right.** Three columns in half a terminal are three
+unreadable columns. The reviewers have finished by the time the synthesiser starts, so it
+takes half of the last reviewer's pane and the synthesis sits under the review it came
+from.
+
+## Verified live
+
+In a throwaway git worktree off this repo (branch `smoke-synth-13`, one commit adding a
+13-line `smoke.js` with a deliberately wrong `--version`), run through the real picker with
+two real claude reviewers and a real synthesiser:
+
+- The confirm line is `review: target=branch:master...smoke-synth-13 [smoke-synth-13 vs
+  master]` — no `post=false` any more, because the input is gone.
+- One tab, `⚙ review · smoke-synth-13`, holding four panes. `opus` kept the full 73-row
+  column; `sonnet` and `synthesize` split the other one at 36 and 35 rows, and `status` is
+  the 11-row strip along the bottom. The synthesiser opened where the ticket asks for it,
+  in the reviewers' tab and under the review it came from, with no tab of its own.
+- Its prompt carried both reviewers' Output paths under `{{fan_in}}`, and the shared
+  preamble with no "Post to GitLab" paragraph in it.
+- `review.md` came out at **11 lines**: the summary, `**Blocker**`, `**Major**`, one bullet
+  each with `` `smoke.js:5` `` and the detail on a continuation line — and the runner
+  printed the whole thing in the strip.
+- `post` was skipped with `skipped: branch:master...smoke-synth-13 is not a merge request`,
+  and the run finished `done`. That is the `mr-target` requirement doing its job, and it is
+  why the reason is worded after the target rather than after glab.
+
+Two things happened on the way that are worth writing down.
+
+**The Synthesis schema caught a real malformed Output on its first live run.** The first
+synthesiser wrote `synthesized.json` with a missing comma between two findings, and the run
+blocked with `steps/synthesize/synthesized.json: not valid JSON (JSON Parse error: Expected
+']')` rather than carrying on with a half-read review. Its content was otherwise exactly
+what was asked for: five findings merged from the two reviewers, one or two sentences each
+with `file:line`, and no mention of a model anywhere.
+
+**`dropped` is asked for, not enforced.** The second synthesiser carried two of the
+reviewers' findings and dropped the rest without listing any of them, with `"dropped": []`.
+The schema can only insist that anything *in* `dropped` has a reason; it cannot insist a
+finding ends up there, because a synthesis rewords and merges titles by design, so no
+mechanical key match between the raw reviews and the synthesis would hold. Making the engine
+diff them would produce a false positive on nearly every run. So this stays a prompt rule,
+and the honest statement is: `dropped` is where a synthesiser says what it let go, and
+nothing checks that it said so.
+
+**Resume cannot restart a step whose agent is still alive.** Resuming the blocked run while
+its old tab was still open failed with herdr's `agent_name_taken` — the previous
+synthesiser was idle, not gone, and `naming.ts` builds the same name from the same run and
+step. Closing the tab first made the resume work. This is not new to this ticket (resume has
+always assumed the previous session's agents are gone), but it is the first time a run has
+been resumed from inside the session that started it.
+
+The MR path is verified by tests with a fake `glab` only — this repo still has no remote, so
+there is no merge request to post to. Those tests assert the menu is offered for an `mr`
+target, that **Post to MR** produces exactly one `glab mr note <iid> --message <review.md>`
+whose message is the file byte for byte, that **Don't post** runs no glab at all, and that a
+note glab refuses re-offers the menu instead of ending the step.
+
+## Where this leaves the tree
+
+`bun test` is green at 176 tests across 20 files, `bunx tsc --noEmit` is clean, and the
+runner still compiles. The baseline is four workflows and four personas; `review` is now
+three steps rather than one.
+
+Open, and worth knowing:
+
+- **No review has ever been posted to a real merge request.** `glab mr note` has only ever
+  been called against a fake.
+- **`dropped` is unverified in the wild**, per the note above: the one live synthesis that
+  had things to drop dropped them silently.
+- **`implement`'s fix step now names a step inside the workflow it embeds**
+  (`repeat: {from: review.synthesize}`). Forking `review` and renaming that step breaks
+  `implement` — loudly, at validation, before a tab opens, but it is a coupling that did not
+  exist before.
+- **The review is rendered from the JSON, so a synthesiser that writes a thin `detail`
+  writes a thin review.** The shape is guaranteed; the substance is still the agent's.

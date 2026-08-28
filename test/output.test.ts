@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { formatFindings, parseReviewOutput, splitDisputed, unionFindings } from "../src/output";
+import {
+  formatFindings,
+  parseReviewOutput,
+  parseSynthesis,
+  renderReview,
+  splitDisputed,
+  type Synthesis,
+} from "../src/output";
 
 const ok = (text: string) => {
   const r = parseReviewOutput(text, "review.json");
@@ -44,13 +51,95 @@ test("the schema rejects what a gate could not read", () => {
   );
 });
 
-test("fan-in unions findings and drops duplicates", () => {
-  const a = ok(`{"verdict": "findings", "findings": [{"file": "a.ts", "line": 1, "severity": "major", "title": "x"}]}`);
-  const b = ok(
-    `{"verdict": "findings", "findings": [{"file": "a.ts", "line": 1, "severity": "minor", "title": "x"}, {"file": "b.ts", "severity": "blocker", "title": "y"}]}`,
-  );
+const synth = (text: string) => {
+  const r = parseSynthesis(text, "synthesized.json");
+  if (!r.ok) throw new Error(r.error);
+  return r.value;
+};
+const synthErr = (text: string) => {
+  const r = parseSynthesis(text, "synthesized.json");
+  return r.ok ? "(no error)" : r.error;
+};
 
-  expect(unionFindings([a, b]).map((f) => f.title)).toEqual(["x", "y"]);
+test("a synthesis is a review plus the summary and what it decided not to carry", () => {
+  expect(
+    synth(
+      `{"verdict": "findings", "summary": "Adds a flag. It exits wrong.",
+        "findings": [{"file": "cli.js", "line": 4, "severity": "blocker", "title": "exit code"}],
+        "dropped": [{"file": "pkg.json", "severity": "minor", "title": "no engines field",
+                     "reason": "packaging is out of scope"}]}`,
+    ),
+  ).toEqual({
+    verdict: "findings",
+    summary: "Adds a flag. It exits wrong.",
+    findings: [{ file: "cli.js", line: 4, severity: "blocker", title: "exit code" }],
+    dropped: [
+      { file: "pkg.json", severity: "minor", title: "no engines field", reason: "packaging is out of scope" },
+    ],
+    disputed: [],
+  });
+});
+
+test("a synthesis must summarise, and may not drop a finding without saying why", () => {
+  // Everything the review schema rejects, a synthesis rejects too.
+  expect(synthErr(`{"verdict": "ok"}`)).toBe('synthesized.json: verdict must be "clean" or "findings", got "ok"');
+  expect(synthErr(`{"verdict": "clean"}`)).toBe("synthesized.json: summary is required");
+  expect(synthErr(`{"verdict": "clean", "summary": "  "}`)).toBe("synthesized.json: summary is required");
+  expect(synthErr(`{"verdict": "clean", "summary": "s", "dropped": [{"title": "t"}]}`)).toBe(
+    "synthesized.json: dropped[0]: severity is required",
+  );
+  // A finding dropped without a reason is a finding lost, not one resolved.
+  expect(synthErr(`{"verdict": "clean", "summary": "s", "dropped": [{"title": "t", "severity": "minor"}]}`)).toBe(
+    "synthesized.json: dropped[0]: reason is required",
+  );
+});
+
+test("the rendered review is the summary and the findings, worst first, and nothing else", () => {
+  const synthesis: Synthesis = {
+    verdict: "findings",
+    summary: "Adds a --version flag. One blocker.",
+    disputed: [],
+    dropped: [{ severity: "minor", title: "dropped one", reason: "cannot defend it" }],
+    findings: [
+      { severity: "minor", title: "Loose equality", file: "cli.js", line: 9 },
+      { severity: "nit", title: "A vocabulary this repo does not use" },
+      { severity: "blocker", title: "Exits 1 on success", file: "cli.js", line: 4, detail: "A caller\ncannot tell." },
+      { severity: "minor", title: "No test for the flag", rebuttal: "the reason misreads the spec" },
+    ],
+  };
+
+  expect(renderReview(synthesis)).toBe(
+    [
+      "Adds a --version flag. One blocker.",
+      "",
+      "**Blocker**",
+      "",
+      "- `cli.js:4` — Exits 1 on success",
+      "  A caller cannot tell.",
+      "",
+      "**Minor**",
+      "",
+      "- `cli.js:9` — Loose equality",
+      "- No test for the flag",
+      "",
+      "**Nit**",
+      "",
+      "- A vocabulary this repo does not use",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("a clean review says so in one line, and never mentions the process", () => {
+  const rendered = renderReview({
+    verdict: "clean",
+    summary: "A one-file change to the CLI. Nothing wrong with it.",
+    findings: [],
+    disputed: [],
+    dropped: [{ severity: "minor", title: "x", reason: "one reviewer only, and I cannot defend it" }],
+  });
+
+  expect(rendered).toBe("A one-file change to the CLI. Nothing wrong with it.\n\nNothing to fix.\n");
 });
 
 test("findings format as a readable list for the fix prompt", () => {
@@ -94,18 +183,17 @@ test("a finding the implementer already disputed is settled, unless a reviewer a
   expect(splitDisputed(raised, []).live).toHaveLength(3);
 });
 
-test("a rebuttal survives whichever reviewer raised the finding first", () => {
-  const plain = ok(`{"verdict": "findings", "findings": [{"file": "cli.js", "severity": "major", "title": "x"}]}`);
-  const answered = ok(
-    `{"verdict": "findings", "findings": [{"file": "cli.js", "line": 9, "severity": "major", "title": "x", "rebuttal": "the reason misreads the spec"}]}`,
+test("a rebuttal the synthesis carried still reopens the dispute", () => {
+  const synthesized = synth(
+    `{"verdict": "findings", "summary": "s. s.",
+      "findings": [{"file": "cli.js", "line": 9, "severity": "major", "title": "x",
+                    "rebuttal": "the reason misreads the spec"}]}`,
   );
   const disputed = [{ file: "cli.js", severity: "major", title: "x", detail: "the spec says so" }];
 
-  // Whichever order the reviewers are listed in, the rebuttal has to count.
-  for (const reviews of [[plain, answered], [answered, plain]]) {
-    const union = unionFindings(reviews);
-    expect(union).toHaveLength(1);
-    expect(union[0]!.rebuttal).toBe("the reason misreads the spec");
-    expect(splitDisputed(union, disputed).rebutted).toHaveLength(1);
-  }
+  const split = splitDisputed(synthesized.findings, disputed);
+
+  expect(split.rebutted).toHaveLength(1);
+  expect(split.live).toHaveLength(1);
+  expect(split.settled).toHaveLength(0);
 });

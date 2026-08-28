@@ -43,9 +43,12 @@ test("forking a persona into the project layer changes every workflow that uses 
   const after = loadDefinitions(layers(env));
   expect(after.personas.get("reviewer")!.layer).toBe("project");
   expect(after.personas.get("reviewer")!.body).toContain("Project reviewer.");
-  // implement embeds review, which uses the reviewer persona.
+  // implement embeds review, whose reviewers and synthesiser use that persona.
   const wf = resolveWorkflow("implement", after, FALLBACK_DEFAULTS);
-  expect(wf.steps.filter((s) => s.persona === "reviewer")).toHaveLength(1);
+  expect(wf.steps.filter((s) => s.persona === "reviewer").map((s) => s.id)).toEqual([
+    "review",
+    "review.synthesize",
+  ]);
 });
 
 test("forking never overwrites an existing fork", () => {

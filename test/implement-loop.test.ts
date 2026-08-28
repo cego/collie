@@ -35,6 +35,14 @@ const OTHER_FINDING = {
   verdict: "findings",
   findings: [{ file: "cli.js", line: 2, severity: "minor", title: "loose equality" }],
 };
+/** What the synthesiser writes: one review, and the summary a human reads first. */
+const SUMMARY = "Adds a --version flag to the CLI. ";
+const SYNTH = { ...CLEAN, summary: `${SUMMARY}Nothing wrong with it.` };
+const synthesized = (...raw: { findings: unknown[] }[]) => ({
+  verdict: "findings",
+  summary: `${SUMMARY}The reviewers found something.`,
+  findings: raw.flatMap((r) => r.findings),
+});
 
 /** Which step each prompt went to, in order — i.e. the path the run took. */
 function promptOrder(rig: Rig, runDir: string): string[] {
@@ -48,9 +56,27 @@ test("implement is build, architecture, simplify, review, fix — and no commit 
   const defs = loadDefinitions(layers(rig.pluginEnv()));
   const wf = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
 
-  expect(wf.steps.map((s) => s.id)).toEqual(["build", "architecture", "simplify", "review", "fix", "mr"]);
-  expect(wf.steps.map((s) => s.agent)).toEqual([undefined, "build", "build", undefined, "build", "build"]);
-  expect(wf.steps[4]!.repeat).toEqual({ from: "review", back_to: "simplify" });
+  expect(wf.steps.map((s) => s.id)).toEqual([
+    "build",
+    "architecture",
+    "simplify",
+    "review",
+    "review.synthesize",
+    "fix",
+    "mr",
+  ]);
+  expect(wf.steps.map((s) => s.agent)).toEqual([
+    undefined,
+    "build",
+    "build",
+    undefined,
+    undefined,
+    "build",
+    "build",
+  ]);
+  // The gate is the one synthesised review, not the reviewers' raw union.
+  expect(wf.steps[4]!.fanIn).toBe("review");
+  expect(wf.steps[5]!.repeat).toEqual({ from: "review.synthesize", back_to: "simplify" });
   expect(wf.maxIterations).toBe(5);
   expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
 
@@ -68,10 +94,12 @@ test("findings loop fix → simplify → review, and architecture stays out of t
     CLEAN, // simplify
     FINDING, // review/claude-opus
     OTHER_FINDING, // review/claude-sonnet
+    synthesized(FINDING, OTHER_FINDING), // review.synthesize
     { ...CLEAN, disputed: [{ file: "cli.js", severity: "minor", title: "loose equality", detail: "== is fine here" }] }, // fix
     CLEAN, // simplify, iteration 2
     CLEAN, // review/claude-opus
     CLEAN, // review/claude-sonnet
+    SYNTH, // review.synthesize
   ]);
 
   const { run, status, lines } = await runWorkflow(rig, "implement", {});
@@ -84,16 +112,19 @@ test("findings loop fix → simplify → review, and architecture stays out of t
     "steps/simplify/prompt-1.md",
     "steps/review/claude-opus/prompt-1.md",
     "steps/review/claude-sonnet/prompt-1.md",
+    "steps/review.synthesize/prompt-1.md",
     "steps/fix/prompt-1.md",
     "steps/simplify/prompt-2.md",
     "steps/review/claude-opus/prompt-2.md",
     "steps/review/claude-sonnet/prompt-2.md",
+    "steps/review.synthesize/prompt-2.md",
   ]);
   expect(run.record.steps.map((s) => [s.id, s.status, s.note])).toEqual([
     ["build", "done", null],
     ["architecture", "done", null],
     ["simplify", "done", null],
     ["review", "done", null],
+    ["review.synthesize", "done", null],
     ["fix", "done", "skipped: reviews clean"],
     // No glab in the rig, so the MR step is skipped rather than failing the run.
     ["mr", "done", "skipped: glab is not installed"],
@@ -102,7 +133,7 @@ test("findings loop fix → simplify → review, and architecture stays out of t
   expect(lines).toContain("  looping back to simplify (iteration 2)");
   expect(lines).toContain("  reviews clean — skipping fix");
 
-  // The union of both reviewers reaches the implementer.
+  // One synthesised review reaches the implementer, carrying both reviewers' findings.
   const fix = readFileSync(join(run.dir, "steps", "fix", "prompt-1.md"), "utf8");
   expect(fix).toContain("- [blocker] no exit code (cli.js:4)");
   expect(fix).toContain("- [minor] loose equality (cli.js:2)");
@@ -120,7 +151,10 @@ test("the loop stops at max_iterations and blocks with the findings still open",
       "max_iterations: 2",
     ),
   );
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN, FINDING, FINDING, CLEAN, CLEAN, FINDING, FINDING, CLEAN]);
+  rig.queueOutputs([
+    CLEAN, CLEAN, CLEAN, FINDING, FINDING, synthesized(FINDING),
+    CLEAN, CLEAN, FINDING, FINDING, synthesized(FINDING), CLEAN,
+  ]);
 
   const { run, status, lines } = await runWorkflow(rig, "implement", {});
 
@@ -133,7 +167,10 @@ test("the loop stops at max_iterations and blocks with the findings still open",
 }, 20_000);
 
 test("the reviewers are one persona at two models, side by side in one tab, restarted every round", async () => {
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN, FINDING, FINDING, CLEAN, CLEAN, CLEAN, CLEAN]);
+  rig.queueOutputs([
+    CLEAN, CLEAN, CLEAN, FINDING, FINDING, synthesized(FINDING),
+    CLEAN, CLEAN, CLEAN, CLEAN, SYNTH,
+  ]);
 
   const { run } = await runWorkflow(rig, "implement", {});
 
@@ -151,7 +188,8 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
   for (const split of sideBySide) {
     expect(split.argv![split.argv!.indexOf("--ratio") + 1]).toBe("0.5");
   }
-  expect(rightSplits.length - sideBySide.length).toBe(2); // the two restarted reviewers
+  // The two reviewers and the synthesiser, all restarted for the second round.
+  expect(rightSplits.length - sideBySide.length).toBe(3);
   // Panes say which model they are; nothing says which run.
   const paneNames = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1));
   expect(paneNames).toContain("opus");
@@ -160,12 +198,15 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
 
   const reviewer = join(run.dir, "personas", "reviewer.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
+  // The synthesiser is the same persona on the user's default model, once per round.
   expect(starts.map((c) => c.argv!.slice(7))).toEqual([
     ["--", "--model", "sonnet", "--append-system-prompt-file", join(run.dir, "personas", "implementer.md")],
     ["--", "--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
     ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
+    ["--", "--model", "sonnet", "--append-system-prompt-file", reviewer],
     ["--", "--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
     ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
+    ["--", "--model", "sonnet", "--append-system-prompt-file", reviewer],
   ]);
   expect(run.step("review").variants.map((v) => [v.model, v.effort])).toEqual([
     ["opus", "xhigh"],
@@ -177,11 +218,11 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
   for (const step of ["architecture", "simplify", "fix"]) {
     expect(run.step(step).variants[0]!.agent).toBe(implementer);
   }
-  expect(rig.cmds().filter((c) => c === "pane close")).toHaveLength(2);
+  expect(rig.cmds().filter((c) => c === "pane close")).toHaveLength(3);
 }, 20_000);
 
 test("review standalone is the same two variants, and says so when it has no spec", async () => {
-  rig.queueOutputs([CLEAN, CLEAN]);
+  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
 
   const { run, status } = await runWorkflow(rig, "review", {});
 
@@ -198,7 +239,7 @@ test("review standalone is the same two variants, and says so when it has no spe
 });
 
 test("review inside implement is held to the plan the run was given", async () => {
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN]);
+  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
 
   const { run } = await runWorkflow(rig, "implement", {});
 
@@ -216,10 +257,12 @@ test("a finding the implementer disputed stops driving the loop, so the run conv
     CLEAN, // simplify
     FINDING, // review/claude-opus
     FINDING, // review/claude-sonnet
+    synthesized(FINDING), // review.synthesize
     { ...CLEAN, disputed: [DISPUTED_REASON] }, // fix: applies nothing, disputes it
     CLEAN, // simplify, iteration 2
     FINDING, // review/claude-opus, raises it again
     FINDING, // review/claude-sonnet, raises it again
+    synthesized(FINDING), // review.synthesize carries it through
   ]);
 
   const { run, status, lines } = await runWorkflow(rig, "implement", {});
@@ -249,14 +292,17 @@ test("a reviewer that answers the dispute puts the finding back in front of the 
     CLEAN, // simplify
     FINDING, // review/claude-opus
     FINDING, // review/claude-sonnet
+    synthesized(FINDING), // review.synthesize
     { ...CLEAN, disputed: [DISPUTED_REASON] }, // fix disputes it
     CLEAN, // simplify, iteration 2
     rebutted, // review/claude-opus answers the dispute
     CLEAN, // review/claude-sonnet
+    synthesized(rebutted), // the synthesis carries the rebuttal through
     CLEAN, // fix applies it
     CLEAN, // simplify, iteration 3
     CLEAN, // review/claude-opus
     CLEAN, // review/claude-sonnet
+    SYNTH, // review.synthesize
   ]);
 
   const { run, status, lines } = await runWorkflow(rig, "implement", {});
@@ -274,7 +320,7 @@ test("a reviewer that answers the dispute puts the finding back in front of the 
 }, 20_000);
 
 test("the build prompt is told which kind of work source it got, and nothing renders empty", async () => {
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN]);
+  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
 
   const { run } = await runWorkflow(rig, "implement", {});
 
@@ -290,11 +336,14 @@ test("review's inputs are the embedder's when it is embedded, so implement never
   const defs = loadDefinitions(layers(rig.pluginEnv()));
 
   const implement = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
-  // `target` and `post` reach implement only through `use: review`, so its picker
-  // must infer them silently; `plan` is implement's own and is chosen normally.
+  // `target` reaches implement only through `use: review`, so its picker must infer
+  // it silently; `plan` is implement's own and is chosen normally.
   expect(implement.inputs.plan).toBe("work-source");
   expect(implement.inputs.target).toBe("diff-target");
-  expect(implement.embeddedInputs.sort()).toEqual(["post", "target"]);
+  expect(implement.embeddedInputs).toEqual(["target"]);
+  // The post choice is standalone, so embedding review drops it.
+  expect(implement.steps.some((s) => s.id.endsWith("post"))).toBe(false);
+  expect(resolveWorkflow("review", defs, FALLBACK_DEFAULTS).steps.at(-1)!.id).toBe("post");
 
   // Standalone, the same input belongs to review itself, so the menu is shown.
   const review = resolveWorkflow("review", defs, FALLBACK_DEFAULTS);
@@ -326,7 +375,7 @@ function onGitLab(branch: string) {
 test("the mr step is skipped, not failed, when this repo cannot have a merge request", async () => {
   bin.add("glab", `echo "glab 1.40.0"`);
   bin.add("git", `case "$1 $2" in "remote -v") echo "origin\tgit@github.com:me/x.git (fetch)" ;; *) echo main ;; esac`);
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN]);
+  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
 
   const { run, status, lines } = await runWorkflow(rig, "implement", {});
 
@@ -345,6 +394,7 @@ test("on GitLab the mr step gets the assignee, the tickets and a short CIATF bri
     CLEAN,
     CLEAN,
     CLEAN,
+    SYNTH,
     { verdict: "clean", findings: [], mr_url: "https://gitlab.cego.dk/x/-/merge_requests/7", linear_issues: ["FRO-149"] },
   ]);
 
@@ -375,7 +425,7 @@ test("with a template in the repo the prompt points at it instead of the plain f
   onGitLab("add-a-picker");
   mkdirSync(join(rig.projectDir, ".gitlab", "merge_request_templates"), { recursive: true });
   writeFileSync(join(rig.projectDir, ".gitlab", "merge_request_templates", "default.md"), "## Description\n");
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, { verdict: "clean", findings: [] }]);
+  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, SYNTH, { verdict: "clean", findings: [] }]);
 
   const { run } = await runWorkflow(rig, "implement", {});
 
@@ -386,7 +436,10 @@ test("with a template in the repo the prompt points at it instead of the plain f
 }, 20_000);
 
 test("build, architecture, simplify and fix are one pane that changes its label", async () => {
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN, FINDING, FINDING, CLEAN, CLEAN, CLEAN, CLEAN]);
+  rig.queueOutputs([
+    CLEAN, CLEAN, CLEAN, FINDING, FINDING, synthesized(FINDING),
+    CLEAN, CLEAN, CLEAN, CLEAN, SYNTH,
+  ]);
 
   const { run } = await runWorkflow(rig, "implement", {});
 

@@ -237,10 +237,10 @@ refine it
   const errors = validateWorkflow(resolveWorkflow("bad", defs, FALLBACK_DEFAULTS), defs, FALLBACK_DEFAULTS);
 
   expect(errors).toEqual([
-    'workflow "bad" step "next" choice "Both": needs exactly one of run, prompt or stop',
+    'workflow "bad" step "next" choice "Both": needs exactly one of run, prompt, post or stop',
     'workflow "bad" step "next" choice "Both": needs a persona or an agent',
     'workflow "bad" step "next" choice "Both": needs an output, so the round can finish',
-    'workflow "bad" step "next" choice "Neither": needs exactly one of run, prompt or stop',
+    'workflow "bad" step "next" choice "Neither": needs exactly one of run, prompt, post or stop',
     'workflow "bad" step "next" choice 3: needs a title',
     'workflow "bad" step "next" choice 3: needs a persona or an agent',
     'workflow "bad" step "next" choice 3: needs an output, so the round can finish',

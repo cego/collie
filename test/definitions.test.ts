@@ -194,6 +194,90 @@ c prompt
   ]);
 });
 
+test("fan_in, requires and a post choice are validated like every other back-reference", () => {
+  writeDef(rig.baselineDir, "workflows", "w", `---
+name: w
+steps:
+  - id: a
+    persona: reviewer
+    fan_in: later
+    requires: [gitlab, moonlight]
+  - id: b
+    requires: mr-target
+    choices:
+      - title: Both
+        post: true
+        stop: true
+      - title: Neither
+---
+## a
+a prompt
+`);
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+  const defs = loadDefinitions(ls());
+  const wf = resolveWorkflow("w", defs, defaults);
+
+  // A single requirement and a list of them both parse to a list.
+  expect(wf.steps.map((s) => s.requires as string[])).toEqual([["gitlab", "moonlight"], ["mr-target"]]);
+  expect(validateWorkflow(wf, defs, defaults)).toEqual([
+    'workflow "w" step "a": unknown requires "moonlight" (known: gitlab, mr-target)',
+    'workflow "w" step "a": fan_in "later" is not an earlier step',
+    'workflow "w" step "a": fan_in needs an output, so the synthesis can be read',
+    'workflow "w" step "b" choice "Both": needs exactly one of run, prompt, post or stop',
+    'workflow "w" step "b" choice "Neither": needs exactly one of run, prompt, post or stop',
+  ]);
+});
+
+test("an embedded step that shares the embedding step's name keeps it; its siblings are prefixed", () => {
+  writeDef(rig.baselineDir, "workflows", "review", `---
+name: review
+steps:
+  - id: review
+    persona: reviewer
+    output: review.json
+  - id: synthesize
+    persona: reviewer
+    fan_in: review
+    output: synthesized.json
+---
+## review
+review it
+
+## synthesize
+{{fan_in}}
+`);
+  writeDef(rig.baselineDir, "workflows", "implement", `---
+name: implement
+steps:
+  - id: build
+    persona: implementer
+  - id: review
+    use: review
+    fresh: true
+  - id: fix
+    persona: implementer
+    repeat:
+      from: review.synthesize
+---
+## build
+build it
+
+## fix
+fix it
+`);
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+  writeDef(rig.baselineDir, "personas", "implementer", IMPLEMENTER);
+
+  const defs = loadDefinitions(ls());
+  const wf = resolveWorkflow("implement", defs, defaults);
+
+  expect(wf.steps.map((s) => s.id)).toEqual(["build", "review", "review.synthesize", "fix"]);
+  // The fan-in reference moved with the step it points at.
+  expect(wf.steps[2]!.fanIn).toBe("review");
+  expect(validateWorkflow(wf, defs, defaults)).toEqual([]);
+});
+
 test("a broken definition file is reported without failing the rest", () => {
   writeDef(rig.baselineDir, "workflows", "broken", "---\nname: broken\nnot a mapping\n---\nx");
   writeDef(rig.baselineDir, "workflows", "fine", "---\nname: fine\nsteps:\n  - id: s\n    persona: reviewer\n---\nx");

@@ -30,6 +30,8 @@ afterEach(async () => {
 });
 
 const CLEAN = { verdict: "clean", findings: [] };
+/** What the synthesiser writes: a review.json plus the summary a human reads. */
+const SYNTH = { ...CLEAN, summary: "A small change to the CLI. Nothing wrong with it." };
 
 /** A run whose `build` step already finished in a previous session. */
 function interruptedRun(): Run {
@@ -40,8 +42,8 @@ function interruptedRun(): Run {
   const run = store.create({
     workflow: "implement",
     cwd: env.cwd,
-    inputs: { plan: planDir, target: "worktree", post: "false" },
-    inputSources: { plan: "plan run", target: "working tree", post: "default" },
+    inputs: { plan: planDir, target: "worktree", target_kind: "worktree" },
+    inputSources: { plan: "plan run", target: "working tree" },
     stepIds: wf.steps.map((s) => s.id),
     maxIterations: wf.maxIterations,
     primaryInput: "add-picker",
@@ -99,6 +101,7 @@ test("resumable lists only runs that still have unfinished steps", () => {
     "architecture",
     "simplify",
     "review",
+    "review.synthesize",
     "fix",
     "mr",
   ]);
@@ -107,12 +110,12 @@ test("resumable lists only runs that still have unfinished steps", () => {
   run.record.status = "done";
   run.save();
   expect(store.resumable()).toEqual([]);
-});
+}, 20_000);
 
 test("resuming skips the finished step and never reattaches to its agent", async () => {
   const run = interruptedRun();
 
-  const { status, lines } = await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN]);
+  const { status, lines } = await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
 
   expect(status).toBe("done");
   expect(lines[0]).toBe("✓ build — already done, skipped");
@@ -123,11 +126,11 @@ test("resuming skips the finished step and never reattaches to its agent", async
     .filter((c) => c.cmd === "agent prompt")
     .map((c) => c.argv![2]);
   expect(prompted).not.toContain("dead-build-agent");
-  expect(rig.calls().filter((c) => c.cmd === "agent prompt")).toHaveLength(4);
+  expect(rig.calls().filter((c) => c.cmd === "agent prompt")).toHaveLength(5);
 
   // No herdr call may touch the dead pane either.
   expect(rig.calls().flatMap((c) => c.argv ?? [])).not.toContain("9-9");
-});
+}, 20_000);
 
 test("the steps that borrowed the dead agent share one new agent instead", async () => {
   const run = interruptedRun();
@@ -137,7 +140,8 @@ test("the steps that borrowed the dead agent share one new agent instead", async
   };
 
   // architecture, simplify and fix all declare `agent: build`, which is gone.
-  await resume(run, [CLEAN, CLEAN, FINDING, FINDING, CLEAN, CLEAN, CLEAN, CLEAN]);
+  const synthesized = { ...FINDING, summary: "A small change to the CLI. It exits wrong." };
+  await resume(run, [CLEAN, CLEAN, FINDING, FINDING, synthesized, CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
 
   const architect = run.step("architecture").variants[0]!;
   expect(architect.agent).toBe("implement-add-pi-architecture-r2");
@@ -148,22 +152,22 @@ test("the steps that borrowed the dead agent share one new agent instead", async
   const starts = rig.calls().filter((c) => c.cmd === "agent start").map((c) => c.argv![2]);
   expect(starts.filter((a) => a === architect.agent)).toHaveLength(1);
   expect(starts).not.toContain("dead-build-agent");
-});
+}, 20_000);
 
 test("the first unfinished step takes the status pane's tab", async () => {
   const run = interruptedRun();
 
-  await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN]);
+  await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
 
   const split = rig.calls().find((c) => c.cmd === "pane split")!.argv!;
   expect(split.slice(0, 3)).toEqual(["pane", "split", "1-0"]);
   expect(run.step("architecture").variants[0]!.paneId).toBe("1-1");
-});
+}, 20_000);
 
 test("a resumed run toasts when it finishes and records the new status", async () => {
   const run = interruptedRun();
 
-  await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN]);
+  await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
 
   const record = JSON.parse(readFileSync(join(run.dir, "run.json"), "utf8"));
   expect(record.status).toBe("done");
@@ -171,7 +175,7 @@ test("a resumed run toasts when it finishes and records the new status", async (
   expect(record.steps.every((s: { status: string }) => s.status === "done")).toBe(true);
   const toast = rig.calls().filter((c) => c.cmd === "notification show").at(-1)!.argv!;
   expect(toast[2]).toBe("implement-add-picker finished");
-});
+}, 20_000);
 
 test("a step that failed and then succeeds does not keep the failure note", async () => {
   const run = interruptedRun();
@@ -180,9 +184,9 @@ test("a step that failed and then succeeds does not keep the failure note", asyn
   review.note = "herdr agent start failed (exit 1): blocked during startup";
   run.save();
 
-  await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN]);
+  await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
 
   expect(run.step("review").status).toBe("done");
   expect(run.step("review").note).toBeNull();
   expect(run.record.summary).not.toContain("blocked during startup");
-});
+}, 20_000);

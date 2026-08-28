@@ -17,7 +17,7 @@ export interface Layer {
 export const INPUT_STRATEGIES = ["goal", "plan-dir", "work-source", "diff-target", "ticket", "flag"] as const;
 
 /** What a step may declare it needs before it is worth starting. */
-export const STEP_REQUIREMENTS = ["gitlab"] as const;
+export const STEP_REQUIREMENTS = ["gitlab", "mr-target"] as const;
 export type StepRequirement = (typeof STEP_REQUIREMENTS)[number];
 export type InputStrategy = (typeof INPUT_STRATEGIES)[number];
 
@@ -44,10 +44,12 @@ export interface RoundDef {
 
 export interface ChoiceDef {
   title: string;
-  /** Exactly one of these three: chain a Workflow, prompt an agent, or just end. */
+  /** Exactly one of these four: chain a Workflow, prompt an agent, post the run's
+   * review to the merge request it reviewed, or just end. */
   run?: string;
   round?: RoundDef;
   stop?: boolean;
+  post?: boolean;
   /** Inputs forwarded to a chained Workflow; values are templated. */
   inputs?: Record<string, string>;
   /** How often this choice may be taken in one Run. */
@@ -77,8 +79,10 @@ export interface StepDef {
   choices?: ChoiceDef[];
   /** Only run this step when its workflow is the one being run, not when embedded. */
   standalone?: boolean;
-  /** Skipped, with a note, when the environment cannot support it. */
-  requires?: StepRequirement;
+  /** Skipped, with a note, when this run cannot give the step what it asks for. */
+  requires?: StepRequirement[];
+  /** This step reconciles that earlier step's parallel Outputs into one. */
+  fanIn?: string;
   /** `from` is the gate; `back_to` is the earliest step to run again (default `from`). */
   repeat?: { from: string; back_to?: string; max?: number };
 }
@@ -160,7 +164,11 @@ function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
     }
     if (typeof s.prompt === "string") step.promptSection = s.prompt;
     if (s.standalone === true) step.standalone = true;
-    if (typeof s.requires === "string") step.requires = s.requires as StepRequirement;
+    if (typeof s.requires === "string") step.requires = [s.requires as StepRequirement];
+    else if (Array.isArray(s.requires)) {
+      step.requires = s.requires.filter((r) => typeof r === "string") as StepRequirement[];
+    }
+    if (typeof s.fan_in === "string") step.fanIn = s.fan_in;
     if (Array.isArray(s.choices)) step.choices = s.choices.map(parseChoice);
     if (s.repeat && typeof s.repeat === "object") {
       const r = s.repeat as Record<string, unknown>;
@@ -199,6 +207,7 @@ function parseChoice(raw: unknown): ChoiceDef {
   const choice: ChoiceDef = { title: str(c.title) };
   if (typeof c.run === "string") choice.run = c.run;
   if (c.stop === true) choice.stop = true;
+  if (c.post === true) choice.post = true;
   if (typeof c.max === "number") choice.max = c.max;
   const round = parseRound(c);
   if (round) choice.round = round;
@@ -375,7 +384,12 @@ function expand(
         : {};
       // Prefixed ids mean the embedded steps' own back-references must move too.
       const ids = new Map(
-        embedded.map((child) => [child.id, embedded.length === 1 ? step.id : `${step.id}.${child.id}`]),
+        embedded.map((child) => [
+          child.id,
+          // The one embedded step IS the embedding step, and so is a child that
+          // shares its name; only that child's siblings need the prefix to stay unique.
+          embedded.length === 1 || child.id === step.id ? step.id : `${step.id}.${child.id}`,
+        ]),
       );
       const rebase = (id: string | undefined) => (id !== undefined ? (ids.get(id) ?? id) : undefined);
       for (const child of embedded) {
@@ -393,6 +407,7 @@ function expand(
           parallel: step.parallel ?? child.parallel,
           repeat: step.repeat ?? rebaseRepeat(child.repeat, rebase),
           agent: step.agent ?? rebase(child.agent),
+          fanIn: step.fanIn ?? rebase(child.fanIn),
           skill: step.skill ?? child.skill,
           ...(child.choices ? { choices: child.choices.map((c) => rebaseChoice(c, rebase)) } : {}),
         });
@@ -457,10 +472,10 @@ export function validateWorkflow(
   const where = (stepId: string) => `workflow "${wf.name}" step "${stepId}"`;
 
   for (const step of wf.steps) {
-    if (step.requires && !(STEP_REQUIREMENTS as readonly string[]).includes(step.requires)) {
-      errors.push(
-        `${where(step.id)}: unknown requires "${step.requires}" (known: ${STEP_REQUIREMENTS.join(", ")})`,
-      );
+    for (const need of step.requires ?? []) {
+      if (!(STEP_REQUIREMENTS as readonly string[]).includes(need)) {
+        errors.push(`${where(step.id)}: unknown requires "${need}" (known: ${STEP_REQUIREMENTS.join(", ")})`);
+      }
     }
   }
 
@@ -501,6 +516,13 @@ export function validateWorkflow(
     }
     if (isChoice) errors.push(...choiceErrors(wf, step, defs, defaults));
 
+    if (step.fanIn && !earlier(wf, step, step.fanIn)) {
+      errors.push(`${where(step.id)}: fan_in "${step.fanIn}" is not an earlier step`);
+    }
+    // The reconciled review is this step's Output; without one there is nothing to read.
+    if (step.fanIn && !step.output) {
+      errors.push(`${where(step.id)}: fan_in needs an output, so the synthesis can be read`);
+    }
     if (step.agent && !earlier(wf, step, step.agent)) {
       errors.push(`${where(step.id)}: agent "${step.agent}" is not an earlier step`);
     }
@@ -553,8 +575,8 @@ function choiceErrors(
     const at = choice.title ? `choice "${choice.title}"` : `choice ${i + 1}`;
     const where = `workflow "${wf.name}" step "${step.id}" ${at}`;
     if (!choice.title) errors.push(`${where}: needs a title`);
-    const forms = [choice.run, choice.round, choice.stop].filter((f) => f !== undefined).length;
-    if (forms !== 1) errors.push(`${where}: needs exactly one of run, prompt or stop`);
+    const forms = [choice.run, choice.round, choice.stop, choice.post].filter((f) => f !== undefined).length;
+    if (forms !== 1) errors.push(`${where}: needs exactly one of run, prompt, post or stop`);
 
     for (const round of [choice.round, choice.followUp]) {
       if (!round) continue;

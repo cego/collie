@@ -3,7 +3,15 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import type { ChoiceDef, Definitions, ResolvedStep, ResolvedWorkflow, RoundDef, Variant } from "./definitions";
+import type {
+  ChoiceDef,
+  Definitions,
+  ResolvedStep,
+  ResolvedWorkflow,
+  RoundDef,
+  StepRequirement,
+  Variant,
+} from "./definitions";
 import { roundVariant, stepVariants, variantKeys } from "./definitions";
 import type { Defaults } from "./config";
 import { configValue, readConfig, writeConfigValue } from "./config";
@@ -18,10 +26,13 @@ import {
   formatFindings,
   parseFindings,
   parseReviewOutput,
+  parseSynthesis,
+  renderReview,
+  REVIEW_FILE,
   splitDisputed,
-  unionFindings,
   type Finding,
   type ReviewOutput,
+  type Synthesis,
 } from "./output";
 import {
   agentName,
@@ -131,25 +142,27 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     // A step that needs something this machine or repo does not have is not a
     // failure: it is work that cannot be done here, and the run carries on.
     let extras: Record<string, unknown> | undefined;
-    if (step.requires === "gitlab") {
-      const ready = await gitlabReadiness(run.record.cwd, shellRun);
-      if (!ready.ok) {
+    if ((step.requires?.length ?? 0) > 0) {
+      const unmet = await unmetRequirement(o, step.requires!);
+      if (unmet) {
         record.status = "done";
-        record.note = `skipped: ${ready.reason}`;
+        record.note = `skipped: ${unmet}`;
         run.save();
-        out(`◦ ${step.id} — skipped: ${ready.reason}`);
+        out(`◦ ${step.id} — skipped: ${unmet}`);
         index += 1;
         continue;
       }
-      const facts = await mrFacts(
-        {
-          cwd: run.record.cwd,
-          inputs: run.record.inputs,
-          configuredAssignee: configValue(readConfig(o.env.configDir), "gitlab.assignee"),
-        },
-        shellRun,
-      );
-      extras = mrVars(facts);
+      if (step.requires!.includes("gitlab")) {
+        const facts = await mrFacts(
+          {
+            cwd: run.record.cwd,
+            inputs: run.record.inputs,
+            configuredAssignee: configValue(readConfig(o.env.configDir), "gitlab.assignee"),
+          },
+          shellRun,
+        );
+        extras = mrVars(facts);
+      }
     }
 
     if ((step.choices?.length ?? 0) > 0) {
@@ -225,6 +238,8 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
       out(`  ${mark} ${v.record.label}${v.record.error ? ` — ${v.record.error}` : ""}`);
     }
     await markTab(o, outcomes.map((v) => v.record));
+    // The whole point of a synthesis is that a human can read it here.
+    if (step.fanIn) printReview(o);
 
     if (blocked.length > 0) {
       return await finish(o, "blocked", viewSource, `${step.id} needs you`);
@@ -299,6 +314,7 @@ async function runStep(
   // A step that has not run in this process gets fresh agents: a resumed Run
   // never reattaches, and the recorded panes may not exist any more.
   const previous = ctx.ran.has(step.id) ? run.step(step.id).variants : [];
+  const fanIn = fanInPane(step, ctx);
   const records: VariantRecord[] = [];
 
   // Start (or reuse) every agent first, then prompt them all, so they work at once.
@@ -333,6 +349,17 @@ async function runStep(
         await herdr.paneClose(prior.paneId);
         record.paneId = replacement;
         record.tabId = prior.tabId;
+      } else if (i === 0 && fanIn) {
+        // A fan-in step belongs with the Outputs it reconciles: under the last of
+        // them, in their tab. A third column would only make all three unreadable.
+        const source = fanIn;
+        record.paneId = await herdr.paneSplit({
+          paneId: source.paneId!,
+          direction: "down",
+          ratio: 0.5,
+          cwd: run.record.cwd,
+        });
+        record.tabId = source.tabId;
       } else if (i > 0) {
         // Variants of one step sit side by side in that step's tab, evenly.
         record.paneId = await herdr.paneSplit({
@@ -463,6 +490,15 @@ async function runChoiceStep(
     out(`  ▸ ${choice.title}`);
 
     if (choice.stop) return { status: "done", note: `chose "${choice.title}"` };
+
+    if (choice.post) {
+      const result = await postReview(o);
+      out(`  ${result.message}`);
+      run.log(result.message);
+      // A note that did not land is not an answer, so the menu comes back.
+      if (!result.ok) continue;
+      return { status: "done", note: `chose "${choice.title}" — ${result.message}` };
+    }
 
     if (choice.run) {
       const child = await chain(o, choice, prompts);
@@ -606,8 +642,26 @@ async function runRound(
   return outcome;
 }
 
+/**
+ * The review reaches the merge request as one note, and the engine sends it: asking
+ * an agent to repeat a file it has already written is how "verbatim" stops being true.
+ */
+async function postReview(o: EngineOptions): Promise<{ ok: boolean; message: string }> {
+  const path = join(o.run.dir, REVIEW_FILE);
+  if (!existsSync(path)) return { ok: false, message: `there is no ${REVIEW_FILE} to post` };
+  const target = o.run.record.inputs.target ?? "";
+  const iid = target.startsWith("mr:") ? target.slice(3) : "";
+  if (!iid) return { ok: false, message: `${target || "this run"} is not a merge request` };
+
+  const note = await shellRun("glab", ["mr", "note", iid, "--message", readFileSync(path, "utf8")], o.run.record.cwd);
+  return note.code === 0
+    ? { ok: true, message: `posted the review to !${iid}` }
+    : { ok: false, message: `glab mr note !${iid} failed (exit ${note.code})` };
+}
+
 function choiceHint(choice: ChoiceDef): string {
   if (choice.run) return `runs ${choice.run}`;
+  if (choice.post) return "one note on the merge request";
   if (choice.stop) return "ends here";
   return choice.round?.agent ? `prompts ${choice.round.agent}` : "a fresh agent";
 }
@@ -765,15 +819,26 @@ async function collect(
     return { record, output: null, review: null };
   }
 
+  const hasVerdict = parsed !== null && typeof parsed === "object" && "verdict" in (parsed as object);
+  if (step.fanIn && !hasVerdict) {
+    record.status = "failed";
+    record.error = `${record.output}: a fan-in Output needs a verdict`;
+    return { record, output: parsed, review: null };
+  }
+
   let review: ReviewOutput | null = null;
-  if (parsed !== null && typeof parsed === "object" && "verdict" in (parsed as object)) {
-    const result = parseReviewOutput(text, record.output);
+  if (hasVerdict) {
+    const result = step.fanIn ? parseSynthesis(text, record.output) : parseReviewOutput(text, record.output);
     if (!result.ok) {
       record.status = "failed";
       record.error = result.error;
       return { record, output: parsed, review: null };
     }
     review = result.value;
+    // The shape of a review is the engine's to decide, so every one reads alike.
+    if (step.fanIn) {
+      writeFileSync(join(o.run.dir, REVIEW_FILE), renderReview(result.value as Synthesis));
+    }
     collectList(o, "deferred", parsed);
     collectMr(o, parsed);
     // A re-run step must not double-report what it disputed last time.
@@ -869,6 +934,49 @@ function collectList(o: EngineOptions, key: "deferred", parsed: unknown): void {
   }
 }
 
+/** Whether this run can give a step what it declared it needs, and why not. */
+async function unmetRequirement(o: EngineOptions, requires: StepRequirement[]): Promise<string | null> {
+  for (const need of requires) {
+    if (need === "gitlab") {
+      const ready = await gitlabReadiness(o.run.record.cwd, shellRun);
+      if (!ready.ok) return ready.reason;
+    }
+    if (need === "mr-target" && o.run.record.inputs.target_kind !== "mr") {
+      return `${o.run.record.inputs.target || "this run"} is not a merge request`;
+    }
+  }
+  return null;
+}
+
+/** The pane a fan-in step splits from: the last of the Outputs it reconciles. */
+function fanInPane(step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
+  if (!step.fanIn) return null;
+  const source = ctx.outputs.get(step.fanIn)?.at(-1)?.record;
+  return source?.paneId ? source : null;
+}
+
+/** The Output files a fan-in step reconciles, for its own prompt to read. */
+function fanInFiles(
+  o: EngineOptions,
+  step: ResolvedStep,
+  outputs: Map<string, VariantOutcome[]>,
+): string {
+  if (!step.fanIn) return "";
+  return (outputs.get(step.fanIn) ?? [])
+    .map((v) => (v.record.output ? `- ${join(o.run.dir, v.record.output)}` : null))
+    .filter((line): line is string => line !== null)
+    .join("\n");
+}
+
+/** The synthesised review, in the strip, where the human is already looking. */
+function printReview(o: EngineOptions): void {
+  const path = join(o.run.dir, REVIEW_FILE);
+  if (!existsSync(path)) return;
+  o.out("");
+  o.out(readFileSync(path, "utf8").trimEnd());
+  o.out("");
+}
+
 /** The agent of an earlier step, but only one this process actually started. */
 function borrowedAgent(o: EngineOptions, step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
   if (!step.agent) return null;
@@ -909,6 +1017,7 @@ function buildPrompt(
       ]),
     ),
     findings: formatFindings(lastFindings(o, step, outputs)),
+    fan_in: fanInFiles(o, step, outputs),
     disputed: formatFindings(o.run.record.disputed),
     run: { dir: o.run.dir, id: o.run.id, slug: o.run.record.slug },
     output_path: outputPath,
@@ -959,7 +1068,9 @@ interface Verdict {
 
 function verdictOf(outcomes: VariantOutcome[], disputed: Finding[]): Verdict {
   const reviews = outcomes.map((v) => v.review).filter((r): r is ReviewOutput => r !== null);
-  const split = splitDisputed(unionFindings(reviews), disputed);
+  // The gate reads one synthesised review: reconciling several reviewers is the
+  // synthesiser's job now, not a union taken here.
+  const split = splitDisputed(reviews.flatMap((r) => r.findings), disputed);
   // Clean means "nothing left for the implementer", not "nobody said anything":
   // a finding the implementer already rejected with a reason is the human's call.
   return {

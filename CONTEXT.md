@@ -24,14 +24,18 @@
 
 **Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking copies a baseline definition into a Layer.
 
-**Fan-in** — Combining several parallel reviewer Outputs: the union of their findings. The implementer may mark an item `disputed` with a reason; the reviewers are shown those reasons and a disputed finding no longer drives the loop, so the run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts it back in front of the implementer.
+**Fan-in** — Combining several parallel Outputs into one. A Step declares `fan_in: <step>`, is given that Step's Output files, and reconciles them itself; it sits in that Step's tab. The engine no longer unions findings.
+
+**Synthesis** — What a fan-in Step over reviewers writes: one review of the change, deduplicated across models, disagreements settled from the diff, plus a `summary` and the findings it `dropped` with a reason for each. The engine renders it to `review.md` — summary, then findings by severity — which is what a human reads and what a Choice may post to the merge request. It is the loop's gate: the fix Step sees the Synthesis, never the raw reviews.
+
+**Disputed** — The implementer may mark a finding `disputed` with a reason; the reviewers are shown those reasons and a disputed finding no longer drives the loop, so the run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts it back in front of the implementer.
 
 ## Baseline Workflows
 - `plan` — interviews the human, writes `tasks/<slug>/PLAN.md`.
 - `implement` — build from plan → parallel `review` (multi-harness/model) → fix loop, max 5 → clean review on a committed branch → `mr`, which pushes and opens the merge request. That last step is skipped where there is no GitLab to open one on.
-- `review` — standalone; target inferred MR → branch diff → working tree; writes Output + summary; posting to GitLab is opt-in.
+- `review` — standalone; you pick the target; parallel reviewers, then one Synthesis; posting it to the merge request is a Choice.
 
-**Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice either chains to another Workflow (`run`) or prompts a named agent.
+**Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice chains to another Workflow (`run`), prompts a named agent (`prompt`), posts the run's review to the merge request it reviewed (`post`), or just ends the Step (`stop`).
 
 **Chain** — Starting a Workflow from a Choice, with Inputs forwarded. The new Run is a child of the current one.
 

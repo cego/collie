@@ -9,6 +9,8 @@ export interface Finding {
   detail?: string;
   /** A reviewer's answer to the implementer's reason for disputing this finding. */
   rebuttal?: string;
+  /** Why a synthesis dropped this finding; only a `dropped` entry carries one. */
+  reason?: string;
 }
 
 export interface ReviewOutput {
@@ -16,6 +18,17 @@ export interface ReviewOutput {
   findings: Finding[];
   disputed: Finding[];
 }
+
+/** The one review that comes out of several, and the file a human reads it in. */
+export interface Synthesis extends ReviewOutput {
+  /** Two sentences: what the change does, and what is wrong with it. */
+  summary: string;
+  /** What one reviewer raised that this synthesis could not defend from the diff. */
+  dropped: Finding[];
+}
+
+/** The human-facing review, written next to run.json. */
+export const REVIEW_FILE = "review.md";
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -63,6 +76,7 @@ export function parseFindings(raw: unknown, where: string): Parsed<Finding[]> {
     if (typeof o.line === "number") finding.line = o.line;
     if (typeof o.detail === "string") finding.detail = o.detail;
     if (typeof o.rebuttal === "string") finding.rebuttal = o.rebuttal;
+    if (typeof o.reason === "string") finding.reason = o.reason;
     out.push(finding);
   }
   return { ok: true, value: out };
@@ -76,22 +90,61 @@ export function findingKey(f: Finding): string {
   return `${f.file ?? ""}::${f.title.trim().toLowerCase()}`;
 }
 
-/** Fan-in: the union of every reviewer's findings, deduplicated. */
-export function unionFindings(outputs: ReviewOutput[]): Finding[] {
-  const byKey = new Map<string, Finding>();
-  for (const o of outputs) {
-    for (const f of o.findings) {
-      const key = findingKey(f);
-      const kept = byKey.get(key);
-      if (!kept) {
-        byKey.set(key, f);
-      } else if (!kept.rebuttal && f.rebuttal) {
-        // Any reviewer's rebuttal counts, whoever happened to raise the finding first.
-        byKey.set(key, { ...kept, rebuttal: f.rebuttal });
-      }
+/**
+ * A review of reviews: everything `review.json` has, plus the summary a human reads
+ * first and the findings this synthesis decided not to carry.
+ */
+export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
+  const base = parseReviewOutput(text, where);
+  if (!base.ok) return base;
+  const obj = JSON.parse(text) as Record<string, unknown>;
+  if (typeof obj.summary !== "string" || obj.summary.trim() === "") {
+    return { ok: false, error: `${where}: summary is required` };
+  }
+  const dropped = parseFindings(obj.dropped, `${where}: dropped`);
+  if (!dropped.ok) return dropped;
+  for (const [i, finding] of dropped.value.entries()) {
+    // A finding dropped without a reason is a finding lost, not one resolved.
+    if (!finding.reason || finding.reason.trim() === "") {
+      return { ok: false, error: `${where}: dropped[${i}]: reason is required` };
     }
   }
-  return [...byKey.values()];
+  return { ok: true, value: { ...base.value, summary: obj.summary.trim(), dropped: dropped.value } };
+}
+
+/** Worst first; anything a fork's own vocabulary adds sorts after these, by name. */
+const SEVERITIES = ["blocker", "major", "minor"];
+
+function severityOrder(findings: Finding[]): string[] {
+  const present = [...new Set(findings.map((f) => f.severity))];
+  const known = SEVERITIES.filter((s) => present.includes(s));
+  return [...known, ...present.filter((s) => !SEVERITIES.includes(s)).sort()];
+}
+
+/**
+ * The review a human reads, and the note posted to a merge request. Rendered here
+ * rather than asked for, so every review is the same shape: the summary, then the
+ * findings under their severity, and nothing about how it was produced.
+ */
+export function renderReview(synthesis: Synthesis): string {
+  const blocks = [synthesis.summary.trim()];
+  if (synthesis.findings.length === 0) {
+    blocks.push("Nothing to fix.");
+  } else {
+    for (const severity of severityOrder(synthesis.findings)) {
+      const group = synthesis.findings.filter((f) => f.severity === severity);
+      blocks.push(`**${severity.charAt(0).toUpperCase()}${severity.slice(1)}**`);
+      blocks.push(group.map(reviewBullet).join("\n"));
+    }
+  }
+  return `${blocks.join("\n\n")}\n`;
+}
+
+function reviewBullet(finding: Finding): string {
+  const at = finding.file ? `\`${finding.file}${finding.line ? `:${finding.line}` : ""}\` — ` : "";
+  // The detail is a sentence or two; a continuation line keeps it in the same bullet.
+  const detail = finding.detail?.trim() ? `\n  ${finding.detail.trim().replace(/\s*\n\s*/g, " ")}` : "";
+  return `- ${at}${finding.title.trim()}${detail}`;
 }
 
 export interface Split {

@@ -2,12 +2,13 @@
 
 **Status: implemented.** All eight tickets of workflows v2 shipped on `master`; this file
 is the design as settled, and `.scratch/workflows-v2/issues/` records the decisions taken
-where it was silent. The engine additions below exist as `choices:` (with `run`, `prompt`
-and `stop`), `{{run.dir}}`, the `plan-dir` and `work-source` Input strategies, chaining with a
-`parent`/`children` link, `prompt: <section>` overrides, `standalone:` steps and
-`repeat.back_to`. What the design left open and the implementation had to name:
-a `stop` choice, `follow_up` and `config` on a choice, and `standalone` for a menu that
-must not be embedded.
+where it was silent. The engine additions below exist as `choices:` (with `run`, `prompt`,
+`post` and `stop`), `{{run.dir}}`, the `plan-dir` and `work-source` Input strategies,
+chaining with a `parent`/`children` link, `prompt: <section>` overrides, `standalone:`
+steps, `requires:`, `fan_in:` and `repeat.back_to`. What the design left open and the
+implementation had to name: a `stop` choice, `follow_up` and `config` on a choice,
+`standalone` for a menu that must not be embedded, and `fan_in` for the step that
+reconciles several parallel Outputs into one.
 
 Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001, ADR-0002.
 
@@ -23,9 +24,11 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
 
 ## Engine additions
 1. **Choice step** — `choices:` renders a menu in the runner pane (picker TUI). Each choice
-   is either `run: <workflow>` (chain: start that Workflow with forwarded Inputs, e.g.
-   `plan: {{run.dir}}/plan`) or `prompt: <text>` (send to a named agent, then re-offer the
-   menu after its Output). Selecting a choice records it in the run.
+   is `run: <workflow>` (chain: start that Workflow with forwarded Inputs, e.g.
+   `plan: {{run.dir}}/plan`), `prompt: <text>` (send to a named agent, then re-offer the
+   menu after its Output), `post: true` (the engine sends the run's `review.md` to the
+   merge request as one `glab mr note`) or `stop: true`. Selecting a choice records it in
+   the run.
 2. **Run-dir artefacts** — `{{run.dir}}` in prompts; `plan-dir` Input strategy = newest
    finished `plan` Run for this repo with `plan/SPEC.md`, else ask. `work-source` widens
    that to the three newest plus a Linear id from the branch, and asks with a menu.
@@ -35,10 +38,20 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
 5. **Bounded unattended variant** — an embedding step may override the embedded
    workflow's prompt section (`prompt: unattended`) so `architecture` has an attended and
    an unattended body.
+6. **Fan-in step** — `fan_in: <earlier step>` gives a Step that Step's Output files as
+   `{{fan_in}}` and puts its pane in that Step's tab. Its own Output must be a Synthesis
+   (`verdict`, `findings`, `summary`, `dropped`, each dropped finding with a `reason`),
+   which the engine renders to `{{run.dir}}/review.md` and prints in the strip. Reconciling
+   several reviewers is that Step's job; the engine no longer unions findings.
+7. **Step requirements** — `requires:` takes one name or a list. `gitlab` is glab plus a
+   GitLab remote; `mr-target` is a run whose `target` is a merge request. An unmet
+   requirement is a skip with a note that names the gap, never a failed run.
 
 ## Tabs and panes
 One tab per Step. A Step's parallel variants are equal side-by-side splits inside that
-Step's tab, so two reviewers are one tab of two panes rather than two tabs. The runner's
+Step's tab, so two reviewers are one tab of two panes rather than two tabs. A Step with
+`fan_in:` opens no tab either: it splits down from the last pane of the Step it
+reconciles, so the synthesis sits under the reviews it came from. The runner's
 own pane becomes a thin `status` strip (15%) along the bottom of the run's first tab only,
 never beside an agent; a Choice menu zooms it to the whole tab while it is open. A Step
 that continues an earlier agent (`agent: <step>`) opens no tab and no pane — it renames
@@ -85,9 +98,9 @@ agent (`agent: build`) for build/architecture/simplify/fix.
    passes; report saved to `{{run.dir}}`, never opened; others → `deferred`.
 3. `simplify` — `/code-simplification`, behaviour-preserving, tests must stay green.
 4. `review` — `use: review`, `fresh: true`, parallel variants opus/xhigh + sonnet/xhigh.
-5. `fix` — `repeat: {from: review}`, max 5: apply union of findings, `disputed` allowed,
-   fixup commits; then loop back through `simplify` → `review` (simplify IS in the loop,
-   architecture is not).
+5. `fix` — `repeat: {from: review.synthesize}`, max 5: apply the one synthesised review's
+   findings, `disputed` allowed, fixup commits; then loop back through `simplify` →
+   `review` (simplify IS in the loop, architecture is not).
 6. `mr` — the same implementer pushes the branch and opens the merge request with `glab`,
    assigned to `gitlab.assignee` from `config.json` or whoever `glab api user` says. The
    description follows the repo's own template
@@ -102,7 +115,7 @@ agent (`agent: build`) for build/architecture/simplify/fix.
 Blocked at max with open findings (unchanged).
 
 ### review
-Inputs: `target` (diff-target), `post` (flag). The target is chosen, not guessed: the
+Inputs: `target` (diff-target). The target is chosen, not guessed: the
 picker lists this branch's open MR (or, failing that, the open MRs I am on either side
 of), the branch against its base, and the working tree when it is dirty, in the order
 plain inference would have picked them — so Enter reproduces the old behaviour — plus
@@ -112,7 +125,13 @@ shape. Embedded in `implement` the target is inferred silently, because an embed
 step never asks. One `reviewer` Persona running BOTH
 `/code-review` (standards + spec axes; spec = plan dir if inferable, else "no spec") and
 `/code-review-and-quality` (five axes), merged into one Output. Parallel variants
-opus + sonnet in baseline. Post to GitLab only on `post: true`.
+opus + sonnet in baseline. Then `synthesize` (`fan_in: review`, a fresh agent on the
+default model) reads both reviews and the diff and writes the one review this change
+gets: findings deduplicated, disagreements settled from the diff, anything it cannot
+defend listed under `dropped` with a reason. The engine renders that to `review.md` and
+prints it. Standalone and pointed at an MR, a last Choice offers **Post to MR** — one
+`glab mr note` with `review.md` verbatim — or **Don't post**; every other target and
+every embedded review skips it (`standalone: true`, `requires: [mr-target, gitlab]`).
 
 ### architecture (standalone, attended)
 Inputs: none (cwd). `architect` runs `/improve-codebase-architecture` with the real
