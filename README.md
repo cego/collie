@@ -71,13 +71,15 @@ it — including `implement`.
   "effort": "high",
   "max_iterations": 5,
   "handoff_timeout_ms": 7200000,
-  "models": { "opencode": ["mycorp/local-model"] }
+  "models": { "opencode": ["mycorp/local-model"] },
+  "trust": "ask"
 }
 ```
 
 `models` adds models the harness adapter table does not already accept. `effort` is
 optional — leave it out and each harness uses its own default. An unknown harness,
-model or effort fails validation before a single tab opens.
+model or effort fails validation before a single tab opens. `trust` is what a run does
+about a directory the harness has not been trusted with: see "The first run in a repo".
 
 ## Harnesses
 
@@ -178,11 +180,34 @@ A step is finished when its `output:` file exists, not when the agent goes quiet
 interviewing agent goes quiet waiting for you. Until the file appears you get one
 toast and the runner keeps waiting.
 
-The same holds at the other end: the first time a harness runs in a directory it may
-stop on a prompt of its own — claude asks whether it may work there — and `agent start`
-reports the agent blocked. That is not a failure, so the runner says which pane wants you,
-toasts, and waits for you to answer it. (It cannot answer for you: the dialog shuffles its
-options, so there is no safe key to send.)
+### The first run in a repo
+
+claude asks once per directory whether it may work there, and it asks inside its own tab,
+where it is easy to miss. So the runner asks you first, before a single tab opens:
+
+```
+claude has not worked in /home/mk/work/some-repo before
+❯ Trust it now                  records it where the harness looks
+  Let claude ask me in its tab  the run waits for you
+```
+
+`Trust it now` writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
+which is where claude keeps the answer to its own dialog — atomically, leaving every other
+project and setting untouched, and with the previous file copied to
+`claude.json.bak` in the plugin state dir. Nothing else in the file is read or changed.
+
+To do it in advance, for as many repos as you like:
+
+```sh
+bin/herdr-workflows trust ~/work/repo-a ~/work/repo-b   # no argument: the current directory
+```
+
+`trust` in `config.json` decides what a run does when it meets an untrusted directory:
+`ask` (default), `auto` (trust it and say so), or `never` (leave it to claude).
+
+If you do let claude ask, nothing breaks: `agent start` reports the agent blocked, which is
+not a failure, so the runner says which pane wants you, toasts, and waits. It cannot answer
+for you — the dialog shuffles its options between runs, so there is no safe key to send.
 
 Outputs are JSON. One carrying a `verdict` is validated against the review schema, so
 a loop gate can always read it:

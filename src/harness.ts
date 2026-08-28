@@ -1,6 +1,8 @@
 // How to start each supported agent CLI, pass it a model, and inject a Persona.
 // Personas are injected, never installed as harness-native config (docs/SPEC.md).
 
+import { claudeTrust, type Trust } from "./trust";
+
 export interface HarnessAdapter {
   id: string;
   /** herdr agent kind, i.e. the canonical executable. */
@@ -13,6 +15,8 @@ export interface HarnessAdapter {
   personaArgs?(personaFile: string): string[];
   /** Present when the harness lets a Step ask for a reasoning effort level. */
   effortArgs?(effort: string): string[];
+  /** Present when the harness asks before it will work in a directory. */
+  trust?(home: string, backupDir: string): Trust;
   models: string[];
   modelPattern?: RegExp;
   efforts?: string[];
@@ -25,6 +29,7 @@ export const HARNESSES: Record<string, HarnessAdapter> = {
     modelArgs: (model) => ["--model", model],
     personaArgs: (file) => ["--append-system-prompt-file", file],
     effortArgs: (effort) => ["--effort", effort],
+    trust: claudeTrust,
     models: ["opus", "sonnet", "haiku", "opusplan"],
     modelPattern: /^claude-[a-z0-9.-]+$/,
     efforts: ["low", "medium", "high", "xhigh", "max"],

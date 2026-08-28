@@ -89,6 +89,8 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
   run.record.finished_at = null;
   run.save();
 
+  await ensureTrusted(o);
+
   const indexOf = (id: string) => wf.steps.findIndex((s) => s.id === id);
   const repeats = wf.steps
     .map((s, at) =>
@@ -553,6 +555,41 @@ async function ensureConfig(
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * A harness that asks before it will work in a directory asks in its own pane, where
+ * it is easy to miss and impossible to answer for someone else. So the question is put
+ * here instead, once per directory, before a single tab opens.
+ */
+async function ensureTrusted(o: EngineOptions): Promise<void> {
+  if (o.defaults.trust === "never") return;
+  const cwd = o.run.record.cwd;
+  const seen = new Set<string>();
+
+  for (const step of o.wf.steps) {
+    for (const variant of stepVariants(step, o.defaults)) {
+      if (seen.has(variant.harness)) continue;
+      seen.add(variant.harness);
+      const trust = HARNESSES[variant.harness]?.trust?.(o.env.home, o.env.stateDir);
+      if (!trust || trust.state(cwd) !== "untrusted") continue;
+
+      if (o.defaults.trust === "ask") {
+        if (!o.prompts) continue;
+        const answer = await o.prompts.menu(
+          [
+            { id: "trust", title: "Trust it now", subtitle: "records it where the harness looks" },
+            { id: "ask", title: "Let claude ask me in its tab", subtitle: "the run waits for you" },
+          ],
+          { header: `${variant.harness} has not worked in ${cwd} before`, footer: "↑↓ move · Enter choose" },
+        );
+        if (answer?.id !== "trust") continue;
+      }
+      const result = trust.grant(cwd);
+      o.out(`  ${result.message}`);
+      o.run.log(`trust ${variant.harness}: ${result.message}`);
+    }
+  }
+}
 
 /** herdr says this when the harness stopped on a prompt before it was ready to work. */
 function blockedAtStartup(e: unknown): boolean {

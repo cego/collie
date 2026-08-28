@@ -16,6 +16,8 @@ export interface PluginContext {
 
 export interface PluginEnv {
   pluginRoot: string;
+  /** The human's home, where a harness keeps what it remembers between sessions. */
+  home: string;
   configDir: string;
   stateDir: string;
   binPath: string;
@@ -65,6 +67,7 @@ export function readEnv(env: Record<string, string | undefined> = process.env): 
 
   return {
     pluginRoot,
+    home,
     configDir:
       first(env, "HERDR_PLUGIN_CONFIG_DIR") ?? `${home}/.config/herdr/plugins/${PLUGIN_ID}`,
     stateDir:

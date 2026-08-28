@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Rig } from "./support/recorder";
-import { installBaseline, runWorkflow } from "./support/engine";
+import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { filterItems, renderList } from "../src/picker";
 
@@ -328,4 +328,74 @@ Grill me about {{inputs.goal}}.
   expect(rig.calls().find((c) => c.cmd === "agent prompt")!.argv![3]).toBe(
     `/grill-with-docs Your task for this step is in ${prompt} — read it and follow it.`,
   );
+});
+
+/** A ~/.claude.json in the rig's HOME, which is where the runner will look. */
+function claudeSeen(rig: Rig, projects: Record<string, unknown>): void {
+  writeFileSync(join(rig.root, ".claude.json"), JSON.stringify({ projects }, null, 2));
+}
+
+test("an untrusted directory is offered up front, so no tab ever stops on the dialog", async () => {
+  claudeSeen(rig, {});
+  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+  const prompts = scriptedPrompts(["Trust it now"]);
+
+  const { run, status, lines } = await runWorkflow(rig, "solo", { goal: "g" }, { prompts });
+
+  expect(status).toBe("done");
+  expect(prompts.offered).toEqual([["Trust it now", "Let claude ask me in its tab"]]);
+  const config = JSON.parse(readFileSync(join(rig.root, ".claude.json"), "utf8"));
+  expect(config.projects[run.record.cwd].hasTrustDialogAccepted).toBe(true);
+  expect(lines.some((l) => l.includes("trusted"))).toBe(true);
+  // Nothing was blocked, so nothing had to wait.
+  expect(lines.some((l) => l.includes("waiting for you in its pane"))).toBe(false);
+});
+
+test("declining leaves claude to ask, and the run goes ahead anyway", async () => {
+  claudeSeen(rig, {});
+  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+  const prompts = scriptedPrompts(["Let claude ask me in its tab"]);
+
+  const { status } = await runWorkflow(rig, "solo", { goal: "g" }, { prompts });
+
+  expect(status).toBe("done");
+  const config = JSON.parse(readFileSync(join(rig.root, ".claude.json"), "utf8"));
+  expect(config.projects).toEqual({});
+});
+
+test("a directory claude already trusts is not mentioned at all", async () => {
+  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+  const prompts = scriptedPrompts([]);
+
+  const run = async () => await runWorkflow(rig, "solo", { goal: "g" }, { prompts });
+
+  claudeSeen(rig, { [rig.projectDir]: { hasTrustDialogAccepted: true } });
+  expect((await run()).status).toBe("done");
+  expect(prompts.offered).toEqual([]);
+});
+
+test("config.json can turn the question off for good", async () => {
+  claudeSeen(rig, {});
+  writeFileSync(join(rig.configDir, "config.json"), JSON.stringify({ trust: "never" }));
+  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+  const prompts = scriptedPrompts([]);
+
+  const { status } = await runWorkflow(rig, "solo", { goal: "g" }, { prompts });
+
+  expect(status).toBe("done");
+  expect(prompts.offered).toEqual([]);
+});
+
+test("config.json can also answer it in advance", async () => {
+  claudeSeen(rig, {});
+  writeFileSync(join(rig.configDir, "config.json"), JSON.stringify({ trust: "auto" }));
+  rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+  const prompts = scriptedPrompts([]);
+
+  const { run, status } = await runWorkflow(rig, "solo", { goal: "g" }, { prompts });
+
+  expect(status).toBe("done");
+  expect(prompts.offered).toEqual([]);
+  const config = JSON.parse(readFileSync(join(rig.root, ".claude.json"), "utf8"));
+  expect(config.projects[run.record.cwd].hasTrustDialogAccepted).toBe(true);
 });

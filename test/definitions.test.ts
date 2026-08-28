@@ -234,6 +234,7 @@ test("user defaults come from config.json in the config layer", () => {
     maxIterations: 2,
     handoffTimeoutMs: 60_000,
     models: { opencode: ["local/foo"] },
+    trust: "ask",
   });
 });
 

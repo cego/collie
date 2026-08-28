@@ -13,6 +13,8 @@ export interface Defaults {
   handoffTimeoutMs: number;
   /** Extra models to accept per harness, for models the adapter table does not list. */
   models: Record<string, string[]>;
+  /** What to do about a directory the harness has not been trusted with yet. */
+  trust: "ask" | "auto" | "never";
 }
 
 export const FALLBACK_DEFAULTS: Defaults = {
@@ -21,6 +23,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   maxIterations: 5,
   handoffTimeoutMs: 2 * 60 * 60 * 1000,
   models: {},
+  trust: "ask",
 };
 
 /** The whole config file, for values only a prompt cares about (e.g. linear.team). */
@@ -73,5 +76,7 @@ export function loadDefaults(configDir: string): Defaults {
         ? raw.handoff_timeout_ms
         : FALLBACK_DEFAULTS.handoffTimeoutMs,
     models: (raw.models ?? {}) as Record<string, string[]>,
+    trust:
+      raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
   };
 }

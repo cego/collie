@@ -16,5 +16,6 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `naming.ts` | herdr-legal agent names vs readable tab labels |
 | `picker.ts` | The minimal TUI |
 | `fork.ts` | Copy a definition into a later layer |
+| `trust.ts` | Whether a harness will work in a directory, or stop and ask first |
 | `template.ts` | `{{a.b}}` prompt substitution |
 | `config.ts` | User defaults and remembered values in `config.json` |
