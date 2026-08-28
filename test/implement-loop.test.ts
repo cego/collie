@@ -198,16 +198,24 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
 
   const reviewer = join(run.dir, "personas", "reviewer.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
-  // The synthesiser is the same persona on the user's default model, once per round.
+  // The implementer and the synthesiser take the harness's own model at medium: no
+  // `--model` flag at all. The reviewers name opus and sonnet at xhigh and keep them.
   expect(starts.map((c) => c.argv!.slice(7))).toEqual([
-    ["--", "--model", "sonnet", "--append-system-prompt-file", join(run.dir, "personas", "implementer.md")],
+    ["--", "--effort", "medium", "--append-system-prompt-file", join(run.dir, "personas", "implementer.md")],
     ["--", "--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
     ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
-    ["--", "--model", "sonnet", "--append-system-prompt-file", reviewer],
+    ["--", "--effort", "medium", "--append-system-prompt-file", reviewer],
     ["--", "--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
     ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
-    ["--", "--model", "sonnet", "--append-system-prompt-file", reviewer],
+    ["--", "--effort", "medium", "--append-system-prompt-file", reviewer],
   ]);
+  expect(starts.flatMap((c) => c.argv!).filter((a) => a === "--model")).toHaveLength(4);
+
+  // Every step that keeps the implementer's agent records the model it is actually on.
+  for (const step of ["build", "architecture", "simplify", "fix"]) {
+    expect(run.step(step).variants[0]!.model).toBe("default");
+    expect(run.step(step).variants[0]!.effort).toBe("medium");
+  }
   expect(run.step("review").variants.map((v) => [v.model, v.effort])).toEqual([
     ["opus", "xhigh"],
     ["sonnet", "xhigh"],

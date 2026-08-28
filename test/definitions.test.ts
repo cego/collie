@@ -278,6 +278,39 @@ fix it
   expect(validateWorkflow(wf, defs, defaults)).toEqual([]);
 });
 
+test("model: default validates for every harness and is what the step runs on", () => {
+  writeDef(rig.baselineDir, "workflows", "w", `---
+name: w
+steps:
+  - id: s
+    persona: reviewer
+    model: default
+    effort: medium
+    parallel:
+      - { harness: claude, model: default }
+      - { harness: codex, model: default }
+      - { harness: opencode, model: default }
+---
+## s
+do it
+`);
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+  const defs = loadDefinitions(ls());
+  const wf = resolveWorkflow("w", defs, defaults);
+
+  // codex and opencode have no effort flag, so only claude's effort survives validation.
+  expect(validateWorkflow(wf, defs, defaults)).toEqual([
+    'workflow "w" step "s": harness "codex" has no effort setting',
+    'workflow "w" step "s": harness "opencode" has no effort setting',
+  ]);
+  expect(stepVariants(wf.steps[0]!, defaults)).toEqual([
+    { harness: "claude", model: "default", effort: "medium" },
+    { harness: "codex", model: "default", effort: "medium" },
+    { harness: "opencode", model: "default", effort: "medium" },
+  ]);
+});
+
 test("a broken definition file is reported without failing the rest", () => {
   writeDef(rig.baselineDir, "workflows", "broken", "---\nname: broken\nnot a mapping\n---\nx");
   writeDef(rig.baselineDir, "workflows", "fine", "---\nname: fine\nsteps:\n  - id: s\n    persona: reviewer\n---\nx");

@@ -3,6 +3,12 @@
 
 import { claudeTrust, type Trust } from "./trust";
 
+/**
+ * "Whatever this harness picks on its own." No model flag is passed, so the harness
+ * uses its own default rather than one this plugin has to keep in step with it.
+ */
+export const DEFAULT_MODEL = "default";
+
 export interface HarnessAdapter {
   id: string;
   /** herdr agent kind, i.e. the canonical executable. */
@@ -56,12 +62,13 @@ export function harnessNames(): string[] {
 }
 
 export function knownModel(harness: HarnessAdapter, model: string, extra: string[] = []): boolean {
+  if (model === DEFAULT_MODEL) return true;
   if (harness.models.includes(model) || extra.includes(model)) return true;
   return harness.modelPattern?.test(model) ?? false;
 }
 
 export function modelHint(harness: HarnessAdapter, extra: string[] = []): string {
-  const known = [...harness.models, ...extra];
+  const known = [DEFAULT_MODEL, ...harness.models, ...extra];
   const parts: string[] = [];
   if (known.length > 0) parts.push(known.join(", "));
   if (harness.modelPattern) parts.push(`or anything matching ${harness.modelPattern.source}`);
@@ -76,7 +83,8 @@ export function startArgs(
   effort?: string,
 ): string[] {
   return [
-    ...harness.modelArgs(model),
+    // `default` is the absence of a model flag, which is how a harness is asked for its own.
+    ...(model === DEFAULT_MODEL ? [] : harness.modelArgs(model)),
     ...(effort ? (harness.effortArgs?.(effort) ?? []) : []),
     ...(harness.personaArgs?.(personaFile) ?? []),
   ];

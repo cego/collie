@@ -93,7 +93,7 @@ it — including `implement`.
 ```json
 {
   "harness": "claude",
-  "model": "sonnet",
+  "model": "default",
   "effort": "high",
   "max_iterations": 5,
   "handoff_timeout_ms": 7200000,
@@ -102,9 +102,11 @@ it — including `implement`.
 }
 ```
 
-`models` adds models the harness adapter table does not already accept. `effort` is
-optional — leave it out and each harness uses its own default. An unknown harness,
-model or effort fails validation before a single tab opens. `trust` is what a run does
+`models` adds models the harness adapter table does not already accept. `model:
+"default"` means "pass no model flag" — the harness picks its own, and this plugin
+never has to keep a list in step with it. `effort` is optional — leave it out and each
+harness uses its own default. An unknown harness, model or effort fails validation
+before a single tab opens. `trust` is what a run does
 about a directory the harness has not been trusted with: see "The first run in a repo".
 
 ## Harnesses
@@ -115,8 +117,15 @@ about a directory the harness has not been trusted with: see "The first run in a
 | `codex` | `-m` | prompt prefix | — |
 | `opencode` | `--model <provider/model>` | prompt prefix | — |
 
-The baseline `implement` reviews with two claude reviewers, `opus` and `sonnet`, both
-at `xhigh`. Mixing in codex or opencode is a fork away.
+`model: default` is accepted by every harness and means the model flag is left off
+entirely, so the harness starts on whatever it would start on by itself. A pane for such
+a variant is named after the harness (`claude`) rather than a model.
+
+The baseline `implement` builds on `model: default` at `effort: medium` — one implementer
+agent for `build`, `architecture`, `simplify`, `fix` and `mr` — and reviews with two
+claude reviewers, `opus` and `sonnet`, both at `xhigh`; the synthesiser takes the
+implementer's setting because it names none of its own. Mixing in codex or opencode is a
+fork away.
 
 ## Writing a workflow
 

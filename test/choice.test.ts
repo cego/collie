@@ -246,7 +246,7 @@ refine it
     'workflow "bad" step "next" choice 3: needs an output, so the round can finish',
     'workflow "bad" step "next" choice "No such section": unknown prompt section "nowhere" in bad.md (known: draft, refine)',
     'workflow "bad" step "next" choice "No such agent": agent "ghost" is not an earlier step',
-    'workflow "bad" step "next" choice "Bad model": unknown model "haiku" for harness "codex" (known: gpt-5-codex, gpt-5, gpt-5-mini or anything matching ^(?:gpt|o)[0-9][a-z0-9.-]*$)',
+    'workflow "bad" step "next" choice "Bad model": unknown model "haiku" for harness "codex" (known: default, gpt-5-codex, gpt-5, gpt-5-mini or anything matching ^(?:gpt|o)[0-9][a-z0-9.-]*$)',
   ]);
 });
 

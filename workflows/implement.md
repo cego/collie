@@ -9,6 +9,10 @@ steps:
   - id: build
     persona: implementer
     skill: implement
+    # One implementer agent for the whole run, so its model is named once, here.
+    # `default` passes no model flag and lets the harness pick its own.
+    model: default
+    effort: medium
     output: build.json
   - id: architecture
     use: architecture
@@ -22,6 +26,9 @@ steps:
   - id: review
     use: review
     fresh: true
+    # The reviewers name their own models and effort, so this reaches only synthesize.
+    model: default
+    effort: medium
   - id: fix
     persona: implementer
     agent: build

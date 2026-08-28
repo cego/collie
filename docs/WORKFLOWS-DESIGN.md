@@ -5,7 +5,7 @@ is the design as settled, and `.scratch/workflows-v2/issues/` records the decisi
 where it was silent. The engine additions below exist as `choices:` (with `run`, `prompt`,
 `post` and `stop`), `{{run.dir}}`, the `plan-dir` and `work-source` Input strategies,
 chaining with a `parent`/`children` link, `prompt: <section>` overrides, `standalone:`
-steps, `requires:`, `fan_in:` and `repeat.back_to`. What the design left open and the
+steps, `requires:`, `fan_in:`, `model: default` and `repeat.back_to`. What the design left open and the
 implementation had to name: a `stop` choice, `follow_up` and `config` on a choice,
 `standalone` for a menu that must not be embedded, and `fan_in` for the step that
 reconciles several parallel Outputs into one.
@@ -46,6 +46,9 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
 7. **Step requirements** — `requires:` takes one name or a list. `gitlab` is glab plus a
    GitLab remote; `mr-target` is a run whose `target` is a merge request. An unmet
    requirement is a skip with a note that names the gap, never a failed run.
+8. **The harness's own model** — `model: default`, at a Step or as the user's default,
+   passes no model flag, so the harness starts on whatever it would start on by itself.
+   Every harness accepts it, and a pane for such a variant is named after the harness.
 
 ## Tabs and panes
 One tab per Step. A Step's parallel variants are equal side-by-side splits inside that
@@ -88,8 +91,10 @@ Steps (one agent throughout, `agent: grill`):
 ### implement
 Inputs: `plan` (work-source: a plan dir, a Linear issue or free text). One implementer
 agent (`agent: build`) for build/architecture/simplify/fix.
-1. `build` — implementer; branch off default branch as `<slug>`; `/implement` over the
-   tickets with `/tdd` at the spec's seams; commit per ticket. No separate commit step.
+1. `build` — implementer, `model: default` at `effort: medium`. That is the whole
+   implementer agent, so `architecture`, `simplify`, `fix` and `mr` run on it too.
+   Branch off the default branch as `<slug>`; `/implement` over the tickets with `/tdd`
+   at the spec's seams; commit per ticket. No separate commit step.
    The prompt branches on `{{inputs.plan_kind}}`: a plan dir is read as today; a Linear
    issue is fetched via MCP and a description is taken as given, and both are written to
    `{{run.dir}}/plan/` as SPEC + tasks before building.
@@ -98,6 +103,8 @@ agent (`agent: build`) for build/architecture/simplify/fix.
    passes; report saved to `{{run.dir}}`, never opened; others → `deferred`.
 3. `simplify` — `/code-simplification`, behaviour-preserving, tests must stay green.
 4. `review` — `use: review`, `fresh: true`, parallel variants opus/xhigh + sonnet/xhigh.
+   The embedding step also carries `model: default` at `effort: medium`, which the named
+   variants override and `synthesize` — which names none — takes.
 5. `fix` — `repeat: {from: review.synthesize}`, max 5: apply the one synthesised review's
    findings, `disputed` allowed, fixup commits; then loop back through `simplify` →
    `review` (simplify IS in the loop, architecture is not).
@@ -148,4 +155,5 @@ dir — the grill writes SPEC/tickets like `plan` does), **Stop here** (report o
 Each ends with the Output contract and a skill-missing fallback paragraph.
 
 ## Config
-`config.json` gains `linear.team`. Defaults unchanged (claude/opus).
+`config.json` gains `linear.team`. `model` may be `default` — accepted by every harness,
+and meaning no model flag is passed at all, so the harness starts on its own default.

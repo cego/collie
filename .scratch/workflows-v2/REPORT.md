@@ -581,3 +581,40 @@ Open, and worth knowing:
   exist before.
 - **The review is rendered from the JSON, so a synthesiser that writes a thin `detail`
   writes a thin review.** The shape is guaranteed; the substance is still the agent's.
+
+
+# Ticket 14 — implement runs on the harness's own model, at medium
+
+`model: default` means "pass no model flag". Every harness accepts it, `startArgs` drops
+the model args for it, and a pane for such a variant is named after the harness rather than
+a model. Baseline `implement` takes it at `effort: medium`, so the implementer is whatever
+claude starts on by itself and this plugin stops having a model name to keep in step with
+the harness. A user can set `"model": "default"` in `config.json` and get the same for
+everything that names no model of its own.
+
+**Only two steps in `implement` say it.** `build` names it for the implementer agent, and
+`architecture`, `simplify`, `fix` and `mr` reuse that agent, so they run on it whatever
+their own definition says. The `review` embedding step names it a second time for
+`synthesize`: the two reviewer variants name their own model and effort and win, while
+`synthesize` names none and takes the embedding step's. That is the whole of the
+"reviewers unchanged, synthesiser follows the implementer" rule, and it needed no new
+mechanism.
+
+**One thing this turned up.** A step that keeps an earlier agent was recording its own
+step's variant rather than the agent's — harmless while every step resolved to the same
+user default, and plainly wrong the moment `build` names something the others do not. The
+record now carries the borrowed agent's harness, model and effort. Nothing renders it (a
+lone variant's pane is named after its step), but `run.json` is the audit trail.
+
+**Verified live**, because the one risk here is not something a transcript can settle:
+starting claude with no model flag at all. `herdr agent start … -- --effort medium
+--append-system-prompt-file …` reported
+`argv: ["claude", "--effort", "medium", "--append-system-prompt-file", …]`, the agent came
+up `idle` and `interactive_ready`, and its status line read `[Fable 5]` — claude's own
+default, not one this plugin named. The rest is transcript: an `implement` run starts its
+implementer and its synthesiser with `--effort medium` and no `--model`, and its two
+reviewers with `--model opus`/`--model sonnet` at `xhigh`, exactly as before.
+
+`bun test` and `bunx tsc --noEmit` are green, and `codex` and `opencode` remain unverified
+as ever — `model: default` is accepted for them and drops their model flag, but no run has
+ever started one.

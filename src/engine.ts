@@ -322,10 +322,13 @@ async function runStep(
     const key = keys[i]!;
     const label = stepLabel(run.record.slug, step.id, key);
     const prior = previous[i] ?? borrowedAgent(o, step, ctx);
+    const reuse = prior !== null && !step.fresh;
     const record: VariantRecord = {
-      harness: variant.harness,
-      model: variant.model,
-      effort: variant.effort ?? null,
+      // A step that keeps an earlier agent runs on that agent's model, whatever its
+      // own says: recording its own would name a model this step never ran on.
+      harness: reuse ? prior!.harness : variant.harness,
+      model: reuse ? prior!.model : variant.model,
+      effort: (reuse ? prior!.effort : variant.effort) ?? null,
       agent: prior?.agent ?? agentName(run.record.slug, step.id, key, run.record.seq),
       label: prior?.label ?? label,
       tabId: prior?.tabId ?? null,
@@ -335,7 +338,6 @@ async function runStep(
       error: null,
     };
 
-    const reuse = prior !== null && !step.fresh;
     const paneName = variantLabel(variant, o.defaults.harness, step.id, variants.length);
     if (reuse) {
       // An `agent:` step opens nothing: it says which step it is on the pane it inherited.

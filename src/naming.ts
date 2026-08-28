@@ -1,6 +1,8 @@
 // herdr agent names must match /^[a-z][a-z0-9_-]{0,31}$/, so they cannot be the
 // readable labels. Labels go on tabs and panes; these go on agents.
 
+import { DEFAULT_MODEL } from "./harness";
+
 const MAX = 32;
 
 function sanitize(text: string): string {
@@ -80,6 +82,8 @@ export function variantLabel(
   variantCount: number,
 ): string {
   if (variantCount < 2) return stepId;
+  // On the harness's own default there is no model to name, so the harness is the name.
+  if (variant.model === DEFAULT_MODEL) return variant.harness;
   return variant.harness === defaultHarness ? variant.model : `${variant.harness} ${variant.model}`;
 }
 

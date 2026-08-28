@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { HARNESSES, knownModel, personaPrefix, startArgs } from "../src/harness";
+import { DEFAULT_MODEL, HARNESSES, knownModel, modelHint, personaPrefix, startArgs } from "../src/harness";
 
 test("the adapter table covers claude, codex and opencode with model flags", () => {
   expect(HARNESSES.claude!.modelArgs("sonnet")).toEqual(["--model", "sonnet"]);
@@ -46,4 +46,21 @@ test("effort is a flag only where the harness has one", () => {
   // codex and opencode have none, so asking for one is a validation error, not a flag.
   expect(HARNESSES.codex!.effortArgs).toBeUndefined();
   expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/reviewer.md", "xhigh")).toEqual(["-m", "gpt-5"]);
+});
+
+test("`default` is a model every harness takes, and it means no model flag at all", () => {
+  for (const harness of Object.values(HARNESSES)) {
+    expect(knownModel(harness, DEFAULT_MODEL)).toBe(true);
+    expect(modelHint(harness)).toContain(DEFAULT_MODEL);
+  }
+
+  // Everything else about the start still applies: only the model args are gone.
+  expect(startArgs(HARNESSES.claude!, DEFAULT_MODEL, "/p/implementer.md", "medium")).toEqual([
+    "--effort",
+    "medium",
+    "--append-system-prompt-file",
+    "/p/implementer.md",
+  ]);
+  expect(startArgs(HARNESSES.codex!, DEFAULT_MODEL, "/p/implementer.md")).toEqual([]);
+  expect(startArgs(HARNESSES.opencode!, DEFAULT_MODEL, "/p/implementer.md")).toEqual([]);
 });

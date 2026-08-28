@@ -44,6 +44,10 @@ test("a pane names the model when the harness is the default one, and the step w
   // Alone in its step, a variant has nothing to distinguish it from.
   expect(variantLabel(opus, "claude", "build", 1)).toBe("build");
   expect(variantLabel(codex, "claude", "build", 1)).toBe("build");
+
+  // On the harness's own default there is no model to name, so the harness is the name.
+  expect(variantLabel({ harness: "claude", model: "default" }, "claude", "review", 2)).toBe("claude");
+  expect(variantLabel({ harness: "codex", model: "default" }, "claude", "review", 2)).toBe("codex");
 });
 
 test("even splits leave every one of N panes the same width", () => {
