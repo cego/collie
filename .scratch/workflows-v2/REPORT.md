@@ -912,5 +912,20 @@ From `/home/mk/work/gitte2/gitlab.cego.dk`, which is not a git repository at all
   line `review: target=mr:gitlab.cego.dk/spilnu/spilnu-dk!23819 [typed]` — the project kept,
   from a directory that knows nothing about that project.
 - The run started its two reviewers against a real merge request of someone else's, in a
-  non-repo cwd, with the tab reading `⚙ Review` and the target recorded as
-  `mr · typed`.
+  non-repo cwd, with the tab reading `⚙ Review` and the target recorded as `mr · typed`.
+- That run ended at `review failed`, because the **pi reviewer wrote invalid JSON** into its
+  Output — the schema catching a malformed Output for the third time in this project, and
+  nothing to do with this ticket. So rather than buy another pair of reviewers to reach the
+  step under test, its `review` and `synthesize` steps were marked done with a note saying
+  so, a `review.md` was dropped in, and the run was **resumed** onto its `post` step. From
+  there everything was real: the recorded target, the real `glab auth status --hostname
+  gitlab.cego.dk`, and mk's own user-layer `review.md`.
+- **The post choice appeared** — `Post to MR` / `Don't post`, in a directory that is not a
+  git repository. `Don't post` was chosen, the run finished `done`, and no `glab mr note`
+  ran: nothing was posted to a real merge request.
+
+**What the smoke could not show live:** the reviewers' `--repo` instructions. The prompt came
+from mk's user-layer `review.md`, a full copy of the old baseline that still says `glab mr
+diff <iid>`; the claude reviewer coped by `cd`-ing into a checkout it found under the group
+folder. The baseline's new wording is verified by transcript, and ticket 17 is what replaces
+that copy with an `extends:` stub.

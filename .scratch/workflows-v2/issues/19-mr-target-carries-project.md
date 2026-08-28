@@ -6,13 +6,13 @@
 
 **Blocked by:** none — jump the queue: do this right after the 16 bug fix, before 18.
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] classifyTarget keeps host/group/project from a URL; bare iid gets the project from the remote (tested with fake git)
-- [ ] all glab calls carry --repo; fake glab asserts it (tested)
-- [ ] post choice offered and succeeds from a non-repo cwd with an MR URL target (fake glab transcript)
-- [ ] non-repo cwd: no worktree/branch candidates, Type it… default (tested)
-- [ ] live smoke: from /home/mk/work/gitte2/gitlab.cego.dk (not a repo) review an MR URL → post choice appears; do NOT actually post to a real MR — stop at the menu and pick Don't post
+- [x] classifyTarget keeps host/group/project from a URL; bare iid gets the project from the remote (tested with fake git)
+- [x] all glab calls carry --repo; fake glab asserts it (tested)
+- [x] post choice offered and succeeds from a non-repo cwd with an MR URL target (fake glab transcript)
+- [x] non-repo cwd: no worktree/branch candidates, Type it… default (tested)
+- [x] live smoke: from /home/mk/work/gitte2/gitlab.cego.dk (not a repo) review an MR URL → post choice appears; do NOT actually post to a real MR — stop at the menu and pick Don't post
 
 ## Decisions where the design was silent
 
@@ -49,3 +49,34 @@ offer.
 **`targetKind(value)`** is now a named function rather than a fact only the picker knew, so
 the test rig and anything else reading a recorded target agree on what `mr:`/`branch:`/
 `worktree` mean.
+
+## What the live smoke turned up
+
+The first attempt reviewed a real merge request (`spilnu/spilnu-dk!23819`, someone else's)
+from the group folder and got as far as both reviewers reading it, but ended at
+`review failed` because **the pi reviewer wrote invalid JSON** into its Output
+(`review.json: not valid JSON (JSON Parse error: Unrecognized token '\')`). That is the
+third malformed Output a live run has produced and the schema catching it again; nothing to
+do with this ticket.
+
+Rather than pay for another pair of reviewers to get at the step actually under test, the
+run's `review` and `synthesize` steps were marked done in `run.json` with a note saying so,
+a `review.md` was dropped in, and the run was **resumed** — which is the honest way to
+exercise one step of a real run. Everything from there was real: the recorded target
+`mr:gitlab.cego.dk/spilnu/spilnu-dk!23819`, the real `glab auth status --hostname
+gitlab.cego.dk`, the real definitions, and mk's own user-layer `review.md` with its
+`requires: [mr-target, gitlab]`.
+
+- The `post` step **was offered**: the menu rendered `Post to MR` / `Don't post` in the
+  run's pane on the Control Plane, from a directory that is not a git repository. That is
+  the bug fixed — mk's earlier run of the same shape recorded
+  `post done: skipped: this repo has no remote`.
+- `Don't post` was chosen and the run finished `done` with `post: chose "Don't post"`. No
+  `glab mr note` ran and nothing was posted to a real merge request.
+
+**One thing the smoke could not verify live: the reviewers' `--repo` instructions.** The
+prompt came from mk's user-layer `review.md`, which is a full copy of the old baseline and
+therefore still says `glab mr diff <iid>` with no `--repo`. The claude reviewer worked around
+it by `cd`-ing into the checkout it happened to find under the group folder; the baseline's
+new wording is verified by transcript instead. Ticket 17 is what replaces that copy with an
+`extends:` stub, after which the live path uses the new text.
