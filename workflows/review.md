@@ -33,5 +33,14 @@ spec axis says exactly that.
 Review against the project's own standards too — `CLAUDE.md`, `CONTEXT.md`, `README.md`
 and the code around the change.
 
+Already disputed — the implementer looked at these and did not apply them, with reasons:
+
+{{disputed}}
+
+Do not raise one of those again unless you can answer the reason it was disputed. If you
+can, raise it with a `"rebuttal"` saying why that reason does not hold; that puts it back
+in front of the implementer. If you cannot, leave it alone — it is the human's call now,
+not another round's.
+
 Post to GitLab: {{inputs.post}} — only if that is `true` may you post a review comment
 with `glab`. Otherwise change nothing outside your Output file.

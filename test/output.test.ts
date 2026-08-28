@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { formatFindings, parseReviewOutput, unionFindings } from "../src/output";
+import { formatFindings, parseReviewOutput, splitDisputed, unionFindings } from "../src/output";
 
 const ok = (text: string) => {
   const r = parseReviewOutput(text, "review.json");
@@ -61,4 +61,35 @@ test("findings format as a readable list for the fix prompt", () => {
       { severity: "minor", title: "typo" },
     ]),
   ).toBe("- [major] leak (a.ts:3)\n  closes late\n- [minor] typo");
+});
+
+test("a rebuttal is kept, and it prints under the finding it answers", () => {
+  expect(
+    ok(`{"verdict": "findings", "findings": [{"severity": "major", "title": "x", "rebuttal": "the reason misreads the spec"}]}`)
+      .findings[0],
+  ).toEqual({ severity: "major", title: "x", rebuttal: "the reason misreads the spec" });
+
+  expect(
+    formatFindings([{ file: "a.ts", severity: "major", title: "leak", detail: "d", rebuttal: "you tested the wrong path" }]),
+  ).toBe("- [major] leak (a.ts)\n  d\n  answers your dispute: you tested the wrong path");
+});
+
+test("a finding the implementer already disputed is settled, unless a reviewer answers it", () => {
+  const disputed = [
+    { file: "cli.js", line: 6, severity: "minor", title: "--version wins everywhere", detail: "the spec says so" },
+    { file: "pkg.json", severity: "minor", title: "no engines field", detail: "packaging is out of scope" },
+  ];
+  const raised = [
+    // Same finding, re-raised verbatim except for a line that moved.
+    { file: "cli.js", line: 9, severity: "minor", title: "--version wins everywhere" },
+    { file: "pkg.json", severity: "minor", title: "no engines field", rebuttal: "node:test needs >=18" },
+    { file: "cli.js", severity: "major", title: "brand new problem" },
+  ];
+
+  const split = splitDisputed(raised, disputed);
+
+  expect(split.live.map((f) => f.title)).toEqual(["no engines field", "brand new problem"]);
+  expect(split.settled.map((f) => f.title)).toEqual(["--version wins everywhere"]);
+  expect(split.rebutted.map((f) => f.title)).toEqual(["no engines field"]);
+  expect(splitDisputed(raised, []).live).toHaveLength(3);
 });

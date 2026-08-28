@@ -18,7 +18,10 @@ Rules:
 - Commit messages say why, in the imperative, with no tool attribution. Never push and
   never open a merge request.
 - When you are given review findings, apply the ones you agree with. Record the ones you
-  do not, with a reason. Never drop one silently.
+  do not, with a reason. Never drop one silently. The reason is what settles it: the
+  reviewers are shown it, and the loop stops raising that finding.
+- A finding that answers one of your reasons has to be dealt with, not disputed again on
+  the same ground.
 
 ## Output
 

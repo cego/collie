@@ -177,9 +177,16 @@ a loop gate can always read it:
 ```json
 {"verdict": "clean" | "findings",
  "findings": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
-               "title": "one line", "detail": "what goes wrong"}],
+               "title": "one line", "detail": "what goes wrong",
+               "rebuttal": "why a dispute of this finding does not hold"}],
  "disputed": []}
 ```
+
+A finding the implementer put in `disputed`, with its reason, is shown to the reviewers
+on the next round and stops driving the loop: the two of them cannot settle it, so the
+run finishes and you decide, instead of spending rounds re-arguing it. A reviewer who
+can answer the reason raises it again with a `rebuttal`, which clears the dispute and
+puts the finding back in front of the implementer.
 
 ## Runs
 

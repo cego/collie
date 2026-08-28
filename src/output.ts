@@ -7,6 +7,8 @@ export interface Finding {
   severity: string;
   title: string;
   detail?: string;
+  /** A reviewer's answer to the implementer's reason for disputing this finding. */
+  rebuttal?: string;
 }
 
 export interface ReviewOutput {
@@ -60,18 +62,27 @@ export function parseFindings(raw: unknown, where: string): Parsed<Finding[]> {
     if (typeof o.file === "string") finding.file = o.file;
     if (typeof o.line === "number") finding.line = o.line;
     if (typeof o.detail === "string") finding.detail = o.detail;
+    if (typeof o.rebuttal === "string") finding.rebuttal = o.rebuttal;
     out.push(finding);
   }
   return { ok: true, value: out };
 }
 
-/** v1 fan-in: the union of every reviewer's findings, deduplicated. */
+/**
+ * What makes two findings the same finding. The line is deliberately left out: it
+ * moves as the branch is fixed, and a dispute has to survive that to ever settle.
+ */
+export function findingKey(f: Finding): string {
+  return `${f.file ?? ""}::${f.title.trim().toLowerCase()}`;
+}
+
+/** Fan-in: the union of every reviewer's findings, deduplicated. */
 export function unionFindings(outputs: ReviewOutput[]): Finding[] {
   const seen = new Set<string>();
   const out: Finding[] = [];
   for (const o of outputs) {
     for (const f of o.findings) {
-      const key = `${f.file ?? ""}:${f.line ?? ""}:${f.title}`;
+      const key = findingKey(f);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(f);
@@ -80,13 +91,44 @@ export function unionFindings(outputs: ReviewOutput[]): Finding[] {
   return out;
 }
 
+export interface Split {
+  /** What the fix step still has to act on. */
+  live: Finding[];
+  /** Already disputed, raised again with no answer: the human decides, not the loop. */
+  settled: Finding[];
+  /** Disputes a reviewer answered, so they are back in front of the implementer. */
+  rebutted: Finding[];
+}
+
+/**
+ * A finding the implementer has already rejected with a reason cannot be settled by
+ * another round of the same two agents — only by the human. So it stops driving the
+ * loop, unless a reviewer answers the reason with a `rebuttal`.
+ */
+export function splitDisputed(findings: Finding[], disputed: Finding[]): Split {
+  const known = new Set(disputed.map(findingKey));
+  const split: Split = { live: [], settled: [], rebutted: [] };
+  for (const finding of findings) {
+    if (!known.has(findingKey(finding))) {
+      split.live.push(finding);
+    } else if (finding.rebuttal) {
+      split.live.push(finding);
+      split.rebutted.push(finding);
+    } else {
+      split.settled.push(finding);
+    }
+  }
+  return split;
+}
+
 export function formatFindings(findings: Finding[]): string {
   if (findings.length === 0) return "(none)";
   return findings
     .map((f) => {
       const at = f.file ? ` (${f.file}${f.line ? `:${f.line}` : ""})` : "";
       const detail = f.detail ? `\n  ${f.detail.replace(/\n/g, "\n  ")}` : "";
-      return `- [${f.severity}] ${f.title}${at}${detail}`;
+      const rebuttal = f.rebuttal ? `\n  answers your dispute: ${f.rebuttal.replace(/\n/g, "\n  ")}` : "";
+      return `- [${f.severity}] ${f.title}${at}${detail}${rebuttal}`;
     })
     .join("\n");
 }

@@ -14,9 +14,11 @@ import type { Herdr } from "./herdr";
 import { HerdrError } from "./herdr";
 import { HARNESSES, personaPrefix, startArgs } from "./harness";
 import {
+  findingKey,
   formatFindings,
   parseFindings,
   parseReviewOutput,
+  splitDisputed,
   unionFindings,
   type Finding,
   type ReviewOutput,
@@ -193,7 +195,17 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
 
     const gate = repeats.find((r) => r.from === index);
     if (gate) {
-      const verdict = verdictOf(outcomes);
+      const verdict = verdictOf(outcomes, run.record.disputed);
+      // A reviewer that answered a dispute reopens it: the argument has moved on.
+      if (verdict.rebutted.length > 0) {
+        const answered = new Set(verdict.rebutted.map(findingKey));
+        run.record.disputed = run.record.disputed.filter((d) => !answered.has(findingKey(d)));
+        run.save();
+        out(`  ${verdict.rebutted.length} disputed finding(s) answered by a reviewer`);
+      }
+      if (verdict.settled.length > 0) {
+        out(`  ${verdict.settled.length} finding(s) already disputed — your call, not the loop's`);
+      }
       if (verdict.clean) {
         out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
         for (const s of wf.steps.slice(index + 1, gate.at + 1)) {
@@ -223,7 +235,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
         continue;
       }
       // Committing work the reviewers still object to would be worse than stopping.
-      const still = verdictOf(ctx.outputs.get(wf.steps[mine.from]!.id) ?? []);
+      const still = verdictOf(ctx.outputs.get(wf.steps[mine.from]!.id) ?? [], run.record.disputed);
       run.record.outstanding = still.findings;
       run.step(step.id).note = `stopped at max_iterations ${mine.max} with ${still.findings.length} finding(s)`;
       run.save();
@@ -603,11 +615,10 @@ async function collect(
     collectList(o, "deferred", parsed);
     // A re-run step must not double-report what it disputed last time.
     for (const finding of review.disputed) {
-      const key = `${finding.file ?? ""}:${finding.line ?? ""}:${finding.title}`;
-      const seen = o.run.record.disputed.some(
-        (d) => `${d.file ?? ""}:${d.line ?? ""}:${d.title}` === key,
-      );
-      if (!seen) o.run.record.disputed.push(finding);
+      const key = findingKey(finding);
+      if (!o.run.record.disputed.some((d) => findingKey(d) === key)) {
+        o.run.record.disputed.push(finding);
+      }
     }
   }
 
@@ -622,10 +633,8 @@ function collectList(o: EngineOptions, key: "deferred", parsed: unknown): void {
   const result = parseFindings(raw, `${key}`);
   if (!result.ok) return;
   for (const finding of result.value) {
-    const id = `${finding.file ?? ""}:${finding.title}`;
-    if (!o.run.record[key].some((f) => `${f.file ?? ""}:${f.title}` === id)) {
-      o.run.record[key].push(finding);
-    }
+    const id = findingKey(finding);
+    if (!o.run.record[key].some((f) => findingKey(f) === id)) o.run.record[key].push(finding);
   }
 }
 
@@ -669,6 +678,7 @@ function buildPrompt(
       ]),
     ),
     findings: formatFindings(lastFindings(o, step, outputs)),
+    disputed: formatFindings(o.run.record.disputed),
     run: { dir: o.run.dir, id: o.run.id, slug: o.run.record.slug },
     output_path: outputPath,
     iteration: String(o.run.record.iteration),
@@ -705,14 +715,28 @@ function lastFindings(
 ): Finding[] {
   const from = step.repeat?.from;
   const source = from ? outputs.get(from) : undefined;
-  if (!source) return [];
-  return unionFindings(source.map((v) => v.review).filter((r): r is ReviewOutput => r !== null));
+  return source ? verdictOf(source, o.run.record.disputed).findings : [];
 }
 
-function verdictOf(outcomes: VariantOutcome[]): { clean: boolean; findings: Finding[] } {
+interface Verdict {
+  clean: boolean;
+  /** What the fix step gets: everything except what is already settled. */
+  findings: Finding[];
+  settled: Finding[];
+  rebutted: Finding[];
+}
+
+function verdictOf(outcomes: VariantOutcome[], disputed: Finding[]): Verdict {
   const reviews = outcomes.map((v) => v.review).filter((r): r is ReviewOutput => r !== null);
-  const findings = unionFindings(reviews);
-  return { clean: reviews.length > 0 && reviews.every((r) => r.verdict === "clean") && findings.length === 0, findings };
+  const split = splitDisputed(unionFindings(reviews), disputed);
+  // Clean means "nothing left for the implementer", not "nobody said anything":
+  // a finding the implementer already rejected with a reason is the human's call.
+  return {
+    clean: reviews.length > 0 && split.live.length === 0,
+    findings: split.live,
+    settled: split.settled,
+    rebutted: split.rebutted,
+  };
 }
 
 async function markTab(herdr: Herdr, record: VariantRecord, mark: string): Promise<void> {
@@ -789,7 +813,11 @@ export function summarise(o: EngineOptions, status: RunStatus): string {
     lines.push("", "Deferred (the architect did not apply these):", formatFindings(run.record.deferred));
   }
   if (run.record.disputed.length > 0) {
-    lines.push("", "Disputed findings (the implementer did not apply these):", formatFindings(run.record.disputed));
+    lines.push(
+      "",
+      "Disputed findings (the implementer did not apply these; the loop stopped arguing about them):",
+      formatFindings(run.record.disputed),
+    );
   }
   return lines.join("\n");
 }

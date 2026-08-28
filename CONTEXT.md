@@ -20,7 +20,7 @@
 
 **Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking copies a baseline definition into a Layer.
 
-**Fan-in** — Combining several parallel reviewer Outputs. v1: union of findings; the implementer may mark items `disputed`, surfaced to the human.
+**Fan-in** — Combining several parallel reviewer Outputs: the union of their findings. The implementer may mark an item `disputed` with a reason; the reviewers are shown those reasons and a disputed finding no longer drives the loop, so the run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts it back in front of the implementer.
 
 ## Baseline Workflows
 - `plan` — interviews the human, writes `tasks/<slug>/PLAN.md`.

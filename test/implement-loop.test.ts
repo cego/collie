@@ -188,3 +188,69 @@ test("review inside implement is held to the plan the run was given", async () =
   expect(prompt).toContain(`Spec: ${run.record.inputs.plan}`);
   expect(run.record.inputs.plan).toContain("/plan");
 });
+
+const DISPUTED_REASON = { file: "cli.js", severity: "minor", title: "no exit code", detail: "the spec asks for this" };
+
+test("a finding the implementer disputed stops driving the loop, so the run converges", async () => {
+  rig.queueOutputs([
+    CLEAN, // build
+    CLEAN, // architecture
+    CLEAN, // simplify
+    FINDING, // review/claude-opus
+    FINDING, // review/claude-sonnet
+    { ...CLEAN, disputed: [DISPUTED_REASON] }, // fix: applies nothing, disputes it
+    CLEAN, // simplify, iteration 2
+    FINDING, // review/claude-opus, raises it again
+    FINDING, // review/claude-sonnet, raises it again
+  ]);
+
+  const { run, status, lines } = await runWorkflow(rig, "implement", {});
+
+  expect(status).toBe("done");
+  expect(run.record.iteration).toBe(2);
+  expect(run.step("fix").note).toBe("skipped: reviews clean");
+  expect(lines).toContain("  1 finding(s) already disputed — your call, not the loop's");
+  expect(run.record.summary).toContain("Disputed findings");
+  expect(run.record.summary).toContain("- [minor] no exit code (cli.js)");
+
+  // The reviewers were told what had already been argued.
+  const second = readFileSync(join(run.dir, "steps", "review", "claude-opus", "prompt-2.md"), "utf8");
+  expect(second).toContain("Already disputed");
+  expect(second).toContain("- [minor] no exit code (cli.js)");
+  expect(second).toContain("the spec asks for this");
+});
+
+test("a reviewer that answers the dispute puts the finding back in front of the implementer", async () => {
+  const rebutted = {
+    verdict: "findings",
+    findings: [{ ...FINDING.findings[0], rebuttal: "the spec's own out-of-scope line says otherwise" }],
+  };
+  rig.queueOutputs([
+    CLEAN, // build
+    CLEAN, // architecture
+    CLEAN, // simplify
+    FINDING, // review/claude-opus
+    FINDING, // review/claude-sonnet
+    { ...CLEAN, disputed: [DISPUTED_REASON] }, // fix disputes it
+    CLEAN, // simplify, iteration 2
+    rebutted, // review/claude-opus answers the dispute
+    CLEAN, // review/claude-sonnet
+    CLEAN, // fix applies it
+    CLEAN, // simplify, iteration 3
+    CLEAN, // review/claude-opus
+    CLEAN, // review/claude-sonnet
+  ]);
+
+  const { run, status, lines } = await runWorkflow(rig, "implement", {});
+
+  expect(status).toBe("done");
+  expect(run.record.iteration).toBe(3);
+  expect(lines).toContain("  1 disputed finding(s) answered by a reviewer");
+  // The argument moved on, so the dispute is no longer standing.
+  expect(run.record.disputed).toEqual([]);
+
+  const fix = readFileSync(join(run.dir, "steps", "fix", "prompt-2.md"), "utf8");
+  expect(fix).toContain("- [blocker] no exit code (cli.js:4)");
+  expect(fix).toContain("answers your dispute: the spec's own out-of-scope line says otherwise");
+  // Three iterations of a five-step workflow is a lot of fake agents.
+}, 20_000);

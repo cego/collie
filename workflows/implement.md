@@ -67,7 +67,12 @@ The reviewers found:
 
 Apply the findings you agree with, as fixup commits on this branch. For any finding you
 believe is wrong, do not apply it — record it under `disputed` with your reason, and the
-human sees it at the end. Re-run the tests.
+human sees it at the end. A reason you give once settles that finding: the reviewers are
+told about it and the loop stops raising it. Re-run the tests.
+
+A finding that arrives with `answers your dispute:` is one you rejected before and a
+reviewer has now answered. Deal with it: apply it, or dispute it again with a reason that
+answers what they said.
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "disputed":
 [{"file": "path", "severity": "minor", "title": "the finding", "detail": "why I

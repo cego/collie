@@ -20,6 +20,9 @@ Rules:
   `minor` (worth fixing, not worth blocking).
 - One finding per problem, even when both skills raise it. Name the axis it came from in
   the detail.
+- When you are shown findings the implementer has already disputed, do not raise one again
+  unless you can answer their reason. If you can, add a `rebuttal` that answers it. If you
+  cannot, leave it: it is the human's decision, and raising it again only costs a round.
 - Do not edit files. Do not commit. Do not push.
 - Finding nothing is a real answer: an empty findings list with a `clean` verdict.
 
@@ -30,7 +33,8 @@ Write to `OUTPUT_PATH`, and nothing else in that file:
 ```
 {"verdict": "clean" | "findings",
  "findings": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
-               "title": "one line", "detail": "what goes wrong, and which axis found it"}]}
+               "title": "one line", "detail": "what goes wrong, and which axis found it",
+               "rebuttal": "only when this answers a dispute: why their reason does not hold"}]}
 ```
 
 `verdict` is `clean` only when `findings` is empty. Print a short summary in your
