@@ -279,6 +279,46 @@ through the same funnel, and a test asserts the build prompt names its kind, kee
 three branches, and leaves no unknown template keys in the run log. 141 pass, 0 fail;
 `bunx tsc --noEmit` clean.
 
+
+## 10 — review lets the human choose the target
+
+`diff-target` stops being a silent guess. It gathers what this repo actually offers, in
+the order plain inference used to pick them: this branch's own open MR; failing that, the
+open MRs I am assigned or have authored (`glab mr list --assignee @me` and `--author @me`,
+deduplicated by iid); the branch against its default base; and the working tree when it is
+dirty. The picker shows all of them plus "Type it…", which takes an MR iid (`42` or `!42`),
+an MR URL, a `base...head` range, or a bare ref meaning that ref against the base. Because
+the head of the list is what inference alone would have chosen, Enter reproduces the old
+behaviour exactly.
+
+Kinds are `mr`, `branch`, `worktree`, and the value keeps its `mr:<iid>` /
+`branch:<base>...<head>` / `worktree` shape, so no prompt body changed.
+
+**The menu is 09's machinery generalised, not copied.** One `resolveFromMenu` over a
+`MenuSpec` (header, hint, question, classifier), with `resolveWorkSource` and
+`resolveTarget` as its two callers and `resolveCandidates` dispatching on the strategy.
+
+**"An embedded step never asks" is now a property of the input.** A resolved workflow
+carries `embeddedInputs` — the inputs that reached it only through `use:` — so `implement`
+infers `review`'s target silently while standalone `review` shows the menu. That makes the
+rule assertable without driving the picker, which is how it is tested.
+
+**Verified live**, in a throwaway git worktree off this repo (branch `smoke-target-10`,
+one untracked file, so both a branch and a dirty tree existed — the main checkout's HEAD
+was never moved):
+
+- The menu rendered `smoke-target-10  branch · smoke-target-10 vs master`, then
+  `working tree  worktree · working tree`, then `Type it…  an MR iid or URL, or a
+  base...head range`.
+- Enter on the top entry produced
+  `review: target=branch:master...smoke-target-10 [smoke-target-10 vs master]  post=false
+  [default]` — the old value shape and the old source wording, from the new menu.
+- Esc cancelled; the worktree and branch were removed.
+
+`glab` has no remote to talk to here, so the MR candidates are covered by tests with a
+fake `glab` rather than live — the same limitation v1 recorded. 150 pass, 0 fail;
+`bunx tsc --noEmit` clean.
+
 ## A note on this round's history, for whoever reads the log
 
 The commit subjects in this range do not describe their contents, and one of them swept up

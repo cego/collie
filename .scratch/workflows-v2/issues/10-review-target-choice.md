@@ -4,10 +4,30 @@
 
 **Blocked by:** 09 (shares the candidate/menu input machinery; reuse it, do not duplicate)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] menu always shown for a standalone review, default = old inference order (tested with fake glab/git)
-- [ ] "Type it…" classifies MR iid, MR URL and base...head correctly (tested)
-- [ ] embedded review inside implement never prompts (tested)
-- [ ] README + docs/WORKFLOWS-DESIGN.md updated; bun test + tsc green
-- [ ] live smoke: pick review on this repo → menu lists branch and worktree
+- [x] menu always shown for a standalone review, default = old inference order (tested with fake glab/git)
+- [x] "Type it…" classifies MR iid, MR URL and base...head correctly (tested)
+- [x] embedded review inside implement never prompts (tested)
+- [x] README + docs/WORKFLOWS-DESIGN.md updated; bun test + tsc green
+- [x] live smoke: pick review on this repo → menu lists branch and worktree
+
+## Decisions where the design was silent
+
+- **The value shape is the one the code already used, `mr:<iid>`.** The ticket writes it
+  as `mr:!<iid>`, but its own reason for naming a shape is "so the review prompt is
+  unchanged", and the prompt has always been given `mr:42`. Keeping `mr:42` honours the
+  reason; the `!` appears in the label and the source line, where it reads as an MR.
+- **A bare ref typed into "Type it…" means that ref against the default base.** Only
+  `base...head` is specified, but a lone branch name is the obvious thing to type, and
+  `branch:<base>...<ref>` is what it can only sensibly mean. A blank line cancels.
+- **The working tree is offered when it is dirty, and also when nothing else is.** The
+  ticket asks for it only when dirty, but old inference fell back to it unconditionally,
+  and an empty menu would have no way to reproduce that. It stays last either way.
+- **"Never asks" is a property of the input, not the step.** An embedded workflow's
+  inputs now travel as `embeddedInputs` on the resolved workflow, so `implement` infers
+  `target` silently while standalone `review` shows the menu. This is what makes the
+  rule testable without running the picker.
+- **A kind is a companion of its input, not an input of its own.** `<name>_kind` is in
+  `inputs` because prompts read it, but out of `input_sources`, which is about
+  provenance; the runner prints the kind on its own input's line instead.
