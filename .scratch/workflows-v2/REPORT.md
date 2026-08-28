@@ -2,8 +2,12 @@
 
 All eight tickets are `done` and committed on `master` (local only, never pushed), plus
 three follow-ups mk asked for afterwards (convergence, workarounds for the two harness
-facts below, and pre-trusting). `bun test` is green: 128 tests, 19 files. `bunx tsc --noEmit` is clean, and the runner
-still compiles.
+facts below, and pre-trusting). Everything up to that point is this section; tickets 09,
+10 and 11 came after it, by another session, and are recorded in their own sections at the
+end. Where they changed something described here, their sections say so.
+
+At the time of writing, the repo is green: 159 tests across 19 files, `bunx tsc --noEmit`
+clean, and the runner still compiles.
 
 ```
 bd58133 Drop the trust subcommand
@@ -20,10 +24,12 @@ ae3e1f4 Ask the human with a Choice step                       (02)
 2dcaaa9 Write plan artefacts to the run dir                    (01)
 ```
 
-The baseline is now five workflows (`plan`, `ticket`, `implement`, `review`,
-`architecture`) and four personas (`planner`, `implementer`, `reviewer`, `architect`).
-Every decision taken where the design was silent is recorded in the ticket it belongs
-to, under "Decisions where the design was silent".
+The baseline these eight tickets left was five workflows (`plan`, `ticket`, `implement`,
+`review`, `architecture`) and four personas (`planner`, `implementer`, `reviewer`,
+`architect`). `ticket` is since gone — ticket 09 replaced it and the `plan-dir`/`issue`
+strategies with one `work-source` input — and `implement` has since grown a sixth step,
+`mr`. Every decision taken where the design was silent is recorded in the ticket it
+belongs to, under "Decisions where the design was silent".
 
 ## What shipped, per ticket
 
