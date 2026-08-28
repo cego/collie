@@ -2,7 +2,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 
 | File | What it owns |
 | --- | --- |
-| `main.ts` | Subcommand dispatch: the three actions and the two pane entrypoints |
+| `main.ts` | Subcommand dispatch: the three actions and the three pane entrypoints |
 | `flows.ts` | What each action and pane entrypoint does |
 | `env.ts` | The plugin environment herdr provides |
 | `herdr.ts` | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest |
@@ -11,9 +11,12 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `harness.ts` | Per-harness start, model flag, effort flag and persona injection |
 | `inputs.ts` | Input inference from branch, cwd, earlier runs and glab |
 | `engine.ts` | Tabs, agents, prompts, waits, gates, choices and the fix loop |
+| `workspace.ts` | The `workflows` tab: what the Session's board shows, and how it reads |
+| `registry.ts` | Which long-lived agents this Session still has, per workspace + repo |
+| `handoff.ts` | Giving one Run's result to another Run's live agent |
 | `output.ts` | The Output and Synthesis schemas, `review.md`, and which findings the loop still owns |
 | `run.ts` | The run directory: audit trail and resume state |
-| `naming.ts` | herdr-legal agent names vs readable tab labels |
+| `naming.ts` | herdr-legal agent names vs readable tab and pane labels |
 | `picker.ts` | The minimal TUI |
 | `fork.ts` | Copy a definition into a later layer |
 | `trust.ts` | Whether a harness will work in a directory, or stop and ask first |

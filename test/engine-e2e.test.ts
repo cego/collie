@@ -38,18 +38,24 @@ afterEach(async () => {
   await rig.close();
 });
 
-test("plan runs one step in the status pane's tab and records the run", async () => {
+test("plan runs one step in a tab of its own and records the run", async () => {
   rig.queueOutputs([{ verdict: "clean", findings: [], plan_file: "tasks/add-a-picker/PLAN.md", slug: "add-a-picker" }]);
 
   const { run, status, lines } = await runWorkflow(rig, "solo", { goal: "Add a picker" });
 
   expect(status).toBe("done");
-  // The runner's own pane is split, swapped under the agent and renamed `status`;
-  // the tab takes the run's name and, at the end, its ✓.
+  // The workspace's board is found or opened and put first, the runner's own pane
+  // moves in under it, and only then does the step open its own tab — which takes
+  // the run's name and, at the end, its ✓.
   expect(rig.cmds()).toEqual([
-    "pane split",
-    "pane swap",
+    "tab list",
+    "plugin pane",
     "pane rename",
+    "tab rename",
+    "tab.move",
+    "pane move",
+    "pane rename",
+    "tab create",
     "tab rename",
     "pane rename",
     "pane run",
@@ -63,11 +69,16 @@ test("plan runs one step in the status pane's tab and records the run", async ()
     "notification show",
   ]);
 
-  const split = rig.calls().find((c) => c.cmd === "pane split")!.argv!;
-  expect(split).toContain("--direction");
-  expect(split[split.indexOf("--direction") + 1]).toBe("down");
-  expect(split[split.indexOf("--ratio") + 1]).toBe("0.85");
-  expect(rig.calls().find((c) => c.cmd === "pane rename")!.argv!.at(-1)).toBe("status");
+  // Nothing is split off the runner's pane any more, and nothing is a `status` strip.
+  expect(rig.cmds()).not.toContain("pane split");
+  const moved = rig.calls().find((c) => c.cmd === "pane move")!.argv!;
+  expect(moved[2]).toBe("1-0");
+  expect(moved[moved.indexOf("--split") + 1]).toBe("down");
+  expect(rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1))).toEqual([
+    "workflows",
+    "solo-add-a-picker",
+    "solo",
+  ]);
   expect(rig.calls().filter((c) => c.cmd === "tab rename").at(-1)!.argv!.at(-1)).toBe("✓ solo · add-a-picker");
 
   const start = rig.calls().find((c) => c.cmd === "agent start")!.argv!;
@@ -78,7 +89,7 @@ test("plan runs one step in the status pane's tab and records the run", async ()
     "--kind",
     "claude",
     "--pane",
-    "1-1",
+    "1-2",
     "--",
   ]);
   expect(start.slice(8, 10)).toEqual(["--model", "sonnet"]);
@@ -98,12 +109,13 @@ test("plan runs one step in the status pane's tab and records the run", async ()
   expect(prompt.split("Interview me about this goal")).toHaveLength(2);
   expect(prompt).toContain(`OUTPUT_PATH: ${join(run.dir, "steps", "solo", "solo.json")}`);
 
-  // The strip is renamed first, then the agent's pane takes the step's name.
-  // Neither carries the run id or the slug any more; the tab holds those.
+  // The board's pane, then the run's own pane, then the agent's — which takes the
+  // step's name and carries neither the run id nor the slug; the tab holds those.
   const renames = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2));
   expect(renames).toEqual([
-    ["1-0", "status"],
-    ["1-1", "solo"],
+    ["1-1", "workflows"],
+    ["1-0", "solo-add-a-picker"],
+    ["1-2", "solo"],
   ]);
 
   const record = JSON.parse(readFileSync(join(run.dir, "run.json"), "utf8"));
@@ -158,7 +170,7 @@ test("the sidebar filter is set to the run's panes and cleared at the end", asyn
   expect(set.params).toEqual({
     source: `cego.workflows:${run.id}`,
     label: run.record.slug,
-    filter: { op: "in", field: "pane_id", values: ["1-1"] },
+    filter: { op: "in", field: "pane_id", values: ["1-2"] },
   });
   expect(rig.calls().find((c) => c.cmd === "agent.view.clear")!.params).toEqual({
     source: `cego.workflows:${run.id}`,

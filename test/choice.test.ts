@@ -120,9 +120,10 @@ test("a fresh reviewer choice gets its own tab and its findings prompt the follo
   const { run, status } = await runWorkflow(rig, "choose", { goal: "g" }, { prompts });
 
   expect(status).toBe("done");
-  // A round's tab is named for the run, not for the choice that started it.
+  // A tab for the draft step and one for the round; both named for the run, not
+  // for the choice that started it.
   const labels = rig.calls().filter((c) => c.cmd === "tab create").map((c) => c.argv!.at(-2));
-  expect(labels).toEqual(["⚙ choose · g"]);
+  expect(labels).toEqual(["⚙ choose · g", "⚙ choose · g"]);
 
   // The strip is fifteen percent of a tab, so a menu takes the whole tab while it
   // is open and gives it back afterwards — once per time the menu was shown.

@@ -174,10 +174,13 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
 
   const { run } = await runWorkflow(rig, "implement", {});
 
-  // One tab for the review step, named for the run rather than the variant, and the
-  // same tab across both iterations — build's own panes live on the runner's tab.
+  // Two tabs, both named for the run rather than for a variant: the implementer's
+  // and the reviewers', and the review step keeps its own across both iterations.
   const created = rig.calls().filter((c) => c.cmd === "tab create");
-  expect(created.map((c) => c.argv!.at(-2))).toEqual(["⚙ implement · add-picker"]);
+  expect(created.map((c) => c.argv!.at(-2))).toEqual([
+    "⚙ implement · add-picker",
+    "⚙ implement · add-picker",
+  ]);
   expect(new Set(run.step("review").variants.map((v) => v.tabId)).size).toBe(1);
 
   // The second variant sits beside the first, each taking half the tab. A restart
@@ -190,11 +193,14 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
   }
   // The two reviewers and the synthesiser, all restarted for the second round.
   expect(rightSplits.length - sideBySide.length).toBe(3);
-  // Panes say which model they are; nothing says which run.
-  const paneNames = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1));
-  expect(paneNames).toContain("opus");
-  expect(paneNames).toContain("sonnet");
-  expect(paneNames.some((n) => n!.includes("implement-add-picker"))).toBe(false);
+  // Agent panes say which model they are; only the run's own pane, on the board,
+  // says which run — two of those in one tab would otherwise be indistinguishable.
+  const renames = rig.calls().filter((c) => c.cmd === "pane rename");
+  const agentPanes = renames.filter((c) => c.argv![2] !== "1-0").map((c) => c.argv!.at(-1));
+  expect(agentPanes).toContain("opus");
+  expect(agentPanes).toContain("sonnet");
+  expect(agentPanes.some((n) => n!.includes("implement-add-picker"))).toBe(false);
+  expect(renames.find((c) => c.argv![2] === "1-0")!.argv!.at(-1)).toBe("implement-add-picker");
 
   const reviewer = join(run.dir, "personas", "reviewer.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
@@ -451,7 +457,7 @@ test("build, architecture, simplify and fix are one pane that changes its label"
 
   const { run } = await runWorkflow(rig, "implement", {});
 
-  // One pane, on the runner's own tab, for every step that reuses the agent.
+  // One pane, in the implementer's own tab, for every step that reuses the agent.
   const panes = ["build", "architecture", "simplify", "fix"].map((id) => run.step(id).variants[0]!.paneId);
   expect(new Set(panes).size).toBe(1);
 
@@ -462,12 +468,15 @@ test("build, architecture, simplify and fix are one pane that changes its label"
     .map((c) => c.argv!.at(-1));
   expect(onThatPane.slice(0, 4)).toEqual(["build", "architecture", "simplify", "fix"]);
 
-  // Only the review step ever opened a tab of its own.
-  expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(1);
+  // Two tabs for the whole run: the implementer's and the reviewers'.
+  expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(2);
 
-  // The strip is renamed once, at the start, and never becomes an agent's pane.
-  const strip = rig.calls().filter((c) => c.cmd === "pane rename" && c.argv!.at(-1) === "status");
-  expect(strip).toHaveLength(1);
-  expect(strip[0]!.argv![2]).toBe("1-0");
+  // The runner's own pane is on the board, and never becomes an agent's pane.
+  const moved = rig.calls().filter((c) => c.cmd === "pane move");
+  expect(moved).toHaveLength(1);
+  expect(moved[0]!.argv![2]).toBe("1-0");
   expect(panes[0]).not.toBe("1-0");
+  expect(
+    rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1)),
+  ).not.toContain("status");
 }, 20_000);

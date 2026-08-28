@@ -153,7 +153,8 @@ test("the synthesis pane opens under the reviewers, in their tab", async () => {
     .filter((c) => c.cmd === "pane split")
     .find((c) => c.argv![2] === reviewers[1]!.paneId)!;
   expect(split.argv!.slice(3, 7)).toEqual(["--direction", "down", "--ratio", "0.5"]);
-  expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(0);
+  // One tab for the whole run: the reviewers', which the synthesis joins.
+  expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(1);
   expect(rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1))).toContain("synthesize");
 });
 

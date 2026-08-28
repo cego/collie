@@ -133,6 +133,11 @@ export class Herdr {
     await this.cli(["tab", "focus", tabId]);
   }
 
+  /** Reorders a tab within its workspace; 0 is first. No CLI for it in 0.8.2. */
+  async tabMove(tabId: string, insertIndex: number): Promise<void> {
+    await this.rpc("tab.move", { tab_id: tabId, insert_index: insertIndex });
+  }
+
   async paneList(): Promise<PaneInfo[]> {
     const res = await this.cli(["pane", "list"]);
     const panes = res?.result?.panes ?? [];

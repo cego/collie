@@ -702,15 +702,23 @@ function register(o: EngineOptions, step: ResolvedStep, record: VariantRecord): 
 }
 
 /**
- * The Session's own tab, found by its label and created when it is not there.
- * The runner's own pane moves in beside the view, because that is where every
- * question this run asks has to appear. Returns the tab id, or null when there
- * is no workspace to own one — the run then keeps its own tab, as before.
+ * The Session's own tab, found by its label and created when it is not there,
+ * and moved to the front of the workspace either way. The runner's own pane
+ * moves in beside the view, because that is where every question this run asks
+ * has to appear. Returns the tab id, or null when there is no workspace to own
+ * one — the run then keeps its own tab, as before.
  */
 async function ensureWorkspaceTab(o: EngineOptions): Promise<string | null> {
   try {
     const view = await findOrOpenView(o);
     if (!view) return null;
+    // First tab, every run: the Session's board is where `prefix+1` should land,
+    // and a tab that drifts down the list is one the human stops looking at.
+    try {
+      await o.herdr.tabMove(view.tabId, 0);
+    } catch (e) {
+      o.run.log(`workspace tab order: ${(e as Error).message}`);
+    }
     if (o.hostPaneId) {
       await o.herdr.paneMove({
         paneId: o.hostPaneId,
@@ -967,16 +975,15 @@ async function collect(
 }
 
 /**
- * A menu cannot be read in a strip fifteen percent tall, so the strip takes the
- * whole tab while it is open and gives it back afterwards — even if it throws.
+ * A menu cannot be read in the bottom half of a shared tab, so the run's own pane
+ * takes the whole tab while it is open and gives it back afterwards — even if it
+ * throws.
  */
 async function zoomed<T>(o: EngineOptions, body: () => Promise<T>): Promise<T> {
-  // The runner's own pane is the strip; `host` is nulled as the run moves on, but
-  // the option it came from still names it.
-  const strip = o.hostPaneId ?? o.env.paneId;
-  if (!strip) return await body();
+  const own = o.hostPaneId ?? o.env.paneId;
+  if (!own) return await body();
   try {
-    await o.herdr.paneZoom(strip, true);
+    await o.herdr.paneZoom(own, true);
   } catch {
     // A pane that will not zoom is still a pane the human can scroll.
   }
@@ -984,7 +991,7 @@ async function zoomed<T>(o: EngineOptions, body: () => Promise<T>): Promise<T> {
     return await body();
   } finally {
     try {
-      await o.herdr.paneZoom(strip, false);
+      await o.herdr.paneZoom(own, false);
     } catch {
       // Leaving it zoomed is survivable; failing the run over it is not.
     }
@@ -1080,7 +1087,7 @@ function fanInFiles(
     .join("\n");
 }
 
-/** The synthesised review, in the strip, where the human is already looking. */
+/** The synthesised review, in the run's own pane, where the human is already looking. */
 function printReview(o: EngineOptions): void {
   const path = join(o.run.dir, REVIEW_FILE);
   if (!existsSync(path)) return;

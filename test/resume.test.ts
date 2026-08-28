@@ -154,14 +154,18 @@ test("the steps that borrowed the dead agent share one new agent instead", async
   expect(starts).not.toContain("dead-build-agent");
 }, 20_000);
 
-test("the first unfinished step takes the status pane's tab", async () => {
+test("a resumed run joins the workspace tab and gives the first unfinished step its own", async () => {
   const run = interruptedRun();
 
   await resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
 
-  const split = rig.calls().find((c) => c.cmd === "pane split")!.argv!;
-  expect(split.slice(0, 3)).toEqual(["pane", "split", "1-0"]);
-  expect(run.step("architecture").variants[0]!.paneId).toBe("1-1");
+  // The runner's own pane moves onto the board; the step opens a tab rather than
+  // splitting the runner's pane, which is no longer in the run's own tabs at all.
+  const moved = rig.calls().find((c) => c.cmd === "pane move")!.argv!;
+  expect(moved.slice(0, 3)).toEqual(["pane", "move", "1-0"]);
+  const architecture = run.step("architecture").variants[0]!;
+  expect(architecture.paneId).not.toBe("1-0");
+  expect(rig.calls().filter((c) => c.cmd === "tab create").length).toBeGreaterThan(0);
 }, 20_000);
 
 test("a resumed run toasts when it finishes and records the new status", async () => {

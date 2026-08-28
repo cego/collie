@@ -22,6 +22,10 @@
 
 **Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents.
 
+**Session** — One herdr workspace and one repo cwd, taken together. Runs in the same
+Session share a `workflows` tab and a register of each other's long-lived agents; runs in
+another workspace, or another checkout, never see them.
+
 **Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking copies a baseline definition into a Layer.
 
 **Fan-in** — Combining several parallel Outputs into one. A Step declares `fan_in: <step>`, is given that Step's Output files, and reconciles them itself; it sits in that Step's tab. The engine no longer unions findings.
@@ -42,3 +46,9 @@
 **Plan directory** — The `plan/` folder inside a Run: SPEC.md and the ticket files. It is the hand-off from `plan` to `implement` and never lives in the repository.
 
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
+
+**Workspace tab** — The `workflows` tab a Session keeps as its control surface: live
+agents by role, active Runs with their step, this Session's finished Runs, and quick
+actions. It is a view over the run dirs and the register, always the workspace's first
+tab, and holds no state of its own; each Run's own pane sits in it, which is where that
+Run reports and where its Choice menus appear.

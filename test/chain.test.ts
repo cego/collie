@@ -109,7 +109,9 @@ test("a run: choice starts a child run with the forwarded inputs and the parent 
   expect(child.record.steps.map((s) => s.status)).toEqual(["pending"]);
 
   // The child gets its own runner pane, in the same workspace.
-  const opened = rig.calls().find((c) => c.cmd === "plugin pane")!.argv!;
+  const opened = rig
+    .calls()
+    .find((c) => c.cmd === "plugin pane" && c.argv!.includes("runner"))!.argv!;
   expect(opened).toContain("--entrypoint");
   expect(opened).toContain("runner");
   expect(opened).toContain(`HERDR_WORKFLOWS_RUN=${child.id}`);
@@ -154,7 +156,10 @@ test("cancelling that question abandons the chain and offers the menu again", as
   expect(run.step("after").status).toBe("done");
   expect(prompts.offered).toHaveLength(2);
   expect(run.record.choices.map((c) => c.title)).toEqual(["Ask me", "Stop here"]);
-  expect(rig.cmds()).not.toContain("plugin pane");
+  // No child run: the only plugin pane opened is the workspace's own board.
+  expect(
+    rig.calls().filter((c) => c.cmd === "plugin pane" && c.argv!.includes("runner")),
+  ).toEqual([]);
 });
 
 test("an unknown chained workflow or input fails validation before anything opens", () => {

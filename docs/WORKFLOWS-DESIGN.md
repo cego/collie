@@ -41,7 +41,7 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
 6. **Fan-in step** — `fan_in: <earlier step>` gives a Step that Step's Output files as
    `{{fan_in}}` and puts its pane in that Step's tab. Its own Output must be a Synthesis
    (`verdict`, `findings`, `summary`, `dropped`, each dropped finding with a `reason`),
-   which the engine renders to `{{run.dir}}/review.md` and prints in the strip. Reconciling
+   which the engine renders to `{{run.dir}}/review.md` and prints in the run's pane. Reconciling
    several reviewers is that Step's job; the engine no longer unions findings.
 7. **Step requirements** — `requires:` takes one name or a list. `gitlab` is glab plus a
    GitLab remote; `mr-target` is a run whose `target` is a merge request. An unmet
@@ -49,22 +49,34 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
 8. **The harness's own model** — `model: default`, at a Step or as the user's default,
    passes no model flag, so the harness starts on whatever it would start on by itself.
    Every harness accepts it, and a pane for such a variant is named after the harness.
+9. **The workspace tab** — one `workflows` tab per workspace as the Session's control
+   surface: live agents by role with a key that focuses each, active Runs with their
+   step and iteration, this Session's finished Runs with their outcome, and quick
+   actions (pick, resume, fork, send the last review to the implementer). It reads the
+   run dirs and the live-agent register and holds no engine state of its own. Runs
+   register their long-lived agents there — see **Session**.
 
 ## Tabs and panes
 One tab per Step. A Step's parallel variants are equal side-by-side splits inside that
 Step's tab, so two reviewers are one tab of two panes rather than two tabs. A Step with
 `fan_in:` opens no tab either: it splits down from the last pane of the Step it
-reconciles, so the synthesis sits under the reviews it came from. The runner's
-own pane becomes a thin `status` strip (15%) along the bottom of the run's first tab only,
-never beside an agent; a Choice menu zooms it to the whole tab while it is open. A Step
+reconciles, so the synthesis sits under the reviews it came from. A Step
 that continues an earlier agent (`agent: <step>`) opens no tab and no pane — it renames
-the pane it inherited to its own id.
+the pane it inherited to its own id. Run tabs hold agents and nothing else.
+
+The runner's own pane is not in them. One tab per workspace, labelled `workflows`, holds
+the Session's board, and each Run's own pane moves in underneath it (40/60): that is
+where the Run reports and where every Choice menu it opens appears, zoomed while it is
+open. The tab is created by the first Run in the workspace, found by its label and
+reused by every Run after it, and moved to the front of the workspace on every Run start
+so it is always `prefix+1`. Closing it loses nothing — the next Run recreates it.
 
 Tabs read `<glyph> <workflow> · <target>`: `!123`, a branch name (never a sha) or
 `worktree` for `review`, the run's slug for the rest, and never a run id, harness or
 model. `⚙` working, `⚠` waiting for the human, `✓` done — only when every pane in the tab
 is — `✗` stopped. Panes are the model where variants differ (`opus`, `codex gpt-5`), the
-step id where one runs alone, `status` for the strip. Agent names stay herdr-legal and
+step id where one runs alone, the run's slug on its own pane in the `workflows` tab.
+Agent names stay herdr-legal and
 unique, and are never what a label shows.
 
 ## Workflows

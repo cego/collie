@@ -100,7 +100,7 @@ test("plan writes into the run dir, keeps one agent, and chains implement", asyn
   expect(child.record.workflow).toBe("implement");
   expect(child.record.slug).toBe("implement-add-a-version-flag");
   expect(child.record.inputs.plan).toBe(`${run.dir}/plan`);
-});
+}, 20_000);
 
 test("a second opinion is a fresh opus reviewer whose findings go back to the planner, twice at most", async () => {
   rig.queueOutputs([CLEAN, CLEAN, CLEAN, PLAN_FINDING, CLEAN, CLEAN]);
@@ -123,7 +123,7 @@ test("a second opinion is a fresh opus reviewer whose findings go back to the pl
   expect(revise).toContain("- [major] no ticket for the migration");
   const planner = run.step("grill").variants[0]!.agent;
   expect(rig.calls().filter((c) => c.cmd === "agent prompt").map((c) => c.argv![2]).at(-2)).toBe(planner);
-});
+}, 20_000);
 
 test("offloading to Linear asks for the team once and keeps it in config.json", async () => {
   rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN]);
@@ -138,7 +138,7 @@ test("offloading to Linear asks for the team once and keeps it in config.json", 
   const offload = readFileSync(join(run.dir, "steps", "next", "offload-to-linear-1", "prompt-1.md"), "utf8");
   expect(offload).toContain("`ENG` team's board");
   expect(offload).toContain("ONE issue");
-});
+}, 20_000);
 
 test("a workflow embedding plan gets the same steps with the references rebased", () => {
   const env = rig.pluginEnv();

@@ -62,4 +62,7 @@ else
   say "herdr is not running; the bindings apply on next start"
 fi
 
-say "Done. Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f forks."
+say "Done."
+say "Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f forks."
+say "The first run in a workspace opens a 'workflows' tab as its first tab (prefix+1):"
+say "live agents, running and finished runs, and every menu a workflow asks you to answer."

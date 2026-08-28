@@ -38,18 +38,49 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
 3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only
    for what could not be inferred, and shown one confirm line. Two inputs offer a menu
    instead of a guess: `implement`'s work source, and `review`'s target.
-4. A `runner` tab opens. Its own pane drops to a thin `status` strip along the bottom
-   and the first step's agent takes the space above it. After that, one tab per step:
-   a step's parallel variants sit side by side in it, an even share each, a step that
-   reconciles them (`fan_in:`) opens underneath them in the same tab, and a step that
-   continues an earlier agent opens nothing — it renames that pane to itself, so
-   `build` becomes `architecture`, then `simplify`, then `fix`. Tabs are named
-   `⚙ <workflow> · <target>` and carry the run's state: `⚙` working, `⚠` your turn,
-   `✓` done — only once every pane in the tab is — and `✗` stopped. Panes are named for
-   what is in them: the model for parallel variants (`opus`, `sonnet`), the step's name
-   when it runs alone. A toast tells you when a run is done or needs you.
-5. `plan` and `architecture` end in a menu, which takes over the whole tab while it is
-   open and hands it back afterwards; "Implement now" chains straight into `implement`. `prefix+u` picks up any run with unfinished steps.
+4. The workspace's **`workflows` tab** opens — always the first tab, so `prefix+1`
+   lands on it — and the run's own pane joins it underneath the board. That pane is
+   where the run reports and where every menu it shows you appears; see "The
+   workflows tab" below.
+5. The run's own tabs hold agents and nothing else: one tab per step, a step's
+   parallel variants side by side in it with an even share each, a step that
+   reconciles them (`fan_in:`) underneath them in the same tab, and a step that
+   continues an earlier agent opening nothing at all — it renames that pane to
+   itself, so `build` becomes `architecture`, then `simplify`, then `fix`. Tabs are
+   named `⚙ <workflow> · <target>` and carry the run's state: `⚙` working, `⚠` your
+   turn, `✓` done — only once every pane in the tab is — and `✗` stopped. Panes are
+   named for what is in them: the model for parallel variants (`opus`, `sonnet`), the
+   step's name when it runs alone. A toast tells you when a run is done or needs you.
+6. `plan` and `architecture` end in a menu, which takes over the whole pane while it
+   is open and hands it back afterwards; "Implement now" chains straight into
+   `implement`. `prefix+u` picks up any run with unfinished steps.
+
+## The workflows tab
+
+One tab per workspace, created by the first run and reused by every run after it, and
+moved to the front of the workspace each time so it is always `prefix+1`. It is a
+board, not an engine: it watches the run dirs and the register of live agents and
+draws what it finds, so closing it loses nothing — the next run opens it again.
+
+```
+workflows — herdr-plugin
+/home/mk/work/cego/herdr-plugin
+
+Agents
+  1  implementer working  implement-add-a-picker-20260828-093012
+
+Runs
+  ⚙ implement · add-a-picker    fix · iteration 3/5
+
+Finished
+  ✓ review · smoke-synth        done
+
+1-9 focus that agent · p run a workflow · u resume · f fork · s send the last review to the implementer · q close this tab
+```
+
+Every menu a run asks you about renders in that run's pane in this tab, and the runner
+toasts and brings the tab to the front before it asks, so a menu is never left unseen
+in a tab you are not looking at.
 
 ## Workflows
 
@@ -207,7 +238,7 @@ Each choice needs a `title` and exactly one of `run`, `prompt`, `post` or `stop`
 `prompt` choice offers the menu again as soon as its round has written its Output, so
 `Refine` can be taken as often as you like; `run`, `post` and `stop` end the step. A
 `post` choice sends this run's `review.md` to the merge request it reviewed, verbatim
-and as a single note — the engine runs `glab mr note`, so what you read in the strip is
+and as a single note — the engine runs `glab mr note`, so what you read in the run's pane is
 exactly what lands on the MR. A note that will not send re-offers the menu. `run` starts that
 workflow as a child run in the same workspace — forwarded inputs first, the rest
 inferred, anything left over asked here — and the parent finishes once the child has
@@ -280,7 +311,7 @@ nothing is dropped silently. Its Output is a review plus `summary` and `dropped`
 
 The engine renders that to `review.md` in the run dir — the summary, then the findings
 under their severity, and nothing about the process or the models — and prints it in the
-status strip. That file is what a `post` choice sends to the merge request, and inside
+run's own pane. That file is what a `post` choice sends to the merge request, and inside
 `implement` it is what the fix step is given: one reconciled review per round, never the
 reviewers' raw union.
 
