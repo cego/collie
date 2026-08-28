@@ -85,6 +85,8 @@ export async function runWorkflow(
     handoffTimeoutMs?: number;
     outputPollMs?: number;
     prompts?: EnginePrompts;
+    /** For prompts that need the run dir, which only exists once the run does. */
+    promptsFor?: (run: Run) => EnginePrompts;
     env?: Record<string, string>;
     workspaceLabel?: string;
   } = {},
@@ -137,7 +139,7 @@ export async function runWorkflow(
     out: (line) => lines.push(line),
     handoffTimeoutMs: opts.handoffTimeoutMs,
     outputPollMs: opts.outputPollMs,
-    prompts: opts.prompts,
+    prompts: opts.promptsFor ? opts.promptsFor(run) : opts.prompts,
     env,
   });
   return { run, status, lines };

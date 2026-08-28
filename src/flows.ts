@@ -414,7 +414,7 @@ async function announce(herdr: Herdr, env: PluginEnv, waiting: RunRow): Promise<
 }
 
 /** One keypress against a pending question; the answer goes back to the run dir. */
-function answerKey(
+export function answerKey(
   waiting: RunRow,
   asking: Asking,
   key: string,
