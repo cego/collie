@@ -115,7 +115,7 @@ in a tab you are not looking at.
 | --- | --- |
 | `plan` | Grills you, writes `SPEC.md` and tickets into the run dir, then a menu: implement now, second opinion, offload to Linear, refine |
 | `implement` | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models into one synthesised review, loops on its findings up to five times, then pushes and opens the merge request |
-| `review` | Reviews an MR, a branch diff or the working tree with two models, synthesises them into one review, and offers to post it to the merge request |
+| `review` | Reviews an MR (anyone's, from any directory), a branch diff or the working tree with two models, synthesises them into one review, and offers to post it to the merge request |
 | `architecture` | Runs the architect over the project, reports into the run dir, then a menu: implement now or stop |
 
 `plan` and `architecture` can chain `implement`, which embeds `review` and the
@@ -358,6 +358,22 @@ on the next round and stops driving the loop: the two of them cannot settle it, 
 run finishes and you decide, instead of spending rounds re-arguing it. A reviewer who
 can answer the reason raises it again with a `rebuttal`, which clears the dispute and
 puts the finding back in front of the implementer.
+
+## Reviewing someone else's merge request
+
+An MR target carries its project, not just its iid:
+`mr:<host>/<group>/<project>!<iid>`. Paste an MR URL and the project comes from the URL; type
+a bare `!42` and it comes from the remote of the directory you are in. Every `glab` call the
+runner makes — and every command the review prompt hands the reviewers — then passes
+`--repo <host>/<group>/<project>`, so **no checkout of that project is needed**: you can
+review and comment on a colleague's MR from a group folder that is not a git repository at
+all. The tab still reads `⚙ Review`, and the board row still says `!42`.
+
+What a step pointed at a merge request needs is glab and `glab auth status --hostname
+<host>` for that host; the "does this directory have a GitLab remote" check stays where it
+belongs, on `implement`'s `mr` step, which is the one that pushes. In a directory that is
+not a checkout there is no branch and no working tree to review, so the target menu is one
+entry — **Type it…**.
 
 ## Runs
 

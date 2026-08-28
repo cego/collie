@@ -6,6 +6,7 @@ import { basename, join } from "node:path";
 import type { InputStrategy } from "./definitions";
 import type { PickItem } from "./picker";
 import { RunStore } from "./run";
+import { mrTarget, parseMrTarget, projectHere } from "./mr";
 
 /** Where the work to be done was described. */
 export type WorkSourceKind = "plan-dir" | "linear" | "text";
@@ -53,6 +54,8 @@ export interface Resolution {
   candidates?: Candidate[];
   /** The default branch a bare ref is compared against, for a `diff-target`. */
   base?: string;
+  /** The GitLab project this directory pushes to, for a bare MR iid. */
+  project?: string;
 }
 
 export interface InferContext {
@@ -110,7 +113,14 @@ export async function inferInput(
       // Inference still picks the value; the menu only lets the human override it,
       // and the head of the list is what inference alone would have chosen.
       const baseRef = (await defaultBase(run, ctx.cwd)) ?? "";
-      return { ...base, ...candidates[0]!, candidates, base: baseRef };
+      const project = (await projectHere(ctx.cwd, run)) ?? undefined;
+      const common = { ...base, candidates, base: baseRef, project };
+      // A directory that is not a checkout offers nothing to infer from, so the
+      // menu is one entry: type it.
+      if (candidates.length === 0) {
+        return { ...common, value: "", source: "ask", needsAsking: true, question: TARGET_QUESTION };
+      }
+      return { ...common, ...candidates[0]! };
     }
 
     case "ticket": {
@@ -218,38 +228,53 @@ export async function workSourceCandidates(ctx: InferContext): Promise<WorkSourc
 export async function targetCandidates(ctx: InferContext): Promise<Candidate[]> {
   const run = ctx.run ?? shell;
   const out: Candidate[] = [];
+  // Whether this directory is a checkout at all decides which candidates exist:
+  // a group folder has no branch and no working tree to review.
+  const inRepo = (await run("git", ["rev-parse", "--git-dir"], ctx.cwd)).code === 0;
+  const project = inRepo ? await projectHere(ctx.cwd, run) : null;
 
   const view = await run("glab", ["mr", "view", "--output", "json"], ctx.cwd);
   const iid = view.code === 0 ? mrIid(view.stdout) : null;
   if (iid) {
-    out.push({ kind: "mr", value: `mr:${iid}`, source: `open merge request !${iid}`, label: `!${iid}` });
+    out.push({
+      kind: "mr",
+      value: mrTarget(project, iid),
+      source: `open merge request !${iid}`,
+      label: `!${iid}`,
+    });
   } else {
     // This branch has no MR, so offer the ones I would otherwise go looking for.
-    for (const mine of await myOpenMrs(run, ctx.cwd)) out.push(mine);
+    for (const mine of await myOpenMrs(run, ctx.cwd, project)) out.push(mine);
   }
 
-  const branch = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout.trim();
-  const baseRef = await defaultBase(run, ctx.cwd);
-  if (branch && baseRef && branch !== baseRef) {
-    out.push({
-      kind: "branch",
-      value: `branch:${baseRef}...${branch}`,
-      source: `${branch} vs ${baseRef}`,
-      label: branch,
-    });
-  }
+  if (inRepo) {
+    const branch = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout.trim();
+    const baseRef = await defaultBase(run, ctx.cwd);
+    if (branch && baseRef && branch !== baseRef) {
+      out.push({
+        kind: "branch",
+        value: `branch:${baseRef}...${branch}`,
+        source: `${branch} vs ${baseRef}`,
+        label: branch,
+      });
+    }
 
-  const dirty = (await run("git", ["status", "--porcelain"], ctx.cwd)).stdout.trim() !== "";
-  // Last, and always there when nothing else is: the working tree is the one
-  // target that exists in every repo, and inference already fell back to it.
-  if (dirty || out.length === 0) {
-    out.push({ kind: "worktree", value: "worktree", source: "working tree", label: "working tree" });
+    const dirty = (await run("git", ["status", "--porcelain"], ctx.cwd)).stdout.trim() !== "";
+    // Last, and always there when nothing else is: the working tree is the one
+    // target every checkout has, and inference already fell back to it.
+    if (dirty || out.length === 0) {
+      out.push({ kind: "worktree", value: "worktree", source: "working tree", label: "working tree" });
+    }
   }
   return out;
 }
 
 /** Open MRs I am on either side of, deduplicated by iid. */
-async function myOpenMrs(run: NonNullable<InferContext["run"]>, cwd: string): Promise<Candidate[]> {
+async function myOpenMrs(
+  run: NonNullable<InferContext["run"]>,
+  cwd: string,
+  project: string | null,
+): Promise<Candidate[]> {
   const seen = new Map<string, Candidate>();
   for (const who of ["--assignee", "--author"]) {
     const res = await run("glab", ["mr", "list", who, "@me", "--output", "json"], cwd);
@@ -269,29 +294,35 @@ async function myOpenMrs(run: NonNullable<InferContext["run"]>, cwd: string): Pr
       const title = typeof row.title === "string" ? row.title : "";
       seen.set(key, {
         kind: "mr",
-        value: `mr:${key}`,
+        value: mrTarget(project, key),
         source: title ? `open MR !${key} — ${title}` : `open MR !${key}`,
         label: `!${key}`,
       });
     }
   }
-  return [...seen.values()].sort((a, b) => Number(a.value.slice(3)) - Number(b.value.slice(3)));
+  return [...seen.values()].sort(
+    (a, b) => Number(parseMrTarget(a.value)?.iid ?? 0) - Number(parseMrTarget(b.value)?.iid ?? 0),
+  );
 }
 
 /**
  * What the human typed for a review target: an MR iid or URL, a `base...head`
  * range, the working tree, or a bare ref meaning that ref against the base.
  */
-export function classifyTarget(typed: string, baseRef: string): Candidate | null {
+export function classifyTarget(typed: string, baseRef: string, project: string | null = null): Candidate | null {
   const text = typed.trim();
   if (text === "") return null;
   const source = "typed";
 
-  const url = /\/-\/merge_requests\/(\d+)/.exec(text);
-  if (url) return { kind: "mr", value: `mr:${url[1]}`, source, label: `!${url[1]}` };
+  // A URL names its own project, which is the whole point of pasting one.
+  const url = /^(?:https?:\/\/)?([^/\s]+)\/(.+?)\/-\/merge_requests\/(\d+)/.exec(text);
+  if (url) {
+    return { kind: "mr", value: mrTarget(`${url[1]}/${url[2]}`, url[3]!), source, label: `!${url[3]}` };
+  }
 
+  // A bare iid means one in the project this directory belongs to.
   const iid = /^!?(\d+)$/.exec(text);
-  if (iid) return { kind: "mr", value: `mr:${iid[1]}`, source, label: `!${iid[1]}` };
+  if (iid) return { kind: "mr", value: mrTarget(project, iid[1]!), source, label: `!${iid[1]}` };
 
   if (/^worktree$/i.test(text)) return { kind: "worktree", value: "worktree", source, label: "working tree" };
 
@@ -299,6 +330,13 @@ export function classifyTarget(typed: string, baseRef: string): Candidate | null
 
   if (!baseRef) return null;
   return { kind: "branch", value: `branch:${baseRef}...${text}`, source, label: text };
+}
+
+/** A target's kind is its value's shape; both the picker and a resume read it back. */
+export function targetKind(value: string): CandidateKind {
+  if (value.startsWith("mr:")) return "mr";
+  if (value.startsWith("branch:")) return "branch";
+  return "worktree";
 }
 
 /** What the human typed: a plan directory, a Linear issue, or the work in their own words. */
@@ -335,7 +373,7 @@ const TARGET_MENU: MenuSpec = {
   header: TARGET_QUESTION,
   hint: "an MR iid or URL, or a base...head range",
   question: "MR iid or URL, or a base...head range",
-  classify: (typed, r) => classifyTarget(typed, r.base ?? ""),
+  classify: (typed, r) => classifyTarget(typed, r.base ?? "", r.project ?? null),
 };
 
 /**

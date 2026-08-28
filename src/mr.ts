@@ -12,6 +12,69 @@ export const MR_TEMPLATE = join(".gitlab", "merge_request_templates", "default.m
 /** A Linear id, the shape it takes in a branch name, a URL, or an Output. */
 const LINEAR_ID = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
 
+/**
+ * An MR target names its project, not just its iid: reviewing or commenting on
+ * someone else's merge request has to work from a directory that is not a
+ * checkout of it, and every glab call then needs `--repo`.
+ */
+export interface MrRef {
+  /** `host/group/project`, or null for an old target that only carried an iid. */
+  project: string | null;
+  iid: string;
+}
+
+/** `mr:gitlab.example.com/group/project!42`, or the bare `mr:42` that came before. */
+export function parseMrTarget(target: string): MrRef | null {
+  if (!target.startsWith("mr:")) return null;
+  const rest = target.slice(3);
+  const at = rest.lastIndexOf("!");
+  if (at < 0) return /^\d+$/.test(rest) ? { project: null, iid: rest } : null;
+  const iid = rest.slice(at + 1);
+  if (!/^\d+$/.test(iid)) return null;
+  const project = rest.slice(0, at);
+  return { project: project === "" ? null : project, iid };
+}
+
+export function mrTarget(project: string | null, iid: string): string {
+  return project ? `mr:${project}!${iid}` : `mr:${iid}`;
+}
+
+/** The glab arguments that point a command at a project rather than at the cwd. */
+export function repoArgs(project: string | null): string[] {
+  return project ? ["--repo", project] : [];
+}
+
+/** The host part of `host/group/project`, which is what glab authenticates against. */
+export function hostOf(project: string | null): string | null {
+  const host = project?.split("/")[0];
+  return host && host.includes(".") ? host : null;
+}
+
+/**
+ * `git@host:group/project.git` and `https://host/group/project.git` both name the
+ * same project; either is what a bare iid or a branch's MR is resolved against.
+ */
+export function projectFromRemote(url: string): string | null {
+  const text = url.trim();
+  if (text === "") return null;
+  const ssh = /^(?:ssh:\/\/)?(?:[^@\s]+@)?([^:/\s]+)[:/](.+?)(?:\.git)?$/.exec(text.replace(/^https?:\/\//, ""));
+  if (!ssh) return null;
+  const [, host = "", path = ""] = ssh;
+  if (!host.includes(".") || path === "") return null;
+  return `${host}/${path.replace(/^\/+/, "").replace(/\.git$/, "")}`;
+}
+
+/** The project this checkout pushes to, or null when there is no GitLab remote. */
+export async function projectHere(cwd: string, run: Runner): Promise<string | null> {
+  for (const remote of ["origin", "upstream"]) {
+    const url = await run("git", ["remote", "get-url", remote], cwd);
+    if (url.code !== 0) continue;
+    const project = projectFromRemote(url.stdout);
+    if (project) return project;
+  }
+  return null;
+}
+
 export interface Readiness {
   ok: boolean;
   /** Why not, phrased for the runner's skip note. */
@@ -38,6 +101,28 @@ export async function gitlabReadiness(cwd: string, run: Runner): Promise<Readine
   }
   if (!/gitlab/i.test(remotes.stdout)) return { ok: false, reason: "no GitLab remote" };
   return { ok: true, reason: "" };
+}
+
+/**
+ * What a step pointed at someone else's merge request needs: glab, and glab logged
+ * in to that host. The cwd's remotes are none of its business — the whole point of
+ * carrying the project is that no checkout is required.
+ */
+export async function gitlabForProject(
+  project: string | null,
+  cwd: string,
+  run: Runner,
+): Promise<Readiness> {
+  const glab = await run("glab", ["--version"], cwd);
+  if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
+
+  const host = hostOf(project);
+  if (!host) {
+    // No project to check against: fall back to what this directory can prove.
+    return await gitlabReadiness(cwd, run);
+  }
+  const auth = await run("glab", ["auth", "status", "--hostname", host], cwd);
+  return auth.code === 0 ? { ok: true, reason: "" } : { ok: false, reason: `glab is not logged in to ${host}` };
 }
 
 /** The configured assignee wins; otherwise whoever glab is logged in as. */

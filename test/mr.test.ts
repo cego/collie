@@ -1,7 +1,20 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { gitlabReadiness, linearIssues, mrFacts, resolveAssignee, templateFile, MR_TEMPLATE } from "../src/mr";
+import {
+  MR_TEMPLATE,
+  gitlabForProject,
+  gitlabReadiness,
+  hostOf,
+  linearIssues,
+  mrFacts,
+  mrTarget,
+  parseMrTarget,
+  projectFromRemote,
+  repoArgs,
+  resolveAssignee,
+  templateFile,
+} from "../src/mr";
 import { RunStore } from "../src/run";
 import { Rig } from "./support/recorder";
 
@@ -117,4 +130,71 @@ test("mrFacts gathers the three things the prompt needs in one go", async () => 
     template: null,
     issues: ["FRO-149"],
   });
+});
+
+test("an MR target carries host, group and project, and reads back", () => {
+  expect(mrTarget("gitlab.cego.dk/cego/herdr-plugin", "42")).toBe("mr:gitlab.cego.dk/cego/herdr-plugin!42");
+  expect(parseMrTarget("mr:gitlab.cego.dk/cego/herdr-plugin!42")).toEqual({
+    project: "gitlab.cego.dk/cego/herdr-plugin",
+    iid: "42",
+  });
+  // The shape that came before, still understood: an iid in whatever repo you are in.
+  expect(mrTarget(null, "42")).toBe("mr:42");
+  expect(parseMrTarget("mr:42")).toEqual({ project: null, iid: "42" });
+  // Anything that is not an MR target, and anything malformed, is not one.
+  expect(parseMrTarget("worktree")).toBeNull();
+  expect(parseMrTarget("branch:main...x")).toBeNull();
+  expect(parseMrTarget("mr:cego/x!")).toBeNull();
+  expect(parseMrTarget("mr:cego/x")).toBeNull();
+
+  expect(repoArgs("cego/x")).toEqual(["--repo", "cego/x"]);
+  expect(repoArgs(null)).toEqual([]);
+  expect(hostOf("gitlab.cego.dk/cego/x")).toBe("gitlab.cego.dk");
+  expect(hostOf("cego/x")).toBeNull();
+  expect(hostOf(null)).toBeNull();
+});
+
+test("a project is read out of either remote shape", () => {
+  const want = "gitlab.cego.dk/cego/herdr-plugin";
+  expect(projectFromRemote("git@gitlab.cego.dk:cego/herdr-plugin.git")).toBe(want);
+  expect(projectFromRemote("https://gitlab.cego.dk/cego/herdr-plugin.git")).toBe(want);
+  expect(projectFromRemote("https://gitlab.cego.dk/cego/herdr-plugin")).toBe(want);
+  expect(projectFromRemote("ssh://git@gitlab.cego.dk/cego/herdr-plugin.git")).toBe(want);
+  expect(projectFromRemote("git@gitlab.cego.dk:cego/sub/deep.git")).toBe("gitlab.cego.dk/cego/sub/deep");
+  // Not a remote this plugin can name a project from.
+  expect(projectFromRemote("")).toBeNull();
+  expect(projectFromRemote("/srv/git/bare.git")).toBeNull();
+});
+
+test("a step pointed at a project needs glab logged in to that host, not a checkout", async () => {
+  const calls: string[][] = [];
+  const run = async (cmd: string, args: string[]) => {
+    calls.push([cmd, ...args]);
+    if (cmd === "glab" && args[0] === "--version") return { code: 0, stdout: "glab 1.0" };
+    if (cmd === "glab" && args[0] === "auth") return { code: 0, stdout: "logged in" };
+    // No git remotes here at all: the point is that it is never asked.
+    return { code: 1, stdout: "" };
+  };
+
+  const ready = await gitlabForProject("gitlab.cego.dk/cego/x", "/not/a/repo", run);
+
+  expect(ready.ok).toBe(true);
+  expect(calls).toEqual([
+    ["glab", "--version"],
+    ["glab", "auth", "status", "--hostname", "gitlab.cego.dk"],
+  ]);
+});
+
+test("not logged in to that host says so, and no project falls back to the checkout", async () => {
+  const run = async (cmd: string, args: string[]) => {
+    if (cmd === "glab" && args[0] === "--version") return { code: 0, stdout: "glab 1.0" };
+    if (cmd === "glab" && args[0] === "auth") return { code: 1, stdout: "" };
+    return { code: 1, stdout: "" };
+  };
+
+  expect((await gitlabForProject("gitlab.cego.dk/cego/x", "/x", run)).reason).toBe(
+    "glab is not logged in to gitlab.cego.dk",
+  );
+  // A target with no project can only be judged by the directory, as before.
+  expect((await gitlabForProject(null, "/x", run)).reason).toBe("this repo has no remote");
 });

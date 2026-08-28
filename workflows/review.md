@@ -30,8 +30,10 @@ Spec: {{inputs.plan}}
 
 Read the target first:
 
-- `mr:<iid>` — `glab mr diff <iid>` for the change and `glab mr view <iid>` for the
-  description.
+- `mr:<project>!<iid>` — the project is part of the target, so name it and you do not
+  need a checkout of it: `glab mr diff <iid> {{target_repo}}` for the change and
+  `glab mr view <iid> {{target_repo}}` for the description. An older target is a bare
+  `mr:<iid>`, which means the merge request of the project you are standing in.
 - `branch:<base>...<head>` — `git diff <base>...<head>`.
 - `worktree` — the change in front of you: `git status` and `git diff HEAD` for
   uncommitted work, and `git log --oneline <default-branch>..HEAD` plus `git diff

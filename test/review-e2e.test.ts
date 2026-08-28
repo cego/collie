@@ -36,6 +36,7 @@ function fakeGlab(iid: number): void {
     "glab",
     `case "$1 $2" in
       "--version ") echo "glab 1.40.0" ;;
+      "auth status") echo "logged in" ;;
       "mr view") echo '{"iid": ${iid}, "state": "opened"}' ;;
       "mr note") shift 2; printf '%s\\n' "$@" >> ${notes} ;;
       *) exit 1 ;;
@@ -43,7 +44,9 @@ function fakeGlab(iid: number): void {
   );
   bin.add(
     "git",
-    `case "$1 $2" in
+    `case "$*" in
+      "rev-parse --git-dir") echo .git ;;
+      "remote get-url origin") echo git@gitlab.cego.dk:cego/herdr-plugin.git ;;
       "remote -v") echo "origin\tgit@gitlab.cego.dk:cego/herdr-plugin.git (fetch)" ;;
       *) echo main ;;
     esac`,
@@ -179,12 +182,56 @@ test("an MR target offers the post choice, and Post sends review.md as one note"
 
   expect(status).toBe("done");
   expect(prompts.offered).toEqual([["Post to MR", "Don't post"]]);
-  expect(run.step("post").note).toBe(`chose "Post to MR" — posted the review to !12`);
-  expect(lines).toContain("  posted the review to !12");
+  const where = "gitlab.cego.dk/cego/herdr-plugin!12";
+  expect(run.step("post").note).toBe(`chose "Post to MR" — posted the review to ${where}`);
+  expect(lines).toContain(`  posted the review to ${where}`);
 
-  // Exactly one note, and it is review.md character for character.
+  // Exactly one note, sent with --repo so no checkout is needed, and review.md
+  // character for character.
   const posted = readFileSync(join(rig.root, "bin", "notes.txt"), "utf8");
-  expect(posted).toBe(`12\n--message\n${readFileSync(join(run.dir, REVIEW_FILE), "utf8")}\n`);
+  expect(posted).toBe(
+    `12\n--repo\ngitlab.cego.dk/cego/herdr-plugin\n--message\n${readFileSync(join(run.dir, REVIEW_FILE), "utf8")}\n`,
+  );
+});
+
+test("someone else's MR can be reviewed and posted to from a directory that is not a checkout", async () => {
+  const notes = join(rig.root, "bin", "notes.txt");
+  // No git repo here at all — a group folder. glab is installed and logged in.
+  bin.add("git", `exit 1`);
+  bin.add(
+    "glab",
+    `case "$1 $2" in
+      "--version ") echo "glab 1.40.0" ;;
+      "auth status") echo "logged in to gitlab.cego.dk" ;;
+      "mr note") shift 2; printf '%s\\n' "$@" >> ${notes} ;;
+      *) exit 1 ;;
+    esac`,
+  );
+  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
+  const prompts = scriptedPrompts(["Post to MR"]);
+
+  const { run, status } = await runWorkflow(
+    rig,
+    "review",
+    { target: "mr:gitlab.cego.dk/cego/other-project!7" },
+    { prompts },
+  );
+
+  // The step is offered — its readiness is glab's login for that host, not this
+  // directory's remotes, which is what used to fail with "not a git worktree".
+  expect(status).toBe("done");
+  expect(prompts.offered).toEqual([["Post to MR", "Don't post"]]);
+  expect(run.step("post").note).toBe(
+    `chose "Post to MR" — posted the review to gitlab.cego.dk/cego/other-project!7`,
+  );
+  expect(readFileSync(notes, "utf8")).toBe(
+    `7\n--repo\ngitlab.cego.dk/cego/other-project\n--message\n${readFileSync(join(run.dir, REVIEW_FILE), "utf8")}\n`,
+  );
+
+  // The reviewers were told how to read it without a checkout.
+  const prompt = readFileSync(join(run.dir, "steps", "review", "claude-opus", "prompt-1.md"), "utf8");
+  expect(prompt).toContain("glab mr diff <iid> --repo gitlab.cego.dk/cego/other-project");
+  expect(prompt).not.toContain("{{target_repo}}");
 });
 
 test("Don't post leaves the merge request alone", async () => {

@@ -843,3 +843,74 @@ way, so the second run of the same workflow is disambiguated even when the first
 Also gone: the runner no longer renames the tab it was opened in. That tab exists for the
 seconds before the pane moves onto the Control Plane, and naming it put a run's name on a
 tab nobody ever sees.
+
+**Verified live**, in a throwaway worktree of this repo run through the real picker with
+mk's user-layer `review` (claude opus + pi `openai-codex/gpt-5.6-sol`): the run's tab read
+`⚙ Review` with no target, its panes read `Opus` and `gpt-5.6-sol`, the run's own pane on
+the Control Plane read `Review`, and the tab ended as `✓ Review` with the run under
+Finished. The board's own row is where the target appears: `✓ Review · smoke-tab-16 done`.
+
+### The bug this smoke found
+
+**A long model id truncated away the number that makes an agent name unique.** The first
+attempt died with herdr's `agent_name_taken`. `agentName` builds
+`<slug>-<step>-<variant>-r<seq>` and slices it to herdr's 32 characters — and with
+`pi-openai-codex/gpt-5.6-sol` as the variant, the part that fell off the end was `-r25`,
+the run sequence number, which is the only thing making the name unique across runs. mk's
+review in another workspace had produced the identical 32-character name, so my run could
+not start its second reviewer. The suffix is now reserved first and the step, variant and
+slug take what is left; verified live on the rerun as
+`review-pi-openai-codex-gpt-5-r25`. Any provider-qualified model would have hit this —
+`pi` and `opencode` both — and no test covered it because every test variant key is short.
+
+**And the board could not see an agent until its step finished.** `runStep` wrote the
+variant records into the run only once every agent in the step was done, and not at all
+when the step failed on the way — so a working `review` step showed `(none live here)` and
+the failed run above recorded `variants: []`, which is also why its agents never appeared.
+Variants are now written as soon as the agents exist, appended rather than replaced so a
+Choice step's rounds still accumulate. That closes the second half of mk's Agents bug: the
+board reads the run record, so the run record has to be current, not eventual.
+
+
+# Ticket 19 — an MR target carries its project
+
+Pasting an MR URL used to reduce it to `mr:<iid>`, and every glab call assumed the cwd was a
+checkout of that project. From a group folder — which is where you actually are when you go
+to review a colleague's merge request — the post choice was skipped with "this repo has no
+remote", and the reviewers were told to run `glab mr diff <iid>` in a directory glab could
+make no sense of. mk's own earlier review shows the shape of it: target `mr:2367`, cwd
+`/home/mk/work/gitte2/gitlab.cego.dk`, `post done: skipped: this repo has no remote`.
+
+**The target now carries the project**: `mr:<host>/<group>/<project>!<iid>`, with the label
+still `!<iid>`. A pasted URL names its own project; a bare `!42` takes the project from the
+directory's `origin` (else `upstream`) remote; and the old bare `mr:<iid>` is still read as
+"in whatever project you are standing in", so nothing recorded before this breaks.
+
+**Every glab call takes `--repo`.** `parseMrTarget` → `repoArgs(project)` → `glab mr note
+<iid> --repo <project> --message …`, and the review prompt renders `{{target_repo}}` so the
+reviewers are handed `glab mr diff <iid> --repo <host>/<group>/<project>` verbatim.
+
+**Readiness asks the right question.** `requires: gitlab` on a step that also requires
+`mr-target` means glab installed and `glab auth status --hostname <host>` for that project's
+host; on any other step it still means glab plus a GitLab remote here, which is what
+`implement`'s `mr` step needs because it is the one that pushes. Choosing the implicit rule
+over a new `glab-auth` name is recorded in the ticket: it reaches mk's already-installed
+user-layer `review.md`, which declares `[mr-target, gitlab]` today.
+
+**A directory that is not a checkout offers nothing to infer.** `git rev-parse --git-dir`
+now gates the branch and working-tree candidates; the old code fell back to offering
+`worktree` whenever nothing else turned up, which in a group folder meant offering a working
+tree that does not exist. The menu there is one entry, and it is the default: **Type it…**.
+
+## Verified live
+
+From `/home/mk/work/gitte2/gitlab.cego.dk`, which is not a git repository at all:
+
+- The target menu rendered exactly one entry — `Type it…  an MR iid or URL, or a base...head
+  range` — with no branch and no working tree offered.
+- Typing `https://gitlab.cego.dk/spilnu/spilnu-dk/-/merge_requests/23819` produced the confirm
+  line `review: target=mr:gitlab.cego.dk/spilnu/spilnu-dk!23819 [typed]` — the project kept,
+  from a directory that knows nothing about that project.
+- The run started its two reviewers against a real merge request of someone else's, in a
+  non-repo cwd, with the tab reading `⚙ Review` and the target recorded as
+  `mr · typed`.

@@ -369,6 +369,7 @@ function onGitLab(branch: string) {
   bin.add(
     "glab",
     `case "$1 $2" in
+      "rev-parse --git-dir") echo .git ;;
       "--version ") echo "glab 1.40.0" ;;
       "api user") echo '{"username": "mk"}' ;;
       *) exit 1 ;;
@@ -377,6 +378,7 @@ function onGitLab(branch: string) {
   bin.add(
     "git",
     `case "$1 $2" in
+      "rev-parse --git-dir") echo .git ;;
       "remote -v") echo "origin\tgit@gitlab.cego.dk:cego/herdr-plugin.git (fetch)" ;;
       "rev-parse --abbrev-ref") echo ${branch} ;;
       "status --porcelain") echo "" ;;

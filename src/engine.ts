@@ -51,7 +51,7 @@ import {
 import { registerAgent, registryPath, scopeFor } from "./registry";
 import { classifyWorkSource, inferInputs, resolveWorkSource, shell as shellRun, type InputPrompts } from "./inputs";
 import { RunStore } from "./run";
-import { gitlabReadiness, mrFacts, type MrFacts } from "./mr";
+import { gitlabForProject, gitlabReadiness, mrFacts, parseMrTarget, repoArgs, type MrFacts } from "./mr";
 import { renderTemplate } from "./template";
 import { resolveWorkflow } from "./definitions";
 import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
@@ -415,6 +415,14 @@ async function runStep(
     records.push(record);
   }
 
+  // Recorded as soon as they exist, not when the step ends: the Control Plane reads
+  // its agents out of the run record, and a step that is still working — or one that
+  // failed on its way — would otherwise have started agents nothing knows about.
+  // Appended, because a Choice step's rounds accumulate here across the whole step.
+  const recorded = run.step(step.id).variants;
+  for (const record of records) if (!recorded.includes(record)) recorded.push(record);
+  run.save();
+
   for (const [i, record] of records.entries()) {
     const variant = variants[i]!;
     const key = keys[i]!;
@@ -644,7 +652,7 @@ async function runRound(
   const variant = roundVariant(round, step, o.defaults);
   const outcomes = await runStep(o, synth, [variant], [key], ctx, extraVars);
   const outcome = outcomes[0]!;
-  o.run.step(step.id).variants.push(outcome.record);
+  // runStep has already recorded it; a second push here would list it twice.
   ctx.outputs.set(step.id, [outcome]);
   o.run.save();
   await markTab(o, ctx, [outcome.record]);
@@ -659,13 +667,19 @@ async function postReview(o: EngineOptions): Promise<{ ok: boolean; message: str
   const path = join(o.run.dir, REVIEW_FILE);
   if (!existsSync(path)) return { ok: false, message: `there is no ${REVIEW_FILE} to post` };
   const target = o.run.record.inputs.target ?? "";
-  const iid = target.startsWith("mr:") ? target.slice(3) : "";
-  if (!iid) return { ok: false, message: `${target || "this run"} is not a merge request` };
+  const mr = parseMrTarget(target);
+  if (!mr) return { ok: false, message: `${target || "this run"} is not a merge request` };
 
-  const note = await shellRun("glab", ["mr", "note", iid, "--message", readFileSync(path, "utf8")], o.run.record.cwd);
+  // `--repo` is what lets this work from a directory that is not that checkout.
+  const note = await shellRun(
+    "glab",
+    ["mr", "note", mr.iid, ...repoArgs(mr.project), "--message", readFileSync(path, "utf8")],
+    o.run.record.cwd,
+  );
+  const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
   return note.code === 0
-    ? { ok: true, message: `posted the review to !${iid}` }
-    : { ok: false, message: `glab mr note !${iid} failed (exit ${note.code})` };
+    ? { ok: true, message: `posted the review to ${where}` }
+    : { ok: false, message: `glab mr note ${where} failed (exit ${note.code})` };
 }
 
 function choiceHint(choice: ChoiceDef): string {
@@ -1090,13 +1104,19 @@ function collectList(o: EngineOptions, key: "deferred", parsed: unknown): void {
 
 /** Whether this run can give a step what it declared it needs, and why not. */
 async function unmetRequirement(o: EngineOptions, requires: StepRequirement[]): Promise<string | null> {
+  const target = o.run.record.inputs.target ?? "";
   for (const need of requires) {
     if (need === "gitlab") {
-      const ready = await gitlabReadiness(o.run.record.cwd, shellRun);
+      // A step pointed at a merge request needs glab for that project; a step that
+      // pushes needs this directory to be the checkout. `mr-target` says which.
+      const mr = requires.includes("mr-target") ? parseMrTarget(target) : null;
+      const ready = mr
+        ? await gitlabForProject(mr.project, o.run.record.cwd, shellRun)
+        : await gitlabReadiness(o.run.record.cwd, shellRun);
       if (!ready.ok) return ready.reason;
     }
     if (need === "mr-target" && o.run.record.inputs.target_kind !== "mr") {
-      return `${o.run.record.inputs.target || "this run"} is not a merge request`;
+      return `${target || "this run"} is not a merge request`;
     }
   }
   return null;
@@ -1171,6 +1191,8 @@ function buildPrompt(
       ]),
     ),
     findings: formatFindings(lastFindings(o, step, outputs)),
+    // `--repo <project>` for an MR target, so a prompt can be followed from anywhere.
+    target_repo: repoArgs(parseMrTarget(o.run.record.inputs.target ?? "")?.project ?? null).join(" "),
     fan_in: fanInFiles(o, step, outputs),
     disputed: formatFindings(o.run.record.disputed),
     run: { dir: o.run.dir, id: o.run.id, slug: o.run.record.slug },

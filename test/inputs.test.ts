@@ -48,6 +48,7 @@ test("diff-target falls back to the branch diff when there is no open merge requ
   bin.add(
     "git",
     `case "$1 $2" in
+      "rev-parse --git-dir") echo .git ;;
       "rev-parse --abbrev-ref") echo feature/add-picker ;;
       "symbolic-ref --short") echo origin/main ;;
       *) exit 1 ;;
@@ -65,6 +66,7 @@ test("diff-target skips a merge request that is no longer open", async () => {
   bin.add(
     "git",
     `case "$1 $2" in
+      "rev-parse --git-dir") echo .git ;;
       "rev-parse --abbrev-ref") echo feature/x ;;
       "symbolic-ref --short") echo origin/master ;;
       *) exit 1 ;;
@@ -81,6 +83,7 @@ test("diff-target ends at the working tree on the default branch", async () => {
   bin.add(
     "git",
     `case "$1 $2" in
+      "rev-parse --git-dir") echo .git ;;
       "rev-parse --abbrev-ref") echo main ;;
       "symbolic-ref --short") echo origin/main ;;
       *) exit 1 ;;
@@ -99,6 +102,7 @@ test("diff-target finds the base by name when origin/HEAD is missing", async () 
   bin.add(
     "git",
     `case "$*" in
+      "rev-parse --git-dir") echo .git ;;
       "rev-parse --abbrev-ref HEAD") echo topic ;;
       "symbolic-ref --short refs/remotes/origin/HEAD") exit 1 ;;
       "rev-parse --verify --quiet main") exit 1 ;;
@@ -112,9 +116,14 @@ test("diff-target finds the base by name when origin/HEAD is missing", async () 
   });
 });
 
-test("a missing glab or git does not throw", async () => {
+test("no glab and no git leaves nothing to infer, so the human types it", async () => {
+  // Also the non-repo case: a directory that is not a checkout has no branch and
+  // no working tree to review, so the menu is one entry — Type it….
   expect(await inferInput("target", "diff-target", { cwd: rig.projectDir })).toMatchObject({
-    value: "worktree",
+    value: "",
+    source: "ask",
+    needsAsking: true,
+    candidates: [],
   });
 });
 
@@ -397,6 +406,7 @@ function makePlanRun(store: RunStore, slug: string, cwd: string, created: string
 /** git that answers the three questions diff-target asks, with a dirty tree. */
 function gitOn(branch: string, base = "origin/main", porcelain = " M src/x.ts") {
   return `case "$1 $2" in
+      "rev-parse --git-dir") echo .git ;;
       "rev-parse --abbrev-ref") echo ${branch} ;;
       "symbolic-ref --short") echo ${base} ;;
       "status --porcelain") echo "${porcelain}" ;;
@@ -456,11 +466,22 @@ test("a clean tree on the default branch still offers the working tree", async (
 });
 
 test("what the human types is classified as an MR, a range or a branch", () => {
-  expect(classifyTarget("42", "main")).toMatchObject({ kind: "mr", value: "mr:42" });
-  expect(classifyTarget("!42", "main")).toMatchObject({ kind: "mr", value: "mr:42" });
+  // A bare iid means one in the project the directory belongs to, and carries it.
+  expect(classifyTarget("42", "main", "gitlab.example.com/g/p")).toMatchObject({
+    kind: "mr",
+    value: "mr:gitlab.example.com/g/p!42",
+    label: "!42",
+  });
+  // With no project to resolve against it stays the shape it always was.
+  expect(classifyTarget("!42", "main")).toMatchObject({ kind: "mr", value: "mr:42", label: "!42" });
+  // A URL names its own project, whatever directory it was pasted in.
   expect(
-    classifyTarget("https://gitlab.cego.dk/cego/herdr-plugin/-/merge_requests/128", "main"),
-  ).toMatchObject({ kind: "mr", value: "mr:128" });
+    classifyTarget("https://gitlab.cego.dk/cego/herdr-plugin/-/merge_requests/128", "main", "other/g/p"),
+  ).toMatchObject({ kind: "mr", value: "mr:gitlab.cego.dk/cego/herdr-plugin!128", label: "!128" });
+  // Subgroups are part of the path.
+  expect(
+    classifyTarget("https://gitlab.cego.dk/cego/sub/deep/-/merge_requests/9", "main"),
+  ).toMatchObject({ value: "mr:gitlab.cego.dk/cego/sub/deep!9", label: "!9" });
   expect(classifyTarget("main...add-picker", "main")).toMatchObject({
     kind: "branch",
     value: "branch:main...add-picker",
@@ -515,9 +536,31 @@ test("escaping the target menu leaves the run unstarted", async () => {
   expect(await resolveTarget(resolved, { menu: async () => null, ask: async () => "x" })).toBe(false);
 });
 
-test("targetCandidates does not throw when neither glab nor git is there", async () => {
+test("targetCandidates offers nothing outside a checkout, and does not throw", async () => {
   bin.add("glab", `exit 1`);
   bin.add("git", `exit 1`);
 
-  expect((await targetCandidates(ctx())).map((c) => c.kind)).toEqual(["worktree"]);
+  // No checkout means no branch and no working tree; the menu is Type it… alone.
+  expect(await targetCandidates(ctx())).toEqual([]);
+});
+
+test("an MR candidate carries the project its checkout pushes to", async () => {
+  bin.add("glab", `echo '{"iid": 42, "state": "opened", "title": "t"}'`);
+  bin.add(
+    "git",
+    `case "$*" in
+      "rev-parse --git-dir") echo .git ;;
+      "remote get-url origin") echo git@gitlab.cego.dk:cego/herdr-plugin.git ;;
+      *) exit 1 ;;
+    esac`,
+  );
+
+  const [mr] = await targetCandidates(ctx());
+  expect(mr).toMatchObject({
+    kind: "mr",
+    value: "mr:gitlab.cego.dk/cego/herdr-plugin!42",
+    label: "!42",
+  });
+  // And the label a tab would show is still just the iid.
+  expect(mr!.label).toBe("!42");
 });

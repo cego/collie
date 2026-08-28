@@ -43,9 +43,11 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
    (`verdict`, `findings`, `summary`, `dropped`, each dropped finding with a `reason`),
    which the engine renders to `{{run.dir}}/review.md` and prints in the run's pane. Reconciling
    several reviewers is that Step's job; the engine no longer unions findings.
-7. **Step requirements** — `requires:` takes one name or a list. `gitlab` is glab plus a
-   GitLab remote; `mr-target` is a run whose `target` is a merge request. An unmet
-   requirement is a skip with a note that names the gap, never a failed run.
+7. **Step requirements** — `requires:` takes one name or a list. `mr-target` is a run whose
+   `target` is a merge request. `gitlab` means glab plus a GitLab remote for a step that
+   pushes, and — on a step that also requires `mr-target` — glab logged in to that
+   project's host instead, because such a step needs no checkout. An unmet requirement is a
+   skip with a note that names the gap, never a failed run.
 8. **The harness's own model** — `model: default`, at a Step or as the user's default,
    passes no model flag, so the harness starts on whatever it would start on by itself.
    Every harness accepts it, and a pane for such a variant is named after the harness.
@@ -55,6 +57,10 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
    actions (pick, resume, fork, send the last review to the implementer). It reads the
    run dirs and the live-agent register and holds no engine state of its own. Runs
    register their long-lived agents there — see **Session**.
+10. **An MR target carries its project** — `mr:<host>/<group>/<project>!<iid>`, from the URL
+    when one is pasted and from the directory's remote for a bare iid. Every glab call takes
+    `--repo`, so reviewing and commenting on someone else's merge request works from a
+    directory that is not a checkout of it. The label stays `!<iid>`.
 
 ## Tabs and panes
 One tab per Step. A Step's parallel variants are equal side-by-side splits inside that

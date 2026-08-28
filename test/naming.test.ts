@@ -100,6 +100,25 @@ test("even splits leave every one of N panes the same width", () => {
   expect(evenRatio(2, 3)).toBeCloseTo(1 / 2);
 });
 
+test("a long model never truncates away the number that makes a name unique", () => {
+  // The live failure: two runs, different seq, same 32-character name, and herdr
+  // refused the second with `agent_name_taken`.
+  const a = agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 23);
+  const b = agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 24);
+
+  expect(a).not.toBe(b);
+  for (const name of [a, b]) {
+    expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
+    expect(name.length).toBeLessThanOrEqual(32);
+  }
+  expect(a.endsWith("-r23")).toBe(true);
+  expect(b.endsWith("-r24")).toBe(true);
+  // A three-digit run number still fits, and still ends the name.
+  expect(agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 1234).endsWith("-r1234")).toBe(true);
+  // A short variant still gets its slug prefix, as before.
+  expect(agentName("review-x", "review", "claude-opus", 12)).toBe("review-x-review-claude-opus-r12");
+});
+
 test("agent names stay herdr-legal and are never what a label shows", () => {
   const name = agentName("review-branch-b5571dc-head", "review", "claude-opus", 12);
   expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);

@@ -4,7 +4,7 @@ import { loadDefaults, type Defaults } from "../../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../../src/definitions";
 import { executeRun } from "../../src/engine";
 import { Herdr } from "../../src/herdr";
-import { classifyWorkSource, inferInputs, inputSources, inputValues } from "../../src/inputs";
+import { classifyWorkSource, inferInputs, inputSources, inputValues, targetKind } from "../../src/inputs";
 import { RunStore, type Run } from "../../src/run";
 import type { Rig } from "./recorder";
 import type { EnginePrompts } from "../../src/engine";
@@ -104,8 +104,9 @@ export async function runWorkflow(
     if (override === undefined) continue;
     r.value = override;
     r.source = "asked";
-    // An overridden work-source still owes the prompts its kind, as the picker would.
+    // An overridden Input still owes the prompts its kind, as the picker would.
     if (r.strategy === "work-source") r.kind = classifyWorkSource(override).kind;
+    if (r.strategy === "diff-target") r.kind = targetKind(override);
   }
   // Through the same funnel the picker uses, so a run here has the keys a real one has.
   const merged = inputValues(inferred);

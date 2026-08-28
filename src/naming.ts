@@ -2,6 +2,7 @@
 // readable labels. Labels go on tabs and panes; these go on agents.
 
 import { DEFAULT_MODEL } from "./harness";
+import { parseMrTarget } from "./mr";
 
 const MAX = 32;
 
@@ -13,16 +14,26 @@ function sanitize(text: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
-/** Unique, valid agent name; the step and variant survive truncation. */
+/**
+ * Unique, valid agent name. The run's sequence number is what makes it unique
+ * across runs, so it is reserved before anything else: a provider-qualified model
+ * (`openai-codex/gpt-5.6-sol`) is long enough to have truncated it away, and two
+ * runs then picked the same name and herdr refused the second with
+ * `agent_name_taken`. The step and the variant take what is left, and the run's
+ * slug only what is left after that.
+ */
 export function agentName(
   slug: string,
   stepId: string,
   variantKey: string | null,
   seq: number,
 ): string {
-  const tail = sanitize([stepId, variantKey, `r${seq}`].filter((p) => p).join("-")).slice(0, MAX);
+  const suffix = `r${seq}`;
+  const trim = (text: string, room: number) => text.slice(0, Math.max(0, room)).replace(/-+$/g, "");
+  const core = trim(sanitize([stepId, variantKey].filter((p) => p).join("-")), MAX - suffix.length - 1);
+  const tail = core ? `${core}-${suffix}` : suffix;
   const room = MAX - tail.length - 1;
-  const head = room > 0 ? sanitize(slug).slice(0, room).replace(/-+$/g, "") : "";
+  const head = room > 0 ? trim(sanitize(slug), room) : "";
   const name = head ? `${head}-${tail}` : tail;
   return (/^[a-z]/.test(name) ? name : `w${name}`).slice(0, MAX);
 }
@@ -69,7 +80,9 @@ function opaque(ref: string): boolean {
 export function targetLabel(workflow: string, slug: string, inputs: Record<string, string>): string {
   const target = inputs.target ?? "";
   if (target === "worktree") return "worktree";
-  if (target.startsWith("mr:")) return `!${target.slice(3)}`;
+  // An MR target carries its project; only the iid belongs on a label.
+  const mr = parseMrTarget(target);
+  if (mr) return `!${mr.iid}`;
   if (target.startsWith("branch:")) {
     const [base = "", head = ""] = target.slice(7).split("...");
     if (!opaque(head)) return head;
