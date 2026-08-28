@@ -38,10 +38,17 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
 3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only
    for what could not be inferred, and shown one confirm line. Two inputs offer a menu
    instead of a guess: `implement`'s work source, and `review`'s target.
-4. A `runner` tab opens as the status pane; each step gets its own tab, marked
-   `✓`/`⚠`/`✗` as it finishes. A toast tells you when a run is done or needs you.
-5. `plan` and `architecture` end in a menu; "Implement now" chains straight into
-   `implement`. `prefix+u` picks up any run with unfinished steps.
+4. A `runner` tab opens. Its own pane drops to a thin `status` strip along the bottom
+   and the first step's agent takes the space above it. After that, one tab per step:
+   a step's parallel variants sit side by side in it, an even share each, and a step
+   that continues an earlier agent opens nothing — it renames that pane to itself, so
+   `build` becomes `architecture`, then `simplify`, then `fix`. Tabs are named
+   `⚙ <workflow> · <target>` and carry the run's state: `⚙` working, `⚠` your turn,
+   `✓` done — only once every pane in the tab is — and `✗` stopped. Panes are named for
+   what is in them: the model for parallel variants (`opus`, `sonnet`), the step's name
+   when it runs alone. A toast tells you when a run is done or needs you.
+5. `plan` and `architecture` end in a menu, which takes over the whole tab while it is
+   open and hands it back afterwards; "Implement now" chains straight into `implement`. `prefix+u` picks up any run with unfinished steps.
 
 ## Workflows
 

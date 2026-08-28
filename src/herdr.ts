@@ -122,6 +122,15 @@ export class Herdr {
     await this.cli(["pane", "run", paneId, command]);
   }
 
+  /** Exchanges two panes' positions; their slots keep their sizes. */
+  async paneSwap(sourcePaneId: string, targetPaneId: string): Promise<void> {
+    await this.cli(["pane", "swap", "--source-pane", sourcePaneId, "--target-pane", targetPaneId]);
+  }
+
+  async paneZoom(paneId: string, on: boolean): Promise<void> {
+    await this.cli(["pane", "zoom", paneId, on ? "--on" : "--off"]);
+  }
+
   async paneRename(paneId: string, label: string): Promise<void> {
     await this.cli(["pane", "rename", paneId, label]);
   }

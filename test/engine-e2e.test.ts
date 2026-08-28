@@ -44,8 +44,13 @@ test("plan runs one step in the status pane's tab and records the run", async ()
   const { run, status, lines } = await runWorkflow(rig, "solo", { goal: "Add a picker" });
 
   expect(status).toBe("done");
+  // The runner's own pane is split, swapped under the agent and renamed `status`;
+  // the tab takes the run's name and, at the end, its ✓.
   expect(rig.cmds()).toEqual([
     "pane split",
+    "pane swap",
+    "pane rename",
+    "tab rename",
     "pane rename",
     "pane run",
     "agent start",
@@ -53,10 +58,17 @@ test("plan runs one step in the status pane's tab and records the run", async ()
     "agent prompt",
     "agent wait",
     "agent wait",
-    "pane rename",
+    "tab rename",
     "agent.view.clear",
     "notification show",
   ]);
+
+  const split = rig.calls().find((c) => c.cmd === "pane split")!.argv!;
+  expect(split).toContain("--direction");
+  expect(split[split.indexOf("--direction") + 1]).toBe("down");
+  expect(split[split.indexOf("--ratio") + 1]).toBe("0.85");
+  expect(rig.calls().find((c) => c.cmd === "pane rename")!.argv!.at(-1)).toBe("status");
+  expect(rig.calls().filter((c) => c.cmd === "tab rename").at(-1)!.argv!.at(-1)).toBe("✓ solo · add-a-picker");
 
   const start = rig.calls().find((c) => c.cmd === "agent start")!.argv!;
   expect(start.slice(0, 8)).toEqual([
@@ -86,13 +98,13 @@ test("plan runs one step in the status pane's tab and records the run", async ()
   expect(prompt.split("Interview me about this goal")).toHaveLength(2);
   expect(prompt).toContain(`OUTPUT_PATH: ${join(run.dir, "steps", "solo", "solo.json")}`);
 
-  expect(rig.calls().find((c) => c.cmd === "pane rename")!.argv).toEqual([
-    "pane",
-    "rename",
-    "1-1",
-    "solo-add-a-picker/solo",
+  // The strip is renamed first, then the agent's pane takes the step's name.
+  // Neither carries the run id or the slug any more; the tab holds those.
+  const renames = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2));
+  expect(renames).toEqual([
+    ["1-0", "status"],
+    ["1-1", "solo"],
   ]);
-  expect(rig.calls().filter((c) => c.cmd === "pane rename")[1]!.argv![3]).toBe("✓ solo-add-a-picker/solo");
 
   const record = JSON.parse(readFileSync(join(run.dir, "run.json"), "utf8"));
   expect(record.workflow).toBe("solo");

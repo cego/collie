@@ -120,8 +120,19 @@ test("a fresh reviewer choice gets its own tab and its findings prompt the follo
   const { run, status } = await runWorkflow(rig, "choose", { goal: "g" }, { prompts });
 
   expect(status).toBe("done");
+  // A round's tab is named for the run, not for the choice that started it.
   const labels = rig.calls().filter((c) => c.cmd === "tab create").map((c) => c.argv!.at(-2));
-  expect(labels).toEqual([`${run.record.slug}/next/second-opinion-1`]);
+  expect(labels).toEqual(["⚙ choose · g"]);
+
+  // The strip is fifteen percent of a tab, so a menu takes the whole tab while it
+  // is open and gives it back afterwards — once per time the menu was shown.
+  const zooms = rig.calls().filter((c) => c.cmd === "pane zoom").map((c) => c.argv!.slice(2));
+  expect(zooms.length).toBeGreaterThan(0);
+  expect(zooms.length % 2).toBe(0);
+  for (const [i, z] of zooms.entries()) {
+    expect(z[0]).toBe("1-0");
+    expect(z[1]).toBe(i % 2 === 0 ? "--on" : "--off");
+  }
 
   const start = rig.calls().filter((c) => c.cmd === "agent start").at(-1)!.argv!;
   expect(start.slice(7)).toEqual([

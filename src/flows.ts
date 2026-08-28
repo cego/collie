@@ -10,7 +10,7 @@ import {
   validateWorkflow,
   type Definitions,
 } from "./definitions";
-import { executeRun } from "./engine";
+import { executeRun, runTarget } from "./engine";
 import type { PluginEnv } from "./env";
 import type { Herdr } from "./herdr";
 import {
@@ -24,6 +24,7 @@ import {
 } from "./inputs";
 import { ask, confirm, nextKey, pick, releaseKeyboard, type PickItem } from "./picker";
 import { forkDefinition, type DefinitionKind } from "./fork";
+import { GLYPH, tabLabel } from "./naming";
 import { RunStore } from "./run";
 
 export type Mode = "pick" | "resume" | "fork";
@@ -213,7 +214,9 @@ export async function runnerFlow(herdr: Herdr, env: PluginEnv): Promise<number> 
   const defaults = loadDefaults(env.configDir);
   const wf = resolveWorkflow(run.record.workflow, defs, defaults);
 
-  if (env.tabId) await herdr.tabRename(env.tabId, `⚙ ${run.record.slug}`);
+  if (env.tabId) {
+    await herdr.tabRename(env.tabId, tabLabel(GLYPH.running, run.record.workflow, runTarget(wf, run.record)));
+  }
   console.log(`${run.id}\n${wf.title}\n`);
   for (const [name, value] of Object.entries(run.record.inputs)) {
     // The kind is shown with its own Input, not as a second line of its own.

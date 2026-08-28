@@ -36,6 +36,21 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
    workflow's prompt section (`prompt: unattended`) so `architecture` has an attended and
    an unattended body.
 
+## Tabs and panes
+One tab per Step. A Step's parallel variants are equal side-by-side splits inside that
+Step's tab, so two reviewers are one tab of two panes rather than two tabs. The runner's
+own pane becomes a thin `status` strip (15%) along the bottom of the run's first tab only,
+never beside an agent; a Choice menu zooms it to the whole tab while it is open. A Step
+that continues an earlier agent (`agent: <step>`) opens no tab and no pane — it renames
+the pane it inherited to its own id.
+
+Tabs read `<glyph> <workflow> · <target>`: `!123`, a branch name (never a sha) or
+`worktree` for `review`, the run's slug for the rest, and never a run id, harness or
+model. `⚙` working, `⚠` waiting for the human, `✓` done — only when every pane in the tab
+is — `✗` stopped. Panes are the model where variants differ (`opus`, `codex gpt-5`), the
+step id where one runs alone, `status` for the strip. Agent names stay herdr-legal and
+unique, and are never what a label shows.
+
 ## Workflows
 
 ### plan

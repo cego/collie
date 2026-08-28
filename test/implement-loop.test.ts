@@ -132,15 +132,31 @@ test("the loop stops at max_iterations and blocks with the findings still open",
   expect(run.record.summary).toContain("- [blocker] no exit code (cli.js:4)");
 }, 20_000);
 
-test("the reviewers are one persona at two models, in a tab each, restarted every round", async () => {
+test("the reviewers are one persona at two models, side by side in one tab, restarted every round", async () => {
   rig.queueOutputs([CLEAN, CLEAN, CLEAN, FINDING, FINDING, CLEAN, CLEAN, CLEAN, CLEAN]);
 
   const { run } = await runWorkflow(rig, "implement", {});
 
-  expect(rig.calls().filter((c) => c.cmd === "tab create").map((c) => c.argv!.at(-2))).toEqual([
-    "implement-add-picker/review/claude-opus",
-    "implement-add-picker/review/claude-sonnet",
-  ]);
+  // One tab for the review step, named for the run rather than the variant, and the
+  // same tab across both iterations — build's own panes live on the runner's tab.
+  const created = rig.calls().filter((c) => c.cmd === "tab create");
+  expect(created.map((c) => c.argv!.at(-2))).toEqual(["⚙ implement · add-picker"]);
+  expect(new Set(run.step("review").variants.map((v) => v.tabId)).size).toBe(1);
+
+  // The second variant sits beside the first, each taking half the tab. A restart
+  // splits without a ratio and closes the old pane, so it lands in the same slot.
+  const rightSplits = rig.calls().filter((c) => c.cmd === "pane split" && c.argv!.includes("right"));
+  const sideBySide = rightSplits.filter((c) => c.argv!.includes("--ratio"));
+  expect(sideBySide).toHaveLength(1);
+  for (const split of sideBySide) {
+    expect(split.argv![split.argv!.indexOf("--ratio") + 1]).toBe("0.5");
+  }
+  expect(rightSplits.length - sideBySide.length).toBe(2); // the two restarted reviewers
+  // Panes say which model they are; nothing says which run.
+  const paneNames = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1));
+  expect(paneNames).toContain("opus");
+  expect(paneNames).toContain("sonnet");
+  expect(paneNames.some((n) => n!.includes("implement-add-picker"))).toBe(false);
 
   const reviewer = join(run.dir, "personas", "reviewer.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
@@ -367,4 +383,30 @@ test("with a template in the repo the prompt points at it instead of the plain f
   expect(prompt).toContain("MR template: `.gitlab/merge_request_templates/default.md`");
   // No ticket anywhere this time, so the prompt says so rather than inventing one.
   expect(prompt).toContain("Linear tickets: ``");
+}, 20_000);
+
+test("build, architecture, simplify and fix are one pane that changes its label", async () => {
+  rig.queueOutputs([CLEAN, CLEAN, CLEAN, FINDING, FINDING, CLEAN, CLEAN, CLEAN, CLEAN]);
+
+  const { run } = await runWorkflow(rig, "implement", {});
+
+  // One pane, on the runner's own tab, for every step that reuses the agent.
+  const panes = ["build", "architecture", "simplify", "fix"].map((id) => run.step(id).variants[0]!.paneId);
+  expect(new Set(panes).size).toBe(1);
+
+  // That pane is renamed as the work moves, and nothing else opens for it.
+  const onThatPane = rig
+    .calls()
+    .filter((c) => c.cmd === "pane rename" && c.argv![2] === panes[0])
+    .map((c) => c.argv!.at(-1));
+  expect(onThatPane.slice(0, 4)).toEqual(["build", "architecture", "simplify", "fix"]);
+
+  // Only the review step ever opened a tab of its own.
+  expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(1);
+
+  // The strip is renamed once, at the start, and never becomes an agent's pane.
+  const strip = rig.calls().filter((c) => c.cmd === "pane rename" && c.argv!.at(-1) === "status");
+  expect(strip).toHaveLength(1);
+  expect(strip[0]!.argv![2]).toBe("1-0");
+  expect(panes[0]).not.toBe("1-0");
 }, 20_000);

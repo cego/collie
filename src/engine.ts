@@ -23,7 +23,17 @@ import {
   type Finding,
   type ReviewOutput,
 } from "./output";
-import { agentName, shellQuote, stepLabel } from "./naming";
+import {
+  agentName,
+  evenRatio,
+  GLYPH,
+  shellQuote,
+  STATUS_PANE,
+  stepLabel,
+  tabLabel,
+  targetLabel,
+  variantLabel,
+} from "./naming";
 import { classifyWorkSource, inferInputs, resolveWorkSource, shell as shellRun, type InputPrompts } from "./inputs";
 import { RunStore } from "./run";
 import { gitlabReadiness, mrFacts, type MrFacts } from "./mr";
@@ -32,6 +42,9 @@ import { resolveWorkflow } from "./definitions";
 import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 
 export const VIEW_SOURCE_PREFIX = "cego.workflows:";
+
+/** The share of the first tab the agents keep; the runner's strip takes the rest. */
+const STRIP_TOP = 0.85;
 
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
 export type EnginePrompts = InputPrompts;
@@ -210,8 +223,8 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     for (const v of outcomes) {
       const mark = v.record.status === "done" ? "✓" : v.record.status === "failed" ? "✗" : "⚠";
       out(`  ${mark} ${v.record.label}${v.record.error ? ` — ${v.record.error}` : ""}`);
-      await markTab(herdr, v.record, mark);
     }
+    await markTab(o, outcomes.map((v) => v.record));
 
     if (blocked.length > 0) {
       return await finish(o, "blocked", viewSource, `${step.id} needs you`);
@@ -307,23 +320,46 @@ async function runStep(
     };
 
     const reuse = prior !== null && !step.fresh;
-    if (!reuse) {
+    const paneName = variantLabel(variant, o.defaults.harness, step.id, variants.length);
+    if (reuse) {
+      // An `agent:` step opens nothing: it says which step it is on the pane it inherited.
+      if (record.paneId) await herdr.paneRename(record.paneId, paneName);
+      if (record.tabId) await herdr.tabRename(record.tabId, runTab(o, GLYPH.running));
+    } else {
       if (prior?.paneId) {
-        // fresh: replace the pane so `agent start` sees a shell prompt again.
+        // fresh: replace the pane so `agent start` sees a shell prompt again. The
+        // replacement inherits the slot, so the step keeps its tab across iterations.
         const replacement = await herdr.paneSplit({ paneId: prior.paneId, direction: "right", cwd: run.record.cwd });
         await herdr.paneClose(prior.paneId);
         record.paneId = replacement;
         record.tabId = prior.tabId;
-      } else if (host && i === 0) {
-        record.paneId = await herdr.paneSplit({ paneId: host, direction: "right", ratio: 0.75, cwd: run.record.cwd });
-        record.tabId = null;
+      } else if (i > 0) {
+        // Variants of one step sit side by side in that step's tab, evenly.
+        record.paneId = await herdr.paneSplit({
+          paneId: records[i - 1]!.paneId!,
+          direction: "right",
+          ratio: evenRatio(i, variants.length),
+          cwd: run.record.cwd,
+        });
+        record.tabId = records[i - 1]!.tabId;
+      } else if (host) {
+        // The runner's own pane becomes the thin strip under this step's panes.
+        record.paneId = await herdr.paneSplit({
+          paneId: host,
+          direction: "down",
+          ratio: STRIP_TOP,
+          cwd: run.record.cwd,
+        });
+        await herdr.paneSwap(host, record.paneId);
+        await herdr.paneRename(host, STATUS_PANE);
+        record.tabId = o.env.tabId ?? null;
       } else {
-        const tab = await herdr.tabCreate({ label, cwd: run.record.cwd });
+        const tab = await herdr.tabCreate({ label: runTab(o, GLYPH.running), cwd: run.record.cwd });
         record.tabId = tab.tabId;
         record.paneId = tab.paneId;
       }
-      if (record.tabId) await herdr.tabRename(record.tabId, label);
-      else if (record.paneId) await herdr.paneRename(record.paneId, label);
+      if (record.tabId) await herdr.tabRename(record.tabId, runTab(o, GLYPH.running));
+      if (record.paneId) await herdr.paneRename(record.paneId, paneName);
 
       // herdr 0.7.5 ignores --cwd on tab create and pane split, so cd explicitly.
       if (record.paneId) await herdr.paneRun(record.paneId, `cd ${shellQuote(run.record.cwd)}`);
@@ -413,10 +449,12 @@ async function runChoiceStep(
       .filter((c) => c.max === undefined || taken(c.title) < c.max)
       .map((c) => ({ id: c.title, title: c.title, subtitle: choiceHint(c) }));
 
-    const picked = await prompts.menu(items, {
-      header: `${run.record.slug} — ${step.id}`,
-      footer: "↑↓ move · Enter choose · Esc leave the run open",
-    });
+    const picked = await zoomed(o, () =>
+      prompts.menu(items, {
+        header: `${run.record.slug} — ${step.id}`,
+        footer: "↑↓ move · Enter choose · Esc leave the run open",
+      }),
+    );
     if (!picked) return { status: "blocked", note: "no choice taken" };
 
     const choice = choices.find((c) => c.title === picked.id)!;
@@ -564,8 +602,7 @@ async function runRound(
   o.run.step(step.id).variants.push(outcome.record);
   ctx.outputs.set(step.id, [outcome]);
   o.run.save();
-  const mark = outcome.record.status === "done" ? "✓" : "⚠";
-  await markTab(o.herdr, outcome.record, mark);
+  await markTab(o, [outcome.record]);
   return outcome;
 }
 
@@ -609,12 +646,14 @@ async function ensureTrusted(o: EngineOptions): Promise<void> {
 
       if (o.defaults.trust === "ask") {
         if (!o.prompts) continue;
-        const answer = await o.prompts.menu(
-          [
-            { id: "trust", title: "Trust it now", subtitle: "records it where the harness looks" },
-            { id: "ask", title: "Let claude ask me in its tab", subtitle: "the run waits for you" },
-          ],
-          { header: `${variant.harness} has not worked in ${cwd} before`, footer: "↑↓ move · Enter choose" },
+        const answer = await zoomed(o, () =>
+          o.prompts!.menu(
+            [
+              { id: "trust", title: "Trust it now", subtitle: "records it where the harness looks" },
+              { id: "ask", title: "Let claude ask me in its tab", subtitle: "the run waits for you" },
+            ],
+            { header: `${variant.harness} has not worked in ${cwd} before`, footer: "↑↓ move · Enter choose" },
+          ),
         );
         if (answer?.id !== "trust") continue;
       }
@@ -748,6 +787,49 @@ async function collect(
 
   record.status = "done";
   return { record, output: parsed, review };
+}
+
+/**
+ * A menu cannot be read in a strip fifteen percent tall, so the strip takes the
+ * whole tab while it is open and gives it back afterwards — even if it throws.
+ */
+async function zoomed<T>(o: EngineOptions, body: () => Promise<T>): Promise<T> {
+  // The runner's own pane is the strip; `host` is nulled as the run moves on, but
+  // the option it came from still names it.
+  const strip = o.hostPaneId ?? o.env.paneId;
+  if (!strip) return await body();
+  try {
+    await o.herdr.paneZoom(strip, true);
+  } catch {
+    // A pane that will not zoom is still a pane the human can scroll.
+  }
+  try {
+    return await body();
+  } finally {
+    try {
+      await o.herdr.paneZoom(strip, false);
+    } catch {
+      // Leaving it zoomed is survivable; failing the run over it is not.
+    }
+  }
+}
+
+/** Every tab of a run carries the same name; the glyph is what moves. */
+function runTab(o: EngineOptions, glyph: string): string {
+  return tabLabel(glyph, o.run.record.workflow, runTarget(o.wf, o.run.record));
+}
+
+/**
+ * A target names the run only where the workflow owns it. `implement` inherits
+ * `target` from the review it embeds, and is not "implement · worktree" — it is
+ * whatever it is building.
+ */
+export function runTarget(
+  wf: { name: string; embeddedInputs: string[] },
+  record: { workflow: string; slug: string; inputs: Record<string, string> },
+): string {
+  const own = !wf.embeddedInputs.includes("target");
+  return targetLabel(record.workflow, record.slug, own ? record.inputs : {});
 }
 
 /** The MR step reports what it opened; the summary is where the human looks for it. */
@@ -888,10 +970,22 @@ function verdictOf(outcomes: VariantOutcome[], disputed: Finding[]): Verdict {
   };
 }
 
-async function markTab(herdr: Herdr, record: VariantRecord, mark: string): Promise<void> {
-  const label = `${mark} ${record.label}`;
-  if (record.tabId) await herdr.tabRename(record.tabId, label);
-  else if (record.paneId) await herdr.paneRename(record.paneId, label);
+/**
+ * The step's tab wears the state of every pane in it: ✓ only once they are all
+ * done, ✗ when one stopped, ⚠ when one is waiting for the human.
+ */
+async function markTab(o: EngineOptions, records: VariantRecord[]): Promise<void> {
+  const glyph = records.every((r) => r.status === "done")
+    ? GLYPH.done
+    : records.some((r) => r.status === "failed")
+      ? GLYPH.failed
+      : records.some((r) => r.status === "blocked")
+        ? GLYPH.waiting
+        : GLYPH.running;
+  const label = runTab(o, glyph);
+  for (const tabId of new Set(records.map((r) => r.tabId).filter((t): t is string => !!t))) {
+    await o.herdr.tabRename(tabId, label);
+  }
 }
 
 async function setView(o: EngineOptions, source: string, panes: string[]): Promise<void> {

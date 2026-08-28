@@ -33,3 +33,57 @@ export function stepLabel(slug: string, stepId: string, variantKey: string | nul
 export function shellQuote(text: string): string {
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }
+
+/** ⚙ working, ⚠ your turn, ✓ finished, ✗ stopped. */
+export const GLYPH = { running: "⚙", waiting: "⚠", done: "✓", failed: "✗" } as const;
+
+export const STATUS_PANE = "status";
+
+/** A sha, or `HEAD`, names nothing a human recognises on a tab. */
+function opaque(ref: string): boolean {
+  return ref === "" || ref === "HEAD" || /^[0-9a-f]{7,40}$/i.test(ref);
+}
+
+/**
+ * What this run is pointed at, short enough for a tab: an MR as `!123`, a branch
+ * by name, the working tree, or — for the workflows that have no target — the
+ * run's own slug without the workflow it already carries.
+ */
+export function targetLabel(workflow: string, slug: string, inputs: Record<string, string>): string {
+  const target = inputs.target ?? "";
+  if (target === "worktree") return "worktree";
+  if (target.startsWith("mr:")) return `!${target.slice(3)}`;
+  if (target.startsWith("branch:")) {
+    const [base = "", head = ""] = target.slice(7).split("...");
+    if (!opaque(head)) return head;
+    if (!opaque(base)) return base;
+    return "diff";
+  }
+  const prefix = `${workflow}-`;
+  return slug.startsWith(prefix) ? slug.slice(prefix.length) : slug;
+}
+
+/** `⚙ review · !123`. The step is on the panes, not here. */
+export function tabLabel(glyph: string, workflow: string, target: string): string {
+  return target ? `${glyph} ${workflow} · ${target}` : `${glyph} ${workflow}`;
+}
+
+/**
+ * A pane says which agent it is: the model alone where the harness is the one
+ * everything else uses, `codex gpt-5` where it is not. A step running on its own
+ * has nothing to distinguish, so it takes the step's name.
+ */
+export function variantLabel(
+  variant: { harness: string; model: string },
+  defaultHarness: string,
+  stepId: string,
+  variantCount: number,
+): string {
+  if (variantCount < 2) return stepId;
+  return variant.harness === defaultHarness ? variant.model : `${variant.harness} ${variant.model}`;
+}
+
+/** Splitting N panes evenly: the i-th split leaves the left pane 1/N of the tab. */
+export function evenRatio(index: number, count: number): number {
+  return 1 / (count - index + 1);
+}
