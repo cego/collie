@@ -254,3 +254,16 @@ test("a reviewer that answers the dispute puts the finding back in front of the 
   expect(fix).toContain("answers your dispute: the spec's own out-of-scope line says otherwise");
   // Three iterations of a five-step workflow is a lot of fake agents.
 }, 20_000);
+
+test("the build prompt is told which kind of work source it got, and nothing renders empty", async () => {
+  rig.queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN]);
+
+  const { run } = await runWorkflow(rig, "implement", {});
+
+  const build = readFileSync(join(run.dir, "steps", "build", "prompt-1.md"), "utf8");
+  expect(build).toContain("Work source (plan-dir):");
+  // The three branches have to survive templating, or the implementer cannot choose one.
+  for (const kind of ["**plan-dir**", "**linear**", "**text**"]) expect(build).toContain(kind);
+  // A key the run never set renders empty and is only visible in the log.
+  expect(readFileSync(join(run.dir, "log.txt"), "utf8")).not.toContain("unknown template keys");
+}, 20_000);

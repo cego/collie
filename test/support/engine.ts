@@ -4,7 +4,7 @@ import { loadDefaults, type Defaults } from "../../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../../src/definitions";
 import { executeRun } from "../../src/engine";
 import { Herdr } from "../../src/herdr";
-import { inferInputs } from "../../src/inputs";
+import { classifyWorkSource, inferInputs, inputSources, inputValues } from "../../src/inputs";
 import { RunStore, type Run } from "../../src/run";
 import type { Rig } from "./recorder";
 import type { EnginePrompts } from "../../src/engine";
@@ -98,12 +98,17 @@ export async function runWorkflow(
   if (errors.length > 0) throw new Error(errors.join("\n"));
 
   const inferred = await inferInputs(wf.inputs, { cwd: env.cwd, stateDir: env.stateDir });
-  const merged: Record<string, string> = {};
-  const sources: Record<string, string> = {};
   for (const r of inferred) {
-    merged[r.name] = inputs[r.name] ?? r.value;
-    sources[r.name] = inputs[r.name] !== undefined ? "asked" : r.source;
+    const override = inputs[r.name];
+    if (override === undefined) continue;
+    r.value = override;
+    r.source = "asked";
+    // An overridden work-source still owes the prompts its kind, as the picker would.
+    if (r.strategy === "work-source") r.kind = classifyWorkSource(override).kind;
   }
+  // Through the same funnel the picker uses, so a run here has the keys a real one has.
+  const merged = inputValues(inferred);
+  const sources = inputSources(inferred);
 
   const run = new RunStore(env.stateDir).create({
     workflow: wf.name,
