@@ -9,7 +9,7 @@ steps:
     persona: reviewer
     output: review.json
     parallel:
-      - { harness: claude, model: opus, effort: xhigh }
+      - { harness: claude, model: opus, effort: medium }
       - { harness: claude, model: sonnet, effort: xhigh }
   - id: synthesize
     persona: reviewer
