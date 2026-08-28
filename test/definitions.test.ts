@@ -155,7 +155,7 @@ test("validation names the step and the bad harness", () => {
   const defs = loadDefinitions(ls());
   const errors = validateWorkflow(resolveWorkflow("w", defs, defaults), defs, defaults);
 
-  expect(errors[0]).toBe('workflow "w" step "s": unknown harness "aider" (known: claude, codex, opencode)');
+  expect(errors[0]).toBe('workflow "w" step "s": unknown harness "aider" (known: claude, codex, opencode, pi)');
 });
 
 test("validation catches missing personas, prompts, strategies and bad back-references", () => {
