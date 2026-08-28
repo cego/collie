@@ -1,10 +1,13 @@
 # workflows v2 — implementation report
 
-All eight tickets are `done` and committed on `master` (local only, never pushed).
-`bun test` is green: 108 tests, 17 files. `bunx tsc --noEmit` is clean, and the runner
-still compiles.
+All eight tickets are `done` and committed on `master` (local only, never pushed), plus
+two follow-ups mk asked for afterwards (convergence, and workarounds for the two harness
+facts below). `bun test` is green: 116 tests, 17 files. `bunx tsc --noEmit` is clean, and
+the runner still compiles.
 
 ```
+6686f76 Work around a harness that will not start or will not be told
+4c5879f Let a disputed finding settle the argument
 a81ab87 Build, tidy, review, fix — implement v2                (08)
 4d6d439 Add the architecture workflow, attended and not        (07)
 372cbbc Grill, spec, tickets, then a menu                      (06)
@@ -97,6 +100,12 @@ end to end):
   written to `plan/ARCHITECTURE.md` in the run dir, one `weak` deferred candidate in the
   Output, the two-choice menu, and `Stop here` finishing the run with the deferred list
   printed in the summary.
+- **A startup block recovered** (`review-worktree-20260828-061002`): `review` in a repo
+  claude had never been trusted with waited for the dialog to be answered and then
+  finished `done`. See fact 1 below.
+- **A user-only skill invoked** by the engine: a `plan` run's grill step arrived in the
+  pane as `/grill-with-docs Your task for this step is in …`, and the skill ran. See
+  fact 2 below.
 - **`implement` v2 end to end in the sandbox repo**
   (`implement-…-20260827-125306`), the whole loop with real agents:
   - `plan-dir` inferred the plan run above ("plan run plan-…-121724"), nothing asked.
@@ -132,44 +141,68 @@ Verified by tests only (fake herdr):
 - `diff-target` inference for the merge-request case (fake `glab`), and the Output
   schema's rejections.
 
-## herdr and harness facts this round turned up
+## herdr and harness facts this round turned up, and what was done about them
 
 1. **`agent start` fails in a directory claude has not been trusted with**:
    `agent_not_ready … blocked during startup`, because claude is sitting on its
-   "Is this a project you trust?" dialog. Accepting it once in that pane fixes it for
-   good. Nothing the plugin can do — but it is the first thing to check when a workflow
-   fails instantly in a fresh clone.
-2. **A skill marked `disable-model-invocation` cannot be run by an agent.**
-   `/grill-with-docs` refused with "Ask the user to run /grill-with-docs themselves".
-   The planner used its Fallback paragraph and interviewed by hand. For that skill the
-   fallback is the normal path, not the edge case — which is the strongest argument for
-   every persona having one.
+   "Is this a project you trust?" dialog.
+   **Worked around.** `agent get` shows the agent exists and is `blocked`, and it goes
+   `idle` under the same name the moment a person answers — so a startup block is no
+   longer a failure. The runner names the pane, toasts, and waits within the handoff
+   budget, exactly as a step waits for an interviewing agent's Output; when the agent
+   reports ready the run carries on. It does *not* answer the dialog itself: the options
+   are shuffled between runs — the second probe put "No, exit" first, and a blind Enter
+   quit claude — so there is no safe key to send. Verified live: `review` in a fresh
+   untrusted repo printed "⏸ … is waiting for you in its pane", then "▸ … is ready" after
+   the dialog was answered, and finished `done`.
+2. **A skill marked `disable-model-invocation` cannot be run by an agent.** This is not
+   one skill but most of them: `grill-with-docs`, `to-spec`, `to-tickets`, `wayfinder`,
+   `implement` and `improve-codebase-architecture` all refuse, with "Ask the user to run
+   it themselves — do not replicate this skill's workflow by other means". Six of the ten
+   the design names.
+   **Worked around.** A step names the skill it drives (`skill: to-spec`) and the engine
+   sends the prompt as `/to-spec Your task for this step is in <path> …`. `agent prompt`
+   is the human's channel, so the skill runs as if it had been typed. Verified live: the
+   planner's pane shows `❯ /grill-with-docs Your task for this step is in …`, the skill
+   loading, and the interview starting. `/wayfinder` is the one that cannot be handled
+   this way — it is a mid-step *switch*, not the step's own skill — so the grill prompt
+   now tells the planner to stop and ask the human to run it, and to say so in its Output.
 3. **An interviewing agent may block on an interactive dialog** (claude's multi-question
    form), which `agent prompt` cannot answer — keys have to go to the pane. That is the
    human's job anyway; the engine's job is to keep waiting for the Output, which it does.
 
+## The two follow-ups
+
+**Disputed findings converge (`4c5879f`).** A finding the implementer rejected with a
+reason cannot be settled by another round of the same two agents — only by the human — so
+it no longer drives the loop. The reviewers are shown the standing disputes and their
+reasons (`{{disputed}}` in the review prompt), a disputed finding raised again does not
+gate, and the run finishes with it in the summary for mk. A reviewer who *can* answer the
+reason raises it with a `"rebuttal"`, which clears the dispute and puts the finding back in
+front of the implementer, so a real objection still gets its round. Findings now match on
+file and title rather than file, line and title: the line moves while the branch is being
+fixed, and a dispute has to survive that to ever settle. In the live run that stood behind
+this, the loop would have finished at iteration 2 instead of burning to 5.
+
+**The two harness facts are handled (`6686f76`).** See the section above — a startup block
+now waits for the human instead of failing the run, and a step can drive a user-only skill.
+
 ## Left open
 
-- **Two sandbox runs are still in the plugin state dir**: the live `plan` run (done) and
-  the live `implement` run (blocked at max_iterations, so `resume` lists it). They are the
-  evidence for the section above and can be deleted whenever you like; the sandbox repo
-  they point at was a throwaway outside any real checkout.
+- **The sandbox runs are still in the plugin state dir** — `plan-…-121724`,
+  `architecture-run-…`, `review-worktree-…-120549`, `review-worktree-…-061002` and the
+  `implement-…-125306` that blocked at max_iterations, which is the one `resume` lists.
+  They are the evidence for the sections above and can be deleted whenever you like; the
+  sandbox repos they point at were throwaways outside any real checkout.
 - **No remote, no tag, no release** — unchanged from v1. `.gitlab-ci.yml` is still unrun.
 - **Linear is unverified end to end.** `Offload to Linear` asks for the team, keeps it in
   `config.json` and hands the id to the planner in its prompt, but no live run has
   created an issue: the Linear MCP is not configured for the harnesses here. Same for
   `ticket`'s issue fetch.
 - **`codex` and `opencode` remain unverified**, as in v1. The baseline is claude-only.
-- **Findings are still unioned, never reconciled** (v1 by design).
 - **A resumed Choice step forgets which choices were taken in the previous session's
   process, but not the record**: the count behind `max:` comes from `run.json`, so a
   resumed run still honours it. Nothing verifies that live.
-- **The fix loop cannot converge on a disputed finding, and that is what burns the
-  iterations.** In the live `implement` run the same finding came back verbatim in
-  iterations 2, 3 and 5 and was disputed each time, so three of five rounds were spent
-  re-arguing it before the run blocked. The reviewers never see `run.json`'s `disputed`
-  list — fan-in is a union by design (v1, out of scope) — so nothing tells them the
-  argument has already been had. The cheap fix is one line of prompt: put the disputed
-  list in the review prompt and ask reviewers to either drop the item or answer the
-  implementer's reason. That changes the review contract, so it is mk's call, not a
-  decision this round should make on its own.
+- **Findings are still unioned, never reconciled between reviewers** — two reviewers who
+  disagree with *each other* both reach the implementer (v1 by design). What is now
+  reconciled is the implementer's side of the argument; see below.
