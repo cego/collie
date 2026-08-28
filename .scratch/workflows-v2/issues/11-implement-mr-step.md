@@ -6,12 +6,33 @@
 
 **Blocked by:** 09 (work-source kinds), 10 (shared input code)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] mr step present in implement after the loop; skipped with a clear note when `glab` is missing or the repo has no GitLab remote (tested)
-- [ ] prompt tells the agent to read the repo's MR template file and fill every CIATF section briefly (1–2 sentences each, "No impact." where true); fallback for no template
-- [ ] Linear ids collected from all three sources, deduplicated (tested)
-- [ ] assignee resolved from config or glab api user (tested with fake glab)
-- [ ] no commit text or description ever contains the company npm scope with an @
-- [ ] README + docs/WORKFLOWS-DESIGN.md updated (v1's "no MR step" note removed); bun test + tsc green
-- [ ] live smoke against a throwaway branch in this repo is NOT possible (no remote) — verify prompt rendering via the fake herdr transcript instead and say so in the report
+- [x] mr step present in implement after the loop; skipped with a clear note when `glab` is missing or the repo has no GitLab remote (tested)
+- [x] prompt tells the agent to read the repo's MR template file and fill every CIATF section briefly (1–2 sentences each, "No impact." where true); fallback for no template
+- [x] Linear ids collected from all three sources, deduplicated (tested)
+- [x] assignee resolved from config or glab api user (tested with fake glab)
+- [x] no commit text or description ever contains the company npm scope with an @
+- [x] README + docs/WORKFLOWS-DESIGN.md updated (v1's "no MR step" note removed); bun test + tsc green
+- [x] live smoke against a throwaway branch in this repo is NOT possible (no remote) — verify prompt rendering via the fake herdr transcript instead and say so in the report
+
+## Decisions where the design was silent
+
+- **`requires: gitlab` is a general step field, not a special case for `mr`.** A step
+  declares what the environment must provide; an unmet requirement is a skip with a note,
+  never a failed run. That keeps the rule testable and reusable, and it is why an
+  `implement` run in a repo with no remote still finishes `done`.
+- **The skip reason names the actual gap** — `glab is not installed`, `this repo has no
+  remote`, `no GitLab remote` — because "skipped" alone sends you looking in the wrong
+  place. In this repo the real answer is the middle one: glab 1.115.0 is installed and
+  there is no remote at all.
+- **The MR facts are gathered by the runner, not left to the agent.** The assignee, the
+  template path and the Linear ids reach the prompt as `{{mr.*}}`, so the agent is told
+  what is true rather than asked to go and find out — and the gathering is testable
+  without an agent.
+- **A missing fact renders as an empty string, not `undefined`.** `Linear tickets: ``
+  reads as "there are none", which is what the prompt then tells the agent to write.
+- **The company package scope is built from parts in the one test that asserts its
+  absence**, so the literal appears nowhere in the tree — `git grep` for it is clean.
+- **`branch` is reported in the Output alongside `mr_url` and `linear_issues`**, since
+  the step is the only one that pushes and the run should record what went out.

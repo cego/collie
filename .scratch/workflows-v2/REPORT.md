@@ -319,6 +319,69 @@ was never moved):
 fake `glab` rather than live — the same limitation v1 recorded. 150 pass, 0 fail;
 `bunx tsc --noEmit` clean.
 
+
+## 11 — implement ends by opening the merge request
+
+A sixth step, `mr`, runs after the fix loop with the same implementer agent. It pushes the
+branch and opens the MR with `glab`, and it never merges: `push` is the only remote side
+effect in the whole run, and it happens only here.
+
+The description follows the repo's own template when there is one, because `glab` does not
+pre-fill templates — the agent reads
+`.gitlab/merge_request_templates/default.md` and fills it in. The prompt asks for the CIATF
+assessment mk's way: one or two ordinary sentences per section, `No impact.` written
+exactly where that is the honest answer, no headings inside sections, no tables, no risk
+matrices, and the whole thing readable in under a minute. The template's Trello line
+becomes the Linear links. Category is `feature` unless the spec says a defect was fixed.
+
+Linear ids are gathered from all three places they hide — a `linear` work source, the
+branch name, and whatever a `plan` run's Offload-to-Linear choice recorded in its run —
+deduplicated in that order. The assignee is `gitlab.assignee` from `config.json`, else
+whoever `glab api user` reports. The step's Output carries `mr_url`, `linear_issues` and
+the branch; the run records them and the summary prints them.
+
+**`requires: gitlab` is the general mechanism behind it.** A step declares what the
+environment has to provide, and an unmet requirement is a skip with a note — never a
+failed run. The reason names the actual gap (`glab is not installed`, `this repo has no
+remote`, `no GitLab remote`), because "skipped" on its own sends you looking in the wrong
+place.
+
+**Not verified live, and it cannot be here.** This repo has no remote at all — `git remote
+-v` is empty, though glab 1.115.0 is installed — so there is nothing to open a merge
+request against, on a throwaway branch or otherwise. What is verified instead, through the
+fake herdr transcript, is the prompt the agent would receive: with a fake `glab`/`git`
+standing in for a GitLab repo, `steps/mr/prompt-1.md` carries ``Assignee: `mk` ``,
+``Linear tickets: `FRO-149` `` picked out of the branch name, the CIATF brief in mk's
+words, "Never merge the MR", and the Trello-line instruction; with a template file present
+it names that path, and with no ticket anywhere it renders the ticket line empty rather
+than inventing one. The reported `mr_url` reaches the run record and the summary line. The
+skip path is verified both ways — a GitHub remote gives "no GitLab remote", and the rig's
+bare environment gives "glab is not installed", which is the note an `implement` run
+leaves in this repo today.
+
+The company package scope never appears with a leading at-sign in any commit message,
+prompt or description. The one test that asserts its absence builds the string from parts,
+so `git grep` for the literal is clean across the whole tree.
+
+## Where these three left things
+
+`bun test` is green at 159 tests across 19 files, `bunx tsc --noEmit` is clean, and the
+runner still compiles. The baseline is four workflows (`plan`, `implement`, `review`,
+`architecture`) and four personas; `ticket` is gone, folded into `implement`'s work source.
+
+Open, and worth knowing:
+
+- **The MR step has never opened a real merge request.** Everything about it is verified
+  against a fake `glab`. The first real run will be the first time `glab mr create --assignee mk` is
+  called for real, and the CIATF template it fills will be the target repo's, not this
+  one's — this repo has no template either.
+- **Linear is still unverified end to end**, unchanged from v2: no MCP is configured for
+  these harnesses, so neither the offload, the issue fetch, nor the new "comment the MR
+  URL back onto the issue" step has run against the real thing.
+- **`codex` and `opencode` remain unverified.** The baseline is still claude-only.
+- **The `mr` step assumes one branch, one MR.** A run that somehow ends on the default
+  branch would try to open an MR from it; nothing checks that yet.
+
 ## A note on this round's history, for whoever reads the log
 
 The commit subjects in this range do not describe their contents, and one of them swept up
