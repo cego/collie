@@ -26,9 +26,9 @@ ae3e1f4 Ask the human with a Choice step                       (02)
 
 The baseline these eight tickets left was five workflows (`plan`, `ticket`, `implement`,
 `review`, `architecture`) and four personas (`planner`, `implementer`, `reviewer`,
-`architect`). `ticket` is since gone — ticket 09 replaced it and the `plan-dir`/`issue`
-strategies with one `work-source` input — and `implement` has since grown a sixth step,
-`mr`. Every decision taken where the design was silent is recorded in the ticket it
+`architect`). `ticket` is since gone — ticket 09 replaced it and the `issue`
+strategy with one `work-source` input — and `implement` has since grown a sixth step,
+`mr`. `plan-dir` is still a strategy, just one no baseline workflow declares any more. Every decision taken where the design was silent is recorded in the ticket it
 belongs to, under "Decisions where the design was silent".
 
 ## What shipped, per ticket
