@@ -47,6 +47,18 @@ export const HARNESSES: Record<string, HarnessAdapter> = {
     models: ["gpt-5-codex", "gpt-5", "gpt-5-mini"],
     modelPattern: /^(?:gpt|o)[0-9][a-z0-9.-]*$/,
   },
+  pi: {
+    id: "pi",
+    kind: "pi",
+    modelArgs: (model) => ["--model", model],
+    // pi reads a path here as file contents, so the persona file can be passed directly.
+    personaArgs: (file) => ["--append-system-prompt", file],
+    effortArgs: (effort) => ["--thinking", effort],
+    // pi models are provider-qualified (`openai-codex/gpt-5.6-sol`), so the shape is the check.
+    models: [],
+    modelPattern: /^[a-z0-9-]+\/[A-Za-z0-9._:-]+$/,
+    efforts: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+  },
   opencode: {
     id: "opencode",
     kind: "opencode",
