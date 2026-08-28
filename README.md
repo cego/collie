@@ -209,13 +209,21 @@ claude has not worked in /home/mk/work/some-repo before
 ```
 
 `Trust it now` writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
-which is where claude keeps the answer to its own dialog — atomically, leaving every other
-project and setting untouched, and with the previous file copied to
-`claude.json.bak` in the plugin state dir. Nothing else in the file is read or changed.
+which is where claude keeps the answer to its own dialog. The previous file is copied to
+`claude.json.bak` in the plugin state dir first, every other project and setting is carried
+over as it was, and the new file is renamed into place with the old one's permissions, so no
+reader ever sees it half-written. It is still a read-modify-write of a file claude owns: if
+a claude session saves in the same instant, that save is the one that loses. Once per
+directory, so the window is opened once.
 
-It asks once per directory, the first time you run a workflow there. `trust` in
-`config.json` answers it in advance: `ask` (default), `auto` (trust it and say so in the
-runner), or `never` (leave the dialog to claude).
+It asks the first time you run a workflow in a directory. `trust` in `config.json` answers
+it in advance: `ask` (default), `auto`, or `never` (leave the dialog to claude).
+
+`auto` trusts every directory a run starts in, without asking. Be deliberate about it:
+claude's question is "is this a project you created or one you trust?", and it says plainly
+that claude will then read, edit and execute files there — it is not bookkeeping about where
+claude has been. `auto` is for a machine where every repo you run workflows in is already
+one you would answer yes for.
 
 If you do let claude ask, nothing breaks: `agent start` reports the agent blocked, which is
 not a failure, so the runner says which pane wants you, toasts, and waits. It cannot answer
