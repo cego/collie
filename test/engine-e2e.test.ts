@@ -44,17 +44,15 @@ test("plan runs one step in a tab of its own and records the run", async () => {
   const { run, status, lines } = await runWorkflow(rig, "solo", { goal: "Add a picker" });
 
   expect(status).toBe("done");
-  // The workspace's board is found or opened and put first, the runner's own pane
-  // moves in under it, and only then does the step open its own tab — named after
-  // the workflow once `tab list` says nothing else has that name.
+  // The workspace's board is found or opened and put first, and then the step opens
+  // its own tab — named after the workflow, once `tab list` says nothing else has
+  // that name. The run itself opens no pane: it is driven headlessly.
   expect(rig.cmds()).toEqual([
     "tab list",
     "plugin pane",
     "pane rename",
     "tab rename",
     "tab.move",
-    "pane move",
-    "pane rename",
     "tab list",
     "tab create",
     "tab rename",
@@ -69,16 +67,13 @@ test("plan runs one step in a tab of its own and records the run", async () => {
     "notification show",
   ]);
 
-  // Nothing is split off the runner's pane any more, and nothing is a `status` strip.
-  expect(rig.cmds()).not.toContain("pane split");
-  const moved = rig.calls().find((c) => c.cmd === "pane move")!.argv!;
-  expect(moved[2]).toBe("1-0");
-  expect(moved[moved.indexOf("--split") + 1]).toBe("down");
-  // Two renames, not three: the board's pane and the run's own. The agent's pane
-  // is alone in its tab, so the tab says what it is and the pane says nothing.
-  expect(rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1))).toEqual([
-    "Control Plane",
-    "Solo",
+  // No pane is split, moved or swapped for the run itself: the Control Plane's is
+  // the only pane this plugin keeps, and the step's tab holds the agent.
+  for (const cmd of ["pane split", "pane move", "pane swap"]) expect(rig.cmds()).not.toContain(cmd);
+  // One pane rename in the whole run: the board's own. The agent's pane is alone in
+  // its tab, so the tab says `Solo` and the pane says nothing.
+  expect(rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2))).toEqual([
+    ["1-1", "Control Plane"],
   ]);
   expect(rig.calls().filter((c) => c.cmd === "tab rename").at(-1)!.argv!.at(-1)).toBe("✓ Solo");
 
@@ -110,13 +105,6 @@ test("plan runs one step in a tab of its own and records the run", async () => {
   expect(prompt.split("Interview me about this goal")).toHaveLength(2);
   expect(prompt).toContain(`OUTPUT_PATH: ${join(run.dir, "steps", "solo", "solo.json")}`);
 
-  // The board's pane, then the run's own — named after the workflow, never after
-  // the run. The agent's pane is left unlabelled: its tab already says `solo`.
-  const renames = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2));
-  expect(renames).toEqual([
-    ["1-1", "Control Plane"],
-    ["1-0", "Solo"],
-  ]);
 
   const record = JSON.parse(readFileSync(join(run.dir, "run.json"), "utf8"));
   expect(record.workflow).toBe("solo");

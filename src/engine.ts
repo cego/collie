@@ -58,9 +58,6 @@ import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 
 export const VIEW_SOURCE_PREFIX = "cego.workflows:";
 
-/** The share of the Control Plane tab its board keeps; a run's own pane takes the rest. */
-const VIEW_TOP = 0.4;
-
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
 export type EnginePrompts = InputPrompts;
 
@@ -71,8 +68,6 @@ export interface EngineOptions {
   wf: ResolvedWorkflow;
   run: Run;
   env: PluginEnv;
-  /** The runner's own pane, which moves into the Control Plane tab and asks there. */
-  hostPaneId: string | null;
   out: (line: string) => void;
   stepTimeoutMs?: number;
   /** How long to keep waiting for an Output after the agent hands off to the human. */
@@ -489,12 +484,10 @@ async function runChoiceStep(
       .map((c) => ({ id: c.title, title: c.title, subtitle: choiceHint(c) }));
 
     await callAttention(o, ctx, `${step.id}: pick what happens next`, step.id);
-    const picked = await zoomed(o, () =>
-      prompts.menu(items, {
-        header: `${run.record.slug} — ${step.id}`,
-        footer: "↑↓ move · Enter choose · Esc leave the run open",
-      }),
-    );
+    const picked = await prompts.menu(items, {
+      header: `${run.record.slug} — ${step.id}`,
+      footer: "↑↓ move · Enter choose · Esc leave the run open",
+    });
     run.record.awaiting = null;
     run.save();
     if (!picked) return { status: "blocked", note: "no choice taken" };
@@ -730,11 +723,10 @@ function register(o: EngineOptions, step: ResolvedStep, record: VariantRecord): 
 }
 
 /**
- * The Session's own tab, found by its label and created when it is not there,
- * and moved to the front of the workspace either way. The runner's own pane
- * moves in beside the view, because that is where every question this run asks
- * has to appear. Returns the tab id, or null when there is no workspace to own
- * one — the run then keeps its own tab, as before.
+ * The Session's own tab, found by its label and created when it is not there, and
+ * moved to the front of the workspace either way. It is the only pane this plugin
+ * keeps open in a workspace: the driver has no pane, and every question it asks is
+ * rendered there. Returns the tab id, or null when there is no workspace to own one.
  */
 async function ensureWorkspaceTab(o: EngineOptions): Promise<string | null> {
   try {
@@ -747,19 +739,9 @@ async function ensureWorkspaceTab(o: EngineOptions): Promise<string | null> {
     } catch (e) {
       o.run.log(`workspace tab order: ${(e as Error).message}`);
     }
-    if (o.hostPaneId) {
-      await o.herdr.paneMove({
-        paneId: o.hostPaneId,
-        tabId: view.tabId,
-        targetPaneId: view.paneId,
-        direction: "down",
-        ratio: VIEW_TOP,
-      });
-      await o.herdr.paneRename(o.hostPaneId, displayName(o.run.record.workflow));
-    }
     return view.tabId;
   } catch (e) {
-    // Without the tab the run still runs; it just asks in the pane it started in.
+    // Without the tab the run still runs; it just has nowhere to ask.
     o.run.log(`workspace tab: ${(e as Error).message}`);
     return null;
   }
@@ -838,14 +820,12 @@ async function ensureTrusted(o: EngineOptions): Promise<void> {
 
       if (o.defaults.trust === "ask") {
         if (!o.prompts) continue;
-        const answer = await zoomed(o, () =>
-          o.prompts!.menu(
-            [
-              { id: "trust", title: "Trust it now", subtitle: "records it where the harness looks" },
-              { id: "ask", title: "Let claude ask me in its tab", subtitle: "the run waits for you" },
-            ],
-            { header: `${variant.harness} has not worked in ${cwd} before`, footer: "↑↓ move · Enter choose" },
-          ),
+        const answer = await o.prompts!.menu(
+          [
+            { id: "trust", title: "Trust it now", subtitle: "records it where the harness looks" },
+            { id: "ask", title: "Let claude ask me in its tab", subtitle: "the run waits for you" },
+          ],
+          { header: `${variant.harness} has not worked in ${cwd} before`, footer: "↑↓ move · Enter choose" },
         );
         if (answer?.id !== "trust") continue;
       }
@@ -1000,30 +980,6 @@ async function collect(
 
   record.status = "done";
   return { record, output: parsed, review };
-}
-
-/**
- * A menu cannot be read in the bottom half of a shared tab, so the run's own pane
- * takes the whole tab while it is open and gives it back afterwards — even if it
- * throws.
- */
-async function zoomed<T>(o: EngineOptions, body: () => Promise<T>): Promise<T> {
-  const own = o.hostPaneId ?? o.env.paneId;
-  if (!own) return await body();
-  try {
-    await o.herdr.paneZoom(own, true);
-  } catch {
-    // A pane that will not zoom is still a pane the human can scroll.
-  }
-  try {
-    return await body();
-  } finally {
-    try {
-      await o.herdr.paneZoom(own, false);
-    } catch {
-      // Leaving it zoomed is survivable; failing the run over it is not.
-    }
-  }
 }
 
 /** A tab keeps the name it was given; only the glyph moves. */

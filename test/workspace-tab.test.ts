@@ -118,7 +118,7 @@ function opened(entrypoint: string): string[][] {
     .map((c) => c.argv!);
 }
 
-test("the first run opens the workflows tab, puts it first, and moves its own pane in", async () => {
+test("the first run opens the Control Plane tab and puts it first", async () => {
   rig.queueOutputs([CLEAN]);
 
   const { status } = await runWorkflow(rig, "solo", { goal: "Add a picker" });
@@ -142,23 +142,9 @@ test("the first run opens the workflows tab, puts it first, and moves its own pa
   expect(move).toHaveLength(1);
   expect(move[0]!.params).toEqual({ tab_id: "1:1", insert_index: 0 });
 
-  // The runner's own pane joins the view instead of becoming a strip in a run tab.
-  const paneMove = rig.calls().filter((c) => c.cmd === "pane move");
-  expect(paneMove).toHaveLength(1);
-  expect(paneMove[0]!.argv!.slice(2)).toEqual([
-    "1-0",
-    "--tab",
-    "1:1",
-    "--target-pane",
-    "1-1",
-    "--split",
-    "down",
-    "--ratio",
-    "0.4",
-  ]);
-
-  // No strip anywhere: no swap, and nothing is called `status` any more.
-  expect(rig.cmds()).not.toContain("pane swap");
+  // The board's pane is the only one this plugin keeps: the run has none of its own,
+  // so nothing is moved or swapped and nothing is a `status` strip.
+  for (const cmd of ["pane move", "pane swap"]) expect(rig.cmds()).not.toContain(cmd);
   expect(
     rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1)),
   ).not.toContain("status");
@@ -179,7 +165,25 @@ test("the second run reuses that tab and re-asserts its position", async () => {
   expect(later.filter((c) => c.cmd === "tab.move").map((c) => c.params)).toEqual([
     { tab_id: "1:1", insert_index: 0 },
   ]);
-  expect(later.filter((c) => c.cmd === "pane move")).toHaveLength(1);
+});
+
+test("a step that fails after starting its agents still records them", async () => {
+  // The Control Plane finds its agents in the run record, so an agent that was
+  // started has to be in there whatever happens to the step afterwards.
+  rig.queueOutputs([CLEAN]);
+  const env = { FAKE_HERDR_FAIL: JSON.stringify({ "agent prompt": "no such agent" }) };
+
+  const { run, status } = await runWorkflow(rig, "solo", { goal: "g" }, { env });
+
+  expect(status).toBe("failed");
+  const variants = run.step("solo").variants;
+  expect(variants).toHaveLength(1);
+  expect(variants[0]!.agent).toBe("solo-g-solo-r1");
+  expect(variants[0]!.paneId).not.toBeNull();
+
+  // And the board lists it, which is the whole point of recording it.
+  const view = board([live(variants[0]!.agent, variants[0]!.paneId!, "working")]);
+  expect(view.agents.map((a) => [a.name, a.status])).toEqual([["Solo", "working"]]);
 });
 
 test("a second run of the same workflow adds the target to tell the tabs apart", async () => {
@@ -199,14 +203,13 @@ test("a second run of the same workflow adds the target to tell the tabs apart",
   expect(later).not.toContain("✓ Solo");
 });
 
-test("a run with no workspace keeps its own pane and opens no tab", async () => {
+test("a run with no workspace opens no board at all", async () => {
   rig.queueOutputs([CLEAN]);
 
   const { status } = await runWorkflow(rig, "solo", { goal: "one" }, { env: { HERDR_WORKSPACE_ID: "" } });
 
   expect(status).toBe("done");
   expect(opened("workspace")).toHaveLength(0);
-  expect(rig.cmds()).not.toContain("pane move");
   expect(rig.cmds()).not.toContain("tab.move");
 });
 

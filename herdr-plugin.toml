@@ -34,17 +34,10 @@ width = "70%"
 height = "60%"
 command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/herdr-workflows" picker']
 
-# The run's own pane: it drives the run and asks its questions. It opens as a tab
-# and is then moved into the workspace's `workflows` tab.
-[[panes]]
-id = "runner"
-title = "Workflow run"
-placement = "tab"
-command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/herdr-workflows" runner']
-
-# One per workspace: the `workflows` tab, a view over this session's runs and agents.
+# One per workspace, and the only pane this plugin keeps open: the Control Plane.
+# A run itself is driven by a detached `drive` process with no pane of its own.
 [[panes]]
 id = "workspace"
-title = "Workflows"
+title = "Control Plane"
 placement = "tab"
 command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/herdr-workflows" workspace']

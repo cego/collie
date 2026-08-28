@@ -12,6 +12,8 @@ import { RunStore, type Run } from "./run";
 export interface Session extends RegistryScope {
   herdr: Herdr;
   stateDir: string;
+  /** The Control Plane's own pane, which is what a temporary pane splits off. */
+  paneId?: string | null;
 }
 
 export interface HandoffResult {

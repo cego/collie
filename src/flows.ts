@@ -35,8 +35,28 @@ import {
 import { forkDefinition, type DefinitionKind } from "./fork";
 import { RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
+import {
+  answerChoice,
+  appendProgress,
+  clearPid,
+  driverAlive,
+  filePrompts,
+  lastProgress,
+  readChoice,
+  RUNNER_LOG,
+  writePid,
+  type PendingChoice,
+} from "./driver";
 import { scopeFor } from "./registry";
-import { agentForKey, buildView, renderWorkspace, type WorkspaceView } from "./workspace";
+import {
+  agentForKey,
+  askingRun,
+  buildView,
+  renderWorkspace,
+  type Asking,
+  type RunRow,
+  type WorkspaceView,
+} from "./workspace";
 
 export type Mode = "pick" | "resume" | "fork";
 
@@ -139,19 +159,33 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   run.log(`created from ${resolved.path} (${resolved.layer} layer)`);
   run.log(line);
 
-  await herdr.pluginPaneOpen({
-    entrypoint: "runner",
-    env: { HERDR_WORKFLOWS_RUN: run.id, HERDR_WORKFLOWS_CWD: env.cwd },
-    focus: true,
-    workspaceId: env.workspaceId,
-    cwd: env.cwd,
-  });
+  spawnDriver(env, run.id, env.cwd);
   try {
     await herdr.popupClose();
   } catch {
     // Only a popup can close itself; running the picker in a plain pane is fine.
   }
   return 0;
+}
+
+/**
+ * The run driver, detached: it outlives this pane, because the picker closes the
+ * moment it has started one and a run takes hours. `nohup` is what keeps the
+ * hang-up that closing a pane sends from taking the run with it.
+ */
+export function spawnDriver(env: PluginEnv, runId: string, cwd: string): void {
+  const command = (process.env.HERDR_WORKFLOWS_DRIVER ?? `${env.pluginRoot}/bin/herdr-workflows`).split(" ");
+  Bun.spawn(["nohup", ...command, "drive"], {
+    cwd,
+    env: {
+      ...process.env,
+      HERDR_WORKFLOWS_RUN: runId,
+      HERDR_WORKFLOWS_CWD: cwd,
+    } as Record<string, string>,
+    stdin: "ignore",
+    stdout: "ignore",
+    stderr: "ignore",
+  }).unref();
 }
 
 export async function forkFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
@@ -196,8 +230,10 @@ export async function forkFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
 
 export async function resumeFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const store = new RunStore(env.stateDir);
-  const runs = store.resumable();
-  if (runs.length === 0) return await bail("No runs with unfinished steps.");
+  // A run something is still driving is not a run to resume: a second driver would
+  // fight the first over the same agents and the same run record.
+  const runs = store.resumable().filter((run) => !driverAlive(run.dir));
+  if (runs.length === 0) return await bail("No runs with unfinished steps that nothing is already driving.");
 
   const items: PickItem[] = runs.map((run) => {
     const left = run.unfinished().map((s) => s.id).join(", ");
@@ -215,13 +251,10 @@ export async function resumeFlow(herdr: Herdr, env: PluginEnv): Promise<number> 
   if (!chosen) return 0;
 
   const run = store.load(chosen.id);
-  await herdr.pluginPaneOpen({
-    entrypoint: "runner",
-    env: { HERDR_WORKFLOWS_RUN: run.id, HERDR_WORKFLOWS_CWD: run.record.cwd },
-    focus: true,
-    workspaceId: env.workspaceId,
-    cwd: run.record.cwd,
-  });
+  if (driverAlive(run.dir)) {
+    return await bail(`${run.record.slug} is already being driven; nothing started.`);
+  }
+  spawnDriver(env, run.id, run.record.cwd);
   try {
     await herdr.popupClose();
   } catch {
@@ -230,50 +263,67 @@ export async function resumeFlow(herdr: Herdr, env: PluginEnv): Promise<number> 
   return 0;
 }
 
-export async function runnerFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
+/**
+ * The run driver. No terminal, no pane: it writes what it is doing into the run
+ * dir and asks its questions there, and the Control Plane is what renders both.
+ * Everything it can say about a failure goes into `runner.log`.
+ */
+export async function driveFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const runId = process.env.HERDR_WORKFLOWS_RUN;
   if (!runId) {
-    console.error("HERDR_WORKFLOWS_RUN is not set; open this pane through the picker.");
+    console.error("HERDR_WORKFLOWS_RUN is not set; a driver is started by the picker.");
     return 2;
   }
   const store = new RunStore(env.stateDir);
   const run = store.load(runId);
-  const defs = loadDefinitions(layers({ ...env, cwd: run.record.cwd }));
-  const defaults = loadDefaults(env.configDir);
-  const wf = resolveWorkflow(run.record.workflow, defs, defaults);
+  const out = (line: string) => appendProgress(run.dir, line);
 
-  // No tab rename here: the engine moves this pane onto the board and the tab it
-  // was opened in closes behind it.
-  console.log(`${run.id}\n${wf.title}\n`);
-  for (const [name, value] of Object.entries(run.record.inputs)) {
-    // The kind is shown with its own Input, not as a second line of its own.
-    if (isKindCompanion(name, run.record.inputs)) continue;
-    const kind = run.record.inputs[`${name}_kind`];
-    const where = run.record.input_sources[name] ?? "?";
-    console.log(`  ${name} = ${value || "(empty)"} [${kind ? `${kind} · ${where}` : where}]`);
+  if (driverAlive(run.dir)) {
+    out("a driver is already running this run; this one is stopping");
+    return 1;
   }
-  console.log("");
+  writePid(run.dir);
 
-  const status = await executeRun({
-    herdr,
-    defs,
-    defaults,
-    wf,
-    run,
-    env,
-    hostPaneId: env.paneId,
-    out: (line) => console.log(line),
-    handoffTimeoutMs: defaults.handoffTimeoutMs,
-    // A Choice step asks in this pane, which is where the terminal is.
-    prompts: {
-      menu: (items, opts) => pick(items, opts),
-      ask: (question) => ask(question),
-    },
-  });
+  try {
+    const defs = loadDefinitions(layers({ ...env, cwd: run.record.cwd }));
+    const defaults = loadDefaults(env.configDir);
+    const wf = resolveWorkflow(run.record.workflow, defs, defaults);
+    out(`${wf.title}`);
 
-  console.log(`\nRun dir: ${run.dir}`);
-  await hold();
-  return status === "done" ? 0 : 1;
+    const status = await executeRun({
+      herdr,
+      defs,
+      defaults,
+      wf,
+      run,
+      env,
+      out,
+      handoffTimeoutMs: defaults.handoffTimeoutMs,
+      // Every question this run asks goes through the run dir to the Control Plane.
+      prompts: filePrompts({
+        dir: run.dir,
+        run: run.id,
+        step: () => run.record.steps.find((st) => st.status === "running")?.id ?? "",
+        timeoutMs: defaults.handoffTimeoutMs,
+      }),
+    });
+    return status === "done" ? 0 : 1;
+  } catch (e) {
+    // Nobody is watching a pane for this, so the only useful place is the log.
+    const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
+    out(`the driver stopped: ${detail.split("\n")[0]}`);
+    run.log(`driver failed: ${detail}`);
+    run.record.status = "failed";
+    run.save();
+    try {
+      await herdr.notify(`${run.record.slug} failed`, `see ${RUNNER_LOG} in the run dir`, "request");
+    } catch {
+      /* a missing toast must not be the last word */
+    }
+    return 1;
+  } finally {
+    clearPid(run.dir);
+  }
 }
 
 /** How often the tab re-reads the files and asks herdr what is still alive. */
@@ -290,27 +340,49 @@ const CLEAR = "\x1b[2J\x1b[H";
  * closing it loses nothing.
  */
 export async function workspaceFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
-  const session: Session = { herdr, ...scopeFor(env, env.cwd), stateDir: env.stateDir };
+  const session: Session = {
+    herdr,
+    ...scopeFor(env, env.cwd),
+    stateDir: env.stateDir,
+    paneId: env.paneId,
+  };
   startKeyboard();
   let view = await load(session);
   const open = (mode: Mode) => openMode(herdr, env, mode);
   let note: string | null = null;
   let drawn = "";
   let read = Date.now();
+  let asking: Asking = { index: 0, typed: "" };
+  let answering: string | null = null;
 
   for (;;) {
-    const text = renderWorkspace(view, note ?? undefined);
+    const waiting = askingRun(view);
+    // A new question starts from the top, with nothing typed.
+    if (waiting && waiting.id !== answering) {
+      asking = { index: 0, typed: "" };
+      answering = waiting.id;
+      await announce(herdr, env, waiting);
+    }
+    if (!waiting) answering = null;
+
+    const text = renderWorkspace(view, note ?? undefined, asking);
     if (text !== drawn) {
       process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
       drawn = text;
     }
     const key = takeKey();
     if (key !== null) {
-      if (key === "q" || key === "\x03") {
+      // While a run is asking, every key belongs to that question.
+      if (waiting) {
+        const answered = answerKey(waiting, asking, key);
+        asking = answered.asking;
+        note = answered.note ?? note;
+      } else if (key === "q" || key === "\x03") {
         releaseKeyboard();
         return 0;
+      } else {
+        note = await act(session, view, key, open);
       }
-      note = await act(session, view, key, open);
       view = await load(session);
       read = Date.now();
       continue;
@@ -321,6 +393,54 @@ export async function workspaceFlow(herdr: Herdr, env: PluginEnv): Promise<numbe
     }
     await new Promise((r) => setTimeout(r, TICK_MS));
   }
+}
+
+/**
+ * A question nobody sees is a run that has silently stopped, so the board says it
+ * twice: a toast, and this tab brought to the front.
+ */
+async function announce(herdr: Herdr, env: PluginEnv, waiting: RunRow): Promise<void> {
+  try {
+    await herdr.notify(`${waiting.title} needs you`, `${waiting.choice?.step}: pick what happens next`, "request");
+  } catch {
+    /* a missing toast must not stop the question being asked */
+  }
+  if (!env.tabId) return;
+  try {
+    await herdr.tabFocus(env.tabId);
+  } catch {
+    /* a tab that will not focus is still a tab the human can reach */
+  }
+}
+
+/** One keypress against a pending question; the answer goes back to the run dir. */
+function answerKey(
+  waiting: RunRow,
+  asking: Asking,
+  key: string,
+): { asking: Asking; note?: string } {
+  const choice = waiting.choice!;
+  const send = (answer: { choice?: string | null; text?: string | null }) => {
+    answerChoice(waiting.dir, { id: choice.id, ...answer });
+    return { asking: { index: 0, typed: "" }, note: `answered ${waiting.title}` };
+  };
+
+  if (key === "\x1b" || key === "\x03") return send({ choice: null, text: null });
+  if (key === "\r" || key === "\n") {
+    if (choice.kind === "ask") return send({ text: asking.typed });
+    const picked = choice.items[asking.index];
+    return picked ? send({ choice: picked.id }) : { asking };
+  }
+  if (choice.kind === "ask") {
+    if (key === "\x7f" || key === "\b") return { asking: { ...asking, typed: asking.typed.slice(0, -1) } };
+    if (/^[\x20-\x7e]$/.test(key)) return { asking: { ...asking, typed: asking.typed + key } };
+    return { asking };
+  }
+  if (key === "\x1b[A") return { asking: { ...asking, index: Math.max(0, asking.index - 1) } };
+  if (key === "\x1b[B") {
+    return { asking: { ...asking, index: Math.min(choice.items.length - 1, asking.index + 1) } };
+  }
+  return { asking };
 }
 
 /**
@@ -368,7 +488,26 @@ async function act(
     }
   }
   if (key === "s") return (await sendReviewToImplementer(session)).message;
+  if (key === "l") return await openLog(session, view);
   return null;
+}
+
+/**
+ * The newest run's `runner.log` in a pane of its own. The driver has no pane, so
+ * this is the only place its detail can be read, and a temporary pane is the
+ * cheapest way to read it without leaving the board.
+ */
+async function openLog(session: Session, view: WorkspaceView): Promise<string | null> {
+  const run = view.active[0] ?? view.recent[0];
+  if (!run) return "no run here to open a log for";
+  const path = `${run.dir}/${RUNNER_LOG}`;
+  try {
+    const pane = await session.herdr.paneSplit({ paneId: session.paneId ?? "", direction: "down", ratio: 0.6 });
+    await session.herdr.paneRun(pane, `less +G ${path}`);
+    return `opened ${run.title}'s log`;
+  } catch (e) {
+    return `${path}: ${(e as Error).message}`;
+  }
 }
 
 async function load(session: Session): Promise<WorkspaceView> {

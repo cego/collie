@@ -4,6 +4,7 @@
 
 import { existsSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
+import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
 import { CONTROL_PLANE, displayName, GLYPH, targetLabel } from "./naming";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
 import { RunStore, type Run, type RunRecord, type VariantRecord } from "./run";
@@ -42,9 +43,13 @@ export interface AgentRow {
 
 export interface RunRow {
   id: string;
+  /** The run dir, so an answer or a log can be written back to it. */
+  dir: string;
   glyph: string;
   title: string;
   detail: string;
+  /** The question this run is waiting on, rendered under its row. */
+  choice: PendingChoice | null;
 }
 
 export interface WorkspaceView {
@@ -102,18 +107,25 @@ function agentTitle(variant: VariantRecord, registered: AgentEntry | undefined):
   return `${name} · ${displayName(variant.model.slice(variant.model.lastIndexOf("/") + 1))}`;
 }
 
-function activeDetail(record: RunRecord): string {
+function activeDetail(run: Run): string {
+  const record = run.record;
   if (record.awaiting) return `${record.awaiting} — your turn`;
   const step = record.steps.find((s) => s.status === "running" || s.status === "blocked");
   const where = step ? step.id : "starting";
-  return record.max_iterations > 1
+  const at = record.max_iterations > 1
     ? `${where} · iteration ${record.iteration}/${record.max_iterations}`
     : where;
+  // What the driver last said, which is what the runner pane used to show.
+  const said = lastProgress(run.dir);
+  return said ? `${at} · ${said}` : at;
 }
 
 function recentDetail(record: RunRecord, abandoned: boolean): string {
   const parts: string[] = [abandoned ? "abandoned" : record.status];
   if (record.outstanding.length > 0) parts.push(`${record.outstanding.length} finding(s) open`);
+  // Why it stopped, which used to be in the runner pane and is now only in the log.
+  const note = record.steps.filter((s) => s.note && s.status !== "done").at(-1)?.note;
+  if (note && record.status !== "done") parts.push(note);
   if (record.mr_url) parts.push(record.mr_url);
   return parts.join(" · ");
 }
@@ -137,13 +149,14 @@ function touchedAt(run: Run): number {
 }
 
 /**
- * A run whose runner is gone: still marked `running`, no agent of its own left
- * alive, and quiet for long enough that it cannot be one that has just started.
- * Nothing marks such a run — the process that would have is the one that died —
- * so the board says so instead of showing it as work in progress.
+ * A run whose driver is gone: still marked `running`, nothing driving it, no agent
+ * of its own left alive, and quiet for long enough that it cannot be one that has
+ * just started. Nothing marks such a run — the process that would have is the one
+ * that died — so the board says so instead of showing it as work in progress.
  */
 function abandonedRun(run: Run, hereNames: Set<string>, now: number): boolean {
   if (run.record.status !== "running") return false;
+  if (driverAlive(run.dir)) return false;
   if (agentsHere(run.record, hereNames).length > 0) return false;
   return now - touchedAt(run) > STALE_MS;
 }
@@ -197,15 +210,19 @@ export function buildView(
       .filter((r) => r.record.status === "running" && !abandoned.has(r.id))
       .map((r) => ({
         id: r.id,
+        dir: r.dir,
         glyph: glyphFor(r.record, false),
         title: title(r.record),
-        detail: activeDetail(r.record),
+        detail: activeDetail(r),
+        choice: readChoice(r.dir),
       })),
     recent: stopped.slice(0, RECENT).map((r) => ({
       id: r.id,
+      dir: r.dir,
       glyph: glyphFor(r.record, abandoned.has(r.id)),
       title: title(r.record),
       detail: recentDetail(r.record, abandoned.has(r.id)),
+      choice: null,
     })),
   };
 }
@@ -214,27 +231,71 @@ function section(name: string, rows: string[], empty: string): string[] {
   return ["", name, ...(rows.length > 0 ? rows : [`  (${empty})`])];
 }
 
+/** What the human is being asked, under the run that is asking, never elsewhere. */
+export interface Asking {
+  /** Which option is highlighted, or the text typed so far for a question. */
+  index: number;
+  typed: string;
+}
+
+function askingRows(choice: PendingChoice, asking: Asking): string[] {
+  const rows = [`      ${choice.header}`];
+  if (choice.kind === "ask") {
+    rows.push(`      > ${asking.typed}`, "      type an answer · Enter send · Esc leave it");
+    return rows;
+  }
+  for (const [i, item] of choice.items.entries()) {
+    const marker = i === asking.index ? "❯" : " ";
+    rows.push(`      ${marker} ${item.title.padEnd(26)}${item.subtitle ?? ""}`);
+  }
+  rows.push("      ↑↓ move · Enter choose · Esc leave the run open");
+  return rows;
+}
+
+function runRows(rows: RunRow[], asking: Asking, waiting: string | null): string[] {
+  const out: string[] = [];
+  for (const r of rows) {
+    out.push(`  ${r.glyph} ${r.title.padEnd(30)}${r.detail}`);
+    if (r.choice && r.id === waiting) out.push(...askingRows(r.choice, asking));
+  }
+  return out;
+}
+
+/** The run whose question is being answered, if any: the first one asking. */
+export function askingRun(view: WorkspaceView): RunRow | null {
+  return view.active.find((r) => r.choice) ?? null;
+}
+
 /** Plain lists, one screen, no boxes: this is a status board, not an application. */
-export function renderWorkspace(view: WorkspaceView, note?: string): string {
+export function renderWorkspace(
+  view: WorkspaceView,
+  note?: string,
+  asking: Asking = { index: 0, typed: "" },
+): string {
   const lines = [`${CONTROL_PLANE} — ${view.repo}`, view.cwd];
 
   const agents = view.agents.map((a) => `  ${a.key}  ${a.name.padEnd(22)}${a.status.padEnd(9)}${a.run}`);
   if (view.extraAgents > 0) agents.push(`     … and ${view.extraAgents} more without a key`);
 
-  // The key line offers only what is there: a focus key with nothing to focus is a lie.
-  const keys = [
-    ...(view.agents.length > 0 ? ["1-9 focus that agent"] : []),
-    "p run a workflow",
-    "u resume",
-    "f fork",
-    "s send the last review to the implementer",
-    "q close this tab",
-  ];
+  const waiting = askingRun(view);
+  // The key line offers only what is there: a key with nothing to act on is a lie.
+  // While a run is asking, the keys are that question's.
+  const keys = waiting
+    ? ["answering " + waiting.title]
+    : [
+        ...(view.agents.length > 0 ? ["1-9 focus that agent"] : []),
+        "p run a workflow",
+        "u resume",
+        "f fork",
+        "s send the last review to the implementer",
+        "l open a run's log",
+        "q close this tab",
+      ];
 
   lines.push(
     ...section("Agents", agents, "none live here"),
-    ...section("Runs", view.active.map((r) => `  ${r.glyph} ${r.title.padEnd(30)}${r.detail}`), "none running"),
-    ...section("Finished", view.recent.map((r) => `  ${r.glyph} ${r.title.padEnd(30)}${r.detail}`), "nothing yet"),
+    ...section("Runs", runRows(view.active, asking, waiting?.id ?? null), "none running"),
+    ...section("Finished", runRows(view.recent, asking, null), "nothing yet"),
     "",
     keys.join(" · "),
   );

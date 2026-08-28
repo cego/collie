@@ -81,7 +81,6 @@ export async function runWorkflow(
   name: string,
   inputs: Record<string, string>,
   opts: {
-    hostPaneId?: string | null;
     defaults?: Partial<Defaults>;
     handoffTimeoutMs?: number;
     outputPollMs?: number;
@@ -135,7 +134,6 @@ export async function runWorkflow(
     defaults,
     wf,
     run,
-    hostPaneId: opts.hostPaneId === undefined ? "1-0" : opts.hostPaneId,
     out: (line) => lines.push(line),
     handoffTimeoutMs: opts.handoffTimeoutMs,
     outputPollMs: opts.outputPollMs,

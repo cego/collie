@@ -1,8 +1,8 @@
 import { readEnv } from "./env";
 import { Herdr, HerdrError } from "./herdr";
-import { forkFlow, openPicker, pickFlow, resumeFlow, runnerFlow, workspaceFlow, type Mode } from "./flows";
+import { driveFlow, forkFlow, openPicker, pickFlow, resumeFlow, workspaceFlow, type Mode } from "./flows";
 
-const USAGE = "herdr-workflows <pick|resume|fork|picker|runner|workspace>";
+const USAGE = "herdr-workflows <pick|resume|fork|picker|workspace|drive>";
 
 async function main(): Promise<number> {
   const [command] = process.argv.slice(2);
@@ -24,8 +24,9 @@ async function main(): Promise<number> {
       return 2;
     }
 
-    case "runner":
-      return await runnerFlow(herdr, env);
+    // Not a pane: the detached run driver, started by the picker.
+    case "drive":
+      return await driveFlow(herdr, env);
 
     case "workspace":
       return await workspaceFlow(herdr, env);
