@@ -15,14 +15,43 @@ platform from the matching tag's release. You do not need bun. (If bun happens t
 installed — because you are working on the plugin itself — `install.sh` builds from
 source when there is no release asset.)
 
-Add a keybinding in `~/.config/herdr/config.toml`:
+Add keybindings in `~/.config/herdr/config.toml`, then `herdr server reload-config`
+(or `prefix+shift+r`). Keys are suggestions; `prefix` is `ctrl+b` by default:
 
 ```toml
 [[keys.command]]
 key = "prefix+alt+w"
 type = "plugin_action"
 command = "cego.workflows.pick"
+description = "Run a workflow"
+
+[[keys.command]]
+key = "prefix+alt+r"
+type = "plugin_action"
+command = "cego.workflows.resume"
+description = "Resume a workflow run"
+
+[[keys.command]]
+key = "prefix+alt+f"
+type = "plugin_action"
+command = "cego.workflows.fork"
+description = "Fork a workflow or persona"
 ```
+
+`description` makes them show up in herdr's keybind help (`prefix+?`). Without a
+binding, any action still runs from a shell inside herdr:
+`herdr plugin action invoke cego.workflows.pick`.
+
+## Using it
+
+1. Focus a pane in the workspace of the repo you want to work on and press `prefix+alt+w`.
+2. Pick a workflow in the popup (type to filter, Enter).
+3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only
+   for what could not be inferred, and shown one confirm line.
+4. A `runner` tab opens as the status pane; each step gets its own tab, marked
+   `✓`/`⚠`/`✗` as it finishes. A toast tells you when a run is done or needs you.
+5. `plan` and `architecture` end in a menu; "Implement now" chains straight into
+   `implement`. `prefix+alt+r` picks up any run with unfinished steps.
 
 ## Workflows
 
