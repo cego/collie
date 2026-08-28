@@ -76,7 +76,14 @@ agent (`agent: build`) for build/architecture/simplify/fix.
 Blocked at max with open findings (unchanged).
 
 ### review
-Inputs: `target` (diff-target), `post` (flag). One `reviewer` Persona running BOTH
+Inputs: `target` (diff-target), `post` (flag). The target is chosen, not guessed: the
+picker lists this branch's open MR (or, failing that, the open MRs I am on either side
+of), the branch against its base, and the working tree when it is dirty, in the order
+plain inference would have picked them — so Enter reproduces the old behaviour — plus
+"Type it…" for an MR iid/URL or a `base...head` range. Kinds are `mr`, `branch`,
+`worktree` and the value keeps its `mr:<iid>` / `branch:<base>...<head>` / `worktree`
+shape. Embedded in `implement` the target is inferred silently, because an embedded
+step never asks. One `reviewer` Persona running BOTH
 `/code-review` (standards + spec axes; spec = plan dir if inferable, else "no spec") and
 `/code-review-and-quality` (five axes), merged into one Output. Parallel variants
 opus + sonnet in baseline. Post to GitLab only on `post: true`.

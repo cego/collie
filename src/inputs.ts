@@ -10,12 +10,20 @@ import { RunStore } from "./run";
 /** Where the work to be done was described. */
 export type WorkSourceKind = "plan-dir" | "linear" | "text";
 
-export interface WorkSourceCandidate {
-  kind: WorkSourceKind;
+/** What a review is pointed at. */
+export type TargetKind = "mr" | "branch" | "worktree";
+
+export type CandidateKind = WorkSourceKind | TargetKind;
+
+/** One thing the human may pick for an Input, whatever the Input is. */
+export interface Candidate {
+  kind: CandidateKind;
   value: string;
   source: string;
   label?: string;
 }
+
+export type WorkSourceCandidate = Candidate;
 
 /** How a work-source reaches the human; the picker and the runner pane both supply it. */
 export interface InputPrompts {
@@ -26,6 +34,7 @@ export interface InputPrompts {
 /** More than this and the oldest plans would bury the branch's own ticket. */
 const PLAN_DIR_CANDIDATES = 3;
 const WORK_SOURCE_QUESTION = "What should be built?";
+const TARGET_QUESTION = "Review what?";
 const TYPE_IT = "type";
 
 export interface Resolution {
@@ -38,10 +47,12 @@ export interface Resolution {
   question: string;
   /** A short name for this value, when the value itself would name the Run badly. */
   label?: string;
-  /** Where the work is described, for a `work-source`. */
-  kind?: WorkSourceKind;
-  /** What the human may pick from, when a `work-source` could not be inferred. */
-  candidates?: WorkSourceCandidate[];
+  /** Which sort of thing the value is, for an Input that has kinds. */
+  kind?: CandidateKind;
+  /** What the human may pick from. */
+  candidates?: Candidate[];
+  /** The default branch a bare ref is compared against, for a `diff-target`. */
+  base?: string;
 }
 
 export interface InferContext {
@@ -94,17 +105,11 @@ export async function inferInput(
     }
 
     case "diff-target": {
-      const mr = await run("glab", ["mr", "view", "--output", "json"], ctx.cwd);
-      if (mr.code === 0) {
-        const iid = mrIid(mr.stdout);
-        if (iid) return { ...base, value: `mr:${iid}`, source: `open merge request !${iid}` };
-      }
-      const branch = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout.trim();
-      const baseRef = await defaultBase(run, ctx.cwd);
-      if (branch && baseRef && branch !== baseRef) {
-        return { ...base, value: `branch:${baseRef}...${branch}`, source: `${branch} vs ${baseRef}` };
-      }
-      return { ...base, value: "worktree", source: "working tree" };
+      const candidates = await targetCandidates(ctx);
+      // Inference still picks the value; the menu only lets the human override it,
+      // and the head of the list is what inference alone would have chosen.
+      const baseRef = (await defaultBase(run, ctx.cwd)) ?? "";
+      return { ...base, ...candidates[0]!, candidates, base: baseRef };
     }
 
     case "ticket": {
@@ -204,6 +209,97 @@ export async function workSourceCandidates(ctx: InferContext): Promise<WorkSourc
   return candidates;
 }
 
+/**
+ * Everything this repo could sensibly have a review pointed at, in the order plain
+ * inference would have picked them: the branch's own MR (else mine), the branch
+ * against its base, then the working tree.
+ */
+export async function targetCandidates(ctx: InferContext): Promise<Candidate[]> {
+  const run = ctx.run ?? shell;
+  const out: Candidate[] = [];
+
+  const view = await run("glab", ["mr", "view", "--output", "json"], ctx.cwd);
+  const iid = view.code === 0 ? mrIid(view.stdout) : null;
+  if (iid) {
+    out.push({ kind: "mr", value: `mr:${iid}`, source: `open merge request !${iid}`, label: `!${iid}` });
+  } else {
+    // This branch has no MR, so offer the ones I would otherwise go looking for.
+    for (const mine of await myOpenMrs(run, ctx.cwd)) out.push(mine);
+  }
+
+  const branch = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout.trim();
+  const baseRef = await defaultBase(run, ctx.cwd);
+  if (branch && baseRef && branch !== baseRef) {
+    out.push({
+      kind: "branch",
+      value: `branch:${baseRef}...${branch}`,
+      source: `${branch} vs ${baseRef}`,
+      label: branch,
+    });
+  }
+
+  const dirty = (await run("git", ["status", "--porcelain"], ctx.cwd)).stdout.trim() !== "";
+  // Last, and always there when nothing else is: the working tree is the one
+  // target that exists in every repo, and inference already fell back to it.
+  if (dirty || out.length === 0) {
+    out.push({ kind: "worktree", value: "worktree", source: "working tree", label: "working tree" });
+  }
+  return out;
+}
+
+/** Open MRs I am on either side of, deduplicated by iid. */
+async function myOpenMrs(run: NonNullable<InferContext["run"]>, cwd: string): Promise<Candidate[]> {
+  const seen = new Map<string, Candidate>();
+  for (const who of ["--assignee", "--author"]) {
+    const res = await run("glab", ["mr", "list", who, "@me", "--output", "json"], cwd);
+    if (res.code !== 0) continue;
+    let rows: unknown;
+    try {
+      rows = JSON.parse(res.stdout);
+    } catch {
+      continue;
+    }
+    if (!Array.isArray(rows)) continue;
+    for (const row of rows as Record<string, unknown>[]) {
+      const id = row.iid ?? row.id;
+      if (id === undefined || id === null) continue;
+      const key = String(id);
+      if (seen.has(key)) continue;
+      const title = typeof row.title === "string" ? row.title : "";
+      seen.set(key, {
+        kind: "mr",
+        value: `mr:${key}`,
+        source: title ? `open MR !${key} — ${title}` : `open MR !${key}`,
+        label: `!${key}`,
+      });
+    }
+  }
+  return [...seen.values()].sort((a, b) => Number(a.value.slice(3)) - Number(b.value.slice(3)));
+}
+
+/**
+ * What the human typed for a review target: an MR iid or URL, a `base...head`
+ * range, the working tree, or a bare ref meaning that ref against the base.
+ */
+export function classifyTarget(typed: string, baseRef: string): Candidate | null {
+  const text = typed.trim();
+  if (text === "") return null;
+  const source = "typed";
+
+  const url = /\/-\/merge_requests\/(\d+)/.exec(text);
+  if (url) return { kind: "mr", value: `mr:${url[1]}`, source, label: `!${url[1]}` };
+
+  const iid = /^!?(\d+)$/.exec(text);
+  if (iid) return { kind: "mr", value: `mr:${iid[1]}`, source, label: `!${iid[1]}` };
+
+  if (/^worktree$/i.test(text)) return { kind: "worktree", value: "worktree", source, label: "working tree" };
+
+  if (text.includes("...")) return { kind: "branch", value: `branch:${text}`, source, label: text };
+
+  if (!baseRef) return null;
+  return { kind: "branch", value: `branch:${baseRef}...${text}`, source, label: text };
+}
+
 /** What the human typed: a plan directory, a Linear issue, or the work in their own words. */
 export function classifyWorkSource(typed: string): WorkSourceCandidate {
   const text = typed.trim();
@@ -219,21 +315,43 @@ export function classifyWorkSource(typed: string): WorkSourceCandidate {
   return { kind: "text", value: text, source, label: textLabel(text) };
 }
 
+/** What one Input's menu says, so the two of them share the machinery below. */
+interface MenuSpec {
+  header: string;
+  hint: string;
+  question: string;
+  classify(typed: string, r: Resolution): Candidate | null;
+}
+
+const WORK_SOURCE_MENU: MenuSpec = {
+  header: WORK_SOURCE_QUESTION,
+  hint: "a Linear id or URL, or the work in your own words",
+  question: "Linear id or URL, or the work in your own words",
+  classify: (typed) => classifyWorkSource(typed),
+};
+
+const TARGET_MENU: MenuSpec = {
+  header: TARGET_QUESTION,
+  hint: "an MR iid or URL, or a base...head range",
+  question: "MR iid or URL, or a base...head range",
+  classify: (typed, r) => classifyTarget(typed, r.base ?? ""),
+};
+
 /**
- * Settles a work-source the human has to choose: the candidates as a menu, plus
- * "Type it…" for a Linear issue or a description. False when they backed out.
+ * Settles an Input the human chooses from: its candidates as a menu, plus
+ * "Type it…" for anything not listed. False when they backed out.
  */
-export async function resolveWorkSource(r: Resolution, prompts: InputPrompts): Promise<boolean> {
+async function resolveFromMenu(r: Resolution, prompts: InputPrompts, spec: MenuSpec): Promise<boolean> {
   const candidates = r.candidates ?? [];
   const items: PickItem[] = candidates.map((c, i) => ({
     id: String(i),
     title: c.label ?? c.value,
     subtitle: `${c.kind} · ${c.source}`,
   }));
-  items.push({ id: TYPE_IT, title: "Type it…", subtitle: "a Linear id or URL, or the work in your own words" });
+  items.push({ id: TYPE_IT, title: "Type it…", subtitle: spec.hint });
 
   const chosen = await prompts.menu(items, {
-    header: WORK_SOURCE_QUESTION,
+    header: spec.header,
     footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
   });
   if (!chosen) return false;
@@ -243,10 +361,25 @@ export async function resolveWorkSource(r: Resolution, prompts: InputPrompts): P
     return true;
   }
 
-  const typed = await prompts.ask("Linear id or URL, or the work in your own words");
+  const typed = await prompts.ask(spec.question);
   if (typed === null || typed.trim() === "") return false;
-  settle(r, classifyWorkSource(typed));
+  const classified = spec.classify(typed, r);
+  if (!classified) return false;
+  settle(r, classified);
   return true;
+}
+
+export function resolveWorkSource(r: Resolution, prompts: InputPrompts): Promise<boolean> {
+  return resolveFromMenu(r, prompts, WORK_SOURCE_MENU);
+}
+
+export function resolveTarget(r: Resolution, prompts: InputPrompts): Promise<boolean> {
+  return resolveFromMenu(r, prompts, TARGET_MENU);
+}
+
+/** The menu an Input needs, whichever Input it is. */
+export function resolveCandidates(r: Resolution, prompts: InputPrompts): Promise<boolean> {
+  return r.strategy === "diff-target" ? resolveTarget(r, prompts) : resolveWorkSource(r, prompts);
 }
 
 function settle(r: Resolution, candidate: WorkSourceCandidate): void {
@@ -288,20 +421,24 @@ export function inputValues(resolutions: Resolution[]): Record<string, string> {
   return values;
 }
 
+/** Only real Inputs have a provenance; a `<name>_kind` is a companion of its own Input. */
 export function inputSources(resolutions: Resolution[]): Record<string, string> {
   const sources: Record<string, string> = {};
-  for (const r of resolutions) {
-    sources[r.name] = r.source;
-    if (r.kind) sources[`${r.name}_kind`] = r.source;
-  }
+  for (const r of resolutions) sources[r.name] = r.source;
   return sources;
+}
+
+/** True for the `<name>_kind` companion `inputValues` adds next to a kinded Input. */
+export function isKindCompanion(name: string, inputs: Record<string, string>): boolean {
+  return name.endsWith("_kind") && name.slice(0, -"_kind".length) in inputs;
 }
 
 export function confirmLine(workflow: string, resolutions: Resolution[]): string {
   const parts = resolutions
     .filter((r) => r.value !== "" || r.strategy !== "ticket")
     .map((r) => {
-      const where = r.kind ? `${r.kind} · ${r.source}` : r.source;
+      // A target's value already says its kind (`mr:42`), so only name it when it adds something.
+      const where = r.kind && !r.value.startsWith(r.kind) ? `${r.kind} · ${r.source}` : r.source;
       return `${r.name}=${abbreviate(r.value) || "(empty)"} [${where}]`;
     });
   return `${workflow}: ${parts.join("  ")}`;

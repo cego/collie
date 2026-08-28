@@ -1,7 +1,7 @@
 ---
 name: review
 title: review — an MR, a branch diff, or the working tree
-description: Reviews the inferred target with both review skills and writes one verdict. Posts to GitLab only when asked.
+description: You pick the target — an MR, a branch diff or the working tree — and both review skills write one verdict. Posts to GitLab only when asked.
 inputs:
   target: diff-target
   post: flag

@@ -18,7 +18,8 @@ import {
   inferInputs,
   inputSources,
   inputValues,
-  resolveWorkSource,
+  isKindCompanion,
+  resolveCandidates,
   type Resolution,
 } from "./inputs";
 import { ask, confirm, nextKey, pick, releaseKeyboard, type PickItem } from "./picker";
@@ -77,13 +78,15 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   }
 
   const resolutions = await inferInputs(resolved.inputs, { cwd: env.cwd, stateDir: env.stateDir });
+  // An embedded workflow's inputs belong to the run that embeds it, which never asks.
+  const embedded = new Set(resolved.embeddedInputs);
   for (const r of resolutions) {
-    if (!r.needsAsking) continue;
-    // A work-source is chosen from what this repo offers; everything else is typed.
-    if (r.candidates) {
-      if (!(await resolveWorkSource(r, { menu: pick, ask }))) return 0;
+    // An Input with candidates is chosen from what this repo offers, not typed blind.
+    if (r.candidates && !embedded.has(r.name)) {
+      if (!(await resolveCandidates(r, { menu: pick, ask }))) return 0;
       continue;
     }
+    if (!r.needsAsking) continue;
     const answer = await ask(r.question);
     if (answer === null) return 0;
     r.value = answer.trim();
@@ -213,7 +216,11 @@ export async function runnerFlow(herdr: Herdr, env: PluginEnv): Promise<number> 
   if (env.tabId) await herdr.tabRename(env.tabId, `⚙ ${run.record.slug}`);
   console.log(`${run.id}\n${wf.title}\n`);
   for (const [name, value] of Object.entries(run.record.inputs)) {
-    console.log(`  ${name} = ${value || "(empty)"} [${run.record.input_sources[name] ?? "?"}]`);
+    // The kind is shown with its own Input, not as a second line of its own.
+    if (isKindCompanion(name, run.record.inputs)) continue;
+    const kind = run.record.inputs[`${name}_kind`];
+    const where = run.record.input_sources[name] ?? "?";
+    console.log(`  ${name} = ${value || "(empty)"} [${kind ? `${kind} · ${where}` : where}]`);
   }
   console.log("");
 

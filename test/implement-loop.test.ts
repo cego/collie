@@ -267,3 +267,19 @@ test("the build prompt is told which kind of work source it got, and nothing ren
   // A key the run never set renders empty and is only visible in the log.
   expect(readFileSync(join(run.dir, "log.txt"), "utf8")).not.toContain("unknown template keys");
 }, 20_000);
+
+test("review's inputs are the embedder's when it is embedded, so implement never asks for them", () => {
+  const defs = loadDefinitions(layers(rig.pluginEnv()));
+
+  const implement = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
+  // `target` and `post` reach implement only through `use: review`, so its picker
+  // must infer them silently; `plan` is implement's own and is chosen normally.
+  expect(implement.inputs.plan).toBe("work-source");
+  expect(implement.inputs.target).toBe("diff-target");
+  expect(implement.embeddedInputs.sort()).toEqual(["post", "target"]);
+
+  // Standalone, the same input belongs to review itself, so the menu is shown.
+  const review = resolveWorkflow("review", defs, FALLBACK_DEFAULTS);
+  expect(review.inputs.target).toBe("diff-target");
+  expect(review.embeddedInputs).toEqual([]);
+});

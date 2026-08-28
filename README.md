@@ -36,7 +36,8 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
 1. Focus a pane in the workspace of the repo you want to work on and press `prefix+f`.
 2. Pick a workflow in the popup (type to filter, Enter).
 3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only
-   for what could not be inferred, and shown one confirm line.
+   for what could not be inferred, and shown one confirm line. Two inputs offer a menu
+   instead of a guess: `implement`'s work source, and `review`'s target.
 4. A `runner` tab opens as the status pane; each step gets its own tab, marked
    `✓`/`⚠`/`✗` as it finishes. A toast tells you when a run is done or needs you.
 5. `plan` and `architecture` end in a menu; "Implement now" chains straight into

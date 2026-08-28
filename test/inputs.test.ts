@@ -2,12 +2,15 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  classifyTarget,
   classifyWorkSource,
   confirmLine,
   inferInput,
   inferInputs,
   inputValues,
+  resolveTarget,
   resolveWorkSource,
+  targetCandidates,
   workSourceCandidates,
 } from "../src/inputs";
 import { RunStore } from "../src/run";
@@ -388,3 +391,133 @@ function makePlanRun(store: RunStore, slug: string, cwd: string, created: string
   writeFileSync(join(run.dir, "plan", "SPEC.md"), "# spec\n");
   return run;
 }
+
+// --- 10: the human chooses the review target ------------------------------
+
+/** git that answers the three questions diff-target asks, with a dirty tree. */
+function gitOn(branch: string, base = "origin/main", porcelain = " M src/x.ts") {
+  return `case "$1 $2" in
+      "rev-parse --abbrev-ref") echo ${branch} ;;
+      "symbolic-ref --short") echo ${base} ;;
+      "status --porcelain") echo "${porcelain}" ;;
+      *) exit 1 ;;
+    esac`;
+}
+
+test("diff-target offers the MR, the branch and the working tree, inference first", async () => {
+  bin.add("glab", `echo '{"iid": 42, "state": "opened", "title": "t"}'`);
+  bin.add("git", gitOn("add-picker"));
+
+  const resolved = await inferInput("target", "diff-target", ctx());
+
+  // The head of the list is what inference alone would have picked, so Enter keeps it.
+  expect(resolved.value).toBe("mr:42");
+  expect(resolved.kind).toBe("mr");
+  expect(resolved.candidates?.map((c) => [c.kind, c.value])).toEqual([
+    ["mr", "mr:42"],
+    ["branch", "branch:main...add-picker"],
+    ["worktree", "worktree"],
+  ]);
+});
+
+test("with no MR for this branch, my own open MRs are offered instead", async () => {
+  bin.add(
+    "glab",
+    `case "$2" in
+      view) exit 1 ;;
+      list) case "$3" in
+        --assignee) echo '[{"iid": 7, "title": "mine to review"}]' ;;
+        --author) echo '[{"iid": 7, "title": "mine to review"}, {"iid": 9, "title": "also mine"}]' ;;
+      esac ;;
+    esac`,
+  );
+  bin.add("git", gitOn("add-picker"));
+
+  const resolved = await inferInput("target", "diff-target", ctx());
+
+  // Deduplicated across assignee and author, and never ahead of the branch itself.
+  expect(resolved.candidates?.map((c) => [c.kind, c.value])).toEqual([
+    ["mr", "mr:7"],
+    ["mr", "mr:9"],
+    ["branch", "branch:main...add-picker"],
+    ["worktree", "worktree"],
+  ]);
+  expect(resolved.value).toBe("mr:7");
+});
+
+test("a clean tree on the default branch still offers the working tree", async () => {
+  bin.add("glab", `exit 1`);
+  bin.add("git", gitOn("main", "origin/main", ""));
+
+  const resolved = await inferInput("target", "diff-target", ctx());
+
+  expect(resolved.candidates?.map((c) => c.kind)).toEqual(["worktree"]);
+  expect(resolved.value).toBe("worktree");
+});
+
+test("what the human types is classified as an MR, a range or a branch", () => {
+  expect(classifyTarget("42", "main")).toMatchObject({ kind: "mr", value: "mr:42" });
+  expect(classifyTarget("!42", "main")).toMatchObject({ kind: "mr", value: "mr:42" });
+  expect(
+    classifyTarget("https://gitlab.cego.dk/cego/herdr-plugin/-/merge_requests/128", "main"),
+  ).toMatchObject({ kind: "mr", value: "mr:128" });
+  expect(classifyTarget("main...add-picker", "main")).toMatchObject({
+    kind: "branch",
+    value: "branch:main...add-picker",
+  });
+  expect(classifyTarget("worktree", "main")).toMatchObject({ kind: "worktree", value: "worktree" });
+  // A bare ref means that ref against the default base, which is what a branch target is.
+  expect(classifyTarget("add-picker", "main")).toMatchObject({
+    kind: "branch",
+    value: "branch:main...add-picker",
+  });
+  expect(classifyTarget("   ", "main")).toBeNull();
+});
+
+test("the target menu always shows, and Type it… classifies what comes back", async () => {
+  bin.add("glab", `exit 1`);
+  bin.add("git", gitOn("add-picker"));
+  const resolved = await inferInput("target", "diff-target", ctx());
+
+  const titles: string[] = [];
+  const ok = await resolveTarget(resolved, {
+    menu: async (items, opts) => {
+      titles.push(...items.map((i) => i.title));
+      expect(opts.header).toContain("Review what?");
+      return items.find((i) => i.id === "type")!;
+    },
+    ask: async () => "!128",
+  });
+
+  expect(ok).toBe(true);
+  expect(titles).toEqual(["add-picker", "working tree", "Type it…"]);
+  expect(resolved).toMatchObject({ value: "mr:128", kind: "mr", source: "typed" });
+});
+
+test("picking the top of the target menu reproduces plain inference", async () => {
+  bin.add("glab", `exit 1`);
+  bin.add("git", gitOn("add-picker"));
+  const resolved = await inferInput("target", "diff-target", ctx());
+  const inferredValue = resolved.value;
+
+  const ok = await resolveTarget(resolved, { menu: async (items) => items[0]!, ask: async () => null });
+
+  expect(ok).toBe(true);
+  expect(resolved.value).toBe(inferredValue);
+  expect(resolved.value).toBe("branch:main...add-picker");
+});
+
+test("escaping the target menu leaves the run unstarted", async () => {
+  bin.add("glab", `exit 1`);
+  bin.add("git", gitOn("add-picker"));
+  const resolved = await inferInput("target", "diff-target", ctx());
+
+  expect(await resolveTarget(resolved, { menu: async () => null, ask: async () => "x" })).toBe(false);
+});
+
+test("targetCandidates does not throw when neither glab nor git is there", async () => {
+  bin.add("glab", `exit 1`);
+  bin.add("git", `exit 1`);
+
+  expect((await targetCandidates(ctx())).map((c) => c.kind)).toEqual(["worktree"]);
+});

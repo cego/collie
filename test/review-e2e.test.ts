@@ -32,7 +32,8 @@ test("review runs standalone on the inferred target with post off by default", a
   const { run, status } = await runWorkflow(rig, "review", {});
 
   expect(status).toBe("done");
-  expect(run.record.inputs).toEqual({ target: "mr:12", post: "false" });
+  // The kind is recorded next to the value, so a prompt can branch on it.
+  expect(run.record.inputs).toEqual({ target: "mr:12", target_kind: "mr", post: "false" });
   expect(run.record.input_sources).toEqual({ target: "open merge request !12", post: "default" });
 
   const prompt = promptOf(run);

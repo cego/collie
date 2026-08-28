@@ -288,6 +288,8 @@ export interface ResolvedWorkflow {
   title: string;
   description: string;
   inputs: Record<string, InputStrategy>;
+  /** Inputs that arrived only from an embedded workflow, so this run must not ask for them. */
+  embeddedInputs: string[];
   maxIterations: number;
   steps: ResolvedStep[];
   layer: LayerName;
@@ -319,6 +321,7 @@ export function resolveWorkflow(
     title: wf.title,
     description: wf.description,
     inputs,
+    embeddedInputs: Object.keys(inherited).filter((key) => !(key in wf.inputs)),
     maxIterations: wf.maxIterations ?? defaults.maxIterations,
     steps,
     layer: wf.layer,
