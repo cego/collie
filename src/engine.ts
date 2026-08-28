@@ -36,13 +36,15 @@ import {
 } from "./output";
 import {
   agentName,
+  disambiguate,
   evenRatio,
   GLYPH,
+  paneLabel,
   shellQuote,
   stepLabel,
   tabLabel,
+  tabNameOf,
   targetLabel,
-  variantLabel,
   WORKSPACE_TAB,
 } from "./naming";
 import { registerAgent, registryPath } from "./registry";
@@ -96,6 +98,8 @@ interface RunCtx {
   viewSource: string;
   /** The `workflows` tab this run asks its questions in, when there is one. */
   workspaceTabId: string | null;
+  /** Each of this run's tabs and the name it was given; the glyph is what moves. */
+  tabNames: Map<string, string>;
 }
 
 export async function executeRun(o: EngineOptions): Promise<RunStatus> {
@@ -108,6 +112,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     groups: new Map(),
     viewSource,
     workspaceTabId: null,
+    tabNames: new Map(),
   };
 
   run.record.status = "running";
@@ -241,7 +246,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
       const mark = v.record.status === "done" ? "✓" : v.record.status === "failed" ? "✗" : "⚠";
       out(`  ${mark} ${v.record.label}${v.record.error ? ` — ${v.record.error}` : ""}`);
     }
-    await markTab(o, outcomes.map((v) => v.record));
+    await markTab(o, ctx, outcomes.map((v) => v.record));
     // The whole point of a synthesis is that a human can read it here.
     if (step.fanIn) printReview(o);
 
@@ -341,11 +346,13 @@ async function runStep(
       error: null,
     };
 
-    const paneName = variantLabel(variant, o.defaults.harness, step.id, variants.length);
+    // A pane says only what its tab cannot; a lone pane in its own tab says nothing.
+    const paneName = paneLabel(variant, step.id, variants.length, !!step.fanIn);
     if (reuse) {
-      // An `agent:` step opens nothing: it says which step it is on the pane it inherited.
-      if (record.paneId) await herdr.paneRename(record.paneId, paneName);
-      if (record.tabId) await herdr.tabRename(record.tabId, runTab(o, GLYPH.running));
+      // An `agent:` step opens nothing, and renames nothing: the pane it inherited
+      // is alone in its tab, and the tab already names the run.
+      if (paneName && record.paneId) await herdr.paneRename(record.paneId, paneName);
+      if (record.tabId) await herdr.tabRename(record.tabId, runTab(o, ctx, record.tabId, GLYPH.running));
     } else {
       if (prior?.paneId) {
         // fresh: replace the pane so `agent start` sees a shell prompt again. The
@@ -375,12 +382,14 @@ async function runStep(
         });
         record.tabId = records[i - 1]!.tabId;
       } else {
-        const tab = await herdr.tabCreate({ label: runTab(o, GLYPH.running), cwd: run.record.cwd });
+        const name = await freeTabName(o, ctx, step);
+        const tab = await herdr.tabCreate({ label: tabLabel(GLYPH.running, name), cwd: run.record.cwd });
         record.tabId = tab.tabId;
         record.paneId = tab.paneId;
+        if (record.tabId) ctx.tabNames.set(record.tabId, name);
       }
-      if (record.tabId) await herdr.tabRename(record.tabId, runTab(o, GLYPH.running));
-      if (record.paneId) await herdr.paneRename(record.paneId, paneName);
+      if (record.tabId) await herdr.tabRename(record.tabId, runTab(o, ctx, record.tabId, GLYPH.running));
+      if (paneName && record.paneId) await herdr.paneRename(record.paneId, paneName);
 
       // herdr 0.7.5 ignores --cwd on tab create and pane split, so cd explicitly.
       if (record.paneId) await herdr.paneRun(record.paneId, `cd ${shellQuote(run.record.cwd)}`);
@@ -634,7 +643,7 @@ async function runRound(
   o.run.step(step.id).variants.push(outcome.record);
   ctx.outputs.set(step.id, [outcome]);
   o.run.save();
-  await markTab(o, [outcome.record]);
+  await markTab(o, ctx, [outcome.record]);
   return outcome;
 }
 
@@ -727,7 +736,7 @@ async function ensureWorkspaceTab(o: EngineOptions): Promise<string | null> {
         direction: "down",
         ratio: VIEW_TOP,
       });
-      await o.herdr.paneRename(o.hostPaneId, o.run.record.slug);
+      await o.herdr.paneRename(o.hostPaneId, o.run.record.workflow);
     }
     return view.tabId;
   } catch (e) {
@@ -998,9 +1007,29 @@ async function zoomed<T>(o: EngineOptions, body: () => Promise<T>): Promise<T> {
   }
 }
 
-/** Every tab of a run carries the same name; the glyph is what moves. */
-function runTab(o: EngineOptions, glyph: string): string {
-  return tabLabel(glyph, o.run.record.workflow, runTarget(o.wf, o.run.record));
+/** A tab keeps the name it was given; only the glyph moves. */
+function runTab(o: EngineOptions, ctx: RunCtx, tabId: string | null, glyph: string): string {
+  const name = (tabId && ctx.tabNames.get(tabId)) ?? o.run.record.workflow;
+  return tabLabel(glyph, name);
+}
+
+/**
+ * What to call a new tab: the workflow for the run's own first tab, the step for
+ * every tab after it. Where a live tab in this workspace already carries that
+ * name — another run of the same workflow — the target is appended to tell them
+ * apart, which is the only place a target appears on a tab.
+ */
+async function freeTabName(o: EngineOptions, ctx: RunCtx, step: ResolvedStep): Promise<string> {
+  const plain = ctx.tabNames.size === 0 ? o.run.record.workflow : step.id;
+  let taken: string[] = [];
+  try {
+    taken = (await o.herdr.tabList()).map((t) => tabNameOf(t.label));
+  } catch (e) {
+    // Without the list a plain name is the better guess than a decorated one.
+    o.run.log(`tab names: ${(e as Error).message}`);
+  }
+  if (!taken.includes(plain)) return plain;
+  return disambiguate(plain, runTarget(o.wf, o.run.record));
 }
 
 /**
@@ -1204,7 +1233,7 @@ function verdictOf(outcomes: VariantOutcome[], disputed: Finding[]): Verdict {
  * The step's tab wears the state of every pane in it: ✓ only once they are all
  * done, ✗ when one stopped, ⚠ when one is waiting for the human.
  */
-async function markTab(o: EngineOptions, records: VariantRecord[]): Promise<void> {
+async function markTab(o: EngineOptions, ctx: RunCtx, records: VariantRecord[]): Promise<void> {
   const glyph = records.every((r) => r.status === "done")
     ? GLYPH.done
     : records.some((r) => r.status === "failed")
@@ -1212,9 +1241,8 @@ async function markTab(o: EngineOptions, records: VariantRecord[]): Promise<void
       : records.some((r) => r.status === "blocked")
         ? GLYPH.waiting
         : GLYPH.running;
-  const label = runTab(o, glyph);
   for (const tabId of new Set(records.map((r) => r.tabId).filter((t): t is string => !!t))) {
-    await o.herdr.tabRename(tabId, label);
+    await o.herdr.tabRename(tabId, runTab(o, ctx, tabId, glyph));
   }
 }
 

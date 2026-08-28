@@ -174,13 +174,11 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
 
   const { run } = await runWorkflow(rig, "implement", {});
 
-  // Two tabs, both named for the run rather than for a variant: the implementer's
-  // and the reviewers', and the review step keeps its own across both iterations.
+  // Two tabs, each one word: the run's own takes the workflow, the review step's
+  // takes the step. No target, no slug, no model — and the review step keeps its
+  // tab across both iterations.
   const created = rig.calls().filter((c) => c.cmd === "tab create");
-  expect(created.map((c) => c.argv!.at(-2))).toEqual([
-    "⚙ implement · add-picker",
-    "⚙ implement · add-picker",
-  ]);
+  expect(created.map((c) => c.argv!.at(-2))).toEqual(["⚙ implement", "⚙ review"]);
   expect(new Set(run.step("review").variants.map((v) => v.tabId)).size).toBe(1);
 
   // The second variant sits beside the first, each taking half the tab. A restart
@@ -193,14 +191,15 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
   }
   // The two reviewers and the synthesiser, all restarted for the second round.
   expect(rightSplits.length - sideBySide.length).toBe(3);
-  // Agent panes say which model they are; only the run's own pane, on the board,
-  // says which run — two of those in one tab would otherwise be indistinguishable.
+  // Parallel panes say which model they are, and nothing else does: the run's own
+  // pane on the board says the workflow, and no pane anywhere names the run.
   const renames = rig.calls().filter((c) => c.cmd === "pane rename");
   const agentPanes = renames.filter((c) => c.argv![2] !== "1-0").map((c) => c.argv!.at(-1));
   expect(agentPanes).toContain("opus");
   expect(agentPanes).toContain("sonnet");
-  expect(agentPanes.some((n) => n!.includes("implement-add-picker"))).toBe(false);
-  expect(renames.find((c) => c.argv![2] === "1-0")!.argv!.at(-1)).toBe("implement-add-picker");
+  expect(agentPanes).toContain("synthesize");
+  expect(renames.some((c) => c.argv!.at(-1)!.includes("add-picker"))).toBe(false);
+  expect(renames.find((c) => c.argv![2] === "1-0")!.argv!.at(-1)).toBe("implement");
 
   const reviewer = join(run.dir, "personas", "reviewer.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
@@ -449,7 +448,7 @@ test("with a template in the repo the prompt points at it instead of the plain f
   expect(prompt).toContain("Linear tickets: ``");
 }, 20_000);
 
-test("build, architecture, simplify and fix are one pane that changes its label", async () => {
+test("build, architecture, simplify and fix are one unlabelled pane in one tab", async () => {
   rig.queueOutputs([
     CLEAN, CLEAN, CLEAN, FINDING, FINDING, synthesized(FINDING),
     CLEAN, CLEAN, CLEAN, CLEAN, SYNTH,
@@ -461,12 +460,19 @@ test("build, architecture, simplify and fix are one pane that changes its label"
   const panes = ["build", "architecture", "simplify", "fix"].map((id) => run.step(id).variants[0]!.paneId);
   expect(new Set(panes).size).toBe(1);
 
-  // That pane is renamed as the work moves, and nothing else opens for it.
+  // It is never labelled: it is alone in its tab, and the tab says `implement`.
+  // Nothing else opens for it either.
   const onThatPane = rig
     .calls()
     .filter((c) => c.cmd === "pane rename" && c.argv![2] === panes[0])
     .map((c) => c.argv!.at(-1));
-  expect(onThatPane.slice(0, 4)).toEqual(["build", "architecture", "simplify", "fix"]);
+  expect(onThatPane).toEqual([]);
+  const itsTab = run.step("build").variants[0]!.tabId;
+  const tabNames = rig
+    .calls()
+    .filter((c) => c.cmd === "tab rename" && c.argv![2] === itsTab)
+    .map((c) => c.argv!.at(-1));
+  expect(new Set(tabNames)).toEqual(new Set(["⚙ implement", "✓ implement"]));
 
   // Two tabs for the whole run: the implementer's and the reviewers'.
   expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(2);

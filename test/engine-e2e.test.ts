@@ -45,8 +45,8 @@ test("plan runs one step in a tab of its own and records the run", async () => {
 
   expect(status).toBe("done");
   // The workspace's board is found or opened and put first, the runner's own pane
-  // moves in under it, and only then does the step open its own tab — which takes
-  // the run's name and, at the end, its ✓.
+  // moves in under it, and only then does the step open its own tab — named after
+  // the workflow once `tab list` says nothing else has that name.
   expect(rig.cmds()).toEqual([
     "tab list",
     "plugin pane",
@@ -55,9 +55,9 @@ test("plan runs one step in a tab of its own and records the run", async () => {
     "tab.move",
     "pane move",
     "pane rename",
+    "tab list",
     "tab create",
     "tab rename",
-    "pane rename",
     "pane run",
     "agent start",
     "agent.view.set",
@@ -74,12 +74,13 @@ test("plan runs one step in a tab of its own and records the run", async () => {
   const moved = rig.calls().find((c) => c.cmd === "pane move")!.argv!;
   expect(moved[2]).toBe("1-0");
   expect(moved[moved.indexOf("--split") + 1]).toBe("down");
+  // Two renames, not three: the board's pane and the run's own. The agent's pane
+  // is alone in its tab, so the tab says what it is and the pane says nothing.
   expect(rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1))).toEqual([
     "workflows",
-    "solo-add-a-picker",
     "solo",
   ]);
-  expect(rig.calls().filter((c) => c.cmd === "tab rename").at(-1)!.argv!.at(-1)).toBe("✓ solo · add-a-picker");
+  expect(rig.calls().filter((c) => c.cmd === "tab rename").at(-1)!.argv!.at(-1)).toBe("✓ solo");
 
   const start = rig.calls().find((c) => c.cmd === "agent start")!.argv!;
   expect(start.slice(0, 8)).toEqual([
@@ -109,13 +110,12 @@ test("plan runs one step in a tab of its own and records the run", async () => {
   expect(prompt.split("Interview me about this goal")).toHaveLength(2);
   expect(prompt).toContain(`OUTPUT_PATH: ${join(run.dir, "steps", "solo", "solo.json")}`);
 
-  // The board's pane, then the run's own pane, then the agent's — which takes the
-  // step's name and carries neither the run id nor the slug; the tab holds those.
+  // The board's pane, then the run's own — named after the workflow, never after
+  // the run. The agent's pane is left unlabelled: its tab already says `solo`.
   const renames = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2));
   expect(renames).toEqual([
     ["1-1", "workflows"],
-    ["1-0", "solo-add-a-picker"],
-    ["1-2", "solo"],
+    ["1-0", "solo"],
   ]);
 
   const record = JSON.parse(readFileSync(join(run.dir, "run.json"), "utf8"));

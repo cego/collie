@@ -69,26 +69,47 @@ export function targetLabel(workflow: string, slug: string, inputs: Record<strin
   return slug.startsWith(prefix) ? slug.slice(prefix.length) : slug;
 }
 
-/** `⚙ review · !123`. The step is on the panes, not here. */
-export function tabLabel(glyph: string, workflow: string, target: string): string {
-  return target ? `${glyph} ${workflow} · ${target}` : `${glyph} ${workflow}`;
+/**
+ * `⚙ review`. A tab is the word a human would say for what is in it: the workflow
+ * for a run's own tab, the step for a step's. The target is added only where two
+ * live tabs would otherwise read the same.
+ */
+export function tabLabel(glyph: string, name: string): string {
+  return `${glyph} ${name}`;
+}
+
+/** The name part of a tab label, i.e. what a collision is judged on. */
+export function tabNameOf(label: string): string {
+  const glyphs = Object.values(GLYPH).join("");
+  return label.replace(new RegExp(`^[${glyphs}]\\s*`), "").trim();
+}
+
+/** `implement` vs `implement · add-picker`, once something else owns the plain name. */
+export function disambiguate(name: string, target: string): string {
+  return target ? `${name} · ${target}` : name;
+}
+
+/** `openai-codex/gpt-5.6-sol` is a model id; `gpt-5.6-sol` is the model. */
+function shortModel(model: string): string {
+  return model.slice(model.lastIndexOf("/") + 1);
 }
 
 /**
- * A pane says which agent it is: the model alone where the harness is the one
- * everything else uses, `codex gpt-5` where it is not. A step running on its own
- * has nothing to distinguish, so it takes the step's name.
+ * A pane says only what the tab cannot. Parallel variants say which model they
+ * are; a pane sharing a tab with others says which step it is; a pane alone in
+ * its tab says nothing, because the tab already said it.
  */
-export function variantLabel(
+export function paneLabel(
   variant: { harness: string; model: string },
-  defaultHarness: string,
   stepId: string,
   variantCount: number,
-): string {
-  if (variantCount < 2) return stepId;
-  // On the harness's own default there is no model to name, so the harness is the name.
-  if (variant.model === DEFAULT_MODEL) return variant.harness;
-  return variant.harness === defaultHarness ? variant.model : `${variant.harness} ${variant.model}`;
+  sharesTab: boolean,
+): string | null {
+  if (variantCount > 1) {
+    // On the harness's own default there is no model to name, so the harness is the name.
+    return variant.model === DEFAULT_MODEL ? variant.harness : shortModel(variant.model);
+  }
+  return sharesTab ? stepId : null;
 }
 
 /** Splitting N panes evenly: the i-th split leaves the left pane 1/N of the tab. */

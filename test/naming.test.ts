@@ -1,5 +1,15 @@
 import { expect, test } from "bun:test";
-import { agentName, evenRatio, GLYPH, stepLabel, tabLabel, targetLabel, variantLabel } from "../src/naming";
+import {
+  agentName,
+  disambiguate,
+  evenRatio,
+  GLYPH,
+  paneLabel,
+  stepLabel,
+  tabLabel,
+  tabNameOf,
+  targetLabel,
+} from "../src/naming";
 
 test("a review's target is short and human, and never a sha", () => {
   expect(targetLabel("review", "review-x", { target: "mr:123" })).toBe("!123");
@@ -24,30 +34,45 @@ test("workflows with no target are named by their slug, without repeating the wo
   expect(targetLabel("implement", "something-else", {})).toBe("something-else");
 });
 
-test("a tab is a glyph, the workflow and the target — no run id, no model", () => {
-  expect(tabLabel(GLYPH.running, "review", "!123")).toBe("⚙ review · !123");
-  expect(tabLabel(GLYPH.done, "implement", "add-picker")).toBe("✓ implement · add-picker");
-  expect(tabLabel(GLYPH.waiting, "plan", "")).toBe("⚠ plan");
-  expect(tabLabel(GLYPH.failed, "review", "worktree")).toBe("✗ review · worktree");
-  for (const label of [tabLabel(GLYPH.running, "review", "!123"), tabLabel(GLYPH.done, "implement", "add-picker")]) {
+test("a tab is a glyph and one word: the workflow, or the step", () => {
+  expect(tabLabel(GLYPH.running, "implement")).toBe("⚙ implement");
+  expect(tabLabel(GLYPH.running, "review")).toBe("⚙ review");
+  expect(tabLabel(GLYPH.waiting, "plan")).toBe("⚠ plan");
+  expect(tabLabel(GLYPH.done, "review")).toBe("✓ review");
+  for (const label of [tabLabel(GLYPH.running, "review"), tabLabel(GLYPH.done, "implement")]) {
     expect(label).not.toMatch(/\d{8}-\d{6}/); // no run-id stamp
     expect(label).not.toContain("claude");
+    expect(label).not.toContain("·");
   }
 });
 
-test("a pane names the model when the harness is the default one, and the step when it is alone", () => {
+test("the target is appended only to break a collision, and read back off the label", () => {
+  expect(disambiguate("review", "!123")).toBe("review · !123");
+  expect(disambiguate("implement", "add-picker")).toBe("implement · add-picker");
+  // Nothing to disambiguate with is still the plain name, never a dangling separator.
+  expect(disambiguate("plan", "")).toBe("plan");
+
+  // A collision is judged on the name, so the glyph a tab is wearing cannot hide one.
+  expect(tabNameOf("⚙ review")).toBe("review");
+  expect(tabNameOf("✓ review · !123")).toBe("review · !123");
+  expect(tabNameOf("workflows")).toBe("workflows");
+});
+
+test("a pane names the model, or the step, or nothing at all", () => {
   const opus = { harness: "claude", model: "opus" };
-  const codex = { harness: "codex", model: "gpt-5" };
+  const pi = { harness: "pi", model: "openai-codex/gpt-5.6-sol" };
 
-  expect(variantLabel(opus, "claude", "review", 2)).toBe("opus");
-  expect(variantLabel(codex, "claude", "review", 2)).toBe("codex gpt-5");
-  // Alone in its step, a variant has nothing to distinguish it from.
-  expect(variantLabel(opus, "claude", "build", 1)).toBe("build");
-  expect(variantLabel(codex, "claude", "build", 1)).toBe("build");
+  // Parallel variants: the model alone, with the provider stripped off it.
+  expect(paneLabel(opus, "review", 2, false)).toBe("opus");
+  expect(paneLabel(pi, "review", 2, false)).toBe("gpt-5.6-sol");
+  // The harness names the pane only where there is no model to name.
+  expect(paneLabel({ harness: "claude", model: "default" }, "review", 2, false)).toBe("claude");
+  expect(paneLabel({ harness: "pi", model: "default" }, "review", 2, false)).toBe("pi");
 
-  // On the harness's own default there is no model to name, so the harness is the name.
-  expect(variantLabel({ harness: "claude", model: "default" }, "claude", "review", 2)).toBe("claude");
-  expect(variantLabel({ harness: "codex", model: "default" }, "claude", "review", 2)).toBe("codex");
+  // Alone in a tab, the tab has already said it.
+  expect(paneLabel(opus, "build", 1, false)).toBeNull();
+  // Sharing a tab with the panes it came from, it says which step it is.
+  expect(paneLabel(opus, "synthesize", 1, true)).toBe("synthesize");
 });
 
 test("even splits leave every one of N panes the same width", () => {
@@ -61,7 +86,7 @@ test("even splits leave every one of N panes the same width", () => {
 test("agent names stay herdr-legal and are never what a label shows", () => {
   const name = agentName("review-branch-b5571dc-head", "review", "claude-opus", 12);
   expect(name).toMatch(/^[a-z][a-z0-9_-]{0,31}$/);
-  expect(tabLabel(GLYPH.running, "review", "diff")).not.toContain(name);
+  expect(tabLabel(GLYPH.running, "review")).not.toContain(name);
   // stepLabel is still what the run record carries for a variant.
   expect(stepLabel("review-x", "review", "claude-opus")).toBe("review-x/review/claude-opus");
 });
