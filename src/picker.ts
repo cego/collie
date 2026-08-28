@@ -93,28 +93,38 @@ class Keyboard {
   private waiter: ((key: string) => void) | null = null;
   private started = false;
 
-  async next(): Promise<string> {
-    if (!this.started) {
-      this.started = true;
-      process.stdin.setRawMode?.(true);
-      process.stdin.resume();
-      process.stdin.on("data", (buf: Buffer) => {
-        for (const key of tokenizeKeys(buf.toString("utf8"))) {
-          const waiter = this.waiter;
-          if (waiter) {
-            this.waiter = null;
-            waiter(key);
-          } else {
-            this.queue.push(key);
-          }
+  /** Raw mode and one data handler; everything else reads from the queue. */
+  start(): void {
+    if (this.started) return;
+    this.started = true;
+    process.stdin.setRawMode?.(true);
+    process.stdin.resume();
+    process.stdin.on("data", (buf: Buffer) => {
+      for (const key of tokenizeKeys(buf.toString("utf8"))) {
+        const waiter = this.waiter;
+        if (waiter) {
+          this.waiter = null;
+          waiter(key);
+        } else {
+          this.queue.push(key);
         }
-      });
-    }
+      }
+    });
+  }
+
+  async next(): Promise<string> {
+    this.start();
     const queued = this.queue.shift();
     if (queued !== undefined) return queued;
     return await new Promise<string>((resolve) => {
       this.waiter = resolve;
     });
+  }
+
+  /** The next queued key, or null: for a loop that must also redraw on a timer. */
+  take(): string | null {
+    this.start();
+    return this.queue.shift() ?? null;
   }
 
   release(): void {
@@ -127,6 +137,8 @@ class Keyboard {
 const keyboard = new Keyboard();
 
 export const nextKey = () => keyboard.next();
+export const startKeyboard = () => keyboard.start();
+export const takeKey = () => keyboard.take();
 export const releaseKeyboard = () => keyboard.release();
 
 const CANCEL = new Set(["\x03", "\x1b"]);

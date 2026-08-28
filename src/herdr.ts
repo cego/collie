@@ -21,6 +21,24 @@ export interface StartedTab {
   paneId: string;
 }
 
+export interface TabInfo {
+  tabId: string;
+  label: string;
+}
+
+export interface PaneInfo {
+  paneId: string;
+  tabId: string;
+  label: string | null;
+}
+
+/** A live agent as herdr sees it. Only named agents — the ones this plugin started. */
+export interface AgentInfo {
+  name: string;
+  paneId: string;
+  status: AgentStatus;
+}
+
 export class Herdr {
   private seq = 0;
 
@@ -103,6 +121,43 @@ export class Herdr {
     await this.cli(["tab", "rename", tabId, label]);
   }
 
+  async tabList(): Promise<TabInfo[]> {
+    const args = ["tab", "list"];
+    if (this.env.workspaceId) args.push("--workspace", this.env.workspaceId);
+    const res = await this.cli(args);
+    const tabs = res?.result?.tabs ?? [];
+    return tabs.map((t: any) => ({ tabId: t.tab_id ?? "", label: t.label ?? "" }));
+  }
+
+  async tabFocus(tabId: string): Promise<void> {
+    await this.cli(["tab", "focus", tabId]);
+  }
+
+  async paneList(): Promise<PaneInfo[]> {
+    const res = await this.cli(["pane", "list"]);
+    const panes = res?.result?.panes ?? [];
+    return panes.map((p: any) => ({
+      paneId: p.pane_id ?? "",
+      tabId: p.tab_id ?? "",
+      label: p.label ?? null,
+    }));
+  }
+
+  /** Moves a live pane into another tab; the process in it keeps running. */
+  async paneMove(opts: {
+    paneId: string;
+    tabId: string;
+    targetPaneId?: string;
+    direction?: "right" | "down";
+    ratio?: number;
+  }): Promise<void> {
+    const args = ["pane", "move", opts.paneId, "--tab", opts.tabId];
+    if (opts.targetPaneId) args.push("--target-pane", opts.targetPaneId);
+    if (opts.direction) args.push("--split", opts.direction);
+    if (opts.ratio !== undefined) args.push("--ratio", String(opts.ratio));
+    await this.cli(args);
+  }
+
   async paneSplit(opts: {
     paneId: string;
     direction: "right" | "down";
@@ -163,6 +218,27 @@ export class Herdr {
     await this.cli(args);
   }
 
+  async agentList(): Promise<AgentInfo[]> {
+    const res = await this.cli(["agent", "list"]);
+    const agents = res?.result?.agents ?? [];
+    return agents
+      .filter((a: any) => typeof a.name === "string" && a.name !== "")
+      .map((a: any) => ({
+        name: a.name as string,
+        paneId: (a.pane_id as string) ?? "",
+        status: (a.agent_status as AgentStatus) ?? "unknown",
+      }));
+  }
+
+  async agentFocus(target: string): Promise<void> {
+    await this.cli(["agent", "focus", target]);
+  }
+
+  /** Runs one of this plugin's own actions, which is how the tab offers them. */
+  async actionInvoke(actionId: string): Promise<void> {
+    await this.cli(["plugin", "action", "invoke", actionId, "--plugin", PLUGIN_ID]);
+  }
+
   async agentStatus(target: string): Promise<AgentStatus> {
     const res = await this.cli(["agent", "get", target]);
     return (res?.result?.agent?.agent_status as AgentStatus) ?? "unknown";
@@ -185,13 +261,22 @@ export class Herdr {
     /** Only for non-popup placements: popups and overlays target the active pane. */
     workspaceId?: string | null;
     cwd?: string;
-  }): Promise<void> {
+    /** Overrides the placement the manifest declares for this entrypoint. */
+    placement?: "tab" | "split";
+    targetPaneId?: string;
+    direction?: "right" | "down";
+  }): Promise<StartedTab> {
     const args = ["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", opts.entrypoint];
     if (opts.workspaceId) args.push("--workspace", opts.workspaceId);
+    if (opts.placement) args.push("--placement", opts.placement);
+    if (opts.targetPaneId) args.push("--target-pane", opts.targetPaneId);
+    if (opts.direction) args.push("--direction", opts.direction);
     if (opts.cwd) args.push("--cwd", opts.cwd);
     for (const [k, v] of Object.entries(opts.env ?? {})) args.push("--env", `${k}=${v}`);
     args.push(opts.focus === false ? "--no-focus" : "--focus");
-    await this.cli(args);
+    const res = await this.cli(args);
+    const pane = res?.result?.plugin_pane?.pane;
+    return { tabId: pane?.tab_id ?? "", paneId: pane?.pane_id ?? "" };
   }
 
   /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.7.5. */

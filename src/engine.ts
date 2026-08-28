@@ -39,12 +39,13 @@ import {
   evenRatio,
   GLYPH,
   shellQuote,
-  STATUS_PANE,
   stepLabel,
   tabLabel,
   targetLabel,
   variantLabel,
+  WORKSPACE_TAB,
 } from "./naming";
+import { registerAgent, registryPath } from "./registry";
 import { classifyWorkSource, inferInputs, resolveWorkSource, shell as shellRun, type InputPrompts } from "./inputs";
 import { RunStore } from "./run";
 import { gitlabReadiness, mrFacts, type MrFacts } from "./mr";
@@ -54,8 +55,8 @@ import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 
 export const VIEW_SOURCE_PREFIX = "cego.workflows:";
 
-/** The share of the first tab the agents keep; the runner's strip takes the rest. */
-const STRIP_TOP = 0.85;
+/** The share of the `workflows` tab its view keeps; a run's own pane takes the rest. */
+const VIEW_TOP = 0.4;
 
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
 export type EnginePrompts = InputPrompts;
@@ -67,7 +68,7 @@ export interface EngineOptions {
   wf: ResolvedWorkflow;
   run: Run;
   env: PluginEnv;
-  /** The Run's status pane; the first Step splits off it. */
+  /** The runner's own pane, which moves into the `workflows` tab and asks there. */
   hostPaneId: string | null;
   out: (line: string) => void;
   stepTimeoutMs?: number;
@@ -93,6 +94,8 @@ interface RunCtx {
   /** One agent per `agent:` group, so a resumed run still keeps one implementer. */
   groups: Map<string, VariantRecord>;
   viewSource: string;
+  /** The `workflows` tab this run asks its questions in, when there is one. */
+  workspaceTabId: string | null;
 }
 
 export async function executeRun(o: EngineOptions): Promise<RunStatus> {
@@ -104,13 +107,17 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     ran: new Set(),
     groups: new Map(),
     viewSource,
+    workspaceTabId: null,
   };
-  let host = o.hostPaneId;
 
   run.record.status = "running";
   run.record.finished_at = null;
+  // The tab, the toast and the workspace view all name the run the same way.
+  run.record.target_label = runTarget(wf, run.record);
   run.save();
 
+  // Before anything opens: this is where the run's own pane and its menus live.
+  ctx.workspaceTabId = await ensureWorkspaceTab(o);
   await ensureTrusted(o);
 
   const indexOf = (id: string) => wf.steps.findIndex((s) => s.id === id);
@@ -174,7 +181,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
       out(`▶ ${step.id} — over to you`);
       let result: ChoiceResult;
       try {
-        result = await runChoiceStep(o, step, ctx, host);
+        result = await runChoiceStep(o, step, ctx);
       } catch (e) {
         record.status = "failed";
         record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
@@ -182,7 +189,6 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
         out(`✗ ${step.id} — ${record.note}`);
         return await finish(o, "failed", viewSource);
       }
-      host = null;
       ctx.ran.add(step.id);
       record.status = result.status;
       record.note = result.note;
@@ -214,7 +220,7 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
 
     let outcomes: VariantOutcome[];
     try {
-      outcomes = await runStep(o, step, variants, keys, ctx, host, extras);
+      outcomes = await runStep(o, step, variants, keys, ctx, extras);
     } catch (e) {
       record.status = "failed";
       record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
@@ -222,8 +228,6 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
       out(`✗ ${step.id} — ${record.note}`);
       return await finish(o, "failed", viewSource);
     }
-    // Only the very first pane splits off the status pane.
-    host = null;
     ctx.ran.add(step.id);
 
     record.variants = outcomes.map((v) => v.record);
@@ -307,7 +311,6 @@ async function runStep(
   variants: Variant[],
   keys: (string | null)[],
   ctx: RunCtx,
-  host: string | null,
   extraVars?: Record<string, unknown>,
 ): Promise<VariantOutcome[]> {
   const { herdr, run } = o;
@@ -371,17 +374,6 @@ async function runStep(
           cwd: run.record.cwd,
         });
         record.tabId = records[i - 1]!.tabId;
-      } else if (host) {
-        // The runner's own pane becomes the thin strip under this step's panes.
-        record.paneId = await herdr.paneSplit({
-          paneId: host,
-          direction: "down",
-          ratio: STRIP_TOP,
-          cwd: run.record.cwd,
-        });
-        await herdr.paneSwap(host, record.paneId);
-        await herdr.paneRename(host, STATUS_PANE);
-        record.tabId = o.env.tabId ?? null;
       } else {
         const tab = await herdr.tabCreate({ label: runTab(o, GLYPH.running), cwd: run.record.cwd });
         record.tabId = tab.tabId;
@@ -403,6 +395,8 @@ async function runStep(
       if (record.paneId) {
         ctx.panes.push(record.paneId);
         await setView(o, ctx.viewSource, ctx.panes);
+        // A group's first agent outlives its step, so the Session may hand it work.
+        if (groupHead(o.wf, step.id)) register(o, step, record);
       }
       // The first step of an `agent:` group lends its agent to the rest of it.
       if (step.agent && !ctx.groups.has(step.agent)) ctx.groups.set(step.agent, record);
@@ -461,7 +455,6 @@ async function runChoiceStep(
   o: EngineOptions,
   step: ResolvedStep,
   ctx: RunCtx,
-  host: string | null,
 ): Promise<ChoiceResult> {
   const { run, out } = o;
   const prompts = o.prompts;
@@ -469,7 +462,6 @@ async function runChoiceStep(
     return { status: "failed", note: `${step.id} needs a menu, and this run has no terminal` };
   }
   const choices = step.choices ?? [];
-  let hostPane = host;
 
   for (;;) {
     const taken = (title: string) =>
@@ -478,12 +470,15 @@ async function runChoiceStep(
       .filter((c) => c.max === undefined || taken(c.title) < c.max)
       .map((c) => ({ id: c.title, title: c.title, subtitle: choiceHint(c) }));
 
+    await callAttention(o, ctx, `${step.id}: pick what happens next`, step.id);
     const picked = await zoomed(o, () =>
       prompts.menu(items, {
         header: `${run.record.slug} — ${step.id}`,
         footer: "↑↓ move · Enter choose · Esc leave the run open",
       }),
     );
+    run.record.awaiting = null;
+    run.save();
     if (!picked) return { status: "blocked", note: "no choice taken" };
 
     const choice = choices.find((c) => c.title === picked.id)!;
@@ -516,15 +511,14 @@ async function runChoiceStep(
 
     const round = choice.round!;
     const key = `${slugify(choice.title)}-${taken(choice.title)}`;
-    const first = await runRound(o, step, round, key, ctx, hostPane);
-    hostPane = null;
+    const first = await runRound(o, step, round, key, ctx);
     if (first.record.status !== "done") {
       out(`  ⚠ ${first.record.label} — ${first.record.error ?? "did not finish"}`);
       continue;
     }
     const findings = first.review?.findings ?? [];
     if (choice.followUp && findings.length > 0) {
-      const next = await runRound(o, step, choice.followUp, `${key}-then`, ctx, null, {
+      const next = await runRound(o, step, choice.followUp, `${key}-then`, ctx, {
         findings: formatFindings(findings),
       });
       if (next.record.status !== "done") {
@@ -592,6 +586,7 @@ async function chain(
   const childRun = new RunStore(o.env.stateDir).create({
     workflow: child.name,
     cwd: run.record.cwd,
+    workspace: o.env.workspaceId,
     inputs,
     inputSources: sources,
     stepIds: child.steps.map((s) => s.id),
@@ -621,7 +616,6 @@ async function runRound(
   round: RoundDef,
   key: string,
   ctx: RunCtx,
-  host: string | null,
   extraVars?: Record<string, unknown>,
 ): Promise<VariantOutcome> {
   const synth: ResolvedStep = {
@@ -635,7 +629,7 @@ async function runRound(
     choices: undefined,
   };
   const variant = roundVariant(round, step, o.defaults);
-  const outcomes = await runStep(o, synth, [variant], [key], ctx, host, extraVars);
+  const outcomes = await runStep(o, synth, [variant], [key], ctx, extraVars);
   const outcome = outcomes[0]!;
   o.run.step(step.id).variants.push(outcome.record);
   ctx.outputs.set(step.id, [outcome]);
@@ -682,6 +676,112 @@ async function ensureConfig(
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** A step some later step continues, i.e. the one that starts a long-lived agent. */
+function groupHead(wf: ResolvedWorkflow, stepId: string): boolean {
+  return wf.steps.some((s) => s.agent === stepId);
+}
+
+/** Puts one long-lived agent on the Session's register, for a later Run to find. */
+function register(o: EngineOptions, step: ResolvedStep, record: VariantRecord): void {
+  const path = registryPath(o.env.stateDir, o.env.workspaceId, o.run.record.cwd);
+  try {
+    registerAgent(path, {
+      role: step.persona ?? step.id,
+      agent: record.agent,
+      paneId: record.paneId!,
+      runId: o.run.id,
+      workflow: o.run.record.workflow,
+      at: new Date().toISOString(),
+    });
+    o.run.log(`registered ${record.agent} as ${step.persona ?? step.id}`);
+  } catch (e) {
+    // A register nobody can write is a hand-off nobody gets, not a failed run.
+    o.run.log(`register ${record.agent} failed: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * The Session's own tab, found by its label and created when it is not there.
+ * The runner's own pane moves in beside the view, because that is where every
+ * question this run asks has to appear. Returns the tab id, or null when there
+ * is no workspace to own one — the run then keeps its own tab, as before.
+ */
+async function ensureWorkspaceTab(o: EngineOptions): Promise<string | null> {
+  try {
+    const view = await findOrOpenView(o);
+    if (!view) return null;
+    if (o.hostPaneId) {
+      await o.herdr.paneMove({
+        paneId: o.hostPaneId,
+        tabId: view.tabId,
+        targetPaneId: view.paneId,
+        direction: "down",
+        ratio: VIEW_TOP,
+      });
+      await o.herdr.paneRename(o.hostPaneId, o.run.record.slug);
+    }
+    return view.tabId;
+  } catch (e) {
+    // Without the tab the run still runs; it just asks in the pane it started in.
+    o.run.log(`workspace tab: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+async function findOrOpenView(o: EngineOptions): Promise<{ tabId: string; paneId: string } | null> {
+  if (!o.env.workspaceId) return null;
+  const open = async (placement: "tab" | "split", targetPaneId?: string) => {
+    const opened = await o.herdr.pluginPaneOpen({
+      entrypoint: "workspace",
+      placement,
+      targetPaneId,
+      direction: placement === "split" ? "down" : undefined,
+      focus: false,
+      workspaceId: o.env.workspaceId,
+      cwd: o.run.record.cwd,
+      env: { HERDR_WORKFLOWS_CWD: o.run.record.cwd },
+    });
+    if (!opened.paneId) return null;
+    await o.herdr.paneRename(opened.paneId, WORKSPACE_TAB);
+    return opened;
+  };
+
+  const tab = (await o.herdr.tabList()).find((t) => t.label === WORKSPACE_TAB);
+  if (!tab) {
+    const opened = await open("tab");
+    if (!opened?.tabId) return null;
+    await o.herdr.tabRename(opened.tabId, WORKSPACE_TAB);
+    return opened;
+  }
+  // The tab is there; its view pane may not be, if someone closed just that pane.
+  const panes = (await o.herdr.paneList()).filter((p) => p.tabId === tab.tabId);
+  const view = panes.find((p) => p.label === WORKSPACE_TAB);
+  if (view) return { tabId: tab.tabId, paneId: view.paneId };
+  if (panes.length === 0) return null;
+  const opened = await open("split", panes[0]!.paneId);
+  return opened ? { tabId: tab.tabId, paneId: opened.paneId } : null;
+}
+
+/**
+ * A question nobody sees is a run that has silently stopped, so it is said
+ * twice: a toast, and the Session's tab brought to the front.
+ */
+async function callAttention(o: EngineOptions, ctx: RunCtx, detail: string, stepId: string): Promise<void> {
+  o.run.record.awaiting = stepId;
+  o.run.save();
+  try {
+    await o.herdr.notify(`${o.run.record.slug} needs you`, detail, "request");
+  } catch {
+    /* a missing toast must not fail the run */
+  }
+  if (!ctx.workspaceTabId) return;
+  try {
+    await o.herdr.tabFocus(ctx.workspaceTabId);
+  } catch {
+    /* a tab that will not focus is still a tab the human can reach */
+  }
+}
 
 /**
  * A harness that asks before it will work in a directory asks in its own pane, where
@@ -744,6 +844,8 @@ async function startAgent(
     const budget = o.handoffTimeoutMs ?? 0;
     o.out(`  ⏸ ${opts.name} is waiting for you in its pane — answer the prompt there`);
     o.run.log(`${opts.name}: blocked at startup, waiting for the human`);
+    o.run.record.awaiting = step.id;
+    o.run.save();
     try {
       await o.herdr.notify(
         `${o.run.record.slug} needs you`,
@@ -758,6 +860,8 @@ async function startAgent(
       await sleep(Math.min(o.outputPollMs ?? 2000, Math.max(1, deadline - Date.now())));
       if ((await o.herdr.agentStatus(opts.name)) !== "blocked") {
         o.out(`  ▸ ${opts.name} is ready`);
+        o.run.record.awaiting = null;
+        o.run.save();
         return;
       }
     }
@@ -776,6 +880,8 @@ async function awaitOutput(o: EngineOptions, agent: string, stepId: string, path
   if (budget <= 0) return;
 
   o.out(`  ⏸ ${agent} is waiting for you in its tab`);
+  o.run.record.awaiting = stepId;
+  o.run.save();
   try {
     await o.herdr.notify(`${o.run.record.slug} needs you`, `${stepId}: answer the agent in its tab`, "request");
   } catch {
@@ -787,6 +893,8 @@ async function awaitOutput(o: EngineOptions, agent: string, stepId: string, path
     await sleep(Math.min(poll, Math.max(1, deadline - Date.now())));
   }
   if (existsSync(path)) o.out(`  ▸ ${agent} produced its Output`);
+  o.run.record.awaiting = null;
+  o.run.save();
 }
 
 async function collect(
@@ -840,6 +948,8 @@ async function collect(
     // The shape of a review is the engine's to decide, so every one reads alike.
     if (step.fanIn) {
       writeFileSync(join(o.run.dir, REVIEW_FILE), renderReview(result.value as Synthesis));
+      // A hand-off gives the implementer both the prose and the findings it came from.
+      o.run.record.synthesis = record.output;
     }
     collectList(o, "deferred", parsed);
     collectMr(o, parsed);
@@ -1119,6 +1229,7 @@ async function finish(
   const { run, out } = o;
   run.record.status = status;
   run.record.finished_at = new Date().toISOString();
+  run.record.awaiting = null;
   run.record.summary = summarise(o, status);
   run.save();
   out("");

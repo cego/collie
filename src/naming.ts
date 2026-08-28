@@ -39,7 +39,11 @@ export function shellQuote(text: string): string {
 /** ⚙ working, ⚠ your turn, ✓ finished, ✗ stopped. */
 export const GLYPH = { running: "⚙", waiting: "⚠", done: "✓", failed: "✗" } as const;
 
-export const STATUS_PANE = "status";
+/**
+ * The Session's own tab, and the label on the view pane inside it. One per
+ * workspace: the runner reuses it, and recreates it when it has been closed.
+ */
+export const WORKSPACE_TAB = "workflows";
 
 /** A sha, or `HEAD`, names nothing a human recognises on a tab. */
 function opaque(ref: string): boolean {

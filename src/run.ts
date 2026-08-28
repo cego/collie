@@ -23,6 +23,15 @@ export interface VariantRecord {
   error: string | null;
 }
 
+/** A prompt this Run handed to another Run's live agent. */
+export interface HandoffRecord {
+  /** The role it went to: `implementer`, `planner`. */
+  to: string;
+  agent: string;
+  at: string;
+  note: string;
+}
+
 export interface ChoiceRecord {
   step: string;
   title: string;
@@ -44,6 +53,8 @@ export interface RunRecord {
   slug: string;
   workflow: string;
   cwd: string;
+  /** The herdr workspace the Run was started in; a Session is workspace + cwd. */
+  workspace: string | null;
   created_at: string;
   finished_at: string | null;
   status: RunStatus;
@@ -57,11 +68,19 @@ export interface RunRecord {
   /** Runs chained from a Choice in this one. */
   children: string[];
   choices: ChoiceRecord[];
+  /** The step this Run is waiting on the human for, so the workspace tab can say so. */
+  awaiting: string | null;
+  /** Prompts this Run sent to another Run's live agents. */
+  handoffs: HandoffRecord[];
   disputed: Finding[];
   /** Architecture candidates the architect did not apply. */
   deferred: Finding[];
   /** Findings still open when a fix loop hit max_iterations. */
   outstanding: Finding[];
+  /** What the run is pointed at, as its tab shows it; the engine fills it in. */
+  target_label: string | null;
+  /** The Synthesis Output `review.md` was rendered from, relative to the run dir. */
+  synthesis: string | null;
   /** The merge request the `mr` step opened, when it ran. */
   mr_url: string | null;
   /** Linear tickets this run answered, as the MR step resolved them. */
@@ -127,6 +146,7 @@ export class RunStore {
     maxIterations: number;
     primaryInput: string;
     parent?: string;
+    workspace?: string | null;
   }): Run {
     const slug = `${opts.workflow}-${slugify(opts.primaryInput)}`;
     const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
@@ -139,6 +159,7 @@ export class RunStore {
       slug,
       workflow: opts.workflow,
       cwd: opts.cwd,
+      workspace: opts.workspace ?? null,
       created_at: new Date().toISOString(),
       finished_at: null,
       status: "running",
@@ -150,9 +171,13 @@ export class RunStore {
       parent: opts.parent ?? null,
       children: [],
       choices: [],
+      awaiting: null,
+      handoffs: [],
       disputed: [],
       deferred: [],
       outstanding: [],
+      target_label: null,
+      synthesis: null,
       mr_url: null,
       linear_issues: [],
       summary: null,
@@ -179,7 +204,12 @@ export class RunStore {
     // A run recorded by an older version has fewer lists than this one expects.
     record.children ??= [];
     record.choices ??= [];
+    record.workspace ??= null;
+    record.awaiting ??= null;
+    record.handoffs ??= [];
     record.deferred ??= [];
+    record.target_label ??= null;
+    record.synthesis ??= null;
     record.mr_url ??= null;
     record.linear_issues ??= [];
     record.parent ??= null;

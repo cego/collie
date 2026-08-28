@@ -22,10 +22,21 @@ import {
   resolveCandidates,
   type Resolution,
 } from "./inputs";
-import { ask, confirm, nextKey, pick, releaseKeyboard, type PickItem } from "./picker";
+import {
+  ask,
+  confirm,
+  nextKey,
+  pick,
+  releaseKeyboard,
+  startKeyboard,
+  takeKey,
+  type PickItem,
+} from "./picker";
 import { forkDefinition, type DefinitionKind } from "./fork";
 import { GLYPH, tabLabel } from "./naming";
 import { RunStore } from "./run";
+import { sendReviewToImplementer, type Session } from "./handoff";
+import { agentForKey, buildView, renderWorkspace, type WorkspaceView } from "./workspace";
 
 export type Mode = "pick" | "resume" | "fork";
 
@@ -102,6 +113,7 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const run = store.create({
     workflow: resolved.name,
     cwd: env.cwd,
+    workspace: env.workspaceId,
     inputs: inputValues(resolutions),
     inputSources: inputSources(resolutions),
     stepIds: resolved.steps.map((s) => s.id),
@@ -247,6 +259,97 @@ export async function runnerFlow(herdr: Herdr, env: PluginEnv): Promise<number> 
   console.log(`\nRun dir: ${run.dir}`);
   await hold();
   return status === "done" ? 0 : 1;
+}
+
+/** How often the tab re-reads the files and asks herdr what is still alive. */
+const REFRESH_MS = 1500;
+/** How long a keypress may wait; the tab has to feel like a TUI, not a report. */
+const TICK_MS = 120;
+
+const CLEAR = "\x1b[2J\x1b[H";
+
+/**
+ * The `workflows` tab: the Session's control surface. It watches the run dirs
+ * and the register and draws them; the quick actions are the plugin's own
+ * actions and one hand-off. It drives no run and holds no engine state, so
+ * closing it loses nothing.
+ */
+export async function workspaceFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
+  const session: Session = {
+    herdr,
+    stateDir: env.stateDir,
+    workspaceId: env.workspaceId,
+    cwd: env.cwd,
+  };
+  startKeyboard();
+  let view = await load(session);
+  let note: string | null = null;
+  let drawn = "";
+  let read = Date.now();
+
+  for (;;) {
+    const text = renderWorkspace(view, note ?? undefined);
+    if (text !== drawn) {
+      process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
+      drawn = text;
+    }
+    const key = takeKey();
+    if (key !== null) {
+      if (key === "q" || key === "\x03") {
+        releaseKeyboard();
+        return 0;
+      }
+      note = await act(session, view, key);
+      view = await load(session);
+      read = Date.now();
+      continue;
+    }
+    if (Date.now() - read >= REFRESH_MS) {
+      view = await load(session);
+      read = Date.now();
+    }
+    await new Promise((r) => setTimeout(r, TICK_MS));
+  }
+}
+
+/** What one keypress does. Returns the line to show under the lists, if any. */
+async function act(session: Session, view: WorkspaceView, key: string): Promise<string | null> {
+  if (/^[1-9]$/.test(key)) {
+    const agent = agentForKey(view, key);
+    if (!agent) return null;
+    try {
+      await session.herdr.agentFocus(agent.agent);
+      return `focused ${agent.role} (${agent.agent})`;
+    } catch (e) {
+      return `${agent.agent}: ${(e as Error).message}`;
+    }
+  }
+  const actions: Record<string, string> = { p: "pick", u: "resume", f: "fork" };
+  if (actions[key]) {
+    try {
+      await session.herdr.actionInvoke(actions[key]!);
+      return null;
+    } catch (e) {
+      return `${actions[key]}: ${(e as Error).message}`;
+    }
+  }
+  if (key === "s") return (await sendReviewToImplementer(session)).message;
+  return null;
+}
+
+async function load(session: Session): Promise<WorkspaceView> {
+  let alive: Awaited<ReturnType<Herdr["agentList"]>> = [];
+  try {
+    alive = await session.herdr.agentList();
+  } catch {
+    // A herdr that will not answer means "nothing verified live", not a crash.
+  }
+  return buildView({
+    stateDir: session.stateDir,
+    workspaceId: session.workspaceId,
+    cwd: session.cwd,
+    alive,
+  });
 }
 
 function primaryInput(resolutions: Resolution[]): string {

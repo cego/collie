@@ -1,8 +1,8 @@
 import { readEnv } from "./env";
 import { Herdr, HerdrError } from "./herdr";
-import { forkFlow, openPicker, pickFlow, resumeFlow, runnerFlow, type Mode } from "./flows";
+import { forkFlow, openPicker, pickFlow, resumeFlow, runnerFlow, workspaceFlow, type Mode } from "./flows";
 
-const USAGE = "herdr-workflows <pick|resume|fork|picker|runner>";
+const USAGE = "herdr-workflows <pick|resume|fork|picker|runner|workspace>";
 
 async function main(): Promise<number> {
   const [command] = process.argv.slice(2);
@@ -26,6 +26,9 @@ async function main(): Promise<number> {
 
     case "runner":
       return await runnerFlow(herdr, env);
+
+    case "workspace":
+      return await workspaceFlow(herdr, env);
 
     default:
       console.error(USAGE);

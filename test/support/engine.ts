@@ -113,6 +113,7 @@ export async function runWorkflow(
   const run = new RunStore(env.stateDir).create({
     workflow: wf.name,
     cwd: env.cwd,
+    workspace: env.workspaceId,
     inputs: merged,
     inputSources: sources,
     stepIds: wf.steps.map((s) => s.id),
