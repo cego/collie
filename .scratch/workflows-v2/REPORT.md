@@ -727,4 +727,14 @@ Open, and worth knowing:
 - **Quick actions open the picker in the board's pane, not as a popup.** A popup lands on
   whatever pane herdr has focused, which is rarely the workspace the board is for — the
   first live attempt opened a picker in *this* session's workspace, against the wrong repo.
-  Splitting the board's own pane fixes it and makes the mode and cwd the board's.
+  Splitting the board's own pane fixes it and makes the mode and cwd the board's. Only the
+  action-invoking version was seen live; the split version is verified by transcript and
+  compiles, but no live board has run it yet.
+- **The smoke needed a fork of `review` without `requires: [mr-target, gitlab]`**, because
+  this repo has no remote and a branch target skips that step — so the menu would never have
+  appeared. The fork went into the user layer, which is also where mk's session keeps a
+  full-copy `review.md`; the two overwrote each other for a few minutes and mk's version is
+  what is there now. Worth knowing before running a smoke that writes into that layer.
+- **The baseline's opus reviewer moved to `effort: medium`** (`acfd896`, another session)
+  while this ticket was in flight. Four assertions naming the baseline's own variants were
+  following the old `xhigh` and were updated here; nothing in this ticket depends on it.

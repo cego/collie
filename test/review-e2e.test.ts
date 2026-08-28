@@ -72,7 +72,7 @@ test("review runs standalone on the inferred target, and post is no longer an in
   // Same persona, two models: that is the whole difference between the variants.
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
   expect(starts.map((c) => c.argv!.slice(8))).toEqual([
-    ["--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
+    ["--model", "opus", "--effort", "medium", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
     ["--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
     ["--model", "sonnet", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.md")],
   ]);

@@ -6,13 +6,13 @@
 
 **Blocked by:** 14 (engine files)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] transcript: first run creates `workflows` tab + pane and moves it to position 1; second run reuses it and re-asserts position 1; strip no longer created
-- [ ] choice waiting ⇒ toast + tab focus (transcript); selection recorded as before
-- [ ] TUI renders agents/runs from fixture run dirs and registry (unit test on the render function)
-- [ ] README "Using it" + docs/WORKFLOWS-DESIGN.md updated; bun test + tsc green
-- [ ] live smoke: run review on this repo → `workflows` tab shows the run and its variants; menu appears there
+- [x] transcript: first run creates `workflows` tab + pane and moves it to position 1; second run reuses it and re-asserts position 1; strip no longer created
+- [x] choice waiting ⇒ toast + tab focus (transcript); selection recorded as before
+- [x] TUI renders agents/runs from fixture run dirs and registry (unit test on the render function)
+- [x] README "Using it" + docs/WORKFLOWS-DESIGN.md updated; bun test + tsc green
+- [x] live smoke: run review on this repo → `workflows` tab shows the run and its variants; menu appears there
 
 ## Decisions where the design was silent
 

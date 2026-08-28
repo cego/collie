@@ -205,13 +205,13 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
   const reviewer = join(run.dir, "personas", "reviewer.md");
   const starts = rig.calls().filter((c) => c.cmd === "agent start");
   // The implementer and the synthesiser take the harness's own model at medium: no
-  // `--model` flag at all. The reviewers name opus and sonnet at xhigh and keep them.
+  // `--model` flag at all. The reviewers name their own models and efforts and keep them.
   expect(starts.map((c) => c.argv!.slice(7))).toEqual([
     ["--", "--effort", "medium", "--append-system-prompt-file", join(run.dir, "personas", "implementer.md")],
-    ["--", "--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
+    ["--", "--model", "opus", "--effort", "medium", "--append-system-prompt-file", reviewer],
     ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
     ["--", "--effort", "medium", "--append-system-prompt-file", reviewer],
-    ["--", "--model", "opus", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
+    ["--", "--model", "opus", "--effort", "medium", "--append-system-prompt-file", reviewer],
     ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
     ["--", "--effort", "medium", "--append-system-prompt-file", reviewer],
   ]);
@@ -223,7 +223,7 @@ test("the reviewers are one persona at two models, side by side in one tab, rest
     expect(run.step(step).variants[0]!.effort).toBe("medium");
   }
   expect(run.step("review").variants.map((v) => [v.model, v.effort])).toEqual([
-    ["opus", "xhigh"],
+    ["opus", "medium"],
     ["sonnet", "xhigh"],
   ]);
 
@@ -242,7 +242,7 @@ test("review standalone is the same two variants, and says so when it has no spe
 
   expect(status).toBe("done");
   expect(run.record.steps[0]!.variants.map((v) => [v.harness, v.model, v.effort])).toEqual([
-    ["claude", "opus", "xhigh"],
+    ["claude", "opus", "medium"],
     ["claude", "sonnet", "xhigh"],
   ]);
   const prompt = readFileSync(join(run.dir, "steps", "review", "claude-opus", "prompt-1.md"), "utf8");
