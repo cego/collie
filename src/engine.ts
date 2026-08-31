@@ -50,6 +50,7 @@ import {
   tabNameOf,
   targetLabel,
   CONTROL_PLANE,
+  reason,
 } from "./naming";
 import { registerAgent, registryPath, scopeFor } from "./registry";
 import {
@@ -102,11 +103,6 @@ interface VariantOutcome {
   record: VariantRecord;
   output: YamlValue | null;
   review: ReviewOutput | null;
-}
-
-/** What a failure says for a log line, the way a caught Error used to. */
-function reason(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
 }
 
 const isString = Schema.is(Schema.String);
@@ -1271,11 +1267,10 @@ const freeTabName = Effect.fn("Engine.freeTabName")(function* (
   step: ResolvedStep,
 ) {
   const plain = ctx.tabNames.size === 0 ? o.run.record.workflow : step.id;
-  let taken: string[] = [];
   // Without the list a plain name is the better guess than a decorated one.
-  taken = yield* o.herdr.tabList().pipe(
+  const taken = yield* o.herdr.tabList().pipe(
     Effect.map((tabs) => tabs.map((t) => tabNameOf(t.label))),
-    Effect.catch((e) => o.run.log(`tab names: ${reason(e)}`).pipe(Effect.as(taken))),
+    Effect.catch((e) => o.run.log(`tab names: ${reason(e)}`).pipe(Effect.as<string[]>([]))),
   );
   // Compared as a human reads them, so the capitalisation cannot hide a collision.
   if (!taken.includes(displayName(plain))) return plain;

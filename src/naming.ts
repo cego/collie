@@ -67,6 +67,14 @@ export function shellQuote(text: string): string {
 }
 
 /** ⚙ working, ⚠ your turn, ✓ finished, ✗ stopped. */
+/**
+ * What a failure says in a log line or a board row: a caught Error's own message, and
+ * anything else as it prints. Both adapters and the engine report failures this way.
+ */
+export function reason(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 export const GLYPH = { running: "⚙", waiting: "⚠", done: "✓", failed: "✗" } as const;
 
 /**

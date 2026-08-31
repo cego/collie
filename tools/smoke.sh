@@ -21,22 +21,24 @@ unset HERDR_WORKSPACE_ID HERDR_ACTIVE_WORKSPACE_ID HERDR_PLUGIN_CONTEXT_JSON \
 
 fail() { echo "smoke: $1" >&2; exit 1; }
 
+# envelope WHAT WANTED-STATUS PATTERN ARGS...: one line of JSON on stdout, that
+# status, and that pattern in it. `set -e` is off around the run so a command that is
+# meant to fail can be checked rather than ending the script.
+envelope() {
+  what=$1 wanted=$2 pattern=$3
+  shift 3
+  set +e
+  out=$("$BIN" --json "$@" 2>/dev/null)
+  status=$?
+  set -e
+  [ "$status" = "$wanted" ] || fail "$what exited $status, wanted $wanted"
+  [ "$(echo "$out" | wc -l)" = "1" ] || fail "$what wrote more than one line: $out"
+  echo "$out" | grep -q "$pattern" || fail "$what does not match $pattern: $out"
+}
+
 "$BIN" --help >/dev/null 2>&1 || fail "--help exited nonzero"
-
-out=$("$BIN" --json workflow list) || fail "workflow list exited nonzero"
-echo "$out" | head -1 | grep -q '^{"ok":true' || fail "workflow list is not a success envelope: $out"
-[ "$(echo "$out" | wc -l)" = "1" ] || fail "workflow list wrote more than one line"
-
-set +e
-out=$("$BIN" --json run show no-such-run 2>/dev/null); status=$?
-set -e
-[ "$status" = "1" ] || fail "a missing run exited $status, wanted 1"
-echo "$out" | grep -q '"code":"run_not_found"' || fail "a missing run is not typed: $out"
-
-set +e
-out=$("$BIN" --json workflow show 2>/dev/null); status=$?
-set -e
-[ "$status" = "2" ] || fail "invalid input exited $status, wanted 2"
-echo "$out" | head -1 | grep -q '^{"ok":false' || fail "invalid input is not one envelope: $out"
+envelope "workflow list" 0 '^{"ok":true' workflow list
+envelope "a missing run" 1 '"code":"run_not_found"' run show no-such-run
+envelope "invalid input" 2 '^{"ok":false' workflow show
 
 echo "smoke: $BIN answered --help, one JSON success and two typed failures"

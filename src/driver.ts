@@ -168,11 +168,7 @@ const consumeInboxAnswer = Effect.fn("consumeInboxAnswer")(function* (
   choice: PendingChoice,
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const inbox = path.join(dir, "inbox");
-  if (!(yield* fs.exists(inbox))) return null;
-  for (const name of (yield* fs.readDirectory(inbox)).filter((e) => e.endsWith(".json")).sort()) {
-    const file = path.join(inbox, name);
+  for (const file of yield* inboxFiles(dir)) {
     const command = yield* read(InboxCommandJson, file);
     if (command?.type !== "answer" || command.choiceId !== choice.id || !isString(command.answer))
       continue;
@@ -193,6 +189,22 @@ const consumeInboxAnswer = Effect.fn("consumeInboxAnswer")(function* (
 });
 
 /**
+ * Every command in the Run's inbox, oldest name first, or none at all. The inbox's
+ * layout — one directory, one JSON file per request — is named here and by the writer,
+ * and nowhere else.
+ */
+export const inboxFiles = Effect.fn("inboxFiles")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const inbox = path.join(dir, "inbox");
+  if (!(yield* fs.exists(inbox))) return [];
+  return (yield* fs.readDirectory(inbox))
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => path.join(inbox, name));
+});
+
+/**
  * Everything the previous Driver left behind. A command is removed only by the
  * consumer that matches it, and the SIGTERM path consumes nothing, so a stop written
  * while a Driver was mid-Step outlived it — and the next Driver's first Choice found
@@ -203,12 +215,8 @@ const consumeInboxAnswer = Effect.fn("consumeInboxAnswer")(function* (
  */
 export const clearPreviousDriver = Effect.fn("clearPreviousDriver")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
   yield* clearChoice(dir);
-  const inbox = path.join(dir, "inbox");
-  if (!(yield* fs.exists(inbox))) return;
-  for (const name of (yield* fs.readDirectory(inbox)).filter((e) => e.endsWith(".json")))
-    yield* fs.remove(path.join(inbox, name), { force: true });
+  for (const file of yield* inboxFiles(dir)) yield* fs.remove(file, { force: true });
 });
 
 /**
@@ -220,11 +228,7 @@ export const clearPreviousDriver = Effect.fn("clearPreviousDriver")(function* (d
  */
 const consumeInboxStop = Effect.fn("consumeInboxStop")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const inbox = path.join(dir, "inbox");
-  if (!(yield* fs.exists(inbox))) return false;
-  for (const name of (yield* fs.readDirectory(inbox)).filter((e) => e.endsWith(".json")).sort()) {
-    const file = path.join(inbox, name);
+  for (const file of yield* inboxFiles(dir)) {
     const command = yield* read(InboxCommandJson, file);
     if (command?.type !== "stop") continue;
     yield* fs.remove(file, { force: true });

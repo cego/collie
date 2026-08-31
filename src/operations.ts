@@ -20,6 +20,7 @@ import {
 import {
   CHOICE,
   driverAlive,
+  inboxFiles,
   InboxCommandJson,
   readChoice,
   stopDriver,
@@ -291,12 +292,9 @@ const handOver = Effect.fn("operations.handOver")(function* (env: PluginEnv, run
  */
 const answeredChoices = Effect.fn("operations.answeredChoices")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const inbox = path.join(dir, "inbox");
-  if (!(yield* fs.exists(inbox))) return new Set<string>();
   const answered = new Set<string>();
-  for (const name of yield* fs.readDirectory(inbox)) {
-    const command = yield* fs.readFileString(path.join(inbox, name)).pipe(
+  for (const file of yield* inboxFiles(dir)) {
+    const command = yield* fs.readFileString(file).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(InboxAnswerCommandJson)),
       Effect.catch(() => Effect.succeed(null)),
     );

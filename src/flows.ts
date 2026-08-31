@@ -28,7 +28,7 @@ import {
   type PickItem,
 } from "./picker";
 import { forkDefinition, type DefinitionKind } from "./fork";
-import { shellQuote } from "./naming";
+import { reason, shellQuote } from "./naming";
 import { Run, RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
 import {
@@ -65,11 +65,6 @@ export interface ControlSession extends Omit<Session, "herdr"> {
 }
 
 export type Mode = "pick" | "resume" | "fork";
-
-/** What a failure says in a board line, the way a caught Error used to. */
-function reason(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause);
-}
 
 const ProblemDetails = Schema.Struct({ problems: Schema.Array(Schema.String) });
 
