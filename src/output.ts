@@ -4,6 +4,17 @@
 import { Schema } from "effect";
 import { isYamlMap, YamlValueSchema, type YamlValue } from "./yaml";
 
+export const FindingSchema = Schema.Struct({
+  file: Schema.optionalKey(Schema.String),
+  line: Schema.optionalKey(Schema.Number),
+  severity: Schema.String,
+  title: Schema.String,
+  detail: Schema.optionalKey(Schema.String),
+  /** A reviewer's answer to the implementer's reason for disputing this finding. */
+  rebuttal: Schema.optionalKey(Schema.String),
+  /** Why a synthesis dropped this finding; only a `dropped` entry carries one. */
+  reason: Schema.optionalKey(Schema.String),
+});
 export interface Finding {
   file?: string;
   line?: number;

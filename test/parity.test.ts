@@ -33,6 +33,7 @@ import { answerKey, stopRun as boardStop, type ControlSession } from "../src/flo
 import { Herdr } from "../src/herdr";
 import { prepareWorkflow, resumeRun, startRun } from "../src/operations";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
+import { RunStore } from "../src/run";
 import type { RunRow, WorkspaceView } from "../src/workspace";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -140,7 +141,12 @@ afterEach(() =>
   ),
 );
 
-const EnvelopeJson = Schema.fromJsonString(Schema.Struct({ ok: Schema.Boolean }));
+const EnvelopeJson = Schema.fromJsonString(
+  Schema.Struct({
+    ok: Schema.Boolean,
+    error: Schema.optionalKey(Schema.Struct({ code: Schema.String, message: Schema.String })),
+  }),
+);
 
 const InboxCommandJson = Schema.fromJsonString(
   Schema.Struct({
@@ -384,4 +390,24 @@ effectTest("starting through the operation and through the CLI record the same R
   const launched = (yield* fs.readFileString(path.join(dir, "drivers"))).trim().split("\n");
   expect(launched).toHaveLength(2);
   expect(launched).toContain(runId);
+});
+
+effectTest("a run.json that is not a Run is reported, not trusted", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const run = yield* makeRun();
+  yield* fs.writeFileString(path.join(run.dir, "run.json"), '{"id":"broken"}\n');
+
+  // The CLI names the Run and says its state is invalid rather than half-reading it.
+  const shown = yield* cli(["run", "show", run.id]);
+  expect(shown.body).toMatchObject({ ok: false, error: { code: "invalid_state" } });
+  expect(shown.exit).toBe(1);
+  expect((yield* cli(["run", "list"])).body).toMatchObject({
+    ok: false,
+    error: { code: "invalid_state" },
+  });
+
+  // And the store refuses to hand it to anyone, so no reader has to check again.
+  const failure = yield* Effect.result(new RunStore(env.HERDR_PLUGIN_STATE_DIR).load(run.id));
+  expect(failure._tag).toBe("Failure");
 });

@@ -1,8 +1,8 @@
-import { Schema, Clock, Effect, FileSystem, Path } from "effect";
+import { Data, Schema, Clock, Effect, FileSystem, Path } from "effect";
 import { nowIso } from "./time";
 import { breakStaleLock, holdsLock, releaseOwnLock, tryClaimLock } from "./lock";
 import { unsafePathComponent } from "./naming";
-import type { Finding } from "./output";
+import { FindingSchema, type Finding } from "./output";
 import { slugify } from "./template";
 
 export type StepStatus = "pending" | "running" | "done" | "blocked" | "failed";
@@ -73,10 +73,118 @@ export interface RunRecord {
   summary: string | null;
 }
 
+/** A collection a Run may predate: absent reads as empty, so old is not corrupt. */
+function optionalList<S extends Schema.Top>(item: S) {
+  return Schema.Array(item).pipe(Schema.withDecodingDefaultKey(Effect.succeed([])));
+}
+
+const StepStatusSchema = Schema.Literals(["pending", "running", "done", "blocked", "failed"]);
+
+/**
+ * The persisted Run, and the only place `run.json` is given a shape. Every reader —
+ * the CLI, the Control Plane, the Driver, the engine — loads Runs through RunStore,
+ * so a malformed Run fails where it is read rather than being trusted by whoever
+ * reads it first and re-checked by whoever cares most.
+ *
+ * The Run is mutated in place while it runs, so `RunRecord` above stays the written
+ * type and this schema is what decides whether a file may become one.
+ */
+const RunSchema = Schema.Struct({
+  id: Schema.String,
+  seq: Schema.Number,
+  slug: Schema.String,
+  workflow: Schema.String,
+  cwd: Schema.String,
+  session: Schema.NullOr(Schema.String),
+  workspace: Schema.NullOr(Schema.String),
+  workspace_label: Schema.NullOr(Schema.String),
+  workspace_worktree: Schema.NullOr(Schema.String),
+  created_at: Schema.String,
+  finished_at: Schema.NullOr(Schema.String),
+  status: Schema.Literals(["running", "done", "blocked", "failed"]),
+  iteration: Schema.Number,
+  max_iterations: Schema.Number,
+  inputs: Schema.Record(Schema.String, Schema.String),
+  input_sources: Schema.Record(Schema.String, Schema.String),
+  steps: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      status: StepStatusSchema,
+      iteration: Schema.Number,
+      note: Schema.NullOr(Schema.String),
+      variants: optionalList(
+        Schema.Struct({
+          harness: Schema.String,
+          model: Schema.String,
+          effort: Schema.NullOr(Schema.String),
+          agent: Schema.String,
+          label: Schema.String,
+          tabId: Schema.NullOr(Schema.String),
+          paneId: Schema.NullOr(Schema.String),
+          status: StepStatusSchema,
+          output: Schema.NullOr(Schema.String),
+          error: Schema.NullOr(Schema.String),
+        }),
+      ),
+    }),
+  ),
+  parent: Schema.NullOr(Schema.String),
+  children: optionalList(Schema.String),
+  choices: optionalList(
+    Schema.Struct({ step: Schema.String, title: Schema.String, at: Schema.String }),
+  ),
+  awaiting: Schema.NullOr(Schema.String),
+  handoffs: optionalList(
+    Schema.Struct({
+      id: Schema.optionalKey(Schema.String),
+      direction: Schema.Literals(["sent", "received"]),
+      role: Schema.String,
+      agent: Schema.String,
+      run: Schema.String,
+      at: Schema.String,
+      note: Schema.String,
+    }),
+  ),
+  disputed: optionalList(FindingSchema),
+  deferred: optionalList(FindingSchema),
+  outstanding: optionalList(FindingSchema),
+  target_label: Schema.NullOr(Schema.String),
+  synthesis: Schema.NullOr(Schema.String),
+  mr_url: Schema.NullOr(Schema.String),
+  linear_issues: optionalList(Schema.String),
+  summary: Schema.NullOr(Schema.String),
+});
+
+// A field added to one side and not the other fails the build here rather than at
+// the next Run that happens to carry it.
+type Unschemad = Exclude<keyof RunRecord, keyof Schema.Schema.Type<typeof RunSchema>>;
+type Unrecorded = Exclude<keyof Schema.Schema.Type<typeof RunSchema>, keyof RunRecord>;
+const fieldsAgree: [Unschemad, Unrecorded] extends [never, never] ? true : never = true;
+void fieldsAgree;
+
+const RunRecordJson = Schema.fromJsonString(RunSchema);
+const encodeRecord = Schema.encodeSync(RunRecordJson);
+
+/** A `run.json` that exists but is not a Run. Readers report it; they never guess. */
+export class InvalidRunState extends Data.TaggedError("InvalidRunState")<{
+  run: string;
+  cause: string;
+}> {}
+
+/**
+ * Decodes one `run.json`. The result is the schema's own readonly view of a record
+ * the engine goes on to mutate, which is the only reason for the assertion.
+ */
+const decodeRecord = Effect.fn("RunStore.decodeRecord")(function* (id: string, raw: string) {
+  const decoded = yield* Schema.decodeUnknownEffect(RunRecordJson)(raw).pipe(
+    Effect.mapError((cause) => new InvalidRunState({ run: id, cause: String(cause) })),
+  );
+  // SAFETY: RunSchema has just accepted `raw` field for field against RunRecord,
+  // which SchemaMatchesRecord holds to the same shape.
+  return decoded as RunRecord;
+});
+
 const RUN_FILE = "run.json";
-const JsonString = Schema.fromJsonString(Schema.Unknown);
-const encodeJson = Schema.encodeSync(JsonString);
-const decodeJson = Schema.decodeUnknownSync(JsonString);
 const pid = Effect.sync(() => globalThis.process.pid);
 
 export class Run {
@@ -127,10 +235,7 @@ const mergeHandoffs = Effect.fn("Run.mergeHandoffs")(function* (run: Run) {
   const path = yield* Path.Path;
   const fs = yield* FileSystem.FileSystem;
   const disk = yield* fs.readFileString(path.join(run.dir, RUN_FILE)).pipe(
-    Effect.map((raw) => {
-      // SAFETY: run.json is written by writeRecord from RunRecord.
-      return decodeJson(raw) as RunRecord;
-    }),
+    Effect.flatMap((raw) => decodeRecord(run.record.id, raw)),
     Effect.catch(() => Effect.succeed(null)),
   );
   if (!disk) return;
@@ -209,7 +314,7 @@ const writeRecord = Effect.fn("writeRecord")(function* (dir: string, record: Run
   const path = yield* Path.Path;
   const me = yield* pid;
   const tmp = path.join(dir, `${RUN_FILE}.tmp-${me}`);
-  yield* fs.writeFileString(tmp, `${encodeJson(record)}\n`);
+  yield* fs.writeFileString(tmp, `${encodeRecord(record)}\n`);
   yield* fs.rename(tmp, path.join(dir, RUN_FILE));
 });
 
@@ -374,8 +479,7 @@ const loadRun = Effect.fn("RunStore.load")(function* (store: RunStore, id: strin
   const dir = path.join(root, id);
   const file = path.join(dir, RUN_FILE);
   if (!(yield* fs.exists(file))) return yield* Effect.fail(new Error(`no run "${id}" in ${root}`));
-  // SAFETY: run.json is written by writeRecord from RunRecord.
-  return new Run(dir, decodeJson(yield* fs.readFileString(file)) as RunRecord);
+  return new Run(dir, yield* decodeRecord(id, yield* fs.readFileString(file)));
 });
 
 const listRuns = Effect.fn("RunStore.list")(function* (store: RunStore) {
@@ -385,6 +489,8 @@ const listRuns = Effect.fn("RunStore.list")(function* (store: RunStore) {
   const runs: Run[] = [];
   for (const name of yield* fs.readDirectory(root)) {
     if (name.startsWith(".")) continue;
+    // Skipped rather than raised: a listing is a view, and every caller that cares
+    // which Run is broken loads that Run by id and is told exactly why.
     const run = yield* store.load(name).pipe(Effect.catch(() => Effect.succeed(null)));
     if (run) runs.push(run);
   }

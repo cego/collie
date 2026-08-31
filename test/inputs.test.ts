@@ -13,7 +13,7 @@ import {
   targetCandidates,
   workSourceCandidates,
 } from "../src/inputs";
-import type { RunStatus } from "../src/run";
+import { Run, type RunRecord, type RunStatus } from "../src/run";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 
@@ -470,6 +470,11 @@ function withState() {
   return { cwd: rig.projectDir, stateDir: rig.stateDir };
 }
 
+/**
+ * A finished `plan` Run on disk. It is written as a whole record rather than the few
+ * fields this suite reads, because RunStore decodes `run.json` and a partial file is
+ * a broken Run, not an old one.
+ */
 function makePlanRun(
   slug: string,
   cwd: string,
@@ -480,12 +485,41 @@ function makePlanRun(
   return Effect.gen(function* () {
     const id = slug;
     const dir = join(rig.stateDir, "runs", id);
-    const record = { id, cwd, status, workflow: "plan", slug: `plan-${slug}`, created_at: created };
+    const record: RunRecord = {
+      id,
+      seq: 1,
+      slug: `plan-${slug}`,
+      workflow: "plan",
+      cwd,
+      session: null,
+      workspace: null,
+      workspace_label: null,
+      workspace_worktree: null,
+      created_at: created,
+      finished_at: status === "done" ? created : null,
+      status,
+      iteration: 1,
+      max_iterations: 1,
+      inputs: {},
+      input_sources: {},
+      steps: [],
+      parent: null,
+      children: [],
+      choices: [],
+      awaiting: null,
+      handoffs: [],
+      disputed: [],
+      deferred: [],
+      outstanding: [],
+      target_label: null,
+      synthesis: null,
+      mr_url: null,
+      linear_issues: [],
+      summary: null,
+    };
     yield* mkdir(dir);
-    yield* writeFile(
-      join(dir, "run.json"),
-      `{"id":"${id}","cwd":"${cwd}","status":"${status}","workflow":"plan","slug":"plan-${slug}","created_at":"${created}"}`,
-    );
+    // Saved the way a Driver saves, so the fixture cannot drift from the real shape.
+    yield* new Run(dir, record).save();
     if (spec) {
       yield* mkdir(join(dir, "plan"));
       yield* writeFile(join(dir, "plan", "SPEC.md"), "# spec\n");

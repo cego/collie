@@ -13,7 +13,7 @@ import { RUNNER_LOG, readChoice, readProgress } from "./driver";
 import { currentEnv, type PluginEnv } from "./env";
 import { forkDefinition } from "./fork";
 import { Herdr, HerdrError, type WorkspaceInfo } from "./herdr";
-import { Run, RunStore } from "./run";
+import { InvalidRunState, Run, RunStore } from "./run";
 import { scopeFor } from "./registry";
 import {
   answerRun,
@@ -48,23 +48,6 @@ const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 const PrettyUnknownJson = Schema.fromJsonString(Schema.Unknown, { space: 2 });
 
 const TimeoutErrorTag = Schema.Struct({ _tag: Schema.optionalKey(Schema.String) });
-
-const RunBoundary = Schema.Struct({
-  id: Schema.String,
-  workflow: Schema.String,
-  cwd: Schema.String,
-  workspace: Schema.NullOr(Schema.String),
-  workspace_label: Schema.NullOr(Schema.String),
-  workspace_worktree: Schema.NullOr(Schema.String),
-  status: Schema.Literals(["running", "done", "blocked", "failed"]),
-  created_at: Schema.String,
-  finished_at: Schema.NullOr(Schema.String),
-  inputs: Schema.Record(Schema.String, Schema.String),
-  input_sources: Schema.Record(Schema.String, Schema.String),
-  steps: Schema.Array(Schema.Struct({ id: Schema.String, status: Schema.String })),
-  awaiting: Schema.NullOr(Schema.String),
-});
-const RunJson = Schema.fromJsonString(RunBoundary);
 
 type Result = OpResult;
 type Global = { readonly workspace: Option.Option<string>; readonly json: boolean };
@@ -159,27 +142,17 @@ function personaData(persona: PersonaDef) {
   };
 }
 
+/** A Run named on the command line, or the reason the caller cannot have it. */
 const readRun = Effect.fn("collie.readRun")(function* (
   env: PluginEnv,
   id: string,
   workspace: string | null,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
   if (unsafePathComponent(id))
     return err("run_not_found", `Run "${id}" was not found.`, { run: id });
-  const run = yield* new RunStore(env.stateDir)
-    .load(id)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
-  if (!run) return err("run_not_found", `Run "${id}" was not found.`, { run: id });
-  try {
-    Schema.decodeUnknownSync(RunJson)(yield* fs.readFileString(path.join(run.dir, "run.json")));
-  } catch (cause) {
-    return err("invalid_state", `Run "${id}" has invalid persisted state.`, {
-      run: id,
-      cause: String(cause),
-    });
-  }
+  const loaded = yield* new RunStore(env.stateDir).load(id).pipe(Effect.result);
+  if (loaded._tag === "Failure") return notLoaded(id, loaded.failure);
+  const run = loaded.success;
   if (workspace && run.record.workspace !== workspace) {
     return err("run_not_found", `Run "${id}" was not found in workspace "${workspace}".`, {
       run: id,
@@ -188,6 +161,19 @@ const readRun = Effect.fn("collie.readRun")(function* (
   }
   return run;
 });
+
+/**
+ * Why a Run would not load. RunStore decodes `run.json`, so a Run that exists but
+ * is not a Run is `invalid_state` and anything else is simply absent.
+ */
+function notLoaded(id: string, cause: unknown): Result {
+  if (cause instanceof InvalidRunState)
+    return err("invalid_state", `Run "${id}" has invalid persisted state.`, {
+      run: id,
+      cause: cause.cause,
+    });
+  return err("run_not_found", `Run "${id}" was not found.`, { run: id });
+}
 
 const runData = Effect.fn("collie.runData")(function* (run: Run) {
   return {
@@ -581,22 +567,16 @@ const runList = Command.make("list", {}, () =>
         const workspace = yield* selected(global);
         const store = new RunStore(resolved.env.stateDir);
         const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
         const root = yield* store.rootEffect;
+        // A listing hides a broken Run; `run list` is the one place that has to say
+        // so, because an agent reading it would otherwise never learn the Run exists.
         if (yield* fs.exists(root)) {
           for (const name of (yield* fs.readDirectory(root)).filter(
             (entry) => !entry.startsWith("."),
           )) {
-            try {
-              Schema.decodeUnknownSync(RunJson)(
-                yield* fs.readFileString(path.join(root, name, "run.json")),
-              );
-            } catch (cause) {
-              return err("invalid_state", `Run "${name}" has invalid persisted state.`, {
-                run: name,
-                cause: String(cause),
-              });
-            }
+            const loaded = yield* store.load(name).pipe(Effect.result);
+            if (loaded._tag === "Failure" && loaded.failure instanceof InvalidRunState)
+              return notLoaded(name, loaded.failure);
           }
         }
         const runs = (yield* store.list()).filter(
