@@ -8,6 +8,8 @@ test:
   stage: test
   script:
     - bun install --frozen-lockfile
+    - bun run format:check
+    - bun run lint
     - bun test
     # The same script contributors run, so the local gate and CI cannot drift.
     - bun run typecheck

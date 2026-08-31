@@ -1,7 +1,5 @@
-// The Run directory: one per execution, the audit trail and the resume state.
-
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { Schema, Clock, Effect, FileSystem, Path } from "effect";
+import { nowIso } from "./time";
 import { breakStaleLock, holdsLock, releaseOwnLock, tryClaimLock } from "./lock";
 import { unsafePathComponent } from "./naming";
 import type { Finding } from "./output";
@@ -9,43 +7,32 @@ import { slugify } from "./template";
 
 export type StepStatus = "pending" | "running" | "done" | "blocked" | "failed";
 export type RunStatus = "running" | "done" | "blocked" | "failed";
-
 export interface VariantRecord {
   harness: string;
   model: string;
   effort: string | null;
   agent: string;
-  /** The readable tab/pane name; the agent name is length-constrained. */
   label: string;
   tabId: string | null;
   paneId: string | null;
   status: StepStatus;
-  /** Path of the Output file, relative to the run dir. */
   output: string | null;
   error: string | null;
 }
-
-/** A prompt one Run handed to another Run's live agent. Both Runs record it. */
 export interface HandoffRecord {
-  /** One identity for the exchange, shared by both sides, so merges deduplicate.
-   * Absent on records written before Hand-offs had ids; handoffKey falls back. */
   id?: string;
   direction: "sent" | "received";
-  /** The role at the other end: `implementer`, `planner`. */
   role: string;
   agent: string;
-  /** The other Run in the exchange. */
   run: string;
   at: string;
   note: string;
 }
-
 export interface ChoiceRecord {
   step: string;
   title: string;
   at: string;
 }
-
 export interface StepRecord {
   id: string;
   status: StepStatus;
@@ -53,21 +40,15 @@ export interface StepRecord {
   note: string | null;
   variants: VariantRecord[];
 }
-
 export interface RunRecord {
   id: string;
-  /** Monotonic per state dir; keeps agent names unique inside 32 characters. */
   seq: number;
   slug: string;
   workflow: string;
   cwd: string;
-  /** The herdr session the Run was started in, as its socket path. */
   session: string | null;
-  /** The workspace it was started in; a Session is session + workspace + cwd. */
   workspace: string | null;
-  /** That workspace's label, so a recycled workspace id is caught. */
   workspace_label: string | null;
-  /** Stable worktree provenance captured from the live workspace at start. */
   workspace_worktree: string | null;
   created_at: string;
   finished_at: string | null;
@@ -77,72 +58,50 @@ export interface RunRecord {
   inputs: Record<string, string>;
   input_sources: Record<string, string>;
   steps: StepRecord[];
-  /** Set when this Run was chained from a Choice in another Run. */
   parent: string | null;
-  /** Runs chained from a Choice in this one. */
   children: string[];
   choices: ChoiceRecord[];
-  /** The step this Run is waiting on the human for, so the workspace tab can say so. */
   awaiting: string | null;
-  /** Prompts this Run sent to another Run's live agents. */
   handoffs: HandoffRecord[];
   disputed: Finding[];
-  /** Architecture candidates the architect did not apply. */
   deferred: Finding[];
-  /** Findings still open when a fix loop hit max_iterations. */
   outstanding: Finding[];
-  /** What the run is pointed at, as its tab shows it; the engine fills it in. */
   target_label: string | null;
-  /** The Synthesis Output `review.md` was rendered from, relative to the run dir. */
   synthesis: string | null;
-  /** The merge request the `mr` step opened, when it ran. */
   mr_url: string | null;
-  /** Linear tickets this run answered, as the MR step resolved them. */
   linear_issues: string[];
   summary: string | null;
 }
+
+const RUN_FILE = "run.json";
+const JsonString = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonString);
+const decodeJson = Schema.decodeUnknownSync(JsonString);
+const pid = Effect.sync(() => globalThis.process.pid);
 
 export class Run {
   constructor(
     readonly dir: string,
     readonly record: RunRecord,
   ) {}
-
   get id(): string {
     return this.record.id;
   }
 
-  save(): void {
-    mkdirSync(this.dir, { recursive: true });
-    // Under the run lock, so the merge-read and the rename are one step against
-    // a Hand-off writer in another process: nothing lands between them and is lost.
-    withRunLock(this.dir, () => {
-      this.mergeHandoffs(join(this.dir, RUN_FILE));
-      writeRecord(this.dir, this.record);
-    });
+  save() {
+    return saveRun(this);
   }
-
-  /**
-   * Another process may have recorded a Hand-off here since this record was
-   * loaded; a save from that older in-memory state must keep it, exactly once.
-   * Everything else is this Driver's to overwrite — the merge is only the list
-   * another process appends to.
-   */
-  private mergeHandoffs(path: string): void {
-    let disk: RunRecord;
-    try {
-      disk = JSON.parse(readFileSync(path, "utf8")) as RunRecord;
-    } catch {
-      // No file yet, or one mid-write: nothing external to preserve.
-      return;
-    }
-    const have = new Set(this.record.handoffs.map(handoffKey));
-    for (const handoff of disk.handoffs ?? []) {
-      const key = handoffKey(handoff);
-      if (have.has(key)) continue;
-      have.add(key);
-      this.record.handoffs.push(handoff);
-    }
+  stepDir(stepId: string, variantKey: string | null) {
+    return stepDirRun(this, stepId, variantKey);
+  }
+  outputPath(stepId: string, variantKey: string | null, filename: string) {
+    return outputPathRun(this, stepId, variantKey, filename);
+  }
+  personaPath(persona: string, harness: string) {
+    return personaPathRun(this, persona, harness);
+  }
+  log(line: string) {
+    return logRun(this, line);
   }
 
   step(id: string): StepRecord {
@@ -151,110 +110,157 @@ export class Run {
     return found;
   }
 
-  /**
-   * Defence in depth behind definition validation: a value that is not a plain
-   * path component must never become a path, or it could land outside the Run.
-   */
-  private component(value: string): string {
-    // The same predicate the validation layer uses, so the two cannot drift.
-    if (unsafePathComponent(value) !== null) {
-      throw new Error(`run ${this.record.id}: "${value}" cannot name a file or directory inside the run`);
-    }
+  component(value: string): string {
+    if (unsafePathComponent(value) !== null)
+      throw new Error(
+        `run ${this.record.id}: "${value}" cannot name a file or directory inside the run`,
+      );
     return value;
   }
 
-  stepDir(stepId: string, variantKey: string | null): string {
-    const dir = variantKey
-      ? join(this.dir, "steps", this.component(stepId), this.component(variantKey))
-      : join(this.dir, "steps", this.component(stepId));
-    mkdirSync(dir, { recursive: true });
-    return dir;
-  }
-
-  outputPath(stepId: string, variantKey: string | null, filename: string): string {
-    return join(this.stepDir(stepId, variantKey), this.component(filename));
-  }
-
-  /**
-   * Where a Persona is written for one harness. Guarded here because a resumed
-   * Run re-resolves its definitions without re-validating them, so a persona
-   * name edited to something unsafe since the Run was created must still be
-   * unable to name a file outside the Run.
-   */
-  personaPath(persona: string, harness: string): string {
-    const dir = join(this.dir, "personas");
-    mkdirSync(dir, { recursive: true });
-    return join(dir, this.component(`${persona}.${harness}.md`));
-  }
-
-  log(line: string): void {
-    mkdirSync(this.dir, { recursive: true });
-    appendFileSync(join(this.dir, "log.txt"), `${new Date().toISOString()} ${line}\n`);
-  }
-
-  /** Steps that still have work, i.e. what a resume would restart. */
   unfinished(): StepRecord[] {
     return this.record.steps.filter((s) => s.status !== "done");
   }
 }
 
-/**
- * The dedupe identity of one side of one exchange. Direction is part of it:
- * a Run handing off to its own agent carries both sides under one id, and the
- * "received" entry must not be dropped as a duplicate of the "sent" one. A
- * record written before Hand-offs had ids is identified by its fields instead.
- */
+const mergeHandoffs = Effect.fn("Run.mergeHandoffs")(function* (run: Run) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const disk = yield* fs.readFileString(path.join(run.dir, RUN_FILE)).pipe(
+    Effect.map((raw) => {
+      // SAFETY: run.json is written by writeRecord from RunRecord.
+      return decodeJson(raw) as RunRecord;
+    }),
+    Effect.catch(() => Effect.succeed(null)),
+  );
+  if (!disk) return;
+  const have = new Set(run.record.handoffs.map(handoffKey));
+  for (const handoff of disk.handoffs ?? []) {
+    const key = handoffKey(handoff);
+    if (!have.has(key)) {
+      have.add(key);
+      run.record.handoffs.push(handoff);
+    }
+  }
+});
+
+const saveRun = Effect.fn("Run.save")(function* (run: Run) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(run.dir, { recursive: true });
+  yield* withRunLock(
+    run.dir,
+    Effect.gen(function* () {
+      yield* mergeHandoffs(run);
+      yield* writeRecord(run.dir, run.record);
+    }),
+  );
+});
+
+const stepDirRun = Effect.fn("Run.stepDir")(function* (
+  run: Run,
+  stepId: string,
+  variantKey: string | null,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = variantKey
+    ? path.join(run.dir, "steps", run.component(stepId), run.component(variantKey))
+    : path.join(run.dir, "steps", run.component(stepId));
+  yield* fs.makeDirectory(dir, { recursive: true });
+  return dir;
+});
+
+const outputPathRun = Effect.fn("Run.outputPath")(function* (
+  run: Run,
+  stepId: string,
+  variantKey: string | null,
+  filename: string,
+) {
+  const path = yield* Path.Path;
+  return path.join(yield* stepDirRun(run, stepId, variantKey), run.component(filename));
+});
+
+const personaPathRun = Effect.fn("Run.personaPath")(function* (
+  run: Run,
+  persona: string,
+  harness: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = path.join(run.dir, "personas");
+  yield* fs.makeDirectory(dir, { recursive: true });
+  return path.join(dir, run.component(`${persona}.${harness}.md`));
+});
+
+const logRun = Effect.fn("Run.log")(function* (run: Run, line: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(run.dir, { recursive: true });
+  const at = yield* nowIso();
+  yield* fs.writeFileString(path.join(run.dir, "log.txt"), `${at} ${line}\n`, { flag: "a" });
+});
+
 export function handoffKey(h: HandoffRecord): string {
   return h.id ? `${h.direction}|${h.id}` : [h.direction, h.role, h.run, h.at, h.note].join("|");
 }
 
-const RUN_FILE = "run.json";
+const writeRecord = Effect.fn("writeRecord")(function* (dir: string, record: RunRecord) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const me = yield* pid;
+  const tmp = path.join(dir, `${RUN_FILE}.tmp-${me}`);
+  yield* fs.writeFileString(tmp, `${encodeJson(record)}\n`);
+  yield* fs.rename(tmp, path.join(dir, RUN_FILE));
+});
 
-/** Whole file, then renamed into place, so a concurrent reader never sees a torn record. */
-function writeRecord(dir: string, record: RunRecord): void {
-  const tmp = join(dir, `${RUN_FILE}.tmp-${process.pid}`);
-  writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`);
-  renameSync(tmp, join(dir, RUN_FILE));
-}
-
-/**
- * run.json is read-modify-written by its Driver and by Hand-off writers in other
- * processes; this lock serialises those critical sections, and fn never runs
- * without it. A crashed holder's lock is broken the moment its pid is dead and a
- * reused pid is spotted by its start time, so waiting is only ever for a live
- * holder, whose critical section is microseconds. A verified-live holder wedged
- * past the deadline — a suspended process — makes this throw rather than write
- * unlocked or break a living lock: the lost update and the broken lock are each
- * worse than a loud failure.
- */
-function withRunLock<T>(dir: string, fn: () => T): T {
-  const lock = join(dir, `${RUN_FILE}.lock`);
-  const deadline = Date.now() + 15_000;
-  let held = false;
-  while (!held && Date.now() < deadline) {
-    // Anything but contention — the run directory itself missing, say — throws
-    // out of the claim; spinning on it here would burn the deadline hot.
-    // The claim is re-read after winning it: a contender that raced the same
-    // stale break may have removed this one's fresh lock before claiming its own.
-    if (tryClaimLock(lock) && holdsLock(lock)) held = true;
-    else if (!breakStaleLock(lock)) Bun.sleepSync(5);
-  }
-  if (!held) throw new Error(`${lock} could not be acquired; not writing unlocked`);
-  try {
-    return fn();
-  } finally {
-    releaseOwnLock(lock);
-  }
+function withRunLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) {
+  return Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const lock = path.join(dir, `${RUN_FILE}.lock`);
+    const start = yield* Clock.currentTimeMillis;
+    let held = false;
+    while (!held && (yield* Clock.currentTimeMillis) < start + 15_000) {
+      held = (yield* tryClaimLock(lock)) && (yield* holdsLock(lock));
+      if (!held && !(yield* breakStaleLock(lock))) yield* Effect.sleep("5 millis");
+    }
+    if (!held)
+      return yield* Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`));
+    return yield* effect.pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+  });
 }
 
 export class RunStore {
   constructor(private readonly stateDir: string) {}
-
-  get root(): string {
-    return join(this.stateDir, "runs");
+  get rootEffect() {
+    const stateDir = this.stateDir;
+    return Effect.gen(function* () {
+      const path = yield* Path.Path;
+      return path.join(stateDir, "runs");
+    });
   }
+  create(opts: Parameters<typeof createRun>[1]) {
+    return createRun(this, opts);
+  }
+  appendHandoff(runId: string, handoff: HandoffRecord) {
+    return appendHandoffRun(this, runId, handoff);
+  }
+  load(id: string) {
+    return loadRun(this, id);
+  }
+  list() {
+    return listRuns(this);
+  }
+  resumable() {
+    return resumableRuns(this);
+  }
+  nextSeq() {
+    return nextSeqRun(this);
+  }
+}
 
-  create(opts: {
+const createRun = Effect.fn("RunStore.create")(function* (
+  store: RunStore,
+  opts: {
     workflow: string;
     cwd: string;
     inputs: Record<string, string>;
@@ -267,105 +273,126 @@ export class RunStore {
     workspace?: string | null;
     workspaceLabel?: string | null;
     workspaceWorktree?: string | null;
-  }): Run {
-    // Validation rejects such a name earlier with a friendlier error; this is the
-    // defence in depth, because the workflow name becomes the Run directory itself.
-    const badWorkflow = unsafePathComponent(opts.workflow);
-    if (badWorkflow) {
-      throw new Error(`workflow name "${opts.workflow}" ${badWorkflow}, so it cannot name a Run directory`);
-    }
-    const slug = `${opts.workflow}-${slugify(opts.primaryInput)}`;
-    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
-    let id = `${slug}-${stamp}`;
-    for (let n = 2; existsSync(join(this.root, id)); n++) id = `${slug}-${stamp}-${n}`;
-
-    const record: RunRecord = {
+  },
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const root = yield* store.rootEffect;
+  const badWorkflow = unsafePathComponent(opts.workflow);
+  if (badWorkflow)
+    return yield* Effect.fail(
+      new Error(
+        `workflow name "${opts.workflow}" ${badWorkflow}, so it cannot name a Run directory`,
+      ),
+    );
+  const slug = `${opts.workflow}-${slugify(opts.primaryInput)}`;
+  const stamp = (yield* nowIso()).replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
+  let id = `${slug}-${stamp}`;
+  for (let n = 2; yield* fs.exists(path.join(root, id)); n++) id = `${slug}-${stamp}-${n}`;
+  const record: RunRecord = {
+    id,
+    seq: yield* store.nextSeq(),
+    slug,
+    workflow: opts.workflow,
+    cwd: opts.cwd,
+    session: opts.session ?? null,
+    workspace: opts.workspace ?? null,
+    workspace_label: opts.workspaceLabel ?? null,
+    workspace_worktree: opts.workspaceWorktree ?? null,
+    created_at: yield* nowIso(),
+    finished_at: null,
+    status: "running",
+    iteration: 1,
+    max_iterations: opts.maxIterations,
+    inputs: opts.inputs,
+    input_sources: opts.inputSources,
+    steps: opts.stepIds.map((id) => ({
       id,
-      seq: this.nextSeq(),
-      slug,
-      workflow: opts.workflow,
-      cwd: opts.cwd,
-      session: opts.session ?? null,
-      workspace: opts.workspace ?? null,
-      workspace_label: opts.workspaceLabel ?? null,
-      workspace_worktree: opts.workspaceWorktree ?? null,
-      created_at: new Date().toISOString(),
-      finished_at: null,
-      status: "running",
-      iteration: 1,
-      max_iterations: opts.maxIterations,
-      inputs: opts.inputs,
-      input_sources: opts.inputSources,
-      steps: opts.stepIds.map((id) => ({ id, status: "pending", iteration: 0, note: null, variants: [] })),
-      parent: opts.parent ?? null,
-      children: [],
-      choices: [],
-      awaiting: null,
-      handoffs: [],
-      disputed: [],
-      deferred: [],
-      outstanding: [],
-      target_label: null,
-      synthesis: null,
-      mr_url: null,
-      linear_issues: [],
-      summary: null,
-    };
-    const run = new Run(join(this.root, id), record);
-    run.save();
-    return run;
-  }
+      status: "pending",
+      iteration: 0,
+      note: null,
+      variants: [],
+    })),
+    parent: opts.parent ?? null,
+    children: [],
+    choices: [],
+    awaiting: null,
+    handoffs: [],
+    disputed: [],
+    deferred: [],
+    outstanding: [],
+    target_label: null,
+    synthesis: null,
+    mr_url: null,
+    linear_issues: [],
+    summary: null,
+  };
+  const run = new Run(path.join(root, id), record);
+  yield* run.save();
+  return run;
+});
 
-  private nextSeq(): number {
-    mkdirSync(this.root, { recursive: true });
-    const path = join(this.root, ".seq");
-    const current = existsSync(path) ? Number.parseInt(readFileSync(path, "utf8").trim(), 10) : 0;
-    const next = Number.isFinite(current) ? current + 1 : 1;
-    writeFileSync(path, String(next));
-    return next;
-  }
+const nextSeqRun = Effect.fn("RunStore.nextSeq")(function* (store: RunStore) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* store.rootEffect;
+  yield* fs.makeDirectory(root, { recursive: true });
+  const seqPath = path.join(root, ".seq");
+  const current = yield* fs.readFileString(seqPath).pipe(
+    Effect.map((x) => Number.parseInt(x.trim(), 10)),
+    Effect.catch(() => Effect.succeed(0)),
+  );
+  const next = Number.isFinite(current) ? current + 1 : 1;
+  yield* fs.writeFileString(seqPath, String(next));
+  return next;
+});
 
-  /**
-   * Records one Hand-off on a Run another process may be driving. Loaded fresh
-   * and written under the run lock, so the entry can neither be lost to a
-   * concurrent save nor roll back state that Run's Driver wrote in the meantime,
-   * and the same exchange appended twice is kept once.
-   */
-  appendHandoff(runId: string, handoff: HandoffRecord): Run {
-    return withRunLock(join(this.root, runId), () => {
-      const run = this.load(runId);
+const appendHandoffRun = Effect.fn("RunStore.appendHandoff")(function* (
+  store: RunStore,
+  runId: string,
+  handoff: HandoffRecord,
+) {
+  const path = yield* Path.Path;
+  const root = yield* store.rootEffect;
+  return yield* withRunLock(
+    path.join(root, runId),
+    Effect.gen(function* () {
+      const run = yield* store.load(runId);
       if (!run.record.handoffs.some((h) => handoffKey(h) === handoffKey(handoff))) {
         run.record.handoffs.push(handoff);
-        writeRecord(run.dir, run.record);
+        yield* writeRecord(run.dir, run.record);
       }
       return run;
-    });
-  }
+    }),
+  );
+});
 
-  load(id: string): Run {
-    const dir = join(this.root, id);
-    const path = join(dir, "run.json");
-    if (!existsSync(path)) throw new Error(`no run "${id}" in ${this.root}`);
-    const record = JSON.parse(readFileSync(path, "utf8")) as RunRecord;
-    return new Run(dir, record);
-  }
+const loadRun = Effect.fn("RunStore.load")(function* (store: RunStore, id: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* store.rootEffect;
+  const dir = path.join(root, id);
+  const file = path.join(dir, RUN_FILE);
+  if (!(yield* fs.exists(file))) return yield* Effect.fail(new Error(`no run "${id}" in ${root}`));
+  // SAFETY: run.json is written by writeRecord from RunRecord.
+  return new Run(dir, decodeJson(yield* fs.readFileString(file)) as RunRecord);
+});
 
-  /** Newest first. */
-  list(): Run[] {
-    if (!existsSync(this.root)) return [];
-    const runs: Run[] = [];
-    for (const name of readdirSync(this.root)) {
-      if (name.startsWith(".")) continue;
-      try {
-        runs.push(this.load(name));
-      } catch {
-        // A half-written run dir must not break the resume list.
-      }
-    }
-    return runs.sort((a, b) => b.record.created_at.localeCompare(a.record.created_at));
+const listRuns = Effect.fn("RunStore.list")(function* (store: RunStore) {
+  const fs = yield* FileSystem.FileSystem;
+  const root = yield* store.rootEffect;
+  if (!(yield* fs.exists(root))) return [];
+  const runs: Run[] = [];
+  for (const name of yield* fs.readDirectory(root)) {
+    if (name.startsWith(".")) continue;
+    const run = yield* store.load(name).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (run) runs.push(run);
   }
+  return runs.sort((a, b) => b.record.created_at.localeCompare(a.record.created_at));
+});
 
-  resumable(): Run[] {
-    return this.list().filter((r) => r.record.status !== "done" && r.unfinished().length > 0);
-  }
-}
+const resumableRuns = Effect.fn("RunStore.resumable")(function* (store: RunStore) {
+  return (yield* store.list()).filter(
+    (r) => r.record.status !== "done" && r.unfinished().length > 0,
+  );
+});

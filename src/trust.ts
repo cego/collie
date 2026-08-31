@@ -1,97 +1,105 @@
-// Whether a Harness will work in a directory, or stop and ask first. claude asks
-// once per directory and remembers the answer in ~/.claude.json; there is no
-// command for it, so this writes the key it looks for — carefully, because that
-// file is claude's, not ours, and it holds far more than this.
+// Whether a Harness will work in a directory, or stop and ask first. Claude asks
+// once per directory and remembers the answer in ~/.claude.json; this file is
+// Claude's, so unreadable data is always left untouched.
 
-import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
-  readFileSync,
-  realpathSync,
-  renameSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
+import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
+import { isYamlMap, YamlMapSchema, type YamlMap } from "./yaml";
 
 export type TrustState = "trusted" | "untrusted" | "unknown";
 
+export interface TrustResult {
+  readonly ok: boolean;
+  readonly message: string;
+}
+
 export interface Trust {
   /** `unknown` when the harness has left nothing here to read. */
-  state(cwd: string): TrustState;
-  grant(cwd: string): { ok: boolean; message: string };
+  readonly state: (
+    cwd: string,
+  ) => Effect.Effect<TrustState, PlatformError.PlatformError, FileSystem.FileSystem>;
+  readonly grant: (
+    cwd: string,
+  ) => Effect.Effect<TrustResult, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path>;
 }
 
-interface ClaudeConfig {
-  projects?: Record<string, Record<string, unknown>>;
-}
+const ClaudeConfigJson = Schema.fromJsonString(YamlMapSchema);
 
-/** Both spellings of one directory: claude records whichever it was started with. */
-function paths(cwd: string): string[] {
-  try {
-    const real = realpathSync(cwd);
-    return real === cwd ? [cwd] : [cwd, real];
-  } catch {
-    return [cwd];
-  }
+const paths = Effect.fn("Trust.paths")(function* (cwd: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const real = yield* fs.realPath(cwd).pipe(Effect.catch(() => Effect.succeed(cwd)));
+  return real === cwd ? [cwd] : [cwd, real];
+});
+
+function projects(config: YamlMap): YamlMap {
+  return isYamlMap(config.projects) ? config.projects : {};
 }
 
 export function claudeTrust(home: string, backupDir: string): Trust {
-  const path = join(home, ".claude.json");
+  const read = Effect.fn("Trust.read")(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = `${home}/.claude.json`;
+    if (!(yield* fs.exists(path))) return null;
+    return yield* fs.readFileString(path).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(ClaudeConfigJson)),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+  });
 
-  const read = (): ClaudeConfig | null => {
-    if (!existsSync(path)) return null;
-    try {
-      return JSON.parse(readFileSync(path, "utf8")) as ClaudeConfig;
-    } catch {
-      // Not ours to repair, and certainly not ours to overwrite.
-      return null;
+  const state = Effect.fn("Trust.state")(function* (cwd: string) {
+    const config = yield* read();
+    if (config === null) return "unknown" as const;
+    const entries = projects(config);
+    for (const path of yield* paths(cwd)) {
+      const entry = entries[path];
+      if (isYamlMap(entry) && entry.hasTrustDialogAccepted === true) return "trusted" as const;
     }
-  };
+    return "untrusted" as const;
+  });
 
-  return {
-    state(cwd) {
-      const config = read();
-      if (!config) return "unknown";
-      const projects = config.projects ?? {};
-      return paths(cwd).some((p) => projects[p]?.hasTrustDialogAccepted === true)
-        ? "trusted"
-        : "untrusted";
-    },
+  const grant = Effect.fn("Trust.grant")(function* (cwd: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const path = pathService.join(home, ".claude.json");
+    const config = yield* read();
+    if (config === null) {
+      return {
+        ok: false,
+        message: (yield* fs.exists(path))
+          ? `${path} is not readable JSON; left alone`
+          : "claude has not run on this machine yet, so it will ask you the first time",
+      };
+    }
+    if ((yield* state(cwd)) === "trusted") {
+      return { ok: true, message: `${cwd} is already trusted` };
+    }
 
-    grant(cwd) {
-      const config = read();
-      if (!config) {
-        return {
-          ok: false,
-          message: existsSync(path)
-            ? `${path} is not readable JSON; left alone`
-            : `claude has not run on this machine yet, so it will ask you the first time`,
-        };
-      }
-      if (this.state(cwd) === "trusted") return { ok: true, message: `${cwd} is already trusted` };
+    const entries = projects(config);
+    config.projects = entries;
+    for (const projectPath of yield* paths(cwd)) {
+      const current = entries[projectPath];
+      const updated: YamlMap = { mcpServers: {} };
+      if (isYamlMap(current)) Object.assign(updated, current);
+      updated.hasTrustDialogAccepted = true;
+      entries[projectPath] = updated;
+    }
 
-      const projects = (config.projects ??= {});
-      for (const p of paths(cwd)) {
-        // `mcpServers` is the one field every entry claude writes has.
-        projects[p] = { mcpServers: {}, ...(projects[p] ?? {}), hasTrustDialogAccepted: true };
-      }
+    const backup = pathService.join(backupDir, "claude.json.bak");
+    yield* fs.copyFile(path, backup);
+    const tmp = `${path}.herdr-${globalThis.process.pid}`;
+    yield* fs.writeFileString(tmp, `${Schema.encodeSync(ClaudeConfigJson)(config)}\n`);
+    const info = yield* fs.stat(path);
+    yield* fs.chmod(tmp, info.mode & 0o777);
+    yield* fs.rename(tmp, path);
 
-      const backup = join(backupDir, "claude.json.bak");
-      copyFileSync(path, backup);
-      // Rename so a reader never sees a half-written config — and carry the original
-      // mode over with it, because a rename replaces the file, permissions and all.
-      const tmp = `${path}.herdr-${process.pid}`;
-      writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`);
-      chmodSync(tmp, statSync(path).mode & 0o777);
-      renameSync(tmp, path);
+    if ((yield* state(cwd)) !== "trusted") {
+      yield* fs.copyFile(backup, path);
+      return { ok: false, message: `could not record trust for ${cwd}; ${path} restored` };
+    }
+    return {
+      ok: true,
+      message: `trusted ${cwd} for claude (previous config saved to ${backup})`,
+    };
+  });
 
-      if (this.state(cwd) !== "trusted") {
-        copyFileSync(backup, path);
-        return { ok: false, message: `could not record trust for ${cwd}; ${path} restored` };
-      }
-      return { ok: true, message: `trusted ${cwd} for claude (previous config saved to ${backup})` };
-    },
-  };
+  return { state, grant };
 }

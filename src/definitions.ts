@@ -1,12 +1,10 @@
 // Workflow and Persona definitions across the three Layers: baseline (this repo),
 // the user's plugin config dir, and the project's .herdr/. Later wins by name.
 
-import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { basename, join } from "node:path";
 import { skillsIn } from "./template";
 import { unsafePathComponent } from "./naming";
-import { parseDocument, YamlError } from "./yaml";
+import { isYamlMap, parseDocument, YamlError, type YamlMap, type YamlValue } from "./yaml";
+import { Crypto, Data, Effect, FileSystem, Path, Result, Schema, type PlatformError } from "effect";
 import { DEFAULT_MODEL, HARNESSES, harnessNames, knownModel, modelHint } from "./harness";
 import type { Defaults } from "./config";
 
@@ -17,12 +15,22 @@ export interface Layer {
   dir: string;
 }
 
-export const INPUT_STRATEGIES = ["goal", "plan-dir", "work-source", "diff-target", "ticket", "flag"] as const;
+export const INPUT_STRATEGIES = [
+  "goal",
+  "plan-dir",
+  "work-source",
+  "diff-target",
+  "ticket",
+  "flag",
+] as const;
 
 /** What a step may declare it needs before it is worth starting. */
 export const STEP_REQUIREMENTS = ["gitlab", "mr-target"] as const;
-export type StepRequirement = (typeof STEP_REQUIREMENTS)[number];
-export type InputStrategy = (typeof INPUT_STRATEGIES)[number];
+export type StepRequirement = string;
+export type InputStrategy = string;
+
+const STEP_REQUIREMENT_SET: ReadonlySet<string> = new Set(STEP_REQUIREMENTS);
+const INPUT_STRATEGY_SET: ReadonlySet<string> = new Set(INPUT_STRATEGIES);
 
 export interface Variant {
   harness: string;
@@ -129,9 +137,13 @@ export function isStale(def: Provenance): boolean {
   return Boolean(def.forkedFromHash && def.parentHash && def.forkedFromHash !== def.parentHash);
 }
 
-export function contentHash(text: string): string {
-  return createHash("sha1").update(text).digest("hex").slice(0, 12);
-}
+export const contentHash = Effect.fn("Definitions.contentHash")(function* (text: string) {
+  const crypto = yield* Crypto.Crypto;
+  const bytes = yield* crypto.digest("SHA-1", new TextEncoder().encode(text));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 12);
+});
 
 export interface Definitions {
   workflows: Map<string, WorkflowDef>;
@@ -144,232 +156,294 @@ export interface Definitions {
  * by skills.sh, so a missing one is a missing prerequisite — like the harness binary
  * — not a definition error to work around.
  */
-export function skillDirs(env: { home: string; cwd: string }): string[] {
-  return [join(env.cwd, ".agents", "skills"), join(env.home, ".agents", "skills")];
-}
+export const skillDirs = Effect.fn("Definitions.skillDirs")(function* (env: {
+  home: string;
+  cwd: string;
+}) {
+  const path = yield* Path.Path;
+  return [path.join(env.cwd, ".agents", "skills"), path.join(env.home, ".agents", "skills")];
+});
 
-export function layers(env: { pluginRoot: string; configDir: string; cwd: string }): Layer[] {
+export const layers = Effect.fn("Definitions.layers")(function* (env: {
+  pluginRoot: string;
+  configDir: string;
+  cwd: string;
+}) {
+  const path = yield* Path.Path;
   return [
-    { name: "baseline", dir: env.pluginRoot },
-    { name: "user", dir: env.configDir },
-    { name: "project", dir: join(env.cwd, ".herdr") },
+    { name: "baseline" as const, dir: env.pluginRoot },
+    { name: "user" as const, dir: env.configDir },
+    { name: "project" as const, dir: path.join(env.cwd, ".herdr") },
   ];
-}
+});
 
-function markdownFiles(dir: string): string[] {
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir)
+const markdownFiles = Effect.fn("Definitions.markdownFiles")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if (!(yield* fs.exists(dir))) return [];
+  return (yield* fs.readDirectory(dir))
     .filter((f) => f.endsWith(".md"))
     .sort()
-    .map((f) => join(dir, f));
+    .map((f) => path.join(dir, f));
+});
+
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+const isBoolean = Schema.is(Schema.Boolean);
+
+function str(value: YamlValue | undefined, fallback = ""): string {
+  return value !== undefined && isString(value) ? value : fallback;
 }
 
-function str(v: unknown, fallback = ""): string {
-  return typeof v === "string" ? v : fallback;
-}
-
-function parseWorkflow(path: string, layer: LayerName): WorkflowDef {
-  const { data, body } = parseDocument(readFileSync(path, "utf8"));
-  const stem = basename(path, ".md");
-  const rawInputs = (data.inputs ?? {}) as Record<string, unknown>;
+const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
+  file: string,
+  layer: LayerName,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const text = yield* fs.readFileString(file);
+  const { data, body } = yield* Effect.try({
+    try: () => parseDocument(text),
+    catch: (cause) => (cause instanceof YamlError ? cause : new Error(String(cause))),
+  });
+  const stem = path.basename(file, ".md");
+  const rawInputs = data.inputs !== undefined && isYamlMap(data.inputs) ? data.inputs : {};
   const inputs: Record<string, InputStrategy> = {};
-  for (const [key, value] of Object.entries(rawInputs)) {
-    inputs[key] = str(value) as InputStrategy;
-  }
+  for (const [key, value] of Object.entries(rawInputs)) inputs[key] = str(value);
   const rawSteps = Array.isArray(data.steps) ? data.steps : [];
-  const steps: StepDef[] = rawSteps.map((raw, i) => {
-    const s = (raw ?? {}) as Record<string, unknown>;
-    const step: StepDef = { id: str(s.id, `step-${i + 1}`) };
-    if (typeof s.persona === "string") step.persona = s.persona;
-    if (typeof s.harness === "string") step.harness = s.harness;
-    if (typeof s.model === "string") step.model = s.model;
-    if (typeof s.effort === "string") step.effort = s.effort;
-    if (typeof s.fresh === "boolean") step.fresh = s.fresh;
-    if (typeof s.output === "string") step.output = s.output;
-    if (typeof s.agent === "string") step.agent = s.agent;
-    if (typeof s.skill === "string") step.skill = s.skill;
-    if (typeof s.use === "string") step.use = s.use;
-    if (Array.isArray(s.parallel)) {
-      step.parallel = s.parallel.map((v) => {
-        const o = (v ?? {}) as Record<string, unknown>;
-        const variant: Variant = { harness: str(o.harness), model: str(o.model) };
-        if (typeof o.effort === "string") variant.effort = o.effort;
+  const steps: StepDef[] = rawSteps.map((raw, index) => {
+    const stepData = isYamlMap(raw) ? raw : {};
+    const step: StepDef = { id: str(stepData.id, `step-${index + 1}`) };
+    if (isString(stepData.persona)) step.persona = stepData.persona;
+    if (isString(stepData.harness)) step.harness = stepData.harness;
+    if (isString(stepData.model)) step.model = stepData.model;
+    if (isString(stepData.effort)) step.effort = stepData.effort;
+    if (isBoolean(stepData.fresh)) step.fresh = stepData.fresh;
+    if (isString(stepData.output)) step.output = stepData.output;
+    if (isString(stepData.agent)) step.agent = stepData.agent;
+    if (isString(stepData.skill)) step.skill = stepData.skill;
+    if (isString(stepData.use)) step.use = stepData.use;
+    if (Array.isArray(stepData.parallel)) {
+      step.parallel = stepData.parallel.map((rawVariant) => {
+        const variantData = isYamlMap(rawVariant) ? rawVariant : {};
+        const variant: Variant = {
+          harness: str(variantData.harness),
+          model: str(variantData.model),
+        };
+        if (isString(variantData.effort)) variant.effort = variantData.effort;
         return variant;
       });
     }
-    if (typeof s.prompt === "string") step.promptSection = s.prompt;
-    if (s.standalone === true) step.standalone = true;
-    const requires = parseRequires(s.requires);
+    if (isString(stepData.prompt)) step.promptSection = stepData.prompt;
+    if (stepData.standalone === true) step.standalone = true;
+    const requires = parseRequires(stepData.requires);
     if (requires) step.requires = requires;
-    if (typeof s.fan_in === "string") step.fanIn = s.fan_in;
-    if (Array.isArray(s.choices)) step.choices = s.choices.map(parseChoice);
-    if (s.repeat && typeof s.repeat === "object") {
-      const r = s.repeat as Record<string, unknown>;
-      step.repeat = { from: str(r.from) };
-      if (typeof r.back_to === "string") step.repeat.back_to = r.back_to;
-      if (typeof r.max === "number") step.repeat.max = r.max;
+    if (isString(stepData.fan_in)) step.fanIn = stepData.fan_in;
+    if (Array.isArray(stepData.choices)) step.choices = stepData.choices.map(parseChoice);
+    if (isYamlMap(stepData.repeat)) {
+      step.repeat = { from: str(stepData.repeat.from) };
+      if (isString(stepData.repeat.back_to)) step.repeat.back_to = stepData.repeat.back_to;
+      if (isNumber(stepData.repeat.max)) step.repeat.max = stepData.repeat.max;
     }
     return step;
   });
 
-  return {
+  const workflow: WorkflowDef = {
     name: str(data.name, stem),
     title: str(data.title, str(data.name, stem)),
     description: str(data.description),
     inputs,
-    maxIterations: typeof data.max_iterations === "number" ? data.max_iterations : null,
+    maxIterations: isNumber(data.max_iterations) ? data.max_iterations : null,
     steps,
     body,
-    path,
+    path: file,
     layer,
-    ...(typeof data.extends === "string" ? { extends: data.extends } : {}),
-    ...(typeof data.forked_from_hash === "string" ? { forkedFromHash: data.forked_from_hash } : {}),
   };
-}
+  if (isString(data.extends)) workflow.extends = data.extends;
+  if (isString(data.forked_from_hash)) workflow.forkedFromHash = data.forked_from_hash;
+  return workflow;
+});
 
-function parseRound(raw: Record<string, unknown>): RoundDef | undefined {
-  if (typeof raw.prompt !== "string") return undefined;
+function parseRound(raw: YamlMap): RoundDef | undefined {
+  if (!isString(raw.prompt)) return undefined;
   const round: RoundDef = { section: raw.prompt, prompt: "" };
-  for (const key of ["agent", "persona", "harness", "model", "effort", "output", "skill"] as const) {
-    if (typeof raw[key] === "string") round[key] = raw[key] as string;
+  for (const key of [
+    "agent",
+    "persona",
+    "harness",
+    "model",
+    "effort",
+    "output",
+    "skill",
+  ] as const) {
+    const value = raw[key];
+    if (isString(value)) round[key] = value;
   }
-  if (typeof raw.fresh === "boolean") round.fresh = raw.fresh;
+  if (isBoolean(raw.fresh)) round.fresh = raw.fresh;
   return round;
 }
 
 /** `requires: gitlab` and `requires: [mr-target, gitlab]` are the same thing. */
-function parseRequires(raw: unknown): StepRequirement[] | undefined {
-  if (typeof raw === "string") return [raw as StepRequirement];
-  if (Array.isArray(raw)) return raw.filter((r) => typeof r === "string") as StepRequirement[];
+function parseRequires(raw: YamlValue | undefined): StepRequirement[] | undefined {
+  if (raw !== undefined && isString(raw)) return [raw];
+  if (Array.isArray(raw)) return raw.filter(isString);
   return undefined;
 }
 
-function parseChoice(raw: unknown): ChoiceDef {
-  const c = (raw ?? {}) as Record<string, unknown>;
-  const choice: ChoiceDef = { title: str(c.title) };
-  if (typeof c.run === "string") choice.run = c.run;
-  if (c.stop === true) choice.stop = true;
-  if (c.post === true) choice.post = true;
-  if (typeof c.handoff === "string") choice.handoff = c.handoff;
-  if (typeof c.unless === "string") choice.unless = c.unless;
-  const requires = parseRequires(c.requires);
+function parseChoice(raw: YamlValue): ChoiceDef {
+  const choiceData = isYamlMap(raw) ? raw : {};
+  const choice: ChoiceDef = { title: str(choiceData.title) };
+  if (isString(choiceData.run)) choice.run = choiceData.run;
+  if (choiceData.stop === true) choice.stop = true;
+  if (choiceData.post === true) choice.post = true;
+  if (isString(choiceData.handoff)) choice.handoff = choiceData.handoff;
+  if (isString(choiceData.unless)) choice.unless = choiceData.unless;
+  const requires = parseRequires(choiceData.requires);
   if (requires) choice.requires = requires;
-  if (typeof c.max === "number") choice.max = c.max;
-  const round = parseRound(c);
+  if (isNumber(choiceData.max)) choice.max = choiceData.max;
+  const round = parseRound(choiceData);
   if (round) choice.round = round;
-  if (c.inputs && typeof c.inputs === "object") {
+  if (isYamlMap(choiceData.inputs)) {
     const inputs: Record<string, string> = {};
-    for (const [k, v] of Object.entries(c.inputs as Record<string, unknown>)) inputs[k] = str(v);
+    for (const [key, value] of Object.entries(choiceData.inputs)) inputs[key] = str(value);
     choice.inputs = inputs;
   }
-  if (c.config && typeof c.config === "object") {
-    const cfg = c.config as Record<string, unknown>;
-    choice.config = { key: str(cfg.key), question: str(cfg.question) };
+  if (isYamlMap(choiceData.config)) {
+    choice.config = { key: str(choiceData.config.key), question: str(choiceData.config.question) };
   }
-  if (c.follow_up && typeof c.follow_up === "object") {
-    const follow = parseRound(c.follow_up as Record<string, unknown>);
+  if (isYamlMap(choiceData.follow_up)) {
+    const follow = parseRound(choiceData.follow_up);
     if (follow) choice.followUp = follow;
   }
   return choice;
 }
 
-function parsePersona(path: string, layer: LayerName): PersonaDef {
-  const { data, body } = parseDocument(readFileSync(path, "utf8"));
-  return {
-    name: str(data.name, basename(path, ".md")),
+const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
+  file: string,
+  layer: LayerName,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const text = yield* fs.readFileString(file);
+  const { data, body } = yield* Effect.try({
+    try: () => parseDocument(text),
+    catch: (cause) => (cause instanceof YamlError ? cause : new Error(String(cause))),
+  });
+  const persona: PersonaDef = {
+    name: str(data.name, path.basename(file, ".md")),
     description: str(data.description),
-    ...(typeof data.extends === "string" ? { extends: data.extends } : {}),
-    ...(typeof data.forked_from_hash === "string" ? { forkedFromHash: data.forked_from_hash } : {}),
     body,
-    path,
+    path: file,
     layer,
   };
-}
+  if (isString(data.extends)) persona.extends = data.extends;
+  if (isString(data.forked_from_hash)) persona.forkedFromHash = data.forked_from_hash;
+  return persona;
+});
 
-export function loadDefinitions(ls: Layer[]): Definitions {
+export const loadDefinitions = Effect.fn("Definitions.loadDefinitions")(function* (ls: Layer[]) {
   const workflows = new Map<string, WorkflowDef>();
   const personas = new Map<string, PersonaDef>();
   const errors: string[] = [];
 
   for (const layer of ls) {
-    loadLayer(workflows, layer, "workflows", parseWorkflow, mergeWorkflow, errors);
-    loadLayer(personas, layer, "personas", parsePersona, mergePersona, errors);
+    yield* loadLayer(workflows, layer, "workflows", parseWorkflow, mergeWorkflow, errors);
+    yield* loadLayer(personas, layer, "personas", parsePersona, mergePersona, errors);
   }
 
   return { workflows, personas, errors };
-}
+});
 
 /**
  * One layer of one kind. A file that names no parent replaces what the layers below
  * had; a file with `extends:` changes only what it names, and is resolved in
  * dependency order so a parent in the same layer is merged before its child.
  */
-function loadLayer<T extends Provenance & { name: string }>(
+const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
+  T extends Provenance & { name: string },
+>(
   into: Map<string, T>,
   layer: Layer,
   kind: "workflows" | "personas",
-  parse: (path: string, layer: LayerName) => T,
+  parse: (
+    path: string,
+    layer: LayerName,
+  ) => Effect.Effect<
+    T,
+    YamlError | Error | PlatformError.PlatformError,
+    FileSystem.FileSystem | Path.Path
+  >,
   merge: (parent: T, child: T) => T,
   errors: string[],
-): void {
+) {
+  const pathSvc = yield* Path.Path;
   const parsed = new Map<string, T>();
-  for (const path of markdownFiles(join(layer.dir, kind))) {
-    try {
-      const def = parse(path, layer.name);
-      parsed.set(def.name, def);
-    } catch (e) {
-      errors.push(`${path}: ${e instanceof YamlError ? e.message : (e as Error).message}`);
-    }
+  for (const path of yield* markdownFiles(pathSvc.join(layer.dir, kind))) {
+    const result = yield* Effect.result(parse(path, layer.name));
+    if (Result.isSuccess(result)) parsed.set(result.success.name, result.success);
+    else
+      errors.push(
+        `${path}: ${result.failure instanceof YamlError ? result.failure.message : String(result.failure)}`,
+      );
   }
 
   const settled = new Set<string>();
-  const resolve = (name: string, chain: string[]): void => {
-    if (settled.has(name)) return;
-    const def = parsed.get(name);
-    if (!def) return;
-    settled.add(name);
+  const resolve = (
+    name: string,
+    chain: string[],
+  ): Effect.Effect<
+    void,
+    PlatformError.PlatformError,
+    FileSystem.FileSystem | Path.Path | Crypto.Crypto
+  > =>
+    Effect.gen(function* () {
+      if (settled.has(name)) return;
+      const def = parsed.get(name);
+      if (!def) return;
+      settled.add(name);
 
-    // What this file is built on, before it goes in: the same name from a lower
-    // layer is the usual case, and another name in this layer is resolved first.
-    const parentName = def.extends;
-    if (!parentName) {
-      into.set(name, withParentHash(def, into));
-      return;
-    }
-    if (chain.includes(parentName)) {
-      errors.push(`${def.path}: extends cycle (${[...chain, parentName].join(" → ")})`);
-      return;
-    }
-    if (parsed.has(parentName) && parentName !== name) resolve(parentName, [...chain, name]);
+      // What this file is built on, before it goes in: the same name from a lower
+      // layer is the usual case, and another name in this layer is resolved first.
+      const parentName = def.extends;
+      if (!parentName) {
+        into.set(name, yield* withParentHash(def, into));
+        return;
+      }
+      if (chain.includes(parentName)) {
+        errors.push(`${def.path}: extends cycle (${[...chain, parentName].join(" → ")})`);
+        return;
+      }
+      if (parsed.has(parentName) && parentName !== name)
+        yield* resolve(parentName, [...chain, name]);
 
-    const parent = into.get(parentName);
-    if (!parent) {
-      errors.push(`${def.path}: extends "${parentName}", which no layer below this one defines`);
-      return;
-    }
-    into.set(name, withParentHash(merge(parent, def), into));
-  };
-  for (const name of parsed.keys()) resolve(name, []);
-}
+      const parent = into.get(parentName);
+      if (!parent) {
+        errors.push(`${def.path}: extends "${parentName}", which no layer below this one defines`);
+        return;
+      }
+      into.set(name, yield* withParentHash(merge(parent, def), into));
+    });
+  for (const name of parsed.keys()) yield* resolve(name, []);
+});
 
 /**
  * The hash of the file this definition shadows, so a full copy whose original has
  * moved on can be spotted. Only a full copy carries a hash to compare against.
  */
-function withParentHash<T extends Provenance & { name: string }>(def: T, into: Map<string, T>): T {
+const withParentHash = Effect.fn("Definitions.withParentHash")(function* <
+  T extends Provenance & { name: string },
+>(def: T, into: Map<string, T>) {
   if (!def.forkedFromHash) return def;
   const shadowed = into.get(def.name);
-  const parentHash = shadowed ? readHash(shadowed.path) : undefined;
+  const parentHash = shadowed ? yield* readHash(shadowed.path) : undefined;
   return parentHash ? { ...def, parentHash } : def;
-}
+});
 
-function readHash(path: string): string | undefined {
-  try {
-    return contentHash(readFileSync(path, "utf8"));
-  } catch {
-    return undefined;
-  }
-}
+const readHash = Effect.fn("Definitions.readHash")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const text = yield* fs.readFileString(path).pipe(Effect.catch(() => Effect.succeed(undefined)));
+  return text === undefined ? undefined : yield* contentHash(text);
+});
 
 /** The parent with the child's frontmatter and sections laid over it. */
 function mergeWorkflow(parent: WorkflowDef, child: WorkflowDef): WorkflowDef {
@@ -432,7 +506,12 @@ function mergeBody(parent: string, child: string): string {
 }
 
 /** Body split into a shared preamble plus one section per `## <step-id>` heading. */
-export function bodySections(body: string): { preamble: string; sections: Map<string, string> } {
+export interface BodySections {
+  preamble: string;
+  sections: Map<string, string>;
+}
+
+export function bodySections(body: string): BodySections {
   const sections = new Map<string, string>();
   const lines = body.split("\n");
   const preamble: string[] = [];
@@ -483,27 +562,45 @@ export interface ResolvedWorkflow {
  * the command that installs it: a run that starts without them wastes an agent's
  * whole turn discovering the same thing.
  */
-function missingSkills(wf: ResolvedWorkflow, defs: Definitions, dirs: string[]): string[] {
+const missingSkills = Effect.fn("Definitions.missingSkills")(function* (
+  wf: ResolvedWorkflow,
+  defs: Definitions,
+  dirs: string[],
+) {
   const asked = new Map<string, string>();
   const note = (name: string, by: string) => {
     if (!asked.has(name)) asked.set(name, by);
   };
   for (const step of wf.steps) {
     if (step.skill) note(step.skill, `${wf.name} step "${step.id}"`);
-    for (const name of skillsIn(`${step.preamble}\n${step.prompt}`)) note(name, `${wf.name} step "${step.id}"`);
+    for (const name of skillsIn(`${step.preamble}\n${step.prompt}`))
+      note(name, `${wf.name} step "${step.id}"`);
     const persona = step.persona ? defs.personas.get(step.persona) : undefined;
     if (persona) for (const name of skillsIn(persona.body)) note(name, `persona "${persona.name}"`);
   }
 
   const errors: string[] = [];
   for (const [name, by] of asked) {
-    if (dirs.some((dir) => existsSync(join(dir, name)))) continue;
-    errors.push(`${by}: the skill "${name}" is not installed — run \`npx skills add ${name}\``);
+    let installed = false;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    for (const dir of dirs) {
+      if (yield* fs.exists(path.join(dir, name))) {
+        installed = true;
+        break;
+      }
+    }
+    if (!installed)
+      errors.push(`${by}: the skill "${name}" is not installed — run \`npx skills add ${name}\``);
   }
   return errors;
-}
+});
 
-export class DefinitionError extends Error {}
+export class DefinitionError extends Data.TaggedError("DefinitionError")<{ message: string }> {
+  constructor(message: string) {
+    super({ message });
+  }
+}
 
 /** The error for one Workflow-controlled name, or nothing when it is safe. */
 function nameErrors(where: string, label: string, value: string, names: string): string[] {
@@ -525,7 +622,7 @@ export function resolveWorkflow(
   const steps = expand(wf, defs, [wf.name], inherited);
   // An embedded workflow brings its own Inputs, but the embedder's come first and
   // win: the first one names the Run.
-  const inputs: Record<string, InputStrategy> = { ...wf.inputs };
+  const inputs = { ...wf.inputs };
   for (const [key, strategy] of Object.entries(inherited)) {
     if (!(key in inputs)) inputs[key] = strategy;
   }
@@ -558,7 +655,9 @@ function expand(
     if (step.standalone && chain.length > 1) continue;
     if (step.use) {
       if (chain.includes(step.use)) {
-        throw new DefinitionError(`workflow "${chain[0]}" embeds "${step.use}" in a cycle: ${[...chain, step.use].join(" -> ")}`);
+        throw new DefinitionError(
+          `workflow "${chain[0]}" embeds "${step.use}" in a cycle: ${[...chain, step.use].join(" -> ")}`,
+        );
       }
       const inner = defs.workflows.get(step.use);
       if (!inner) {
@@ -588,9 +687,10 @@ function expand(
           embedded.length === 1 || child.id === step.id ? step.id : `${step.id}.${child.id}`,
         ]),
       );
-      const rebase = (id: string | undefined) => (id !== undefined ? (ids.get(id) ?? id) : undefined);
+      const rebase = (id: string | undefined) =>
+        id !== undefined ? (ids.get(id) ?? id) : undefined;
       for (const child of embedded) {
-        out.push({
+        const resolvedChild: ResolvedStep = {
           ...child,
           ...override,
           // The embedding step's own settings win over the embedded defaults.
@@ -606,21 +706,25 @@ function expand(
           agent: step.agent ?? rebase(child.agent),
           fanIn: step.fanIn ?? rebase(child.fanIn),
           skill: step.skill ?? child.skill,
-          ...(child.choices ? { choices: child.choices.map((c) => rebaseChoice(c, rebase)) } : {}),
-        });
+        };
+        if (child.choices)
+          resolvedChild.choices = child.choices.map((choice) => rebaseChoice(choice, rebase));
+        out.push(resolvedChild);
       }
       continue;
     }
     const section = step.promptSection ?? step.id;
-    out.push({
+    const resolvedStep: ResolvedStep = {
       ...step,
       origin: wf.name,
       // A body with no headings IS the prompt, so it must not also be the preamble.
       preamble: single ? "" : preamble,
       prompt: single ? wf.body : (sections.get(section) ?? ""),
       known: [...sections.keys()],
-      ...(step.choices ? { choices: step.choices.map((c) => resolveChoice(c, sections)) } : {}),
-    });
+    };
+    if (step.choices)
+      resolvedStep.choices = step.choices.map((choice) => resolveChoice(choice, sections));
+    out.push(resolvedStep);
   }
   return out;
 }
@@ -629,11 +733,9 @@ type Rebase = (id: string | undefined) => string | undefined;
 
 function rebaseRepeat(repeat: StepDef["repeat"], rebase: Rebase): StepDef["repeat"] {
   if (!repeat) return undefined;
-  return {
-    ...repeat,
-    from: rebase(repeat.from)!,
-    ...(repeat.back_to ? { back_to: rebase(repeat.back_to)! } : {}),
-  };
+  const rebased = { ...repeat, from: rebase(repeat.from)! };
+  if (repeat.back_to) rebased.back_to = rebase(repeat.back_to)!;
+  return rebased;
 }
 
 function rebaseRound(round: RoundDef, rebase: Rebase): RoundDef {
@@ -641,11 +743,10 @@ function rebaseRound(round: RoundDef, rebase: Rebase): RoundDef {
 }
 
 function rebaseChoice(choice: ChoiceDef, rebase: Rebase): ChoiceDef {
-  return {
-    ...choice,
-    ...(choice.round ? { round: rebaseRound(choice.round, rebase) } : {}),
-    ...(choice.followUp ? { followUp: rebaseRound(choice.followUp, rebase) } : {}),
-  };
+  const rebased = { ...choice };
+  if (choice.round) rebased.round = rebaseRound(choice.round, rebase);
+  if (choice.followUp) rebased.followUp = rebaseRound(choice.followUp, rebase);
+  return rebased;
 }
 
 function resolveRound(round: RoundDef, sections: Map<string, string>): RoundDef {
@@ -653,24 +754,23 @@ function resolveRound(round: RoundDef, sections: Map<string, string>): RoundDef 
 }
 
 function resolveChoice(choice: ChoiceDef, sections: Map<string, string>): ChoiceDef {
-  return {
-    ...choice,
-    ...(choice.round ? { round: resolveRound(choice.round, sections) } : {}),
-    ...(choice.followUp ? { followUp: resolveRound(choice.followUp, sections) } : {}),
-  };
+  const resolved = { ...choice };
+  if (choice.round) resolved.round = resolveRound(choice.round, sections);
+  if (choice.followUp) resolved.followUp = resolveRound(choice.followUp, sections);
+  return resolved;
 }
 
-export function validateWorkflow(
+export const validateWorkflow = Effect.fn("Definitions.validateWorkflow")(function* (
   wf: ResolvedWorkflow,
   defs: Definitions,
   defaults: Defaults,
   /** Where installed skills live; omit to skip the check (tests without a fixture). */
   skills?: string[],
-): string[] {
+) {
   const errors: string[] = [];
   const where = (stepId: string) => `workflow "${wf.name}" step "${stepId}"`;
 
-  if (skills) errors.push(...missingSkills(wf, defs, skills));
+  if (skills) errors.push(...(yield* missingSkills(wf, defs, skills)));
 
   // The workflow's own name becomes the Run directory, so it is held to the same
   // rule as every other Workflow-controlled name.
@@ -678,14 +778,16 @@ export function validateWorkflow(
 
   for (const step of wf.steps) {
     for (const need of step.requires ?? []) {
-      if (!(STEP_REQUIREMENTS as readonly string[]).includes(need)) {
-        errors.push(`${where(step.id)}: unknown requires "${need}" (known: ${STEP_REQUIREMENTS.join(", ")})`);
+      if (!STEP_REQUIREMENT_SET.has(need)) {
+        errors.push(
+          `${where(step.id)}: unknown requires "${need}" (known: ${STEP_REQUIREMENTS.join(", ")})`,
+        );
       }
     }
   }
 
   for (const [input, strategy] of Object.entries(wf.inputs)) {
-    if (!(INPUT_STRATEGIES as readonly string[]).includes(strategy)) {
+    if (!INPUT_STRATEGY_SET.has(strategy)) {
       errors.push(
         `workflow "${wf.name}" input "${input}": unknown strategy "${strategy}" (known: ${INPUT_STRATEGIES.join(", ")})`,
       );
@@ -701,13 +803,27 @@ export function validateWorkflow(
 
     errors.push(...nameErrors(where(step.id), "step id", step.id, "a directory inside the Run"));
     if (step.output) {
-      errors.push(...nameErrors(where(step.id), `output "${step.output}"`, step.output, "a file inside the Step directory"));
+      errors.push(
+        ...nameErrors(
+          where(step.id),
+          `output "${step.output}"`,
+          step.output,
+          "a file inside the Step directory",
+        ),
+      );
     }
 
     const isChoice = (step.choices?.length ?? 0) > 0;
     const personaName = step.persona;
     if (personaName) {
-      errors.push(...nameErrors(where(step.id), `persona "${personaName}"`, personaName, "the Persona file in the Run"));
+      errors.push(
+        ...nameErrors(
+          where(step.id),
+          `persona "${personaName}"`,
+          personaName,
+          "the Persona file in the Run",
+        ),
+      );
     }
     if (!personaName && !isChoice) errors.push(`${where(step.id)}: no persona`);
     else if (personaName && !defs.personas.has(personaName)) {
@@ -743,7 +859,9 @@ export function validateWorkflow(
       errors.push(`${where(step.id)}: repeat.from "${step.repeat.from}" is not an earlier step`);
     }
     if (step.repeat?.back_to && !earlier(wf, step, step.repeat.back_to)) {
-      errors.push(`${where(step.id)}: repeat.back_to "${step.repeat.back_to}" is not an earlier step`);
+      errors.push(
+        `${where(step.id)}: repeat.back_to "${step.repeat.back_to}" is not an earlier step`,
+      );
     }
     if (step.agent && step.fresh) {
       errors.push(`${where(step.id)}: agent and fresh are mutually exclusive`);
@@ -751,7 +869,7 @@ export function validateWorkflow(
   }
 
   return errors;
-}
+});
 
 function variantErrors(where: string, combo: Variant, defaults: Defaults): string[] {
   const adapter = HARNESSES[combo.harness];
@@ -795,12 +913,15 @@ function choiceErrors(
       errors.push(`${where}: needs exactly one of run, prompt, post, handoff or stop`);
     }
     for (const need of choice.requires ?? []) {
-      if (!(STEP_REQUIREMENTS as readonly string[]).includes(need)) {
-        errors.push(`${where}: unknown requires "${need}" (known: ${STEP_REQUIREMENTS.join(", ")})`);
+      if (!STEP_REQUIREMENT_SET.has(need)) {
+        errors.push(
+          `${where}: unknown requires "${need}" (known: ${STEP_REQUIREMENTS.join(", ")})`,
+        );
       }
     }
     // `handoff` is already "when that role is live"; saying it twice is a mistake.
-    if (choice.handoff && choice.unless) errors.push(`${where}: handoff is already conditional on a live agent`);
+    if (choice.handoff && choice.unless)
+      errors.push(`${where}: handoff is already conditional on a live agent`);
 
     for (const round of [choice.round, choice.followUp]) {
       if (!round) continue;
@@ -812,14 +933,23 @@ function choiceErrors(
       const persona = round.persona ?? step.persona;
       if (!round.agent && !persona) errors.push(`${where}: needs a persona or an agent`);
       if (persona) {
-        errors.push(...nameErrors(where, `persona "${persona}"`, persona, "the Persona file in the Run"));
+        errors.push(
+          ...nameErrors(where, `persona "${persona}"`, persona, "the Persona file in the Run"),
+        );
       }
       if (persona && !defs.personas.has(persona)) {
         const known = [...defs.personas.keys()].sort().join(", ") || "none";
         errors.push(`${where}: unknown persona "${persona}" (known: ${known})`);
       }
       if (round.output) {
-        errors.push(...nameErrors(where, `output "${round.output}"`, round.output, "a file inside the Step directory"));
+        errors.push(
+          ...nameErrors(
+            where,
+            `output "${round.output}"`,
+            round.output,
+            "a file inside the Step directory",
+          ),
+        );
       }
       if (round.agent && !earlier(wf, step, round.agent)) {
         errors.push(`${where}: agent "${round.agent}" is not an earlier step`);
@@ -844,11 +974,12 @@ function chainErrors(
   defs: Definitions,
   defaults: Defaults,
 ): string[] {
+  if (!choice.run) return [`${where}: chained choice has no workflow`];
   let child: ResolvedWorkflow;
   try {
-    child = resolveWorkflow(choice.run!, defs, defaults);
-  } catch (e) {
-    return [`${where}: ${(e as Error).message}`];
+    child = resolveWorkflow(choice.run, defs, defaults);
+  } catch (cause) {
+    return [`${where}: ${cause instanceof DefinitionError ? cause.message : String(cause)}`];
   }
   const unknown = Object.keys(choice.inputs ?? {}).filter((k) => !(k in child.inputs));
   return unknown.length === 0
@@ -878,16 +1009,18 @@ function earlier(wf: ResolvedWorkflow, step: ResolvedStep, id: string): boolean 
 export function stepVariants(step: StepDef, defaults: Defaults): Variant[] {
   const effortOf = (own?: string) => own ?? step.effort ?? defaults.effort;
   if (step.parallel && step.parallel.length > 0) {
-    return step.parallel.map((v) => withEffort(
-      {
-        harness: v.harness || step.harness || defaults.harness,
-        model: resolvedModel(
-          v.harness || step.harness || defaults.harness,
-          v.model || step.model || defaults.model,
-        ),
-      },
-      effortOf(v.effort),
-    ));
+    return step.parallel.map((v) =>
+      withEffort(
+        {
+          harness: v.harness || step.harness || defaults.harness,
+          model: resolvedModel(
+            v.harness || step.harness || defaults.harness,
+            v.model || step.model || defaults.model,
+          ),
+        },
+        effortOf(v.effort),
+      ),
+    );
   }
   return [
     withEffort(

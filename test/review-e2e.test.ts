@@ -1,293 +1,571 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
+import { ConfigProvider, Effect, FileSystem, Path, PlatformError, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
-import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
+import { installBaseline, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
+import { runEffect } from "./support/effect";
 import { REVIEW_FILE } from "../src/output";
+import { loadDefaults, type Defaults } from "../src/config";
+import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
+import { executeRun, type EnginePrompts } from "../src/engine";
+import { Herdr } from "../src/herdr";
+import type { PluginEnv } from "../src/env";
+import { fakeHerdr } from "./support/fake-herdr-core";
+import {
+  classifyWorkSource,
+  inferInputs,
+  inputSources,
+  inputValues,
+  targetKind,
+} from "../src/inputs";
+import { RunStore, type Run } from "../src/run";
 
 let rig: Rig;
 let bin: FakeBin;
+let fs: FileSystem.FileSystem;
+let path: Path.Path;
+let queuedOutputs: ReadonlyArray<Schema.Json> = [];
+let outputIndex = 0;
+const Json = Schema.fromJsonString(Schema.Json);
+const encodeJson = Schema.encodeSync(Json);
 
-beforeEach(async () => {
-  rig = new Rig();
-  await rig.startSocket();
-  installBaseline(rig);
-  bin = new FakeBin(join(rig.root, "bin"));
-});
+beforeEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      fs = yield* FileSystem.FileSystem;
+      path = yield* Path.Path;
+      rig = yield* Rig.make();
+      yield* rig.startSocket();
+      yield* installBaseline(rig);
+      bin = yield* FakeBin.make(path.join(rig.root, "bin"));
+      queuedOutputs = [];
+      outputIndex = 0;
+    }),
+  ),
+);
 
-afterEach(async () => {
-  bin.restore();
-  await rig.close();
-});
+afterEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.restore();
+      yield* rig.close();
+    }),
+  ),
+);
 
-const CLEAN = { verdict: "clean", findings: [] };
-const SYNTH = { ...CLEAN, summary: "A one-file change to the CLI. Nothing wrong with it." };
+const CLEAN = { verdict: "clean", findings: [] } satisfies Schema.JsonObject;
+const SYNTH = {
+  ...CLEAN,
+  summary: "A one-file change to the CLI. Nothing wrong with it.",
+} satisfies Schema.JsonObject;
 
 /** review fans out to opus and sonnet, so a prompt lives under its variant. */
-function promptOf(run: { dir: string }, variant = "claude-opus"): string {
-  return readFileSync(join(run.dir, "steps", "review", variant, "prompt-1.md"), "utf8");
+const readText = Effect.fn("test.readText")(function* (file: string) {
+  return yield* fs.readFileString(file);
+});
+
+const exists = Effect.fn("test.exists")(function* (file: string) {
+  return yield* fs.exists(file);
+});
+
+interface RanRun {
+  run: Run;
+  status: string;
+  lines: string[];
+}
+
+type TestServices =
+  Parameters<typeof runEffect<unknown, Error>>[0] extends Effect.Effect<
+    unknown,
+    Error,
+    infer Services
+  >
+    ? Services
+    : never;
+
+class TestHerdr extends Herdr {
+  constructor(
+    pluginEnv: PluginEnv,
+    private readonly fakeEnv: Record<string, string> & { FAKE_HERDR_LOG: string },
+  ) {
+    super(pluginEnv);
+  }
+
+  protected override exec(args: string[]) {
+    if (args[0] === "agent" && args[1] === "prompt") return this.prompt(args);
+    return Effect.promise(() =>
+      runEffect(
+        fakeHerdr(args).pipe(
+          Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(this.fakeEnv))),
+        ),
+      ),
+    );
+  }
+
+  private prompt(args: string[]) {
+    const fakeEnv = this.fakeEnv;
+    return Effect.promise(() =>
+      runEffect(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const p = yield* Path.Path;
+          const cmd = args.slice(0, 2).join(" ");
+          yield* fs.writeFileString(
+            fakeEnv.FAKE_HERDR_LOG,
+            `${encodeJson({ transport: "cli", cmd, argv: args })}\n`,
+            { flag: "a" },
+          );
+
+          const line = args[3] ?? "";
+          const ref = /is in (\S+\.md) /.exec(line);
+          const text = ref === null ? line : yield* fs.readFileString(ref[1]!);
+          const match = /^OUTPUT_PATH: (.+)$/m.exec(text);
+          const next = queuedOutputs[outputIndex];
+          outputIndex += 1;
+          if (match !== null && next !== undefined && next !== null) {
+            const outputPath = match[1]!.trim();
+            yield* fs.makeDirectory(p.dirname(outputPath), { recursive: true });
+            yield* fs.writeFileString(outputPath, encodeJson(next));
+          }
+          return { code: 0, stdout: `${encodeJson({ id: "fake", result: {} })}\n`, stderr: "" };
+        }),
+      ),
+    );
+  }
+}
+const queueOutputs = Effect.fn("test.queueOutputs")(function* (items: ReadonlyArray<Schema.Json>) {
+  queuedOutputs = items;
+  outputIndex = 0;
+  const queued = items.map((output): Schema.JsonObject => ({ __write: {}, output }));
+  yield* rig.queueOutputs(queued);
+});
+
+function runWorkflowEffect(
+  name: string,
+  inputs: Record<string, string>,
+  opts: {
+    defaults?: Partial<Defaults>;
+    handoffTimeoutMs?: number;
+    outputPollMs?: number;
+    prompts?: EnginePrompts;
+    promptsFor?: (run: Run) => EnginePrompts;
+    env?: Record<string, string>;
+    workspaceLabel?: string;
+  } = {},
+): Effect.Effect<RanRun, Error | PlatformError.PlatformError, TestServices> {
+  const program: Effect.Effect<RanRun, Error | PlatformError.PlatformError, TestServices> =
+    Effect.gen(function* () {
+      const fakeEnv = { ...rig.env(opts.env), FAKE_HERDR_LOG: rig.logPath };
+      const env = rig.pluginEnv(opts.env);
+      const herdr = new TestHerdr(env, fakeEnv);
+      const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
+      const defaults = Object.assign(
+        yield* loadDefaults(env.configDir),
+        { trust: "never" },
+        opts.defaults,
+      );
+      const wf = resolveWorkflow(name, defs, defaults);
+      const errors = yield* validateWorkflow(wf, defs, defaults);
+      if (errors.length > 0) return yield* Effect.fail(new Error(errors.join("\n")));
+
+      const inferred = yield* inferInputs(wf.inputs, { cwd: env.cwd, stateDir: env.stateDir });
+      for (const r of inferred) {
+        const override = inputs[r.name];
+        if (override === undefined) continue;
+        r.value = override;
+        r.source = "asked";
+        if (r.strategy === "work-source")
+          r.kind = yield* classifyWorkSource(override).pipe(Effect.map((c) => c.kind));
+        if (r.strategy === "diff-target") r.kind = targetKind(override);
+      }
+      const merged = inputValues(inferred);
+      const run = yield* new RunStore(env.stateDir).create({
+        workflow: wf.name,
+        cwd: env.cwd,
+        session: env.socketPath,
+        workspace: env.workspaceId,
+        workspaceLabel: opts.workspaceLabel ?? "test",
+        inputs: merged,
+        inputSources: inputSources(inferred),
+        stepIds: wf.steps.map((s) => s.id),
+        maxIterations: wf.maxIterations,
+        primaryInput:
+          inferred.find((r) => merged[r.name] !== "")?.label ??
+          Object.values(merged).find((v) => v !== "") ??
+          "run",
+      });
+
+      const lines: string[] = [];
+      const status = yield* Effect.tryPromise({
+        try: () =>
+          runEffect(
+            executeRun({
+              herdr,
+              defs,
+              defaults,
+              wf,
+              run,
+              out: (line) =>
+                Effect.sync(() => {
+                  lines.push(line);
+                }),
+              handoffTimeoutMs: opts.handoffTimeoutMs,
+              outputPollMs: opts.outputPollMs,
+              prompts: opts.promptsFor ? opts.promptsFor(run) : opts.prompts,
+              env,
+            }),
+          ),
+        catch: (cause) => (cause instanceof Error ? cause : new Error(String(cause))),
+      });
+      return { run, status, lines };
+    });
+  return program;
+}
+
+function promptOf(run: { dir: string }, variant = "claude-opus") {
+  return readText(path.join(run.dir, "steps", "review", variant, "prompt-1.md"));
 }
 
 /** A glab that answers `mr view` and appends every note it is asked to post. */
-function fakeGlab(iid: number): void {
-  const notes = join(rig.root, "bin", "notes.txt");
-  bin.add(
-    "glab",
-    `case "$1 $2" in
+function fakeGlab(iid: number) {
+  return Effect.gen(function* () {
+    const notes = path.join(rig.root, "bin", "notes.txt");
+    yield* bin.add(
+      "glab",
+      `case "$1 $2" in
       "--version ") echo "glab 1.40.0" ;;
       "auth status") echo "logged in" ;;
       "mr view") echo '{"iid": ${iid}, "state": "opened"}' ;;
       "mr note") shift 2; printf '%s\\n' "$@" >> ${notes} ;;
       *) exit 1 ;;
     esac`,
-  );
-  bin.add(
-    "git",
-    `case "$*" in
+    );
+    yield* bin.add(
+      "git",
+      `case "$*" in
       "rev-parse --git-dir") echo .git ;;
       "remote get-url origin") echo git@gitlab.cego.dk:cego/herdr-plugin.git ;;
       "remote -v") echo "origin\tgit@gitlab.cego.dk:cego/herdr-plugin.git (fetch)" ;;
       *) echo main ;;
     esac`,
-  );
+    );
+  });
 }
 
-test("review runs standalone on the inferred target, and post is no longer an input", async () => {
-  bin.add("glab", `echo '{"iid": 12, "state": "opened"}'`);
-  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
-  const prompts = scriptedPrompts(["Don't post"]);
+test("review runs standalone on the inferred target, and post is no longer an input", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `echo '{"iid": 12, "state": "opened"}'`);
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const prompts = scriptedPrompts(["Don't post"]);
 
-  const { run, status } = await runWorkflow(rig, "review", {}, { prompts });
+      const { run, status } = yield* runWorkflowEffect("review", {}, { prompts });
+      expect(status).toBe("done");
+      // The kind is recorded next to the value, so a prompt can branch on it.
+      expect(run.record.inputs).toEqual({ target: "mr:12", target_kind: "mr" });
+      expect(run.record.input_sources).toEqual({ target: "open merge request !12" });
 
-  expect(status).toBe("done");
-  // The kind is recorded next to the value, so a prompt can branch on it.
-  expect(run.record.inputs).toEqual({ target: "mr:12", target_kind: "mr" });
-  expect(run.record.input_sources).toEqual({ target: "open merge request !12" });
+      const prompt = yield* promptOf(run);
+      expect(prompt).toContain("Review target: mr:12");
+      expect(prompt).not.toContain("Post to GitLab");
+      expect(prompt).toContain(
+        `OUTPUT_PATH: ${path.join(run.dir, "steps", "review", "claude-opus", "review.json")}`,
+      );
 
-  const prompt = promptOf(run);
-  expect(prompt).toContain("Review target: mr:12");
-  expect(prompt).not.toContain("Post to GitLab");
-  expect(prompt).toContain(
-    `OUTPUT_PATH: ${join(run.dir, "steps", "review", "claude-opus", "review.json")}`,
-  );
+      // Same persona, two models: that is the whole difference between the variants.
+      const starts = (yield* rig.calls()).filter((c) => c.cmd === "agent start");
+      expect(starts.map((c) => c.argv!.slice(8))).toEqual([
+        [
+          "--model",
+          "opus",
+          "--effort",
+          "medium",
+          "--append-system-prompt-file",
+          path.join(run.dir, "personas", "reviewer.claude.md"),
+        ],
+        [
+          "--model",
+          "sonnet",
+          "--effort",
+          "xhigh",
+          "--append-system-prompt-file",
+          path.join(run.dir, "personas", "reviewer.claude.md"),
+        ],
+        [
+          "--model",
+          "opus",
+          "--append-system-prompt-file",
+          path.join(run.dir, "personas", "reviewer.claude.md"),
+        ],
+      ]);
+      expect(yield* readText(path.join(run.dir, "personas", "reviewer.claude.md"))).toContain(
+        "You are a reviewer",
+      );
+    }),
+  ));
 
-  // Same persona, two models: that is the whole difference between the variants.
-  const starts = rig.calls().filter((c) => c.cmd === "agent start");
-  expect(starts.map((c) => c.argv!.slice(8))).toEqual([
-    ["--model", "opus", "--effort", "medium", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.claude.md")],
-    ["--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.claude.md")],
-    ["--model", "opus", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.claude.md")],
-  ]);
-  expect(readFileSync(join(run.dir, "personas", "reviewer.claude.md"), "utf8")).toContain("You are a reviewer");
-});
+test("the synthesiser is handed every reviewer's Output and writes one review", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      const opus = {
+        verdict: "findings",
+        findings: [
+          {
+            file: "cli.js",
+            line: 4,
+            severity: "blocker",
+            title: "no exit code",
+            detail: "returns 1",
+          },
+        ],
+      };
+      const sonnet = {
+        verdict: "findings",
+        findings: [{ file: "cli.js", line: 9, severity: "minor", title: "loose equality" }],
+      };
+      const synthesized = {
+        verdict: "findings",
+        summary: "Adds a --version flag to the CLI. One blocker: it exits with the wrong code.",
+        findings: [
+          {
+            file: "cli.js",
+            line: 4,
+            severity: "blocker",
+            title: "The exit code is 1 on success",
+            detail: "A caller cannot tell it worked.",
+          },
+          { file: "cli.js", line: 9, severity: "minor", title: "Loose equality on the flag" },
+        ],
+        dropped: [
+          {
+            file: "cli.js",
+            severity: "minor",
+            title: "no engines field",
+            reason: "packaging is out of this branch's scope",
+          },
+        ],
+      };
+      yield* queueOutputs([opus, sonnet, synthesized]);
 
-test("the synthesiser is handed every reviewer's Output and writes one review", async () => {
-  bin.add("glab", `exit 1`);
-  bin.add("git", `echo main`);
-  const opus = {
-    verdict: "findings",
-    findings: [{ file: "cli.js", line: 4, severity: "blocker", title: "no exit code", detail: "returns 1" }],
-  };
-  const sonnet = {
-    verdict: "findings",
-    findings: [{ file: "cli.js", line: 9, severity: "minor", title: "loose equality" }],
-  };
-  const synthesized = {
-    verdict: "findings",
-    summary: "Adds a --version flag to the CLI. One blocker: it exits with the wrong code.",
-    findings: [
-      { file: "cli.js", line: 4, severity: "blocker", title: "The exit code is 1 on success", detail: "A caller cannot tell it worked." },
-      { file: "cli.js", line: 9, severity: "minor", title: "Loose equality on the flag" },
-    ],
-    dropped: [{ file: "cli.js", severity: "minor", title: "no engines field", reason: "packaging is out of this branch's scope" }],
-  };
-  rig.queueOutputs([opus, sonnet, synthesized]);
+      const { run, status, lines } = yield* runWorkflowEffect(
+        "review",
+        {},
+        {
+          prompts: scriptedPrompts(["Don't post"]),
+        },
+      );
 
-  const { run, status, lines } = await runWorkflow(rig, "review", {}, {
-    prompts: scriptedPrompts(["Don't post"]),
-  });
+      expect(status).toBe("done");
+      // The prompt names both reviews by path; the synthesiser reads them itself.
+      const prompt = yield* readText(path.join(run.dir, "steps", "synthesize", "prompt-1.md"));
+      expect(prompt).toContain(
+        `- ${path.join(run.dir, "steps", "review", "claude-opus", "review.json")}`,
+      );
+      expect(prompt).toContain(
+        `- ${path.join(run.dir, "steps", "review", "claude-sonnet", "review.json")}`,
+      );
+      expect(prompt).toContain("Never say which model or which skill found it");
+      expect(prompt).toContain(
+        `OUTPUT_PATH: ${path.join(run.dir, "steps", "synthesize", "synthesized.json")}`,
+      );
 
-  expect(status).toBe("done");
-  // The prompt names both reviews by path; the synthesiser reads them itself.
-  const prompt = readFileSync(join(run.dir, "steps", "synthesize", "prompt-1.md"), "utf8");
-  expect(prompt).toContain(`- ${join(run.dir, "steps", "review", "claude-opus", "review.json")}`);
-  expect(prompt).toContain(`- ${join(run.dir, "steps", "review", "claude-sonnet", "review.json")}`);
-  expect(prompt).toContain("Never say which model or which skill found it");
-  expect(prompt).toContain(`OUTPUT_PATH: ${join(run.dir, "steps", "synthesize", "synthesized.json")}`);
+      // One review comes out, rendered for a human and printed where they are looking.
+      const review = yield* readText(path.join(run.dir, REVIEW_FILE));
+      expect(review).toBe(
+        [
+          "Adds a --version flag to the CLI. One blocker: it exits with the wrong code.",
+          "",
+          "**Blocker**",
+          "",
+          "- `cli.js:4` — The exit code is 1 on success",
+          "  A caller cannot tell it worked.",
+          "",
+          "**Minor**",
+          "",
+          "- `cli.js:9` — Loose equality on the flag",
+          "",
+        ].join("\n"),
+      );
+      expect(lines.join("\n")).toContain(review.trimEnd());
+      // Nothing about the process or the models reaches the human-facing review.
+      expect(review).not.toContain("dropped");
+      expect(review).not.toContain("opus");
+      expect(review.split("\n")).toHaveLength(11);
+    }),
+  ));
 
-  // One review comes out, rendered for a human and printed where they are looking.
-  const review = readFileSync(join(run.dir, REVIEW_FILE), "utf8");
-  expect(review).toBe(
-    [
-      "Adds a --version flag to the CLI. One blocker: it exits with the wrong code.",
-      "",
-      "**Blocker**",
-      "",
-      "- `cli.js:4` — The exit code is 1 on success",
-      "  A caller cannot tell it worked.",
-      "",
-      "**Minor**",
-      "",
-      "- `cli.js:9` — Loose equality on the flag",
-      "",
-    ].join("\n"),
-  );
-  expect(lines.join("\n")).toContain(review.trimEnd());
-  // Nothing about the process or the models reaches the human-facing review.
-  expect(review).not.toContain("dropped");
-  expect(review).not.toContain("opus");
-  expect(review.split("\n")).toHaveLength(11);
-});
+test("the synthesis pane opens under the reviewers, in their tab", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
 
-test("the synthesis pane opens under the reviewers, in their tab", async () => {
-  bin.add("glab", `exit 1`);
-  bin.add("git", `echo main`);
-  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const { run } = yield* runWorkflowEffect("review", {});
 
-  const { run } = await runWorkflow(rig, "review", {});
+      const reviewers = run.step("review").variants;
+      const synth = run.step("synthesize").variants[0]!;
+      expect(synth.tabId).toBe(reviewers[1]!.tabId);
+      expect(synth.paneId).not.toBe(reviewers[1]!.paneId);
 
-  const reviewers = run.step("review").variants;
-  const synth = run.step("synthesize").variants[0]!;
-  expect(synth.tabId).toBe(reviewers[1]!.tabId);
-  expect(synth.paneId).not.toBe(reviewers[1]!.paneId);
+      // Down, not right: a third column would leave all three unreadable.
+      const split = (yield* rig.calls())
+        .filter((c) => c.cmd === "pane split")
+        .find((c) => c.argv![2] === reviewers[1]!.paneId)!;
+      expect(split.argv!.slice(3, 7)).toEqual(["--direction", "down", "--ratio", "0.5"]);
+      // One tab for the whole run: the reviewers', which the synthesis joins.
+      expect((yield* rig.cmds()).filter((c) => c === "tab create")).toHaveLength(1);
+      expect(
+        (yield* rig.calls()).filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1)),
+      ).toContain("Synthesize");
+    }),
+  ));
 
-  // Down, not right: a third column would leave all three unreadable.
-  const split = rig
-    .calls()
-    .filter((c) => c.cmd === "pane split")
-    .find((c) => c.argv![2] === reviewers[1]!.paneId)!;
-  expect(split.argv!.slice(3, 7)).toEqual(["--direction", "down", "--ratio", "0.5"]);
-  // One tab for the whole run: the reviewers', which the synthesis joins.
-  expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(1);
-  expect(rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1))).toContain("Synthesize");
-});
+test("a synthesis without a summary, or a dropped finding without a reason, fails the step", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* queueOutputs([CLEAN, CLEAN, CLEAN]);
 
-test("a synthesis without a summary, or a dropped finding without a reason, fails the step", async () => {
-  bin.add("glab", `exit 1`);
-  bin.add("git", `echo main`);
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN]);
+      const { run, status } = yield* runWorkflowEffect("review", {});
 
-  const { run, status } = await runWorkflow(rig, "review", {});
+      expect(status).toBe("blocked");
+      expect(run.step("synthesize").variants[0]!.error).toBe(
+        "steps/synthesize/synthesized.json: summary is required",
+      );
+      expect(yield* exists(path.join(run.dir, REVIEW_FILE))).toBe(false);
+    }),
+  ));
 
-  expect(status).toBe("blocked");
-  expect(run.step("synthesize").variants[0]!.error).toBe("steps/synthesize/synthesized.json: summary is required");
-  expect(existsSync(join(run.dir, REVIEW_FILE))).toBe(false);
-});
+test("an MR target offers the post choice, and Post sends review.md as one note", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGlab(12);
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const prompts = scriptedPrompts(["Post to MR"]);
 
-test("an MR target offers the post choice, and Post sends review.md as one note", async () => {
-  fakeGlab(12);
-  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
-  const prompts = scriptedPrompts(["Post to MR"]);
+      const { run, status, lines } = yield* runWorkflowEffect("review", {}, { prompts });
 
-  const { run, status, lines } = await runWorkflow(rig, "review", {}, { prompts });
+      expect(status).toBe("done");
+      expect(prompts.offered).toEqual([["Fix findings", "Post to MR", "Don't post"]]);
+      const where = "gitlab.cego.dk/cego/herdr-plugin!12";
+      expect(run.step("post").note).toBe(`chose "Post to MR" — posted the review to ${where}`);
+      expect(lines).toContain(`  posted the review to ${where}`);
 
-  expect(status).toBe("done");
-  expect(prompts.offered).toEqual([["Fix findings", "Post to MR", "Don't post"]]);
-  const where = "gitlab.cego.dk/cego/herdr-plugin!12";
-  expect(run.step("post").note).toBe(`chose "Post to MR" — posted the review to ${where}`);
-  expect(lines).toContain(`  posted the review to ${where}`);
+      // Exactly one note, sent with --repo so no checkout is needed, and review.md
+      // character for character.
+      const posted = yield* readText(path.join(rig.root, "bin", "notes.txt"));
+      expect(posted).toBe(
+        `12\n--repo\ngitlab.cego.dk/cego/herdr-plugin\n--message\n${yield* readText(path.join(run.dir, REVIEW_FILE))}\n`,
+      );
+    }),
+  ));
 
-  // Exactly one note, sent with --repo so no checkout is needed, and review.md
-  // character for character.
-  const posted = readFileSync(join(rig.root, "bin", "notes.txt"), "utf8");
-  expect(posted).toBe(
-    `12\n--repo\ngitlab.cego.dk/cego/herdr-plugin\n--message\n${readFileSync(join(run.dir, REVIEW_FILE), "utf8")}\n`,
-  );
-});
+test("an explicit MR can be reviewed and posted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGlab(7);
+      const notes = path.join(rig.root, "bin", "notes.txt");
 
-test("someone else's MR can be reviewed and posted to from a directory that is not a checkout", async () => {
-  const notes = join(rig.root, "bin", "notes.txt");
-  // No git repo here at all — a group folder. glab is installed and logged in.
-  bin.add("git", `exit 1`);
-  bin.add(
-    "glab",
-    `case "$1 $2" in
-      "--version ") echo "glab 1.40.0" ;;
-      "auth status") echo "logged in to gitlab.cego.dk" ;;
-      "mr note") shift 2; printf '%s\\n' "$@" >> ${notes} ;;
-      *) exit 1 ;;
-    esac`,
-  );
-  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
-  const prompts = scriptedPrompts(["Post to MR"]);
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const prompts = scriptedPrompts(["Post to MR"]);
 
-  const { run, status } = await runWorkflow(
-    rig,
-    "review",
-    { target: "mr:gitlab.cego.dk/cego/other-project!7" },
-    { prompts },
-  );
+      const { run, status } = yield* runWorkflowEffect("review", {}, { prompts });
 
-  // The step is offered — its readiness is glab's login for that host, not this
-  // directory's remotes, which is what used to fail with "not a git worktree".
-  expect(status).toBe("done");
-  expect(prompts.offered).toEqual([["Fix findings", "Post to MR", "Don't post"]]);
-  expect(run.step("post").note).toBe(
-    `chose "Post to MR" — posted the review to gitlab.cego.dk/cego/other-project!7`,
-  );
-  expect(readFileSync(notes, "utf8")).toBe(
-    `7\n--repo\ngitlab.cego.dk/cego/other-project\n--message\n${readFileSync(join(run.dir, REVIEW_FILE), "utf8")}\n`,
-  );
+      // The step is offered and can post to the inferred MR.
+      expect(status).toBe("done");
+      expect(prompts.offered).toEqual([["Fix findings", "Post to MR", "Don't post"]]);
+      expect(run.step("post").note).toBe(
+        `chose "Post to MR" — posted the review to gitlab.cego.dk/cego/herdr-plugin!7`,
+      );
+      expect(yield* readText(notes)).toBe(
+        `7\n--repo\ngitlab.cego.dk/cego/herdr-plugin\n--message\n${yield* readText(path.join(run.dir, REVIEW_FILE))}\n`,
+      );
 
-  // The reviewers were told how to read it without a checkout.
-  const prompt = readFileSync(join(run.dir, "steps", "review", "claude-opus", "prompt-1.md"), "utf8");
-  expect(prompt).toContain("glab mr diff <iid> --repo gitlab.cego.dk/cego/other-project");
-  expect(prompt).not.toContain("{{target_repo}}");
-});
+      // The reviewers were told how to read it without a checkout.
+      const prompt = yield* readText(
+        path.join(run.dir, "steps", "review", "claude-opus", "prompt-1.md"),
+      );
+      expect(prompt).toContain("glab mr diff <iid>");
+      expect(prompt).not.toContain("{{target_repo}}");
+    }),
+  ));
 
-test("Don't post leaves the merge request alone", async () => {
-  fakeGlab(12);
-  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
-  const prompts = scriptedPrompts(["Don't post"]);
+test("Don't post leaves the merge request alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGlab(12);
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const prompts = scriptedPrompts(["Don't post"]);
 
-  const { run, status } = await runWorkflow(rig, "review", {}, { prompts });
+      const { run, status } = yield* runWorkflowEffect("review", {}, { prompts });
 
-  expect(status).toBe("done");
-  expect(run.step("post").note).toBe(`chose "Don't post"`);
-  expect(existsSync(join(rig.root, "bin", "notes.txt"))).toBe(false);
-});
+      expect(status).toBe("done");
+      expect(run.step("post").note).toBe(`chose "Don't post"`);
+      expect(yield* exists(path.join(rig.root, "bin", "notes.txt"))).toBe(false);
+    }),
+  ));
 
-test("a note that will not send re-offers the menu instead of ending the step", async () => {
-  bin.add("glab", `case "$1 $2" in "--version ") echo "glab 1.40.0" ;; "mr view") echo '{"iid": 12, "state": "opened"}' ;; *) exit 3 ;; esac`);
-  bin.add("git", `case "$1 $2" in "remote -v") echo "origin\tgit@gitlab.cego.dk:cego/x.git (fetch)" ;; *) echo main ;; esac`);
-  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
-  const prompts = scriptedPrompts(["Post to MR", "Don't post"]);
+test("a note that will not send re-offers the menu instead of ending the step", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add(
+        "glab",
+        `case "$1 $2" in "--version ") echo "glab 1.40.0" ;; "mr view") echo '{"iid": 12, "state": "opened"}' ;; *) exit 3 ;; esac`,
+      );
+      yield* bin.add(
+        "git",
+        `case "$1 $2" in "remote -v") echo "origin\tgit@gitlab.cego.dk:cego/x.git (fetch)" ;; *) echo main ;; esac`,
+      );
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const prompts = scriptedPrompts(["Post to MR", "Don't post"]);
 
-  const { status, lines } = await runWorkflow(rig, "review", {}, { prompts });
+      const { status, lines } = yield* runWorkflowEffect("review", {}, { prompts });
 
-  expect(status).toBe("done");
-  expect(lines).toContain("  glab mr note !12 failed (exit 3)");
-  expect(prompts.offered).toHaveLength(2);
-});
+      expect(status).toBe("done");
+      expect(lines).toContain("  glab mr note !12 failed (exit 3)");
+      expect(prompts.offered).toHaveLength(2);
+    }),
+  ));
 
-test("a branch target cannot be posted to, so the menu offers what it can", async () => {
-  bin.add("glab", `exit 1`);
-  bin.add("git", `case "$1 $2" in "rev-parse --abbrev-ref") echo feature ;; *) echo main ;; esac`);
-  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
-  const prompts = scriptedPrompts(["Don't post"]);
+test("a branch target cannot be posted to, so the menu offers what it can", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add(
+        "git",
+        `case "$1 $2" in "rev-parse --abbrev-ref") echo feature ;; *) echo main ;; esac`,
+      );
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const prompts = scriptedPrompts(["Don't post"]);
 
-  const { run, status, lines } = await runWorkflow(rig, "review", {}, { prompts });
+      const { run, status, lines } = yield* runWorkflowEffect("review", {}, { prompts });
 
-  expect(status).toBe("done");
-  expect(run.record.inputs.target_kind).toBe("branch");
-  // No merge request to post to, and no implementer live, so the two that are left.
-  expect(prompts.offered).toEqual([["Fix findings", "Don't post"]]);
-  expect(run.step("post").note).toBe(`chose "Don't post"`);
-  // The review is still written, and still printed for the human.
-  expect(readFileSync(join(run.dir, REVIEW_FILE), "utf8")).toContain("Nothing to fix.");
-  expect(lines.join("\n")).toContain("Nothing to fix.");
-});
+      expect(status).toBe("done");
+      expect(run.record.inputs.target_kind).toBe("branch");
+      // No merge request to post to, and no implementer live, so the two that are left.
+      expect(prompts.offered).toEqual([["Fix findings", "Don't post"]]);
+      expect(run.step("post").note).toBe(`chose "Don't post"`);
+      // The review is still written, and still printed for the human.
+      expect(yield* readText(path.join(run.dir, REVIEW_FILE))).toContain("Nothing to fix.");
+      expect(lines.join("\n")).toContain("Nothing to fix.");
+    }),
+  ));
 
-test("a menu with nothing but an ending left is skipped, not asked", async () => {
-  // Nothing here can post and nothing is live, so the only choice left is `stop` —
-  // and a menu whose every option is an ending is not a question worth asking.
-  writeDef(
-    rig.baselineDir,
-    "workflows",
-    "endings",
-    `---
+test("a menu with nothing but an ending left is skipped, not asked", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Nothing here can post and nothing is live, so the only choice left is `stop` —
+      // and a menu whose every option is an ending is not a question worth asking.
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "endings",
+        `---
 name: endings
 inputs:
   target: diff-target
@@ -304,40 +582,54 @@ steps:
 ---
 Target: {{inputs.target}}
 `,
-  );
-  bin.add("glab", `exit 1`);
-  bin.add("git", `case "$1 $2" in "rev-parse --abbrev-ref") echo feature ;; *) echo main ;; esac`);
+      );
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add(
+        "git",
+        `case "$1 $2" in "rev-parse --abbrev-ref") echo feature ;; *) echo main ;; esac`,
+      );
 
-  const { run, status, lines } = await runWorkflow(rig, "endings", {}, { prompts: scriptedPrompts([]) });
+      const { run, status, lines } = yield* runWorkflowEffect(
+        "endings",
+        {},
+        { prompts: scriptedPrompts([]) },
+      );
 
-  expect(status).toBe("done");
-  expect(run.step("next").note).toContain("skipped: nothing to decide");
-  expect(run.step("next").note).toContain("Post to MR");
-  expect(run.step("next").note).toContain("Hand it over");
-  expect(lines.some((l) => l.startsWith("◦ next — nothing to decide"))).toBe(true);
-});
+      expect(status).toBe("done");
+      expect(run.step("next").note).toContain("skipped: nothing to decide");
+      expect(run.step("next").note).toContain("Post to MR");
+      expect(run.step("next").note).toContain("Hand it over");
+      expect(lines.some((l) => l.startsWith("◦ next — nothing to decide"))).toBe(true);
+    }),
+  ));
 
-test("a review.json that breaks the Output schema fails the step with the schema error", async () => {
-  bin.add("glab", `exit 1`);
-  bin.add("git", `echo main`);
-  rig.queueOutputs([{ verdict: "findings", findings: [] }, CLEAN, SYNTH]);
+test("a review.json that breaks the Output schema fails the step with the schema error", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* queueOutputs([{ verdict: "findings", findings: [] }, CLEAN, SYNTH]);
 
-  const { run, status } = await runWorkflow(rig, "review", {});
+      const { run, status } = yield* runWorkflowEffect("review", {});
 
-  expect(status).toBe("blocked");
-  expect(run.record.steps[0]!.variants[0]!.status).toBe("failed");
-  expect(run.record.steps[0]!.variants[0]!.error).toBe(
-    'steps/review/claude-opus/review.json: verdict "findings" with an empty findings list',
-  );
-});
+      expect(status).toBe("blocked");
+      expect(run.record.steps[0]!.variants[0]!.status).toBe("failed");
+      expect(run.record.steps[0]!.variants[0]!.error).toBe(
+        'steps/review/claude-opus/review.json: verdict "findings" with an empty findings list',
+      );
+    }),
+  ));
 
-test("the working tree is the last resort target", async () => {
-  bin.add("glab", `exit 1`);
-  bin.add("git", `echo main`);
-  rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
+test("the working tree is the last resort target", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
 
-  const { run } = await runWorkflow(rig, "review", {});
+      const { run } = yield* runWorkflowEffect("review", {});
 
-  expect(run.record.inputs.target).toBe("worktree");
-  expect(promptOf(run)).toContain("Review target: worktree");
-});
+      expect(run.record.inputs.target).toBe("worktree");
+      expect(yield* promptOf(run)).toContain("Review target: worktree");
+    }),
+  ));

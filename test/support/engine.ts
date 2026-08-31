@@ -1,19 +1,44 @@
-import { cpSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { Effect, FileSystem, Path } from "effect";
 import { loadDefaults, type Defaults } from "../../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../../src/definitions";
 import { executeRun } from "../../src/engine";
-import { FakeHerdr, type Rig } from "./recorder";
-import { classifyWorkSource, inferInputs, inputSources, inputValues, targetKind } from "../../src/inputs";
+import { Herdr } from "../../src/herdr";
+import type { PluginEnv } from "../../src/env";
+import { fakeHerdr } from "./fake-herdr-core";
+import type { Rig } from "./recorder";
+import {
+  classifyWorkSource,
+  inferInputs,
+  inputSources,
+  inputValues,
+  targetKind,
+} from "../../src/inputs";
 import { RunStore, type Run } from "../../src/run";
 import type { EnginePrompts } from "../../src/engine";
 import type { PickItem } from "../../src/picker";
 
+class EffectFakeHerdr extends Herdr {
+  constructor(
+    env: PluginEnv,
+    private readonly configEnv: Record<string, string | undefined>,
+  ) {
+    super(env);
+  }
+
+  protected override exec(args: string[]) {
+    return fakeHerdr(args, this.configEnv);
+  }
+}
+
 /** Copies the repo's real baseline definitions into the rig's baseline layer. */
-export function installBaseline(rig: Rig): void {
-  const root = new URL("../../", import.meta.url).pathname;
-  cpSync(`${root}workflows`, `${rig.baselineDir}/workflows`, { recursive: true });
-  cpSync(`${root}personas`, `${rig.baselineDir}/personas`, { recursive: true });
+export function installBaseline(rig: Rig) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const root = yield* path.fromFileUrl(new URL("../../", import.meta.url));
+    yield* fs.copy(path.join(root, "workflows"), path.join(rig.baselineDir, "workflows"));
+    yield* fs.copy(path.join(root, "personas"), path.join(rig.baselineDir, "personas"));
+  });
 }
 
 /** A menu and a keyboard the tests drive: picks by title, answers in order. */
@@ -26,46 +51,58 @@ export function scriptedPrompts(
   return {
     offered,
     asked,
-    async menu(items: PickItem[]) {
+    menu(items: PickItem[]) {
       offered.push(items.map((i) => i.title));
       if (picks.length === 0) {
-        throw new Error(`menu offered [${items.map((i) => i.title).join(", ")}] with no scripted pick left`);
+        return Effect.fail(
+          new Error(
+            `menu offered [${items.map((i) => i.title).join(", ")}] with no scripted pick left`,
+          ),
+        );
       }
       const want = picks.shift()!;
-      if (want === null) return null;
+      if (want === null) return Effect.succeed(null);
       const found = items.find((i) => i.title === want);
       if (!found) {
-        throw new Error(`scripted pick "${want}" was not offered (offered: ${items.map((i) => i.title).join(", ")})`);
+        return Effect.fail(
+          new Error(
+            `scripted pick "${want}" was not offered (offered: ${items.map((i) => i.title).join(", ")})`,
+          ),
+        );
       }
-      return found;
+      return Effect.succeed(found);
     },
-    async ask(question: string) {
+    ask(question: string) {
       asked.push(question);
-      return answers.shift() ?? null;
+      return Effect.succeed(answers.shift() ?? null);
     },
   };
 }
 
 /** A finished `plan` Run with a SPEC, i.e. what `plan-dir` inference looks for. */
-export function plannedRun(rig: Rig, goal: string): string {
-  const env = rig.pluginEnv();
-  const run = new RunStore(env.stateDir).create({
-    workflow: "plan",
-    cwd: env.cwd,
-    inputs: { goal },
-    inputSources: { goal: "asked" },
-    stepIds: ["grill"],
-    maxIterations: 5,
-    primaryInput: goal,
+export function plannedRun(rig: Rig, goal: string) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const env = rig.pluginEnv();
+    const run = yield* new RunStore(env.stateDir).create({
+      workflow: "plan",
+      cwd: env.cwd,
+      inputs: { goal },
+      inputSources: { goal: "asked" },
+      stepIds: ["grill"],
+      maxIterations: 5,
+      primaryInput: goal,
+    });
+    run.step("grill").status = "done";
+    run.record.status = "done";
+    yield* run.save();
+    const dir = path.join(run.dir, "plan");
+    yield* fs.makeDirectory(path.join(dir, "issues"), { recursive: true });
+    yield* fs.writeFileString(path.join(dir, "SPEC.md"), `# ${goal}\n`);
+    yield* fs.writeFileString(path.join(dir, "issues", "01-first.md"), "# 01: first\n");
+    return dir;
   });
-  run.step("grill").status = "done";
-  run.record.status = "done";
-  run.save();
-  const dir = join(run.dir, "plan");
-  mkdirSync(join(dir, "issues"), { recursive: true });
-  writeFileSync(join(dir, "SPEC.md"), `# ${goal}\n`);
-  writeFileSync(join(dir, "issues", "01-first.md"), "# 01: first\n");
-  return dir;
 }
 
 export interface RanRun {
@@ -75,7 +112,7 @@ export interface RanRun {
 }
 
 /** Everything the picker does after the human has answered, then the engine. */
-export async function runWorkflow(
+export function runWorkflow(
   rig: Rig,
   name: string,
   inputs: Record<string, string>,
@@ -89,59 +126,69 @@ export async function runWorkflow(
     env?: Record<string, string>;
     workspaceLabel?: string;
   } = {},
-): Promise<RanRun> {
-  const env = rig.pluginEnv(opts.env);
-  const herdr = new FakeHerdr(env);
-  const defs = loadDefinitions(layers(env));
-  const defaults = { ...loadDefaults(env.configDir), ...opts.defaults };
-  const wf = resolveWorkflow(name, defs, defaults);
-  const errors = validateWorkflow(wf, defs, defaults);
-  if (errors.length > 0) throw new Error(errors.join("\n"));
+) {
+  return Effect.gen(function* () {
+    const configEnv = rig.env(opts.env);
+    const env = rig.pluginEnv(opts.env);
+    const herdr = new EffectFakeHerdr(env, configEnv);
+    const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
+    const defaults = Object.assign(yield* loadDefaults(env.configDir), opts.defaults);
+    const wf = resolveWorkflow(name, defs, defaults);
+    const errors = yield* validateWorkflow(wf, defs, defaults);
+    if (errors.length > 0) return yield* Effect.fail(new Error(errors.join("\n")));
 
-  const inferred = await inferInputs(wf.inputs, { cwd: env.cwd, stateDir: env.stateDir });
-  for (const r of inferred) {
-    const override = inputs[r.name];
-    if (override === undefined) continue;
-    r.value = override;
-    r.source = "asked";
-    // An overridden Input still owes the prompts its kind, as the picker would.
-    if (r.strategy === "work-source") r.kind = classifyWorkSource(override).kind;
-    if (r.strategy === "diff-target") r.kind = targetKind(override);
-  }
-  // Through the same funnel the picker uses, so a run here has the keys a real one has.
-  const merged = inputValues(inferred);
-  const sources = inputSources(inferred);
+    const inferred = yield* inferInputs(wf.inputs, { cwd: env.cwd, stateDir: env.stateDir });
+    for (const r of inferred) {
+      const override = inputs[r.name];
+      if (override === undefined) continue;
+      r.value = override;
+      r.source = "asked";
+      if (r.strategy === "work-source") {
+        const kind = yield* classifyWorkSource(override).pipe(Effect.map((c) => c.kind));
+        r.kind = kind;
+      }
+      if (r.strategy === "diff-target") {
+        const kind = targetKind(override);
+        r.kind = kind;
+      }
+    }
+    const merged = inputValues(inferred);
+    const sources = inputSources(inferred);
 
-  const run = new RunStore(env.stateDir).create({
-    workflow: wf.name,
-    cwd: env.cwd,
-    session: env.socketPath,
-    workspace: env.workspaceId,
-    workspaceLabel: opts.workspaceLabel ?? "test",
-    inputs: merged,
-    inputSources: sources,
-    stepIds: wf.steps.map((s) => s.id),
-    maxIterations: wf.maxIterations,
-    primaryInput:
-      inferred.find((r) => merged[r.name] !== "")?.label ??
-      Object.values(merged).find((v) => v !== "") ??
-      "run",
-  });
+    const run = yield* new RunStore(env.stateDir).create({
+      workflow: wf.name,
+      cwd: env.cwd,
+      session: env.socketPath,
+      workspace: env.workspaceId,
+      workspaceLabel: opts.workspaceLabel ?? "test",
+      inputs: merged,
+      inputSources: sources,
+      stepIds: wf.steps.map((s) => s.id),
+      maxIterations: wf.maxIterations,
+      primaryInput:
+        inferred.find((r) => merged[r.name] !== "")?.label ??
+        Object.values(merged).find((v) => v !== "") ??
+        "run",
+    });
 
-  const lines: string[] = [];
-  const status = await executeRun({
-    herdr,
-    defs,
-    defaults,
-    wf,
-    run,
-    out: (line) => lines.push(line),
-    handoffTimeoutMs: opts.handoffTimeoutMs,
-    outputPollMs: opts.outputPollMs,
-    prompts: opts.promptsFor ? opts.promptsFor(run) : opts.prompts,
-    env,
-  });
-  return { run, status, lines };
+    const lines: string[] = [];
+    const status = yield* executeRun({
+      herdr,
+      defs,
+      defaults,
+      wf,
+      run,
+      out: (line) =>
+        Effect.sync(() => {
+          lines.push(line);
+        }),
+      handoffTimeoutMs: opts.handoffTimeoutMs,
+      outputPollMs: opts.outputPollMs,
+      prompts: opts.promptsFor ? opts.promptsFor(run) : opts.prompts,
+      env,
+    }).pipe(Effect.catch(() => Effect.succeed("failed")));
+    return { run, status, lines };
+  }).pipe(Effect.mapError((error) => (error instanceof Error ? error : new Error(String(error)))));
 }
 
 export { inferInputs, resolveWorkflow, loadDefinitions, layers };

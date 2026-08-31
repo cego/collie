@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { join } from "node:path";
+import { Effect, Path } from "effect";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
+import { runEffect } from "./support/effect";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { layerSet, writeDef } from "./support/defs";
 import { FALLBACK_DEFAULTS } from "../src/config";
@@ -11,22 +12,31 @@ import { RunStore } from "../src/run";
 let rig: Rig;
 let bin: FakeBin;
 
-beforeEach(async () => {
-  rig = new Rig();
-  await rig.startSocket();
-  installBaseline(rig);
-  bin = new FakeBin(join(rig.root, "bin"));
-  bin.add("glab", `exit 1`);
-  bin.add("git", `echo main`);
-  writeDef(rig.baselineDir, "workflows", "parent", PARENT);
-  writeDef(rig.baselineDir, "workflows", "child", CHILD);
-  writeDef(rig.baselineDir, "workflows", "asker", ASKER);
-});
+beforeEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      rig = yield* Rig.make();
+      yield* rig.startSocket();
+      yield* installBaseline(rig);
+      bin = yield* FakeBin.make(path.join(rig.root, "bin"));
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* writeDef(rig.baselineDir, "workflows", "parent", PARENT);
+      yield* writeDef(rig.baselineDir, "workflows", "child", CHILD);
+      yield* writeDef(rig.baselineDir, "workflows", "asker", ASKER);
+    }),
+  ),
+);
 
-afterEach(async () => {
-  bin.restore();
-  await rig.close();
-});
+afterEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.restore();
+      yield* rig.close();
+    }),
+  ),
+);
 
 const PARENT = `---
 name: parent
@@ -86,88 +96,118 @@ Build {{inputs.goal}}
 
 const CLEAN = { verdict: "clean", findings: [] };
 
-test("a run: choice starts a child run with the forwarded inputs and the parent finishes", async () => {
-  rig.queueOutputs([CLEAN]);
-  const prompts = scriptedPrompts(["Build it now"]);
+function runWorkflowEffect(...args: Parameters<typeof runWorkflow>) {
+  return runWorkflow(...args);
+}
 
-  const { run, status } = await runWorkflow(rig, "parent", { goal: "Add a picker" }, { prompts });
+test("a run: choice starts a child run with the forwarded inputs and the parent finishes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
+      const prompts = scriptedPrompts(["Build it now"]);
 
-  expect(status).toBe("done");
-  expect(run.record.slug).toBe("parent-add-a-picker");
-  expect(run.record.children).toHaveLength(1);
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "parent",
+        { goal: "Add a picker" },
+        { prompts },
+      );
 
-  const child = new RunStore(rig.stateDir).load(run.record.children[0]!);
-  expect(child.record.workflow).toBe("child");
-  expect(child.record.slug).toBe("child-add-a-picker");
-  expect(child.record.parent).toBe(run.id);
-  expect(child.record.cwd).toBe(run.record.cwd);
-  expect(child.record.inputs).toEqual({ plan: `${run.dir}/plan`, post: "false" });
-  expect(child.record.input_sources).toEqual({
-    plan: `chained from ${run.id}`,
-    post: "default",
-  });
-  expect(child.record.steps.map((s) => s.status)).toEqual(["pending"]);
+      expect(status).toBe("done");
+      expect(run.record.slug).toBe("parent-add-a-picker");
+      expect(run.record.children).toHaveLength(1);
 
-  // The child gets its own runner pane, in the same workspace.
-  const opened = rig
-    .calls()
-    .find((c) => c.cmd === "plugin pane" && c.argv!.includes("runner"))!.argv!;
-  expect(opened).toContain("--entrypoint");
-  expect(opened).toContain("runner");
-  expect(opened).toContain(`COLLIE_RUN=${child.id}`);
-  expect(opened).toContain("--workspace");
+      const child = yield* new RunStore(rig.stateDir).load(run.record.children[0]!);
+      expect(child.record.workflow).toBe("child");
+      expect(child.record.slug).toBe("child-add-a-picker");
+      expect(child.record.parent).toBe(run.id);
+      expect(child.record.cwd).toBe(run.record.cwd);
+      expect(child.record.inputs).toEqual({ plan: `${run.dir}/plan`, post: "false" });
+      expect(child.record.input_sources).toEqual({
+        plan: `chained from ${run.id}`,
+        post: "default",
+      });
+      expect(child.record.steps.map((s) => s.status)).toEqual(["pending"]);
 
-  expect(run.step("next").note).toBe(`chose "Build it now" → child run ${child.id}`);
-  expect(run.step("after").status).toBe("pending");
-  expect(run.step("after").note).toContain("not run");
-  expect(run.record.summary).toContain(`Chained: ${child.id}`);
-});
+      // The child gets its own runner pane, in the same workspace.
+      const opened = (yield* rig.calls()).find(
+        (c) => c.cmd === "plugin pane" && c.argv!.includes("runner"),
+      )!.argv!;
+      expect(opened).toContain("--entrypoint");
+      expect(opened).toContain("runner");
+      expect(opened).toContain(`COLLIE_RUN=${child.id}`);
+      expect(opened).toContain("--workspace");
 
-test("resume lists the child on its own and not the finished parent", async () => {
-  rig.queueOutputs([CLEAN]);
+      expect(run.step("next").note).toBe(`chose "Build it now" → child run ${child.id}`);
+      expect(run.step("after").status).toBe("pending");
+      expect(run.step("after").note).toContain("not run");
+      expect(run.record.summary).toContain(`Chained: ${child.id}`);
+    }),
+  ));
 
-  const { run } = await runWorkflow(rig, "parent", { goal: "g" }, { prompts: scriptedPrompts(["Build it now"]) });
+test("resume lists the child on its own and not the finished parent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
 
-  expect(new RunStore(rig.stateDir).resumable().map((r) => r.id)).toEqual(run.record.children);
-});
+      const { run } = yield* runWorkflowEffect(
+        rig,
+        "parent",
+        { goal: "g" },
+        { prompts: scriptedPrompts(["Build it now"]) },
+      );
 
-test("a chained input nobody forwarded is asked for in the runner pane", async () => {
-  rig.queueOutputs([CLEAN]);
-  const prompts = scriptedPrompts(["Ask me"], ["build the picker"]);
+      expect((yield* new RunStore(rig.stateDir).resumable()).map((r) => r.id)).toEqual(
+        run.record.children,
+      );
+    }),
+  ));
 
-  const { run, status } = await runWorkflow(rig, "parent", { goal: "g" }, { prompts });
+test("a chained input nobody forwarded is asked for in the runner pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
+      const prompts = scriptedPrompts(["Ask me"], ["build the picker"]);
 
-  expect(status).toBe("done");
-  expect(prompts.asked).toEqual(["What is the goal?"]);
-  const child = new RunStore(rig.stateDir).load(run.record.children[0]!);
-  expect(child.record.inputs).toEqual({ goal: "build the picker" });
-  expect(child.record.input_sources).toEqual({ goal: "asked" });
-});
+      const { run, status } = yield* runWorkflowEffect(rig, "parent", { goal: "g" }, { prompts });
 
-test("cancelling that question abandons the chain and offers the menu again", async () => {
-  // Two Outputs: the draft, then `after`, which Stop here does not skip.
-  rig.queueOutputs([CLEAN, CLEAN]);
-  const prompts = scriptedPrompts(["Ask me", "Stop here"], []);
+      expect(status).toBe("done");
+      expect(prompts.asked).toEqual(["What is the goal?"]);
+      const child = yield* new RunStore(rig.stateDir).load(run.record.children[0]!);
+      expect(child.record.inputs).toEqual({ goal: "build the picker" });
+      expect(child.record.input_sources).toEqual({ goal: "asked" });
+    }),
+  ));
 
-  const { run, status } = await runWorkflow(rig, "parent", { goal: "g" }, { prompts });
+test("cancelling that question abandons the chain and offers the menu again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Two Outputs: the draft, then `after`, which Stop here does not skip.
+      yield* rig.queueOutputs([CLEAN, CLEAN]);
+      const prompts = scriptedPrompts(["Ask me", "Stop here"], []);
 
-  expect(status).toBe("done");
-  expect(run.record.children).toEqual([]);
-  expect(run.step("after").status).toBe("done");
-  expect(prompts.offered).toHaveLength(2);
-  expect(run.record.choices.map((c) => c.title)).toEqual(["Ask me", "Stop here"]);
-  // No child run: the only plugin pane opened is the workspace's own board.
-  expect(
-    rig.calls().filter((c) => c.cmd === "plugin pane" && c.argv!.includes("runner")),
-  ).toEqual([]);
-});
+      const { run, status } = yield* runWorkflowEffect(rig, "parent", { goal: "g" }, { prompts });
 
-test("an unknown chained workflow or input fails validation before anything opens", () => {
-  writeDef(
-    rig.baselineDir,
-    "workflows",
-    "broken-chain",
-    `---
+      expect(status).toBe("done");
+      expect(run.record.children).toEqual([]);
+      expect(run.step("after").status).toBe("done");
+      expect(prompts.offered).toHaveLength(2);
+      expect(run.record.choices.map((c) => c.title)).toEqual(["Ask me", "Stop here"]);
+      // No child run: the only plugin pane opened is the workspace's own board.
+      expect(
+        (yield* rig.calls()).filter((c) => c.cmd === "plugin pane" && c.argv!.includes("runner")),
+      ).toEqual([]);
+    }),
+  ));
+
+test("an unknown chained workflow or input fails validation before anything opens", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "broken-chain",
+        `---
 name: broken-chain
 steps:
   - id: next
@@ -183,17 +223,21 @@ steps:
 ## next
 menu
 `,
-  );
+      );
 
-  const defs = loadDefinitions(layerSet(rig.baselineDir, rig.configDir, join(rig.projectDir, ".herdr")));
-  const errors = validateWorkflow(
-    resolveWorkflow("broken-chain", defs, FALLBACK_DEFAULTS),
-    defs,
-    FALLBACK_DEFAULTS,
-  );
+      const path = yield* Path.Path;
+      const defs = yield* loadDefinitions(
+        layerSet(rig.baselineDir, rig.configDir, path.join(rig.projectDir, ".herdr")),
+      );
+      const errors = yield* validateWorkflow(
+        resolveWorkflow("broken-chain", defs, FALLBACK_DEFAULTS),
+        defs,
+        FALLBACK_DEFAULTS,
+      );
 
-  expect(errors).toEqual([
-    'workflow "broken-chain" step "next" choice "Nowhere": unknown workflow "nope" (known: architecture, asker, broken-chain, child, implement, parent, plan, review)',
-    'workflow "broken-chain" step "next" choice "Wrong input": workflow "child" has no input(s) spec (known: plan, post)',
-  ]);
-});
+      expect(errors).toEqual([
+        'workflow "broken-chain" step "next" choice "Nowhere": unknown workflow "nope" (known: architecture, asker, broken-chain, child, implement, parent, plan, review)',
+        'workflow "broken-chain" step "next" choice "Wrong input": workflow "child" has no input(s) spec (known: plan, post)',
+      ]);
+    }),
+  ));

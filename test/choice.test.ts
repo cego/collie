@@ -1,25 +1,45 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { Rig } from "./support/recorder";
+import { ConfigProvider, Effect, FileSystem, Path, Schema } from "effect";
+import { FakeHerdr, Rig } from "./support/recorder";
+import { fakeHerdr } from "./support/fake-herdr-core";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { layerSet, writeDef } from "./support/defs";
 import { FALLBACK_DEFAULTS } from "../src/config";
 import { loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
 import { RunStore } from "../src/run";
+import { filePrompts, readChoice } from "../src/driver";
+import { runEffect } from "./support/effect";
+
+const Json = Schema.fromJsonString(Schema.Any);
+const decodeJson = Schema.decodeUnknownSync(Json);
+const encodeJson = Schema.encodeUnknownSync(Json);
+
+Object.defineProperty(FakeHerdr.prototype, "exec", {
+  value(args: string[]) {
+    return fakeHerdr(args).pipe(
+      Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnvRecord(Bun.env))),
+    );
+  },
+});
 
 let rig: Rig;
 
-beforeEach(async () => {
-  rig = new Rig();
-  await rig.startSocket();
-  installBaseline(rig);
-  writeDef(rig.baselineDir, "workflows", "choose", CHOOSE);
-});
+beforeEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      rig = yield* Rig.make();
+      yield* rig.startSocket();
+      yield* installBaseline(rig);
+      yield* writeDef(rig.baselineDir, "workflows", "choose", CHOOSE);
+    }),
+  ),
+);
 
-afterEach(async () => {
-  await rig.close();
-});
+afterEach(() => runEffect(rig.close()));
+
+function runWorkflowEffect(...args: Parameters<typeof runWorkflow>) {
+  return runWorkflow(...args).pipe(Effect.orDie);
+}
 
 const CHOOSE = `---
 name: choose
@@ -86,113 +106,194 @@ const FINDING = {
   findings: [{ severity: "major", title: "no story for the CLI", detail: "SPEC skips it" }],
 };
 
-test("a prompt choice prompts the named agent and offers the menu again", async () => {
-  rig.queueOutputs([CLEAN, CLEAN]);
-  const prompts = scriptedPrompts(["Refine", "Stop here"]);
+test("a headless inbox answer supplies text to an ask Choice", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectory({ prefix: "collie-ask-choice-" });
+      const prompts = filePrompts({
+        dir,
+        run: "ask-choice",
+        step: () => "question",
+        timeoutMs: 1_000,
+        pollMs: 10,
+      });
+      const pending = runEffect(prompts.ask("What should change?").pipe(Effect.orDie));
 
-  const { run, status, lines } = await runWorkflow(rig, "choose", { goal: "Add a picker" }, { prompts });
+      while (!(yield* readChoice(dir))) yield* Effect.sleep("5 millis");
+      const choice = yield* readChoice(dir);
+      expect(choice).not.toBeNull();
+      const path = yield* Path.Path;
+      yield* fs.makeDirectory(path.join(dir, "inbox"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(dir, "inbox", "answer-ask.json"),
+        `${encodeJson({
+          type: "answer",
+          requestId: "answer-ask",
+          choiceId: choice!.id,
+          answer: "Use the smaller API",
+        })}\n`,
+      );
 
-  expect(status).toBe("done");
-  expect(prompts.offered).toHaveLength(2);
-  expect(prompts.offered[0]).toEqual(["Second opinion", "Offload", "Refine", "Stop here"]);
-  expect(run.record.choices.map((c) => [c.step, c.title])).toEqual([
-    ["next", "Refine"],
-    ["next", "Stop here"],
-  ]);
-  expect(run.step("next").status).toBe("done");
-  expect(run.step("next").note).toBe('chose "Stop here"');
-  expect(lines).toContain("  ▸ Refine");
+      expect(yield* Effect.promise(() => pending).pipe(Effect.orDie)).toBe("Use the smaller API");
+    }),
+  ));
 
-  // The choice reuses the drafting agent, so the human keeps one conversation.
-  const drafter = run.step("draft").variants[0]!.agent;
-  const prompted = rig.calls().filter((c) => c.cmd === "agent prompt").map((c) => c.argv![2]);
-  expect(prompted).toEqual([drafter, drafter]);
-  const round = readFileSync(join(run.dir, "steps", "next", "refine-1", "prompt-1.md"), "utf8");
-  expect(round).toContain("The human wants changes");
-  expect(round).toContain("Goal: Add a picker");
-  expect(run.step("next").variants[0]!.output).toBe("steps/next/refine-1/refine.json");
-});
+test("a prompt choice prompts the named agent and offers the menu again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([CLEAN, CLEAN]);
+      const prompts = scriptedPrompts(["Refine", "Stop here"]);
 
-test("a fresh reviewer choice gets its own tab and its findings prompt the follow-up", async () => {
-  rig.queueOutputs([CLEAN, FINDING, CLEAN]);
-  const prompts = scriptedPrompts(["Second opinion", "Stop here"]);
+      const { run, status, lines } = yield* runWorkflowEffect(
+        rig,
+        "choose",
+        { goal: "Add a picker" },
+        { prompts },
+      );
 
-  const { run, status } = await runWorkflow(rig, "choose", { goal: "g" }, { prompts });
+      expect(status).toBe("done");
+      expect(prompts.offered).toHaveLength(2);
+      expect(prompts.offered[0]).toEqual(["Second opinion", "Offload", "Refine", "Stop here"]);
+      expect(run.record.choices.map((c) => [c.step, c.title])).toEqual([
+        ["next", "Refine"],
+        ["next", "Stop here"],
+      ]);
+      expect(run.step("next").status).toBe("done");
+      expect(run.step("next").note).toBe('chose "Stop here"');
+      expect(lines).toContain("  ▸ Refine");
 
-  expect(status).toBe("done");
-  // The run's own tab takes the workflow's name; the round's takes its step's.
-  // Neither says which choice started it, and neither says the target.
-  const labels = rig.calls().filter((c) => c.cmd === "tab create").map((c) => c.argv!.at(-2));
-  expect(labels).toEqual(["⚙ Choose", "⚙ Next"]);
+      // The choice reuses the drafting agent, so the human keeps one conversation.
+      const drafter = run.step("draft").variants[0]!.agent;
+      const prompted = (yield* rig.calls())
+        .filter((c) => c.cmd === "agent prompt")
+        .map((c) => c.argv![2]);
+      expect(prompted).toEqual([drafter, drafter]);
+      const round = yield* fs.readFileString(
+        path.join(run.dir, "steps", "next", "refine-1", "prompt-1.md"),
+      );
+      expect(round).toContain("The human wants changes");
+      expect(round).toContain("Goal: Add a picker");
+      expect(run.step("next").variants[0]!.output).toBe("steps/next/refine-1/refine.json");
+    }),
+  ));
 
-  // A menu zooms nothing: the run has no pane, and the Control Plane renders the
-  // question inline under the run it belongs to.
-  expect(rig.cmds()).not.toContain("pane zoom");
+test("a fresh reviewer choice gets its own tab and its findings prompt the follow-up", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([CLEAN, FINDING, CLEAN]);
+      const prompts = scriptedPrompts(["Second opinion", "Stop here"]);
 
-  const start = rig.calls().filter((c) => c.cmd === "agent start").at(-1)!.argv!;
-  expect(start.slice(7)).toEqual([
-    "--",
-    "--model",
-    "opus",
-    "--effort",
-    "xhigh",
-    "--append-system-prompt-file",
-    join(run.dir, "personas", "reviewer.claude.md"),
-  ]);
+      const { run, status } = yield* runWorkflowEffect(rig, "choose", { goal: "g" }, { prompts });
 
-  const followUp = readFileSync(join(run.dir, "steps", "next", "second-opinion-1-then", "prompt-1.md"), "utf8");
-  expect(followUp).toContain("- [major] no story for the CLI");
-  expect(followUp).toContain("Revise the spec.");
-  const drafter = run.step("draft").variants[0]!.agent;
-  expect(rig.calls().filter((c) => c.cmd === "agent prompt").at(-1)!.argv![2]).toBe(drafter);
-  expect(run.step("next").variants.map((v) => v.status)).toEqual(["done", "done"]);
-});
+      expect(status).toBe("done");
+      // The run's own tab takes the workflow's name; the round's takes its step's.
+      // Neither says which choice started it, and neither says the target.
+      const labels = (yield* rig.calls())
+        .filter((c) => c.cmd === "tab create")
+        .map((c) => c.argv!.at(-2));
+      expect(labels).toEqual(["⚙ Choose", "⚙ Next"]);
 
-test("a clean round skips the follow-up, and max caps how often a choice is offered", async () => {
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN]);
-  const prompts = scriptedPrompts(["Second opinion", "Second opinion", "Stop here"]);
+      // A menu zooms nothing: the run has no pane, and the Control Plane renders the
+      // question inline under the run it belongs to.
+      expect(yield* rig.cmds()).not.toContain("pane zoom");
 
-  const { run, status } = await runWorkflow(rig, "choose", { goal: "g" }, { prompts });
+      const start = (yield* rig.calls()).filter((c) => c.cmd === "agent start").at(-1)!.argv!;
+      expect(start.slice(7)).toEqual([
+        "--",
+        "--model",
+        "opus",
+        "--effort",
+        "xhigh",
+        "--append-system-prompt-file",
+        path.join(run.dir, "personas", "reviewer.claude.md"),
+      ]);
 
-  expect(status).toBe("done");
-  expect(prompts.offered.at(-1)).toEqual(["Offload", "Refine", "Stop here"]);
-  expect(existsSync(join(run.dir, "steps", "next", "second-opinion-1-then"))).toBe(false);
-  expect(run.step("next").variants).toHaveLength(2);
-});
+      const followUp = yield* fs.readFileString(
+        path.join(run.dir, "steps", "next", "second-opinion-1-then", "prompt-1.md"),
+        "utf8",
+      );
+      expect(followUp).toContain("- [major] no story for the CLI");
+      expect(followUp).toContain("Revise the spec.");
+      const drafter = run.step("draft").variants[0]!.agent;
+      expect((yield* rig.calls()).filter((c) => c.cmd === "agent prompt").at(-1)!.argv![2]).toBe(
+        drafter,
+      );
+      expect(run.step("next").variants.map((v) => v.status)).toEqual(["done", "done"]);
+    }),
+  ));
 
-test("a config key a choice needs is asked once and remembered in config.json", async () => {
-  rig.queueOutputs([CLEAN, CLEAN, CLEAN]);
-  const prompts = scriptedPrompts(["Offload", "Offload", "Stop here"], ["CEGO"]);
+test("a clean round skips the follow-up, and max caps how often a choice is offered", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([CLEAN, CLEAN, CLEAN]);
+      const prompts = scriptedPrompts(["Second opinion", "Second opinion", "Stop here"]);
 
-  const { run, status } = await runWorkflow(rig, "choose", { goal: "g" }, { prompts });
+      const { run, status } = yield* runWorkflowEffect(rig, "choose", { goal: "g" }, { prompts });
 
-  expect(status).toBe("done");
-  expect(prompts.asked).toEqual(["Linear team key"]);
-  expect(JSON.parse(readFileSync(join(rig.configDir, "config.json"), "utf8")).linear).toEqual({
-    team: "CEGO",
-  });
-  const first = readFileSync(join(run.dir, "steps", "next", "offload-1", "prompt-1.md"), "utf8");
-  expect(first).toContain("Put the spec on the CEGO board.");
-});
+      expect(status).toBe("done");
+      expect(prompts.offered.at(-1)).toEqual(["Offload", "Refine", "Stop here"]);
+      expect(yield* fs.exists(path.join(run.dir, "steps", "next", "second-opinion-1-then"))).toBe(
+        false,
+      );
+      expect(run.step("next").variants).toHaveLength(2);
+    }),
+  ));
 
-test("cancelling the menu leaves the step unfinished so the run can be resumed", async () => {
-  rig.queueOutputs([CLEAN]);
-  const prompts = scriptedPrompts([null]);
+test("a config key a choice needs is asked once and remembered in config.json", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([CLEAN, CLEAN, CLEAN]);
+      const prompts = scriptedPrompts(["Offload", "Offload", "Stop here"], ["CEGO"]);
 
-  const { run, status } = await runWorkflow(rig, "choose", { goal: "g" }, { prompts });
+      const { run, status } = yield* runWorkflowEffect(rig, "choose", { goal: "g" }, { prompts });
 
-  expect(status).toBe("blocked");
-  expect(run.step("next").status).toBe("blocked");
-  expect(run.step("next").note).toBe("no choice taken");
-  expect(new RunStore(rig.stateDir).resumable().map((r) => r.id)).toEqual([run.id]);
-});
+      expect(status).toBe("done");
+      expect(prompts.asked).toEqual(["Linear team key"]);
+      expect(
+        decodeJson(yield* fs.readFileString(path.join(rig.configDir, "config.json"))).linear,
+      ).toEqual({
+        team: "CEGO",
+      });
+      const first = yield* fs.readFileString(
+        path.join(run.dir, "steps", "next", "offload-1", "prompt-1.md"),
+      );
+      expect(first).toContain("Put the spec on the CEGO board.");
+    }),
+  ));
 
-test("choices are validated before anything opens", () => {
-  writeDef(
-    rig.baselineDir,
-    "workflows",
-    "bad",
-    `---
+test("cancelling the menu leaves the step unfinished so the run can be resumed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
+      const prompts = scriptedPrompts([null]);
+
+      const { run, status } = yield* runWorkflowEffect(rig, "choose", { goal: "g" }, { prompts });
+
+      expect(status).toBe("blocked");
+      expect(run.step("next").status).toBe("blocked");
+      expect(run.step("next").note).toBe("no choice taken");
+      expect((yield* new RunStore(rig.stateDir).resumable()).map((r) => r.id)).toEqual([run.id]);
+    }),
+  ));
+
+test("choices are validated before anything opens", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "bad",
+        `---
 name: bad
 steps:
   - id: draft
@@ -226,35 +327,48 @@ draft
 ## refine
 refine it
 `,
-  );
+      );
 
-  const defs = loadDefinitions(layerSet(rig.baselineDir, rig.configDir, join(rig.projectDir, ".herdr")));
-  const errors = validateWorkflow(resolveWorkflow("bad", defs, FALLBACK_DEFAULTS), defs, FALLBACK_DEFAULTS);
+      const defs = yield* loadDefinitions(
+        layerSet(rig.baselineDir, rig.configDir, path.join(rig.projectDir, ".herdr")),
+      );
+      const errors = yield* validateWorkflow(
+        resolveWorkflow("bad", defs, FALLBACK_DEFAULTS),
+        defs,
+        FALLBACK_DEFAULTS,
+      );
 
-  expect(errors).toEqual([
-    'workflow "bad" step "next" choice "Both": needs exactly one of run, prompt, post, handoff or stop',
-    'workflow "bad" step "next" choice "Both": needs a persona or an agent',
-    'workflow "bad" step "next" choice "Both": needs an output, so the round can finish',
-    'workflow "bad" step "next" choice "Neither": needs exactly one of run, prompt, post, handoff or stop',
-    'workflow "bad" step "next" choice 3: needs a title',
-    'workflow "bad" step "next" choice 3: needs a persona or an agent',
-    'workflow "bad" step "next" choice 3: needs an output, so the round can finish',
-    'workflow "bad" step "next" choice "No such section": unknown prompt section "nowhere" in bad.md (known: draft, refine)',
-    'workflow "bad" step "next" choice "No such agent": agent "ghost" is not an earlier step',
-    'workflow "bad" step "next" choice "Bad model": unknown model "haiku" for harness "codex" (known: default, gpt-5-codex, gpt-5, gpt-5-mini or anything matching ^(?:gpt|o)[0-9][a-z0-9.-]*$)',
-  ]);
-});
+      expect(errors).toEqual([
+        'workflow "bad" step "next" choice "Both": needs exactly one of run, prompt, post, handoff or stop',
+        'workflow "bad" step "next" choice "Both": needs a persona or an agent',
+        'workflow "bad" step "next" choice "Both": needs an output, so the round can finish',
+        'workflow "bad" step "next" choice "Neither": needs exactly one of run, prompt, post, handoff or stop',
+        'workflow "bad" step "next" choice 3: needs a title',
+        'workflow "bad" step "next" choice 3: needs a persona or an agent',
+        'workflow "bad" step "next" choice 3: needs an output, so the round can finish',
+        'workflow "bad" step "next" choice "No such section": unknown prompt section "nowhere" in bad.md (known: draft, refine)',
+        'workflow "bad" step "next" choice "No such agent": agent "ghost" is not an earlier step',
+        'workflow "bad" step "next" choice "Bad model": unknown model "haiku" for harness "codex" (known: default, gpt-5-codex, gpt-5, gpt-5-mini or anything matching ^(?:gpt|o)[0-9][a-z0-9.-]*$)',
+      ]);
+    }),
+  ));
 
-test("a choice step needs no persona and no prompt section of its own", () => {
-  const defs = loadDefinitions(layerSet(rig.baselineDir, rig.configDir, join(rig.projectDir, ".herdr")));
-  const wf = resolveWorkflow("choose", defs, FALLBACK_DEFAULTS);
+test("a choice step needs no persona and no prompt section of its own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const defs = yield* loadDefinitions(
+        layerSet(rig.baselineDir, rig.configDir, path.join(rig.projectDir, ".herdr")),
+      );
+      const wf = resolveWorkflow("choose", defs, FALLBACK_DEFAULTS);
 
-  expect(validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
-  expect(wf.steps[1]!.choices!.map((c) => c.title)).toEqual([
-    "Second opinion",
-    "Offload",
-    "Refine",
-    "Stop here",
-  ]);
-  expect(wf.steps[1]!.choices![0]!.round!.prompt).toContain("plan-level problems only");
-});
+      expect(yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
+      expect(wf.steps[1]!.choices!.map((c) => c.title)).toEqual([
+        "Second opinion",
+        "Offload",
+        "Refine",
+        "Stop here",
+      ]);
+      expect(wf.steps[1]!.choices![0]!.round!.prompt).toContain("plan-level problems only");
+    }),
+  ));

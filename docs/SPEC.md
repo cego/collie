@@ -87,14 +87,14 @@ Run.
 
 Interactive parity is composition, not a one-to-one command for UI navigation:
 
-| Herdr capability | Programmatic capability |
-| --- | --- |
-| Pick and run a Workflow | `workflow list`, `workflow show`, `run start` |
-| Resume unfinished work | `run list`, `run show`, `run resume` |
-| Answer a Choice | `run show`, `run answer` |
-| Inspect progress and results | `run show`, `run logs`, `run output`, `run wait` |
-| Stop work and close its panes | `run stop` |
-| Fork a Workflow or Persona | `workflow fork`, `persona fork` |
+| Herdr capability              | Programmatic capability                          |
+| ----------------------------- | ------------------------------------------------ |
+| Pick and run a Workflow       | `workflow list`, `workflow show`, `run start`    |
+| Resume unfinished work        | `run list`, `run show`, `run resume`             |
+| Answer a Choice               | `run show`, `run answer`                         |
+| Inspect progress and results  | `run show`, `run logs`, `run output`, `run wait` |
+| Stop work and close its panes | `run stop`                                       |
+| Fork a Workflow or Persona    | `workflow fork`, `persona fork`                  |
 
 UI-only focus, navigation, selection, and popup operations are not CLI capabilities.
 
@@ -132,13 +132,13 @@ Commands print readable text or tables by default. `--json` switches to the stab
 contract. A non-streaming JSON command writes exactly one value to stdout:
 
 ```json
-{"ok":true,"data":{}}
+{ "ok": true, "data": {} }
 ```
 
 Expected failures use:
 
 ```json
-{"ok":false,"error":{"code":"workspace_not_found","message":"...","details":{}}}
+{ "ok": false, "error": { "code": "workspace_not_found", "message": "...", "details": {} } }
 ```
 
 Diagnostics go to stderr and never corrupt JSON stdout. Exit statuses are:

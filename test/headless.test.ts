@@ -1,6 +1,19 @@
+import { dateFromMillis, nowIso, nowMillis } from "../src/time";
+import type { BunServices } from "@effect/platform-bun";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import {
+  Config,
+  ConfigProvider,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Path,
+  PlatformError,
+  Scope,
+  Stream,
+} from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { FakeHerdr, Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
@@ -22,12 +35,15 @@ import {
   stopDriver,
   writeChoice,
 } from "../src/driver";
-import { answerKey, driverCommand, openLog, spawnDriver } from "../src/flows";
+import { answerKey, openLog } from "../src/flows";
+import { driverCommand, spawnDriver } from "../src/operations";
+import type { HerdrError } from "../src/herdr";
 import { processStartTime } from "../src/lock";
-import type { Asking } from "../src/workspace";
+import type { Asking, RunRow, WorkspaceView } from "../src/workspace";
 import { askingRun, buildView, renderWorkspace } from "../src/workspace";
 import { scopeFor } from "../src/registry";
 import { RunStore } from "../src/run";
+import { runEffect } from "./support/effect";
 
 let rig: Rig;
 
@@ -61,51 +77,91 @@ Goal: {{inputs.goal}}
 `;
 
 const CLEAN = { verdict: "clean", findings: [] };
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-beforeEach(async () => {
-  rig = new Rig();
-  await rig.startSocket();
-  installBaseline(rig);
-  writeDef(rig.baselineDir, "workflows", "solo", SOLO);
-  writeDef(rig.baselineDir, "workflows", "choose", CHOOSE);
-});
+interface InboxAnswer {
+  type: "answer";
+  requestId: string;
+  choiceId: string;
+  answer: string;
+}
 
-afterEach(async () => {
-  await rig.close();
-});
+type TestError =
+  | Config.ConfigError
+  | Error
+  | HerdrError
+  | PlatformError.PlatformError
+  | readonly [string, ...string[]];
+type TestServices = BunServices.BunServices | Scope.Scope;
+type TestEffect = Effect.Effect<unknown, TestError, TestServices>;
 
-function board(now?: number) {
+const effectTest = (
+  name: string,
+  body: () => Generator<TestEffect, void, unknown>,
+  timeout?: number,
+) => test(name, () => runEffect(Effect.gen(body).pipe(Effect.scoped)), timeout);
+
+beforeEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      rig = yield* Rig.make();
+      yield* rig.startSocket();
+      yield* installBaseline(rig);
+      yield* writeDef(rig.baselineDir, "workflows", "solo", SOLO);
+      yield* writeDef(rig.baselineDir, "workflows", "choose", CHOOSE);
+    }),
+  ),
+);
+
+afterEach(() => runEffect(rig.close()));
+
+const board = Effect.fn("test.board")(function* (now?: number) {
   const env = rig.pluginEnv();
-  return buildView({
+  return yield* buildView({
     ...scopeFor(env, env.cwd),
     workspaceLabel: "test",
     stateDir: env.stateDir,
     alive: [],
     now,
   });
-}
+});
 
-test("a review is one run tab of agent panes, and the plugin keeps one pane", async () => {
-  rig.queueOutputs([CLEAN, CLEAN, { ...CLEAN, summary: "nothing to fix", dropped: [] }]);
+const configLayer = (driver?: string) =>
+  ConfigProvider.layer(
+    ConfigProvider.fromUnknown(driver === undefined ? {} : { COLLIE_DRIVER: driver }),
+  );
 
-  const { run, status } = await runWorkflow(rig, "review", {}, {
-    prompts: scriptedPrompts(["Don't post"]),
-  });
+const currentPid = Effect.sync(() => globalThis.process.pid);
+const fakeHerdrFail = '{"agent prompt":"no such agent"}';
+
+effectTest("a review is one run tab of agent panes, and the plugin keeps one pane", function* () {
+  yield* rig.queueOutputs([CLEAN, CLEAN, { ...CLEAN, summary: "nothing to fix", dropped: [] }]);
+
+  const { run, status } = yield* runWorkflow(
+    rig,
+    "review",
+    {},
+    {
+      prompts: scriptedPrompts(["Don't post"]),
+    },
+  );
 
   expect(status).toBe("done");
   // One tab for the run — the reviewers' — plus the Control Plane's, and no pane of
   // the run's own anywhere: no runner pane to move, swap or name.
-  expect(rig.cmds().filter((c) => c === "tab create")).toHaveLength(1);
-  for (const cmd of ["pane move", "pane swap"]) expect(rig.cmds()).not.toContain(cmd);
-  expect(rig.calls().filter((c) => c.cmd === "plugin pane")).toHaveLength(1);
-  const panes = rig.calls().filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1));
+  const cmds = yield* rig.cmds();
+  const calls = yield* rig.calls();
+  expect(cmds.filter((c) => c === "tab create")).toHaveLength(1);
+  for (const cmd of ["pane move", "pane swap"]) expect(cmds).not.toContain(cmd);
+  expect(calls.filter((c) => c.cmd === "plugin pane")).toHaveLength(1);
+  const panes = calls.filter((c) => c.cmd === "pane rename").map((c) => c.argv?.at(-1));
   expect(panes).toEqual(["Control Plane", "Opus", "Sonnet", "Synthesize"]);
   expect(run.step("review").variants).toHaveLength(2);
 });
 
-test("the driver's progress is a file, and the board shows the last of it", async () => {
-  const run = new RunStore(rig.stateDir).create({
+effectTest("the driver's progress is a file, and the board shows the last of it", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const run = yield* new RunStore(rig.stateDir).create({
     workflow: "review",
     cwd: rig.projectDir,
     session: rig.pluginEnv().socketPath,
@@ -119,40 +175,45 @@ test("the driver's progress is a file, and the board shows the last of it", asyn
   });
   run.record.target_label = "worktree";
   run.step("review").status = "running";
-  run.save();
+  yield* run.save();
 
-  appendProgress(run.dir, "▶ review (2 in parallel) — iteration 1");
-  appendProgress(run.dir, "  ✓ opus");
+  yield* appendProgress(run.dir, "▶ review (2 in parallel) — iteration 1");
+  yield* appendProgress(run.dir, "  ✓ opus");
 
   // Both shapes: one line per event for the board, and a plain log for a human.
-  expect(readProgress(run.dir).map((l) => l.text)).toEqual([
+  expect((yield* readProgress(run.dir)).map((l) => l.text)).toEqual([
     "▶ review (2 in parallel) — iteration 1",
     "  ✓ opus",
   ]);
-  expect(lastProgress(run.dir)).toBe("  ✓ opus");
-  expect(readFileSync(join(run.dir, RUNNER_LOG), "utf8")).toContain("▶ review (2 in parallel)");
+  expect(yield* lastProgress(run.dir)).toBe("  ✓ opus");
+  expect(yield* fs.readFileString(path.join(run.dir, RUNNER_LOG))).toContain(
+    "▶ review (2 in parallel)",
+  );
 
-  const row = board().active[0]!;
+  const row = (yield* board()).active[0];
+  if (!row) return yield* Effect.fail(new Error("expected one active run"));
   expect(row.detail).toBe("review · iteration 1/5 ·   ✓ opus");
 });
 
-test("a Choice asked through the run dir is answered through it", async () => {
+effectTest("a Choice asked through the run dir is answered through it", function* () {
   const answered: string[] = [];
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   // Stands in for the Control Plane: sees choice.json, writes choice-answer.json.
-  const answerer = (async () => {
+  const answerer = yield* Effect.gen(function* () {
     for (let i = 0; i < 200; i++) {
-      const run = new RunStore(rig.stateDir).list()[0];
-      const choice = run ? readChoice(run.dir) : null;
-      if (choice) {
+      const run = (yield* new RunStore(rig.stateDir).list())[0] ?? null;
+      const choice = run ? yield* readChoice(run.dir) : null;
+      if (run && choice) {
         answered.push(...choice.items.map((it) => it.title));
-        answerChoice(run!.dir, { id: choice.id, choice: "Carry on" });
+        yield* answerChoice(run.dir, { id: choice.id, choice: "Carry on" });
         return;
       }
-      await sleep(25);
+      yield* Effect.sleep("25 millis");
     }
-  })();
+  }).pipe(Effect.forkScoped);
 
-  const { run, status } = await runWorkflow(
+  const { run, status } = yield* runWorkflow(
     rig,
     "choose",
     { goal: "g" },
@@ -162,7 +223,7 @@ test("a Choice asked through the run dir is answered through it", async () => {
         filePrompts({ dir: r.dir, run: r.id, step: () => "next", timeoutMs: 10_000, pollMs: 25 }),
     },
   );
-  await answerer;
+  yield* Fiber.join(answerer);
 
   // The question reached the file, the answer came back through it, and the run
   // recorded the choice exactly as a menu in a pane used to.
@@ -170,73 +231,81 @@ test("a Choice asked through the run dir is answered through it", async () => {
   expect(status).toBe("done");
   expect(run.record.choices.map((c) => c.title)).toEqual(["Carry on"]);
   // Neither file is left behind to be answered twice.
-  expect(existsSync(join(run.dir, CHOICE))).toBe(false);
-  expect(existsSync(join(run.dir, CHOICE_ANSWER))).toBe(false);
+  expect(yield* fs.exists(path.join(run.dir, CHOICE))).toBe(false);
+  expect(yield* fs.exists(path.join(run.dir, CHOICE_ANSWER))).toBe(false);
 });
 
-test("a question nobody answers leaves the step unfinished, not the run wedged", async () => {
-  const { run, status } = await runWorkflow(
-    rig,
-    "choose",
-    { goal: "g" },
-    {
-      promptsFor: (r) =>
-        filePrompts({ dir: r.dir, run: r.id, step: () => "next", timeoutMs: 150, pollMs: 25 }),
-    },
-  );
+effectTest(
+  "a question nobody answers leaves the step unfinished, not the run wedged",
+  function* () {
+    const { run, status } = yield* runWorkflow(
+      rig,
+      "choose",
+      { goal: "g" },
+      {
+        promptsFor: (r) =>
+          filePrompts({ dir: r.dir, run: r.id, step: () => "next", timeoutMs: 150, pollMs: 25 }),
+      },
+    );
 
-  expect(status).toBe("blocked");
-  expect(run.step("next").status).toBe("blocked");
-  expect(run.step("next").note).toBe("no choice taken");
-});
+    expect(status).toBe("blocked");
+    expect(run.step("next").status).toBe("blocked");
+    expect(run.step("next").note).toBe("no choice taken");
+  },
+);
 
-test("a pending choice renders under its run, and survives the board being reopened", () => {
-  const run = new RunStore(rig.stateDir).create({
-    workflow: "plan",
-    cwd: rig.projectDir,
-    session: rig.pluginEnv().socketPath,
-    workspace: "1",
-    workspaceLabel: "test",
-    inputs: {},
-    inputSources: {},
-    stepIds: ["grill", "next"],
-    maxIterations: 1,
-    primaryInput: "add-a-picker",
-  });
-  run.record.target_label = "add-a-picker";
-  run.record.awaiting = "next";
-  run.save();
-  writeChoice(run.dir, {
-    id: "c1",
-    kind: "menu",
-    run: run.id,
-    step: "next",
-    header: "plan-add-a-picker — next",
-    footer: "↑↓ move · Enter choose",
-    items: [
-      { id: "Implement now", title: "Implement now", subtitle: "runs implement" },
-      { id: "Refine", title: "Refine", subtitle: "a fresh agent" },
-    ],
-  });
+effectTest(
+  "a pending choice renders under its run, and survives the board being reopened",
+  function* () {
+    const run = yield* new RunStore(rig.stateDir).create({
+      workflow: "plan",
+      cwd: rig.projectDir,
+      session: rig.pluginEnv().socketPath,
+      workspace: "1",
+      workspaceLabel: "test",
+      inputs: {},
+      inputSources: {},
+      stepIds: ["grill", "next"],
+      maxIterations: 1,
+      primaryInput: "add-a-picker",
+    });
+    run.record.target_label = "add-a-picker";
+    run.record.awaiting = "next";
+    yield* run.save();
+    yield* writeChoice(run.dir, {
+      id: "c1",
+      kind: "menu",
+      run: run.id,
+      step: "next",
+      header: "plan-add-a-picker — next",
+      footer: "↑↓ move · Enter choose",
+      items: [
+        { id: "Implement now", title: "Implement now", subtitle: "runs implement" },
+        { id: "Refine", title: "Refine", subtitle: "a fresh agent" },
+      ],
+    });
 
-  // Read from the file every time, so closing and reopening the pane loses nothing.
-  for (const pass of [1, 2]) {
-    const view = board();
-    const waiting = askingRun(view);
-    expect(waiting?.id, `pass ${pass}`).toBe(run.id);
-    const text = renderWorkspace(view, undefined, { index: 1, typed: "" });
-    expect(text).toContain("⚠ Plan · add-a-picker");
-    expect(text).toContain("plan-add-a-picker — next");
-    expect(text).toContain("  Implement now");
-    expect(text).toContain("❯ Refine");
-    // While a run is asking, the board's own keys are that question's.
-    expect(text).toContain("answering Plan · add-a-picker");
-    expect(text).not.toContain("p run a workflow");
-  }
-});
+    // Read from the file every time, so closing and reopening the pane loses nothing.
+    for (const pass of [1, 2]) {
+      const view = yield* board();
+      const waiting = askingRun(view);
+      expect(waiting?.id, `pass ${pass}`).toBe(run.id);
+      const text = renderWorkspace(view, undefined, { index: 1, typed: "" });
+      expect(text).toContain("⚠ Plan · add-a-picker");
+      expect(text).toContain("plan-add-a-picker — next");
+      expect(text).toContain("  Implement now");
+      expect(text).toContain("❯ Refine");
+      // While a run is asking, the board's own keys are that question's.
+      expect(text).toContain("answering Plan · add-a-picker");
+      expect(text).not.toContain("p run a workflow");
+    }
+  },
+);
 
-test("the board's keys answer the question, and Esc leaves the run open", () => {
-  const run = new RunStore(rig.stateDir).create({
+effectTest("the board's keys answer the question, and Esc leaves the run open", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const run = yield* new RunStore(rig.stateDir).create({
     workflow: "plan",
     cwd: rig.projectDir,
     inputs: {},
@@ -245,53 +314,94 @@ test("the board's keys answer the question, and Esc leaves the run open", () => 
     maxIterations: 1,
     primaryInput: "x",
   });
-  const row = {
+  // The board answers against the run dir's own choice, the way the CLI does.
+  const menu = {
+    id: "c1",
+    kind: "menu",
+    run: run.id,
+    step: "next",
+    header: "h",
+    footer: "f",
+    items: [
+      { id: "one", title: "One" },
+      { id: "two", title: "Two" },
+    ],
+  } as const;
+  yield* writeChoice(run.dir, menu);
+  const row: RunRow = {
     id: run.id,
     dir: run.dir,
     glyph: "⚠",
     title: "Plan · x",
     detail: "",
-    choice: {
-      id: "c1",
-      kind: "menu" as const,
-      run: run.id,
-      step: "next",
-      header: "h",
-      footer: "f",
-      items: [
-        { id: "one", title: "One" },
-        { id: "two", title: "Two" },
-      ],
-    },
+    choice: menu,
   };
   const start: Asking = { index: 0, typed: "" };
 
   // Down moves, and Enter sends the highlighted option's id.
-  const moved = answerKey(row, start, "\x1b[B");
+  const moved = yield* answerKey(row, start, "\x1b[B");
   expect(moved.asking.index).toBe(1);
-  answerKey(row, moved.asking, "\r");
-  const commands = () => readdirSync(join(run.dir, "inbox")).map((name) =>
-    JSON.parse(readFileSync(join(run.dir, "inbox", name), "utf8")) as Record<string, string>
-  );
-  expect(commands()).toContainEqual({ type: "answer", requestId: expect.any(String), choiceId: "c1", answer: "two" });
+  yield* answerKey(row, moved.asking, "\r");
+  const commands = Effect.gen(function* () {
+    return yield* Effect.forEach(yield* fs.readDirectory(path.join(run.dir, "inbox")), (name) =>
+      fs
+        .readFileString(path.join(run.dir, "inbox", name))
+        .pipe(Effect.map((text): InboxAnswer => JSON.parse(text))),
+    );
+  });
+  expect(yield* commands).toContainEqual({
+    type: "answer",
+    requestId: expect.any(String),
+    choiceId: "c1",
+    answer: "two",
+  });
+
+  // A second answer to the same choice is refused, exactly as `collie run answer` is.
+  const again = yield* answerKey(row, moved.asking, "\r");
+  expect(again.note).toContain("already has an answer");
+  expect((yield* commands).filter((c) => c.choiceId === "c1")).toHaveLength(1);
 
   // Esc is an answer too: it is what leaves the run open for a resume.
-  answerKey(row, start, "\x1b");
-  expect(commands()).toContainEqual({ type: "answer", requestId: expect.any(String), choiceId: "c1", answer: "" });
+  const dismissed = { ...menu, id: "c3" };
+  yield* writeChoice(run.dir, dismissed);
+  yield* answerKey({ ...row, choice: dismissed }, start, "\x1b");
+  expect(yield* commands).toContainEqual({
+    type: "answer",
+    requestId: expect.any(String),
+    choiceId: "c3",
+    answer: "",
+  });
 
   // A typed question collects characters and sends the text.
-  const ask = { ...row, choice: { ...row.choice, kind: "ask" as const, items: [] } };
+  const typed = {
+    id: "c2",
+    kind: "ask",
+    run: run.id,
+    step: "next",
+    header: "h",
+    footer: "f",
+    items: [],
+  } as const;
+  yield* writeChoice(run.dir, typed);
+  const ask: RunRow = { ...row, choice: typed };
   let asking = start;
-  for (const key of ["c", "e", "g", "o"]) asking = answerKey(ask, asking, key).asking;
-  asking = answerKey(ask, asking, "\x7f").asking;
+  for (const key of ["c", "e", "g", "o"]) asking = (yield* answerKey(ask, asking, key)).asking;
+  asking = (yield* answerKey(ask, asking, "\x7f")).asking;
   expect(asking.typed).toBe("ceg");
-  answerKey(ask, asking, "\r");
-  expect(commands()).toContainEqual({ type: "answer", requestId: expect.any(String), choiceId: "c1", answer: "ceg" });
+  yield* answerKey(ask, asking, "\r");
+  expect(yield* commands).toContainEqual({
+    type: "answer",
+    requestId: expect.any(String),
+    choiceId: "c2",
+    answer: "ceg",
+  });
 });
 
-test("a run nothing is driving is abandoned; one with a live driver is not", () => {
+effectTest("a run nothing is driving is abandoned; one with a live driver is not", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const store = new RunStore(rig.stateDir);
-  const run = store.create({
+  const run = yield* store.create({
     workflow: "review",
     cwd: rig.projectDir,
     session: rig.pluginEnv().socketPath,
@@ -306,66 +416,85 @@ test("a run nothing is driving is abandoned; one with a live driver is not", () 
   run.record.target_label = "worktree";
   run.step("review").status = "running";
   run.step("review").note = "herdr agent start failed (exit 1)";
-  run.save();
-  const later = Date.now() + 3_600_000;
+  yield* run.save();
+  const later = (yield* nowMillis()) + 3_600_000;
 
   // This test process is a live driver as far as the ownership claim is concerned.
-  expect(acquireDriver(run.dir)).toBe(true);
-  expect(driverAlive(run.dir)).toBe(true);
-  expect(board(later).active.map((r) => r.title)).toEqual(["Review · worktree"]);
+  expect(yield* acquireDriver(run.dir)).toBe(true);
+  expect(yield* driverAlive(run.dir)).toBe(true);
+  expect((yield* board(later)).active.map((r) => r.title)).toEqual(["Review · worktree"]);
   // And resume will not start a second one for it.
-  expect(store.resumable().filter((r) => !driverAlive(r.dir))).toEqual([]);
+  const resumable = yield* store.resumable();
+  const withoutDriver = yield* Effect.filter(resumable, (r) =>
+    driverAlive(r.dir).pipe(Effect.map((alive) => !alive)),
+  );
+  expect(withoutDriver).toEqual([]);
 
-  releaseDriver(run.dir);
-  expect(driverAlive(run.dir)).toBe(false);
-  const gone = board(later);
+  yield* releaseDriver(run.dir);
+  expect(yield* driverAlive(run.dir)).toBe(false);
+  const gone = yield* board(later);
   expect(gone.active).toEqual([]);
   // Why it stopped is on the row, because there is no pane it could have printed in.
   expect(gone.recent[0]!.detail).toBe("abandoned · herdr agent start failed (exit 1)");
 
   // A claim left behind by a driver that died is not a driver, and neither is a
   // legacy plain-pid file naming a process that no longer exists.
-  writeFileSync(join(run.dir, RUNNER_PID), "999999\n");
-  expect(driverAlive(run.dir)).toBe(false);
+  yield* fs.writeFileString(path.join(run.dir, RUNNER_PID), "999999\n");
+  expect(yield* driverAlive(run.dir)).toBe(false);
 });
 
-test("a failed run says why on its row, and its log opens in a pane of its own", async () => {
-  rig.queueOutputs([]);
-  const env = rig.pluginEnv({ FAKE_HERDR_FAIL: JSON.stringify({ "agent prompt": "no such agent" }) });
+effectTest(
+  "a failed run says why on its row, and its log opens in a pane of its own",
+  function* () {
+    yield* rig.queueOutputs([]);
+    const env = rig.pluginEnv({
+      FAKE_HERDR_FAIL: fakeHerdrFail,
+    });
 
-  const { run, status } = await runWorkflow(
-    rig,
-    "solo",
-    { goal: "g" },
-    { env: { FAKE_HERDR_FAIL: JSON.stringify({ "agent prompt": "no such agent" }) } },
-  );
-  expect(status).toBe("failed");
-  appendProgress(run.dir, "✗ solo — herdr agent prompt failed (exit 1): no such agent");
+    const { run, status } = yield* runWorkflow(
+      rig,
+      "solo",
+      { goal: "g" },
+      { env: { FAKE_HERDR_FAIL: fakeHerdrFail } },
+    );
+    expect(status).toBe("failed");
+    yield* appendProgress(run.dir, "✗ solo — herdr agent prompt failed (exit 1): no such agent");
 
-  // The row carries the reason, because there is no pane it could have printed in.
-  const row = board().recent[0]!;
-  expect(row.glyph).toBe("✗");
-  expect(row.detail).toContain("failed");
-  expect(row.detail).toContain("no such agent");
-  // And a toast said so at the time.
-  const toast = rig.calls().filter((c) => c.cmd === "notification show").at(-1)!.argv!;
-  expect(toast[2]).toBe(`${run.record.slug} failed`);
+    // The row carries the reason, because there is no pane it could have printed in.
+    const view = yield* board();
+    const row = view.recent[0];
+    if (!row) return yield* Effect.fail(new Error("expected one recent run"));
+    expect(row.glyph).toBe("✗");
+    expect(row.detail).toContain("failed");
+    expect(row.detail).toContain("no such agent");
+    // And a toast said so at the time.
+    const toast = (yield* rig.calls()).filter((c) => c.cmd === "notification show").at(-1)?.argv;
+    expect(toast?.[2]).toBe(`${run.record.slug} failed`);
 
-  // `l` puts the detail in a pane of its own, split off the board's.
-  const before = rig.calls().length;
-  const note = await openLog(
-    { herdr: new FakeHerdr(env), ...scopeFor(env, env.cwd), stateDir: env.stateDir, paneId: "1-1" },
-    board(),
-  );
-  expect(note).toContain(row.title);
-  const after = rig.calls().slice(before);
-  expect(after.map((c) => c.cmd)).toEqual(["pane split", "pane run"]);
-  expect(after[0]!.argv!.slice(2, 5)).toEqual(["1-1", "--direction", "down"]);
-  expect(after[1]!.argv!.at(-1)).toBe(`less +G '${run.dir}/${RUNNER_LOG}'`);
-});
+    // `l` puts the detail in a pane of its own, split off the board's.
+    const before = (yield* rig.calls()).length;
+    const note = yield* openLog(
+      {
+        herdr: new FakeHerdr(env),
+        ...scopeFor(env, env.cwd),
+        stateDir: env.stateDir,
+        paneId: "1-1",
+      },
+      view,
+    );
+    expect(note).toContain(row.title);
+    const after = (yield* rig.calls()).slice(before);
+    expect(after.map((c) => c.cmd)).toEqual(["pane split", "pane run"]);
+    expect(after[0]?.argv?.slice(2, 5)).toEqual(["1-1", "--direction", "down"]);
+    expect(after[1]?.argv?.at(-1)).toBe(`less +G '${run.dir}/${RUNNER_LOG}'`);
+  },
+);
 
-test("a run can be stopped, because closing a pane no longer does it", async () => {
-  const run = new RunStore(rig.stateDir).create({
+effectTest("a run can be stopped, because closing a pane no longer does it", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const run = yield* new RunStore(rig.stateDir).create({
     workflow: "review",
     cwd: rig.projectDir,
     session: rig.pluginEnv().socketPath,
@@ -378,291 +507,391 @@ test("a run can be stopped, because closing a pane no longer does it", async () 
     primaryInput: "worktree",
   });
   run.step("review").status = "running";
-  run.save();
+  yield* run.save();
 
   // A driver that is not there cannot be stopped, and says so rather than lying.
-  expect(stopDriver(run.dir)).toBe(false);
+  expect(yield* stopDriver(run.dir)).toBe(false);
 
   // A live process whose identity does not match the claim is not the driver: a
   // pid reused by something unrelated must never be signalled. It stays alive.
-  const bystander = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
-  writeFileSync(
-    join(run.dir, RUNNER_PID),
-    `${JSON.stringify({ pid: bystander.pid, start: "not-its-start-time", at: new Date().toISOString() })}\n`,
+  const bystander = yield* spawner.spawn(
+    ChildProcess.make("sleep", ["30"], { stdout: "ignore", stderr: "ignore" }),
   );
-  expect(driverAlive(run.dir)).toBe(false);
-  expect(stopDriver(run.dir)).toBe(false);
-  expect(bystander.killed).toBe(false);
+  yield* fs.writeFileString(
+    path.join(run.dir, RUNNER_PID),
+    `${JSON.stringify({ pid: Number(bystander.pid), start: "not-its-start-time", at: yield* nowIso() })}\n`,
+  );
+  expect(yield* driverAlive(run.dir)).toBe(false);
+  expect(yield* stopDriver(run.dir)).toBe(false);
+  expect(yield* bystander.isRunning).toBe(true);
 
   // A verified owner: a real process, asked to stop. The claim stays while it
   // dies — a resume in that window must still see the run as owned — and reads
   // as stale once the process is gone, which is when a new claim may be taken.
-  const child = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
-  writeFileSync(
-    join(run.dir, RUNNER_PID),
-    `${JSON.stringify({ pid: child.pid, start: processStartTime(child.pid), at: new Date().toISOString() })}\n`,
+  const child = yield* spawner.spawn(
+    ChildProcess.make("sleep", ["30"], { stdout: "ignore", stderr: "ignore" }),
   );
-  expect(driverAlive(run.dir)).toBe(true);
-  expect(stopDriver(run.dir)).toBe(true);
-  expect(existsSync(join(run.dir, RUNNER_PID))).toBe(true);
-  await child.exited;
-  expect(driverAlive(run.dir)).toBe(false);
+  yield* fs.writeFileString(
+    path.join(run.dir, RUNNER_PID),
+    `${JSON.stringify({ pid: Number(child.pid), start: yield* processStartTime(Number(child.pid)), at: yield* nowIso() })}\n`,
+  );
+  expect(yield* driverAlive(run.dir)).toBe(true);
+  expect(yield* stopDriver(run.dir)).toBe(true);
+  expect(yield* fs.exists(path.join(run.dir, RUNNER_PID))).toBe(true);
+  yield* child.exitCode.pipe(Effect.ignore);
+  expect(yield* driverAlive(run.dir)).toBe(false);
   // The dead owner's claim is stale, so the next driver can take the run over.
-  expect(acquireDriver(run.dir)).toBe(true);
-  releaseDriver(run.dir);
-  bystander.kill();
+  expect(yield* acquireDriver(run.dir)).toBe(true);
+  yield* releaseDriver(run.dir);
+  yield* bystander.kill();
 });
 
-test("ownership: one winner, stale claims recovered, and only your own claim released", async () => {
-  const run = new RunStore(rig.stateDir).create({
-    workflow: "solo",
-    cwd: rig.projectDir,
-    inputs: {},
-    inputSources: {},
-    stepIds: ["solo"],
-    maxIterations: 1,
-    primaryInput: "x",
-  });
-  const root = new URL("../", import.meta.url).pathname;
-  const claimAndHold = `const { acquireDriver } = await import(${JSON.stringify(`${root}src/driver.ts`)});
-console.log(acquireDriver(${JSON.stringify(run.dir)}));
-await Bun.sleep(5000);`;
+effectTest(
+  "ownership: one winner, stale claims recovered, and only your own claim released",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const run = yield* new RunStore(rig.stateDir).create({
+      workflow: "solo",
+      cwd: rig.projectDir,
+      inputs: {},
+      inputSources: {},
+      stepIds: ["solo"],
+      maxIterations: 1,
+      primaryInput: "x",
+    });
+    const root = new URL("../", import.meta.url).pathname;
+    const claimAndHold = `import { BunServices } from "@effect/platform-bun";
+import { Effect, ManagedRuntime } from "effect";
+const { acquireDriver } = await import(${JSON.stringify(`${root}src/driver.ts`)});
+const runtime = ManagedRuntime.make(BunServices.layer);
+console.log(await runtime.runPromise(acquireDriver(${JSON.stringify(run.dir)})));
+await runtime.runPromise(Effect.sleep("5 seconds"));`;
 
-  // Two concurrent claims on one run: exactly one owner, one clean refusal. The
-  // winner holds its claim (and stays alive) until this test kills it.
-  const spawnClaim = () => Bun.spawn(["bun", "-e", claimAndHold], { stdout: "pipe", stderr: "ignore" });
-  const firstLine = async (p: ReturnType<typeof spawnClaim>) => {
-    const reader = p.stdout.getReader();
-    let text = "";
-    while (!text.includes("\n")) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      text += new TextDecoder().decode(value);
-    }
-    return text.split("\n")[0]!;
-  };
-  const a = spawnClaim();
-  const b = spawnClaim();
-  const won = await Promise.all([a, b].map(async (p) => (await firstLine(p)) === "true"));
-  expect(won.filter(Boolean)).toHaveLength(1);
-  expect(driverAlive(run.dir)).toBe(true);
+    // Two concurrent claims on one run: exactly one owner, one clean refusal. The
+    // winner holds its claim (and stays alive) until this test kills it.
+    const spawnClaim = () =>
+      spawner.spawn(
+        ChildProcess.make("bun", ["-e", claimAndHold], { stdout: "pipe", stderr: "ignore" }),
+      );
+    const firstLine = (process: ChildProcessSpawner.ChildProcessHandle) =>
+      process.stdout.pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.runHead,
+        Effect.map(Option.getOrElse(() => "")),
+      );
+    const a = yield* spawnClaim();
+    const b = yield* spawnClaim();
+    const won = yield* Effect.all([firstLine(a), firstLine(b)], { concurrency: "unbounded" }).pipe(
+      Effect.map((lines) => lines.map((line) => line === "true")),
+    );
+    expect(won.filter(Boolean)).toHaveLength(1);
+    expect(yield* driverAlive(run.dir)).toBe(true);
 
-  // A different process cannot release the owner's claim.
-  releaseDriver(run.dir);
-  expect(driverAlive(run.dir)).toBe(true);
+    // A different process cannot release the owner's claim.
+    yield* releaseDriver(run.dir);
+    expect(yield* driverAlive(run.dir)).toBe(true);
 
-  // The owner dies without cleanup: the stale claim is recovered, not respected.
-  a.kill();
-  b.kill();
-  await Promise.all([a.exited, b.exited]);
-  expect(driverAlive(run.dir)).toBe(false);
-  expect(acquireDriver(run.dir)).toBe(true);
-  expect(driverAlive(run.dir)).toBe(true);
-  // And a second claim while this one lives is refused.
-  expect(acquireDriver(run.dir)).toBe(false);
-  releaseDriver(run.dir);
-  expect(existsSync(join(run.dir, RUNNER_PID))).toBe(false);
-}, 20_000);
+    // The owner dies without cleanup: the stale claim is recovered, not respected.
+    yield* a.kill();
+    yield* b.kill();
+    yield* Effect.all([a.exitCode, b.exitCode], { concurrency: "unbounded" }).pipe(Effect.ignore);
+    expect(yield* driverAlive(run.dir)).toBe(false);
+    expect(yield* acquireDriver(run.dir)).toBe(true);
+    expect(yield* driverAlive(run.dir)).toBe(true);
+    // And a second claim while this one lives is refused.
+    expect(yield* acquireDriver(run.dir)).toBe(false);
+    yield* releaseDriver(run.dir);
+    expect(yield* fs.exists(path.join(run.dir, RUNNER_PID))).toBe(false);
+  },
+  20_000,
+);
 
-test("the driver outlives the process that started it", async () => {
-  const store = new RunStore(rig.stateDir);
-  const run = store.create({
-    workflow: "solo",
-    cwd: rig.projectDir,
-    session: rig.pluginEnv().socketPath,
-    workspace: "1",
-    workspaceLabel: "test",
-    inputs: { goal: "Add a picker" },
-    inputSources: { goal: "asked" },
-    stepIds: ["solo"],
-    maxIterations: 5,
-    primaryInput: "Add a picker",
-  });
-  rig.queueOutputs([CLEAN]);
+effectTest(
+  "the driver outlives the process that started it",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const store = new RunStore(rig.stateDir);
+    const run = yield* store.create({
+      workflow: "solo",
+      cwd: rig.projectDir,
+      session: rig.pluginEnv().socketPath,
+      workspace: "1",
+      workspaceLabel: "test",
+      inputs: { goal: "Add a picker" },
+      inputSources: { goal: "asked" },
+      stepIds: ["solo"],
+      maxIterations: 5,
+      primaryInput: "Add a picker",
+    });
+    yield* rig.queueOutputs([CLEAN]);
 
-  // A parent that starts a driver and exits at once, which is what the picker does.
-  const root = new URL("../", import.meta.url).pathname;
-  const parent = join(rig.root, "parent.ts");
-  writeFileSync(
-    parent,
-    `import { readEnv } from "${root}src/env";
-import { spawnDriver } from "${root}src/flows";
-const env = readEnv(process.env);
-spawnDriver(env, process.env.RUN_ID!, env.cwd);
+    // A parent that starts a driver and exits at once, which is what the picker does.
+    const root = new URL("../", import.meta.url).pathname;
+    const parent = path.join(rig.root, "parent.ts");
+    yield* fs.writeFileString(
+      parent,
+      `import { readEnv } from "${root}src/env";
+import { spawnDriver } from "${root}src/operations";
+import { runEffect } from "${root}test/support/effect";
+const env = readEnv(Bun.env);
+await runEffect(spawnDriver(env, Bun.env.RUN_ID ?? "", env.cwd));
 `,
-  );
-  const spawned = Bun.spawn(["bun", parent], {
-    env: {
-      ...rig.env({ COLLIE_DRIVER: JSON.stringify(["bun", `${root}src/main.ts`]), RUN_ID: run.id }),
-    } as Record<string, string>,
-    stdout: "ignore",
-    stderr: "ignore",
-  });
-  expect(await spawned.exited).toBe(0);
+    );
+    expect(
+      Number(
+        yield* spawner.exitCode(
+          ChildProcess.make("bun", [parent], {
+            env: rig.env({
+              COLLIE_DRIVER: JSON.stringify(["bun", `${root}src/main.ts`]),
+              RUN_ID: run.id,
+            }),
+            extendEnv: true,
+            stdout: "ignore",
+            stderr: "ignore",
+          }),
+        ),
+      ),
+    ).toBe(0);
 
-  // The parent is gone; the run finishes anyway.
-  for (let i = 0; i < 200 && store.load(run.id).record.status === "running"; i++) await sleep(100);
-  const finished = store.load(run.id);
-  expect(finished.record.status).toBe("done");
-  expect(finished.step("solo").status).toBe("done");
-  // And it said what it was doing where the board can read it.
-  expect(readProgress(finished.dir).map((l) => l.text)).toContain("▶ solo — iteration 1");
-  // The pid file is cleaned up, so nothing thinks it is still being driven — the
-  // driver is a moment behind the record it just saved, so give it that moment.
-  for (let i = 0; i < 40 && driverAlive(finished.dir); i++) await sleep(50);
-  expect(driverAlive(finished.dir)).toBe(false);
-}, 30_000);
+    // The parent is gone; the run finishes anyway.
+    for (let i = 0; i < 200 && (yield* store.load(run.id)).record.status === "running"; i++)
+      yield* Effect.sleep("100 millis");
+    const finished = yield* store.load(run.id);
+    expect(finished.record.status).toBe("done");
+    expect(finished.step("solo").status).toBe("done");
+    // And it said what it was doing where the board can read it.
+    expect((yield* readProgress(finished.dir)).map((l) => l.text)).toContain(
+      "▶ solo — iteration 1",
+    );
+    // The pid file is cleaned up, so nothing thinks it is still being driven — the
+    // driver is a moment behind the record it just saved, so give it that moment.
+    for (let i = 0; i < 40 && (yield* driverAlive(finished.dir)); i++)
+      yield* Effect.sleep("50 millis");
+    expect(yield* driverAlive(finished.dir)).toBe(false);
+  },
+  30_000,
+);
 
-test("the compiled driver path is one executable, and overrides are explicit arguments", () => {
-  const env = rig.pluginEnv();
-  delete process.env.COLLIE_DRIVER;
-  expect(driverCommand(env)).toEqual([`${env.pluginRoot}/bin/collie`]);
+effectTest(
+  "the compiled driver path is one executable, and overrides are explicit arguments",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const env = rig.pluginEnv();
+    expect(yield* driverCommand(env).pipe(Effect.provide(configLayer()))).toEqual([
+      `${env.pluginRoot}/bin/collie`,
+    ]);
 
-  process.env.COLLIE_DRIVER = JSON.stringify(["bun", "/a dir with spaces/main.ts"]);
-  expect(driverCommand(env)).toEqual(["bun", "/a dir with spaces/main.ts"]);
+    expect(
+      yield* driverCommand(env).pipe(
+        Effect.provide(configLayer(JSON.stringify(["bun", "/a dir with spaces/main.ts"]))),
+      ),
+    ).toEqual(["bun", "/a dir with spaces/main.ts"]);
 
-  // Anything that is not a JSON array is one executable path, spaces and all —
-  // as long as it actually exists.
-  const spaced = join(rig.root, "my tools", "collie");
-  mkdirSync(join(rig.root, "my tools"), { recursive: true });
-  writeFileSync(spaced, "#!/bin/sh\n", { mode: 0o755 });
-  process.env.COLLIE_DRIVER = spaced;
-  expect(driverCommand(env)).toEqual([spaced]);
+    // Anything that is not a JSON array is one executable path, spaces and all —
+    // as long as it actually exists.
+    const spaced = path.join(rig.root, "my tools", "collie");
+    yield* fs.makeDirectory(path.join(rig.root, "my tools"), { recursive: true });
+    yield* fs.writeFileString(spaced, "#!/bin/sh\n", { mode: 0o755 });
+    expect(yield* driverCommand(env).pipe(Effect.provide(configLayer(spaced)))).toEqual([spaced]);
 
-  // The pre-JSON space-separated form gets the contract error, not a raw ENOENT.
-  process.env.COLLIE_DRIVER = "bun src/main.ts";
-  expect(() => driverCommand(env)).toThrow("JSON array");
+    // The pre-JSON space-separated form gets the contract error, not a raw ENOENT.
+    yield* driverCommand(env).pipe(
+      Effect.provide(configLayer("bun src/main.ts")),
+      Effect.flip,
+      Effect.map((error) => expect(error.message).toContain("JSON array")),
+    );
 
-  process.env.COLLIE_DRIVER = '["bun", 42]';
-  expect(() => driverCommand(env)).toThrow("COLLIE_DRIVER");
-  process.env.COLLIE_DRIVER = "[not json";
-  expect(() => driverCommand(env)).toThrow("COLLIE_DRIVER");
-  delete process.env.COLLIE_DRIVER;
-});
+    for (const driver of ['["bun", 42]', "[not json"]) {
+      yield* driverCommand(env).pipe(
+        Effect.provide(configLayer(driver)),
+        Effect.flip,
+        Effect.map((error) => expect(error.message).toContain("COLLIE_DRIVER")),
+      );
+    }
+  },
+);
 
-test("driver startup works from a plugin root with spaces and shell metacharacters", async () => {
-  const pluginRoot = join(rig.root, "plu gin's root; touch pwned");
-  const marker = join(rig.root, "launched.txt");
-  mkdirSync(join(pluginRoot, "bin"), { recursive: true });
-  writeFileSync(
-    join(pluginRoot, "bin", "collie"),
-    `#!/bin/sh\nprintf '%s %s %s' "$1" "$2" "$COLLIE_RUN" > ${JSON.stringify(marker)}\n`,
-    { mode: 0o755 },
-  );
-  delete process.env.COLLIE_DRIVER;
+effectTest(
+  "driver startup works from a plugin root with spaces and shell metacharacters",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const pluginRoot = path.join(rig.root, "plu gin's root; touch pwned");
+    const marker = path.join(rig.root, "launched.txt");
+    yield* fs.makeDirectory(path.join(pluginRoot, "bin"), { recursive: true });
+    yield* fs.writeFileString(
+      path.join(pluginRoot, "bin", "collie"),
+      `#!/bin/sh\nprintf '%s %s %s' "$1" "$2" "$COLLIE_RUN" > ${JSON.stringify(marker)}\n`,
+      { mode: 0o755 },
+    );
 
-  const env = rig.pluginEnv({ HERDR_PLUGIN_ROOT: pluginRoot });
-  spawnDriver(env, "run-1", rig.projectDir);
-  for (let i = 0; i < 100 && !existsSync(marker); i++) await sleep(25);
+    const env = rig.pluginEnv({ HERDR_PLUGIN_ROOT: pluginRoot });
+    yield* spawnDriver(env, "run-1", rig.projectDir).pipe(Effect.provide(configLayer()));
+    for (let i = 0; i < 100 && !(yield* fs.exists(marker)); i++) yield* Effect.sleep("25 millis");
 
-  // The path reached exec whole: the fake driver ran, with the run in its env,
-  // and the metacharacters in the path stayed path characters.
-  expect(readFileSync(marker, "utf8")).toBe("herdr drive run-1");
-  expect(existsSync(join(rig.root, "pwned"))).toBe(false);
-  expect(existsSync("pwned")).toBe(false);
-});
+    // The path reached exec whole: the fake driver ran, with the run in its env,
+    // and the metacharacters in the path stayed path characters.
+    expect(yield* fs.readFileString(marker)).toBe("herdr drive run-1");
+    expect(yield* fs.exists(path.join(rig.root, "pwned"))).toBe(false);
+    expect(yield* fs.exists("pwned")).toBe(false);
+  },
+);
 
-test("a log path with spaces and metacharacters is one argument to less, not syntax", async () => {
-  const env = rig.pluginEnv();
-  const dir = join(rig.root, "state's dir; touch pwned", "run dir");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, RUNNER_LOG), "hello\n");
-  const row = { id: "r", dir, glyph: "✓", title: "Review · x", detail: "", choice: null };
-  const view = { repo: "r", cwd: env.cwd, agents: [], extraAgents: 0, active: [], recent: [row] };
+effectTest(
+  "a log path with spaces and metacharacters is one argument to less, not syntax",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const env = rig.pluginEnv();
+    const dir = path.join(rig.root, "state's dir; touch pwned", "run dir");
+    yield* fs.makeDirectory(dir, { recursive: true });
+    yield* fs.writeFileString(path.join(dir, RUNNER_LOG), "hello\n");
+    const row = { id: "r", dir, glyph: "✓", title: "Review · x", detail: "", choice: null };
+    const view: WorkspaceView = {
+      repo: "r",
+      cwd: env.cwd,
+      agents: [],
+      extraAgents: 0,
+      active: [],
+      recent: [row],
+    };
 
-  const note = await openLog(
-    { herdr: new FakeHerdr(env), ...scopeFor(env, env.cwd), stateDir: env.stateDir, paneId: "1-1" },
-    view,
-  );
-  expect(note).toContain("Review · x");
+    const note = yield* openLog(
+      {
+        herdr: new FakeHerdr(env),
+        ...scopeFor(env, env.cwd),
+        stateDir: env.stateDir,
+        paneId: "1-1",
+      },
+      view,
+    );
+    expect(note).toContain("Review · x");
 
-  // Run the exact command the pane was given through a real shell, with `less`
-  // faked: the whole path must arrive as one argument, and nothing else must run.
-  const command = rig.calls().filter((c) => c.cmd === "pane run").at(-1)!.argv!.at(-1)!;
-  const bin = new FakeBin(join(rig.root, "fakebin"));
-  const marker = join(rig.root, "less-arg.txt");
-  bin.add("less", `printf '%s' "$2" > ${JSON.stringify(marker)}`);
-  const proc = Bun.spawnSync(["sh", "-c", command], { env: process.env as Record<string, string> });
-  bin.restore();
+    // Run the exact command the pane was given through a real shell, with `less`
+    // faked: the whole path must arrive as one argument, and nothing else must run.
+    const command =
+      (yield* rig.calls())
+        .filter((c) => c.cmd === "pane run")
+        .at(-1)
+        ?.argv?.at(-1) ?? "";
+    const bin = yield* FakeBin.make(path.join(rig.root, "fakebin"));
+    const marker = path.join(rig.root, "less-arg.txt");
+    yield* bin.add("less", `printf '%s' "$2" > ${JSON.stringify(marker)}`);
+    const pathValue = yield* Config.string("PATH").pipe(Config.withDefault(""));
+    const exit = yield* spawner.exitCode(
+      ChildProcess.make("sh", ["-c", command], {
+        env: { PATH: `${bin.dir}:${pathValue}` },
+        extendEnv: true,
+        stdout: "ignore",
+        stderr: "ignore",
+      }),
+    );
+    yield* bin.restore();
 
-  expect(proc.exitCode).toBe(0);
-  expect(readFileSync(marker, "utf8")).toBe(join(dir, RUNNER_LOG));
-  expect(existsSync(join(rig.root, "pwned"))).toBe(false);
-  expect(existsSync("pwned")).toBe(false);
-});
+    expect(Number(exit)).toBe(0);
+    expect(yield* fs.readFileString(marker)).toBe(path.join(dir, RUNNER_LOG));
+    expect(yield* fs.exists(path.join(rig.root, "pwned"))).toBe(false);
+    expect(yield* fs.exists("pwned")).toBe(false);
+  },
+);
 
-test("a contender mid-takeover blocks others from clearing the claim, and its crash does not wedge the run", () => {
-  const run = new RunStore(rig.stateDir).create({
-    workflow: "solo",
-    cwd: rig.projectDir,
-    inputs: {},
-    inputSources: {},
-    stepIds: ["solo"],
-    maxIterations: 1,
-    primaryInput: "x",
-  });
-  const claim = join(run.dir, RUNNER_PID);
-  const lock = `${claim}.takeover`;
-  // A stale claim (dead pid), with a live contender holding the takeover lock —
-  // this test process stands in for that contender.
-  writeFileSync(claim, `${JSON.stringify({ pid: 999999, start: "1", at: "" })}\n`);
-  writeFileSync(lock, `${JSON.stringify({ pid: process.pid, start: processStartTime(process.pid) })}\n`);
+effectTest(
+  "a contender mid-takeover blocks others from clearing the claim, and its crash does not wedge the run",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const run = yield* new RunStore(rig.stateDir).create({
+      workflow: "solo",
+      cwd: rig.projectDir,
+      inputs: {},
+      inputSources: {},
+      stepIds: ["solo"],
+      maxIterations: 1,
+      primaryInput: "x",
+    });
+    const claim = path.join(run.dir, RUNNER_PID);
+    const lock = `${claim}.takeover`;
+    // A stale claim (dead pid), with a live contender holding the takeover lock —
+    // this test process stands in for that contender.
+    yield* fs.writeFileString(claim, `${JSON.stringify({ pid: 999999, start: "1", at: "" })}\n`);
+    yield* fs.writeFileString(
+      lock,
+      `${JSON.stringify({ pid: yield* currentPid, start: yield* processStartTime(yield* currentPid) })}\n`,
+    );
 
-  // This attempt loses cleanly and, crucially, does not remove the claim: the
-  // lock holder may already have cleared it and written a fresh one of its own.
-  expect(acquireDriver(run.dir)).toBe(false);
-  expect(existsSync(claim)).toBe(true);
+    // This attempt loses cleanly and, crucially, does not remove the claim: the
+    // lock holder may already have cleared it and written a fresh one of its own.
+    expect(yield* acquireDriver(run.dir)).toBe(false);
+    expect(yield* fs.exists(claim)).toBe(true);
 
-  // The lock holder crashed: a dead holder's lock is broken at once — no ageing
-  // needed — and the run is not wedged.
-  writeFileSync(lock, `${JSON.stringify({ pid: 424242, start: "1" })}\n`);
-  expect(acquireDriver(run.dir)).toBe(true);
-  releaseDriver(run.dir);
-  expect(existsSync(lock)).toBe(false);
-});
+    // The lock holder crashed: a dead holder's lock is broken at once — no ageing
+    // needed — and the run is not wedged.
+    yield* fs.writeFileString(lock, `${JSON.stringify({ pid: 424242, start: "1" })}\n`);
+    expect(yield* acquireDriver(run.dir)).toBe(true);
+    yield* releaseDriver(run.dir);
+    expect(yield* fs.exists(lock)).toBe(false);
+  },
+);
 
-test("a pre-upgrade bare-pid claim from a live driver still counts as a driver", () => {
-  const run = new RunStore(rig.stateDir).create({
-    workflow: "solo",
-    cwd: rig.projectDir,
-    inputs: {},
-    inputSources: {},
-    stepIds: ["solo"],
-    maxIterations: 1,
-    primaryInput: "x",
-  });
-  // This test process stands in for a driver from the previous release.
-  writeFileSync(join(run.dir, RUNNER_PID), `${process.pid}\n`);
+effectTest(
+  "a pre-upgrade bare-pid claim from a live driver still counts as a driver",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const run = yield* new RunStore(rig.stateDir).create({
+      workflow: "solo",
+      cwd: rig.projectDir,
+      inputs: {},
+      inputSources: {},
+      stepIds: ["solo"],
+      maxIterations: 1,
+      primaryInput: "x",
+    });
+    // This test process stands in for a driver from the previous release.
+    yield* fs.writeFileString(path.join(run.dir, RUNNER_PID), `${yield* currentPid}\n`);
 
-  // Alive for liveness — a resume mid-upgrade must not start a second driver —
-  // but never verified enough to signal.
-  expect(driverAlive(run.dir)).toBe(true);
-  expect(acquireDriver(run.dir)).toBe(false);
-  expect(stopDriver(run.dir)).toBe(false);
-  expect(existsSync(join(run.dir, RUNNER_PID))).toBe(true);
-  rmSync(join(run.dir, RUNNER_PID));
-});
+    // Alive for liveness — a resume mid-upgrade must not start a second driver —
+    // but never verified enough to signal.
+    expect(yield* driverAlive(run.dir)).toBe(true);
+    expect(yield* acquireDriver(run.dir)).toBe(false);
+    expect(yield* stopDriver(run.dir)).toBe(false);
+    expect(yield* fs.exists(path.join(run.dir, RUNNER_PID))).toBe(true);
+    yield* fs.remove(path.join(run.dir, RUNNER_PID));
+  },
+);
 
-test("an unreadable young claim is a winner mid-write, not a stale claim to remove", () => {
-  const run = new RunStore(rig.stateDir).create({
-    workflow: "solo",
-    cwd: rig.projectDir,
-    inputs: {},
-    inputSources: {},
-    stepIds: ["solo"],
-    maxIterations: 1,
-    primaryInput: "x",
-  });
-  const claim = join(run.dir, RUNNER_PID);
-  // wx creation and the JSON write are not one operation; a contender arriving
-  // between them sees an empty claim. It must lose cleanly, not remove it.
-  writeFileSync(claim, "");
-  expect(acquireDriver(run.dir)).toBe(false);
-  expect(existsSync(claim)).toBe(true);
+effectTest(
+  "an unreadable young claim is a winner mid-write, not a stale claim to remove",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const run = yield* new RunStore(rig.stateDir).create({
+      workflow: "solo",
+      cwd: rig.projectDir,
+      inputs: {},
+      inputSources: {},
+      stepIds: ["solo"],
+      maxIterations: 1,
+      primaryInput: "x",
+    });
+    const claim = path.join(run.dir, RUNNER_PID);
+    // wx creation and the JSON write are not one operation; a contender arriving
+    // between them sees an empty claim. It must lose cleanly, not remove it.
+    yield* fs.writeFileString(claim, "");
+    expect(yield* acquireDriver(run.dir)).toBe(false);
+    expect(yield* fs.exists(claim)).toBe(true);
 
-  // Aged past any plausible write, the unreadable claim is leftovers.
-  const old = new Date(Date.now() - 60_000);
-  utimesSync(claim, old, old);
-  expect(acquireDriver(run.dir)).toBe(true);
-  releaseDriver(run.dir);
-});
+    // Aged past any plausible write, the unreadable claim is leftovers.
+    const old = dateFromMillis((yield* nowMillis()) - 60_000);
+    yield* fs.utimes(claim, old, old);
+    expect(yield* acquireDriver(run.dir)).toBe(true);
+    yield* releaseDriver(run.dir);
+  },
+);

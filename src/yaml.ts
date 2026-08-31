@@ -2,7 +2,37 @@
 // flow maps/sequences, block scalars, quoted and bare scalars. Not a general
 // YAML parser — enough for the frontmatter documented in docs/SPEC.md.
 
-export class YamlError extends Error {}
+import { Data, Schema } from "effect";
+
+export type YamlScalar = string | number | boolean | null;
+export type YamlValue = YamlScalar | YamlMap | ReadonlyArray<YamlValue>;
+export interface YamlMap {
+  [key: string]: YamlValue;
+}
+
+export const YamlValueSchema: Schema.Codec<YamlValue> = Schema.suspend(() =>
+  Schema.Union([
+    Schema.String,
+    Schema.Number,
+    Schema.Boolean,
+    Schema.Null,
+    Schema.Array(YamlValueSchema),
+    YamlMapSchema,
+  ]),
+);
+export const YamlMapSchema: Schema.Codec<YamlMap> = Schema.Record(Schema.String, YamlValueSchema);
+
+export class YamlError extends Data.TaggedError("YamlError")<{ message: string }> {}
+
+function yamlError(message: string): YamlError {
+  return new YamlError({ message });
+}
+
+const isStringMap = Schema.is(Schema.Record(Schema.String, Schema.Unknown));
+
+export function isYamlMap(value: YamlValue | undefined): value is YamlMap {
+  return value !== undefined && value !== null && !Array.isArray(value) && isStringMap(value);
+}
 
 interface Line {
   indent: number;
@@ -10,7 +40,7 @@ interface Line {
   n: number;
 }
 
-const KEY = /^("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_][A-Za-z0-9_.\/-]*)\s*:(?:[ \t]+(.*))?$/;
+const KEY = /^("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_][A-Za-z0-9_./-]*)\s*:(?:[ \t]+(.*))?$/;
 
 function stripComment(raw: string): string {
   let quote: string | null = null;
@@ -42,19 +72,19 @@ function isSeqItem(text: string): boolean {
   return text === "-" || text.startsWith("- ");
 }
 
-export function parseYaml(src: string): unknown {
+export function parseYaml(src: string): YamlValue {
   const ls = toLines(src);
   if (ls.length === 0) return {};
   const [value] = parseNode(ls, 0, ls[0]!.indent);
   return value;
 }
 
-function parseNode(ls: Line[], i: number, indent: number): [unknown, number] {
+function parseNode(ls: Line[], i: number, indent: number): [YamlValue, number] {
   return isSeqItem(ls[i]!.text) ? parseSeq(ls, i, indent) : parseMap(ls, i, indent);
 }
 
-function parseSeq(ls: Line[], i: number, indent: number): [unknown[], number] {
-  const out: unknown[] = [];
+function parseSeq(ls: Line[], i: number, indent: number): [YamlValue[], number] {
+  const out: YamlValue[] = [];
   while (i < ls.length && ls[i]!.indent === indent && isSeqItem(ls[i]!.text)) {
     const rest = ls[i]!.text === "-" ? "" : ls[i]!.text.slice(2).trim();
     if (rest === "") {
@@ -84,11 +114,11 @@ function parseSeq(ls: Line[], i: number, indent: number): [unknown[], number] {
   return [out, i];
 }
 
-function parseMap(ls: Line[], i: number, indent: number): [Record<string, unknown>, number] {
-  const out: Record<string, unknown> = {};
+function parseMap(ls: Line[], i: number, indent: number): [YamlMap, number] {
+  const out: YamlMap = {};
   while (i < ls.length && ls[i]!.indent === indent) {
     const m = KEY.exec(ls[i]!.text);
-    if (!m) throw new YamlError(`line ${ls[i]!.n}: expected "key: value", got "${ls[i]!.text}"`);
+    if (!m) throw yamlError(`line ${ls[i]!.n}: expected "key: value", got "${ls[i]!.text}"`);
     const key = unquote(m[1]!);
     const rest = (m[2] ?? "").trim();
     if (rest === "|" || rest === "|-" || rest === ">" || rest === ">-") {
@@ -134,7 +164,7 @@ function unquote(raw: string): string {
   return raw;
 }
 
-function parseScalar(raw: string, line: number): unknown {
+function parseScalar(raw: string, line: number): YamlValue {
   if (raw.startsWith("{") || raw.startsWith("[")) return parseFlow(raw, line);
   if (raw === "null" || raw === "~") return null;
   if (raw === "true" || raw === "yes") return true;
@@ -144,11 +174,11 @@ function parseScalar(raw: string, line: number): unknown {
   return unquote(raw);
 }
 
-function parseFlow(raw: string, line: number): unknown {
+function parseFlow(raw: string, line: number): YamlValue {
   const s = { text: raw, i: 0, line };
   const value = readFlowValue(s);
   skipSpace(s);
-  if (s.i < s.text.length) throw new YamlError(`line ${line}: trailing text in "${raw}"`);
+  if (s.i < s.text.length) throw yamlError(`line ${line}: trailing text in "${raw}"`);
   return value;
 }
 
@@ -162,7 +192,7 @@ function skipSpace(s: Cursor) {
   while (s.i < s.text.length && /\s/.test(s.text[s.i]!)) s.i += 1;
 }
 
-function readFlowValue(s: Cursor): unknown {
+function readFlowValue(s: Cursor): YamlValue {
   skipSpace(s);
   const c = s.text[s.i];
   if (c === "{") return readFlowMap(s);
@@ -189,9 +219,9 @@ function readFlowToken(s: Cursor): string {
   return s.text.slice(start, s.i).trim();
 }
 
-function readFlowMap(s: Cursor): Record<string, unknown> {
+function readFlowMap(s: Cursor): YamlMap {
   s.i += 1;
-  const out: Record<string, unknown> = {};
+  const out: YamlMap = {};
   for (;;) {
     skipSpace(s);
     if (s.text[s.i] === "}") {
@@ -200,17 +230,17 @@ function readFlowMap(s: Cursor): Record<string, unknown> {
     }
     const token = readFlowToken(s);
     const colon = token.indexOf(":");
-    if (colon < 0) throw new YamlError(`line ${s.line}: expected "key: value" in flow map`);
+    if (colon < 0) throw yamlError(`line ${s.line}: expected "key: value" in flow map`);
     out[unquote(token.slice(0, colon).trim())] = parseScalar(token.slice(colon + 1).trim(), s.line);
     skipSpace(s);
     if (s.text[s.i] === ",") s.i += 1;
-    else if (s.text[s.i] !== "}") throw new YamlError(`line ${s.line}: unterminated flow map`);
+    else if (s.text[s.i] !== "}") throw yamlError(`line ${s.line}: unterminated flow map`);
   }
 }
 
-function readFlowSeq(s: Cursor): unknown[] {
+function readFlowSeq(s: Cursor): YamlValue[] {
   s.i += 1;
-  const out: unknown[] = [];
+  const out: YamlValue[] = [];
   for (;;) {
     skipSpace(s);
     if (s.text[s.i] === "]") {
@@ -220,12 +250,12 @@ function readFlowSeq(s: Cursor): unknown[] {
     out.push(readFlowValue(s));
     skipSpace(s);
     if (s.text[s.i] === ",") s.i += 1;
-    else if (s.text[s.i] !== "]") throw new YamlError(`line ${s.line}: unterminated flow sequence`);
+    else if (s.text[s.i] !== "]") throw yamlError(`line ${s.line}: unterminated flow sequence`);
   }
 }
 
 export interface Document {
-  data: Record<string, unknown>;
+  data: YamlMap;
   body: string;
 }
 
@@ -235,6 +265,9 @@ export function parseDocument(text: string): Document {
   const m = /^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(normalised);
   if (!m) return { data: {}, body: normalised.trim() };
   const data = parseYaml(m[1]!);
-  if (data !== null && typeof data !== "object") throw new YamlError("frontmatter must be a mapping");
-  return { data: (data ?? {}) as Record<string, unknown>, body: normalised.slice(m[0].length).trim() };
+  if (!isYamlMap(data)) throw yamlError("frontmatter must be a mapping");
+  return {
+    data,
+    body: normalised.slice(m[0].length).trim(),
+  };
 }

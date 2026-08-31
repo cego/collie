@@ -4,8 +4,9 @@
 // startup per call) and call the same core directly; see recorder.ts.
 
 import { fakeHerdr } from "./fake-herdr-core";
+import { runEffect } from "./effect";
 
-const { code, stdout, stderr } = fakeHerdr(process.argv.slice(2));
-if (stderr) process.stderr.write(stderr);
-if (stdout) process.stdout.write(stdout);
-process.exit(code);
+const { code, stdout, stderr } = await runEffect(fakeHerdr(Bun.argv.slice(2)));
+if (stderr) await Bun.write(Bun.stderr, stderr);
+if (stdout) await Bun.write(Bun.stdout, stdout);
+globalThis.process.exitCode = code;

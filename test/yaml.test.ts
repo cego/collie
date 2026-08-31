@@ -39,7 +39,11 @@ steps:
 });
 
 test("flow maps and sequences", () => {
-  expect(parseYaml(`parallel: [{ harness: claude, model: sonnet }, { harness: codex, model: gpt-5 }]\ntags: [a, b]`)).toEqual({
+  expect(
+    parseYaml(
+      `parallel: [{ harness: claude, model: sonnet }, { harness: codex, model: gpt-5 }]\ntags: [a, b]`,
+    ),
+  ).toEqual({
     parallel: [
       { harness: "claude", model: "sonnet" },
       { harness: "codex", model: "gpt-5" },
@@ -61,7 +65,10 @@ test("quoted strings keep colons, hashes and booleans verbatim", () => {
 });
 
 test("block scalars", () => {
-  expect(parseYaml(`note: |-\n  first\n  second\nnext: 1\n`)).toEqual({ note: "first\nsecond", next: 1 });
+  expect(parseYaml(`note: |-\n  first\n  second\nnext: 1\n`)).toEqual({
+    note: "first\nsecond",
+    next: 1,
+  });
 });
 
 test("a bad line names its line number", () => {

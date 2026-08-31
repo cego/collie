@@ -41,8 +41,8 @@ steps:
     agent: build
     requires: gitlab
     output: mr.json
-
 ---
+
 Work source ({{inputs.plan_kind}}): {{inputs.plan}}
 Project root: {{cwd}}
 This run's directory: {{run.dir}}
@@ -64,10 +64,10 @@ The work source above is one of four kinds. Do the one that matches
     creates the local branch for you, so the fixes land on that merge request's own branch
     and it is updated rather than replaced.
   - `{{inputs.target_kind}}` is `worktree` — stay on the branch you are on.
-  Write the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket per
-  finding under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix.
-  A finding you disagree with is `disputed` with a reason, exactly as in a fix round —
-  never silently skipped.
+    Write the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket per
+    finding under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix.
+    A finding you disagree with is `disputed` with a reason, exactly as in a fix round —
+    never silently skipped.
 - **linear** — a Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat
   its description as the spec. Before building, write that spec to
   `{{run.dir}}/plan/SPEC.md` and a short task list to `{{run.dir}}/plan/issues/NN-*.md`,

@@ -30,7 +30,10 @@ export function agentName(
 ): string {
   const suffix = `r${seq}`;
   const trim = (text: string, room: number) => text.slice(0, Math.max(0, room)).replace(/-+$/g, "");
-  const core = trim(sanitize([stepId, variantKey].filter((p) => p).join("-")), MAX - suffix.length - 1);
+  const core = trim(
+    sanitize([stepId, variantKey].filter((p) => p).join("-")),
+    MAX - suffix.length - 1,
+  );
   const tail = core ? `${core}-${suffix}` : suffix;
   const room = MAX - tail.length - 1;
   const head = room > 0 ? trim(sanitize(slug), room) : "";
@@ -93,7 +96,11 @@ function opaque(ref: string): boolean {
  * by name, the working tree, or — for the workflows that have no target — the
  * run's own slug without the workflow it already carries.
  */
-export function targetLabel(workflow: string, slug: string, inputs: Record<string, string>): string {
+export function targetLabel(
+  workflow: string,
+  slug: string,
+  inputs: Record<string, string>,
+): string {
   const target = inputs.target ?? "";
   if (target === "worktree") return "worktree";
   // An MR target carries its project; only the iid belongs on a label.

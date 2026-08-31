@@ -23,10 +23,10 @@ Keys it adds (`prefix` is `ctrl+b` by default; edit them in `config.toml` afterw
 Plain letters on purpose: `alt` chords after the prefix are not delivered reliably over
 SSH or through some terminals, and herdr's own config notes the same.
 
-| Key | Action |
-| --- | --- |
-| `prefix+f` | `cego.collie.pick` — run a workflow |
-| `prefix+u` | `cego.collie.resume` — resume a run with unfinished steps |
+| Key              | Action                                                          |
+| ---------------- | --------------------------------------------------------------- |
+| `prefix+f`       | `cego.collie.pick` — run a workflow                             |
+| `prefix+u`       | `cego.collie.resume` — resume a run with unfinished steps       |
 | `prefix+shift+f` | `cego.collie.fork` — copy a workflow or persona into your layer |
 
 They show up in herdr's keybind help (`prefix+?`). Without a binding, any action still
@@ -59,7 +59,7 @@ Put `--workspace <id>` and `--json` before the command. Mutations accept
 3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only
    for what could not be inferred, and shown one confirm line. Two inputs offer a menu
    instead of a guess: `implement`'s work source, and `review`'s target.
-4. The workspace's **Control Plane** tab opens, and it is always the workspace's *first*
+4. The workspace's **Control Plane** tab opens, and it is always the workspace's _first_
    tab, so `prefix+1` lands on it — the first run creates it, every run after it reuses
    it and puts it back at the front. It is the **only pane Collie keeps open**: the
    run itself is driven by a background process with no pane at all, which reports into
@@ -138,23 +138,23 @@ in a tab you are not looking at.
 
 ## Workflows
 
-| Workflow | What it does |
-| --- | --- |
-| `plan` | Grills you, writes `SPEC.md` and tickets into the run dir, then a menu: implement now, second opinion, offload to Linear, refine |
-| `implement` | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models into one synthesised review, loops on its findings up to five times, then pushes and opens the merge request |
-| `review` | Reviews an MR (anyone's, from any directory), a branch diff or the working tree with two models, synthesises them into one review, and offers to post it to the merge request |
-| `architecture` | Runs the architect over the project, reports into the run dir, then a menu: implement now or stop |
+| Workflow       | What it does                                                                                                                                                                                                                                                               |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plan`         | Grills you, writes `SPEC.md` and tickets into the run dir, then a menu: implement now, second opinion, offload to Linear, refine                                                                                                                                           |
+| `implement`    | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models into one synthesised review, loops on its findings up to five times, then pushes and opens the merge request |
+| `review`       | Reviews an MR (anyone's, from any directory), a branch diff or the working tree with two models, synthesises them into one review, and offers to post it to the merge request                                                                                              |
+| `architecture` | Runs the architect over the project, reports into the run dir, then a menu: implement now or stop                                                                                                                                                                          |
 
 `plan` and `architecture` can chain `implement`, which embeds `review` and the
 unattended half of `architecture`. Any of them is a fork away from being yours.
 
 ## Actions
 
-| Action | What it does |
-| --- | --- |
-| `cego.collie.pick` | Popup picker of workflows; infers inputs, asks for the rest, then runs |
+| Action               | What it does                                                           |
+| -------------------- | ---------------------------------------------------------------------- |
+| `cego.collie.pick`   | Popup picker of workflows; infers inputs, asks for the rest, then runs |
 | `cego.collie.resume` | Popup picker of runs with unfinished steps; finished steps are skipped |
-| `cego.collie.fork` | Copy a workflow or persona into your layer or this project's |
+| `cego.collie.fork`   | Copy a workflow or persona into your layer or this project's           |
 
 Each action opens the `picker` popup, because that is where a terminal is. The run itself
 is not a pane: the picker starts a detached `drive` process that outlives it and writes
@@ -237,10 +237,10 @@ about a directory the harness has not been trusted with: see "The first run in a
 
 Workflows and personas name the skills they drive, and the harness decides how to ask:
 
-| Harness | `{{skill:code-review}}` renders as |
-| --- | --- |
-| `claude` | `/code-review` |
-| `pi` | `/skill:code-review` |
+| Harness             | `{{skill:code-review}}` renders as                                                            |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| `claude`            | `/code-review`                                                                                |
+| `pi`                | `/skill:code-review`                                                                          |
 | `codex`, `opencode` | `the "code-review" skill` — they surface skills by description, so a slash would just be text |
 
 The skills themselves are shared: one set in `~/.agents/skills`, installed by `skills.sh`
@@ -262,12 +262,12 @@ runtime rather than at validation.
 
 ## Harnesses
 
-| Harness | Model flag | Persona | Effort |
-| --- | --- | --- | --- |
-| `claude` | `--model` | `--append-system-prompt-file` | `--effort low\|medium\|high\|xhigh\|max` |
-| `codex` | `-m` | prompt prefix | — |
-| `pi` | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` |
-| `opencode` | `--model <provider/model>` | prompt prefix | — |
+| Harness    | Model flag                 | Persona                                                  | Effort                                                   |
+| ---------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| `claude`   | `--model`                  | `--append-system-prompt-file`                            | `--effort low\|medium\|high\|xhigh\|max`                 |
+| `codex`    | `-m`                       | prompt prefix                                            | —                                                        |
+| `pi`       | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` |
+| `opencode` | `--model <provider/model>` | prompt prefix                                            | —                                                        |
 
 `model: default` is accepted by every harness and uses its adapter's pinned default.
 Claude pins that default to `opus`, so every base Claude agent receives `--model opus`;
@@ -287,30 +287,31 @@ name: implement
 title: implement — build from a plan, review in parallel, fix until clean
 description: One line for the picker.
 inputs:
-  plan: work-source        # goal | plan-dir | work-source | diff-target | ticket | flag
+  plan: work-source # goal | plan-dir | work-source | diff-target | ticket | flag
 max_iterations: 5
 steps:
   - id: build
     persona: implementer
     output: build.json
   - id: review
-    use: review            # embeds another workflow by reference
-    fresh: true            # start a new agent each iteration
+    use: review # embeds another workflow by reference
+    fresh: true # start a new agent each iteration
     parallel:
       - { harness: claude, model: opus, effort: medium }
       - { harness: claude, model: sonnet, effort: xhigh }
   - id: synthesize
     persona: reviewer
-    fan_in: review         # reconciles that step's parallel Outputs into one
+    fan_in: review # reconciles that step's parallel Outputs into one
     output: synthesized.json
   - id: fix
-    agent: build           # keep the implementer's context
+    agent: build # keep the implementer's context
     persona: implementer
     output: fix.json
     repeat:
-      from: synthesize     # the gate: loop while that step reports findings
-      back_to: simplify    # where the next round starts (default: from)
+      from: synthesize # the gate: loop while that step reports findings
+      back_to: simplify # where the next round starts (default: from)
 ---
+
 Text before the first heading is prepended to every step's prompt.
 
 ## build
@@ -331,28 +332,28 @@ gap, never a failed run.
 A step with `choices:` asks you instead of running an agent:
 
 ```yaml
-  - id: next
-    choices:
-      - title: Implement now        # chain: a child run of another workflow
-        run: implement
-        inputs:
-          plan: "{{run.dir}}/plan"
-      - title: Second opinion       # one agent round, then the menu again
-        prompt: second-opinion      # sends the "## second-opinion" section
-        persona: reviewer
-        model: opus
-        effort: xhigh
-        fresh: true
-        output: opinion.json
-        max: 2                      # how often this choice may be taken
-        follow_up:                  # only when that round reported findings
-          agent: grill
-          prompt: revise
-          output: revise.json
-      - title: Post to MR           # the engine sends review.md as one glab mr note
-        post: true
-      - title: Stop here
-        stop: true
+- id: next
+  choices:
+    - title: Implement now # chain: a child run of another workflow
+      run: implement
+      inputs:
+        plan: "{{run.dir}}/plan"
+    - title: Second opinion # one agent round, then the menu again
+      prompt: second-opinion # sends the "## second-opinion" section
+      persona: reviewer
+      model: opus
+      effort: xhigh
+      fresh: true
+      output: opinion.json
+      max: 2 # how often this choice may be taken
+      follow_up: # only when that round reported findings
+        agent: grill
+        prompt: revise
+        output: revise.json
+    - title: Post to MR # the engine sends review.md as one glab mr note
+      post: true
+    - title: Stop here
+      stop: true
 ```
 
 Each choice needs a `title` and exactly one of `run`, `prompt`, `post` or `stop`. A
@@ -422,12 +423,27 @@ and anything it cannot defend from the diff itself listed under `dropped` with a
 nothing is dropped silently. Its Output is a review plus `summary` and `dropped`:
 
 ```json
-{"verdict": "findings",
- "summary": "Two sentences: what the change does, and what is wrong with it.",
- "findings": [{"file": "cli.js", "line": 4, "severity": "blocker",
-               "title": "Exits 1 on success", "detail": "A caller cannot tell it worked."}],
- "dropped": [{"file": "pkg.json", "severity": "minor", "title": "no engines field",
-              "reason": "one reviewer only, and the diff does not support it"}]}
+{
+  "verdict": "findings",
+  "summary": "Two sentences: what the change does, and what is wrong with it.",
+  "findings": [
+    {
+      "file": "cli.js",
+      "line": 4,
+      "severity": "blocker",
+      "title": "Exits 1 on success",
+      "detail": "A caller cannot tell it worked."
+    }
+  ],
+  "dropped": [
+    {
+      "file": "pkg.json",
+      "severity": "minor",
+      "title": "no engines field",
+      "reason": "one reviewer only, and the diff does not support it"
+    }
+  ]
+}
 ```
 
 The engine renders that to `review.md` in the run dir — the summary, then the findings
@@ -528,8 +544,10 @@ prerequisite rather than a preference.
 
 ```sh
 bun install
+bun run format:check
+bun run lint
 bun test
-bun run typecheck      # the same TypeScript gate CI runs
+bun run typecheck
 bun run build          # bin/collie for this platform
 ```
 

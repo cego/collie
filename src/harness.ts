@@ -35,7 +35,11 @@ export interface HarnessAdapter {
   efforts?: string[];
 }
 
-export const HARNESSES: Record<string, HarnessAdapter> = {
+export interface Harnesses {
+  readonly [name: string]: HarnessAdapter;
+}
+
+export const HARNESSES: Harnesses = {
   claude: {
     id: "claude",
     kind: "claude",
@@ -85,13 +89,17 @@ export function harnessNames(): string[] {
   return Object.keys(HARNESSES).sort();
 }
 
-export function knownModel(harness: HarnessAdapter, model: string, extra: string[] = []): boolean {
+export function knownModel(
+  harness: HarnessAdapter,
+  model: string,
+  extra: ReadonlyArray<string> = [],
+): boolean {
   if (model === DEFAULT_MODEL) return true;
   if (harness.models.includes(model) || extra.includes(model)) return true;
   return harness.modelPattern?.test(model) ?? false;
 }
 
-export function modelHint(harness: HarnessAdapter, extra: string[] = []): string {
+export function modelHint(harness: HarnessAdapter, extra: ReadonlyArray<string> = []): string {
   const known = [DEFAULT_MODEL, ...harness.models, ...extra];
   const parts: string[] = [];
   if (known.length > 0) parts.push(known.join(", "));

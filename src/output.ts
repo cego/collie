@@ -1,6 +1,9 @@
 // Step Outputs are JSON files in the run dir. Gates and loops read these,
 // never terminal text (docs/SPEC.md).
 
+import { Schema } from "effect";
+import { isYamlMap, YamlValueSchema, type YamlValue } from "./yaml";
+
 export interface Finding {
   file?: string;
   line?: number;
@@ -32,19 +35,32 @@ export const REVIEW_FILE = "review.md";
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
-export function parseReviewOutput(text: string, where: string): Parsed<ReviewOutput> {
-  let raw: unknown;
+const JsonValue = Schema.fromJsonString(YamlValueSchema);
+const isString = Schema.is(Schema.String);
+const isNumber = Schema.is(Schema.Number);
+
+function parseJson(text: string, where: string): Parsed<YamlValue> {
   try {
-    raw = JSON.parse(text);
-  } catch (e) {
-    return { ok: false, error: `${where}: not valid JSON (${(e as Error).message})` };
+    return { ok: true, value: Schema.decodeUnknownSync(JsonValue)(text) };
+  } catch (cause) {
+    return { ok: false, error: `${where}: not valid JSON (${String(cause)})` };
   }
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
-    return { ok: false, error: `${where}: expected a JSON object` };
-  }
-  const obj = raw as Record<string, unknown>;
+}
+
+function display(value: YamlValue | undefined): string {
+  return value === undefined ? "undefined" : Schema.encodeSync(JsonValue)(value);
+}
+
+export function parseReviewOutput(text: string, where: string): Parsed<ReviewOutput> {
+  const parsed = parseJson(text, where);
+  if (!parsed.ok) return parsed;
+  if (!isYamlMap(parsed.value)) return { ok: false, error: `${where}: expected a JSON object` };
+  const obj = parsed.value;
   if (obj.verdict !== "clean" && obj.verdict !== "findings") {
-    return { ok: false, error: `${where}: verdict must be "clean" or "findings", got ${JSON.stringify(obj.verdict)}` };
+    return {
+      ok: false,
+      error: `${where}: verdict must be "clean" or "findings", got ${display(obj.verdict)}`,
+    };
   }
   const findings = parseFindings(obj.findings, `${where}: findings`);
   if (!findings.ok) return findings;
@@ -53,30 +69,30 @@ export function parseReviewOutput(text: string, where: string): Parsed<ReviewOut
   if (obj.verdict === "findings" && findings.value.length === 0) {
     return { ok: false, error: `${where}: verdict "findings" with an empty findings list` };
   }
-  return { ok: true, value: { verdict: obj.verdict, findings: findings.value, disputed: disputed.value } };
+  return {
+    ok: true,
+    value: { verdict: obj.verdict, findings: findings.value, disputed: disputed.value },
+  };
 }
 
-export function parseFindings(raw: unknown, where: string): Parsed<Finding[]> {
+export function parseFindings(raw: YamlValue | undefined, where: string): Parsed<Finding[]> {
   if (raw === undefined || raw === null) return { ok: true, value: [] };
   if (!Array.isArray(raw)) return { ok: false, error: `${where}: expected an array` };
   const out: Finding[] = [];
-  for (const [i, item] of raw.entries()) {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      return { ok: false, error: `${where}[${i}]: expected an object` };
+  for (const [index, item] of raw.entries()) {
+    if (!isYamlMap(item)) return { ok: false, error: `${where}[${index}]: expected an object` };
+    if (!isString(item.title) || item.title.trim() === "") {
+      return { ok: false, error: `${where}[${index}]: title is required` };
     }
-    const o = item as Record<string, unknown>;
-    if (typeof o.title !== "string" || o.title.trim() === "") {
-      return { ok: false, error: `${where}[${i}]: title is required` };
+    if (!isString(item.severity) || item.severity.trim() === "") {
+      return { ok: false, error: `${where}[${index}]: severity is required` };
     }
-    if (typeof o.severity !== "string" || o.severity.trim() === "") {
-      return { ok: false, error: `${where}[${i}]: severity is required` };
-    }
-    const finding: Finding = { severity: o.severity, title: o.title };
-    if (typeof o.file === "string") finding.file = o.file;
-    if (typeof o.line === "number") finding.line = o.line;
-    if (typeof o.detail === "string") finding.detail = o.detail;
-    if (typeof o.rebuttal === "string") finding.rebuttal = o.rebuttal;
-    if (typeof o.reason === "string") finding.reason = o.reason;
+    const finding: Finding = { severity: item.severity, title: item.title };
+    if (isString(item.file)) finding.file = item.file;
+    if (isNumber(item.line)) finding.line = item.line;
+    if (isString(item.detail)) finding.detail = item.detail;
+    if (isString(item.rebuttal)) finding.rebuttal = item.rebuttal;
+    if (isString(item.reason)) finding.reason = item.reason;
     out.push(finding);
   }
   return { ok: true, value: out };
@@ -97,8 +113,11 @@ export function findingKey(f: Finding): string {
 export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
   const base = parseReviewOutput(text, where);
   if (!base.ok) return base;
-  const obj = JSON.parse(text) as Record<string, unknown>;
-  if (typeof obj.summary !== "string" || obj.summary.trim() === "") {
+  const parsed = parseJson(text, where);
+  if (!parsed.ok || !isYamlMap(parsed.value))
+    return { ok: false, error: `${where}: expected a JSON object` };
+  const obj = parsed.value;
+  if (!isString(obj.summary) || obj.summary.trim() === "") {
     return { ok: false, error: `${where}: summary is required` };
   }
   const dropped = parseFindings(obj.dropped, `${where}: dropped`);
@@ -109,7 +128,10 @@ export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
       return { ok: false, error: `${where}: dropped[${i}]: reason is required` };
     }
   }
-  return { ok: true, value: { ...base.value, summary: obj.summary.trim(), dropped: dropped.value } };
+  return {
+    ok: true,
+    value: { ...base.value, summary: obj.summary.trim(), dropped: dropped.value },
+  };
 }
 
 /** Worst first; anything a fork's own vocabulary adds sorts after these, by name. */
@@ -143,7 +165,9 @@ export function renderReview(synthesis: Synthesis): string {
 function reviewBullet(finding: Finding): string {
   const at = finding.file ? `\`${finding.file}${finding.line ? `:${finding.line}` : ""}\` — ` : "";
   // The detail is a sentence or two; a continuation line keeps it in the same bullet.
-  const detail = finding.detail?.trim() ? `\n  ${finding.detail.trim().replace(/\s*\n\s*/g, " ")}` : "";
+  const detail = finding.detail?.trim()
+    ? `\n  ${finding.detail.trim().replace(/\s*\n\s*/g, " ")}`
+    : "";
   return `- ${at}${finding.title.trim()}${detail}`;
 }
 
@@ -183,7 +207,9 @@ export function formatFindings(findings: Finding[]): string {
     .map((f) => {
       const at = f.file ? ` (${f.file}${f.line ? `:${f.line}` : ""})` : "";
       const detail = f.detail ? `\n  ${f.detail.replace(/\n/g, "\n  ")}` : "";
-      const rebuttal = f.rebuttal ? `\n  answers your dispute: ${f.rebuttal.replace(/\n/g, "\n  ")}` : "";
+      const rebuttal = f.rebuttal
+        ? `\n  answers your dispute: ${f.rebuttal.replace(/\n/g, "\n  ")}`
+        : "";
       return `- [${f.severity}] ${f.title}${at}${detail}${rebuttal}`;
     })
     .join("\n");

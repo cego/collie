@@ -1,6 +1,9 @@
 // {{a.b}} substitution for prompt bodies. Unknown keys render empty and are
 // reported so a typo in a definition is visible instead of silent.
 
+import { Schema } from "effect";
+import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
+
 export interface Rendered {
   text: string;
   missing: string[];
@@ -23,11 +26,7 @@ export function skillsIn(text: string): string[] {
 
 const SKILL = /\{\{\s*skill:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 
-export function renderTemplate(
-  text: string,
-  vars: Record<string, unknown>,
-  opts: RenderOptions = {},
-): Rendered {
+export function renderTemplate(text: string, vars: YamlMap, opts: RenderOptions = {}): Rendered {
   const missing: string[] = [];
   // Skills first, so `{{skill:x}}` is never mistaken for a missing variable.
   const withSkills = text.replace(SKILL, (all, name: string) =>
@@ -39,19 +38,23 @@ export function renderTemplate(
       if (!missing.includes(path)) missing.push(path);
       return "";
     }
-    return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+    return isText(value) ? value : JSON.stringify(value, null, 2);
   });
   return { text: out, missing };
 }
 
-function lookup(vars: Record<string, unknown>, path: string[]): unknown {
-  let node: unknown = vars;
+function lookup(vars: YamlMap, path: string[]): YamlValue | undefined {
+  let node: YamlValue = vars;
   for (const key of path) {
-    if (node === null || typeof node !== "object") return undefined;
-    node = (node as Record<string, unknown>)[key];
+    if (!isYamlMap(node)) return undefined;
+    const next: YamlValue | undefined = node[key];
+    if (next === undefined) return undefined;
+    node = next;
   }
   return node;
 }
+
+const isText = Schema.is(Schema.String);
 
 export function slugify(text: string, max = 40): string {
   const slug = text

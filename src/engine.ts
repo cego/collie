@@ -1,8 +1,10 @@
+import { nowIso, nowMillis } from "./time";
+import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import type { PlatformError } from "effect/PlatformError";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 // Executes a Run: one tab per Step, agents started with the right Harness,
 // Model and Persona, gates and loops driven by Output files.
 
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
 import type {
   ChoiceDef,
   Definitions,
@@ -18,6 +20,7 @@ import { configValue, readConfig, writeConfigValue } from "./config";
 import type { PluginEnv } from "./env";
 import type { PickItem } from "./picker";
 import { slugify } from "./template";
+import { isYamlMap, YamlMapSchema, YamlValueSchema, type YamlMap, type YamlValue } from "./yaml";
 import type { Herdr } from "./herdr";
 import { HerdrError } from "./herdr";
 import { HARNESSES, personaPrefix, startArgs } from "./harness";
@@ -32,7 +35,6 @@ import {
   splitDisputed,
   type Finding,
   type ReviewOutput,
-  type Synthesis,
 } from "./output";
 import {
   agentName,
@@ -58,7 +60,15 @@ import {
   type InputPrompts,
 } from "./inputs";
 import { RunStore } from "./run";
-import { gitlabForProject, gitlabReadiness, mrFacts, parseMrTarget, repoArgs, type MrFacts } from "./mr";
+import {
+  gitlabForProject,
+  gitlabReadiness,
+  mrFacts,
+  parseMrTarget,
+  repoArgs,
+  type MrFacts,
+  type Runner,
+} from "./mr";
 import { askRoute, liveRole, sendPlanChange, sendReview, type Session } from "./handoff";
 import { renderTemplate } from "./template";
 import { resolveWorkflow } from "./definitions";
@@ -67,7 +77,7 @@ import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 export const VIEW_SOURCE_PREFIX = "cego.collie:";
 
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
-export type EnginePrompts = InputPrompts;
+export type EnginePrompts = InputPrompts<Error | PlatformError, FileSystem.FileSystem | Path.Path>;
 
 export interface EngineOptions {
   herdr: Herdr;
@@ -76,7 +86,9 @@ export interface EngineOptions {
   wf: ResolvedWorkflow;
   run: Run;
   env: PluginEnv;
-  out: (line: string) => void;
+  out: (
+    line: string,
+  ) => Effect.Effect<void, Error | PlatformError, FileSystem.FileSystem | Path.Path>;
   stepTimeoutMs?: number;
   /** How long to keep waiting for an Output after the agent hands off to the human. */
   handoffTimeoutMs?: number;
@@ -87,9 +99,19 @@ export interface EngineOptions {
 
 interface VariantOutcome {
   record: VariantRecord;
-  output: unknown | null;
+  output: YamlValue | null;
   review: ReviewOutput | null;
 }
+
+const isString = Schema.is(Schema.String);
+const JsonValue = Schema.fromJsonString(YamlValueSchema);
+const choiceResult = (result: ChoiceResult): ChoiceResult => result;
+const handoffResult = (
+  result: false | { ok: boolean; message: string },
+  fallback: string,
+): { ok: boolean; message: string } => result || { ok: false, message: fallback };
+
+const runShell: Runner<ChildProcessSpawner.ChildProcessSpawner> = shellRun;
 
 /** What one execution accumulates as it goes: only this process's panes and agents. */
 interface RunCtx {
@@ -106,8 +128,8 @@ interface RunCtx {
   tabNames: Map<string, string>;
 }
 
-export async function executeRun(o: EngineOptions): Promise<RunStatus> {
-  const { herdr, run, wf, out } = o;
+export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOptions) {
+  const { run, wf, out } = o;
   const viewSource = `${VIEW_SOURCE_PREFIX}${run.id}`;
   const ctx: RunCtx = {
     outputs: new Map(),
@@ -123,11 +145,11 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
   run.record.finished_at = null;
   // The tab, the toast and the workspace view all name the run the same way.
   run.record.target_label = runTarget(wf, run.record);
-  run.save();
+  yield* run.save();
 
   // Before anything opens: this is where the run's own pane and its menus live.
-  ctx.workspaceTabId = await ensureWorkspaceTab(o);
-  await ensureTrusted(o);
+  ctx.workspaceTabId = yield* ensureWorkspaceTab(o);
+  yield* ensureTrusted(o);
 
   const indexOf = (id: string) => wf.steps.findIndex((s) => s.id === id);
   const repeats = wf.steps
@@ -150,32 +172,32 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     const record = run.step(step.id);
 
     if (record.status === "done") {
-      out(`✓ ${step.id} — already done, skipped`);
+      yield* out(`✓ ${step.id} — already done, skipped`);
       index += 1;
       continue;
     }
 
     // A step that needs something this machine or repo does not have is not a
     // failure: it is work that cannot be done here, and the run carries on.
-    let extras: Record<string, unknown> | undefined;
+    let extras: YamlMap | undefined;
     if ((step.requires?.length ?? 0) > 0) {
-      const unmet = await unmetRequirement(o, step.requires!);
+      const unmet = yield* unmetRequirement(o, step.requires!);
       if (unmet) {
         record.status = "done";
         record.note = `skipped: ${unmet}`;
-        run.save();
-        out(`◦ ${step.id} — skipped: ${unmet}`);
+        yield* run.save();
+        yield* out(`◦ ${step.id} — skipped: ${unmet}`);
         index += 1;
         continue;
       }
       if (step.requires!.includes("gitlab")) {
-        const facts = await mrFacts(
+        const facts = yield* mrFacts(
           {
             cwd: run.record.cwd,
             inputs: run.record.inputs,
-            configuredAssignee: configValue(readConfig(o.env.configDir), "gitlab.assignee"),
+            configuredAssignee: configValue(yield* readConfig(o.env.configDir), "gitlab.assignee"),
           },
-          shellRun,
+          runShell,
         );
         extras = mrVars(facts);
       }
@@ -186,24 +208,29 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
       record.iteration = run.record.iteration;
       record.note = null;
       record.variants = [];
-      run.save();
-      out(`▶ ${step.id} — over to you`);
-      let result: ChoiceResult;
-      try {
-        result = await runChoiceStep(o, step, ctx);
-      } catch (e) {
+      yield* run.save();
+      yield* out(`▶ ${step.id} — over to you`);
+      const choiceResult = yield* runChoiceStep(o, step, ctx).pipe(Effect.result);
+      if (Result.isFailure(choiceResult)) {
+        const error = choiceResult.failure;
         record.status = "failed";
-        record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
-        run.save();
-        out(`✗ ${step.id} — ${record.note}`);
-        return await finish(o, "failed", viewSource);
+        record.note =
+          error instanceof HerdrError
+            ? `${error.message}: ${error.detail}`
+            : error instanceof Error
+              ? error.message
+              : String(error);
+        yield* run.save();
+        yield* out(`✗ ${step.id} — ${record.note}`);
+        return yield* finish(o, "failed", viewSource);
       }
+      const result: ChoiceResult = choiceResult.success;
       ctx.ran.add(step.id);
       record.status = result.status;
       record.note = result.note;
-      run.save();
+      yield* run.save();
       if (result.status !== "done") {
-        return await finish(o, "blocked", viewSource, `${step.id} needs you`);
+        return yield* finish(o, "blocked", viewSource, `${step.id} needs you`);
       }
       // A chained Run takes over from here, so the parent stops where it is.
       if (result.chained) {
@@ -211,8 +238,8 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
           const rec = run.step(s.id);
           if (rec.status === "pending") rec.note = `not run: ${result.note}`;
         }
-        run.save();
-        return await finish(o, "done", viewSource, result.note ?? undefined);
+        yield* run.save();
+        return yield* finish(o, "done", viewSource, result.note ?? undefined);
       }
       index += 1;
       continue;
@@ -224,19 +251,26 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
     record.iteration = run.record.iteration;
     // A step that failed and is being tried again must not keep the old note.
     record.note = null;
-    run.save();
-    out(`▶ ${step.id}${variants.length > 1 ? ` (${variants.length} in parallel)` : ""} — iteration ${run.record.iteration}`);
+    yield* run.save();
+    yield* out(
+      `▶ ${step.id}${variants.length > 1 ? ` (${variants.length} in parallel)` : ""} — iteration ${run.record.iteration}`,
+    );
 
-    let outcomes: VariantOutcome[];
-    try {
-      outcomes = await runStep(o, step, variants, keys, ctx, extras);
-    } catch (e) {
+    const stepResult = yield* runStep(o, step, variants, keys, ctx, extras).pipe(Effect.result);
+    if (Result.isFailure(stepResult)) {
+      const error = stepResult.failure;
       record.status = "failed";
-      record.note = e instanceof HerdrError ? `${e.message}: ${e.detail}` : (e as Error).message;
-      run.save();
-      out(`✗ ${step.id} — ${record.note}`);
-      return await finish(o, "failed", viewSource);
+      record.note =
+        error instanceof HerdrError
+          ? `${error.message}: ${error.detail}`
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      yield* run.save();
+      yield* out(`✗ ${step.id} — ${record.note}`);
+      return yield* finish(o, "failed", viewSource);
     }
+    const outcomes: VariantOutcome[] = stepResult.success;
     ctx.ran.add(step.id);
 
     record.variants = outcomes.map((v) => v.record);
@@ -244,18 +278,22 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
 
     const blocked = outcomes.filter((v) => v.record.status !== "done");
     record.status = blocked.length > 0 ? "blocked" : "done";
-    run.save();
+    yield* run.save();
 
     for (const v of outcomes) {
       const mark = v.record.status === "done" ? "✓" : v.record.status === "failed" ? "✗" : "⚠";
-      out(`  ${mark} ${v.record.label}${v.record.error ? ` — ${v.record.error}` : ""}`);
+      yield* out(`  ${mark} ${v.record.label}${v.record.error ? ` — ${v.record.error}` : ""}`);
     }
-    await markTab(o, ctx, outcomes.map((v) => v.record));
+    yield* markTab(
+      o,
+      ctx,
+      outcomes.map((v) => v.record),
+    );
     // The whole point of a synthesis is that a human can read it here.
-    if (step.fanIn) printReview(o);
+    if (step.fanIn) yield* printReview(o);
 
     if (blocked.length > 0) {
-      return await finish(o, "blocked", viewSource, `${step.id} needs you`);
+      return yield* finish(o, "blocked", viewSource, `${step.id} needs you`);
     }
 
     const gate = repeats.find((r) => r.from === index);
@@ -265,24 +303,26 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
       if (verdict.rebutted.length > 0) {
         const answered = new Set(verdict.rebutted.map(findingKey));
         run.record.disputed = run.record.disputed.filter((d) => !answered.has(findingKey(d)));
-        run.save();
-        out(`  ${verdict.rebutted.length} disputed finding(s) answered by a reviewer`);
+        yield* run.save();
+        yield* out(`  ${verdict.rebutted.length} disputed finding(s) answered by a reviewer`);
       }
       if (verdict.settled.length > 0) {
-        out(`  ${verdict.settled.length} finding(s) already disputed — your call, not the loop's`);
+        yield* out(
+          `  ${verdict.settled.length} finding(s) already disputed — your call, not the loop's`,
+        );
       }
       if (verdict.clean) {
-        out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
+        yield* out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
         for (const s of wf.steps.slice(index + 1, gate.at + 1)) {
           const rec = run.step(s.id);
           rec.status = "done";
           rec.note = "skipped: reviews clean";
         }
-        run.save();
+        yield* run.save();
         index = gate.at + 1;
         continue;
       }
-      out(`  ${verdict.findings.length} finding(s) to fix`);
+      yield* out(`  ${verdict.findings.length} finding(s) to fix`);
     }
 
     const mine = repeats.find((r) => r.at === index);
@@ -294,35 +334,40 @@ export async function executeRun(o: EngineOptions): Promise<RunStatus> {
           rec.status = "pending";
           rec.note = null;
         }
-        run.save();
-        out(`  looping back to ${wf.steps[mine.back]!.id} (iteration ${run.record.iteration})`);
+        yield* run.save();
+        yield* out(
+          `  looping back to ${wf.steps[mine.back]!.id} (iteration ${run.record.iteration})`,
+        );
         index = mine.back;
         continue;
       }
       // Committing work the reviewers still object to would be worse than stopping.
       const still = verdictOf(ctx.outputs.get(wf.steps[mine.from]!.id) ?? [], run.record.disputed);
       run.record.outstanding = still.findings;
-      run.step(step.id).note = `stopped at max_iterations ${mine.max} with ${still.findings.length} finding(s)`;
-      run.save();
-      out(`  max_iterations (${mine.max}) reached with ${still.findings.length} finding(s)`);
-      return await finish(o, "blocked", viewSource, `max_iterations reached with findings`);
+      run.step(step.id).note =
+        `stopped at max_iterations ${mine.max} with ${still.findings.length} finding(s)`;
+      yield* run.save();
+      yield* out(`  max_iterations (${mine.max}) reached with ${still.findings.length} finding(s)`);
+      return yield* finish(o, "blocked", viewSource, `max_iterations reached with findings`);
     }
 
     index += 1;
   }
 
-  return await finish(o, "done", viewSource);
-}
+  return yield* finish(o, "done", viewSource);
+});
 
-async function runStep(
+const runStep = Effect.fn("Engine.runStep")(function* (
   o: EngineOptions,
   step: ResolvedStep,
   variants: Variant[],
   keys: (string | null)[],
   ctx: RunCtx,
-  extraVars?: Record<string, unknown>,
-): Promise<VariantOutcome[]> {
+  extraVars?: YamlMap,
+) {
   const { herdr, run } = o;
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
   // A step that has not run in this process gets fresh agents: a resumed Run
   // never reattaches, and the recorded panes may not exist any more.
   const previous = ctx.ran.has(step.id) ? run.step(step.id).variants : [];
@@ -355,21 +400,26 @@ async function runStep(
     if (reuse) {
       // An `agent:` step opens nothing, and renames nothing: the pane it inherited
       // is alone in its tab, and the tab already names the run.
-      if (paneName && record.paneId) await herdr.paneRename(record.paneId, paneName);
-      if (record.tabId) await herdr.tabRename(record.tabId, runTab(o, ctx, record.tabId, GLYPH.running));
+      if (paneName && record.paneId) yield* herdr.paneRename(record.paneId, paneName);
+      if (record.tabId)
+        yield* herdr.tabRename(record.tabId, runTab(o, ctx, record.tabId, GLYPH.running));
     } else {
       if (prior?.paneId) {
         // fresh: replace the pane so `agent start` sees a shell prompt again. The
         // replacement inherits the slot, so the step keeps its tab across iterations.
-        const replacement = await herdr.paneSplit({ paneId: prior.paneId, direction: "right", cwd: run.record.cwd });
-        await herdr.paneClose(prior.paneId);
+        const replacement = yield* herdr.paneSplit({
+          paneId: prior.paneId,
+          direction: "right",
+          cwd: run.record.cwd,
+        });
+        yield* herdr.paneClose(prior.paneId);
         record.paneId = replacement;
         record.tabId = prior.tabId;
       } else if (i === 0 && fanIn) {
         // A fan-in step belongs with the Outputs it reconciles: under the last of
         // them, in their tab. A third column would only make all three unreadable.
         const source = fanIn;
-        record.paneId = await herdr.paneSplit({
+        record.paneId = yield* herdr.paneSplit({
           paneId: source.paneId!,
           direction: "down",
           ratio: 0.5,
@@ -378,7 +428,7 @@ async function runStep(
         record.tabId = source.tabId;
       } else if (i > 0) {
         // Variants of one step sit side by side in that step's tab, evenly.
-        record.paneId = await herdr.paneSplit({
+        record.paneId = yield* herdr.paneSplit({
           paneId: records[i - 1]!.paneId!,
           direction: "right",
           ratio: evenRatio(i, variants.length),
@@ -386,30 +436,39 @@ async function runStep(
         });
         record.tabId = records[i - 1]!.tabId;
       } else {
-        const name = await freeTabName(o, ctx, step);
-        const tab = await herdr.tabCreate({ label: tabLabel(GLYPH.running, name), cwd: run.record.cwd });
+        const name = yield* freeTabName(o, ctx, step);
+        const tab = yield* herdr.tabCreate({
+          label: tabLabel(GLYPH.running, name),
+          cwd: run.record.cwd,
+        });
         record.tabId = tab.tabId;
         record.paneId = tab.paneId;
         if (record.tabId) ctx.tabNames.set(record.tabId, name);
       }
-      if (record.tabId) await herdr.tabRename(record.tabId, runTab(o, ctx, record.tabId, GLYPH.running));
-      if (paneName && record.paneId) await herdr.paneRename(record.paneId, paneName);
+      if (record.tabId)
+        yield* herdr.tabRename(record.tabId, runTab(o, ctx, record.tabId, GLYPH.running));
+      if (paneName && record.paneId) yield* herdr.paneRename(record.paneId, paneName);
 
       // herdr 0.7.5 ignores --cwd on tab create and pane split, so cd explicitly.
-      if (record.paneId) await herdr.paneRun(record.paneId, `cd ${shellQuote(run.record.cwd)}`);
+      if (record.paneId) yield* herdr.paneRun(record.paneId, `cd ${shellQuote(run.record.cwd)}`);
 
       const adapter = HARNESSES[variant.harness]!;
-      await startAgent(o, step, {
+      yield* startAgent(o, step, {
         name: record.agent,
         kind: adapter.kind,
         paneId: record.paneId!,
-        args: startArgs(adapter, variant.model, personaFile(o, step, variant.harness), variant.effort),
+        args: startArgs(
+          adapter,
+          variant.model,
+          yield* personaFile(o, step, variant.harness),
+          variant.effort,
+        ),
       });
       if (record.paneId) {
         ctx.panes.push(record.paneId);
-        await setView(o, ctx.viewSource, ctx.panes);
+        yield* setView(o, ctx.viewSource, ctx.panes);
         // A group's first agent outlives its step, so the Session may hand it work.
-        if (groupHead(o.wf, step.id)) register(o, step, record);
+        if (groupHead(o.wf, step.id)) yield* register(o, step, record);
       }
       // The first step of an `agent:` group lends its agent to the rest of it.
       if (step.agent && !ctx.groups.has(step.agent)) ctx.groups.set(step.agent, record);
@@ -424,11 +483,11 @@ async function runStep(
   // Appended, because a Choice step's rounds accumulate here across the whole step.
   const recorded = run.step(step.id).variants;
   for (const record of records) if (!recorded.includes(record)) recorded.push(record);
-  run.save();
+  yield* run.save();
 
   // Only when a body asks: this costs herdr a round trip, and most steps do not.
   const vars = /\{\{\s*session\./.test(`${step.preamble}\n${step.prompt}`)
-    ? { ...extraVars, session: { ask: await askRoute(sessionOf(o)) } }
+    ? { ...extraVars, session: { ask: yield* askRoute(sessionOf(o)) } }
     : extraVars;
 
   for (const [i, record] of records.entries()) {
@@ -436,13 +495,19 @@ async function runStep(
     const key = keys[i]!;
     // A multi-line prompt cannot be typed into a harness reliably, so the prompt
     // goes to a file in the run dir and the agent is pointed at it.
-    const path = join(run.stepDir(step.id, key), `prompt-${run.record.iteration}.md`);
-    writeFileSync(path, `${buildPrompt(o, step, variant, key, ctx.outputs, vars)}\n`);
-    run.log(`prompt ${record.agent} -> ${relative(run.dir, path)}`);
+    const path = pathService.join(
+      yield* run.stepDir(step.id, key),
+      `prompt-${run.record.iteration}.md`,
+    );
+    yield* fs.writeFileString(
+      path,
+      `${yield* buildPrompt(o, step, variant, key, ctx.outputs, vars)}\n`,
+    );
+    yield* run.log(`prompt ${record.agent} -> ${pathService.relative(run.dir, path)}`);
     // A skill marked `disable-model-invocation` refuses an agent that invokes it
     // itself; `agent prompt` is the human's channel, so a slash command here runs.
     const command = step.skill ? `${skillFor(variants[i]!.harness).call(null, step.skill)} ` : "";
-    await herdr.agentPrompt(
+    yield* herdr.agentPrompt(
       record.agent,
       `${command}Your task for this step is in ${path} — read it and follow it.`,
     );
@@ -453,18 +518,18 @@ async function runStep(
     const key = keys[i]!;
     try {
       // The agent may settle before herdr reports `working`; that is not an error.
-      await o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 });
+      yield* o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 });
     } catch {
       /* ignore */
     }
-    await o.herdr.agentWait(record.agent, {
+    yield* o.herdr.agentWait(record.agent, {
       until: ["idle", "done", "blocked"],
       timeoutMs: o.stepTimeoutMs,
     });
-    outcomes.push(await collect(o, step, record, key));
+    outcomes.push(yield* collect(o, step, record, key));
   }
   return outcomes;
-}
+});
 
 interface ChoiceResult {
   status: StepStatus;
@@ -477,15 +542,18 @@ interface ChoiceResult {
  * A Choice step: a menu in the runner pane instead of an agent. A `prompt` choice
  * runs one agent round and offers the menu again; `run` and `stop` end the step.
  */
-async function runChoiceStep(
+const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
   o: EngineOptions,
   step: ResolvedStep,
   ctx: RunCtx,
-): Promise<ChoiceResult> {
+) {
   const { run, out } = o;
   const prompts = o.prompts;
   if (!prompts) {
-    return { status: "failed", note: `${step.id} needs a menu, and this run has no terminal` };
+    return choiceResult({
+      status: "failed",
+      note: `${step.id} needs a menu, and this run has no terminal`,
+    });
   }
   const choices = step.choices ?? [];
 
@@ -498,9 +566,9 @@ async function runChoiceStep(
     const offered: ChoiceDef[] = [];
     for (const choice of choices) {
       if (choice.max !== undefined && taken(choice.title) >= choice.max) continue;
-      if (choice.handoff && !(await liveRole(sessionOf(o), choice.handoff))) continue;
-      if (choice.unless && (await liveRole(sessionOf(o), choice.unless))) continue;
-      if (choice.requires && (await unmetRequirement(o, choice.requires))) continue;
+      if (choice.handoff && !(yield* liveRole(sessionOf(o), choice.handoff))) continue;
+      if (choice.unless && (yield* liveRole(sessionOf(o), choice.unless))) continue;
+      if (choice.requires && (yield* unmetRequirement(o, choice.requires))) continue;
       offered.push(choice);
     }
     // Everything that could have done something is unavailable, so the only choices
@@ -509,91 +577,99 @@ async function runChoiceStep(
     const lost = choices.filter((c) => !c.stop && !offered.includes(c));
     if (offered.every((c) => c.stop) && lost.length > 0) {
       const why = lost.map((c) => c.title).join(", ");
-      out(`◦ ${step.id} — nothing to decide (not available: ${why})`);
-      return { status: "done", note: `skipped: nothing to decide (${why})` };
+      yield* out(`◦ ${step.id} — nothing to decide (not available: ${why})`);
+      return choiceResult({ status: "done", note: `skipped: nothing to decide (${why})` });
     }
-    const items: PickItem[] = offered.map((c) => ({ id: c.title, title: c.title, subtitle: choiceHint(c) }));
+    const items: PickItem[] = offered.map((c) => ({
+      id: c.title,
+      title: c.title,
+      subtitle: choiceHint(c),
+    }));
 
-    await callAttention(o, ctx, `${step.id}: pick what happens next`, step.id);
-    const picked = await prompts.menu(items, {
+    yield* callAttention(o, ctx, `${step.id}: pick what happens next`, step.id);
+    const picked = yield* prompts.menu(items, {
       header: `${run.record.slug} — ${step.id}`,
       footer: "↑↓ move · Enter choose · Esc leave the run open",
     });
     run.record.awaiting = null;
-    run.save();
-    if (!picked) return { status: "blocked", note: "no choice taken" };
+    yield* run.save();
+    if (!picked) return choiceResult({ status: "blocked", note: "no choice taken" });
 
     const choice = offered.find((c) => c.title === picked.id)!;
-    run.record.choices.push({ step: step.id, title: choice.title, at: new Date().toISOString() });
-    run.save();
-    out(`  ▸ ${choice.title}`);
+    run.record.choices.push({ step: step.id, title: choice.title, at: yield* nowIso() });
+    yield* run.save();
+    yield* out(`  ▸ ${choice.title}`);
 
-    if (choice.stop) return { status: "done", note: `chose "${choice.title}"` };
+    if (choice.stop) return choiceResult({ status: "done", note: `chose "${choice.title}"` });
 
     if (choice.handoff) {
-      const result = await handOff(o, choice.handoff);
-      out(`  ${result.message}`);
-      run.log(result.message);
+      const result = yield* handOff(o, choice.handoff);
+      yield* out(`  ${result.message}`);
+      yield* run.log(result.message);
       // A hand-off that did not land is not an answer, so the menu comes back.
       if (!result.ok) continue;
-      return { status: "done", note: `chose "${choice.title}" — ${result.message}` };
+      return choiceResult({ status: "done", note: `chose "${choice.title}" — ${result.message}` });
     }
 
     if (choice.post) {
-      const result = await postReview(o);
-      out(`  ${result.message}`);
-      run.log(result.message);
+      const result = yield* postReview(o);
+      yield* out(`  ${result.message}`);
+      yield* run.log(result.message);
       // A note that did not land is not an answer, so the menu comes back.
       if (!result.ok) continue;
-      return { status: "done", note: `chose "${choice.title}" — ${result.message}` };
+      return choiceResult({ status: "done", note: `chose "${choice.title}" — ${result.message}` });
     }
 
     if (choice.run) {
-      const child = await chain(o, choice, prompts);
+      const child = yield* chain(o, choice, prompts);
       if (!child) continue;
-      return {
+      return choiceResult({
         status: "done",
         note: `chose "${choice.title}" → ${choice.run} run ${child}`,
         chained: true,
-      };
+      });
     }
 
-    if (choice.config) await ensureConfig(o, prompts, choice.config);
+    if (choice.config) yield* ensureConfig(o, prompts, choice.config);
 
     const round = choice.round!;
     const key = `${slugify(choice.title)}-${taken(choice.title)}`;
     // A round that rewrites the plan has to tell whoever is building from it.
-    const before = snapshotPlan(o, key);
-    const first = await runRound(o, step, round, key, ctx);
+    const before = yield* snapshotPlan(o, key);
+    const first = yield* runRound(o, step, round, key, ctx);
     if (first.record.status !== "done") {
-      out(`  ⚠ ${first.record.label} — ${first.record.error ?? "did not finish"}`);
+      yield* out(`  ⚠ ${first.record.label} — ${first.record.error ?? "did not finish"}`);
       continue;
     }
-    await reportPlanChange(o, before, first.output);
+    yield* reportPlanChange(o, before, first.output);
     const findings = first.review?.findings ?? [];
     if (choice.followUp && findings.length > 0) {
-      const next = await runRound(o, step, choice.followUp, `${key}-then`, ctx, {
+      const next = yield* runRound(o, step, choice.followUp, `${key}-then`, ctx, {
         findings: formatFindings(findings),
       });
       if (next.record.status !== "done") {
-        out(`  ⚠ ${next.record.label} — ${next.record.error ?? "did not finish"}`);
+        yield* out(`  ⚠ ${next.record.label} — ${next.record.error ?? "did not finish"}`);
       }
     }
   }
-}
+});
 
 /**
  * Starts the chosen Workflow as a child Run in this workspace and links it to this
  * one. Returns null when the human abandoned it at a question, so the menu comes back.
  */
-async function chain(
+const chain = Effect.fn("Engine.chain")(function* (
   o: EngineOptions,
   choice: ChoiceDef,
   prompts: EnginePrompts,
-): Promise<string | null> {
+) {
   const { run, out } = o;
   const child = resolveWorkflow(choice.run!, o.defs, o.defaults);
-  const vars = { run: { dir: run.dir, id: run.id, slug: run.record.slug }, inputs: run.record.inputs, cwd: run.record.cwd };
+  const vars = {
+    run: { dir: run.dir, id: run.id, slug: run.record.slug },
+    inputs: run.record.inputs,
+    cwd: run.record.cwd,
+  };
   const forwarded: Record<string, string> = {};
   for (const [key, value] of Object.entries(choice.inputs ?? {})) {
     forwarded[key] = renderTemplate(value, vars).text;
@@ -601,27 +677,31 @@ async function chain(
 
   const inputs: Record<string, string> = {};
   const sources: Record<string, string> = {};
-  for (const r of await inferInputs(child.inputs, { cwd: run.record.cwd, stateDir: o.env.stateDir })) {
+  for (const r of yield* inferInputs(child.inputs, {
+    cwd: run.record.cwd,
+    stateDir: o.env.stateDir,
+  })) {
     if (forwarded[r.name] !== undefined) {
       inputs[r.name] = forwarded[r.name]!;
       sources[r.name] = `chained from ${run.id}`;
       // A forwarded Input still owes the prompts its kind, exactly as the picker would
       // have recorded it: the child's own body branches on it.
-      if (r.strategy === "work-source") inputs[`${r.name}_kind`] = classifyWorkSource(forwarded[r.name]!).kind;
+      if (r.strategy === "work-source")
+        inputs[`${r.name}_kind`] = (yield* classifyWorkSource(forwarded[r.name]!)).kind;
       if (r.strategy === "diff-target") inputs[`${r.name}_kind`] = targetKind(forwarded[r.name]!);
       continue;
     }
     if (r.needsAsking) {
       // A work-source is chosen from what this repo offers; everything else is typed.
       if (r.candidates) {
-        if (!(await resolveWorkSource(r, prompts))) {
-          out(`  ${choice.run} needs "${r.name}" — nothing started`);
+        if (!(yield* resolveWorkSource(r, prompts))) {
+          yield* out(`  ${choice.run} needs "${r.name}" — nothing started`);
           return null;
         }
       } else {
-        const answer = await prompts.ask(r.question);
+        const answer = yield* prompts.ask(r.question);
         if (answer === null || answer.trim() === "") {
-          out(`  ${choice.run} needs "${r.name}" — nothing started`);
+          yield* out(`  ${choice.run} needs "${r.name}" — nothing started`);
           return null;
         }
         r.value = answer.trim();
@@ -638,8 +718,10 @@ async function chain(
 
   // The parent already names the work, so the child inherits its name.
   const prefix = `${run.record.workflow}-`;
-  const tail = run.record.slug.startsWith(prefix) ? run.record.slug.slice(prefix.length) : run.record.slug;
-  const childRun = new RunStore(o.env.stateDir).create({
+  const tail = run.record.slug.startsWith(prefix)
+    ? run.record.slug.slice(prefix.length)
+    : run.record.slug;
+  const childRun = yield* new RunStore(o.env.stateDir).create({
     workflow: child.name,
     cwd: run.record.cwd,
     session: o.env.socketPath,
@@ -654,12 +736,12 @@ async function chain(
     primaryInput: tail,
     parent: run.id,
   });
-  childRun.log(`chained from ${run.id}`);
+  yield* childRun.log(`chained from ${run.id}`);
   run.record.children.push(childRun.id);
-  run.save();
-  out(`  ▸ ${child.name} run ${childRun.id}`);
+  yield* run.save();
+  yield* out(`  ▸ ${child.name} run ${childRun.id}`);
 
-  await o.herdr.pluginPaneOpen({
+  yield* o.herdr.pluginPaneOpen({
     entrypoint: "runner",
     env: { COLLIE_RUN: childRun.id, COLLIE_CWD: run.record.cwd },
     focus: true,
@@ -667,17 +749,17 @@ async function chain(
     cwd: run.record.cwd,
   });
   return childRun.id;
-}
+});
 
 /** One agent round inside a Choice: a Step in every way except its own id. */
-async function runRound(
+const runRound = Effect.fn("Engine.runRound")(function* (
   o: EngineOptions,
   step: ResolvedStep,
   round: RoundDef,
   key: string,
   ctx: RunCtx,
-  extraVars?: Record<string, unknown>,
-): Promise<VariantOutcome> {
+  extraVars?: YamlMap,
+) {
   const synth: ResolvedStep = {
     ...round,
     id: step.id,
@@ -689,37 +771,40 @@ async function runRound(
     choices: undefined,
   };
   const variant = roundVariant(round, step, o.defaults);
-  const outcomes = await runStep(o, synth, [variant], [key], ctx, extraVars);
+  const outcomes = yield* runStep(o, synth, [variant], [key], ctx, extraVars);
   const outcome = outcomes[0]!;
   // runStep has already recorded it; a second push here would list it twice.
   ctx.outputs.set(step.id, [outcome]);
-  o.run.save();
-  await markTab(o, ctx, [outcome.record]);
+  yield* o.run.save();
+  yield* markTab(o, ctx, [outcome.record]);
   return outcome;
-}
+});
 
 /**
  * The review reaches the merge request as one note, and the engine sends it: asking
  * an agent to repeat a file it has already written is how "verbatim" stops being true.
  */
-async function postReview(o: EngineOptions): Promise<{ ok: boolean; message: string }> {
-  const path = join(o.run.dir, REVIEW_FILE);
-  if (!existsSync(path)) return { ok: false, message: `there is no ${REVIEW_FILE} to post` };
+const postReview = Effect.fn("Engine.postReview")(function* (o: EngineOptions) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const path = pathService.join(o.run.dir, REVIEW_FILE);
+  if (!(yield* fs.exists(path)))
+    return { ok: false, message: `there is no ${REVIEW_FILE} to post` };
   const target = o.run.record.inputs.target ?? "";
   const mr = parseMrTarget(target);
   if (!mr) return { ok: false, message: `${target || "this run"} is not a merge request` };
 
   // `--repo` is what lets this work from a directory that is not that checkout.
-  const note = await shellRun(
+  const note = yield* shellRun(
     "glab",
-    ["mr", "note", mr.iid, ...repoArgs(mr.project), "--message", readFileSync(path, "utf8")],
+    ["mr", "note", mr.iid, ...repoArgs(mr.project), "--message", yield* fs.readFileString(path)],
     o.run.record.cwd,
   );
   const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
   return note.code === 0
     ? { ok: true, message: `posted the review to ${where}` }
     : { ok: false, message: `glab mr note ${where} failed (exit ${note.code})` };
-}
+});
 
 function choiceHint(choice: ChoiceDef): string {
   if (choice.run) return `runs ${choice.run}`;
@@ -735,45 +820,58 @@ const PLAN_DIR = "plan";
  * A copy of the plan directory before a round touches it, so a change can be shown
  * as a diff afterwards. Null when this run has no plan of its own to change.
  */
-function snapshotPlan(o: EngineOptions, key: string): string | null {
-  const plan = join(o.run.dir, PLAN_DIR);
-  if (!existsSync(plan)) return null;
-  const before = join(o.run.dir, "steps", "plan-before", key);
+const snapshotPlan = Effect.fn("Engine.snapshotPlan")(function* (o: EngineOptions, key: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const plan = pathService.join(o.run.dir, PLAN_DIR);
+  if (!(yield* fs.exists(plan))) return null;
+  const before = pathService.join(o.run.dir, "steps", "plan-before", key);
   try {
-    rmSync(before, { recursive: true, force: true });
-    mkdirSync(before, { recursive: true });
-    cpSync(plan, before, { recursive: true });
+    yield* fs.remove(before, { recursive: true, force: true });
+    yield* fs.makeDirectory(before, { recursive: true });
+    yield* fs.copy(plan, before);
     return before;
   } catch (e) {
-    o.run.log(`plan snapshot: ${(e as Error).message}`);
+    yield* o.run.log(`plan snapshot: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
-}
+});
 
 /**
  * Once per change, and only when someone is building from this plan: the diff of
  * `plan/` and whatever the planner said it did.
  */
-async function reportPlanChange(o: EngineOptions, before: string | null, output: unknown): Promise<void> {
+const reportPlanChange = Effect.fn("Engine.reportPlanChange")(function* (
+  o: EngineOptions,
+  before: string | null,
+  output: YamlValue | null,
+) {
   if (!before) return;
-  const plan = join(o.run.dir, PLAN_DIR);
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const plan = pathService.join(o.run.dir, PLAN_DIR);
   // `git diff --no-index` exits 1 when the two differ, which is how "changed" is read.
-  const diff = await shellRun(
+  const diff = yield* shellRun(
     "git",
     ["diff", "--no-index", "--no-color", "--", before, plan],
     o.run.record.cwd,
   );
   if (diff.code === 0 || diff.stdout.trim() === "") return;
 
-  const path = join(before, "..", `${basename(before)}.patch`);
-  writeFileSync(path, diff.stdout);
-  const changelog = typeof (output as Record<string, unknown>)?.changelog === "string"
-    ? ((output as Record<string, string>).changelog as string)
-    : "";
-  const result = await sendPlanChange(sessionOf(o), o.run, { planDir: plan, diff: path, changelog });
-  o.run.log(`plan changed: ${result.message}`);
-  if (result.ok) o.out(`  ▸ ${result.message}`);
-}
+  const path = pathService.join(before, "..", `${pathService.basename(before)}.patch`);
+  yield* fs.writeFileString(path, diff.stdout);
+  const changelog = isYamlMap(output) && isString(output.changelog) ? output.changelog : "";
+  const result = handoffResult(
+    yield* sendPlanChange(sessionOf(o), o.run, {
+      planDir: plan,
+      diff: path,
+      changelog,
+    }),
+    "could not send the plan change",
+  );
+  yield* o.run.log(`plan changed: ${result.message}`);
+  if (result.ok) yield* o.out(`  ▸ ${result.message}`);
+});
 
 /** This Run's Session, as the register and the hand-offs key it. */
 function sessionOf(o: EngineOptions): Session {
@@ -785,25 +883,23 @@ function sessionOf(o: EngineOptions): Session {
 }
 
 /** Gives this Run's review to the Session's live agent for that role. */
-async function handOff(o: EngineOptions, role: string): Promise<{ ok: boolean; message: string }> {
+const handOff = Effect.fn("Engine.handOff")(function* (o: EngineOptions, role: string) {
   if (role !== "implementer") return { ok: false, message: `nothing to hand to a ${role}` };
-  return await sendReview(sessionOf(o), o.run);
-}
+  return handoffResult(yield* sendReview(sessionOf(o), o.run), "could not send the review");
+});
 
 /** A value the human is asked for once and that stays in config.json. */
-async function ensureConfig(
+const ensureConfig = Effect.fn("Engine.ensureConfig")(function* (
   o: EngineOptions,
   prompts: EnginePrompts,
   cfg: { key: string; question: string },
-): Promise<void> {
-  if (configValue(readConfig(o.env.configDir), cfg.key) !== undefined) return;
-  const answer = await prompts.ask(cfg.question);
+) {
+  if (configValue(yield* readConfig(o.env.configDir), cfg.key) !== undefined) return;
+  const answer = yield* prompts.ask(cfg.question);
   if (answer === null || answer.trim() === "") return;
-  writeConfigValue(o.env.configDir, cfg.key, answer.trim());
-  o.out(`  saved ${cfg.key} in config.json`);
-}
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  yield* writeConfigValue(o.env.configDir, cfg.key, answer.trim());
+  yield* o.out(`  saved ${cfg.key} in config.json`);
+});
 
 /** A step some later step continues, i.e. the one that starts a long-lived agent. */
 function groupHead(wf: ResolvedWorkflow, stepId: string): boolean {
@@ -811,24 +907,30 @@ function groupHead(wf: ResolvedWorkflow, stepId: string): boolean {
 }
 
 /** Puts one long-lived agent on the Session's register, for a later Run to find. */
-function register(o: EngineOptions, step: ResolvedStep, record: VariantRecord): void {
-  const path = registryPath(o.env.stateDir, scopeFor(o.env, o.run.record.cwd));
+const register = Effect.fn("Engine.register")(function* (
+  o: EngineOptions,
+  step: ResolvedStep,
+  record: VariantRecord,
+) {
+  const path = yield* registryPath(o.env.stateDir, scopeFor(o.env, o.run.record.cwd));
   try {
-    registerAgent(path, {
+    yield* registerAgent(path, {
       role: step.persona ?? step.id,
       agent: record.agent,
       paneId: record.paneId!,
       workspaceId: o.env.workspaceId,
       runId: o.run.id,
       workflow: o.run.record.workflow,
-      at: new Date().toISOString(),
+      at: yield* nowIso(),
     });
-    o.run.log(`registered ${record.agent} as ${step.persona ?? step.id}`);
+    yield* o.run.log(`registered ${record.agent} as ${step.persona ?? step.id}`);
   } catch (e) {
     // A register nobody can write is a hand-off nobody gets, not a failed run.
-    o.run.log(`register ${record.agent} failed: ${(e as Error).message}`);
+    yield* o.run.log(
+      `register ${record.agent} failed: ${e instanceof Error ? e.message : String(e)}`,
+    );
   }
-}
+});
 
 /**
  * The Session's own tab, found by its label and created when it is not there, and
@@ -836,29 +938,32 @@ function register(o: EngineOptions, step: ResolvedStep, record: VariantRecord): 
  * keeps open in a workspace: the driver has no pane, and every question it asks is
  * rendered there. Returns the tab id, or null when there is no workspace to own one.
  */
-async function ensureWorkspaceTab(o: EngineOptions): Promise<string | null> {
+const ensureWorkspaceTab = Effect.fn("Engine.ensureWorkspaceTab")(function* (o: EngineOptions) {
   try {
-    const view = await findOrOpenView(o);
+    const view = yield* findOrOpenView(o);
     if (!view) return null;
     // First tab, every run: the Session's board is where `prefix+1` should land,
     // and a tab that drifts down the list is one the human stops looking at.
     try {
-      await o.herdr.tabMove(view.tabId, 0);
+      yield* o.herdr.tabMove(view.tabId, 0);
     } catch (e) {
-      o.run.log(`workspace tab order: ${(e as Error).message}`);
+      yield* o.run.log(`workspace tab order: ${e instanceof Error ? e.message : String(e)}`);
     }
     return view.tabId;
   } catch (e) {
     // Without the tab the run still runs; it just has nowhere to ask.
-    o.run.log(`workspace tab: ${(e as Error).message}`);
+    yield* o.run.log(`workspace tab: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   }
-}
+});
 
-async function findOrOpenView(o: EngineOptions): Promise<{ tabId: string; paneId: string } | null> {
+const findOrOpenView = Effect.fn("Engine.findOrOpenView")(function* (o: EngineOptions) {
   if (!o.env.workspaceId) return null;
-  const open = async (placement: "tab" | "split", targetPaneId?: string) => {
-    const opened = await o.herdr.pluginPaneOpen({
+  const open = Effect.fn("Engine.openWorkspaceView")(function* (
+    placement: "tab" | "split",
+    targetPaneId?: string,
+  ) {
+    const opened = yield* o.herdr.pluginPaneOpen({
       entrypoint: "workspace",
       placement,
       targetPaneId,
@@ -869,52 +974,57 @@ async function findOrOpenView(o: EngineOptions): Promise<{ tabId: string; paneId
       env: { COLLIE_CWD: o.run.record.cwd },
     });
     if (!opened.paneId) return null;
-    await o.herdr.paneRename(opened.paneId, CONTROL_PLANE);
+    yield* o.herdr.paneRename(opened.paneId, CONTROL_PLANE);
     return opened;
-  };
+  });
 
-  const tab = (await o.herdr.tabList()).find((t) => t.label === CONTROL_PLANE);
+  const tab = (yield* o.herdr.tabList()).find((t) => t.label === CONTROL_PLANE);
   if (!tab) {
-    const opened = await open("tab");
+    const opened = yield* open("tab");
     if (!opened?.tabId) return null;
-    await o.herdr.tabRename(opened.tabId, CONTROL_PLANE);
+    yield* o.herdr.tabRename(opened.tabId, CONTROL_PLANE);
     return opened;
   }
   // The tab is there; its view pane may not be, if someone closed just that pane.
-  const panes = (await o.herdr.paneList()).filter((p) => p.tabId === tab.tabId);
+  const panes = (yield* o.herdr.paneList()).filter((p) => p.tabId === tab.tabId);
   const view = panes.find((p) => p.label === CONTROL_PLANE);
   if (view) return { tabId: tab.tabId, paneId: view.paneId };
   if (panes.length === 0) return null;
-  const opened = await open("split", panes[0]!.paneId);
+  const opened = yield* open("split", panes[0]!.paneId);
   return opened ? { tabId: tab.tabId, paneId: opened.paneId } : null;
-}
+});
 
 /**
  * A question nobody sees is a run that has silently stopped, so it is said
  * twice: a toast, and the Session's tab brought to the front.
  */
-async function callAttention(o: EngineOptions, ctx: RunCtx, detail: string, stepId: string): Promise<void> {
+const callAttention = Effect.fn("Engine.callAttention")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  detail: string,
+  stepId: string,
+) {
   o.run.record.awaiting = stepId;
-  o.run.save();
+  yield* o.run.save();
   try {
-    await o.herdr.notify(`${o.run.record.slug} needs you`, detail, "request");
+    yield* o.herdr.notify(`${o.run.record.slug} needs you`, detail, "request");
   } catch {
     /* a missing toast must not fail the run */
   }
   if (!ctx.workspaceTabId) return;
   try {
-    await o.herdr.tabFocus(ctx.workspaceTabId);
+    yield* o.herdr.tabFocus(ctx.workspaceTabId);
   } catch {
     /* a tab that will not focus is still a tab the human can reach */
   }
-}
+});
 
 /**
  * A harness that asks before it will work in a directory asks in its own pane, where
  * it is easy to miss and impossible to answer for someone else. So the question is put
  * here instead, once per directory, before a single tab opens.
  */
-async function ensureTrusted(o: EngineOptions): Promise<void> {
+const ensureTrusted = Effect.fn("Engine.ensureTrusted")(function* (o: EngineOptions) {
   if (o.defaults.trust === "never") return;
   const cwd = o.run.record.cwd;
   const seen = new Set<string>();
@@ -924,29 +1034,40 @@ async function ensureTrusted(o: EngineOptions): Promise<void> {
       if (seen.has(variant.harness)) continue;
       seen.add(variant.harness);
       const trust = HARNESSES[variant.harness]?.trust?.(o.env.home, o.env.stateDir);
-      if (!trust || trust.state(cwd) !== "untrusted") continue;
+      if (!trust || (yield* trust.state(cwd)) !== "untrusted") continue;
 
       if (o.defaults.trust === "ask") {
         if (!o.prompts) continue;
-        const answer = await o.prompts!.menu(
+        const answer = yield* o.prompts!.menu(
           [
-            { id: "trust", title: "Trust it now", subtitle: "records it where the harness looks" },
-            { id: "ask", title: "Let claude ask me in its tab", subtitle: "the run waits for you" },
+            {
+              id: "trust",
+              title: "Trust it now",
+              subtitle: "records it where the harness looks",
+            },
+            {
+              id: "ask",
+              title: "Let claude ask me in its tab",
+              subtitle: "the run waits for you",
+            },
           ],
-          { header: `${variant.harness} has not worked in ${cwd} before`, footer: "↑↓ move · Enter choose" },
+          {
+            header: `${variant.harness} has not worked in ${cwd} before`,
+            footer: "↑↓ move · Enter choose",
+          },
         );
         if (answer?.id !== "trust") continue;
       }
-      const result = trust.grant(cwd);
-      o.out(`  ${result.message}`);
-      o.run.log(`trust ${variant.harness}: ${result.message}`);
+      const result = yield* trust.grant(cwd);
+      yield* o.out(`  ${result.message}`);
+      yield* o.run.log(`trust ${variant.harness}: ${result.message}`);
     }
   }
-}
+});
 
 /** herdr says this when the harness stopped on a prompt before it was ready to work. */
-function blockedAtStartup(e: unknown): boolean {
-  return e instanceof HerdrError && /agent_not_ready|blocked during startup/.test(e.detail);
+function blockedAtStartup(e: HerdrError): boolean {
+  return /agent_not_ready|blocked during startup/.test(e.detail);
 }
 
 /**
@@ -954,8 +1075,8 @@ function blockedAtStartup(e: unknown): boolean {
  * split and `cd`-ed a moment ago is sometimes still starting, which killed two live
  * runs at the fan-in step before this was here.
  */
-function paneNotReady(e: unknown): boolean {
-  return e instanceof HerdrError && /agent_pane_busy|not an available shell/.test(e.detail);
+function paneNotReady(e: HerdrError): boolean {
+  return /agent_pane_busy|not an available shell/.test(e.detail);
 }
 
 /**
@@ -964,123 +1085,141 @@ function paneNotReady(e: unknown): boolean {
  * it shuffles its options, so there is no safe key to send. The agent exists and is
  * blocked, so this waits for the human exactly as a Step waits for an Output.
  */
-async function startAgent(
+const startAgent = Effect.fn("Engine.startAgent")(function* (
   o: EngineOptions,
   step: ResolvedStep,
   opts: { name: string; kind: string; paneId: string; args: string[] },
-): Promise<void> {
-  try {
-    await startWhenReady(o, opts);
-    return;
-  } catch (e) {
-    if (!blockedAtStartup(e)) throw e;
-    const budget = o.handoffTimeoutMs ?? 0;
-    o.out(`  ⏸ ${opts.name} is waiting for you in its pane — answer the prompt there`);
-    o.run.log(`${opts.name}: blocked at startup, waiting for the human`);
-    o.run.record.awaiting = step.id;
-    o.run.save();
-    try {
-      await o.herdr.notify(
-        `${o.run.record.slug} needs you`,
-        `${step.id}: answer the prompt in its pane`,
-        "request",
-      );
-    } catch {
-      /* a missing toast must not fail the run */
+) {
+  const startError = yield* startWhenReady(o, opts).pipe(
+    Effect.as(Option.none<HerdrError>()),
+    Effect.catchTag("HerdrError", (error) => Effect.succeed(Option.some(error))),
+  );
+  if (Option.isNone(startError)) return;
+  const error = startError.value;
+  if (!blockedAtStartup(error)) return yield* Effect.fail(error);
+
+  const budget = o.handoffTimeoutMs ?? 0;
+  yield* o.out(`  ⏸ ${opts.name} is waiting for you in its pane — answer the prompt there`);
+  yield* o.run.log(`${opts.name}: blocked at startup, waiting for the human`);
+  o.run.record.awaiting = step.id;
+  yield* o.run.save();
+  yield* o.herdr
+    .notify(
+      `${o.run.record.slug} needs you`,
+      `${step.id}: answer the prompt in its pane`,
+      "request",
+    )
+    .pipe(Effect.catchTag("HerdrError", () => Effect.void));
+
+  const deadline = (yield* nowMillis()) + budget;
+  while ((yield* nowMillis()) < deadline) {
+    yield* Effect.sleep(
+      Math.min(o.outputPollMs ?? 2000, Math.max(1, deadline - (yield* nowMillis()))),
+    );
+    if ((yield* o.herdr.agentStatus(opts.name)) !== "blocked") {
+      yield* o.out(`  ▸ ${opts.name} is ready`);
+      o.run.record.awaiting = null;
+      yield* o.run.save();
+      return;
     }
-    const deadline = Date.now() + budget;
-    while (Date.now() < deadline) {
-      await sleep(Math.min(o.outputPollMs ?? 2000, Math.max(1, deadline - Date.now())));
-      if ((await o.herdr.agentStatus(opts.name)) !== "blocked") {
-        o.out(`  ▸ ${opts.name} is ready`);
-        o.run.record.awaiting = null;
-        o.run.save();
-        return;
-      }
-    }
-    throw e;
   }
-}
+  return yield* Effect.fail(error);
+});
 
 /** `agent start`, waiting out a pane whose shell is still coming up. */
-async function startWhenReady(
+const startWhenReady = Effect.fn("Engine.startWhenReady")(function* (
   o: EngineOptions,
   opts: { name: string; kind: string; paneId: string; args: string[] },
-): Promise<void> {
+) {
   const tries = 6;
   for (let attempt = 1; ; attempt++) {
-    try {
-      await o.herdr.agentStart(opts);
-      return;
-    } catch (e) {
-      if (!paneNotReady(e) || attempt === tries) throw e;
-      o.run.log(`${opts.name}: pane ${opts.paneId} is not a shell yet, retrying (${attempt}/${tries})`);
-      await sleep(Math.min(o.outputPollMs ?? 1000, 1000));
-    }
+    const failure = yield* o.herdr.agentStart(opts).pipe(
+      Effect.as(Option.none<HerdrError>()),
+      Effect.catchTag("HerdrError", (error) => Effect.succeed(Option.some(error))),
+    );
+    if (Option.isNone(failure)) return;
+    const error = failure.value;
+    if (!paneNotReady(error) || attempt === tries) return yield* Effect.fail(error);
+    yield* o.run.log(
+      `${opts.name}: pane ${opts.paneId} is not a shell yet, retrying (${attempt}/${tries})`,
+    );
+    yield* Effect.sleep(Math.min(o.outputPollMs ?? 1000, 1000));
   }
-}
+});
 
 /**
  * A settled agent does not mean a finished Step: an interviewing agent goes idle
  * waiting for the human. The Output file is the completion signal, so keep
  * waiting for it and toast once so the human knows they are needed.
  */
-async function awaitOutput(o: EngineOptions, agent: string, stepId: string, path: string): Promise<void> {
-  if (existsSync(path)) return;
+const awaitOutput = Effect.fn("Engine.awaitOutput")(function* (
+  o: EngineOptions,
+  agent: string,
+  stepId: string,
+  path: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  if (yield* fs.exists(path)) return;
   const budget = o.handoffTimeoutMs ?? 0;
   if (budget <= 0) return;
 
-  o.out(`  ⏸ ${agent} is waiting for you in its tab`);
+  yield* o.out(`  ⏸ ${agent} is waiting for you in its tab`);
   o.run.record.awaiting = stepId;
-  o.run.save();
+  yield* o.run.save();
   try {
-    await o.herdr.notify(`${o.run.record.slug} needs you`, `${stepId}: answer the agent in its tab`, "request");
+    yield* o.herdr.notify(
+      `${o.run.record.slug} needs you`,
+      `${stepId}: answer the agent in its tab`,
+      "request",
+    );
   } catch {
     /* a missing toast must not fail the run */
   }
   const poll = o.outputPollMs ?? 2000;
-  const deadline = Date.now() + budget;
-  while (!existsSync(path) && Date.now() < deadline) {
-    await sleep(Math.min(poll, Math.max(1, deadline - Date.now())));
+  const deadline = (yield* nowMillis()) + budget;
+  while (!(yield* fs.exists(path)) && (yield* nowMillis()) < deadline) {
+    yield* Effect.sleep(Math.min(poll, Math.max(1, deadline - (yield* nowMillis()))));
   }
-  if (existsSync(path)) o.out(`  ▸ ${agent} produced its Output`);
+  if (yield* fs.exists(path)) yield* o.out(`  ▸ ${agent} produced its Output`);
   o.run.record.awaiting = null;
-  o.run.save();
-}
+  yield* o.run.save();
+});
 
-async function collect(
+const collect = Effect.fn("Engine.collect")(function* (
   o: EngineOptions,
   step: ResolvedStep,
   record: VariantRecord,
   variantKey: string | null,
-): Promise<VariantOutcome> {
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
   if (!step.output) {
-    const status = await o.herdr.agentStatus(record.agent);
+    const status = yield* o.herdr.agentStatus(record.agent);
     record.status = status === "blocked" ? "blocked" : "done";
     if (record.status === "blocked") record.error = "agent is blocked and needs input";
     return { record, output: null, review: null };
   }
 
-  const path = o.run.outputPath(step.id, variantKey, step.output);
-  record.output = relative(o.run.dir, path);
-  await awaitOutput(o, record.agent, step.id, path);
-  if (!existsSync(path)) {
+  const path = yield* o.run.outputPath(step.id, variantKey, step.output);
+  record.output = pathService.relative(o.run.dir, path);
+  yield* awaitOutput(o, record.agent, step.id, path);
+  if (!(yield* fs.exists(path))) {
     record.status = "blocked";
     record.error = `no Output at ${record.output}`;
     return { record, output: null, review: null };
   }
 
-  const text = readFileSync(path, "utf8");
-  let parsed: unknown;
+  const text = yield* fs.readFileString(path);
+  let parsed: YamlValue;
   try {
-    parsed = JSON.parse(text);
+    parsed = Schema.decodeUnknownSync(JsonValue)(text);
   } catch (e) {
     record.status = "failed";
-    record.error = `${record.output}: not valid JSON (${(e as Error).message})`;
+    record.error = `${record.output}: not valid JSON (${e instanceof Error ? e.message : String(e)})`;
     return { record, output: null, review: null };
   }
 
-  const hasVerdict = parsed !== null && typeof parsed === "object" && "verdict" in (parsed as object);
+  const hasVerdict = isYamlMap(parsed) && "verdict" in parsed;
   if (step.fanIn && !hasVerdict) {
     record.status = "failed";
     record.error = `${record.output}: a fan-in Output needs a verdict`;
@@ -1088,20 +1227,28 @@ async function collect(
   }
 
   let review: ReviewOutput | null = null;
-  if (hasVerdict) {
-    const result = step.fanIn ? parseSynthesis(text, record.output) : parseReviewOutput(text, record.output);
+  if (hasVerdict && step.fanIn) {
+    const result = parseSynthesis(text, record.output);
     if (!result.ok) {
       record.status = "failed";
       record.error = result.error;
       return { record, output: parsed, review: null };
     }
     review = result.value;
-    // The shape of a review is the engine's to decide, so every one reads alike.
-    if (step.fanIn) {
-      writeFileSync(join(o.run.dir, REVIEW_FILE), renderReview(result.value as Synthesis));
-      // A hand-off gives the implementer both the prose and the findings it came from.
-      o.run.record.synthesis = record.output;
+    yield* fs.writeFileString(pathService.join(o.run.dir, REVIEW_FILE), renderReview(result.value));
+    // A hand-off gives the implementer both the prose and the findings it came from.
+    o.run.record.synthesis = record.output;
+  } else if (hasVerdict) {
+    const result = parseReviewOutput(text, record.output);
+    if (!result.ok) {
+      record.status = "failed";
+      record.error = result.error;
+      return { record, output: parsed, review: null };
     }
+    review = result.value;
+  }
+  if (review) {
+    // The shape of a review is the engine's to decide, so every one reads alike.
     collectList(o, "deferred", parsed);
     collectMr(o, parsed);
     // A re-run step must not double-report what it disputed last time.
@@ -1115,7 +1262,7 @@ async function collect(
 
   record.status = "done";
   return { record, output: parsed, review };
-}
+});
 
 /** A tab keeps the name it was given; only the glyph moves. */
 function runTab(o: EngineOptions, ctx: RunCtx, tabId: string | null, glyph: string): string {
@@ -1129,19 +1276,23 @@ function runTab(o: EngineOptions, ctx: RunCtx, tabId: string | null, glyph: stri
  * name — another run of the same workflow — the target is appended to tell them
  * apart, which is the only place a target appears on a tab.
  */
-async function freeTabName(o: EngineOptions, ctx: RunCtx, step: ResolvedStep): Promise<string> {
+const freeTabName = Effect.fn("Engine.freeTabName")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  step: ResolvedStep,
+) {
   const plain = ctx.tabNames.size === 0 ? o.run.record.workflow : step.id;
   let taken: string[] = [];
   try {
-    taken = (await o.herdr.tabList()).map((t) => tabNameOf(t.label));
+    taken = (yield* o.herdr.tabList()).map((t) => tabNameOf(t.label));
   } catch (e) {
     // Without the list a plain name is the better guess than a decorated one.
-    o.run.log(`tab names: ${(e as Error).message}`);
+    yield* o.run.log(`tab names: ${e instanceof Error ? e.message : String(e)}`);
   }
   // Compared as a human reads them, so the capitalisation cannot hide a collision.
   if (!taken.includes(displayName(plain))) return plain;
   return disambiguate(plain, runTarget(o.wf, o.run.record));
-}
+});
 
 /**
  * A target names the run only where the workflow owns it. `implement` inherits
@@ -1157,12 +1308,13 @@ export function runTarget(
 }
 
 /** The MR step reports what it opened; the summary is where the human looks for it. */
-function collectMr(o: EngineOptions, parsed: unknown): void {
-  const obj = parsed as Record<string, unknown>;
-  if (typeof obj.mr_url === "string" && obj.mr_url.trim() !== "") o.run.record.mr_url = obj.mr_url.trim();
-  if (Array.isArray(obj.linear_issues)) {
-    for (const id of obj.linear_issues) {
-      if (typeof id === "string" && id !== "" && !o.run.record.linear_issues.includes(id)) {
+function collectMr(o: EngineOptions, parsed: YamlValue): void {
+  if (!isYamlMap(parsed)) return;
+  if (isString(parsed.mr_url) && parsed.mr_url.trim() !== "")
+    o.run.record.mr_url = parsed.mr_url.trim();
+  if (Array.isArray(parsed.linear_issues)) {
+    for (const id of parsed.linear_issues) {
+      if (isString(id) && id !== "" && !o.run.record.linear_issues.includes(id)) {
         o.run.record.linear_issues.push(id);
       }
     }
@@ -1170,7 +1322,7 @@ function collectMr(o: EngineOptions, parsed: unknown): void {
 }
 
 /** What the MR prompt is given: never null, so a missing value reads as a gap, not "undefined". */
-function mrVars(facts: MrFacts): Record<string, unknown> {
+function mrVars(facts: MrFacts): YamlMap {
   return {
     mr: {
       assignee: facts.assignee ?? "",
@@ -1182,8 +1334,9 @@ function mrVars(facts: MrFacts): Record<string, unknown> {
 }
 
 /** Appends an Output's `deferred` entries to the run, without repeating one. */
-function collectList(o: EngineOptions, key: "deferred", parsed: unknown): void {
-  const raw = (parsed as Record<string, unknown>)[key];
+function collectList(o: EngineOptions, key: "deferred", parsed: YamlValue): void {
+  if (!isYamlMap(parsed)) return;
+  const raw = parsed[key];
   if (!Array.isArray(raw)) return;
   const result = parseFindings(raw, `${key}`);
   if (!result.ok) return;
@@ -1194,16 +1347,19 @@ function collectList(o: EngineOptions, key: "deferred", parsed: unknown): void {
 }
 
 /** Whether this run can give a step what it declared it needs, and why not. */
-async function unmetRequirement(o: EngineOptions, requires: StepRequirement[]): Promise<string | null> {
+const unmetRequirement = Effect.fn("Engine.unmetRequirement")(function* (
+  o: EngineOptions,
+  requires: StepRequirement[],
+) {
   const target = o.run.record.inputs.target ?? "";
   for (const need of requires) {
     if (need === "gitlab") {
       // A step pointed at a merge request needs glab for that project; a step that
       // pushes needs this directory to be the checkout. `mr-target` says which.
       const mr = requires.includes("mr-target") ? parseMrTarget(target) : null;
-      const ready = mr
-        ? await gitlabForProject(mr.project, o.run.record.cwd, shellRun)
-        : await gitlabReadiness(o.run.record.cwd, shellRun);
+      const ready = yield* mr
+        ? gitlabForProject(mr.project, o.run.record.cwd, runShell)
+        : gitlabReadiness(o.run.record.cwd, runShell);
       if (!ready.ok) return ready.reason;
     }
     if (need === "mr-target" && o.run.record.inputs.target_kind !== "mr") {
@@ -1211,7 +1367,7 @@ async function unmetRequirement(o: EngineOptions, requires: StepRequirement[]): 
     }
   }
   return null;
-}
+});
 
 /** The pane a fan-in step splits from: the last of the Outputs it reconciles. */
 function fanInPane(step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
@@ -1221,26 +1377,29 @@ function fanInPane(step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
 }
 
 /** The Output files a fan-in step reconciles, for its own prompt to read. */
-function fanInFiles(
+const fanInFiles = Effect.fn("Engine.fanInFiles")(function* (
   o: EngineOptions,
   step: ResolvedStep,
   outputs: Map<string, VariantOutcome[]>,
-): string {
+) {
   if (!step.fanIn) return "";
+  const pathService = yield* Path.Path;
   return (outputs.get(step.fanIn) ?? [])
-    .map((v) => (v.record.output ? `- ${join(o.run.dir, v.record.output)}` : null))
+    .map((v) => (v.record.output ? `- ${pathService.join(o.run.dir, v.record.output)}` : null))
     .filter((line): line is string => line !== null)
     .join("\n");
-}
+});
 
 /** The synthesised review, in the run's own pane, where the human is already looking. */
-function printReview(o: EngineOptions): void {
-  const path = join(o.run.dir, REVIEW_FILE);
-  if (!existsSync(path)) return;
-  o.out("");
-  o.out(readFileSync(path, "utf8").trimEnd());
-  o.out("");
-}
+const printReview = Effect.fn("Engine.printReview")(function* (o: EngineOptions) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const path = pathService.join(o.run.dir, REVIEW_FILE);
+  if (!(yield* fs.exists(path))) return;
+  yield* o.out("");
+  yield* o.out((yield* fs.readFileString(path)).trimEnd());
+  yield* o.out("");
+});
 
 /** The agent of an earlier step, but only one this process actually started. */
 function borrowedAgent(o: EngineOptions, step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
@@ -1262,11 +1421,16 @@ function personaBody(o: EngineOptions, step: ResolvedStep, harness: string): str
  * file per harness: the same persona asks for its skills in that harness's syntax,
  * and the run dir should show what each agent was actually given.
  */
-function personaFile(o: EngineOptions, step: ResolvedStep, harness: string): string {
-  const path = o.run.personaPath(step.persona ?? "none", harness);
-  writeFileSync(path, `${personaBody(o, step, harness)}\n`);
+const personaFile = Effect.fn("Engine.personaFile")(function* (
+  o: EngineOptions,
+  step: ResolvedStep,
+  harness: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* o.run.personaPath(step.persona ?? "none", harness);
+  yield* fs.writeFileString(path, `${personaBody(o, step, harness)}\n`);
   return path;
-}
+});
 
 /** How one harness is asked for a skill; unknown harnesses fall back to claude's. */
 function skillFor(harness: string): (name: string) => string {
@@ -1274,28 +1438,32 @@ function skillFor(harness: string): (name: string) => string {
   return (name) => (adapter ? adapter.skillRef(name) : `/${name}`);
 }
 
-function buildPrompt(
+const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
   o: EngineOptions,
   step: ResolvedStep,
   variant: Variant,
   variantKey: string | null,
   outputs: Map<string, VariantOutcome[]>,
-  extraVars?: Record<string, unknown>,
-): string {
+  extraVars?: YamlMap,
+) {
   const adapter = HARNESSES[variant.harness]!;
-  const outputPath = step.output ? o.run.outputPath(step.id, variantKey, step.output) : "";
-  const vars: Record<string, unknown> = {
+  const outputPath = step.output ? yield* o.run.outputPath(step.id, variantKey, step.output) : "";
+  const vars: YamlMap = {
     inputs: o.run.record.inputs,
-    outputs: Object.fromEntries(
-      [...outputs.entries()].map(([id, list]) => [
-        id,
-        list.length === 1 ? list[0]!.output : list.map((v) => v.output),
-      ]),
+    outputs: Schema.decodeUnknownSync(YamlMapSchema)(
+      Object.fromEntries(
+        [...outputs.entries()].map(([id, list]) => [
+          id,
+          list.length === 1 ? list[0]!.output : list.map((v) => v.output),
+        ]),
+      ),
     ),
     findings: formatFindings(lastFindings(o, step, outputs)),
     // `--repo <project>` for an MR target, so a prompt can be followed from anywhere.
-    target_repo: repoArgs(parseMrTarget(o.run.record.inputs.target ?? "")?.project ?? null).join(" "),
-    fan_in: fanInFiles(o, step, outputs),
+    target_repo: repoArgs(parseMrTarget(o.run.record.inputs.target ?? "")?.project ?? null).join(
+      " ",
+    ),
+    fan_in: yield* fanInFiles(o, step, outputs),
     disputed: formatFindings(o.run.record.disputed),
     run: { dir: o.run.dir, id: o.run.id, slug: o.run.record.slug },
     output_path: outputPath,
@@ -1306,7 +1474,7 @@ function buildPrompt(
     harness: variant.harness,
     model: variant.model,
     effort: variant.effort ?? "",
-    config: readConfig(o.env.configDir),
+    config: yield* readConfig(o.env.configDir),
     ...extraVars,
   };
 
@@ -1319,7 +1487,7 @@ function buildPrompt(
     { skill: skillFor(variant.harness) },
   );
   if (rendered.missing.length > 0) {
-    o.run.log(`unknown template keys in ${step.id}: ${rendered.missing.join(", ")}`);
+    yield* o.run.log(`unknown template keys in ${step.id}: ${rendered.missing.join(", ")}`);
   }
   parts.push(rendered.text);
   if (outputPath) {
@@ -1328,7 +1496,7 @@ function buildPrompt(
     );
   }
   return parts.join("\n\n");
-}
+});
 
 function lastFindings(
   o: EngineOptions,
@@ -1352,7 +1520,10 @@ function verdictOf(outcomes: VariantOutcome[], disputed: Finding[]): Verdict {
   const reviews = outcomes.map((v) => v.review).filter((r): r is ReviewOutput => r !== null);
   // The gate reads one synthesised review: reconciling several reviewers is the
   // synthesiser's job now, not a union taken here.
-  const split = splitDisputed(reviews.flatMap((r) => r.findings), disputed);
+  const split = splitDisputed(
+    reviews.flatMap((r) => r.findings),
+    disputed,
+  );
   // Clean means "nothing left for the implementer", not "nobody said anything":
   // a finding the implementer already rejected with a reason is the human's call.
   return {
@@ -1367,7 +1538,11 @@ function verdictOf(outcomes: VariantOutcome[], disputed: Finding[]): Verdict {
  * The step's tab wears the state of every pane in it: ✓ only once they are all
  * done, ✗ when one stopped, ⚠ when one is waiting for the human.
  */
-async function markTab(o: EngineOptions, ctx: RunCtx, records: VariantRecord[]): Promise<void> {
+const markTab = Effect.fn("Engine.markTab")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  records: VariantRecord[],
+) {
   const glyph = records.every((r) => r.status === "done")
     ? GLYPH.done
     : records.some((r) => r.status === "failed")
@@ -1376,59 +1551,66 @@ async function markTab(o: EngineOptions, ctx: RunCtx, records: VariantRecord[]):
         ? GLYPH.waiting
         : GLYPH.running;
   for (const tabId of new Set(records.map((r) => r.tabId).filter((t): t is string => !!t))) {
-    await o.herdr.tabRename(tabId, runTab(o, ctx, tabId, glyph));
+    yield* o.herdr.tabRename(tabId, runTab(o, ctx, tabId, glyph));
   }
-}
+});
 
-async function setView(o: EngineOptions, source: string, panes: string[]): Promise<void> {
+const setView = Effect.fn("Engine.setView")(function* (
+  o: EngineOptions,
+  source: string,
+  panes: string[],
+) {
   try {
-    await o.herdr.agentViewSet(source, o.run.record.slug, panes);
+    yield* o.herdr.agentViewSet(source, o.run.record.slug, panes);
   } catch (e) {
     // A filtered sidebar is a nicety; losing it must not fail the run.
-    o.run.log(`agent.view.set failed: ${(e as Error).message}`);
+    yield* o.run.log(`agent.view.set failed: ${e instanceof Error ? e.message : String(e)}`);
   }
-}
+});
 
-async function finish(
+const finish = Effect.fn("Engine.finish")(function* (
   o: EngineOptions,
   status: RunStatus,
   viewSource: string,
   detail?: string,
-): Promise<RunStatus> {
+) {
   const { run, out } = o;
   run.record.status = status;
-  run.record.finished_at = new Date().toISOString();
+  run.record.finished_at = yield* nowIso();
   run.record.awaiting = null;
   run.record.summary = summarise(o, status);
-  run.save();
-  out("");
-  out(run.record.summary);
+  yield* run.save();
+  yield* out("");
+  yield* out(run.record.summary);
   try {
-    await o.herdr.agentViewClear(viewSource);
+    yield* o.herdr.agentViewClear(viewSource);
   } catch {
     /* the sidebar filter is a nicety */
   }
-  const title =
-    status === "done" ? `${run.record.slug} finished` : `${run.record.slug} ${status}`;
+  const title = status === "done" ? `${run.record.slug} finished` : `${run.record.slug} ${status}`;
   try {
-    await o.herdr.notify(title, detail ?? run.record.summary.split("\n")[0], status === "done" ? "done" : "request");
+    yield* o.herdr.notify(
+      title,
+      detail ?? run.record.summary.split("\n")[0],
+      status === "done" ? "done" : "request",
+    );
   } catch {
     /* a missing toast must not fail the run */
   }
   return status;
-}
+});
 
 export function summarise(o: EngineOptions, status: RunStatus): string {
   const { run } = o;
   const lines = [`Run ${run.id} — ${status} after ${run.record.iteration} iteration(s)`];
   for (const step of run.record.steps) {
-    const marks: Record<StepStatus, string> = {
+    const marks = {
       pending: "·",
       running: "…",
       done: "✓",
       blocked: "⚠",
       failed: "✗",
-    };
+    } satisfies Record<StepStatus, string>;
     const detail = step.note ? ` (${step.note})` : "";
     const errors = step.variants
       .filter((v) => v.error)
@@ -1446,11 +1628,16 @@ export function summarise(o: EngineOptions, status: RunStatus): string {
     lines.push("", `Chained: ${run.record.children.join(", ")}`);
   }
   if (run.record.mr_url) {
-    const tickets = run.record.linear_issues.length > 0 ? ` (${run.record.linear_issues.join(", ")})` : "";
+    const tickets =
+      run.record.linear_issues.length > 0 ? ` (${run.record.linear_issues.join(", ")})` : "";
     lines.push("", `Merge request: ${run.record.mr_url}${tickets}`);
   }
   if (run.record.deferred.length > 0) {
-    lines.push("", "Deferred (the architect did not apply these):", formatFindings(run.record.deferred));
+    lines.push(
+      "",
+      "Deferred (the architect did not apply these):",
+      formatFindings(run.record.deferred),
+    );
   }
   if (run.record.disputed.length > 0) {
     lines.push(

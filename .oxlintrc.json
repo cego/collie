@@ -1,0 +1,74 @@
+{
+  "$schema": "./node_modules/@effect/tsgo/oxlint-schema.json",
+  "extends": [
+    "./node_modules/@effect/tsgo/oxlint-presets/correctness.json",
+    "./node_modules/@effect/tsgo/oxlint-presets/effect-native.json"
+  ],
+  "ignorePatterns": [
+    ".agent/**",
+    ".agents/**",
+    ".claude/**",
+    ".codex/**",
+    ".continue/**",
+    ".cursor/**",
+    ".gemini/**",
+    ".opencode/**",
+    ".pi/**",
+    ".roo/**",
+    ".scratch/**",
+    ".windsurf/**",
+    "advisor-plans/**",
+    "plans/**",
+    "tools/oxlint/anti-slop/**"
+  ],
+  "jsPlugins": [
+    {
+      "name": "anti-slop",
+      "specifier": "./tools/oxlint/anti-slop/index.ts"
+    },
+    {
+      "name": "anti-slop-effect",
+      "specifier": "./tools/oxlint/anti-slop/effect/index.ts"
+    }
+  ],
+  "rules": {
+    "anti-slop/no-chained-type-assertions": "error",
+    "anti-slop/no-conditional-empty-object-spread": "error",
+    "anti-slop/no-known-value-widening": "error",
+    "anti-slop/no-module-mocking": "error",
+    "anti-slop/no-object-parameters": "error",
+    "anti-slop/no-reflect-apply": "error",
+    "anti-slop/no-reflect-get": "error",
+    "anti-slop/no-runtime-typeof": "error",
+    "anti-slop/no-shape-in-symbol-names": "error",
+    "anti-slop/no-unknown-parameters": "error",
+    "anti-slop/no-unknown-returns": "error",
+    "anti-slop/no-unknown-type-aliases": "error",
+    "anti-slop/no-unsafe-dictionary-type": "error",
+    "anti-slop/no-widen-then-assert": "error",
+    "anti-slop/require-safety-comment-for-type-assertion": "error",
+    "anti-slop-effect/no-service-constructor-imports": "error",
+    "effecttsgo/global-console": "error",
+    "effecttsgo/global-date": "error",
+    "effecttsgo/abort-controller-in-effect": "error",
+    "effecttsgo/async-function": "error",
+    "effecttsgo/crypto-random-uuid": "error",
+    "effecttsgo/crypto-random-uuid-in-effect": "error",
+    "effecttsgo/extends-native-error": "error",
+    "effecttsgo/global-console-in-effect": "error",
+    "effecttsgo/global-date-in-effect": "error",
+    "effecttsgo/global-fetch": "error",
+    "effecttsgo/global-fetch-in-effect": "error",
+    "effecttsgo/global-random": "error",
+    "effecttsgo/global-random-in-effect": "error",
+    "effecttsgo/global-timers": "error",
+    "effecttsgo/global-timers-in-effect": "error",
+    "effecttsgo/instance-of-schema": "error",
+    "effecttsgo/new-promise": "error",
+    "effecttsgo/node-builtin-import": "error",
+    "effecttsgo/prefer-schema-over-json": "error",
+    "effecttsgo/process-env": "error",
+    "effecttsgo/process-env-in-effect": "error",
+    "effecttsgo/unsafe-effect-type-assertion": "error"
+  }
+}

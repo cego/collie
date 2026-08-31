@@ -18,6 +18,7 @@ steps:
       - title: Stop here
         stop: true
 ---
+
 Project root: {{cwd}}
 Report: {{run.dir}}/plan/ARCHITECTURE.md
 

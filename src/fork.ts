@@ -3,8 +3,7 @@
 // a stub that `extends:` the parent and names only what you came to change, or a
 // full copy that stops tracking the parent altogether.
 
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { Effect, FileSystem, Path, type PlatformError } from "effect";
 import { contentHash } from "./definitions";
 import { unsafePathComponent } from "./naming";
 
@@ -28,37 +27,52 @@ export interface ForkOptions {
 }
 
 /** Never overwrites: an existing fork is the one you already edited. */
-export function forkDefinition(
+export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
   source: string,
   kind: DefinitionKind,
   targetDir: string,
   opts: ForkOptions = {},
-): ForkResult {
-  const dir = join(targetDir, kind);
-  const sourceName = basename(source, ".md");
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathSvc = yield* Path.Path;
+  const dir = pathSvc.join(targetDir, kind);
+  const sourceName = pathSvc.basename(source, ".md");
   const name = opts.name ?? sourceName;
-  const path = join(dir, `${name}.md`);
+  const path = pathSvc.join(dir, `${name}.md`);
 
   const unsafe = unsafePathComponent(name);
   if (unsafe) return { ok: false, path, message: `target name "${name}" ${unsafe}` };
 
   if (path === source) {
-    return { ok: false, path, message: `${basename(source)} is already in that layer` };
+    return { ok: false, path, message: `${pathSvc.basename(source)} is already in that layer` };
   }
-  if (existsSync(path)) {
-    return { ok: false, path, message: `${path} already exists — edit it instead` };
-  }
+  yield* fs.makeDirectory(dir, { recursive: true });
+  const sourceText = opts.full ? yield* fs.readFileString(source) : null;
+  const text =
+    sourceText === null
+      ? stub(name, sourceName, kind, opts)
+      : renamed(stamped(sourceText, yield* contentHash(sourceText)), sourceName, name);
 
-  mkdirSync(dir, { recursive: true });
-  if (opts.full) {
-    // A full copy records what it copied, so a parent that moves on can be spotted.
-    const text = readFileSync(source, "utf8");
-    writeFileSync(path, renamed(stamped(text, contentHash(text)), sourceName, name));
-    return { ok: true, path, message: `copied to ${path} (a full copy: it no longer follows the original)` };
-  }
-  writeFileSync(path, stub(name, sourceName, kind, opts));
-  return { ok: true, path, message: `wrote ${path} — it extends the original and changes only what you add` };
-}
+  const exists = yield* fs.writeFileString(path, text, { flag: "wx" }).pipe(
+    Effect.as(false),
+    Effect.catch((cause: PlatformError.PlatformError) =>
+      cause.reason._tag === "AlreadyExists" ? Effect.succeed(true) : Effect.fail(cause),
+    ),
+  );
+  if (exists) return { ok: false, path, message: `${path} already exists — edit it instead` };
+
+  return opts.full
+    ? {
+        ok: true,
+        path,
+        message: `copied to ${path} (a full copy: it no longer follows the original)`,
+      }
+    : {
+        ok: true,
+        path,
+        message: `wrote ${path} — it extends the original and changes only what you add`,
+      };
+});
 
 /** `forked_from_hash` goes in the frontmatter, which is the first block of the file. */
 function stamped(text: string, hash: string): string {
@@ -69,7 +83,9 @@ function stamped(text: string, hash: string): string {
 }
 
 function renamed(text: string, source: string, target: string): string {
-  return source === target ? text : text.replace(new RegExp(`(^name:\\s*)${source}$`, "m"), `$1${target}`);
+  return source === target
+    ? text
+    : text.replace(new RegExp(`(^name:\\s*)${source}$`, "m"), `$1${target}`);
 }
 
 /**
@@ -80,7 +96,11 @@ function stub(name: string, parent: string, kind: DefinitionKind, opts: ForkOpti
   const head = ["---", `name: ${name}`, `extends: ${parent}`];
   const body: string[] = [];
   if (kind === "workflows" && opts.step) {
-    head.push("steps:", `  - id: ${opts.step}`, `    # Only the keys you change; the rest stay the original's.`);
+    head.push(
+      "steps:",
+      `  - id: ${opts.step}`,
+      `    # Only the keys you change; the rest stay the original's.`,
+    );
     body.push(`## ${opts.step}`, "", opts.section?.trim() || "Your version of this step's prompt.");
   } else {
     head.push("# Add the keys you are changing; the rest stay the original's.");

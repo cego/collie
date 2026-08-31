@@ -1,20 +1,50 @@
+import { nowIso } from "../src/time";
+import type { BunServices } from "@effect/platform-bun";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { Config, Effect, FileSystem, Path, PlatformError, Scope, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { runEffect } from "./support/effect";
 
 const root = new URL("../", import.meta.url).pathname;
 let dir: string;
-let env: Record<string, string>;
+let env: CollieCliEnv;
 
-beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "collie-life-"));
-  const plugin = join(dir, "plugin");
-  const workspace = join(dir, "workspace");
-  mkdirSync(join(plugin, "workflows"), { recursive: true });
-  mkdirSync(join(plugin, "personas"), { recursive: true });
-  mkdirSync(workspace);
-  writeFileSync(join(plugin, "workflows", "demo.md"), `---
+interface CollieCliEnv extends Record<string, string> {
+  PATH: string;
+  HOME: string;
+  HERDR_PLUGIN_ROOT: string;
+  HERDR_PLUGIN_CONFIG_DIR: string;
+  HERDR_PLUGIN_STATE_DIR: string;
+  HERDR_BIN_PATH: string;
+  COLLIE_DRIVER: string;
+}
+
+type TestError = Config.ConfigError | Error | PlatformError.PlatformError;
+type TestServices = BunServices.BunServices | Scope.Scope;
+type TestEffect = Effect.Effect<unknown, TestError, TestServices>;
+
+const effectTest = (
+  name: string,
+  body: () => Generator<TestEffect, void, unknown>,
+  timeout?: number,
+) => test(name, () => runEffect(Effect.gen(body).pipe(Effect.scoped)), timeout);
+
+const parseJson = (text: string) => JSON.parse(text);
+
+beforeEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      dir = yield* fs.makeTempDirectory({ prefix: "collie-life-" });
+      const plugin = path.join(dir, "plugin");
+      const workspace = path.join(dir, "workspace");
+      yield* fs.makeDirectory(path.join(plugin, "workflows"), { recursive: true });
+      yield* fs.makeDirectory(path.join(plugin, "personas"), { recursive: true });
+      yield* fs.makeDirectory(workspace);
+      yield* fs.writeFileString(
+        path.join(plugin, "workflows", "demo.md"),
+        `---
 name: demo
 title: Demo
 description: A demo.
@@ -27,114 +57,395 @@ steps:
 ---
 ## work
 Do it.
-`);
-  writeFileSync(join(plugin, "personas", "helper.md"), `---
+`,
+      );
+      yield* fs.writeFileString(
+        path.join(plugin, "personas", "helper.md"),
+        `---
 name: helper
 description: Helps.
 ---
 Help.
-`);
-  const herdr = join(dir, "herdr");
-  writeFileSync(herdr, `#!/bin/sh
+`,
+      );
+      const herdr = path.join(dir, "herdr");
+      yield* fs.writeFileString(
+        herdr,
+        `#!/bin/sh
 if [ "$1 $2" = "workspace list" ]; then
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","label":"One","cwd":"${workspace}","worktree":{"path":"${workspace}"}},{"workspace_id":"w2","label":"Two","cwd":"${workspace}"}]}}'
 fi
-`, { mode: 0o755 });
-  const driver = join(dir, "driver");
-  writeFileSync(driver, `#!/bin/sh
-printf '%s\n' "$COLLIE_RUN" >> "${join(dir, "drivers")}" 
-`, { mode: 0o755 });
-  env = {
-    PATH: process.env.PATH ?? "",
-    HOME: dir,
-    HERDR_PLUGIN_ROOT: plugin,
-    HERDR_PLUGIN_CONFIG_DIR: join(dir, "config"),
-    HERDR_PLUGIN_STATE_DIR: join(dir, "state"),
-    HERDR_BIN_PATH: herdr,
-    COLLIE_DRIVER: driver,
-  };
+`,
+        { mode: 0o755 },
+      );
+      const driver = path.join(dir, "driver");
+      yield* fs.writeFileString(
+        driver,
+        `#!/bin/sh
+printf '%s\n' "$COLLIE_RUN" >> "${path.join(dir, "drivers")}"
+`,
+        { mode: 0o755 },
+      );
+      env = {
+        PATH: yield* Config.string("PATH").pipe(Config.withDefault("")),
+        HOME: dir,
+        HERDR_PLUGIN_ROOT: plugin,
+        HERDR_PLUGIN_CONFIG_DIR: path.join(dir, "config"),
+        HERDR_PLUGIN_STATE_DIR: path.join(dir, "state"),
+        HERDR_BIN_PATH: herdr,
+        COLLIE_DRIVER: driver,
+      };
+    }),
+  ),
+);
+
+afterEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(dir, { recursive: true, force: true });
+    }),
+  ),
+);
+
+const cli = Effect.fn("test.cli")(function* (args: string[]) {
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const process = yield* spawner.spawn(
+    ChildProcess.make("bun", [path.join(root, "src/main.ts"), "--json", ...args], {
+      cwd: root,
+      env,
+      extendEnv: true,
+      stdout: "pipe",
+      stderr: "pipe",
+    }),
+  );
+  const [stdout, stderr, exit] = yield* Effect.all(
+    [
+      process.stdout.pipe(
+        Stream.decodeText(),
+        Stream.runFold(
+          () => "",
+          (out, chunk) => out + chunk,
+        ),
+      ),
+      process.stderr.pipe(
+        Stream.decodeText(),
+        Stream.runFold(
+          () => "",
+          (out, chunk) => out + chunk,
+        ),
+      ),
+      process.exitCode,
+    ],
+    { concurrency: "unbounded" },
+  ).pipe(Effect.scoped);
+  if (stdout.trim() === "")
+    return yield* Effect.fail(new Error(`empty stdout (exit ${Number(exit)}): ${stderr}`));
+  return { body: parseJson(stdout), stderr, exit };
 });
 
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+effectTest(
+  "start, inspect, scope, and every mutation are retry-safe",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const first = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "start",
+      "demo",
+      "--input",
+      "goal=ship",
+      "--request-id",
+      "start-1",
+    ]);
+    const retry = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "start",
+      "demo",
+      "--input",
+      "goal=ignored",
+      "--request-id",
+      "start-1",
+    ]);
+    expect(Number(first.exit)).toBe(0);
+    expect(retry.body.data.runId).toBe(first.body.data.runId);
+    expect((yield* fs.readFileString(path.join(dir, "drivers"))).trim().split("\n")).toHaveLength(
+      1,
+    );
 
-async function cli(args: string[]) {
-  const process = Bun.spawn(["bun", join(root, "src/main.ts"), "--json", ...args], {
-    cwd: root,
-    env,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, stderr, exit] = await Promise.all([
-    new Response(process.stdout).text(),
-    new Response(process.stderr).text(),
-    process.exited,
+    const runId: string = first.body.data.runId;
+    const shown = (yield* cli(["--workspace", "w1", "run", "show", runId])).body.data.run;
+    expect(shown).toMatchObject({
+      workspace: "w1",
+      workspace_label: "One",
+      workspace_worktree: path.join(dir, "workspace"),
+      cwd: path.join(dir, "workspace"),
+    });
+    expect((yield* cli(["--workspace", "w2", "run", "show", runId])).body.error.code).toBe(
+      "run_not_found",
+    );
+
+    const runDir = path.join(dir, "state", "runs", runId);
+    const snapshotPath = path.join(runDir, "run.json");
+    const snapshot = parseJson(yield* fs.readFileString(snapshotPath));
+    snapshot.steps[0].status = "done";
+    yield* fs.writeFileString(snapshotPath, JSON.stringify(snapshot));
+    yield* fs.writeFileString(
+      path.join(runDir, "choice.json"),
+      JSON.stringify({
+        id: "choice-1",
+        kind: "menu",
+        run: runId,
+        step: "work",
+        header: "Pick",
+        footer: "",
+        items: [{ id: "yes", title: "Yes" }],
+      }),
+    );
+    const answer = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "answer",
+      runId,
+      "yes",
+      "--request-id",
+      "answer-1",
+    ]);
+    const answerRetry = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "answer",
+      runId,
+      "yes",
+      "--request-id",
+      "answer-1",
+    ]);
+    expect(answerRetry.body).toEqual(answer.body);
+    expect(yield* fs.exists(path.join(runDir, "inbox", "answer-1.json"))).toBe(true);
+
+    yield* fs.remove(path.join(runDir, "inbox"), { recursive: true, force: true });
+    yield* fs.writeFileString(
+      path.join(runDir, "choice.json"),
+      JSON.stringify({
+        id: "choice-2",
+        kind: "ask",
+        run: runId,
+        step: "work",
+        header: "What should change?",
+        footer: "",
+        items: [],
+      }),
+    );
+    const text = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "answer",
+      runId,
+      "Use the smaller API",
+      "--request-id",
+      "answer-2",
+    ]);
+    expect(Number(text.exit)).toBe(0);
+    expect(
+      parseJson(yield* fs.readFileString(path.join(runDir, "inbox", "answer-2.json"))),
+    ).toMatchObject({ type: "answer", choiceId: "choice-2", answer: "Use the smaller API" });
+
+    const stopped = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "stop",
+      runId,
+      "--request-id",
+      "stop-1",
+    ]);
+    expect(stopped.body.data.status).toBe("stopped");
+    const resumed = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "resume",
+      runId,
+      "--request-id",
+      "resume-1",
+    ]);
+    expect(resumed.body.data.status).toBe("running");
+    expect(
+      (yield* cli(["--workspace", "w1", "run", "show", runId])).body.data.run.steps[0].status,
+    ).toBe("done");
+  },
+  10_000,
+);
+
+effectTest("a dead request lock is recovered instead of wedging the request id", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const lock = path.join(dir, "state", "requests", "run-start", "stale-request.json.lock");
+  yield* fs.makeDirectory(path.dirname(lock), { recursive: true });
+  yield* fs.writeFileString(lock, `${JSON.stringify({ pid: 2_000_000_000, start: "dead" })}\n`);
+
+  const result = yield* cli([
+    "--workspace",
+    "w1",
+    "run",
+    "start",
+    "demo",
+    "--input",
+    "goal=ship",
+    "--request-id",
+    "stale-request",
   ]);
-  return { body: JSON.parse(stdout), stderr, exit };
-}
-
-test("start, inspect, scope, and every mutation are retry-safe", async () => {
-  const first = await cli(["--workspace", "w1", "run", "start", "demo", "--input", "goal=ship", "--request-id", "start-1"]);
-  const retry = await cli(["--workspace", "w1", "run", "start", "demo", "--input", "goal=ignored", "--request-id", "start-1"]);
-  expect(first.exit).toBe(0);
-  expect(retry.body.data.runId).toBe(first.body.data.runId);
-  expect(readFileSync(join(dir, "drivers"), "utf8").trim().split("\n")).toHaveLength(1);
-
-  const runId = first.body.data.runId as string;
-  const shown = (await cli(["--workspace", "w1", "run", "show", runId])).body.data.run;
-  expect(shown).toMatchObject({ workspace: "w1", workspace_label: "One", workspace_worktree: join(dir, "workspace"), cwd: join(dir, "workspace") });
-  expect((await cli(["--workspace", "w2", "run", "show", runId])).body.error.code).toBe("run_not_found");
-
-  const runDir = join(dir, "state", "runs", runId);
-  const snapshotPath = join(runDir, "run.json");
-  const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8"));
-  snapshot.steps[0].status = "done";
-  writeFileSync(snapshotPath, JSON.stringify(snapshot));
-  writeFileSync(join(runDir, "choice.json"), JSON.stringify({
-    id: "choice-1", kind: "menu", run: runId, step: "work", header: "Pick", footer: "", items: [{ id: "yes", title: "Yes" }],
-  }));
-  const answer = await cli(["--workspace", "w1", "run", "answer", runId, "yes", "--request-id", "answer-1"]);
-  const answerRetry = await cli(["--workspace", "w1", "run", "answer", runId, "yes", "--request-id", "answer-1"]);
-  expect(answerRetry.body).toEqual(answer.body);
-  expect(existsSync(join(runDir, "inbox", "answer-1.json"))).toBe(true);
-
-  const stopped = await cli(["--workspace", "w1", "run", "stop", runId, "--request-id", "stop-1"]);
-  expect(stopped.body.data.status).toBe("stopped");
-  const resumed = await cli(["--workspace", "w1", "run", "resume", runId, "--request-id", "resume-1"]);
-  expect(resumed.body.data.status).toBe("running");
-  expect((await cli(["--workspace", "w1", "run", "show", runId])).body.data.run.steps[0].status).toBe("done");
+  expect(Number(result.exit)).toBe(0);
+  expect(result.body.data.requestId).toBe("stale-request");
+  expect(yield* fs.exists(lock)).toBe(false);
 });
 
-test("wait follows recorded progress to exactly one successful terminal event", async () => {
-  const started = await cli(["--workspace", "w1", "run", "start", "demo", "--input", "goal=wait"]);
-  const runId = started.body.data.runId as string;
-  const runDir = join(dir, "state", "runs", runId);
-  appendFileSync(join(runDir, "progress.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), text: "finished work" })}\n`);
-  const snapshotPath = join(runDir, "run.json");
-  const snapshot = JSON.parse(readFileSync(snapshotPath, "utf8"));
+effectTest("wait follows recorded progress to exactly one successful terminal event", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const started = yield* cli(["--workspace", "w1", "run", "start", "demo", "--input", "goal=wait"]);
+  const runId: string = started.body.data.runId;
+  const runDir = path.join(dir, "state", "runs", runId);
+  yield* fs.writeFileString(
+    path.join(runDir, "progress.jsonl"),
+    `${JSON.stringify({ at: yield* nowIso(), text: "finished work" })}\n`,
+    { flag: "a" },
+  );
+  const snapshotPath = path.join(runDir, "run.json");
+  const snapshot = parseJson(yield* fs.readFileString(snapshotPath));
   snapshot.status = "done";
-  snapshot.finished_at = new Date().toISOString();
+  snapshot.finished_at = yield* nowIso();
   snapshot.steps[0].status = "done";
-  writeFileSync(snapshotPath, JSON.stringify(snapshot));
+  yield* fs.writeFileString(snapshotPath, JSON.stringify(snapshot));
 
-  const process = Bun.spawn(["bun", join(root, "src/main.ts"), "--json", "--workspace", "w1", "run", "wait", runId, "--follow"], {
-    cwd: root, env, stdout: "pipe", stderr: "pipe",
-  });
-  const output = await new Response(process.stdout).text();
-  expect(await process.exited).toBe(0);
-  const events = output.trim().split("\n").map((line) => JSON.parse(line));
+  const process = yield* spawner.spawn(
+    ChildProcess.make(
+      "bun",
+      [
+        path.join(root, "src/main.ts"),
+        "--json",
+        "--workspace",
+        "w1",
+        "run",
+        "wait",
+        runId,
+        "--follow",
+      ],
+      {
+        cwd: root,
+        env,
+        extendEnv: true,
+        stdout: "pipe",
+        stderr: "pipe",
+      },
+    ),
+  );
+  const [output, exit] = yield* Effect.all(
+    [
+      process.stdout.pipe(
+        Stream.decodeText(),
+        Stream.runFold(
+          () => "",
+          (out, chunk) => out + chunk,
+        ),
+      ),
+      process.exitCode,
+    ],
+    { concurrency: "unbounded" },
+  );
+  expect(Number(exit)).toBe(0);
+  const events = output
+    .trim()
+    .split("\n")
+    .map((line) => parseJson(line));
   expect(events.map((event) => event.type)).toEqual(["snapshot", "progress", "terminal"]);
   expect(events.filter((event) => event.type === "terminal")).toHaveLength(1);
 });
 
-test("workflow and persona forks never overwrite and retries return the receipt", async () => {
-  const workflow = await cli(["workflow", "fork", "demo", "--layer", "user", "--mode", "extends", "--name", "mine", "--step", "work", "--request-id", "wf-1"]);
-  expect(workflow.exit).toBe(0);
-  expect(readFileSync(workflow.body.data.path, "utf8")).toContain("extends: demo");
-  expect((await cli(["workflow", "fork", "demo", "--layer", "user", "--mode", "extends", "--name", "mine", "--request-id", "wf-1"])).body).toEqual(workflow.body);
-  expect((await cli(["workflow", "fork", "demo", "--layer", "user", "--mode", "copy", "--name", "mine"])).body.error.code).toBe("target_exists");
-  expect((await cli(["workflow", "fork", "demo", "--layer", "user", "--mode", "copy", "--name", "../escape"])).body.error.code).toBe("invalid_input");
+effectTest(
+  "workflow and persona forks never overwrite and retries return the receipt",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const workflow = yield* cli([
+      "workflow",
+      "fork",
+      "demo",
+      "--layer",
+      "user",
+      "--mode",
+      "extends",
+      "--name",
+      "mine",
+      "--step",
+      "work",
+      "--request-id",
+      "wf-1",
+    ]);
+    expect(Number(workflow.exit)).toBe(0);
+    expect(yield* fs.readFileString(workflow.body.data.path)).toContain("extends: demo");
+    expect(
+      (yield* cli([
+        "workflow",
+        "fork",
+        "demo",
+        "--layer",
+        "user",
+        "--mode",
+        "extends",
+        "--name",
+        "mine",
+        "--request-id",
+        "wf-1",
+      ])).body,
+    ).toEqual(workflow.body);
+    expect(
+      (yield* cli([
+        "workflow",
+        "fork",
+        "demo",
+        "--layer",
+        "user",
+        "--mode",
+        "copy",
+        "--name",
+        "mine",
+      ])).body.error.code,
+    ).toBe("target_exists");
+    expect(
+      (yield* cli([
+        "workflow",
+        "fork",
+        "demo",
+        "--layer",
+        "user",
+        "--mode",
+        "copy",
+        "--name",
+        "../escape",
+      ])).body.error.code,
+    ).toBe("invalid_input");
 
-  const persona = await cli(["persona", "fork", "helper", "--layer", "project", "--name", "project-helper", "--workspace", "w1"]);
-  expect(persona.exit).toBe(0);
-  expect(persona.body.data.path).toContain("/workspace/.herdr/personas/project-helper.md");
-});
+    const persona = yield* cli([
+      "persona",
+      "fork",
+      "helper",
+      "--layer",
+      "project",
+      "--name",
+      "project-helper",
+      "--workspace",
+      "w1",
+    ]);
+    expect(Number(persona.exit)).toBe(0);
+    expect(persona.body.data.path).toContain("/workspace/.herdr/personas/project-helper.md");
+  },
+);

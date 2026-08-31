@@ -1,57 +1,72 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun";
-import { Effect } from "effect";
-import { program } from "./collie";
-import { readEnv } from "./env";
+import { Config, Console, Effect, FileSystem, Path, type PlatformError } from "effect";
+import { app } from "./collie";
+import { CliConfig, Command, GlobalFlag } from "effect/unstable/cli";
+import { currentEnv } from "./env";
 import { Herdr, HerdrError } from "./herdr";
-import { driveFlow, forkFlow, openPicker, pickFlow, resumeFlow, workspaceFlow, type Mode } from "./flows";
+import { driveFlow, forkFlow, openPicker, pickFlow, resumeFlow, workspaceFlow } from "./flows";
 
-async function herdr(command: string, mode?: string): Promise<void> {
-  const env = readEnv();
-  const client = new Herdr(env);
-  let code: number;
-  switch (command) {
-    case "pick":
-    case "resume":
-    case "fork":
-      code = await openPicker(client, env, command);
-      break;
-    case "picker": {
-      const selected = (mode ?? process.env.COLLIE_MODE ?? "pick") as Mode;
-      code = selected === "pick"
-        ? await pickFlow(client, env)
-        : selected === "resume"
-        ? await resumeFlow(client, env)
-        : selected === "fork"
-        ? await forkFlow(client, env)
-        : 2;
-      break;
+const args = Bun.argv.slice(2);
+
+type MainError = Error | PlatformError.PlatformError;
+type MainServices = BunServices.BunServices | FileSystem.FileSystem | Path.Path;
+
+const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, MainServices> =
+  Effect.fn("main.herdr")(function* (command: string, mode?: string) {
+    const env = yield* currentEnv;
+    const client = new Herdr(env);
+    const configuredMode = yield* Config.option(Config.string("COLLIE_MODE"));
+    const selected = mode ?? (configuredMode._tag === "Some" ? configuredMode.value : "pick");
+    if (!["pick", "resume", "fork", "picker", "drive", "workspace"].includes(command)) {
+      yield* Console.error(`Unknown Herdr entrypoint "${command}".`);
+      process.exitCode = 2;
+      return;
     }
-    case "drive":
-      code = await driveFlow(client, env);
-      break;
-    case "workspace":
-      code = await workspaceFlow(client, env);
-      break;
-    default:
-      process.stderr.write(`Unknown Herdr entrypoint "${command}".\n`);
-      code = 2;
-  }
-  process.exitCode = code;
-}
+    const code = yield* (() => {
+      switch (command) {
+        case "pick":
+        case "resume":
+        case "fork":
+          return openPicker(client, env, command);
+        case "picker":
+          return selected === "pick"
+            ? pickFlow(client, env)
+            : selected === "resume"
+              ? resumeFlow(client, env)
+              : selected === "fork"
+                ? forkFlow(client, env)
+                : Effect.succeed(2);
+        case "drive":
+          return driveFlow(client, env);
+        case "workspace":
+          return workspaceFlow(client, env);
+        default:
+          return Effect.succeed(2);
+      }
+    })();
+    process.exitCode = code;
+  });
 
-const args = process.argv.slice(2);
-if (args[0] === "herdr") {
-  BunRuntime.runMain(
-    Effect.tryPromise({ try: () => herdr(args[1] ?? "", args[2]), catch: (cause) => cause }).pipe(
-      Effect.catch((cause) => Effect.sync(() => {
-        const message = cause instanceof HerdrError ? `${cause.message}: ${cause.detail}` : String(cause);
-        process.stderr.write(`${message}\n`);
-        process.exitCode = 1;
-      })),
-      Effect.provide(BunServices.layer),
-    ),
-    { disableErrorReporting: true },
-  );
-} else {
-  BunRuntime.runMain(program, { disableErrorReporting: true });
-}
+const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
+  Effect.catch((cause) =>
+    Effect.gen(function* () {
+      const message =
+        cause instanceof HerdrError ? `${cause.message}: ${cause.detail}` : String(cause);
+      yield* Console.error(message);
+      process.exitCode = 1;
+    }),
+  ),
+  Effect.provide(BunServices.layer),
+);
+
+const cliProgram = app.pipe(
+  Command.run({ version: "0.0.1" }),
+  Effect.provide(
+    CliConfig.layer({ builtIns: [GlobalFlag.Help, GlobalFlag.Version, GlobalFlag.LogLevel] }),
+  ),
+  Effect.provide(BunServices.layer),
+);
+
+BunRuntime.runMain(args[0] === "herdr" ? herdrProgram : cliProgram, {
+  disableErrorReporting: true,
+});

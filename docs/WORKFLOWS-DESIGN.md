@@ -13,6 +13,7 @@ reconciles several parallel Outputs into one.
 Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001, ADR-0002.
 
 ## Principles
+
 - Skills are installed once, in `~/.agents/skills` (skills.sh), and shared by every
   harness, so Personas name skills — `{{skill:code-review}}` — and the harness adapter
   decides the syntax: `/name` for claude, `/skill:name` for pi, a sentence for the
@@ -27,6 +28,7 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
 - Multi-model = variants of one Persona. One implementer, always.
 
 ## Engine additions
+
 1. **Choice step** — `choices:` renders a menu in the runner pane (picker TUI). Each choice
    is `run: <workflow>` (chain: start that Workflow with forwarded Inputs, e.g.
    `plan: {{run.dir}}/plan`), `prompt: <text>` (send to a named agent, then re-offer the
@@ -80,6 +82,7 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
     directory that is not a checkout of it. The label stays `!<iid>`.
 
 ## Tabs and panes
+
 One tab per Step. A Step's parallel variants are equal side-by-side splits inside that
 Step's tab, so two reviewers are one tab of two panes rather than two tabs. A Step with
 `fan_in:` opens no tab either: it splits down from the last pane of the Step it
@@ -120,8 +123,10 @@ what a label shows.
 ## Workflows
 
 ### plan
+
 Inputs: `goal` (ask), `ticket` (optional, from branch).
 Steps (one agent throughout, `agent: grill`):
+
 1. `grill` — planner; `/grill-with-docs` on the goal. Criterion: if the destination is not
    visible or the work exceeds one session, switch to `/wayfinder` with a local map in
    the run dir. Writes CONTEXT/ADRs into the repo (that part IS committed — it is domain
@@ -139,8 +144,10 @@ Steps (one agent throughout, `agent: grill`):
      No cap.
 
 ### implement
+
 Inputs: `plan` (work-source: a plan dir, a Linear issue or free text). One implementer
 agent (`agent: build`) for build/architecture/simplify/fix.
+
 1. `build` — implementer, Claude's pinned `opus` default at `effort: medium`. That is the whole
    implementer agent, so `architecture`, `simplify`, `fix` and `mr` run on it too.
    Branch off the default branch as `<slug>`; `/implement` over the tickets with `/tdd`
@@ -169,9 +176,10 @@ agent (`agent: build`) for build/architecture/simplify/fix.
    commented back onto each issue. Never merges. `push` is the run's only remote side
    effect. The step declares `requires: gitlab` and is skipped with a note where `glab`
    or a GitLab remote is missing.
-Blocked at max with open findings (unchanged).
+   Blocked at max with open findings (unchanged).
 
 ### review
+
 Inputs: `target` (diff-target). The target is chosen, not guessed: the
 picker lists this branch's open MR (or, failing that, the open MRs I am on either side
 of), the branch against its base, and the working tree when it is dirty, in the order
@@ -191,19 +199,22 @@ prints it. Standalone and pointed at an MR, a last Choice offers **Post to MR** 
 every embedded review skips it (`standalone: true`, `requires: [mr-target, gitlab]`).
 
 ### architecture (standalone, attended)
+
 Inputs: none (cwd). `architect` runs `/improve-codebase-architecture` with the real
 grill; ends with choices: **Implement now** (`run: implement` with the resulting plan
 dir — the grill writes SPEC/tickets like `plan` does), **Stop here** (report only).
 
 ## Personas
+
 - `planner` — interview first, write nothing until agreed; knows the wayfinder criterion.
 - `implementer` — plan-bound, thin slices, TDD, commits per ticket, never silently drops
   a finding (`disputed`).
 - `reviewer` — reports, never fixes; runs both review skills; severity vocabulary;
   clean is a real answer.
 - `architect` — deletion test, `Strong` only when unattended, records `deferred`.
-Each ends with the Output contract and a skill-missing fallback paragraph.
+  Each ends with the Output contract and a skill-missing fallback paragraph.
 
 ## Config
+
 `config.json` gains `linear.team`. `model` may be `default` — accepted by every harness,
 and meaning no model flag is passed at all, so the harness starts on its own default.
