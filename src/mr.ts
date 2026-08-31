@@ -78,7 +78,11 @@ export function projectFromRemote(url: string): string | null {
   return `${host}/${path.replace(/^\/+/, "").replace(/\.git$/, "")}`;
 }
 
-/** The project this checkout pushes to, or null when there is no GitLab remote. */
+/**
+ * Runs a command and reports what it said, never failing: a missing executable comes
+ * back as exit 127 with no output, which is what lets callers treat "no glab here" as
+ * an answer rather than an error.
+ */
 export function shell(
   cmd: string,
   args: string[],
@@ -113,6 +117,7 @@ export function shell(
   );
 }
 
+/** The project this checkout pushes to, or null when there is no GitLab remote. */
 export function projectHere<R>(
   cwd: string,
   run: Runner<R>,

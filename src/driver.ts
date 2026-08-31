@@ -7,6 +7,7 @@ import type { PickItem } from "./picker";
 export const PROGRESS = "progress.jsonl";
 export const RUNNER_LOG = "runner.log";
 export const RUNNER_PID = "runner.pid";
+export const STOPPED = "stopped";
 export const CHOICE = "choice.json";
 export const CHOICE_ANSWER = "choice-answer.json";
 export interface ProgressLine {
@@ -218,7 +219,22 @@ export const inboxFiles = Effect.fn("inboxFiles")(function* (dir: string) {
 export const clearPreviousDriver = Effect.fn("clearPreviousDriver")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   yield* clearChoice(dir);
-  for (const file of yield* inboxFiles(dir)) yield* fs.remove(file, { force: true });
+  let resumedBy: string | null = null;
+  for (const file of yield* inboxFiles(dir)) {
+    // A `resume` command is addressed to this Driver, not the last one: it is the
+    // record of the request that started it, so it is read before it is cleared.
+    const command = yield* read(InboxCommandJson, file);
+    if (command?.type === "resume") resumedBy = command.requestId;
+    yield* fs.remove(file, { force: true });
+  }
+  return resumedBy;
+});
+
+/** Whether a stop already took effect on this Run before anyone came to drive it. */
+export const stoppedBefore = Effect.fn("stoppedBefore")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* fs.exists(path.join(dir, STOPPED));
 });
 
 /**

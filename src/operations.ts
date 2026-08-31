@@ -21,6 +21,7 @@ import {
   CHOICE,
   driverAlive,
   inboxFiles,
+  STOPPED,
   InboxCommandJson,
   readChoice,
   stopDriver,
@@ -182,7 +183,7 @@ export const spawnDriver = Effect.fn("operations.spawnDriver")(function* (
 export const runStatus = Effect.fn("operations.runStatus")(function* (run: Run) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (yield* fs.exists(path.join(run.dir, "stopped"))) return "stopped";
+  if (yield* fs.exists(path.join(run.dir, STOPPED))) return "stopped";
   if (run.record.awaiting || (yield* fs.exists(path.join(run.dir, CHOICE)))) return "waiting";
   if (run.record.status === "done") return "succeeded";
   return run.record.status === "running" ? "running" : "failed";
@@ -365,7 +366,7 @@ export const stopRun = Effect.fn("operations.stopRun")(function* (
   } else {
     // A Run nothing is driving has no process left to notice a signal, so the stop is
     // recorded here instead.
-    yield* fs.writeFileString(path.join(run.dir, "stopped"), `${yield* nowIso()}\n`);
+    yield* fs.writeFileString(path.join(run.dir, STOPPED), `${yield* nowIso()}\n`);
     run.record.status = "blocked";
     yield* run.save();
   }
@@ -386,11 +387,16 @@ export const stopRun = Effect.fn("operations.stopRun")(function* (
  * stops that one from driving; closing that window needs the resumer to hand the
  * child a claim it adopts, which is a protocol change, not a lock.
  *
- * Unlike a stop this writes no inbox command. A stop has a Driver to hand it to; a
- * resume runs only when none is alive, so a command in the inbox would have no reader
- * but the Driver this call is about to start, which does not need telling.
+ * The request goes in the inbox like a stop's. A resume runs only when no Driver is
+ * alive, so its reader is the Driver this call starts: that Driver takes the request id
+ * off the command and records it, which is what gives the Run's own audit trail a
+ * resume as well as a stop.
  */
-export const resumeRun = Effect.fn("operations.resumeRun")(function* (env: PluginEnv, run: Run) {
+export const resumeRun = Effect.fn("operations.resumeRun")(function* (
+  env: PluginEnv,
+  run: Run,
+  requestId: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   // driverAlive is a look, not a claim. Two resumes could both find no owner, both
@@ -411,11 +417,15 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (env: Plugi
       return err("run_already_active", `Run "${run.id}" is already active.`);
     if ((yield* runStatus(run)) === "succeeded")
       return err("invalid_state", `Run "${run.id}" has already succeeded.`);
-    yield* fs.remove(path.join(run.dir, "stopped"), { force: true });
+    yield* fs.remove(path.join(run.dir, STOPPED), { force: true });
     for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
     run.record.status = "running";
     run.record.finished_at = null;
     yield* run.save();
+    // Recorded in the Run's own directory, as the spec asks: the inbox is where a
+    // command and its outcome live, and the Driver this call is about to start is what
+    // reads it — `clearPreviousDriver` takes the request id off it before clearing.
+    yield* writeInbox(run.dir, { type: "resume", requestId });
     // The reset has already happened and the stop marker is already gone, so a Run
     // handOver could not place would otherwise be worse off than before it was
     // resumed: reported as advancing, driven by nobody, nothing terminal to wait for.

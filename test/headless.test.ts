@@ -37,6 +37,8 @@ import {
   readProgress,
   clearPreviousDriver,
   releaseDriver,
+  stoppedBefore,
+  STOPPED,
   RUNNER_LOG,
   RUNNER_PID,
   stopDriver,
@@ -956,4 +958,58 @@ effectTest("the Driver is spawned with a usable environment, not just herdr's ke
   expect(yield* fs.readFileString(seen)).toBe(
     yield* Config.string("PATH").pipe(Config.withDefault("")),
   );
+});
+
+effectTest("a stop that lands before the Driver claims the Run is honoured", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const run = yield* new RunStore(rig.stateDir).create({
+    workflow: "plan",
+    cwd: rig.projectDir,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["next"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+
+  // What `run stop` leaves when it finds no owner in the window between the spawn and
+  // the child writing runner.pid: it has already reported the Run stopped.
+  yield* fs.makeDirectory(path.join(run.dir, "inbox"), { recursive: true });
+  yield* fs.writeFileString(
+    path.join(run.dir, "inbox", "req.json"),
+    `${JSON.stringify({ type: "stop", requestId: "req" })}\n`,
+  );
+  yield* fs.writeFileString(path.join(run.dir, STOPPED), `${yield* nowIso()}\n`);
+
+  // The Driver that arrives next must not drive it, and must give the claim back.
+  expect(yield* acquireDriver(run.dir)).toBe(true);
+  expect(yield* stoppedBefore(run.dir)).toBe(true);
+  yield* releaseDriver(run.dir);
+  expect(yield* driverAlive(run.dir)).toBe(false);
+});
+
+effectTest("a resume command is read by the Driver it starts, then cleared", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const run = yield* new RunStore(rig.stateDir).create({
+    workflow: "plan",
+    cwd: rig.projectDir,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["next"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+  const inbox = path.join(run.dir, "inbox");
+  yield* fs.makeDirectory(inbox, { recursive: true });
+  yield* fs.writeFileString(
+    path.join(inbox, "resume-7.json"),
+    `${JSON.stringify({ type: "resume", requestId: "resume-7" })}\n`,
+  );
+
+  // The Run's own audit trail records that a resume asked for this Driver, which is
+  // what the inbox is for; the command itself does not outlive being read.
+  expect(yield* clearPreviousDriver(run.dir)).toBe("resume-7");
+  expect(yield* fs.readDirectory(inbox)).toEqual([]);
 });

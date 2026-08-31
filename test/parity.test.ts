@@ -379,7 +379,7 @@ effectTest("resuming through the operation and through the CLI leave the same tr
     yield* run.save();
   }
 
-  const resumed = yield* withDriver(resumeRun(pluginEnv(), board));
+  const resumed = yield* withDriver(resumeRun(pluginEnv(), board, "req-board"));
   expect(resumed.ok).toBe(true);
   expect((yield* cli(["run", "resume", command.id, "--request-id", "req-cli"])).exit).toBe(0);
 

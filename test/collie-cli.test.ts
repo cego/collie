@@ -147,3 +147,27 @@ test("a Driver that cannot be started fails the Run rather than orphaning it", (
       expect(started.exit).toBe(1);
     }),
   ));
+
+test("discovery is global when an inherited workspace id no longer resolves", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A script that inherited HERDR_WORKSPACE_ID from a pane whose workspace has
+      // since closed. Discovery needs no workspace, so it answers rather than failing.
+      const stale = { HERDR_WORKSPACE_ID: "gone", HERDR_BIN_PATH: "/nonexistent/herdr" };
+      const listed = yield* cli(["--json", "workflow", "list"], stale);
+      expect(yield* parseEnvelope(listed.stdout)).toMatchObject({ ok: true });
+      expect(listed.exit).toBe(0);
+
+      const personas = yield* cli(["--json", "persona", "list"], stale);
+      expect(yield* parseEnvelope(personas.stdout)).toMatchObject({ ok: true });
+
+      // A workspace the caller named is still an error: the spec reserves
+      // workspace_not_found for exactly that.
+      const named = yield* cli(["--json", "--workspace", "gone", "workflow", "list"], stale);
+      expect(yield* parseEnvelope(named.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "workspace_not_found" },
+      });
+      expect(named.exit).toBe(1);
+    }),
+  ));

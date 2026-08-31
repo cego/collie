@@ -34,6 +34,7 @@ import { sendReviewToImplementer, type Session } from "./handoff";
 import {
   acquireDriver,
   clearPreviousDriver,
+  stoppedBefore,
   appendProgress,
   driverAlive,
   filePrompts,
@@ -302,7 +303,7 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (herdr: Herdr,
   if (!chosen) return 0;
 
   const run = yield* store.load(chosen.id);
-  const resumed = yield* resumeRun(env, run);
+  const resumed = yield* resumeRun(env, run, yield* newRequestId());
   if (!resumed.ok) return yield* bail(`${run.record.slug}: ${resumed.error.message}`);
   // Only a popup can close itself; running the picker in a plain pane is fine..
   yield* Effect.ignore(herdr.popupClose());
@@ -355,9 +356,23 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
     yield* out("a driver is already running this run; this one is stopping");
     return 1;
   }
+  /**
+   * A stop that landed before this Driver claimed the Run. `stopRun` writes its inbox
+   * command, sees no owner in the window between the spawn and the claim, and records
+   * the stop itself — so it has already reported success and closed the panes. Driving
+   * on would overwrite that with `running` and start agents nobody is expecting, and
+   * clearing the inbox below would remove the other half of the request too.
+   */
+  if (yield* stoppedBefore(run.dir)) {
+    yield* releaseDriver(run.dir);
+    process.off("SIGTERM", earlySigterm);
+    yield* out("stopped before this driver started; nothing was run");
+    return 0;
+  }
   // This Driver owns the Run now, so nothing the last one left in the run dir is
-  // addressed to it.
-  yield* clearPreviousDriver(run.dir);
+  // addressed to it — except the resume that asked for it, which it records.
+  const resumedBy = yield* clearPreviousDriver(run.dir);
+  if (resumedBy) yield* out(`resumed by request ${resumedBy}`);
 
   const markStopped = Effect.gen(function* () {
     const stoppedAt = yield* nowIso();

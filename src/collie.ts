@@ -42,7 +42,7 @@ import {
 } from "./operations";
 import { reason, unsafePathComponent } from "./naming";
 import { breakStaleLock, releaseOwnLock, tryClaimLock } from "./lock";
-import { YamlMapSchema } from "./yaml";
+import { YamlMapSchema, type YamlMap } from "./yaml";
 
 const ResultBoundary = Schema.Union([
   Schema.Struct({ ok: Schema.Literal(true), data: Schema.Unknown, human: Schema.String }),
@@ -135,15 +135,43 @@ const context = Effect.fn("collie.context")(function* (
       ? err("workspace_required", "This operation requires a workspace.")
       : { env: base, workspace: null };
   if (!resolveLive) return { env: base, workspace: null };
-  const workspace = (yield* new Herdr(base).workspaceList()).find(
-    (item) => item.workspaceId === id,
+  // A herdr that will not answer is a workspace that cannot be resolved, which is what
+  // the spec names this code for; the reason it could not be resolved goes in details
+  // rather than becoming a different, less useful code.
+  const live = yield* new Herdr(base).workspaceList().pipe(
+    Effect.map((workspaces) => ({ workspaces, cause: "" })),
+    Effect.catch((cause) => Effect.succeed({ workspaces: [], cause: String(cause) })),
   );
-  if (!workspace)
-    return err("workspace_not_found", `Workspace "${id}" was not found.`, { workspace: id });
+  const workspace = live.workspaces.find((item) => item.workspaceId === id);
+  if (!workspace) {
+    const details: YamlMap = { workspace: id };
+    if (live.cause) details["cause"] = live.cause;
+    return err("workspace_not_found", `Workspace "${id}" was not found.`, details);
+  }
   return {
     workspace,
     env: { ...base, workspaceId: id, cwd: workspace.cwd || base.context.workspace_cwd || base.cwd },
   };
+});
+
+/**
+ * Where a discovery command looks. The spec makes Workflow and Persona discovery
+ * global and reserves `workspace_not_found` for a workspace the caller named, so an id
+ * inherited from a pane whose workspace has since closed falls back to no scope rather
+ * than failing a listing that needs no workspace at all. Project-layer resolution then
+ * uses the process's own directory, which is the best answer available.
+ */
+const discoveryContext = Effect.fn("collie.discoveryContext")(function* (global: Global) {
+  // Named on the command line: the strict path, so an unresolvable workspace is the
+  // caller's error, as the spec requires.
+  if (Option.isSome(global.workspace)) return yield* context(global, true);
+  // Inherited from the environment: used where it helps, never a reason to fail. It
+  // may name a workspace that has closed, and there may be no herdr to ask at all.
+  const tried = yield* context(global, (yield* selected(global)) !== null).pipe(
+    Effect.catch(() => Effect.succeed(null)),
+  );
+  if (tried !== null && !("ok" in tried)) return tried;
+  return yield* context({ ...global, workspace: Option.none() }, false);
 });
 
 const definitions = Effect.fn("collie.definitions")(function* (env: PluginEnv) {
@@ -359,7 +387,7 @@ const workflowList = Command.make("list", {}, () =>
     const global = yield* root;
     yield* attempt(
       Effect.gen(function* () {
-        const resolved = yield* context(global, (yield* selected(global)) !== null);
+        const resolved = yield* discoveryContext(global);
         if ("ok" in resolved) return resolved;
         const defs = yield* definitions(resolved.env);
         const workflows = [...defs.workflows.values()]
@@ -386,7 +414,7 @@ const workflowShow = Command.make(
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
-          const resolved = yield* context(global, (yield* selected(global)) !== null);
+          const resolved = yield* discoveryContext(global);
           if ("ok" in resolved) return resolved;
           const wf = (yield* definitions(resolved.env)).workflows.get(workflow);
           return wf
@@ -421,11 +449,16 @@ const workflowFork = Command.make(
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
-          const resolved = yield* context(global, layer === "project", layer === "project");
-          if ("ok" in resolved) return resolved;
-          return yield* mutation(resolved.env, "workflow-fork", request, (id) =>
+          const base = yield* context(global, false);
+          if ("ok" in base) return base;
+          return yield* mutation(base.env, "workflow-fork", request, (id) =>
             Effect.gen(function* () {
               void id;
+              // The workspace a project-layer fork needs is resolved inside the
+              // mutation, so replaying a receipt returns the recorded result rather
+              // than needing that workspace to still be open.
+              const resolved = yield* context(global, layer === "project", layer === "project");
+              if ("ok" in resolved) return resolved;
               const wf = (yield* definitions(resolved.env)).workflows.get(workflow);
               if (!wf) return err("workflow_not_found", `Workflow "${workflow}" was not found.`);
               if (unsafePathComponent(name))
@@ -478,7 +511,7 @@ const personaList = Command.make("list", {}, () =>
     const global = yield* root;
     yield* attempt(
       Effect.gen(function* () {
-        const resolved = yield* context(global, (yield* selected(global)) !== null);
+        const resolved = yield* discoveryContext(global);
         if ("ok" in resolved) return resolved;
         const defs = yield* definitions(resolved.env);
         const personas = [...defs.personas.values()]
@@ -502,7 +535,7 @@ const personaShow = Command.make("show", { persona: Argument.string("persona") }
     const global = yield* root;
     yield* attempt(
       Effect.gen(function* () {
-        const resolved = yield* context(global, (yield* selected(global)) !== null);
+        const resolved = yield* discoveryContext(global);
         if ("ok" in resolved) return resolved;
         const found = (yield* definitions(resolved.env)).personas.get(persona);
         return found
@@ -529,10 +562,14 @@ const personaFork = Command.make(
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
-          const resolved = yield* context(global, layer === "project", layer === "project");
-          if ("ok" in resolved) return resolved;
-          return yield* mutation(resolved.env, "persona-fork", request, (_id) =>
+          const base = yield* context(global, false);
+          if ("ok" in base) return base;
+          return yield* mutation(base.env, "persona-fork", request, (_id) =>
             Effect.gen(function* () {
+              // Resolved inside the mutation, so a replayed request id returns its
+              // recorded result whether or not that workspace is still open.
+              const resolved = yield* context(global, layer === "project", layer === "project");
+              if ("ok" in resolved) return resolved;
               const found = (yield* definitions(resolved.env)).personas.get(persona);
               if (!found) return err("persona_not_found", `Persona "${persona}" was not found.`);
               if (unsafePathComponent(name))
@@ -894,7 +931,7 @@ function runCommandMutation(
                 id,
               );
             }
-            return yield* resumeRun(resolved.env, found);
+            return yield* resumeRun(resolved.env, found, id);
           }),
         );
       }),
