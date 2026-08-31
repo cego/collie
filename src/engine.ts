@@ -747,13 +747,7 @@ const chain = Effect.fn("Engine.chain")(function* (
   // herdr-plugin.toml has never declared and main.ts has never routed, so the child
   // was created, recorded `running`, listed as a child — and driven by nobody.
   const undriven = yield* handOver({ ...o.env, cwd: run.record.cwd }, childRun);
-  if (undriven) {
-    yield* out(`  ${child.name} was created but no driver started: ${undriven.why}`);
-    yield* childRun.log(`driver did not start: ${undriven.why}`);
-    childRun.record.status = "failed";
-    childRun.record.finished_at = yield* nowIso();
-    yield* childRun.save();
-  }
+  if (undriven) yield* out(`  ${child.name} was created but no driver started: ${undriven.why}`);
   return childRun.id;
 });
 

@@ -257,3 +257,30 @@ menu
       ]);
     }),
   ));
+
+test("a child whose driver will not start is recorded, not left running", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([CLEAN]);
+      const prompts = scriptedPrompts(["Build it now"]);
+
+      // No driver to hand the child to, which is the ordinary state of a checkout whose
+      // bin/collie has not been built.
+      const missing = ConfigProvider.layer(
+        ConfigProvider.fromUnknown({ COLLIE_DRIVER: path.join(rig.root, "not-here") }),
+      );
+      const { run } = yield* runWorkflow(rig, "parent", { goal: "add a picker" }, { prompts }).pipe(
+        Effect.provide(missing),
+      );
+
+      const child = yield* new RunStore(rig.stateDir).load(run.record.children[0]!);
+      // handOver records it, so it is not reported as advancing with nobody advancing it.
+      expect(child.record.status).toBe("failed");
+      expect(child.record.finished_at).not.toBeNull();
+      expect(yield* fs.readFileString(path.join(child.dir, "log.txt"))).toContain(
+        "driver did not start",
+      );
+    }),
+  ));

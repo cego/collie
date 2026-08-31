@@ -258,34 +258,33 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   yield* run.log(`created from ${workflow.path} (${workflow.layer} layer)`);
   if (options.note) yield* run.log(options.note);
   const undriven = yield* handOver(env, run);
-  if (undriven) {
-    // Nothing is driving this Run and nothing will, so it is recorded rather than
-    // left reported as running for ever.
-    yield* run.log(`driver did not start: ${undriven.why}`);
-    run.record.status = "failed";
-    run.record.finished_at = yield* nowIso();
-    yield* run.save();
-    return undriven.result;
-  }
+  if (undriven) return undriven.result;
   return run;
 });
 
 /**
- * Hands the Run to a detached Driver, or says why none could be started. The reason
- * comes back as a result rather than a failure so a caller's request receipt records
- * it, and a retry with the same request id replays it instead of trying again.
+ * Hands the Run to a detached Driver, or says why none could be started — and records
+ * that on the Run, because nothing is advancing it and nothing will, and a Run left
+ * reported as `running` has no terminal state for `run wait` to return on.
+ *
+ * The reason comes back as a result rather than a failure so a caller's request
+ * receipt records it, and a retry with the same request id replays it.
  */
 export const handOver = Effect.fn("operations.handOver")(function* (env: PluginEnv, run: Run) {
-  const failure = yield* spawnDriver(env, run.id, run.record.cwd).pipe(
+  const why = yield* spawnDriver(env, run.id, run.record.cwd).pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(String(cause))),
   );
-  if (!failure) return null;
+  if (!why) return null;
+  yield* run.log(`driver did not start: ${why}`);
+  run.record.status = "failed";
+  run.record.finished_at = yield* nowIso();
+  yield* run.save();
   return {
-    why: failure,
+    why,
     result: err("operation_failed", `Could not start a Driver for run "${run.id}".`, {
       run: run.id,
-      cause: failure,
+      cause: why,
     }),
   };
 });
@@ -417,17 +416,11 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (env: Plugi
     run.record.status = "running";
     run.record.finished_at = null;
     yield* run.save();
+    // The reset has already happened and the stop marker is already gone, so a Run
+    // handOver could not place would otherwise be worse off than before it was
+    // resumed: reported as advancing, driven by nobody, nothing terminal to wait for.
     const undriven = yield* handOver(env, run);
-    if (undriven) {
-      // The reset has already happened and the stop marker is already gone, so a Run
-      // left `running` here would be strictly worse off than before it was resumed:
-      // reported as advancing, driven by nobody, with nothing terminal to wait for.
-      yield* run.log(`driver did not start: ${undriven.why}`);
-      run.record.status = "failed";
-      run.record.finished_at = yield* nowIso();
-      yield* run.save();
-      return undriven.result;
-    }
+    if (undriven) return undriven.result;
     return ok({ runId: run.id, status: "running" }, `Resumed run ${run.id}.`);
   }).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
 });
