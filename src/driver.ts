@@ -1,4 +1,4 @@
-import { Clock, Effect, FileSystem, Path, Schema, Option } from "effect";
+import { Clock, Effect, FileSystem, Path, Schema, Option, Stream } from "effect";
 import { nowIso } from "./time";
 import { breakStaleLock, holdsLock, processStartTime, releaseOwnLock, tryClaimLock } from "./lock";
 import type { EnginePrompts } from "./engine";
@@ -351,24 +351,60 @@ export function filePrompts(opts: {
   const epoch = Bun.randomUUIDv7().slice(0, 8);
   const wait = (choice: PendingChoice) =>
     Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       yield* clearChoice(opts.dir);
       yield* writeChoice(opts.dir, choice);
-      const start = yield* Clock.currentTimeMillis;
-      return yield* Effect.gen(function* () {
-        while ((yield* Clock.currentTimeMillis) < start + opts.timeoutMs) {
-          const answer =
-            (yield* consumeInboxAnswer(opts.dir, choice)) ??
-            (yield* read(ChoiceAnswerJson, path.join(opts.dir, CHOICE_ANSWER)));
-          if (answer && answer.id === choice.id) return answer;
-          // The same request the signal carries, arriving as a file. Raising it on
-          // ourselves keeps one path recording what a stop does to the Run.
-          if (yield* consumeInboxStop(opts.dir))
-            yield* Effect.sync(() => globalThis.process.kill(globalThis.process.pid, "SIGTERM"));
-          yield* Effect.sleep(`${opts.pollMs ?? 500} millis`);
-        }
+      const inbox = path.join(opts.dir, "inbox");
+      yield* fs.makeDirectory(inbox, { recursive: true });
+
+      /** This Choice's answer, or nothing yet. A stop found here is acted on. */
+      const check = Effect.gen(function* () {
+        const answer =
+          (yield* consumeInboxAnswer(opts.dir, choice)) ??
+          (yield* read(ChoiceAnswerJson, path.join(opts.dir, CHOICE_ANSWER)));
+        if (answer && answer.id === choice.id) return answer;
+        // The same request the signal carries, arriving as a file. Raising it on
+        // ourselves keeps one path recording what a stop does to the Run.
+        if (yield* consumeInboxStop(opts.dir))
+          yield* Effect.sync(() => globalThis.process.kill(globalThis.process.pid, "SIGTERM"));
         return null;
-      }).pipe(Effect.ensuring(clearChoice(opts.dir).pipe(Effect.ignore)));
+      });
+
+      /**
+       * What might mean something has changed. `FileSystem.watch` is not recursive —
+       * a write into `inbox/` raises nothing on a watch of the Run directory — so both
+       * are watched: the inbox for commands, the Run dir for `choice-answer.json`.
+       *
+       * The tick rides alongside them rather than driving the wait. Events are only
+       * invalidation signals, and one that never arrives — a watch the platform drops,
+       * a file written before the subscription settled — should cost latency, not the
+       * answer.
+       */
+      const events = Stream.merge(
+        Stream.merge(fs.watch(opts.dir), fs.watch(inbox)),
+        Stream.tick(`${opts.pollMs ?? 500} millis`),
+      );
+
+      const answered = yield* Effect.gen(function* () {
+        // Subscribed before the first read, so an answer written in the gap between
+        // them still arrives as an event rather than being waited on for ever.
+        const queue = yield* Stream.toQueue(events, { capacity: "unbounded" });
+        const already = yield* check;
+        if (already) return Option.some(already);
+        return yield* Stream.fromQueue(queue).pipe(
+          Stream.mapEffect(() => check),
+          Stream.filter((found): found is ChoiceAnswer => found !== null),
+          Stream.runHead,
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.timeout(opts.timeoutMs),
+        // Running out of time is this function answering nothing, not a failure.
+        Effect.catch(() => Effect.succeed(Option.none<ChoiceAnswer>())),
+        Effect.ensuring(clearChoice(opts.dir).pipe(Effect.ignore)),
+      );
+      return Option.getOrNull(answered);
     });
   return {
     menu: (items, menuOpts) =>
