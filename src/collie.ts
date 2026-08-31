@@ -1,5 +1,5 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Config, Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import { Cause, Config, Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import {
   Argument,
   CliConfig,
@@ -56,8 +56,6 @@ const ResultJson = Schema.fromJsonString(
 const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 const PrettyUnknownJson = Schema.fromJsonString(Schema.Unknown, { space: 2 });
-
-const TimeoutErrorTag = Schema.Struct({ _tag: Schema.optionalKey(Schema.String) });
 
 type Result = OpResult;
 type Global = { readonly workspace: Option.Option<string>; readonly json: boolean };
@@ -632,11 +630,12 @@ function runLookup(command: "show" | "logs" | "output") {
           const fs = yield* FileSystem.FileSystem;
           const pathSvc = yield* Path.Path;
           const outputs: Array<{ path: string; value?: unknown; error?: string }> = [];
+          const inside = `${pathSvc.resolve(found.dir)}/`;
           for (const variant of found.record.steps.flatMap((step) => step.variants)) {
             const relative = variant.output;
             if (!relative) continue;
             const file = pathSvc.resolve(found.dir, relative);
-            if (!file.startsWith(`${pathSvc.resolve(found.dir)}/`))
+            if (!file.startsWith(inside))
               return err("invalid_state", `Run "${runId}" has an unsafe Output path.`);
             // A Step that blocked has its Output path recorded with no file at it, and
             // an agent may write prose where JSON was asked for. The engine records
@@ -698,32 +697,28 @@ const runWait = Command.make(
 
       let progressCount = 0;
       let sentSnapshot = false;
+      /** One event, as the typed line a program reads or the line a human reads. */
+      const say = <A>(event: A, human: string) =>
+        process.stdout.write(`${global.json ? Schema.encodeSync(UnknownJson)(event) : human}\n`);
+
+      /** Reports what has happened since the last call, and whether waiting is over. */
       const emit = Effect.fn("collie.runWait.emit")(function* () {
         const fresh = yield* readRun(resolved.env, runId, workspace);
         if (!(fresh instanceof Run)) return true;
         const snapshot = yield* runData(fresh);
-        const freshStatus = yield* runStatus(fresh);
-        const terminal = ["succeeded", "failed", "stopped"].includes(freshStatus);
+        const status = yield* runStatus(fresh);
+        const terminal = ["succeeded", "failed", "stopped"].includes(status);
         if (follow) {
           // Once, not once per event: a Run with no progress yet leaves progressCount
           // at zero however many times its directory is touched.
           if (!sentSnapshot) {
             sentSnapshot = true;
-            process.stdout.write(
-              `${global.json ? Schema.encodeSync(UnknownJson)({ type: "snapshot", run: snapshot }) : `${fresh.id}: ${freshStatus}`}\n`,
-            );
+            say({ type: "snapshot", run: snapshot }, `${fresh.id}: ${status}`);
           }
           const progress = (yield* readProgress(fresh.dir)).slice(progressCount);
           progressCount += progress.length;
-          for (const event of progress)
-            process.stdout.write(
-              `${global.json ? Schema.encodeSync(UnknownJson)({ type: "progress", runId, ...event }) : event.text}\n`,
-            );
-          if (terminal) {
-            process.stdout.write(
-              `${global.json ? Schema.encodeSync(UnknownJson)({ type: "terminal", run: snapshot }) : `${fresh.id}: ${freshStatus}`}\n`,
-            );
-          }
+          for (const event of progress) say({ type: "progress", runId, ...event }, event.text);
+          if (terminal) say({ type: "terminal", run: snapshot }, `${fresh.id}: ${status}`);
         }
         return terminal;
       });
@@ -742,23 +737,23 @@ const runWait = Command.make(
         );
       }).pipe(Effect.scoped);
       const bounded = ms === null ? watched : watched.pipe(Effect.timeout(ms));
-      yield* bounded.pipe(
+      const failed = yield* bounded.pipe(
+        Effect.as(false),
         Effect.catch((cause) =>
           Effect.sync(() => {
             print(
-              Schema.decodeUnknownOption(TimeoutErrorTag)(cause).pipe(
-                Option.exists((error) => error._tag === "TimeoutError"),
-              )
+              Cause.isTimeoutError(cause)
                 ? err("timeout", `Timed out waiting for run "${runId}".`)
                 : err("operation_failed", `Could not watch run "${runId}".`, {
                     cause: String(cause),
                   }),
               global.json,
             );
+            return true;
           }),
         ),
       );
-      if (!follow && process.exitCode !== 1) {
+      if (!follow && !failed) {
         const terminal = yield* readRun(resolved.env, runId, workspace);
         if (terminal instanceof Run)
           yield* printResult(
@@ -878,14 +873,16 @@ export const program = app.pipe(
   Effect.catch((cause) =>
     Effect.gen(function* () {
       const parse = isShowHelp(cause) ? cause : null;
+      // An explicit `--help` is a ShowHelp carrying no errors, and nobody's failure.
       if (parse && parse.errors.length === 0) return;
-      if (!jsonAsked) {
-        process.exitCode = parse ? 2 : 1;
-        if (!parse) yield* Console.error(String(cause));
-        return;
-      }
-      const message = parse ? parse.errors.map((error) => error.message).join("; ") : String(cause);
-      print(err(parse ? "invalid_input" : "operation_failed", message), true);
+      const failure = parse
+        ? err("invalid_input", parse.errors.map((error) => error.message).join("; "))
+        : err("operation_failed", String(cause));
+      if (jsonAsked) return print(failure, true);
+      // Effect's CLI has already printed the help and the reason for a parse failure,
+      // so saying it again here would only be a third copy.
+      process.exitCode = parse ? 2 : 1;
+      if (!parse) yield* Console.error(failure.error.message);
     }),
   ),
   Effect.provide(quietHelp),

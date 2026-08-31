@@ -1,4 +1,4 @@
-import { Data, Schema, Clock, Effect, FileSystem, Path } from "effect";
+import { Data, Schema, Clock, Effect, FileSystem, Path, Schedule } from "effect";
 import { nowIso } from "./time";
 import { breakStaleLock, holdsLock, releaseOwnLock, tryClaimLock } from "./lock";
 import { unsafePathComponent } from "./naming";
@@ -408,19 +408,19 @@ const createRun = Effect.fn("RunStore.create")(function* (
   // absent, pick the same id, and then overwrite each other's run.json while each
   // spawned a Driver. A non-recursive mkdir fails if the name is taken, so only one
   // of them can own it.
-  let id = `${slug}-${stamp}`;
-  let claimed = false;
-  for (let n = 2; n < 100 && !claimed; n++) {
-    claimed = yield* fs.makeDirectory(path.join(root, id)).pipe(
+  const claim = (candidate: string) =>
+    fs.makeDirectory(path.join(root, candidate)).pipe(
       Effect.as(true),
       Effect.catch(() => Effect.succeed(false)),
     );
-    if (!claimed) id = `${slug}-${stamp}-${n}`;
+  let id = `${slug}-${stamp}`;
+  for (let n = 2; !(yield* claim(id)); n++) {
+    if (n > 99)
+      return yield* Effect.fail(
+        new Error(`could not claim a Run directory for "${slug}" in ${root}`),
+      );
+    id = `${slug}-${stamp}-${n}`;
   }
-  if (!claimed)
-    return yield* Effect.fail(
-      new Error(`could not claim a Run directory for "${slug}" in ${root}`),
-    );
   const record: RunRecord = {
     id,
     seq: yield* store.nextSeq(),
@@ -476,13 +476,14 @@ const nextSeqRun = Effect.fn("RunStore.nextSeq")(function* (store: RunStore) {
   yield* fs.makeDirectory(root, { recursive: true });
   const seqPath = path.join(root, ".seq");
   const lock = `${seqPath}.lock`;
-  let held = false;
-  for (let attempt = 0; attempt < 40 && !held; attempt++) {
-    held =
-      (yield* tryClaimLock(lock)) || ((yield* breakStaleLock(lock)) && (yield* tryClaimLock(lock)));
-    if (!held) yield* Effect.sleep("25 millis");
-  }
-  if (!held) return yield* Effect.fail(new Error(`could not claim the Run sequence lock ${lock}`));
+  const claim = Effect.gen(function* () {
+    if (yield* tryClaimLock(lock)) return;
+    if ((yield* breakStaleLock(lock)) && (yield* tryClaimLock(lock))) return;
+    return yield* Effect.fail(new Error(`could not claim the Run sequence lock ${lock}`));
+  });
+  // Contention here is momentary — another start incrementing the same counter — so
+  // it is worth waiting out rather than failing the start.
+  yield* claim.pipe(Effect.retry({ times: 40, schedule: Schedule.spaced("25 millis") }));
   try {
     const current = yield* fs.readFileString(seqPath).pipe(
       Effect.map((x) => Number.parseInt(x.trim(), 10)),

@@ -76,7 +76,7 @@ const isNumber = Schema.is(Schema.Number);
  * lives here with it and every writer imports it; two definitions of one persisted
  * boundary is exactly what run.json stopped having.
  */
-export const InboxCommand = Schema.Struct({
+const InboxCommand = Schema.Struct({
   type: Schema.Literals(["answer", "stop", "resume"]),
   requestId: Schema.String,
   choiceId: Schema.optionalKey(Schema.String),
