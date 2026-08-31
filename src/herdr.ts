@@ -29,6 +29,8 @@ export interface TabInfo {
 export interface WorkspaceInfo {
   workspaceId: string;
   label: string;
+  cwd: string;
+  worktree: string | null;
 }
 
 export interface PaneInfo {
@@ -137,7 +139,12 @@ export class Herdr {
   async workspaceList(): Promise<WorkspaceInfo[]> {
     const res = await this.cli(["workspace", "list"]);
     const spaces = res?.result?.workspaces ?? [];
-    return spaces.map((w: any) => ({ workspaceId: w.workspace_id ?? "", label: w.label ?? "" }));
+    return spaces.map((w: any) => ({
+      workspaceId: w.workspace_id ?? "",
+      label: w.label ?? "",
+      cwd: w.cwd ?? w.working_directory ?? w.worktree?.path ?? "",
+      worktree: w.worktree?.path ?? w.worktree_path ?? null,
+    }));
   }
 
   async tabList(): Promise<TabInfo[]> {

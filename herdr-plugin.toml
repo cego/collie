@@ -1,5 +1,5 @@
-id = "cego.workflows"
-name = "cego workflows"
+id = "cego.collie"
+name = "Collie"
 version = "0.0.1"
 min_herdr_version = "0.7.5"
 description = "Pick and run codified agent workflows (plan, implement, review) as multi-tab orchestrations."
@@ -12,19 +12,19 @@ command = ["sh", "install.sh"]
 id = "pick"
 title = "Run a workflow"
 contexts = ["global", "workspace", "pane"]
-command = ["bin/herdr-workflows", "pick"]
+command = ["bin/collie", "herdr", "pick"]
 
 [[actions]]
 id = "resume"
 title = "Resume a workflow run"
 contexts = ["global", "workspace"]
-command = ["bin/herdr-workflows", "resume"]
+command = ["bin/collie", "herdr", "resume"]
 
 [[actions]]
 id = "fork"
 title = "Fork a workflow or persona"
 contexts = ["global", "workspace"]
-command = ["bin/herdr-workflows", "fork"]
+command = ["bin/collie", "herdr", "fork"]
 
 [[panes]]
 id = "picker"
@@ -32,7 +32,7 @@ title = "Pick a Workflow"
 placement = "popup"
 width = "70%"
 height = "60%"
-command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/herdr-workflows" picker']
+command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/collie" herdr picker']
 
 # One per workspace, and the only pane this plugin keeps open: the Control Plane.
 # A run itself is driven by a detached `drive` process with no pane of its own.
@@ -40,4 +40,4 @@ command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/herdr-workflows" picker']
 id = "workspace"
 title = "Control Plane"
 placement = "tab"
-command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/herdr-workflows" workspace']
+command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/collie" herdr workspace']

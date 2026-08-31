@@ -1,4 +1,4 @@
-Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; see ADR-0001.
+Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0001.
 
 | File | What it owns |
 | --- | --- |

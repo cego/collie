@@ -1,5 +1,5 @@
 {
-  "name": "herdr-workflows",
+  "name": "collie",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,10 +8,14 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build --compile --outfile bin/herdr-workflows.new src/main.ts && mv -f bin/herdr-workflows.new bin/herdr-workflows"
+    "build": "bun build --compile --outfile bin/collie.new src/main.ts && mv -f bin/collie.new bin/collie"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "typescript": "^5"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.112"
   }
 }

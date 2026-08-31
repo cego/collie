@@ -114,7 +114,7 @@ test("a run: choice starts a child run with the forwarded inputs and the parent 
     .find((c) => c.cmd === "plugin pane" && c.argv!.includes("runner"))!.argv!;
   expect(opened).toContain("--entrypoint");
   expect(opened).toContain("runner");
-  expect(opened).toContain(`HERDR_WORKFLOWS_RUN=${child.id}`);
+  expect(opened).toContain(`COLLIE_RUN=${child.id}`);
   expect(opened).toContain("--workspace");
 
   expect(run.step("next").note).toBe(`chose "Build it now" → child run ${child.id}`);

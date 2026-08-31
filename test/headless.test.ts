@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FakeHerdr, Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
@@ -270,18 +270,14 @@ test("the board's keys answer the question, and Esc leaves the run open", () => 
   const moved = answerKey(row, start, "\x1b[B");
   expect(moved.asking.index).toBe(1);
   answerKey(row, moved.asking, "\r");
-  expect(JSON.parse(readFileSync(join(run.dir, CHOICE_ANSWER), "utf8"))).toEqual({
-    id: "c1",
-    choice: "two",
-  });
+  const commands = () => readdirSync(join(run.dir, "inbox")).map((name) =>
+    JSON.parse(readFileSync(join(run.dir, "inbox", name), "utf8")) as Record<string, string>
+  );
+  expect(commands()).toContainEqual({ type: "answer", requestId: expect.any(String), choiceId: "c1", answer: "two" });
 
   // Esc is an answer too: it is what leaves the run open for a resume.
   answerKey(row, start, "\x1b");
-  expect(JSON.parse(readFileSync(join(run.dir, CHOICE_ANSWER), "utf8"))).toEqual({
-    id: "c1",
-    choice: null,
-    text: null,
-  });
+  expect(commands()).toContainEqual({ type: "answer", requestId: expect.any(String), choiceId: "c1", answer: "" });
 
   // A typed question collects characters and sends the text.
   const ask = { ...row, choice: { ...row.choice, kind: "ask" as const, items: [] } };
@@ -290,10 +286,7 @@ test("the board's keys answer the question, and Esc leaves the run open", () => 
   asking = answerKey(ask, asking, "\x7f").asking;
   expect(asking.typed).toBe("ceg");
   answerKey(ask, asking, "\r");
-  expect(JSON.parse(readFileSync(join(run.dir, CHOICE_ANSWER), "utf8"))).toEqual({
-    id: "c1",
-    text: "ceg",
-  });
+  expect(commands()).toContainEqual({ type: "answer", requestId: expect.any(String), choiceId: "c1", answer: "ceg" });
 });
 
 test("a run nothing is driving is abandoned; one with a live driver is not", () => {
@@ -500,7 +493,7 @@ spawnDriver(env, process.env.RUN_ID!, env.cwd);
   );
   const spawned = Bun.spawn(["bun", parent], {
     env: {
-      ...rig.env({ HERDR_WORKFLOWS_DRIVER: JSON.stringify(["bun", `${root}src/main.ts`]), RUN_ID: run.id }),
+      ...rig.env({ COLLIE_DRIVER: JSON.stringify(["bun", `${root}src/main.ts`]), RUN_ID: run.id }),
     } as Record<string, string>,
     stdout: "ignore",
     stderr: "ignore",
@@ -522,29 +515,29 @@ spawnDriver(env, process.env.RUN_ID!, env.cwd);
 
 test("the compiled driver path is one executable, and overrides are explicit arguments", () => {
   const env = rig.pluginEnv();
-  delete process.env.HERDR_WORKFLOWS_DRIVER;
-  expect(driverCommand(env)).toEqual([`${env.pluginRoot}/bin/herdr-workflows`]);
+  delete process.env.COLLIE_DRIVER;
+  expect(driverCommand(env)).toEqual([`${env.pluginRoot}/bin/collie`]);
 
-  process.env.HERDR_WORKFLOWS_DRIVER = JSON.stringify(["bun", "/a dir with spaces/main.ts"]);
+  process.env.COLLIE_DRIVER = JSON.stringify(["bun", "/a dir with spaces/main.ts"]);
   expect(driverCommand(env)).toEqual(["bun", "/a dir with spaces/main.ts"]);
 
   // Anything that is not a JSON array is one executable path, spaces and all —
   // as long as it actually exists.
-  const spaced = join(rig.root, "my tools", "herdr-workflows");
+  const spaced = join(rig.root, "my tools", "collie");
   mkdirSync(join(rig.root, "my tools"), { recursive: true });
   writeFileSync(spaced, "#!/bin/sh\n", { mode: 0o755 });
-  process.env.HERDR_WORKFLOWS_DRIVER = spaced;
+  process.env.COLLIE_DRIVER = spaced;
   expect(driverCommand(env)).toEqual([spaced]);
 
   // The pre-JSON space-separated form gets the contract error, not a raw ENOENT.
-  process.env.HERDR_WORKFLOWS_DRIVER = "bun src/main.ts";
+  process.env.COLLIE_DRIVER = "bun src/main.ts";
   expect(() => driverCommand(env)).toThrow("JSON array");
 
-  process.env.HERDR_WORKFLOWS_DRIVER = '["bun", 42]';
-  expect(() => driverCommand(env)).toThrow("HERDR_WORKFLOWS_DRIVER");
-  process.env.HERDR_WORKFLOWS_DRIVER = "[not json";
-  expect(() => driverCommand(env)).toThrow("HERDR_WORKFLOWS_DRIVER");
-  delete process.env.HERDR_WORKFLOWS_DRIVER;
+  process.env.COLLIE_DRIVER = '["bun", 42]';
+  expect(() => driverCommand(env)).toThrow("COLLIE_DRIVER");
+  process.env.COLLIE_DRIVER = "[not json";
+  expect(() => driverCommand(env)).toThrow("COLLIE_DRIVER");
+  delete process.env.COLLIE_DRIVER;
 });
 
 test("driver startup works from a plugin root with spaces and shell metacharacters", async () => {
@@ -552,11 +545,11 @@ test("driver startup works from a plugin root with spaces and shell metacharacte
   const marker = join(rig.root, "launched.txt");
   mkdirSync(join(pluginRoot, "bin"), { recursive: true });
   writeFileSync(
-    join(pluginRoot, "bin", "herdr-workflows"),
-    `#!/bin/sh\nprintf '%s %s' "$1" "$HERDR_WORKFLOWS_RUN" > ${JSON.stringify(marker)}\n`,
+    join(pluginRoot, "bin", "collie"),
+    `#!/bin/sh\nprintf '%s %s %s' "$1" "$2" "$COLLIE_RUN" > ${JSON.stringify(marker)}\n`,
     { mode: 0o755 },
   );
-  delete process.env.HERDR_WORKFLOWS_DRIVER;
+  delete process.env.COLLIE_DRIVER;
 
   const env = rig.pluginEnv({ HERDR_PLUGIN_ROOT: pluginRoot });
   spawnDriver(env, "run-1", rig.projectDir);
@@ -564,7 +557,7 @@ test("driver startup works from a plugin root with spaces and shell metacharacte
 
   // The path reached exec whole: the fake driver ran, with the run in its env,
   // and the metacharacters in the path stayed path characters.
-  expect(readFileSync(marker, "utf8")).toBe("drive run-1");
+  expect(readFileSync(marker, "utf8")).toBe("herdr drive run-1");
   expect(existsSync(join(rig.root, "pwned"))).toBe(false);
   expect(existsSync("pwned")).toBe(false);
 });

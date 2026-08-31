@@ -12,25 +12,25 @@ case "$ARCH" in
   aarch64|arm64) ARCH=arm64 ;;
 esac
 
-ASSET="herdr-workflows-${OS}-${ARCH}"
-BASE="${HERDR_WORKFLOWS_RELEASE_BASE:-https://gitlab.cego.dk/mk/herdr-plugin/-/releases/v${VERSION}/downloads}"
+ASSET="collie-${OS}-${ARCH}"
+BASE="${COLLIE_RELEASE_BASE:-https://gitlab.cego.dk/mk/collie/-/releases/v${VERSION}/downloads}"
 
 mkdir -p bin
-if curl -fsSL "${BASE}/${ASSET}" -o bin/herdr-workflows.new 2>/dev/null; then
-  mv bin/herdr-workflows.new bin/herdr-workflows
-  chmod +x bin/herdr-workflows
+if curl -fsSL "${BASE}/${ASSET}" -o bin/collie.new 2>/dev/null; then
+  mv bin/collie.new bin/collie
+  chmod +x bin/collie
   echo "installed ${ASSET} from ${BASE}"
   exit 0
 fi
-rm -f bin/herdr-workflows.new
+rm -f bin/collie.new
 
 if command -v bun >/dev/null 2>&1; then
   echo "no release asset at ${BASE}/${ASSET}; building from source with bun"
   bun install --frozen-lockfile >/dev/null
   # Build beside the binary and rename over it: replacing a running runner's own
   # file in place kills the process executing it.
-  bun build --compile --outfile bin/herdr-workflows.new src/main.ts >/dev/null
-  mv -f bin/herdr-workflows.new bin/herdr-workflows
+  bun build --compile --outfile bin/collie.new src/main.ts >/dev/null
+  mv -f bin/collie.new bin/collie
   exit 0
 fi
 

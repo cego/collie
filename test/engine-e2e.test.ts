@@ -156,12 +156,12 @@ test("the sidebar filter is set to the run's panes and cleared at the end", asyn
 
   const set = rig.calls().find((c) => c.cmd === "agent.view.set")!;
   expect(set.params).toEqual({
-    source: `cego.workflows:${run.id}`,
+    source: `cego.collie:${run.id}`,
     label: run.record.slug,
     filter: { op: "in", field: "pane_id", values: ["1-2"] },
   });
   expect(rig.calls().find((c) => c.cmd === "agent.view.clear")!.params).toEqual({
-    source: `cego.workflows:${run.id}`,
+    source: `cego.collie:${run.id}`,
   });
 });
 

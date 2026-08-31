@@ -1,4 +1,4 @@
-# herdr-plugin — Context
+# Collie — Context
 
 ## Glossary
 
@@ -58,7 +58,7 @@ plan does not cover. Both Runs record it.
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
 **Control Plane** — The tab a Session keeps as its control surface, one per workspace, and
-the only pane this plugin keeps open: live agents, active Runs with their step and last
+the only pane Collie keeps open: live agents, active Runs with their step and last
 line, this Session's finished Runs, quick actions, and any question a Run is waiting on,
 rendered under that Run. It is a view over the run dirs and the register, always the
 workspace's first tab, and holds no state of its own.

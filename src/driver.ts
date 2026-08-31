@@ -3,8 +3,9 @@
 // questions, through files. Everything here is a plain file so both sides survive
 // the other being closed, killed or resumed.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { Schema } from "effect";
 import { breakStaleLock, holdsLock, processStartTime, releaseOwnLock, tryClaimLock } from "./lock";
 import type { EnginePrompts } from "./engine";
 import type { PickItem } from "./picker";
@@ -41,6 +42,24 @@ export interface ChoiceAnswer {
   /** The chosen item's id, the typed text, or null for "the human backed out". */
   choice?: string | null;
   text?: string | null;
+}
+
+const InboxCommand = Schema.Struct({
+  type: Schema.Literals(["answer", "stop", "resume"]),
+  requestId: Schema.String,
+  choiceId: Schema.optionalKey(Schema.String),
+  answer: Schema.optionalKey(Schema.String),
+});
+
+/** Atomically enqueue a Schema-validated command; the Driver owns its effects. */
+export function writeInboxCommand(dir: string, command: unknown): void {
+  const decoded = Schema.decodeUnknownSync(InboxCommand)(command);
+  const inbox = join(dir, "inbox");
+  mkdirSync(inbox, { recursive: true });
+  const target = join(inbox, `${encodeURIComponent(decoded.requestId)}.json`);
+  const tmp = `${target}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(decoded)}\n`, { flag: "wx" });
+  renameSync(tmp, target);
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -98,6 +117,20 @@ export function answerChoice(dir: string, answer: ChoiceAnswer): void {
 
 export function clearChoice(dir: string): void {
   for (const name of [CHOICE, CHOICE_ANSWER]) rmSync(join(dir, name), { force: true });
+}
+
+/** The Driver alone turns an accepted inbox command into a Choice answer. */
+function consumeInboxAnswer(dir: string, choice: PendingChoice): ChoiceAnswer | null {
+  const inbox = join(dir, "inbox");
+  if (!existsSync(inbox)) return null;
+  for (const name of readdirSync(inbox).filter((entry) => entry.endsWith(".json")).sort()) {
+    const path = join(inbox, name);
+    const command = read<{ type?: unknown; choiceId?: unknown; answer?: unknown }>(path);
+    if (command?.type !== "answer" || command.choiceId !== choice.id || typeof command.answer !== "string") continue;
+    rmSync(path, { force: true });
+    return { id: choice.id, choice: command.answer };
+  }
+  return null;
 }
 
 /** The ownership claim in `runner.pid`: which process, and which incarnation of it. */
@@ -263,7 +296,7 @@ export function filePrompts(opts: {
     const deadline = Date.now() + opts.timeoutMs;
     try {
       while (Date.now() < deadline) {
-        const answer = read<ChoiceAnswer>(join(opts.dir, CHOICE_ANSWER));
+        const answer = consumeInboxAnswer(opts.dir, choice) ?? read<ChoiceAnswer>(join(opts.dir, CHOICE_ANSWER));
         // An answer to an earlier question is not an answer to this one.
         if (answer && answer.id === choice.id) return answer;
         await sleep(opts.pollMs ?? 500);

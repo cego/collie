@@ -1,95 +1,256 @@
-# Spec — herdr-plugin: codified agent workflows
+# Spec — Collie
 
-Status: v1, shipped and partly superseded (2026-08-27). Vocabulary: see `CONTEXT.md`.
-Respects ADR-0001.
+Status: accepted
+Written against: `9c8aa13`
 
-ADR-0002 moved plan artefacts out of the repository, so the `tasks/<slug>/PLAN.md` story
-and the `plan-file` strategy below are gone — a plan lives in the Run directory and
-`plan-dir` inference finds it. `docs/WORKFLOWS-DESIGN.md` is the
-current design for the baseline workflows and personas.
+## Problem
 
-## Problem Statement
+The current Herdr plugin exposes workflow operations primarily through picker panes and the
+Control Plane. An agent cannot reliably discover, start, observe, answer, stop, resume, or
+fork workflow state without driving the UI. The implementation also has separate imperative
+paths that would make a second CLI duplicate behavior.
 
-Our agent work is ad hoc. Every time I plan a feature, implement a ticket, or review an MR I hand-assemble the same sequence: open panes, start the right harness, paste the persona, run a review, feed findings back, repeat. The sequence lives in my head, so teammates can't pick it up, results vary run to run, and the repetitive implement→review→fix loop eats the time I'd rather spend on the plan and on testing the result.
+Collie must let a same-user local process do everything a human can do through the plugin,
+while preserving the interactive Herdr experience.
 
-## Solution
+## Product and cutover
 
-A herdr plugin that offers a popup picker of Workflows. Choosing one infers its Inputs from context, opens one tab per Step, starts the chosen Harness/Model with the right Persona, waits on structured Outputs, and drives loops (implement → parallel reviews → fix, max 5) deterministically. The baseline Workflows (`plan`, `implement`, `review`) live in git as a starting point; anyone can fork a Workflow or Persona into their own Layer or a project's `.herdr/` without touching the baseline. The human invests in the plan up front and in testing at the end; the middle is codified.
+- The product, repository, package, executable, release assets, UI labels, and documentation
+  are named **Collie** / `collie`.
+- Rename the GitLab project from `mk/herdr-plugin` to `mk/collie` and update release and clone
+  URLs. Rename the local checkout after active work completes.
+- The Herdr plugin ID becomes `cego.collie`; its fully qualified actions are
+  `cego.collie.pick`, `cego.collie.resume`, and `cego.collie.fork`.
+- Keep `herdr-plugin.toml`, `HERDR_PLUGIN_ROOT`, and other Herdr-owned names because they are
+  host contracts. Rename project-owned `HERDR_WORKFLOWS_*` variables to `COLLIE_*`.
+- There is no old executable, plugin-ID, environment-variable, or persisted-state
+  compatibility layer. Setup unlinks `cego.workflows`, preserves its state directory, prints
+  that location, and links `cego.collie` with clean state.
 
-## User Stories
+## Architecture
 
-1. As a developer, I want to open a picker with one keybinding and choose a Workflow, so that I don't rebuild my process by hand.
-2. As a developer, I want the picker to be filterable by typing, so that a growing list stays fast to navigate.
-3. As a developer, I want Inputs inferred from my branch, cwd, `tasks/` and open MR, so that a Workflow usually starts with zero typing.
-4. As a developer, I want to see a one-line confirmation of what was inferred before anything starts, so that inference never surprises me.
-5. As a developer, I want to be asked only for Inputs that couldn't be inferred, so that prompts stay minimal.
-6. As a developer, I want to run `plan` on a free-text goal without a ticket, so that I can start locally before anything reaches Linear.
-7. As a developer, I want `plan` to interview me before writing, so that the plan reflects my thinking, not the agent's first guess.
-8. As a developer, I want `plan` to write `tasks/<slug>/PLAN.md`, so that `implement` finds it automatically.
-9. As a developer, I want `implement` to build from a plan file, run reviews in parallel, and loop on findings, so that the repetitive middle is automatic.
-10. As a developer, I want each Step in its own tab, so that I can watch any agent without losing the others.
-11. As a developer, I want reviewer tabs per reviewer, so that multi-model reviews are visible side by side.
-12. As a developer, I want a small runner status pane, so that I know which Step/iteration the Run is in.
-13. As a developer, I want the Agents sidebar filtered to the current Run while it is active, so that unrelated agents don't clutter it.
-14. As a developer, I want tabs left open and marked ✓ when a Step finishes, so that I can read what happened.
-15. As a developer, I want a toast when a Run finishes or blocks, so that I can work elsewhere meanwhile.
-16. As a developer, I want the fix loop capped (default 5) and configurable, so that runs can't spin forever.
-17. As a developer, I want the same implementer agent to apply fixes by default, so that context isn't lost between iterations.
-18. As a developer, I want a per-Step `fresh` toggle, so that reviewers (or anyone) can start with no prior context.
-19. As a developer, I want findings from all reviewers unioned into the fix prompt, so that nothing is dropped.
-20. As a developer, I want the implementer to be able to mark findings as disputed and see them at the end, so that bad findings don't get blindly applied.
-21. As a developer, I want `review` to run standalone on an MR, a branch diff, or the working tree, so that I can review others' MRs with the same Persona.
-22. As a developer, I want `review` to post to GitLab only when I opt in, so that external side effects are never accidental.
-23. As a developer, I want each Step to choose Harness and Model with sensible defaults, so that I can mix claude/codex/opencode and models per Step.
-24. As a developer, I want my own default Harness/Model in my config Layer, so that the baseline stays harness-neutral.
-25. As a developer, I want a Workflow validated fully before any tab opens and to fail fast on an unknown model, so that I fix it instead of discovering a half-run.
-26. As a developer, I want Workflows and Personas as markdown with frontmatter, so that I can edit them in any editor and diff them in git.
-27. As a developer, I want to fork a baseline Workflow or Persona into my user Layer or the project's `.herdr/`, so that I can change it without touching the team baseline.
-28. As a developer, I want a same-named definition in a later Layer to win, so that overriding is just "copy and edit".
-29. As a developer, I want `implement` to embed `review` by reference, so that overriding `review` changes every Workflow that uses it.
-30. As a team lead, I want the baseline in a git repo installed by `git clone && herdr plugin link`, so that everyone starts from the same point.
-31. As a teammate, I want installation to not require bun or any runtime, so that it works on a fresh machine.
-32. As a teammate, I want definition edits to take effect without a rebuild, so that iterating on prompts is instant.
-33. As a developer, I want every Run recorded (Inputs, Outputs, status) in a run directory, so that I have an audit trail.
-34. As a developer, I want to resume a Run, skipping finished Steps and restarting unfinished ones fresh, so that a herdr restart doesn't waste work.
-35. As a developer, I want a Step that blocks (agent needs input) to hand off to me with a toast, so that I can unblock and continue.
-36. As a developer, I want to append an `mr` Step to `implement` in my own Layer, so that MR creation is my choice.
-37. As a developer, I want Step Outputs read from JSON files, not terminal text, so that gates are reliable across harnesses.
-38. As a developer, I want Run ids and tab names to show Workflow + input, so that concurrent Runs are distinguishable.
+Rewrite the application as one Effect v4 program. Use the current Effect v4 release-candidate
+APIs, including `effect/unstable/cli`, and accept unstable APIs. Run it with `BunRuntime` and
+the Bun platform layer.
 
-## Implementation Decisions
+The minimum application boundaries are:
 
-- The deliverable is a herdr plugin (`herdr-plugin.toml`, id `cego.workflows`). No standalone CLI is exposed; actions are `pick` and `resume`, plus a popup pane `picker`. Surface = herdr's plugin actions + a keybinding.
-- Runner: TypeScript compiled with Bun into one binary per platform, fetched at install by the manifest build step from a release (ADR-0001). Definitions never require a rebuild.
-- Runner talks to herdr only through the herdr CLI/socket (`workspace/tab/pane`, `agent start/prompt/wait`, `agent.view.set`, `notification.show`, `plugin.pane.open`).
-- Definitions: Workflow = one markdown file, YAML frontmatter (`name`, `inputs` with inference strategies, `steps`, loop config, `max_iterations` default 5) + prompt body with `{{input}}`/`{{outputs}}` templating. Persona = markdown with frontmatter (`name`) + body. Steps declare `id`, `persona`, optional `harness`, `model`, `fresh`, `output`, `parallel` (list of harness/model variants), or `use: <workflow>` to embed by reference.
-- Layers resolved in order baseline → user config dir → project `.herdr/`; name collision ⇒ later wins; `use:` resolves through the same lookup. `fork` copies a definition to a chosen Layer.
-- Harness adapter table: per supported harness, how to start it, pass a model, and inject a Persona (initial prompt / system-prompt flag). Unknown model or harness ⇒ validation error before any tab opens.
-- Run directory under the plugin state dir: `runs/<id>/` with inputs, per-step status and Output JSON. Review Output schema: `{ verdict: clean | findings, findings: [{ file, line?, severity, title, detail }], disputed?: [...] }`. Loop gate reads `verdict` from each reviewer's Output; union of findings feeds the fix prompt.
-- Tab topology: one tab per Step; parallel variants each get a tab; a small runner status pane in the first Step's tab; tabs renamed with ✓/✗ on completion; `agent.view.set` filters sidebar to the Run's agents, cleared on finish.
-- Input inference strategies: `plan-file` (newest `tasks/**/PLAN.md`, else ask), `diff-target` (open MR via glab → branch vs default base → working tree), `goal` (ask), `ticket` (from branch name, optional).
-- Resume: `resume` action lists Runs with unfinished Steps; finished Steps are skipped based on recorded Output; unfinished restart with a fresh agent (never reattach).
-- Standalone `review` posts to GitLab only with an explicit `post: true` Input.
-- Picker: built-in minimal TUI in the runner (list, type-to-filter, enter), rendered in the plugin popup pane.
+- **Definitions**: load, resolve, inspect, and fork Workflows and Personas.
+- **Runs**: start, observe, command, resume, and persist Runs.
+- **Herdr**: resolve workspace state and perform pane, agent, notification, and plugin effects.
 
-## Testing Decisions
+Pure parsing and transformation functions remain ordinary TypeScript. Filesystem, process,
+configuration, timing, concurrency, orchestration, and external commands use Effect. Public
+service operations use named effects; boundary data and expected errors use Effect Schema.
+The CLI, manifest actions, picker pane, and Control Plane call the same services rather than
+calling one another.
 
-Seams (highest possible, fewest possible):
-1. **The herdr boundary** — a fake `herdr` executable/socket recorder injected via `HERDR_BIN_PATH`/`HERDR_SOCKET_PATH`. Tests run a Workflow end to end against it and assert the sequence of herdr commands (tabs created, agents started with which harness/model args, prompts sent, waits) and the resulting run directory. This is the primary seam; it is what a user would observe.
-2. **The definition loader** — given three Layer directories, assert resolution, `use:` embedding and validation errors (unknown model fails fast). Pure functions over files.
+Use Bun and Effect native features before custom code. Use a small Bun-specific implementation
+only if Effect cannot faithfully spawn an unrefed process that survives its caller.
 
-A good test asserts observable behaviour (herdr calls, files written, error messages), not internal structure. Prior art: none in this repo; use bun's test runner. Manual verification: `herdr plugin link` + run `plan` in a real session.
+## Command surface
 
-## Out of Scope
+`collie` is installed on PATH. Global options precede the command:
 
-- Custom sidebar entries in herdr (not possible; no upstream request).
-- Reattaching to live agent context on resume.
-- Consensus/judge fan-in (v1 unions findings).
-- Baked-in MR creation in `implement` (composable `mr` step later).
-- Harness-native config generation (Personas are injected, not installed).
-- GitHub/marketplace publishing; GitLab is the primary distribution.
-- Windows.
+```text
+collie [--workspace <workspace-id>] [--json] <command>
+```
 
-## Further Notes
+Commands are:
 
-Verified facts: herdr ≥0.7.5 has the plugin system used here; latest 0.8.2. `herdr plugin install owner/repo` is GitHub-only, hence `link`. Baseline Personas: implementer, reviewer, planner (interviewer). Naming stays minimal: Workflow, Step, Persona, Run, Layer.
+```text
+collie workflow list
+collie workflow show <workflow>
+collie workflow fork <workflow> \
+  --layer <user|project> --mode <extends|copy> --name <name> [--step <step>]
+
+collie persona list
+collie persona show <persona>
+collie persona fork <persona> --layer <user|project> --name <name>
+
+collie run start <workflow> [inputs]
+collie run list
+collie run show <run-id>
+collie run wait <run-id> [--follow] [--timeout <duration>]
+collie run stop <run-id>
+collie run resume <run-id>
+collie run answer <run-id> <answer>
+collie run logs <run-id>
+collie run output <run-id>
+```
+
+State-changing commands accept `--request-id <id>`. Input values support repeated
+`--input key=value`, `--inputs-json <json>`, and `--inputs-json -` for stdin. Explicit values
+override inference. Omitted values are inferred from the selected workspace and existing local
+state. An ambiguous value returns `needs_input` with its candidates and schema and creates no
+Run.
+
+Interactive parity is composition, not a one-to-one command for UI navigation:
+
+| Herdr capability | Programmatic capability |
+| --- | --- |
+| Pick and run a Workflow | `workflow list`, `workflow show`, `run start` |
+| Resume unfinished work | `run list`, `run show`, `run resume` |
+| Answer a Choice | `run show`, `run answer` |
+| Inspect progress and results | `run show`, `run logs`, `run output`, `run wait` |
+| Stop work and close its panes | `run stop` |
+| Fork a Workflow or Persona | `workflow fork`, `persona fork` |
+
+UI-only focus, navigation, selection, and popup operations are not CLI capabilities.
+
+## Workspace
+
+Resolve workspace scope in this order:
+
+1. `--workspace <workspace-id>`
+2. `HERDR_WORKSPACE_ID`
+3. `HERDR_PLUGIN_CONTEXT_JSON.workspace_id`
+4. no scope
+
+Only workspace IDs are accepted. Resolve a live workspace through Herdr and capture its ID,
+label, working directory, and worktree provenance. Do not import transient focus, selected
+text, or clicked links. Explicit command inputs carry anything else the operation needs.
+
+- Starting a scoped Run requires a live workspace and records its stable workspace details.
+- Input inference uses that context instead of guessing from the CLI process directory.
+- `run list` filters to the resolved workspace, or lists all Runs without a scope.
+- Run commands reject a Run recorded for a different resolved workspace.
+- Starting a Run resolves the workspace live. Existing Run commands compare the selected ID
+  directly with the Run's recorded ID, so they still work after that workspace closes.
+  Closing a workspace does not itself stop a Run.
+- Workflow and Persona discovery is global; project-layer resolution and inference use the
+  selected workspace where applicable.
+- Herdr actions pass their injected workspace through the same resolution path.
+
+Return `workspace_required` when an operation genuinely needs context and none exists, and
+`workspace_not_found` when an explicitly scoped live workspace cannot be resolved. Commands
+that do not need a workspace continue without one.
+
+## CLI output
+
+Commands print readable text or tables by default. `--json` switches to the stable machine
+contract. A non-streaming JSON command writes exactly one value to stdout:
+
+```json
+{"ok":true,"data":{}}
+```
+
+Expected failures use:
+
+```json
+{"ok":false,"error":{"code":"workspace_not_found","message":"...","details":{}}}
+```
+
+Diagnostics go to stderr and never corrupt JSON stdout. Exit statuses are:
+
+- `0`: success
+- `1`: operational failure
+- `2`: invalid or insufficient input
+
+JSON consumers distinguish failures by obvious, Schema-defined codes such as
+`workspace_not_found`, `run_not_found`, `run_already_active`, `workflow_not_found`,
+`target_exists`, and `needs_input`, rather than by adding process exit statuses. Human output
+uses the corresponding plain-language message.
+
+`run wait --follow` prints readable progress. With `--json`, it writes one typed JSON event per
+line. It emits the current snapshot, existing progress, subsequent events, and exactly one
+terminal Run event. `run wait` waits for `succeeded`, `failed`, or `stopped`. An optional
+`--timeout` bounds the wait. Interrupting the command stops only the waiter; `run stop` is the
+explicit Run cancellation operation.
+
+## Run lifecycle
+
+A Run has one of five states:
+
+- `running`: a Driver is advancing it.
+- `waiting`: the Driver is waiting for a Choice.
+- `succeeded`: all required Steps completed.
+- `failed`: execution ended unsuccessfully with unfinished work.
+- `stopped`: an explicit stop ended execution.
+
+`run start` validates and resolves the Workflow and Inputs, creates the Run, launches its
+detached Driver, and returns the Run ID. `run stop` tells the Driver to stop orchestration and
+close only panes owned by that Run; repository changes remain. `run resume` starts a new
+Driver for a failed, stopped, or orphaned Run, skips completed Steps, and restarts unfinished
+Steps with fresh agents. Resuming an actively owned Run returns `run_already_active`.
+
+## Filesystem state and coordination
+
+Keep state under `HERDR_PLUGIN_STATE_DIR` as decided in ADR-0004. Decode every persisted
+boundary through Effect Schema.
+
+Each Run directory contains its authoritative snapshot, append-only progress, runner log,
+verified ownership claim, and command inbox. One Driver owns and writes the Run snapshot at a
+time. Other processes atomically create Schema-validated inbox commands. The Driver consumes
+them and records their result.
+
+Use Effect `FileSystem.watch` with the Bun filesystem layer for inbox and Run updates. Watch
+events are invalidation signals only: reread and decode authoritative files after each event.
+Use atomic create/rename and verified Driver ownership for coordination.
+
+Every state-changing command accepts an optional request ID. Collie generates and returns one
+when omitted. Reusing a request ID returns its recorded result and must not duplicate Run
+creation, Choice effects, stops, resumes, or forks.
+
+## Forking
+
+Workflow and Persona forks support the user and project Layers. Workflow forks support the
+existing `extends` and full-copy modes and may select a Step for an extension. Persona forks
+copy the Persona under the requested name. Forking never overwrites: an occupied target
+returns `target_exists`; there is no `--force`.
+
+## Installation and release
+
+Build native release assets as `collie-<os>-<arch>`. The Herdr manifest invokes its private
+`bin/collie`. Setup creates a symlink at `~/.local/bin/collie`, does not mutate PATH, and
+reports when that directory is not currently on PATH. Do not introduce Bun global package
+installation.
+
+## Acceptance checks
+
+Tests must prove the following without opening UI:
+
+1. Resolve an explicitly passed workspace and capture only its stable details.
+2. Discover Workflows, Personas, and input schemas through their public CLI commands.
+3. Start a Run and return its ID.
+4. Observe current and streamed progress.
+5. Answer a Choice.
+6. Wait for a successful terminal event.
+7. Stop and resume a Run without repeating completed Steps.
+8. Fork a Workflow and a Persona without overwrite.
+9. Retry every mutation with the same request ID without duplicate effects.
+10. Reject cross-workspace Run access.
+11. Verify that each Herdr action and its CLI equivalent produce the same observable Herdr
+    effects.
+
+Use temporary filesystems/directories and fake Herdr layers. Synchronize concurrent tests with
+Effect primitives rather than sleeps. Release gates are:
+
+```sh
+bun test
+bun run typecheck
+bun run build
+./bin/collie --help
+```
+
+The compiled-binary smoke test must also execute one successful JSON command and one typed
+failure.
+
+## Out of scope
+
+- Network API, HTTP server, authentication, multi-user access, or remote daemon.
+- SQLite or another database.
+- Runtime capability negotiation or a separate consent model; explicit commands and Choices
+  are the authority boundary for this same-user local tool.
+- Legacy aliases, state migration, generated SDKs, shell completion, or API-version
+  negotiation.
+- CLI equivalents for UI-only focus and navigation.
+- Publishing releases, changing the GitLab project, or renaming the local checkout during
+  implementation; those are explicit cutover operations after verification.
+
+## Sources
+
+- [Herdr plugin commands and environment](https://herdr.dev/docs/plugins/#commands-and-environment)
+- [Herdr socket and plugin API](https://herdr.dev/docs/socket-api/)
+- [Effect v4 FileSystem](https://www.effect.website/docs/v4/api/effect/FileSystem)
+- [Effect v4 BunFileSystem](https://www.effect.website/docs/v4/api/platform-bun/BunFileSystem)

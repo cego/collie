@@ -1,49 +1,57 @@
+import { BunRuntime, BunServices } from "@effect/platform-bun";
+import { Effect } from "effect";
+import { program } from "./collie";
 import { readEnv } from "./env";
 import { Herdr, HerdrError } from "./herdr";
 import { driveFlow, forkFlow, openPicker, pickFlow, resumeFlow, workspaceFlow, type Mode } from "./flows";
 
-const USAGE = "herdr-workflows <pick|resume|fork|picker|workspace|drive>";
-
-async function main(): Promise<number> {
-  const [command] = process.argv.slice(2);
+async function herdr(command: string, mode?: string): Promise<void> {
   const env = readEnv();
-  const herdr = new Herdr(env);
-
+  const client = new Herdr(env);
+  let code: number;
   switch (command) {
     case "pick":
     case "resume":
     case "fork":
-      return await openPicker(herdr, env, command);
-
+      code = await openPicker(client, env, command);
+      break;
     case "picker": {
-      const mode = (process.env.HERDR_WORKFLOWS_MODE ?? "pick") as Mode;
-      if (mode === "pick") return await pickFlow(herdr, env);
-      if (mode === "resume") return await resumeFlow(herdr, env);
-      if (mode === "fork") return await forkFlow(herdr, env);
-      console.error(`unknown picker mode "${mode}"`);
-      return 2;
+      const selected = (mode ?? process.env.COLLIE_MODE ?? "pick") as Mode;
+      code = selected === "pick"
+        ? await pickFlow(client, env)
+        : selected === "resume"
+        ? await resumeFlow(client, env)
+        : selected === "fork"
+        ? await forkFlow(client, env)
+        : 2;
+      break;
     }
-
-    // Not a pane: the detached run driver, started by the picker.
     case "drive":
-      return await driveFlow(herdr, env);
-
+      code = await driveFlow(client, env);
+      break;
     case "workspace":
-      return await workspaceFlow(herdr, env);
-
+      code = await workspaceFlow(client, env);
+      break;
     default:
-      console.error(USAGE);
-      return 2;
+      process.stderr.write(`Unknown Herdr entrypoint "${command}".\n`);
+      code = 2;
   }
+  process.exitCode = code;
 }
 
-try {
-  process.exit(await main());
-} catch (err) {
-  if (err instanceof HerdrError) {
-    console.error(`${err.message}: ${err.detail}`);
-  } else {
-    console.error(err instanceof Error ? (err.stack ?? err.message) : String(err));
-  }
-  process.exit(1);
+const args = process.argv.slice(2);
+if (args[0] === "herdr") {
+  BunRuntime.runMain(
+    Effect.tryPromise({ try: () => herdr(args[1] ?? "", args[2]), catch: (cause) => cause }).pipe(
+      Effect.catch((cause) => Effect.sync(() => {
+        const message = cause instanceof HerdrError ? `${cause.message}: ${cause.detail}` : String(cause);
+        process.stderr.write(`${message}\n`);
+        process.exitCode = 1;
+      })),
+      Effect.provide(BunServices.layer),
+    ),
+    { disableErrorReporting: true },
+  );
+} else {
+  BunRuntime.runMain(program, { disableErrorReporting: true });
 }

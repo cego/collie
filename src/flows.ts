@@ -2,7 +2,7 @@
 // the interactive work happens in the `picker` and `runner` pane entrypoints.
 
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { loadDefaults } from "./config";
 import {
   bodySections,
@@ -44,7 +44,6 @@ import { RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
 import {
   acquireDriver,
-  answerChoice,
   appendProgress,
   driverAlive,
   filePrompts,
@@ -53,9 +52,10 @@ import {
   releaseDriver,
   RUNNER_LOG,
   stopDriver,
+  writeInboxCommand,
   type PendingChoice,
 } from "./driver";
-import { scopeFor } from "./registry";
+import { readRegistry, registryPath, scopeFor } from "./registry";
 import {
   agentForKey,
   askingRun,
@@ -73,7 +73,7 @@ export async function openPicker(herdr: Herdr, env: PluginEnv, mode: Mode): Prom
   console.log(`${mode}: opening the picker in ${env.cwd}`);
   await herdr.pluginPaneOpen({
     entrypoint: "picker",
-    env: { HERDR_WORKFLOWS_MODE: mode, HERDR_WORKFLOWS_CWD: env.cwd },
+    env: { COLLIE_MODE: mode, COLLIE_CWD: env.cwd },
     focus: true,
   });
   return 0;
@@ -83,10 +83,10 @@ export async function openPicker(herdr: Herdr, env: PluginEnv, mode: Mode): Prom
  * The workspace a Run is started in, by name as well as by id: ids compact, so the
  * label is what tells a recycled id from the workspace the Run actually belongs to.
  */
-async function workspaceLabel(herdr: Herdr, env: PluginEnv): Promise<string | null> {
+async function workspaceInfo(herdr: Herdr, env: PluginEnv) {
   if (!env.workspaceId) return null;
   try {
-    return (await herdr.workspaceList()).find((w) => w.workspaceId === env.workspaceId)?.label ?? null;
+    return (await herdr.workspaceList()).find((w) => w.workspaceId === env.workspaceId) ?? null;
   } catch {
     // Without a label the Run is still scoped by session, workspace id and cwd.
     return null;
@@ -152,12 +152,14 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   if (!(await confirm(line))) return 0;
 
   const store = new RunStore(env.stateDir);
+  const workspace = await workspaceInfo(herdr, env);
   const run = store.create({
     workflow: resolved.name,
     cwd: env.cwd,
     session: env.socketPath,
     workspace: env.workspaceId,
-    workspaceLabel: await workspaceLabel(herdr, env),
+    workspaceLabel: workspace?.label ?? null,
+    workspaceWorktree: workspace?.worktree ?? null,
     inputs: inputValues(resolutions),
     inputSources: inputSources(resolutions),
     stepIds: resolved.steps.map((s) => s.id),
@@ -187,12 +189,12 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
  */
 export function spawnDriver(env: PluginEnv, runId: string, cwd: string): void {
   const [command, ...rest] = driverCommand(env);
-  spawn(command, [...rest, "drive"], {
+  spawn(command, [...rest, "herdr", "drive"], {
     cwd,
     env: {
       ...process.env,
-      HERDR_WORKFLOWS_RUN: runId,
-      HERDR_WORKFLOWS_CWD: cwd,
+      COLLIE_RUN: runId,
+      COLLIE_CWD: cwd,
     } as Record<string, string>,
     detached: true,
     stdio: "ignore",
@@ -202,14 +204,14 @@ export function spawnDriver(env: PluginEnv, runId: string, cwd: string): void {
 /**
  * The executable that drives a run, plus its arguments. The compiled driver is
  * one path passed whole — never split, so a checkout under a directory with
- * spaces launches normally. HERDR_WORKFLOWS_DRIVER overrides it for development
+ * spaces launches normally. COLLIE_DRIVER overrides it for development
  * and tests, with an explicit contract instead of shell parsing: a JSON array
  * (`["bun","src/main.ts"]`) is executable-plus-arguments, anything else is one
  * executable path.
  */
 export function driverCommand(env: PluginEnv): [string, ...string[]] {
-  const override = process.env.HERDR_WORKFLOWS_DRIVER;
-  if (!override) return [`${env.pluginRoot}/bin/herdr-workflows`];
+  const override = process.env.COLLIE_DRIVER;
+  if (!override) return [`${env.pluginRoot}/bin/collie`];
   if (override.trimStart().startsWith("[")) {
     let parsed: unknown;
     try {
@@ -218,7 +220,7 @@ export function driverCommand(env: PluginEnv): [string, ...string[]] {
       parsed = null;
     }
     if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((p) => typeof p !== "string")) {
-      throw new Error(`HERDR_WORKFLOWS_DRIVER must be one path or a JSON array of strings, not ${override}`);
+      throw new Error(`COLLIE_DRIVER must be one path or a JSON array of strings, not ${override}`);
     }
     return parsed as [string, ...string[]];
   }
@@ -226,7 +228,7 @@ export function driverCommand(env: PluginEnv): [string, ...string[]] {
   // that names no file would otherwise die as a raw spawn ENOENT.
   if (/\s/.test(override) && !existsSync(override)) {
     throw new Error(
-      `HERDR_WORKFLOWS_DRIVER must be one executable path or a JSON array of strings (e.g. ["bun","src/main.ts"]), not ${override}`,
+      `COLLIE_DRIVER must be one executable path or a JSON array of strings (e.g. ["bun","src/main.ts"]), not ${override}`,
     );
   }
   return [override];
@@ -351,9 +353,9 @@ export async function resumeFlow(herdr: Herdr, env: PluginEnv): Promise<number> 
  * Everything it can say about a failure goes into `runner.log`.
  */
 export async function driveFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
-  const runId = process.env.HERDR_WORKFLOWS_RUN;
+  const runId = process.env.COLLIE_RUN;
   if (!runId) {
-    console.error("HERDR_WORKFLOWS_RUN is not set; a driver is started by the picker.");
+    console.error("COLLIE_RUN is not set; a driver is started by the picker.");
     return 2;
   }
   const store = new RunStore(env.stateDir);
@@ -366,6 +368,16 @@ export async function driveFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
     out("a driver is already running this run; this one is stopping");
     return 1;
   }
+
+  const stop = () => {
+    writeFileSync(`${run.dir}/stopped`, `${new Date().toISOString()}\n`);
+    run.record.status = "blocked";
+    run.record.finished_at = new Date().toISOString();
+    run.save();
+    releaseDriver(run.dir);
+    process.exit(0);
+  };
+  process.once("SIGTERM", stop);
 
   try {
     const defs = loadDefinitions(layers({ ...env, cwd: run.record.cwd }));
@@ -405,6 +417,7 @@ export async function driveFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
     }
     return 1;
   } finally {
+    process.off("SIGTERM", stop);
     releaseDriver(run.dir);
   }
 }
@@ -504,7 +517,13 @@ export function answerKey(
 ): { asking: Asking; note?: string } {
   const choice = waiting.choice!;
   const send = (answer: { choice?: string | null; text?: string | null }) => {
-    answerChoice(waiting.dir, { id: choice.id, ...answer });
+    const value = answer.choice ?? answer.text ?? "";
+    writeInboxCommand(waiting.dir, {
+      type: "answer",
+      requestId: crypto.randomUUID(),
+      choiceId: choice.id,
+      answer: value,
+    });
     return { asking: { index: 0, typed: "" }, note: `answered ${waiting.title}` };
   };
 
@@ -538,7 +557,7 @@ async function openMode(herdr: Herdr, env: PluginEnv, mode: Mode): Promise<void>
     targetPaneId: env.paneId ?? undefined,
     direction: "down",
     cwd: env.cwd,
-    env: { HERDR_WORKFLOWS_MODE: mode, HERDR_WORKFLOWS_CWD: env.cwd },
+    env: { COLLIE_MODE: mode, COLLIE_CWD: env.cwd },
     focus: true,
   });
 }
@@ -572,7 +591,7 @@ async function act(
   }
   if (key === "s") return (await sendReviewToImplementer(session)).message;
   if (key === "l") return await openLog(session, view);
-  if (key === "k") return stopRun(view);
+  if (key === "k") return await stopRun(session, view);
   return null;
 }
 
@@ -581,9 +600,12 @@ async function act(
  * no pane now, so this replaces that. Its agents are left where they are: their
  * panes are the transcript of what happened.
  */
-function stopRun(view: WorkspaceView): string {
+async function stopRun(session: Session, view: WorkspaceView): Promise<string> {
   const run = view.active[0];
   if (!run) return "nothing running here to stop";
+  writeInboxCommand(run.dir, { type: "stop", requestId: crypto.randomUUID() });
+  const entries = readRegistry(registryPath(session.stateDir, session)).filter((entry) => entry.runId === run.id);
+  await Promise.allSettled(entries.map((entry) => session.herdr.paneClose(entry.paneId)));
   return stopDriver(run.dir) ? `stopped ${run.title}` : `${run.title} has no driver to stop`;
 }
 

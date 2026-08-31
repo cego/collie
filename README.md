@@ -1,4 +1,4 @@
-# herdr-plugin
+# Collie
 
 Codified agent workflows for herdr: `plan`, `implement`, `review`, `architecture` — deterministic multi-tab orchestrations you pick from a popup.
 A shared starting point, not a restriction: fork any workflow or persona into your own layer.
@@ -8,15 +8,16 @@ A shared starting point, not a restriction: fork any workflow or persona into yo
 One command, safe to re-run:
 
 ```sh
-git clone git@gitlab.cego.dk:mk/herdr-plugin.git ~/.herdr-plugin && ~/.herdr-plugin/setup.sh
+git clone git@gitlab.cego.dk:mk/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
-`setup.sh` links the plugin (`herdr plugin link`, which runs `install.sh` to fetch the
+`setup.sh` links Collie (`herdr plugin link`, which runs `install.sh` to fetch the
 prebuilt runner — no bun needed; with bun present it builds from source instead), adds
 the three keybindings below to `~/.config/herdr/config.toml` if they are missing, and
 reloads the running herdr. Run it again after a `git pull` to pick up changes; from a
-non-checkout location it clones/updates `~/.herdr-plugin` itself (`HERDR_PLUGIN_DIR`,
-`HERDR_PLUGIN_REPO` and `HERDR_CONFIG` override the defaults).
+non-checkout location it clones/updates `~/.collie` itself (`COLLIE_DIR`,
+`COLLIE_REPO` and `HERDR_CONFIG` override the defaults). It also links
+`~/.local/bin/collie` without changing PATH.
 
 Keys it adds (`prefix` is `ctrl+b` by default; edit them in `config.toml` afterwards).
 Plain letters on purpose: `alt` chords after the prefix are not delivered reliably over
@@ -24,12 +25,32 @@ SSH or through some terminals, and herdr's own config notes the same.
 
 | Key | Action |
 | --- | --- |
-| `prefix+f` | `cego.workflows.pick` — run a workflow |
-| `prefix+u` | `cego.workflows.resume` — resume a run with unfinished steps |
-| `prefix+shift+f` | `cego.workflows.fork` — copy a workflow or persona into your layer |
+| `prefix+f` | `cego.collie.pick` — run a workflow |
+| `prefix+u` | `cego.collie.resume` — resume a run with unfinished steps |
+| `prefix+shift+f` | `cego.collie.fork` — copy a workflow or persona into your layer |
 
 They show up in herdr's keybind help (`prefix+?`). Without a binding, any action still
-runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`.
+runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
+
+## Command line
+
+The same operations are available without opening UI:
+
+```sh
+collie workflow list
+collie workflow show plan
+collie persona list
+collie --workspace <id> run start plan --input goal="ship it"
+collie run list
+collie run show <run-id>
+collie run wait <run-id> --follow
+collie run answer <run-id> <answer>
+collie run stop <run-id>
+collie run resume <run-id>
+```
+
+Put `--workspace <id>` and `--json` before the command. Mutations accept
+`--request-id`; retrying it returns the original result without repeating the effect.
 
 ## Using it
 
@@ -40,7 +61,7 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
    instead of a guess: `implement`'s work source, and `review`'s target.
 4. The workspace's **Control Plane** tab opens, and it is always the workspace's *first*
    tab, so `prefix+1` lands on it — the first run creates it, every run after it reuses
-   it and puts it back at the front. It is the **only pane this plugin keeps open**: the
+   it and puts it back at the front. It is the **only pane Collie keeps open**: the
    run itself is driven by a background process with no pane at all, which reports into
    its run directory. The board lists the live agents this session has, the runs going on
    now with the step and iteration each is at and the last thing each said, and the runs
@@ -69,8 +90,8 @@ board, not an engine: it watches the run dirs and the register of live agents an
 draws what it finds, so closing it loses nothing — the next run opens it again.
 
 ```
-Control Plane — herdr-plugin
-/home/mk/work/cego/herdr-plugin
+Control Plane — Collie
+/home/mk/work/cego/collie
 
 Agents
   1  Implementer           working  implement-add-a-picker-20260828-093012
@@ -131,9 +152,9 @@ unattended half of `architecture`. Any of them is a fork away from being yours.
 
 | Action | What it does |
 | --- | --- |
-| `cego.workflows.pick` | Popup picker of workflows; infers inputs, asks for the rest, then runs |
-| `cego.workflows.resume` | Popup picker of runs with unfinished steps; finished steps are skipped |
-| `cego.workflows.fork` | Copy a workflow or persona into your layer or this project's |
+| `cego.collie.pick` | Popup picker of workflows; infers inputs, asks for the rest, then runs |
+| `cego.collie.resume` | Popup picker of runs with unfinished steps; finished steps are skipped |
+| `cego.collie.fork` | Copy a workflow or persona into your layer or this project's |
 
 Each action opens the `picker` popup, because that is where a terminal is. The run itself
 is not a pane: the picker starts a detached `drive` process that outlives it and writes
@@ -147,7 +168,7 @@ closing, and the terminal being detached; the driver claims the run atomically, 
 Definitions are markdown files with YAML frontmatter. Same name in a later layer wins:
 
 1. `workflows/`, `personas/` in this repo (team baseline)
-2. `$(herdr plugin config-dir cego.workflows)` (yours)
+2. `$(herdr plugin config-dir cego.collie)` (yours)
 3. `.herdr/workflows`, `.herdr/personas` in the project you're in
 
 `use:` resolves through the same lookup, so overriding `workflows/review.md` changes every
@@ -204,7 +225,7 @@ the picker marks it `(stale — the original has changed since this copy)`.
 ```
 
 `models` adds models the harness adapter table does not already accept. `model:
-"default"` means "pass no model flag" — the harness picks its own, and this plugin
+"default"` means "pass no model flag" — the harness picks its own, and Collie
 never has to keep a list in step with it. `effort` is optional — leave it out and each
 harness uses its own default. An unknown harness, model or effort fails validation
 before a single tab opens. `trust` is what a run does
@@ -371,7 +392,7 @@ claude has not worked in /home/mk/work/some-repo before
 
 `Trust it now` writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
 which is where claude keeps the answer to its own dialog. The previous file is copied to
-`claude.json.bak` in the plugin state dir first, every other project and setting is carried
+`claude.json.bak` in Collie state dir first, every other project and setting is carried
 over as it was, and the new file is renamed into place with the old one's permissions, so no
 reader ever sees it half-written. It is still a read-modify-write of a file claude owns: if
 a claude session saves in the same instant, that save is the one that loses. Once per
@@ -491,13 +512,13 @@ recorded with its kind, and the `build` prompt reads both: `{{inputs.plan}}` and
 implementer writes the spec and a task list into `{{run.dir}}/plan/` before it builds,
 so every run leaves the same audit trail.
 
-Every run is recorded under the plugin state dir: `runs/<id>/run.json` with the
+Every run is recorded under Collie state dir: `runs/<id>/run.json` with the
 inputs and where each came from, `steps/<step>[/<variant>]/` with the exact prompt
 sent and the Output written, `personas/` with the persona as injected, `review.md`
 where the run produced one, and `log.txt`.
 That is the audit trail and what `resume` reads.
 
-## Working on the plugin
+## Working on Collie
 
 **Bun 1.4 or newer** (`engines` in `package.json`, `.mise.toml`, and the CI image all say
 so). The runner is compiled by bun and the tests are `bun:test`, so the version is a
@@ -507,7 +528,7 @@ prerequisite rather than a preference.
 bun install
 bun test
 bun run typecheck      # the same TypeScript gate CI runs
-bun run build          # bin/herdr-workflows for this platform
+bun run build          # bin/collie for this platform
 ```
 
 `bun run build` compiles beside the binary and renames over it, because replacing a

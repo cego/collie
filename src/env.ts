@@ -1,7 +1,7 @@
 // Plugin environment as herdr hands it to an action or pane entrypoint.
 // Names come from the herdr plugin runtime; see docs/SPEC.md.
 
-export const PLUGIN_ID = "cego.workflows";
+export const PLUGIN_ID = "cego.collie";
 
 export interface PluginContext {
   workspace_id?: string;
@@ -55,8 +55,7 @@ export function readEnv(env: Record<string, string | undefined> = process.env): 
   const home = env.HOME ?? "/tmp";
   const pluginRoot = first(env, "HERDR_PLUGIN_ROOT") ?? process.cwd();
   const cwd =
-    first(env, "HERDR_WORKFLOWS_CWD", "HERDR_ACTIVE_PANE_CWD") ??
-    context.focused_pane_cwd ??
+    first(env, "COLLIE_CWD") ??
     context.workspace_cwd ??
     process.cwd();
 

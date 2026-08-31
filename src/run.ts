@@ -67,6 +67,8 @@ export interface RunRecord {
   workspace: string | null;
   /** That workspace's label, so a recycled workspace id is caught. */
   workspace_label: string | null;
+  /** Stable worktree provenance captured from the live workspace at start. */
+  workspace_worktree: string | null;
   created_at: string;
   finished_at: string | null;
   status: RunStatus;
@@ -264,6 +266,7 @@ export class RunStore {
     session?: string | null;
     workspace?: string | null;
     workspaceLabel?: string | null;
+    workspaceWorktree?: string | null;
   }): Run {
     // Validation rejects such a name earlier with a friendlier error; this is the
     // defence in depth, because the workflow name becomes the Run directory itself.
@@ -285,6 +288,7 @@ export class RunStore {
       session: opts.session ?? null,
       workspace: opts.workspace ?? null,
       workspace_label: opts.workspaceLabel ?? null,
+      workspace_worktree: opts.workspaceWorktree ?? null,
       created_at: new Date().toISOString(),
       finished_at: null,
       status: "running",
@@ -343,20 +347,6 @@ export class RunStore {
     const path = join(dir, "run.json");
     if (!existsSync(path)) throw new Error(`no run "${id}" in ${this.root}`);
     const record = JSON.parse(readFileSync(path, "utf8")) as RunRecord;
-    // A run recorded by an older version has fewer lists than this one expects.
-    record.children ??= [];
-    record.choices ??= [];
-    record.session ??= null;
-    record.workspace ??= null;
-    record.workspace_label ??= null;
-    record.awaiting ??= null;
-    record.handoffs ??= [];
-    record.deferred ??= [];
-    record.target_label ??= null;
-    record.synthesis ??= null;
-    record.mr_url ??= null;
-    record.linear_issues ??= [];
-    record.parent ??= null;
     return new Run(dir, record);
   }
 

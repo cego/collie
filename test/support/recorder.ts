@@ -114,7 +114,7 @@ export class Rig {
       HERDR_WORKSPACE_ID: "1",
       HERDR_TAB_ID: "1:1",
       HERDR_PANE_ID: "1-1",
-      HERDR_WORKFLOWS_CWD: this.projectDir,
+      COLLIE_CWD: this.projectDir,
       FAKE_HERDR_LOG: this.logPath,
       FAKE_HERDR_OUTPUTS: join(this.root, "outputs.json"),
       ...overrides,

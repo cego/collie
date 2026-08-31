@@ -64,7 +64,7 @@ import { renderTemplate } from "./template";
 import { resolveWorkflow } from "./definitions";
 import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 
-export const VIEW_SOURCE_PREFIX = "cego.workflows:";
+export const VIEW_SOURCE_PREFIX = "cego.collie:";
 
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
 export type EnginePrompts = InputPrompts;
@@ -646,6 +646,7 @@ async function chain(
     workspace: o.env.workspaceId,
     // A child starts where its parent is, so it inherits the workspace it recorded.
     workspaceLabel: run.record.workspace_label,
+    workspaceWorktree: run.record.workspace_worktree,
     inputs,
     inputSources: sources,
     stepIds: child.steps.map((s) => s.id),
@@ -660,7 +661,7 @@ async function chain(
 
   await o.herdr.pluginPaneOpen({
     entrypoint: "runner",
-    env: { HERDR_WORKFLOWS_RUN: childRun.id, HERDR_WORKFLOWS_CWD: run.record.cwd },
+    env: { COLLIE_RUN: childRun.id, COLLIE_CWD: run.record.cwd },
     focus: true,
     workspaceId: o.env.workspaceId,
     cwd: run.record.cwd,
@@ -865,7 +866,7 @@ async function findOrOpenView(o: EngineOptions): Promise<{ tabId: string; paneId
       focus: false,
       workspaceId: o.env.workspaceId,
       cwd: o.run.record.cwd,
-      env: { HERDR_WORKFLOWS_CWD: o.run.record.cwd },
+      env: { COLLIE_CWD: o.run.record.cwd },
     });
     if (!opened.paneId) return null;
     await o.herdr.paneRename(opened.paneId, CONTROL_PLANE);

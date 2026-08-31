@@ -3,8 +3,9 @@
 # Safe to re-run; every step skips what is already in place.
 set -eu
 
-REPO_URL="${HERDR_PLUGIN_REPO:-git@gitlab.cego.dk:mk/herdr-plugin.git}"
-PLUGIN_ID="cego.workflows"
+REPO_URL="${COLLIE_REPO:-git@gitlab.cego.dk:mk/collie.git}"
+PLUGIN_ID="cego.collie"
+OLD_PLUGIN_ID="cego.workflows"
 CONFIG="${HERDR_CONFIG:-$HOME/.config/herdr/config.toml}"
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -17,7 +18,7 @@ command -v git >/dev/null 2>&1 || die "git is required"
 if [ -f "$(dirname "$0")/herdr-plugin.toml" ]; then
   ROOT=$(cd "$(dirname "$0")" && pwd)
 else
-  ROOT="${HERDR_PLUGIN_DIR:-$HOME/.herdr-plugin}"
+  ROOT="${COLLIE_DIR:-$HOME/.collie}"
   if [ -d "$ROOT/.git" ]; then
     say "Updating $ROOT"
     git -C "$ROOT" pull --ff-only
@@ -27,12 +28,27 @@ else
   fi
 fi
 
+OLD_STATE="$HOME/.local/state/herdr/plugins/$OLD_PLUGIN_ID"
+if herdr plugin list 2>/dev/null | grep -q "$OLD_PLUGIN_ID"; then
+  say "Unlinking $OLD_PLUGIN_ID; its state is preserved at $OLD_STATE"
+  herdr plugin unlink "$OLD_PLUGIN_ID"
+elif [ -d "$OLD_STATE" ]; then
+  say "Previous $OLD_PLUGIN_ID state is preserved at $OLD_STATE"
+fi
+
 if herdr plugin list 2>/dev/null | grep -q "$PLUGIN_ID .*\[local:$ROOT\]"; then
   say "Plugin already linked from $ROOT"
 else
   say "Linking plugin"
   herdr plugin link "$ROOT"
 fi
+
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$ROOT/bin/collie" "$HOME/.local/bin/collie"
+case ":$PATH:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) say "$HOME/.local/bin is not on PATH; add it if you want to run collie by name" ;;
+esac
 
 add_binding() { # key action description
   if grep -q "command = \"$PLUGIN_ID.$2\"" "$CONFIG" 2>/dev/null; then

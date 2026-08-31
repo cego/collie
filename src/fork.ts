@@ -6,6 +6,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { contentHash } from "./definitions";
+import { unsafePathComponent } from "./naming";
 
 export type DefinitionKind = "workflows" | "personas";
 
@@ -16,6 +17,8 @@ export interface ForkResult {
 }
 
 export interface ForkOptions {
+  /** Filename/frontmatter name for a fork that is not shadowing its parent. */
+  name?: string;
   /** A whole copy instead of an `extends:` stub: it stops following the parent. */
   full?: boolean;
   /** The step a workflow stub names, so there is something to edit in it. */
@@ -32,7 +35,12 @@ export function forkDefinition(
   opts: ForkOptions = {},
 ): ForkResult {
   const dir = join(targetDir, kind);
-  const path = join(dir, basename(source));
+  const sourceName = basename(source, ".md");
+  const name = opts.name ?? sourceName;
+  const path = join(dir, `${name}.md`);
+
+  const unsafe = unsafePathComponent(name);
+  if (unsafe) return { ok: false, path, message: `target name "${name}" ${unsafe}` };
 
   if (path === source) {
     return { ok: false, path, message: `${basename(source)} is already in that layer` };
@@ -45,10 +53,10 @@ export function forkDefinition(
   if (opts.full) {
     // A full copy records what it copied, so a parent that moves on can be spotted.
     const text = readFileSync(source, "utf8");
-    writeFileSync(path, stamped(text, contentHash(text)));
+    writeFileSync(path, renamed(stamped(text, contentHash(text)), sourceName, name));
     return { ok: true, path, message: `copied to ${path} (a full copy: it no longer follows the original)` };
   }
-  writeFileSync(path, stub(basename(source, ".md"), kind, opts));
+  writeFileSync(path, stub(name, sourceName, kind, opts));
   return { ok: true, path, message: `wrote ${path} — it extends the original and changes only what you add` };
 }
 
@@ -60,12 +68,16 @@ function stamped(text: string, hash: string): string {
   return lines.join("\n");
 }
 
+function renamed(text: string, source: string, target: string): string {
+  return source === target ? text : text.replace(new RegExp(`(^name:\\s*)${source}$`, "m"), `$1${target}`);
+}
+
 /**
  * The smallest file that changes one thing. Everything not named here is still the
  * parent's, so the stub is what the fork is actually for, and nothing else.
  */
-function stub(name: string, kind: DefinitionKind, opts: ForkOptions): string {
-  const head = ["---", `name: ${name}`, `extends: ${name}`];
+function stub(name: string, parent: string, kind: DefinitionKind, opts: ForkOptions): string {
+  const head = ["---", `name: ${name}`, `extends: ${parent}`];
   const body: string[] = [];
   if (kind === "workflows" && opts.step) {
     head.push("steps:", `  - id: ${opts.step}`, `    # Only the keys you change; the rest stay the original's.`);
