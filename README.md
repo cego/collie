@@ -8,7 +8,7 @@ A shared starting point, not a restriction: fork any workflow or persona into yo
 One command, safe to re-run:
 
 ```sh
-git clone git@gitlab.cego.dk:cego/herdr-plugin.git ~/.herdr-plugin && ~/.herdr-plugin/setup.sh
+git clone git@gitlab.cego.dk:mk/herdr-plugin.git ~/.herdr-plugin && ~/.herdr-plugin/setup.sh
 ```
 
 `setup.sh` links the plugin (`herdr plugin link`, which runs `install.sh` to fetch the

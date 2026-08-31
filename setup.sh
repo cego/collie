@@ -3,7 +3,7 @@
 # Safe to re-run; every step skips what is already in place.
 set -eu
 
-REPO_URL="${HERDR_PLUGIN_REPO:-git@gitlab.cego.dk:cego/herdr-plugin.git}"
+REPO_URL="${HERDR_PLUGIN_REPO:-git@gitlab.cego.dk:mk/herdr-plugin.git}"
 PLUGIN_ID="cego.workflows"
 CONFIG="${HERDR_CONFIG:-$HOME/.config/herdr/config.toml}"
 

@@ -13,7 +13,7 @@ case "$ARCH" in
 esac
 
 ASSET="herdr-workflows-${OS}-${ARCH}"
-BASE="${HERDR_WORKFLOWS_RELEASE_BASE:-https://gitlab.cego.dk/cego/herdr-plugin/-/releases/v${VERSION}/downloads}"
+BASE="${HERDR_WORKFLOWS_RELEASE_BASE:-https://gitlab.cego.dk/mk/herdr-plugin/-/releases/v${VERSION}/downloads}"
 
 mkdir -p bin
 if curl -fsSL "${BASE}/${ASSET}" -o bin/herdr-workflows.new 2>/dev/null; then
