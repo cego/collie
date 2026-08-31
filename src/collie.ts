@@ -2,33 +2,27 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Config, Crypto, Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
 import { Argument, CliConfig, Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import type { PlatformError } from "effect/PlatformError";
-import { loadDefaults } from "./config";
 import {
   bodySections,
-  DefinitionError,
   layers,
   loadDefinitions,
-  resolveWorkflow,
-  skillDirs,
-  validateWorkflow,
   type PersonaDef,
   type WorkflowDef,
 } from "./definitions";
 import { RUNNER_LOG, readChoice, readProgress } from "./driver";
 import { currentEnv, type PluginEnv } from "./env";
 import { forkDefinition } from "./fork";
-
 import { Herdr, HerdrError, type WorkspaceInfo } from "./herdr";
-import { inferInputs, inputSources, inputValues } from "./inputs";
 import { Run, RunStore } from "./run";
 import { scopeFor } from "./registry";
 import {
   answerRun,
   err,
   ExpectedError,
+  prepareWorkflow,
   resumeRun,
   runStatus,
-  spawnDriver,
+  startRun,
   stopRun,
   type OpResult,
 } from "./operations";
@@ -530,37 +524,21 @@ const runStart = Command.make(
           if (!explicit.ok) return explicit.error;
           return yield* mutation(resolved.env, "run-start", request, (_id) =>
             Effect.gen(function* () {
-              const defs = yield* definitions(resolved.env);
-              const defaults = yield* loadDefaults(resolved.env.configDir);
-              let wf;
-              try {
-                wf = resolveWorkflow(workflow, defs, defaults);
-              } catch (cause) {
-                if (cause instanceof DefinitionError)
-                  return err("workflow_not_found", cause.message);
-                throw cause;
+              const prepared = yield* prepareWorkflow(resolved.env, workflow);
+              if (!("workflow" in prepared)) return prepared;
+              const wf = prepared.workflow;
+              for (const item of prepared.resolutions) {
+                const value = explicit.inputs[item.name];
+                if (value === undefined) continue;
+                item.value = value;
+                item.source = "explicit";
+                item.needsAsking = false;
+                delete item.candidates;
               }
-              const dirs = yield* skillDirs(resolved.env);
-              const problems = yield* validateWorkflow(wf, defs, defaults, dirs);
-              if (problems.length > 0)
-                return err(
-                  "operation_failed",
-                  `${workflow} is not runnable.`,
-                  Schema.decodeUnknownSync(YamlMapSchema)({ problems }),
-                );
-              const inferred = yield* inferInputs(wf.inputs, {
-                cwd: resolved.env.cwd,
-                stateDir: resolved.env.stateDir,
-              });
-              for (const item of inferred) {
-                if (explicit.inputs[item.name] !== undefined) {
-                  item.value = explicit.inputs[item.name]!;
-                  item.source = "explicit";
-                  item.needsAsking = false;
-                  delete item.candidates;
-                }
-              }
-              const unresolved = inferred.filter((item) => item.needsAsking || item.candidates);
+              // A command line cannot be asked; an unsettled Input is the caller's to give.
+              const unresolved = prepared.resolutions.filter(
+                (item) => item.needsAsking || item.candidates,
+              );
               if (unresolved.length > 0) {
                 return err(
                   "needs_input",
@@ -575,26 +553,11 @@ const runStart = Command.make(
                   }),
                 );
               }
-              const values = { ...inputValues(inferred), ...explicit.inputs };
-              const sources = {
-                ...inputSources(inferred),
-                ...Object.fromEntries(Object.keys(explicit.inputs).map((key) => [key, "explicit"])),
-              };
-              const run = yield* new RunStore(resolved.env.stateDir).create({
-                workflow: wf.name,
-                cwd: resolved.env.cwd,
-                session: resolved.env.socketPath,
-                workspace: resolved.workspace?.workspaceId ?? resolved.env.workspaceId,
-                workspaceLabel: resolved.workspace?.label ?? null,
-                workspaceWorktree: resolved.workspace?.worktree ?? null,
-                inputs: values,
-                inputSources: sources,
-                stepIds: wf.steps.map((step) => step.id),
-                maxIterations: wf.maxIterations,
-                primaryInput: Object.values(values)[0] ?? wf.name,
+              const run = yield* startRun(resolved.env, {
+                workflow: wf,
+                resolutions: prepared.resolutions,
+                workspace: resolved.workspace,
               });
-              yield* run.log(`created from ${wf.path} (${wf.layer} layer)`);
-              yield* spawnDriver(resolved.env, run.id, run.record.cwd);
               return {
                 ok: true,
                 data: { runId: run.id, run: yield* runData(run) },

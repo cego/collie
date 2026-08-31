@@ -6,6 +6,10 @@
 // Start and resume have no adapter half left to diverge: the picker and the resume
 // pane prompt, then call the same operation the CLI does, so those cases compare the
 // operation against the CLI process rather than a copy of itself.
+//
+// The env below is pinned rather than inherited because this suite may itself be
+// running inside herdr, where a leaked socket or workspace id would scope the two
+// halves differently and make them look divergent when they are not.
 
 import type { BunServices } from "@effect/platform-bun";
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -117,8 +121,6 @@ printf '%s\\n' "$COLLIE_RUN" >> "${path.join(dir, "drivers")}"
         HERDR_PLUGIN_CONFIG_DIR: path.join(dir, "config"),
         HERDR_PLUGIN_STATE_DIR: path.join(dir, "state"),
         HERDR_BIN_PATH: herdr,
-        // Pinned, not inherited: this suite may itself be running inside herdr, and a
-        // leaked socket or workspace would scope the two halves differently.
         HERDR_WORKSPACE_ID: "w1",
         HERDR_ACTIVE_WORKSPACE_ID: "w1",
         HERDR_SOCKET_PATH: path.join(dir, "herdr.sock"),
@@ -152,8 +154,18 @@ const InboxCommandJson = Schema.fromJsonString(
 const RecordJson = Schema.fromJsonString(
   Schema.Struct({
     status: Schema.String,
+    slug: Schema.String,
+    workflow: Schema.String,
+    workspace: Schema.NullOr(Schema.String),
+    workspace_label: Schema.NullOr(Schema.String),
+    inputs: Schema.Record(Schema.String, Schema.String),
+    input_sources: Schema.Record(Schema.String, Schema.String),
     steps: Schema.Array(Schema.Struct({ id: Schema.String, status: Schema.String })),
   }),
+);
+
+const StartJson = Schema.fromJsonString(
+  Schema.Struct({ data: Schema.Struct({ runId: Schema.String }) }),
 );
 
 const pluginEnv = (): PluginEnv => readEnv(env);
@@ -192,13 +204,22 @@ const cli = Effect.fn("parity.cli")(function* (args: string[]) {
     ],
     { concurrency: "unbounded" },
   ).pipe(Effect.scoped);
-  return { body: yield* Schema.decodeUnknownEffect(EnvelopeJson)(stdout), exit: Number(exit) };
+  return {
+    body: yield* Schema.decodeUnknownEffect(EnvelopeJson)(stdout),
+    stdout,
+    exit: Number(exit),
+  };
 });
 
 const makeRun = Effect.fn("parity.makeRun")(function* () {
   const prepared = yield* prepareWorkflow(pluginEnv(), "demo");
   if (!("workflow" in prepared)) throw new Error("demo is not runnable");
-  for (const item of prepared.resolutions) if (item.name === "goal") item.value = "ship";
+  for (const item of prepared.resolutions) {
+    if (item.name !== "goal") continue;
+    item.value = "ship";
+    item.source = "explicit";
+    item.needsAsking = false;
+  }
   return yield* withDriver(
     startRun(pluginEnv(), {
       workflow: prepared.workflow,
@@ -227,8 +248,7 @@ const observed = Effect.fn("parity.observed")(function* (runDir: string) {
   );
   return {
     stopped: yield* fs.exists(path.join(runDir, "stopped")),
-    status: record.status,
-    steps: record.steps,
+    ...record,
     commands: commands.toSorted((a, b) => a.type.localeCompare(b.type)),
   };
 });
@@ -344,4 +364,24 @@ effectTest("resuming through the operation and through the CLI leave the same tr
   const fromCli = yield* observed(command.dir);
   expect(fromBoard.status).toBe("running");
   expect(fromCli).toEqual(fromBoard);
+});
+
+effectTest("starting through the operation and through the CLI record the same Run", function* () {
+  const fromOperation = yield* observed((yield* makeRun()).dir);
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const started = yield* cli(["run", "start", "demo", "--input", "goal=ship"]);
+  expect(started.exit).toBe(0);
+  const runId = (yield* Schema.decodeUnknownEffect(StartJson)(started.stdout)).data.runId;
+  const fromCli = yield* observed(path.join(env.HERDR_PLUGIN_STATE_DIR, "runs", runId));
+
+  // The slug carries the Run's own id, and only that differs.
+  expect({ ...fromCli, slug: "" }).toEqual({ ...fromOperation, slug: "" });
+  expect(fromCli.slug.startsWith("demo-ship")).toBe(true);
+  expect(fromOperation.slug.startsWith("demo-ship")).toBe(true);
+
+  // Both handed the Run to a detached driver, and to exactly one.
+  const launched = (yield* fs.readFileString(path.join(dir, "drivers"))).trim().split("\n");
+  expect(launched).toHaveLength(2);
+  expect(launched).toContain(runId);
 });
