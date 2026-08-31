@@ -59,17 +59,19 @@ const ChoiceAnswerJson = Schema.fromJsonString(
     text: Schema.optionalKey(Schema.NullOr(Schema.String)),
   }),
 );
+/**
+ * The ownership claim. One shape only: the spec allows no persisted-state
+ * compatibility layer, and the bare integer a previous release wrote decoded to a
+ * claim with no start time — which `liveOwner` treats as alive and `stopDriver`
+ * refuses to signal, so such a Run could be neither stopped nor resumed, for ever.
+ */
 const OwnerRecordJson = Schema.fromJsonString(
-  Schema.Union([
-    Schema.Struct({ pid: Schema.Int, start: Schema.NullOr(Schema.String), at: Schema.String }),
-    Schema.Int,
-  ]),
+  Schema.Struct({ pid: Schema.Int, start: Schema.NullOr(Schema.String), at: Schema.String }),
 );
 
 const JsonString = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonString);
 const isString = Schema.is(Schema.String);
-const isNumber = Schema.is(Schema.Number);
 
 /**
  * A command for the Run's owning Driver. The Driver reads the inbox, so the shape
@@ -240,9 +242,7 @@ const consumeInboxStop = Effect.fn("consumeInboxStop")(function* (dir: string) {
 const readOwner = Effect.fn("readOwner")(function* (dir: string) {
   const path = yield* Path.Path;
   const raw = yield* read(OwnerRecordJson, path.join(dir, RUNNER_PID));
-  if (isNumber(raw))
-    return Number.isInteger(raw) && raw > 0 ? { pid: raw, start: null, at: "" } : null;
-  return raw && Number.isInteger(raw.pid) && raw.pid > 0 ? raw : null;
+  return raw && raw.pid > 0 ? raw : null;
 });
 
 const liveOwner = Effect.fn("liveOwner")(function* (dir: string) {

@@ -40,7 +40,7 @@ import {
   type Failure,
   type OpResult,
 } from "./operations";
-import { unsafePathComponent } from "./naming";
+import { reason, unsafePathComponent } from "./naming";
 import { breakStaleLock, releaseOwnLock, tryClaimLock } from "./lock";
 import { YamlMapSchema } from "./yaml";
 
@@ -68,6 +68,17 @@ type CollieServices = BunServices;
 
 const pid = Effect.sync(() => globalThis.process.pid);
 
+/**
+ * The codes that mean the command line was wrong rather than the operation failed:
+ * exit 2, and no receipt, because nothing happened for a retry to replay. A caller
+ * given `needs_input` is meant to fill the gaps and retry with the same request id.
+ */
+const REJECTED: ReadonlyArray<ExpectedError["code"]> = [
+  "invalid_input",
+  "needs_input",
+  "workspace_required",
+];
+
 function print(result: Result, json: boolean): void {
   if (json) {
     process.stdout.write(
@@ -76,12 +87,7 @@ function print(result: Result, json: boolean): void {
   } else {
     process.stdout.write(`${result.ok ? result.human : result.error.message}\n`);
   }
-  if (!result.ok)
-    process.exitCode = ["invalid_input", "needs_input", "workspace_required"].includes(
-      result.error.code,
-    )
-      ? 2
-      : 1;
+  if (!result.ok) process.exitCode = REJECTED.includes(result.error.code) ? 2 : 1;
 }
 
 const printResult = (result: Result, json: boolean) => Effect.sync(() => print(result, json));
@@ -92,10 +98,18 @@ const printResult = (result: Result, json: boolean) => Effect.sync(() => print(r
  * to leave both streams empty and only an exit status behind. Both are caught here.
  */
 function attempt<E, R>(operation: Effect.Effect<Result, E, R>, json: boolean) {
+  return guarded(operation.pipe(Effect.flatMap((result) => printResult(result, json))), json);
+}
+
+/**
+ * The same promise for a command that prints as it goes rather than returning one
+ * result: whatever escapes still becomes one envelope, never an empty stream and a
+ * bare exit status.
+ */
+function guarded<E, R>(operation: Effect.Effect<void, E, R>, json: boolean) {
   return operation.pipe(
-    Effect.catch((cause) => Effect.succeed(err("operation_failed", String(cause)))),
-    Effect.catchDefect((defect) => Effect.succeed(err("operation_failed", String(defect)))),
-    Effect.flatMap((result) => printResult(result, json)),
+    Effect.catch((cause) => printResult(err("operation_failed", String(cause)), json)),
+    Effect.catchDefect((defect) => printResult(err("operation_failed", String(defect)), json)),
   );
 }
 
@@ -194,6 +208,23 @@ function notLoaded(id: string, cause: Error | PlatformError): Failure {
   return err("run_not_found", `Run "${id}" was not found.`, { run: id });
 }
 
+/**
+ * The Run directories the store declined to hand back, and why: a `run.json` that will
+ * not decode, and one that is not there at all — which is what a Run half-created by
+ * `run start` looks like, since the directory is claimed before the record is written.
+ */
+const unreadableRuns = Effect.fn("collie.unreadableRuns")(function* (store: RunStore) {
+  const fs = yield* FileSystem.FileSystem;
+  const root = yield* store.rootEffect;
+  if (!(yield* fs.exists(root))) return [];
+  const broken: Array<{ run: string; reason: string }> = [];
+  for (const name of (yield* fs.readDirectory(root)).filter((entry) => !entry.startsWith("."))) {
+    const loaded = yield* store.load(name).pipe(Effect.result);
+    if (loaded._tag === "Failure") broken.push({ run: name, reason: reason(loaded.failure) });
+  }
+  return broken;
+});
+
 const runData = Effect.fn("collie.runData")(function* (run: Run) {
   return {
     ...run.record,
@@ -262,6 +293,7 @@ const mutation = Effect.fn("collie.mutation")(function* (
   return yield* Effect.gen(function* () {
     const result = yield* apply(id);
     const withRequest = withRequestId(result, id);
+    if (!withRequest.ok && REJECTED.includes(withRequest.error.code)) return withRequest;
     const tmp = `${path}.${yield* pid}.tmp`;
     yield* fs.writeFileString(tmp, `${Schema.encodeSync(ResultBoundaryJson)(withRequest)}\n`);
     yield* fs.rename(tmp, path);
@@ -607,29 +639,24 @@ const runList = Command.make("list", {}, () =>
         if ("ok" in resolved) return resolved;
         const workspace = yield* selected(global);
         const store = new RunStore(resolved.env.stateDir);
-        const fs = yield* FileSystem.FileSystem;
-        const root = yield* store.rootEffect;
-        // A listing hides a broken Run; `run list` is the one place that has to say
-        // so, because an agent reading it would otherwise never learn the Run exists.
-        if (yield* fs.exists(root)) {
-          for (const name of (yield* fs.readDirectory(root)).filter(
-            (entry) => !entry.startsWith("."),
-          )) {
-            const loaded = yield* store.load(name).pipe(Effect.result);
-            if (loaded._tag === "Failure" && loaded.failure instanceof InvalidRunState)
-              return notLoaded(name, loaded.failure);
-          }
-        }
         const runs = (yield* store.list()).filter(
           (item) => !workspace || item.record.workspace === workspace,
         );
         const data = yield* Effect.all(runs.map(runData));
+        // A listing hides a Run it cannot read, and `run list` is the one place that
+        // has to say so, or an agent never learns it exists. Reported alongside the
+        // Runs rather than instead of them: one unreadable Run must not cost the
+        // caller every readable one, and it cannot be workspace-filtered because its
+        // workspace is precisely what could not be read.
+        const broken = yield* unreadableRuns(store);
         return {
           ok: true,
-          data: { runs: data },
+          data: { runs: data, broken },
           human:
-            data.map((item) => `${item.id}\t${item.status}\t${item.workflow}`).join("\n") ||
-            "No runs found.",
+            [
+              ...data.map((item) => `${item.id}\t${item.status}\t${item.workflow}`),
+              ...broken.map((item) => `${item.run}\tunreadable\t${item.reason}`),
+            ].join("\n") || "No runs found.",
         };
       }),
       global.json,
@@ -733,94 +760,108 @@ const runWait = Command.make(
   ({ runId, follow, timeout }) =>
     Effect.gen(function* () {
       const global = yield* root;
-      const resolved = yield* context(global, false);
-      if ("ok" in resolved) return yield* printResult(resolved, global.json);
-      const workspace = yield* selected(global);
-      const found = yield* readRun(resolved.env, runId, workspace);
-      if (!(found instanceof Run)) return yield* printResult(found, global.json);
-      const timeoutResult = parseTimeout(timeout);
-      if (!timeoutResult.ok) return yield* printResult(timeoutResult.error, global.json);
-      const { ms } = timeoutResult;
-
-      let progressCount = 0;
-      let sentSnapshot = false;
-      /** Why the Run stopped being readable, if it did. Waiting ends; success does not. */
-      let lost: Failure | null = null;
-      /** One event, as the typed line a program reads or the line a human reads. */
-      const say = <A>(event: A, human: string) =>
-        process.stdout.write(`${global.json ? Schema.encodeSync(UnknownJson)(event) : human}\n`);
-
-      /** Reports what has happened since the last call, and whether waiting is over. */
-      const emit = Effect.fn("collie.runWait.emit")(function* () {
-        const fresh = yield* readRun(resolved.env, runId, workspace);
-        if (!(fresh instanceof Run)) {
-          // Deleted or no longer decoding, mid-wait. That is the typed failure the
-          // caller is owed, not a terminal state to be reported as a success.
-          lost = fresh;
-          return true;
-        }
-        const snapshot = yield* runData(fresh);
-        const status = yield* runStatus(fresh);
-        const terminal = ["succeeded", "failed", "stopped"].includes(status);
-        if (follow) {
-          // Once, not once per event: a Run with no progress yet leaves progressCount
-          // at zero however many times its directory is touched.
-          if (!sentSnapshot) {
-            sentSnapshot = true;
-            say({ type: "snapshot", run: snapshot }, `${fresh.id}: ${status}`);
-          }
-          const progress = (yield* readProgress(fresh.dir)).slice(progressCount);
-          progressCount += progress.length;
-          for (const event of progress) say({ type: "progress", runId, ...event }, event.text);
-          if (terminal) say({ type: "terminal", run: snapshot }, `${fresh.id}: ${status}`);
-        }
-        return terminal;
-      });
-
-      const fs = yield* FileSystem.FileSystem;
-      /**
-       * The watch is subscribed before the first read, not after it. Reading first
-       * left a gap: a Run reaching a terminal state in it wrote the only event that
-       * would ever arrive, and the command then waited for another one forever.
-       */
-      const watched = Effect.gen(function* () {
-        const events = yield* Stream.toQueue(fs.watch(found.dir), { capacity: "unbounded" });
-        if (yield* emit()) return;
-        yield* Stream.fromQueue(events).pipe(
-          Stream.runForEachWhile(() => emit().pipe(Effect.map((done) => !done))),
-        );
-      }).pipe(Effect.scoped);
-      const bounded = ms === null ? watched : watched.pipe(Effect.timeout(ms));
-      const failed = yield* bounded.pipe(
-        Effect.as(false),
-        Effect.catch((cause) =>
-          Effect.sync(() => {
-            print(
-              Cause.isTimeoutError(cause)
-                ? err("timeout", `Timed out waiting for run "${runId}".`)
-                : err("operation_failed", `Could not watch run "${runId}".`, {
-                    cause: String(cause),
-                  }),
-              global.json,
-            );
-            return true;
-          }),
-        ),
-      );
-      if (lost) return yield* printResult(lost, global.json);
-      if (follow || failed) return;
-      const terminal = yield* readRun(resolved.env, runId, workspace);
-      if (!(terminal instanceof Run)) return yield* printResult(terminal, global.json);
-      yield* printResult(
-        {
-          ok: true,
-          data: { run: yield* runData(terminal) },
-          human: `${terminal.id}: ${yield* runStatus(terminal)}`,
-        },
-        global.json,
-      );
+      // `guarded`, not `attempt`: this command streams its own lines rather than
+      // returning one result, but a defect must still end as one envelope like
+      // everywhere else.
+      yield* guarded(waitFor(global, runId, follow, timeout), global.json);
     }),
 ).pipe(Command.withDescription("Wait for a Run to finish, optionally following its progress"));
+
+const waitFor = Effect.fn("collie.waitFor")(function* (
+  global: Global,
+  runId: string,
+  follow: boolean,
+  timeout: Option.Option<string>,
+) {
+  {
+    const resolved = yield* context(global, false);
+    if ("ok" in resolved) return yield* printResult(resolved, global.json);
+    const workspace = yield* selected(global);
+    const found = yield* readRun(resolved.env, runId, workspace);
+    if (!(found instanceof Run)) return yield* printResult(found, global.json);
+    const timeoutResult = parseTimeout(timeout);
+    if (!timeoutResult.ok) return yield* printResult(timeoutResult.error, global.json);
+    const { ms } = timeoutResult;
+
+    let progressCount = 0;
+    let sentSnapshot = false;
+    /** Why the Run stopped being readable, if it did. Waiting ends; success does not. */
+    let lost: Failure | null = null;
+    /** One event, as the typed line a program reads or the line a human reads. */
+    const say = <A>(event: A, human: string) =>
+      process.stdout.write(`${global.json ? Schema.encodeSync(UnknownJson)(event) : human}\n`);
+
+    /** Reports what has happened since the last call, and whether waiting is over. */
+    const emit = Effect.fn("collie.runWait.emit")(function* () {
+      const fresh = yield* readRun(resolved.env, runId, workspace);
+      if (!(fresh instanceof Run)) {
+        // Deleted or no longer decoding, mid-wait. That is the typed failure the
+        // caller is owed, not a terminal state to be reported as a success.
+        lost = fresh;
+        return true;
+      }
+      const snapshot = yield* runData(fresh);
+      const status = yield* runStatus(fresh);
+      const terminal = ["succeeded", "failed", "stopped"].includes(status);
+      if (follow) {
+        // Once, not once per event: a Run with no progress yet leaves progressCount
+        // at zero however many times its directory is touched.
+        if (!sentSnapshot) {
+          sentSnapshot = true;
+          say({ type: "snapshot", run: snapshot }, `${fresh.id}: ${status}`);
+        }
+        const progress = (yield* readProgress(fresh.dir)).slice(progressCount);
+        progressCount += progress.length;
+        for (const event of progress) say({ type: "progress", runId, ...event }, event.text);
+        if (terminal) say({ type: "terminal", run: snapshot }, `${fresh.id}: ${status}`);
+      }
+      return terminal;
+    });
+
+    const fs = yield* FileSystem.FileSystem;
+    /**
+     * The watch is subscribed before the first read, not after it. Reading first
+     * left a gap: a Run reaching a terminal state in it wrote the only event that
+     * would ever arrive, and the command then waited for another one forever.
+     */
+    const watched = Effect.gen(function* () {
+      const events = yield* Stream.toQueue(fs.watch(found.dir), { capacity: "unbounded" });
+      if (yield* emit()) return;
+      yield* Stream.fromQueue(events).pipe(
+        Stream.runForEachWhile(() => emit().pipe(Effect.map((done) => !done))),
+      );
+    }).pipe(Effect.scoped);
+    const bounded = ms === null ? watched : watched.pipe(Effect.timeout(ms));
+    const failed = yield* bounded.pipe(
+      Effect.as(false),
+      Effect.catch((cause) =>
+        Effect.sync(() => {
+          print(
+            Cause.isTimeoutError(cause)
+              ? err("timeout", `Timed out waiting for run "${runId}".`)
+              : err("operation_failed", `Could not watch run "${runId}".`, {
+                  cause: String(cause),
+                }),
+            global.json,
+          );
+          return true;
+        }),
+      ),
+    );
+    if (lost) return yield* printResult(lost, global.json);
+    if (follow || failed) return;
+    const terminal = yield* readRun(resolved.env, runId, workspace);
+    if (!(terminal instanceof Run)) return yield* printResult(terminal, global.json);
+    yield* printResult(
+      {
+        ok: true,
+        data: { run: yield* runData(terminal) },
+        human: `${terminal.id}: ${yield* runStatus(terminal)}`,
+      },
+      global.json,
+    );
+  }
+});
 
 function runCommandMutation(
   kind: "answer" | "stop" | "resume",

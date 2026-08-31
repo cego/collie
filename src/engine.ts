@@ -62,6 +62,7 @@ import {
   type InputPrompts,
 } from "./inputs";
 import { RunStore } from "./run";
+import { handOver } from "./operations";
 import {
   gitlabForProject,
   gitlabReadiness,
@@ -741,13 +742,18 @@ const chain = Effect.fn("Engine.chain")(function* (
   yield* run.save();
   yield* out(`  ▸ ${child.name} run ${childRun.id}`);
 
-  yield* o.herdr.pluginPaneOpen({
-    entrypoint: "runner",
-    env: { COLLIE_RUN: childRun.id, COLLIE_CWD: run.record.cwd },
-    focus: true,
-    workspaceId: o.env.workspaceId,
-    cwd: run.record.cwd,
-  });
+  // A Run is driven by a detached Driver with no pane of its own, so a child is handed
+  // over exactly as `run start` hands over. This used to open a `runner` pane, which
+  // herdr-plugin.toml has never declared and main.ts has never routed, so the child
+  // was created, recorded `running`, listed as a child — and driven by nobody.
+  const undriven = yield* handOver({ ...o.env, cwd: run.record.cwd }, childRun);
+  if (undriven) {
+    yield* out(`  ${child.name} was created but no driver started: ${undriven.why}`);
+    yield* childRun.log(`driver did not start: ${undriven.why}`);
+    childRun.record.status = "failed";
+    childRun.record.finished_at = yield* nowIso();
+    yield* childRun.save();
+  }
   return childRun.id;
 });
 

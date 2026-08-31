@@ -1,5 +1,6 @@
 import { DateTime } from "effect";
 import { nowIso, nowMillis } from "../src/time";
+import { readEnv } from "../src/env";
 
 /** A Date this far back, without reaching for the global clock. */
 const dateFromMillis = (milliseconds: number) =>
@@ -847,33 +848,6 @@ effectTest(
 );
 
 effectTest(
-  "a pre-upgrade bare-pid claim from a live driver still counts as a driver",
-  function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const run = yield* new RunStore(rig.stateDir).create({
-      workflow: "solo",
-      cwd: rig.projectDir,
-      inputs: {},
-      inputSources: {},
-      stepIds: ["solo"],
-      maxIterations: 1,
-      primaryInput: "x",
-    });
-    // This test process stands in for a driver from the previous release.
-    yield* fs.writeFileString(path.join(run.dir, RUNNER_PID), `${yield* currentPid}\n`);
-
-    // Alive for liveness — a resume mid-upgrade must not start a second driver —
-    // but never verified enough to signal.
-    expect(yield* driverAlive(run.dir)).toBe(true);
-    expect(yield* acquireDriver(run.dir)).toBe(false);
-    expect(yield* stopDriver(run.dir)).toBe(false);
-    expect(yield* fs.exists(path.join(run.dir, RUNNER_PID))).toBe(true);
-    yield* fs.remove(path.join(run.dir, RUNNER_PID));
-  },
-);
-
-effectTest(
   "an unreadable young claim is a winner mid-write, not a stale claim to remove",
   function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -939,4 +913,47 @@ effectTest("a fresh Driver ignores what the last one left in the run dir", funct
   // Choice, so any Workflow that asks a question would never resume.
   expect(yield* fs.readDirectory(inbox)).toEqual([]);
   expect(yield* readChoice(run.dir)).toBeNull();
+});
+
+effectTest("the Driver is spawned with a usable environment, not just herdr's keys", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const seen = path.join(rig.root, "driver-env");
+  const driver = path.join(rig.root, "env-driver");
+  yield* fs.writeFileString(driver, `#!/bin/sh\nprintf '%s' "$PATH" > "${seen}"\n`, {
+    mode: 0o755,
+  });
+
+  const run = yield* new RunStore(rig.stateDir).create({
+    workflow: "plan",
+    cwd: rig.projectDir,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["next"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+  // Built the way production builds it: `currentEnv` reads only the keys env.ts lists,
+  // and PATH is not one of them, so `env.raw` here has none — exactly as in a real
+  // action or pane entrypoint.
+  const production = readEnv({
+    HOME: rig.root,
+    HERDR_PLUGIN_ROOT: rig.baselineDir,
+    HERDR_PLUGIN_STATE_DIR: rig.stateDir,
+    COLLIE_CWD: rig.projectDir,
+  });
+  expect(production.raw["PATH"]).toBeUndefined();
+
+  yield* spawnDriver(production, run.id, run.record.cwd).pipe(Effect.provide(configLayer(driver)));
+
+  for (let i = 0; i < 50 && !(yield* fs.exists(seen)); i++) yield* Effect.sleep("20 millis");
+  // Bun substitutes a default PATH when given an explicit env, so the miss was not an
+  // empty PATH but a reduced one: /bin and /usr/bin only, without ~/.local/bin — which
+  // is where this project's own setup.sh installs — so a git or glab there is
+  // unfindable, and `shell` reads that as exit 127, which the MR and diff paths cannot
+  // tell from "no GitLab here". The Driver gets the environment its parent had.
+  expect(yield* fs.exists(seen)).toBe(true);
+  expect(yield* fs.readFileString(seen)).toBe(
+    yield* Config.string("PATH").pipe(Config.withDefault("")),
+  );
 });

@@ -1,7 +1,7 @@
 import { nowIso } from "../src/time";
 import type { BunServices } from "@effect/platform-bun";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Config, Effect, FileSystem, Path, PlatformError, Scope, Stream } from "effect";
+import { Config, Effect, Fiber, FileSystem, Path, PlatformError, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { runEffect } from "./support/effect";
 
@@ -449,3 +449,115 @@ effectTest(
     expect(persona.body.data.path).toContain("/workspace/.herdr/personas/project-helper.md");
   },
 );
+
+effectTest("wait picks up events written after it started, and ends on one terminal", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const started = yield* cli(["--workspace", "w1", "run", "start", "demo", "--input", "goal=live"]);
+  const runId: string = started.body.data.runId;
+  const runDir = path.join(dir, "state", "runs", runId);
+
+  // Nothing terminal yet, so the first emit cannot end the wait and the FileSystem.watch
+  // stream is what has to deliver everything below. The other wait test writes its
+  // events first, which returns on the first read and never exercises the watch.
+  const process = yield* spawner.spawn(
+    ChildProcess.make(
+      "bun",
+      [
+        path.join(root, "src/main.ts"),
+        "--json",
+        "--workspace",
+        "w1",
+        "run",
+        "wait",
+        runId,
+        "--follow",
+      ],
+      { cwd: root, env, extendEnv: true, stdout: "pipe", stderr: "pipe" },
+    ),
+  );
+
+  const reader = yield* Effect.forkScoped(
+    process.stdout.pipe(
+      Stream.decodeText(),
+      Stream.runFold(
+        (): string => "",
+        (out, chunk) => out + chunk,
+      ),
+    ),
+  );
+
+  // Written only now, one at a time, so each has to reach the waiter as an event.
+  yield* Effect.sleep("300 millis");
+  yield* fs.writeFileString(
+    path.join(runDir, "progress.jsonl"),
+    `${JSON.stringify({ at: yield* nowIso(), text: "step one" })}\n`,
+    { flag: "a" },
+  );
+  yield* Effect.sleep("300 millis");
+  const snapshotPath = path.join(runDir, "run.json");
+  const snapshot = parseJson(yield* fs.readFileString(snapshotPath));
+  snapshot.status = "done";
+  snapshot.finished_at = yield* nowIso();
+  snapshot.steps[0].status = "done";
+  yield* fs.writeFileString(snapshotPath, JSON.stringify(snapshot));
+
+  const output = yield* Fiber.join(reader);
+  expect(Number(yield* process.exitCode)).toBe(0);
+  const events = output
+    .trim()
+    .split("\n")
+    .map((line: string) => parseJson(line));
+  expect(events[0].type).toBe("snapshot");
+  expect(
+    events
+      .filter((event: { type: string }) => event.type === "progress")
+      .map((event: { text: string }) => event.text),
+  ).toContain("step one");
+  expect(events.filter((event: { type: string }) => event.type === "terminal")).toHaveLength(1);
+  expect(events.at(-1).type).toBe("terminal");
+});
+
+effectTest("interrupting wait stops the waiter and leaves the Run alone", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const started = yield* cli([
+    "--workspace",
+    "w1",
+    "run",
+    "start",
+    "demo",
+    "--input",
+    "goal=ctrlc",
+  ]);
+  const runId: string = started.body.data.runId;
+  const runDir = path.join(dir, "state", "runs", runId);
+
+  const process = yield* spawner.spawn(
+    ChildProcess.make(
+      "bun",
+      [
+        path.join(root, "src/main.ts"),
+        "--json",
+        "--workspace",
+        "w1",
+        "run",
+        "wait",
+        runId,
+        "--follow",
+      ],
+      { cwd: root, env, extendEnv: true, stdout: "pipe", stderr: "pipe" },
+    ),
+  );
+  yield* Effect.sleep("500 millis");
+  yield* process.kill({ killSignal: "SIGINT" });
+  // Dying from a signal is a failure to the spawner; that it ended is all this needs.
+  yield* Effect.ignore(process.exitCode);
+
+  // `run stop` is the explicit cancellation; Ctrl-C is not one. The Run is exactly as
+  // it was: no stop marker, and still the status its own Driver last recorded.
+  expect(yield* fs.exists(path.join(runDir, "stopped"))).toBe(false);
+  expect(parseJson(yield* fs.readFileString(path.join(runDir, "run.json"))).status).toBe("running");
+});

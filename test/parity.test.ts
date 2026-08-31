@@ -144,7 +144,15 @@ afterEach(() =>
 const EnvelopeJson = Schema.fromJsonString(
   Schema.Struct({
     ok: Schema.Boolean,
-    data: Schema.optionalKey(Schema.Struct({ runId: Schema.optionalKey(Schema.String) })),
+    data: Schema.optionalKey(
+      Schema.Struct({
+        runId: Schema.optionalKey(Schema.String),
+        runs: Schema.optionalKey(Schema.Array(Schema.Struct({ id: Schema.String }))),
+        broken: Schema.optionalKey(
+          Schema.Array(Schema.Struct({ run: Schema.String, reason: Schema.String })),
+        ),
+      }),
+    ),
     error: Schema.optionalKey(
       Schema.Struct({
         code: Schema.String,
@@ -407,18 +415,37 @@ effectTest("a run.json that is not a Run is reported, not trusted", function* ()
   const run = yield* makeRun();
   yield* fs.writeFileString(path.join(run.dir, "run.json"), '{"id":"broken"}\n');
 
-  // The CLI names the Run and says its state is invalid rather than half-reading it.
+  // Asked for by name, the CLI says the state is invalid rather than half-reading it.
   const shown = yield* cli(["run", "show", run.id]);
   expect(shown.body).toMatchObject({ ok: false, error: { code: "invalid_state" } });
   expect(shown.exit).toBe(1);
-  expect((yield* cli(["run", "list"])).body).toMatchObject({
-    ok: false,
-    error: { code: "invalid_state" },
-  });
+
+  // Listed, it appears as unreadable beside the Runs that are fine. One broken Run
+  // must not cost the caller the listing, which is the only way to find it.
+  const readable = yield* makeRun();
+  const listed = yield* cli(["run", "list"]);
+  expect(listed.body.ok).toBe(true);
+  expect(listed.body.data?.runs?.map((item) => item.id)).toEqual([readable.id]);
+  expect(listed.body.data?.broken?.map((item) => item.run)).toContain(run.id);
 
   // And the store refuses to hand it to anyone, so no reader has to check again.
   const failure = yield* Effect.result(new RunStore(env.HERDR_PLUGIN_STATE_DIR).load(run.id));
   expect(failure._tag).toBe("Failure");
+});
+
+effectTest("a Run directory with no run.json is listed as unreadable, not hidden", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // What `run start` leaves if it dies between claiming the directory and writing the
+  // record. It used to vanish from the listing, which returned success and no sign it
+  // had ever existed.
+  yield* fs.makeDirectory(path.join(env.HERDR_PLUGIN_STATE_DIR, "runs", "half-made"), {
+    recursive: true,
+  });
+
+  const listed = yield* cli(["run", "list"]);
+  expect(listed.body.ok).toBe(true);
+  expect(listed.body.data?.broken?.map((item) => item.run)).toEqual(["half-made"]);
 });
 
 effectTest("concurrent starts get a directory and a sequence number each", function* () {

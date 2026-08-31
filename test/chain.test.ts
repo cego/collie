@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, Path } from "effect";
+import { ConfigProvider, Effect, FileSystem, Layer, Path } from "effect";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { runEffect } from "./support/effect";
@@ -11,6 +11,8 @@ import { RunStore } from "../src/run";
 
 let rig: Rig;
 let bin: FakeBin;
+let driverLog: string;
+let driverLayer: Layer.Layer<never>;
 
 beforeEach(() =>
   runEffect(
@@ -25,6 +27,19 @@ beforeEach(() =>
       yield* writeDef(rig.baselineDir, "workflows", "parent", PARENT);
       yield* writeDef(rig.baselineDir, "workflows", "child", CHILD);
       yield* writeDef(rig.baselineDir, "workflows", "asker", ASKER);
+      // A chained child is handed to a detached Driver, so there has to be one to hand
+      // it to; this records the Run ids it is started for.
+      const fs = yield* FileSystem.FileSystem;
+      driverLog = path.join(rig.root, "drivers");
+      const driver = path.join(rig.root, "fake-driver");
+      yield* fs.writeFileString(
+        driver,
+        `#!/bin/sh\nprintf '%s\\n' "$COLLIE_RUN" >> "${driverLog}"\n`,
+        {
+          mode: 0o755,
+        },
+      );
+      driverLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({ COLLIE_DRIVER: driver }));
     }),
   ),
 );
@@ -96,8 +111,9 @@ Build {{inputs.goal}}
 
 const CLEAN = { verdict: "clean", findings: [] };
 
+/** Every run in this suite may chain, and a chained child is spawned, not paned. */
 function runWorkflowEffect(...args: Parameters<typeof runWorkflow>) {
-  return runWorkflow(...args);
+  return runWorkflow(...args).pipe(Effect.provide(driverLayer));
 }
 
 test("a run: choice starts a child run with the forwarded inputs and the parent finishes", () =>
@@ -129,14 +145,14 @@ test("a run: choice starts a child run with the forwarded inputs and the parent 
       });
       expect(child.record.steps.map((s) => s.status)).toEqual(["pending"]);
 
-      // The child gets its own runner pane, in the same workspace.
-      const opened = (yield* rig.calls()).find(
-        (c) => c.cmd === "plugin pane" && c.argv!.includes("runner"),
-      )!.argv!;
-      expect(opened).toContain("--entrypoint");
-      expect(opened).toContain("runner");
-      expect(opened).toContain(`COLLIE_RUN=${child.id}`);
-      expect(opened).toContain("--workspace");
+      // The child is handed to a detached Driver, the same way `run start` hands over.
+      // It used to be given a `runner` pane instead, which the manifest has never
+      // declared, so nothing ever advanced it.
+      const fs = yield* FileSystem.FileSystem;
+      expect((yield* fs.readFileString(driverLog)).trim().split("\n")).toContain(child.id);
+      expect(
+        (yield* rig.calls()).some((c) => c.cmd === "plugin pane" && c.argv?.includes("runner")),
+      ).toBe(false);
 
       expect(run.step("next").note).toBe(`chose "Build it now" → child run ${child.id}`);
       expect(run.step("after").status).toBe("pending");

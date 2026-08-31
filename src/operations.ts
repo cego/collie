@@ -154,7 +154,12 @@ export const spawnDriver = Effect.fn("operations.spawnDriver")(function* (
     try: () =>
       Bun.spawn([command, ...rest, "herdr", "drive"], {
         cwd,
-        env: { ...env.raw, COLLIE_RUN: runId, COLLIE_CWD: cwd },
+        // The real environment first, then what herdr gave this process. `env.raw`
+        // holds only the keys env.ts reads, so passing it alone handed the Driver no
+        // PATH: every `git`, `glab` and `herdr` it runs by bare name then resolved
+        // against execvp's /bin:/usr/bin fallback only, and `shell` reads that miss as
+        // exit 127 — which the MR and diff paths cannot tell from "no GitLab here".
+        env: { ...globalThis.process.env, ...env.raw, COLLIE_RUN: runId, COLLIE_CWD: cwd },
         detached: true,
         stdin: "ignore",
         stdout: "ignore",
@@ -270,7 +275,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
  * comes back as a result rather than a failure so a caller's request receipt records
  * it, and a retry with the same request id replays it instead of trying again.
  */
-const handOver = Effect.fn("operations.handOver")(function* (env: PluginEnv, run: Run) {
+export const handOver = Effect.fn("operations.handOver")(function* (env: PluginEnv, run: Run) {
   const failure = yield* spawnDriver(env, run.id, run.record.cwd).pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(String(cause))),
