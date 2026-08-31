@@ -1,14 +1,17 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Cause, Config, Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import {
-  Argument,
-  CliConfig,
-  CliError,
-  CliOutput,
-  Command,
-  Flag,
-  GlobalFlag,
-} from "effect/unstable/cli";
+  Cause,
+  Config,
+  Console,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schema,
+  Stream,
+} from "effect";
+import { Argument, CliConfig, CliError, Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import type { PlatformError } from "effect/PlatformError";
 import {
   bodySections,
@@ -857,27 +860,17 @@ const run = Command.make("run").pipe(
 
 export const app = root.pipe(Command.withSubcommands([workflow, persona, run]));
 
-/**
- * Under `--json` the caller is a program, so anything Effect's CLI prints for a human
- * — the help document it renders on any parse failure — must not land on stdout. The
- * formatter empties the document and this moves what is left to stderr, where the
- * spec puts diagnostics: `Console.log` is the framework's only stdout channel, and
- * commands write their envelope straight to `process.stdout`. Effect's own logger
- * already uses `console.error`, so nothing else moves.
- */
 const jsonAsked = Bun.argv.includes("--json");
 /** Help was asked for, as opposed to offered because the command line was wrong. */
 const helpAsked = Bun.argv.includes("--help") || Bun.argv.includes("-h");
 
-const cliOutput = CliOutput.defaultFormatter();
-const quietHelp = CliOutput.layer({
-  formatHelpDoc: jsonAsked ? () => "" : cliOutput.formatHelpDoc,
-  formatCliError: cliOutput.formatCliError,
-  formatError: cliOutput.formatError,
-  formatErrors: cliOutput.formatErrors,
-  formatVersion: cliOutput.formatVersion,
-});
-
+/**
+ * `Console.log` is the only stdout Effect's CLI writes to — the help document it
+ * renders for any parse failure, and the version. Under `--json` that moves to
+ * stderr, where the spec puts diagnostics, leaving stdout to the envelope a command
+ * writes straight to `process.stdout`. Effect's own logger already uses
+ * `console.error`, so nothing else moves.
+ */
 const consoleToStderr = Console.Console.of({
   ...globalThis.console,
   log: (...args: ReadonlyArray<unknown>) => {
@@ -911,15 +904,14 @@ export const program = app.pipe(
       if (!parse) yield* Console.error(failure.error.message);
     }),
   ),
-  Effect.provide(quietHelp),
   Effect.provide(
     CliConfig.layer({ builtIns: [GlobalFlag.Help, GlobalFlag.Version, GlobalFlag.LogLevel] }),
   ),
-  jsonAsked ? Effect.provideService(Console.Console, consoleToStderr) : (self) => self,
+  Effect.provide(jsonAsked ? Layer.succeed(Console.Console, consoleToStderr) : Layer.empty),
 );
 
 /** What was wrong with the command line, or that it stopped short of a command. */
 function parseMessage(parse: CliError.ShowHelp): string {
   if (parse.errors.length > 0) return parse.errors.map((error) => error.message).join("; ");
-  return `${["collie", ...parse.commandPath.slice(1)].join(" ")} needs a subcommand.`.trim();
+  return `${["collie", ...parse.commandPath.slice(1)].join(" ")} needs a subcommand.`;
 }
