@@ -13,6 +13,10 @@ test:
     - bun test
     # The same script contributors run, so the local gate and CI cannot drift.
     - bun run typecheck
+    # `bun test` runs the sources; this runs the thing that actually ships, so a
+    # broken compiled entrypoint or JSON envelope cannot pass CI.
+    - bun run build
+    - bun run smoke
 
 build:
   stage: build
@@ -24,6 +28,12 @@ build:
   script:
     - bun install --frozen-lockfile
     - bun build --compile --target=bun-$TARGET --outfile collie-$TARGET src/main.ts
+    # Only the runner's own target can be executed here; the others are smoked by the
+    # test stage's native build. Nothing is uploaded until this passes.
+    - |
+      if [ "$TARGET" = "linux-x64" ]; then
+        sh tools/smoke.sh "./collie-$TARGET"
+      fi
     - |
       curl --fail --silent --show-error \
         --header "JOB-TOKEN: $CI_JOB_TOKEN" \

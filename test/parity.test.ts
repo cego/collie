@@ -145,7 +145,15 @@ const EnvelopeJson = Schema.fromJsonString(
   Schema.Struct({
     ok: Schema.Boolean,
     data: Schema.optionalKey(Schema.Struct({ runId: Schema.optionalKey(Schema.String) })),
-    error: Schema.optionalKey(Schema.Struct({ code: Schema.String, message: Schema.String })),
+    error: Schema.optionalKey(
+      Schema.Struct({
+        code: Schema.String,
+        message: Schema.String,
+        details: Schema.optionalKey(
+          Schema.Struct({ requestId: Schema.optionalKey(Schema.String) }),
+        ),
+      }),
+    ),
   }),
 );
 
@@ -363,7 +371,7 @@ effectTest("resuming through the operation and through the CLI leave the same tr
     yield* run.save();
   }
 
-  const resumed = yield* withDriver(resumeRun(pluginEnv(), board, "req-board"));
+  const resumed = yield* withDriver(resumeRun(pluginEnv(), board));
   expect(resumed.ok).toBe(true);
   expect((yield* cli(["run", "resume", command.id, "--request-id", "req-cli"])).exit).toBe(0);
 
@@ -472,3 +480,36 @@ effectTest(
     expect((yield* new RunStore(env.HERDR_PLUGIN_STATE_DIR).list()).length).toBe(1);
   },
 );
+
+effectTest("a failed mutation carries the request id it was given", function* () {
+  const path = yield* Path.Path;
+  const broken = { ...env, COLLIE_DRIVER: path.join(dir, "nope") };
+  // No --request-id: the generated one has to come back, or the caller has nothing to
+  // replay the receipt with and an ordinary retry makes a second Run.
+  const failed = yield* cliWith(broken, ["run", "start", "demo", "--input", "goal=ship"]);
+  expect(failed.body).toMatchObject({ ok: false, error: { code: "operation_failed" } });
+  const requestId = failed.body.error?.details?.requestId ?? "";
+  expect(requestId).not.toBe("");
+
+  const replay = yield* cliWith(broken, [
+    "run",
+    "start",
+    "demo",
+    "--input",
+    "goal=ship",
+    "--request-id",
+    String(requestId),
+  ]);
+  expect(replay.body).toEqual(failed.body);
+  expect((yield* new RunStore(env.HERDR_PLUGIN_STATE_DIR).list()).length).toBe(1);
+});
+
+effectTest("run wait takes both the short duration forms and Effect's own", function* () {
+  const run = yield* makeRun();
+  for (const timeout of ["50ms", "1s", "50 millis"]) {
+    const waited = yield* cli(["run", "wait", run.id, "--timeout", timeout]);
+    expect(waited.body).toMatchObject({ ok: false, error: { code: "timeout" } });
+  }
+  const bad = yield* cli(["run", "wait", run.id, "--timeout", "soon"]);
+  expect(bad.body).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+});

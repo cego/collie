@@ -176,12 +176,39 @@ const consumeInboxAnswer = Effect.fn("consumeInboxAnswer")(function* (
     const command = yield* read(InboxCommandJson, file);
     if (command?.type !== "answer" || command.choiceId !== choice.id || !isString(command.answer))
       continue;
+    // Checked against the Choice it is about to satisfy, not just its id: an empty
+    // answer dismisses a menu, and anything else has to be one of its own options.
+    if (
+      choice.kind === "menu" &&
+      command.answer !== "" &&
+      !choice.items.some((item) => item.id === command.answer)
+    )
+      continue;
     yield* fs.remove(file, { force: true });
     return choice.kind === "ask"
       ? { id: choice.id, text: command.answer }
       : { id: choice.id, choice: command.answer };
   }
   return null;
+});
+
+/**
+ * Everything the previous Driver left behind. A command is removed only by the
+ * consumer that matches it, and the SIGTERM path consumes nothing, so a stop written
+ * while a Driver was mid-Step outlived it — and the next Driver's first Choice found
+ * that stop and killed itself, which made any Workflow that asks a question
+ * unresumable. A pending Choice is stale for the same reason: the question belonged to
+ * a process that is gone. A Driver therefore starts from an empty inbox, and only
+ * commands written during its own life reach it.
+ */
+export const clearPreviousDriver = Effect.fn("clearPreviousDriver")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* clearChoice(dir);
+  const inbox = path.join(dir, "inbox");
+  if (!(yield* fs.exists(inbox))) return;
+  for (const name of (yield* fs.readDirectory(inbox)).filter((e) => e.endsWith(".json")))
+    yield* fs.remove(path.join(inbox, name), { force: true });
 });
 
 /**
@@ -253,14 +280,14 @@ const takeOverStale = Effect.fn("takeOverStale")(function* (dir: string, file: s
     (!(yield* breakStaleLock(lock)) || !(yield* tryClaimLock(lock)))
   )
     return false;
-  try {
+  // Effect.ensuring, not try/finally: a typed failure unwinds past a generator's
+  // finally without entering it, and the takeover lock would never be given back.
+  return yield* Effect.gen(function* () {
     if ((yield* liveOwner(dir)) || (yield* midWriteClaim(dir, file)) || !(yield* holdsLock(lock)))
       return false;
     yield* fs.remove(file, { force: true });
     return true;
-  } finally {
-    yield* releaseOwnLock(lock);
-  }
+  }).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
 });
 
 const midWriteClaim = Effect.fn("midWriteClaim")(function* (dir: string, file: string) {
@@ -299,6 +326,9 @@ export function filePrompts(opts: {
   pollMs?: number;
 }): EnginePrompts {
   let seq = 0;
+  // Unique per Driver, not only per Choice within one: `${run}-1` from a resumed Run
+  // would otherwise repeat an id its previous Driver had already used.
+  const epoch = Bun.randomUUIDv7().slice(0, 8);
   const wait = (choice: PendingChoice) =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
@@ -323,7 +353,7 @@ export function filePrompts(opts: {
   return {
     menu: (items, menuOpts) =>
       wait({
-        id: `${opts.run}-${++seq}`,
+        id: `${opts.run}-${epoch}-${++seq}`,
         kind: "menu",
         run: opts.run,
         step: opts.step(),
@@ -337,7 +367,7 @@ export function filePrompts(opts: {
       ),
     ask: (question) =>
       wait({
-        id: `${opts.run}-${++seq}`,
+        id: `${opts.run}-${epoch}-${++seq}`,
         kind: "ask",
         run: opts.run,
         step: opts.step(),

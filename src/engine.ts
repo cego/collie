@@ -1,9 +1,10 @@
-import { nowIso, nowMillis } from "./time";
+// Executes a Run: one tab per Step, agents started with the right Harness,
+// Model and Persona, gates and loops driven by Output files.
+
 import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
-// Executes a Run: one tab per Step, agents started with the right Harness,
-// Model and Persona, gates and loops driven by Output files.
+import { nowIso, nowMillis } from "./time";
 
 import type {
   ChoiceDef,
@@ -101,6 +102,11 @@ interface VariantOutcome {
   record: VariantRecord;
   output: YamlValue | null;
   review: ReviewOutput | null;
+}
+
+/** What a failure says for a log line, the way a caught Error used to. */
+function reason(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
 }
 
 const isString = Schema.is(Schema.String);
@@ -516,12 +522,10 @@ const runStep = Effect.fn("Engine.runStep")(function* (
   const outcomes: VariantOutcome[] = [];
   for (const [i, record] of records.entries()) {
     const key = keys[i]!;
-    try {
-      // The agent may settle before herdr reports `working`; that is not an error.
-      yield* o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 });
-    } catch {
-      /* ignore */
-    }
+    // The agent may settle before herdr reports `working`; that is not an error.
+    yield* Effect.ignore(
+      o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 }),
+    );
     yield* o.herdr.agentWait(record.agent, {
       until: ["idle", "done", "blocked"],
       timeoutMs: o.stepTimeoutMs,
@@ -826,15 +830,12 @@ const snapshotPlan = Effect.fn("Engine.snapshotPlan")(function* (o: EngineOption
   const plan = pathService.join(o.run.dir, PLAN_DIR);
   if (!(yield* fs.exists(plan))) return null;
   const before = pathService.join(o.run.dir, "steps", "plan-before", key);
-  try {
+  return yield* Effect.gen(function* () {
     yield* fs.remove(before, { recursive: true, force: true });
     yield* fs.makeDirectory(before, { recursive: true });
     yield* fs.copy(plan, before);
     return before;
-  } catch (e) {
-    yield* o.run.log(`plan snapshot: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
-  }
+  }).pipe(Effect.catch((e) => o.run.log(`plan snapshot: ${reason(e)}`).pipe(Effect.as(null))));
 });
 
 /**
@@ -913,7 +914,7 @@ const register = Effect.fn("Engine.register")(function* (
   record: VariantRecord,
 ) {
   const path = yield* registryPath(o.env.stateDir, scopeFor(o.env, o.run.record.cwd));
-  try {
+  yield* Effect.gen(function* () {
     yield* registerAgent(path, {
       role: step.persona ?? step.id,
       agent: record.agent,
@@ -924,12 +925,10 @@ const register = Effect.fn("Engine.register")(function* (
       at: yield* nowIso(),
     });
     yield* o.run.log(`registered ${record.agent} as ${step.persona ?? step.id}`);
-  } catch (e) {
+  }).pipe(
     // A register nobody can write is a hand-off nobody gets, not a failed run.
-    yield* o.run.log(
-      `register ${record.agent} failed: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
+    Effect.catch((e) => o.run.log(`register ${record.agent} failed: ${reason(e)}`)),
+  );
 });
 
 /**
@@ -939,22 +938,19 @@ const register = Effect.fn("Engine.register")(function* (
  * rendered there. Returns the tab id, or null when there is no workspace to own one.
  */
 const ensureWorkspaceTab = Effect.fn("Engine.ensureWorkspaceTab")(function* (o: EngineOptions) {
-  try {
+  return yield* Effect.gen(function* () {
     const view = yield* findOrOpenView(o);
     if (!view) return null;
     // First tab, every run: the Session's board is where `prefix+1` should land,
     // and a tab that drifts down the list is one the human stops looking at.
-    try {
-      yield* o.herdr.tabMove(view.tabId, 0);
-    } catch (e) {
-      yield* o.run.log(`workspace tab order: ${e instanceof Error ? e.message : String(e)}`);
-    }
+    yield* o.herdr
+      .tabMove(view.tabId, 0)
+      .pipe(Effect.catch((e) => o.run.log(`workspace tab order: ${reason(e)}`)));
     return view.tabId;
-  } catch (e) {
+  }).pipe(
     // Without the tab the run still runs; it just has nowhere to ask.
-    yield* o.run.log(`workspace tab: ${e instanceof Error ? e.message : String(e)}`);
-    return null;
-  }
+    Effect.catch((e) => o.run.log(`workspace tab: ${reason(e)}`).pipe(Effect.as(null))),
+  );
 });
 
 const findOrOpenView = Effect.fn("Engine.findOrOpenView")(function* (o: EngineOptions) {
@@ -1006,17 +1002,11 @@ const callAttention = Effect.fn("Engine.callAttention")(function* (
 ) {
   o.run.record.awaiting = stepId;
   yield* o.run.save();
-  try {
-    yield* o.herdr.notify(`${o.run.record.slug} needs you`, detail, "request");
-  } catch {
-    /* a missing toast must not fail the run */
-  }
+  // A missing toast must not fail the run.
+  yield* Effect.ignore(o.herdr.notify(`${o.run.record.slug} needs you`, detail, "request"));
   if (!ctx.workspaceTabId) return;
-  try {
-    yield* o.herdr.tabFocus(ctx.workspaceTabId);
-  } catch {
-    /* a tab that will not focus is still a tab the human can reach */
-  }
+  // A tab that will not focus is still a tab the human can reach.
+  yield* Effect.ignore(o.herdr.tabFocus(ctx.workspaceTabId));
 });
 
 /**
@@ -1166,15 +1156,14 @@ const awaitOutput = Effect.fn("Engine.awaitOutput")(function* (
   yield* o.out(`  ⏸ ${agent} is waiting for you in its tab`);
   o.run.record.awaiting = stepId;
   yield* o.run.save();
-  try {
-    yield* o.herdr.notify(
+  // A missing toast must not fail the run.
+  yield* Effect.ignore(
+    o.herdr.notify(
       `${o.run.record.slug} needs you`,
       `${stepId}: answer the agent in its tab`,
       "request",
-    );
-  } catch {
-    /* a missing toast must not fail the run */
-  }
+    ),
+  );
   const poll = o.outputPollMs ?? 2000;
   const deadline = (yield* nowMillis()) + budget;
   while (!(yield* fs.exists(path)) && (yield* nowMillis()) < deadline) {
@@ -1283,12 +1272,11 @@ const freeTabName = Effect.fn("Engine.freeTabName")(function* (
 ) {
   const plain = ctx.tabNames.size === 0 ? o.run.record.workflow : step.id;
   let taken: string[] = [];
-  try {
-    taken = (yield* o.herdr.tabList()).map((t) => tabNameOf(t.label));
-  } catch (e) {
-    // Without the list a plain name is the better guess than a decorated one.
-    yield* o.run.log(`tab names: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  // Without the list a plain name is the better guess than a decorated one.
+  taken = yield* o.herdr.tabList().pipe(
+    Effect.map((tabs) => tabs.map((t) => tabNameOf(t.label))),
+    Effect.catch((e) => o.run.log(`tab names: ${reason(e)}`).pipe(Effect.as(taken))),
+  );
   // Compared as a human reads them, so the capitalisation cannot hide a collision.
   if (!taken.includes(displayName(plain))) return plain;
   return disambiguate(plain, runTarget(o.wf, o.run.record));
@@ -1560,12 +1548,10 @@ const setView = Effect.fn("Engine.setView")(function* (
   source: string,
   panes: string[],
 ) {
-  try {
-    yield* o.herdr.agentViewSet(source, o.run.record.slug, panes);
-  } catch (e) {
-    // A filtered sidebar is a nicety; losing it must not fail the run.
-    yield* o.run.log(`agent.view.set failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  // A filtered sidebar is a nicety; losing it must not fail the run.
+  yield* o.herdr
+    .agentViewSet(source, o.run.record.slug, panes)
+    .pipe(Effect.catch((e) => o.run.log(`agent.view.set failed: ${reason(e)}`)));
 });
 
 const finish = Effect.fn("Engine.finish")(function* (
@@ -1582,21 +1568,17 @@ const finish = Effect.fn("Engine.finish")(function* (
   yield* run.save();
   yield* out("");
   yield* out(run.record.summary);
-  try {
-    yield* o.herdr.agentViewClear(viewSource);
-  } catch {
-    /* the sidebar filter is a nicety */
-  }
+  // The sidebar filter is a nicety.
+  yield* Effect.ignore(o.herdr.agentViewClear(viewSource));
   const title = status === "done" ? `${run.record.slug} finished` : `${run.record.slug} ${status}`;
-  try {
-    yield* o.herdr.notify(
+  // A missing toast must not fail the run.
+  yield* Effect.ignore(
+    o.herdr.notify(
       title,
       detail ?? run.record.summary.split("\n")[0],
       status === "done" ? "done" : "request",
-    );
-  } catch {
-    /* a missing toast must not fail the run */
-  }
+    ),
+  );
   return status;
 });
 

@@ -1,8 +1,8 @@
-import { nowIso, nowMillis } from "./time";
 // What each plugin action does. Actions have no tty, so they only open a pane;
 // the interactive work happens in the `picker` and `runner` pane entrypoints.
 
 import { Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { nowIso, nowMillis } from "./time";
 import { loadDefaults } from "./config";
 import {
   bodySections,
@@ -33,6 +33,7 @@ import { Run, RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
 import {
   acquireDriver,
+  clearPreviousDriver,
   appendProgress,
   driverAlive,
   filePrompts,
@@ -64,6 +65,11 @@ export interface ControlSession extends Omit<Session, "herdr"> {
 }
 
 export type Mode = "pick" | "resume" | "fork";
+
+/** What a failure says in a board line, the way a caught Error used to. */
+function reason(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
 
 const ProblemDetails = Schema.Struct({ problems: Schema.Array(Schema.String) });
 
@@ -158,11 +164,8 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
     note: line,
   });
   if (!(started instanceof Run)) return yield* bail(started.error.message);
-  try {
-    yield* herdr.popupClose();
-  } catch {
-    // Only a popup can close itself; running the picker in a plain pane is fine.
-  }
+  // Only a popup can close itself; running the picker in a plain pane is fine..
+  yield* Effect.ignore(herdr.popupClose());
   return 0;
 });
 
@@ -304,13 +307,10 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (herdr: Herdr,
   if (!chosen) return 0;
 
   const run = yield* store.load(chosen.id);
-  const resumed = yield* resumeRun(env, run, yield* newRequestId());
+  const resumed = yield* resumeRun(env, run);
   if (!resumed.ok) return yield* bail(`${run.record.slug}: ${resumed.error.message}`);
-  try {
-    yield* herdr.popupClose();
-  } catch {
-    // Only a popup can close itself; running the picker in a plain pane is fine.
-  }
+  // Only a popup can close itself; running the picker in a plain pane is fine..
+  yield* Effect.ignore(herdr.popupClose());
   return 0;
 });
 
@@ -360,6 +360,9 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
     yield* out("a driver is already running this run; this one is stopping");
     return 1;
   }
+  // This Driver owns the Run now, so nothing the last one left in the run dir is
+  // addressed to it.
+  yield* clearPreviousDriver(run.dir);
 
   const markStopped = Effect.gen(function* () {
     const stoppedAt = yield* nowIso();
@@ -372,56 +375,57 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
     return 0;
   });
 
-  try {
-    return yield* Effect.raceFirst(
-      Effect.gen(function* () {
-        const defs = yield* loadDefinitions(yield* layers({ ...env, cwd: run.record.cwd }));
-        const defaults = yield* loadDefaults(env.configDir);
-        const wf = resolveWorkflow(run.record.workflow, defs, defaults);
-        yield* out(`${wf.title}`);
-        const prompts = filePrompts({
-          dir: run.dir,
-          run: run.id,
-          step: () => run.record.steps.find((st) => st.status === "running")?.id ?? "",
-          timeoutMs: defaults.handoffTimeoutMs,
-        });
+  // Effect.catch and Effect.ensuring, not try/catch/finally: a typed failure out of
+  // executeRun unwinds past both without entering either, which left the Run marked
+  // `running` with no Driver, nothing in the log, and `collie run wait` blocking to
+  // its timeout — with the ownership claim never given back.
+  return yield* Effect.raceFirst(
+    Effect.gen(function* () {
+      const defs = yield* loadDefinitions(yield* layers({ ...env, cwd: run.record.cwd }));
+      const defaults = yield* loadDefaults(env.configDir);
+      const wf = resolveWorkflow(run.record.workflow, defs, defaults);
+      yield* out(`${wf.title}`);
+      const prompts = filePrompts({
+        dir: run.dir,
+        run: run.id,
+        step: () => run.record.steps.find((st) => st.status === "running")?.id ?? "",
+        timeoutMs: defaults.handoffTimeoutMs,
+      });
 
-        const status = yield* executeRun({
-          herdr,
-          defs,
-          defaults,
-          wf,
-          run,
-          env,
-          out,
-          handoffTimeoutMs: defaults.handoffTimeoutMs,
-          // Every question this run asks goes through the run dir to the Control Plane.
-          prompts,
-        });
-        return status === "done" ? 0 : 1;
+      const status = yield* executeRun({
+        herdr,
+        defs,
+        defaults,
+        wf,
+        run,
+        env,
+        out,
+        handoffTimeoutMs: defaults.handoffTimeoutMs,
+        // Every question this run asks goes through the run dir to the Control Plane.
+        prompts,
+      });
+      return status === "done" ? 0 : 1;
+    }),
+    sigterm.pipe(Effect.andThen(markStopped)),
+  ).pipe(
+    Effect.catch((cause) =>
+      Effect.gen(function* () {
+        // Nobody is watching a pane for this, so the only useful place is the log.
+        const detail = cause instanceof Error ? (cause.stack ?? cause.message) : String(cause);
+        yield* out(`the driver stopped: ${detail.split("\n")[0]}`);
+        yield* run.log(`driver failed: ${detail}`);
+        run.record.status = "failed";
+        run.record.finished_at = yield* nowIso();
+        yield* run.save();
+        // A missing toast must not be the last word.
+        yield* Effect.ignore(
+          herdr.notify(`${run.record.slug} failed`, `see ${RUNNER_LOG} in the run dir`, "request"),
+        );
+        return 1;
       }),
-      sigterm.pipe(Effect.andThen(markStopped)),
-    );
-  } catch (e) {
-    // Nobody is watching a pane for this, so the only useful place is the log.
-    const detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
-    yield* out(`the driver stopped: ${detail.split("\n")[0]}`);
-    yield* run.log(`driver failed: ${detail}`);
-    run.record.status = "failed";
-    yield* run.save();
-    try {
-      yield* herdr.notify(
-        `${run.record.slug} failed`,
-        `see ${RUNNER_LOG} in the run dir`,
-        "request",
-      );
-    } catch {
-      /* a missing toast must not be the last word */
-    }
-    return 1;
-  } finally {
-    yield* releaseDriver(run.dir);
-  }
+    ),
+    Effect.ensuring(releaseDriver(run.dir).pipe(Effect.ignore)),
+  );
 });
 
 /** How often the tab re-reads the files and asks herdr what is still alive. */
@@ -505,21 +509,17 @@ const announce = Effect.fn("Flows.announce")(function* (
   env: PluginEnv,
   waiting: RunRow,
 ) {
-  try {
-    yield* herdr.notify(
+  // A missing toast must not stop the question being asked.
+  yield* Effect.ignore(
+    herdr.notify(
       `${waiting.title} needs you`,
       `${waiting.choice?.step}: pick what happens next`,
       "request",
-    );
-  } catch {
-    /* a missing toast must not stop the question being asked */
-  }
+    ),
+  );
   if (!env.tabId) return;
-  try {
-    yield* herdr.tabFocus(env.tabId);
-  } catch {
-    /* a tab that will not focus is still a tab the human can reach */
-  }
+  // A tab that will not focus is still a tab the human can reach.
+  yield* Effect.ignore(herdr.tabFocus(env.tabId));
 });
 
 /** One keypress against a pending question; the answer goes back to the run dir. */
@@ -587,21 +587,17 @@ const act = Effect.fn("Flows.act")(function* (
   if (/^[1-9]$/.test(key)) {
     const agent = agentForKey(view, key);
     if (!agent) return null;
-    try {
-      yield* session.herdr.agentFocus(agent.agent);
-      return `focused ${agent.name} (${agent.agent})`;
-    } catch (e) {
-      return `${agent.agent}: ${e instanceof Error ? e.message : String(e)}`;
-    }
+    return yield* session.herdr.agentFocus(agent.agent).pipe(
+      Effect.as(`focused ${agent.name} (${agent.agent})`),
+      Effect.catch((cause) => Effect.succeed(`${agent.agent}: ${reason(cause)}`)),
+    );
   }
   const mode = key === "p" ? "pick" : key === "u" ? "resume" : key === "f" ? "fork" : null;
   if (mode) {
-    try {
-      yield* open(mode);
-      return null;
-    } catch (e) {
-      return `${mode}: ${e instanceof Error ? e.message : String(e)}`;
-    }
+    return yield* open(mode).pipe(
+      Effect.as(null),
+      Effect.catch((cause) => Effect.succeed(`${mode}: ${reason(cause)}`)),
+    );
   }
   if (key === "s") return (yield* sendReviewToImplementer(session)).message;
   if (key === "l") return yield* openLog(session, view);
@@ -643,7 +639,7 @@ export const openLog = Effect.fn("Flows.openLog")(function* (
   const run = view.active[0] ?? view.recent[0];
   if (!run) return "no run here to open a log for";
   const path = `${run.dir}/${RUNNER_LOG}`;
-  try {
+  return yield* Effect.gen(function* () {
     const pane = yield* session.herdr.paneSplit({
       paneId: session.paneId ?? "",
       direction: "down",
@@ -653,9 +649,7 @@ export const openLog = Effect.fn("Flows.openLog")(function* (
     // state dir are path characters here, not syntax.
     yield* session.herdr.paneRun(pane, `less +G ${shellQuote(path)}`);
     return `opened ${run.title}'s log`;
-  } catch (e) {
-    return `${path}: ${e instanceof Error ? e.message : String(e)}`;
-  }
+  }).pipe(Effect.catch((cause) => Effect.succeed(`${path}: ${reason(cause)}`)));
 });
 
 interface LiveWorkspace {

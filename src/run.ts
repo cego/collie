@@ -495,7 +495,9 @@ const nextSeqRun = Effect.fn("RunStore.nextSeq")(function* (store: RunStore) {
   // Contention here is momentary — another start incrementing the same counter — so
   // it is worth waiting out rather than failing the start.
   yield* claim.pipe(Effect.retry({ times: 40, schedule: Schedule.spaced("25 millis") }));
-  try {
+  // Effect.ensuring, not try/finally: a typed failure unwinds past a generator's
+  // finally without entering it, and the counter would stay locked for ten seconds.
+  return yield* Effect.gen(function* () {
     const current = yield* fs.readFileString(seqPath).pipe(
       Effect.map((x) => Number.parseInt(x.trim(), 10)),
       Effect.catch(() => Effect.succeed(0)),
@@ -503,9 +505,7 @@ const nextSeqRun = Effect.fn("RunStore.nextSeq")(function* (store: RunStore) {
     const next = Number.isFinite(current) ? current + 1 : 1;
     yield* fs.writeFileString(seqPath, String(next));
     return next;
-  } finally {
-    yield* releaseOwnLock(lock);
-  }
+  }).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
 });
 
 const appendHandoffRun = Effect.fn("RunStore.appendHandoff")(function* (

@@ -1,4 +1,9 @@
-import { dateFromMillis, nowIso, nowMillis } from "../src/time";
+import { DateTime } from "effect";
+import { nowIso, nowMillis } from "../src/time";
+
+/** A Date this far back, without reaching for the global clock. */
+const dateFromMillis = (milliseconds: number) =>
+  DateTime.toDateUtc(DateTime.makeUnsafe(milliseconds));
 import type { BunServices } from "@effect/platform-bun";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
@@ -29,6 +34,7 @@ import {
   lastProgress,
   readChoice,
   readProgress,
+  clearPreviousDriver,
   releaseDriver,
   RUNNER_LOG,
   RUNNER_PID,
@@ -895,3 +901,42 @@ effectTest(
     yield* releaseDriver(run.dir);
   },
 );
+
+effectTest("a fresh Driver ignores what the last one left in the run dir", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const run = yield* new RunStore(rig.stateDir).create({
+    workflow: "plan",
+    cwd: rig.projectDir,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["next"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+
+  // What a stop against a mid-Step Run leaves: the command is written before the
+  // signal, and the SIGTERM path consumes nothing. Plus the dead Driver's question.
+  const inbox = path.join(run.dir, "inbox");
+  yield* fs.makeDirectory(inbox, { recursive: true });
+  yield* fs.writeFileString(
+    path.join(inbox, "old-stop.json"),
+    `${JSON.stringify({ type: "stop", requestId: "old-stop" })}\n`,
+  );
+  yield* writeChoice(run.dir, {
+    id: `${run.id}-1`,
+    kind: "menu",
+    run: run.id,
+    step: "next",
+    header: "h",
+    footer: "f",
+    items: [{ id: "one", title: "One" }],
+  });
+
+  yield* clearPreviousDriver(run.dir);
+
+  // Left in place, that stop would have made the next Driver kill itself at its first
+  // Choice, so any Workflow that asks a question would never resume.
+  expect(yield* fs.readDirectory(inbox)).toEqual([]);
+  expect(yield* readChoice(run.dir)).toBeNull();
+});

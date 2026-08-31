@@ -2,6 +2,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import {
   Cause,
   Config,
+  Duration,
   Console,
   Effect,
   FileSystem,
@@ -221,8 +222,17 @@ const readReceipt = Effect.fn("collie.readReceipt")(function* (file: string) {
   return yield* Schema.decodeUnknownEffect(ResultBoundaryJson)(yield* fs.readFileString(file));
 });
 
+/**
+ * The request id a caller can replay with. A receipt is written for a failure too, so
+ * a failure that omits the id leaves the caller nothing to retry with but a fresh one
+ * — which is a second Run, not a retry.
+ */
 function withRequestId(result: Result, id: string): Result {
-  if (!result.ok) return result;
+  if (!result.ok)
+    return err(result.error.code, result.error.message, {
+      ...result.error.details,
+      requestId: id,
+    });
   const data = Option.getOrElse(Schema.decodeUnknownOption(YamlMapSchema)(result.data), () => ({}));
   return { ...result, data: { ...data, requestId: id } };
 }
@@ -247,16 +257,16 @@ const mutation = Effect.fn("collie.mutation")(function* (
     if (yield* fs.exists(path)) return yield* readReceipt(path);
     return err("operation_failed", `Request "${id}" is already in progress.`, { requestId: id });
   }
-  try {
+  // Effect.ensuring, not try/finally: a typed failure out of `apply` unwinds past a
+  // generator's finally without entering it, and the lock would outlive the request.
+  return yield* Effect.gen(function* () {
     const result = yield* apply(id);
     const withRequest = withRequestId(result, id);
     const tmp = `${path}.${yield* pid}.tmp`;
     yield* fs.writeFileString(tmp, `${Schema.encodeSync(ResultBoundaryJson)(withRequest)}\n`);
     yield* fs.rename(tmp, path);
     return withRequest;
-  } finally {
-    yield* releaseOwnLock(lock);
-  }
+  }).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
 });
 
 const layerDir = Effect.fn("collie.layerDir")(function* (
@@ -293,8 +303,14 @@ const parseInput = Effect.fn("collie.parseInput")(function* (
 
 const root = Command.make("collie").pipe(
   Command.withSharedFlags({
-    workspace: Flag.string("workspace").pipe(Flag.optional),
-    json: Flag.boolean("json").pipe(Flag.withDefault(false)),
+    workspace: Flag.string("workspace").pipe(
+      Flag.withDescription("Scope to this herdr workspace id"),
+      Flag.optional,
+    ),
+    json: Flag.boolean("json").pipe(
+      Flag.withDescription("Emit one machine-readable envelope instead of text"),
+      Flag.withDefault(false),
+    ),
   }),
   Command.withDescription("Discover and run Collie workflows"),
 );
@@ -321,7 +337,7 @@ const workflowList = Command.make("list", {}, () =>
       global.json,
     );
   }),
-);
+).pipe(Command.withDescription("List every Workflow, with its Inputs and the Layer it came from"));
 
 const workflowShow = Command.make(
   "show",
@@ -345,7 +361,7 @@ const workflowShow = Command.make(
         global.json,
       );
     }),
-);
+).pipe(Command.withDescription("Show one Workflow: its Steps, its Inputs and where it is defined"));
 
 const forkFlags = {
   layer: Flag.choice("layer", ["user", "project"]),
@@ -411,9 +427,10 @@ const workflowFork = Command.make(
         global.json,
       );
     }),
-);
+).pipe(Command.withDescription("Copy or extend a Workflow into your user or project Layer"));
 
 const workflow = Command.make("workflow").pipe(
+  Command.withDescription("Inspect and fork Workflows"),
   Command.withSubcommands([workflowList, workflowShow, workflowFork]),
 );
 
@@ -439,7 +456,7 @@ const personaList = Command.make("list", {}, () =>
       global.json,
     );
   }),
-);
+).pipe(Command.withDescription("List every Persona and the Layer it came from"));
 
 const personaShow = Command.make("show", { persona: Argument.string("persona") }, ({ persona }) =>
   Effect.gen(function* () {
@@ -460,7 +477,7 @@ const personaShow = Command.make("show", { persona: Argument.string("persona") }
       global.json,
     );
   }),
-);
+).pipe(Command.withDescription("Show one Persona's instructions and where it is defined"));
 
 const personaFork = Command.make(
   "fork",
@@ -502,9 +519,10 @@ const personaFork = Command.make(
         global.json,
       );
     }),
-);
+).pipe(Command.withDescription("Copy a Persona into your user or project Layer"));
 
 const persona = Command.make("persona").pipe(
+  Command.withDescription("Inspect and fork Personas"),
   Command.withSubcommands([personaList, personaShow, personaFork]),
 );
 
@@ -521,12 +539,17 @@ const runStart = Command.make(
       const global = yield* root;
       yield* attempt(
         Effect.gen(function* () {
-          const resolved = yield* context(global, (yield* selected(global)) !== null);
-          if ("ok" in resolved) return resolved;
+          const base = yield* context(global, false);
+          if ("ok" in base) return base;
           const explicit = yield* parseInput(input, inputsJson);
           if (!explicit.ok) return explicit.error;
-          return yield* mutation(resolved.env, "run-start", request, (_id) =>
+          return yield* mutation(base.env, "run-start", request, (_id) =>
             Effect.gen(function* () {
+              // The live workspace is resolved inside the mutation, so replaying a
+              // receipt returns what was recorded rather than needing that workspace
+              // to still be open. Only a start that is actually happening needs it.
+              const resolved = yield* context(global, (yield* selected(global)) !== null);
+              if ("ok" in resolved) return resolved;
               const prepared = yield* prepareWorkflow(resolved.env, workflow);
               if (!prepared.ok) return prepared;
               const wf = prepared.workflow;
@@ -573,7 +596,7 @@ const runStart = Command.make(
         global.json,
       );
     }),
-);
+).pipe(Command.withDescription("Start a Workflow and return the new Run's id"));
 
 const runList = Command.make("list", {}, () =>
   Effect.gen(function* () {
@@ -612,9 +635,14 @@ const runList = Command.make("list", {}, () =>
       global.json,
     );
   }),
-);
+).pipe(Command.withDescription("List Runs in the selected workspace, or everywhere without one"));
 
 function runLookup(command: "show" | "logs" | "output") {
+  const described = {
+    show: "Show one Run: its state, its Inputs, its Steps and any pending Choice",
+    logs: "Print what the Run's Driver recorded",
+    output: "Print every Output the Run's Steps have written",
+  }[command];
   return Command.make(command, { runId: Argument.string("run-id") }, ({ runId }) =>
     Effect.gen(function* () {
       const global = yield* root;
@@ -668,7 +696,7 @@ function runLookup(command: "show" | "logs" | "output") {
         global.json,
       );
     }),
-  );
+  ).pipe(Command.withDescription(described));
 }
 
 const runShow = runLookup("show");
@@ -677,13 +705,22 @@ const runOutput = runLookup("output");
 
 type ParsedTimeout = { ok: true; ms: number | null } | { ok: false; error: Result };
 
+/**
+ * A duration, in the short forms this flag has always taken (`30`, `30s`, `500ms`,
+ * `2m`) or in the form the rest of this codebase writes (`"25 millis"`, `"2 minutes"`),
+ * which Effect parses itself. The short forms stay because they are what the flag has
+ * accepted; Effect's are added because they are what a reader of this code expects.
+ */
 function parseTimeout(value: Option.Option<string>): ParsedTimeout {
   if (Option.isNone(value)) return { ok: true, ms: null };
-  const match = /^(\d+(?:\.\d+)?)(ms|s|m)?$/.exec(value.value);
-  if (!match)
-    return { ok: false, error: err("invalid_input", `Invalid timeout "${value.value}".`) };
-  const factor = match[2] === "m" ? 60_000 : match[2] === "ms" ? 1 : 1_000;
-  return { ok: true, ms: Number(match[1]) * factor };
+  const short = /^(\d+(?:\.\d+)?)(ms|s|m)?$/.exec(value.value);
+  if (short) {
+    const factor = short[2] === "m" ? 60_000 : short[2] === "ms" ? 1 : 1_000;
+    return { ok: true, ms: Number(short[1]) * factor };
+  }
+  const spelled = Schema.decodeUnknownOption(Schema.DurationFromString)(value.value);
+  if (Option.isSome(spelled)) return { ok: true, ms: Duration.toMillis(spelled.value) };
+  return { ok: false, error: err("invalid_input", `Invalid timeout "${value.value}".`) };
 }
 
 const runWait = Command.make(
@@ -783,7 +820,7 @@ const runWait = Command.make(
         global.json,
       );
     }),
-);
+).pipe(Command.withDescription("Wait for a Run to finish, optionally following its progress"));
 
 function runCommandMutation(
   kind: "answer" | "stop" | "resume",
@@ -812,7 +849,7 @@ function runCommandMutation(
                 id,
               );
             }
-            return yield* resumeRun(resolved.env, found, id);
+            return yield* resumeRun(resolved.env, found);
           }),
         );
       }),
@@ -829,9 +866,13 @@ const runAnswer = Command.make(
     requestId: Flag.string("request-id").pipe(Flag.optional),
   },
   ({ runId, answer, requestId }) => runCommandMutation("answer", runId, answer, requestId),
-);
+).pipe(Command.withDescription("Answer the Choice a waiting Run is asking"));
 
 function runStatusMutation(kind: "stop" | "resume") {
+  const described =
+    kind === "stop"
+      ? "Stop a Run and close only the panes it owns"
+      : "Start a fresh Driver for a Run, skipping the Steps that finished";
   return Command.make(
     kind,
     {
@@ -839,12 +880,13 @@ function runStatusMutation(kind: "stop" | "resume") {
       requestId: Flag.string("request-id").pipe(Flag.optional),
     },
     ({ runId, requestId }) => runCommandMutation(kind, runId, undefined, requestId),
-  );
+  ).pipe(Command.withDescription(described));
 }
 
 const runStop = runStatusMutation("stop");
 const runResume = runStatusMutation("resume");
 const run = Command.make("run").pipe(
+  Command.withDescription("Start Runs and follow, answer, stop or resume them"),
   Command.withSubcommands([
     runStart,
     runList,

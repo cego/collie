@@ -383,12 +383,12 @@ export const stopRun = Effect.fn("operations.stopRun")(function* (
  * the first writes its ownership claim, and the Driver's own `acquireDriver` is what
  * stops that one from driving; closing that window needs the resumer to hand the
  * child a claim it adopts, which is a protocol change, not a lock.
+ *
+ * Unlike a stop this writes no inbox command. A stop has a Driver to hand it to; a
+ * resume runs only when none is alive, so a command in the inbox would have no reader
+ * but the Driver this call is about to start, which does not need telling.
  */
-export const resumeRun = Effect.fn("operations.resumeRun")(function* (
-  env: PluginEnv,
-  run: Run,
-  requestId: string,
-) {
+export const resumeRun = Effect.fn("operations.resumeRun")(function* (env: PluginEnv, run: Run) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   // driverAlive is a look, not a claim. Two resumes could both find no owner, both
@@ -402,7 +402,9 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
     return yield* Effect.fail(new Error(`another resume of run "${run.id}" is in progress`));
   });
   yield* claim.pipe(Effect.retry({ times: 40, schedule: Schedule.spaced("25 millis") }));
-  try {
+  // Effect.ensuring, not try/finally: a typed failure unwinds past a generator's
+  // finally without entering it, and the Run would stay locked against resuming.
+  return yield* Effect.gen(function* () {
     if (yield* driverAlive(run.dir))
       return err("run_already_active", `Run "${run.id}" is already active.`);
     if ((yield* runStatus(run)) === "succeeded")
@@ -412,11 +414,17 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
     run.record.status = "running";
     run.record.finished_at = null;
     yield* run.save();
-    yield* writeInbox(run.dir, { type: "resume", requestId });
     const undriven = yield* handOver(env, run);
-    if (undriven) return undriven.result;
+    if (undriven) {
+      // The reset has already happened and the stop marker is already gone, so a Run
+      // left `running` here would be strictly worse off than before it was resumed:
+      // reported as advancing, driven by nobody, with nothing terminal to wait for.
+      yield* run.log(`driver did not start: ${undriven.why}`);
+      run.record.status = "failed";
+      run.record.finished_at = yield* nowIso();
+      yield* run.save();
+      return undriven.result;
+    }
     return ok({ runId: run.id, status: "running" }, `Resumed run ${run.id}.`);
-  } finally {
-    yield* releaseOwnLock(lock);
-  }
+  }).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
 });
