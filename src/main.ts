@@ -1,7 +1,6 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Config, Console, Effect, FileSystem, Path, type PlatformError } from "effect";
-import { app } from "./collie";
-import { CliConfig, Command, GlobalFlag } from "effect/unstable/cli";
+import { program } from "./collie";
 import { currentEnv } from "./env";
 import { Herdr, HerdrError } from "./herdr";
 import { driveFlow, forkFlow, openPicker, pickFlow, resumeFlow, workspaceFlow } from "./flows";
@@ -59,13 +58,9 @@ const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
   Effect.provide(BunServices.layer),
 );
 
-const cliProgram = app.pipe(
-  Command.run({ version: "0.0.1" }),
-  Effect.provide(
-    CliConfig.layer({ builtIns: [GlobalFlag.Help, GlobalFlag.Version, GlobalFlag.LogLevel] }),
-  ),
-  Effect.provide(BunServices.layer),
-);
+// `program`, not `app`: the handler around it is what turns a parse failure into one
+// JSON envelope and exit 2, and running `app` bare bypassed it entirely.
+const cliProgram = program.pipe(Effect.provide(BunServices.layer));
 
 BunRuntime.runMain(args[0] === "herdr" ? herdrProgram : cliProgram, {
   disableErrorReporting: true,

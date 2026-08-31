@@ -1,6 +1,14 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Config, Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
-import { Argument, CliConfig, Command, Flag, GlobalFlag } from "effect/unstable/cli";
+import { Config, Console, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import {
+  Argument,
+  CliConfig,
+  CliError,
+  CliOutput,
+  Command,
+  Flag,
+  GlobalFlag,
+} from "effect/unstable/cli";
 import type { PlatformError } from "effect/PlatformError";
 import {
   bodySections,
@@ -200,9 +208,10 @@ const receiptPath = Effect.fn("collie.receiptPath")(function* (
   return path.join(env.stateDir, "requests", operation, `${encodeURIComponent(id)}.json`);
 });
 
+/** A receipt this version cannot read is a failure to report, never a defect to die on. */
 const readReceipt = Effect.fn("collie.readReceipt")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  return Schema.decodeUnknownSync(ResultBoundaryJson)(yield* fs.readFileString(file));
+  return yield* Schema.decodeUnknownEffect(ResultBoundaryJson)(yield* fs.readFileString(file));
 });
 
 function withRequestId(result: Result, id: string): Result {
@@ -622,16 +631,24 @@ function runLookup(command: "show" | "logs" | "output") {
           }
           const fs = yield* FileSystem.FileSystem;
           const pathSvc = yield* Path.Path;
-          const outputs: Array<{ path: string; value: unknown }> = [];
+          const outputs: Array<{ path: string; value?: unknown; error?: string }> = [];
           for (const variant of found.record.steps.flatMap((step) => step.variants)) {
-            if (!variant.output) continue;
-            const path = pathSvc.resolve(found.dir, variant.output);
-            if (!path.startsWith(`${pathSvc.resolve(found.dir)}/`))
+            const relative = variant.output;
+            if (!relative) continue;
+            const file = pathSvc.resolve(found.dir, relative);
+            if (!file.startsWith(`${pathSvc.resolve(found.dir)}/`))
               return err("invalid_state", `Run "${runId}" has an unsafe Output path.`);
-            outputs.push({
-              path: variant.output,
-              value: Schema.decodeUnknownSync(UnknownJson)(yield* fs.readFileString(path)),
-            });
+            // A Step that blocked has its Output path recorded with no file at it, and
+            // an agent may write prose where JSON was asked for. The engine records
+            // both deliberately, so neither may cost the caller the Outputs that did
+            // land: each entry says what is there, and the command still succeeds.
+            outputs.push(
+              yield* fs.readFileString(file).pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(UnknownJson)),
+                Effect.map((value) => ({ path: relative, value })),
+                Effect.catch((cause) => Effect.succeed({ path: relative, error: String(cause) })),
+              ),
+            );
           }
           return {
             ok: true,
@@ -680,47 +697,51 @@ const runWait = Command.make(
       const { ms } = timeoutResult;
 
       let progressCount = 0;
+      let sentSnapshot = false;
       const emit = Effect.fn("collie.runWait.emit")(function* () {
         const fresh = yield* readRun(resolved.env, runId, workspace);
         if (!(fresh instanceof Run)) return true;
         const snapshot = yield* runData(fresh);
         const freshStatus = yield* runStatus(fresh);
+        const terminal = ["succeeded", "failed", "stopped"].includes(freshStatus);
         if (follow) {
-          if (progressCount === 0)
+          // Once, not once per event: a Run with no progress yet leaves progressCount
+          // at zero however many times its directory is touched.
+          if (!sentSnapshot) {
+            sentSnapshot = true;
             process.stdout.write(
               `${global.json ? Schema.encodeSync(UnknownJson)({ type: "snapshot", run: snapshot }) : `${fresh.id}: ${freshStatus}`}\n`,
             );
+          }
           const progress = (yield* readProgress(fresh.dir)).slice(progressCount);
           progressCount += progress.length;
           for (const event of progress)
             process.stdout.write(
               `${global.json ? Schema.encodeSync(UnknownJson)({ type: "progress", runId, ...event }) : event.text}\n`,
             );
-          if (["succeeded", "failed", "stopped"].includes(freshStatus)) {
+          if (terminal) {
             process.stdout.write(
               `${global.json ? Schema.encodeSync(UnknownJson)({ type: "terminal", run: snapshot }) : `${fresh.id}: ${freshStatus}`}\n`,
             );
           }
         }
-        return ["succeeded", "failed", "stopped"].includes(freshStatus);
+        return terminal;
       });
-      if (yield* emit()) {
-        if (!follow)
-          yield* printResult(
-            {
-              ok: true,
-              data: { run: yield* runData(found) },
-              human: `${found.id}: ${yield* runStatus(found)}`,
-            },
-            global.json,
-          );
-        return;
-      }
+
       const fs = yield* FileSystem.FileSystem;
-      const wait = fs
-        .watch(found.dir)
-        .pipe(Stream.runForEachWhile(() => emit().pipe(Effect.map((done) => !done))));
-      const bounded = ms === null ? wait : wait.pipe(Effect.timeout(ms));
+      /**
+       * The watch is subscribed before the first read, not after it. Reading first
+       * left a gap: a Run reaching a terminal state in it wrote the only event that
+       * would ever arrive, and the command then waited for another one forever.
+       */
+      const watched = Effect.gen(function* () {
+        const events = yield* Stream.toQueue(fs.watch(found.dir), { capacity: "unbounded" });
+        if (yield* emit()) return;
+        yield* Stream.fromQueue(events).pipe(
+          Stream.runForEachWhile(() => emit().pipe(Effect.map((done) => !done))),
+        );
+      }).pipe(Effect.scoped);
+      const bounded = ms === null ? watched : watched.pipe(Effect.timeout(ms));
       yield* bounded.pipe(
         Effect.catch((cause) =>
           Effect.sync(() => {
@@ -776,10 +797,9 @@ function runCommandMutation(
                 new Herdr(resolved.env),
                 found,
                 scopeFor(resolved.env, found.record.cwd),
-                id,
               );
             }
-            return yield* resumeRun(resolved.env, found, id);
+            return yield* resumeRun(resolved.env, found);
           }),
         );
       }),
@@ -827,27 +847,48 @@ const run = Command.make("run").pipe(
 
 export const app = root.pipe(Command.withSubcommands([workflow, persona, run]));
 
+/**
+ * Under `--json` the caller is a program, so the help document Effect's CLI renders on
+ * stdout for a parse failure is noise that breaks the one-value contract. The
+ * formatter decides what that document contains, so this is where it is silenced;
+ * human invocations keep it.
+ */
+const jsonAsked = Bun.argv.includes("--json");
+const cliOutput = CliOutput.defaultFormatter();
+const quietHelp = CliOutput.layer({
+  formatHelpDoc: jsonAsked ? () => "" : cliOutput.formatHelpDoc,
+  formatCliError: cliOutput.formatCliError,
+  formatError: cliOutput.formatError,
+  formatErrors: cliOutput.formatErrors,
+  formatVersion: cliOutput.formatVersion,
+});
+
+const isShowHelp = Schema.is(CliError.ShowHelp);
+
+/**
+ * Everything a command handler did not catch, which is a parse failure or a defect.
+ *
+ * A parse failure is invalid input: exit 2, and under `--json` one envelope carrying
+ * what Effect's CLI would otherwise only render for a human. In human mode it has
+ * already printed the help and the reason itself, so this only sets the status. An
+ * explicit `--help` arrives as a ShowHelp with no errors and is nobody's failure.
+ */
 export const program = app.pipe(
   Command.run({ version: "0.0.1" }),
   Effect.catch((cause) =>
     Effect.gen(function* () {
-      const stdio = yield* Stdio.Stdio;
-      const args = yield* stdio.args;
-      yield* Effect.sync(() => {
-        process.exitCode = 2;
-        if (args.includes("--json")) {
-          const error = ExpectedError.make({
-            code: "invalid_input",
-            message: String(cause),
-            details: {},
-          });
-          process.stdout.write(`${Schema.encodeSync(ResultJson)({ ok: false, error })}\n`);
-        } else {
-          process.stderr.write(`${String(cause)}\n`);
-        }
-      });
+      const parse = isShowHelp(cause) ? cause : null;
+      if (parse && parse.errors.length === 0) return;
+      if (!jsonAsked) {
+        process.exitCode = parse ? 2 : 1;
+        if (!parse) yield* Console.error(String(cause));
+        return;
+      }
+      const message = parse ? parse.errors.map((error) => error.message).join("; ") : String(cause);
+      print(err(parse ? "invalid_input" : "operation_failed", message), true);
     }),
   ),
+  Effect.provide(quietHelp),
   Effect.provide(
     CliConfig.layer({ builtIns: [GlobalFlag.Help, GlobalFlag.Version, GlobalFlag.LogLevel] }),
   ),

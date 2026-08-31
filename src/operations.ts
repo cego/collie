@@ -17,7 +17,14 @@ import {
   validateWorkflow,
   type ResolvedWorkflow,
 } from "./definitions";
-import { CHOICE, driverAlive, readChoice, stopDriver } from "./driver";
+import {
+  CHOICE,
+  driverAlive,
+  InboxCommandJson,
+  readChoice,
+  stopDriver,
+  type InboxCommandValue,
+} from "./driver";
 import { inferInputs, inputSources, inputValues, type Resolution } from "./inputs";
 import { readRegistry, registryPath, type RegistryScope } from "./registry";
 import { Run, RunStore } from "./run";
@@ -64,15 +71,6 @@ export const newRequestId = Effect.fn("operations.newRequestId")(function* () {
   return yield* (yield* Crypto.Crypto).randomUUIDv4;
 });
 
-export const InboxCommand = Schema.Struct({
-  type: Schema.Literals(["answer", "stop", "resume"]),
-  requestId: Schema.String,
-  choiceId: Schema.optionalKey(Schema.String),
-  answer: Schema.optionalKey(Schema.String),
-});
-export interface InboxCommand extends Schema.Schema.Type<typeof InboxCommand> {}
-export const InboxCommandJson = Schema.fromJsonString(InboxCommand);
-
 const InboxAnswerCommand = Schema.Struct({
   type: Schema.Literal("answer"),
   choiceId: Schema.String,
@@ -84,7 +82,7 @@ const DriverCommandJson = Schema.fromJsonString(Schema.NonEmptyArray(Schema.Stri
 /** A command for the owning Driver: written whole under a name only this request can claim. */
 export const writeInbox = Effect.fn("operations.writeInbox")(function* (
   dir: string,
-  command: InboxCommand,
+  command: InboxCommandValue,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -157,15 +155,23 @@ export const spawnDriver = Effect.fn("operations.spawnDriver")(function* (
   }).unref();
 });
 
-/** The Run's state as the spec names it, which the record alone does not spell. */
+/**
+ * The Run's state as the spec names it, which the record alone does not spell: the
+ * stop marker and a pending Choice both outrank what the record last recorded.
+ *
+ * The engine's `blocked` — a Step that needs the human, or max_iterations reached
+ * with findings — is the spec's `failed`, "execution ended unsuccessfully with
+ * unfinished work". It is terminal, so reporting it as `running` left `run wait`
+ * watching a directory nothing would write again. Which kind of unsuccessful it was
+ * is in the Run's own `outstanding` and Step notes, which `run show` returns whole.
+ */
 export const runStatus = Effect.fn("operations.runStatus")(function* (run: Run) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   if (yield* fs.exists(path.join(run.dir, "stopped"))) return "stopped";
   if (run.record.awaiting || (yield* fs.exists(path.join(run.dir, CHOICE)))) return "waiting";
   if (run.record.status === "done") return "succeeded";
-  if (run.record.status === "failed") return "failed";
-  return "running";
+  return run.record.status === "running" ? "running" : "failed";
 });
 
 /**
@@ -285,41 +291,50 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
 /**
  * Stops orchestration and closes only the panes this Run owns. Its agents keep
  * whatever they wrote; the repository is left exactly as it is.
+ *
+ * Nothing is written to the inbox: the Driver consumes answers and nothing else, so a
+ * `stop` command there would sit unread for the life of the Run directory. A signal
+ * is the channel to a live Driver, and the request receipt is the record.
  */
 export const stopRun = Effect.fn("operations.stopRun")(function* (
   stateDir: string,
   herdr: Herdr,
   run: Run,
   scope: RegistryScope,
-  requestId: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   if ((yield* runStatus(run)) === "succeeded")
     return err("invalid_state", `Run "${run.id}" has already succeeded.`);
-  yield* writeInbox(run.dir, { type: "stop", requestId });
   const entries = (yield* readRegistry(yield* registryPath(stateDir, scope))).filter(
     (entry) => entry.runId === run.id,
   );
   yield* Effect.all(entries.map((entry) => herdr.paneClose(entry.paneId).pipe(Effect.result)));
-  // A Run nothing is driving has no one to read the inbox, so the stop is recorded here.
+  // A Run nothing is driving has no process left to notice a signal, so the stop is
+  // recorded here instead.
   if (!(yield* driverAlive(run.dir))) {
     yield* fs.writeFileString(path.join(run.dir, "stopped"), `${yield* nowIso()}\n`);
     run.record.status = "blocked";
     yield* run.save();
-  } else yield* stopDriver(run.dir);
+  } else if (!(yield* stopDriver(run.dir))) {
+    // stopDriver declines when it cannot establish whose process it is about to
+    // signal — a claim whose start time will not read is deliberately treated as
+    // alive — and when the kill itself fails. Either way nothing was sent and the
+    // Driver is still orchestrating, so reporting a stop would be a lie the caller
+    // has no way to check.
+    return err("operation_failed", `Run "${run.id}" has a Driver that could not be signalled.`, {
+      run: run.id,
+    });
+  }
   return ok({ runId: run.id, status: "stopped" }, `Stopped run ${run.id}.`);
 });
 
 /**
  * Starts a fresh Driver for work nothing is driving. Completed Steps stay done;
- * everything else goes back to pending so the new Driver picks it up.
+ * everything else goes back to pending so the new Driver picks it up. Like a stop,
+ * this writes no inbox command: the fresh Driver is the effect.
  */
-export const resumeRun = Effect.fn("operations.resumeRun")(function* (
-  env: PluginEnv,
-  run: Run,
-  requestId: string,
-) {
+export const resumeRun = Effect.fn("operations.resumeRun")(function* (env: PluginEnv, run: Run) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   if (yield* driverAlive(run.dir))
@@ -331,7 +346,6 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
   run.record.status = "running";
   run.record.finished_at = null;
   yield* run.save();
-  yield* writeInbox(run.dir, { type: "resume", requestId });
   yield* spawnDriver(env, run.id, run.record.cwd);
   return ok({ runId: run.id, status: "running" }, `Resumed run ${run.id}.`);
 });

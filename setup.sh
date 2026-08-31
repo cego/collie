@@ -50,6 +50,29 @@ case ":$PATH:" in
   *) say "$HOME/.local/bin is not on PATH; add it if you want to run collie by name" ;;
 esac
 
+# The previous plugin bound the same three keys to cego.workflows.<action>. Unlinking
+# it leaves those entries behind, so every upgraded user would end up with two
+# bindings per key, one of them pointing at a plugin herdr no longer has.
+drop_old_bindings() {
+  [ -f "$CONFIG" ] || return 0
+  grep -q "command = \"$OLD_PLUGIN_ID\." "$CONFIG" || return 0
+  cp "$CONFIG" "$CONFIG.collie-backup"
+  say "Removing $OLD_PLUGIN_ID keybindings; previous config saved as $CONFIG.collie-backup"
+  awk -v old="command = \"$OLD_PLUGIN_ID." '
+    function flush() {
+      if (buffering && !drop) printf "%s", block
+      block = ""; drop = 0
+    }
+    # Each [[keys.command]] table is buffered so one naming the old plugin can be
+    # dropped whole; every other line passes through untouched.
+    /^\[\[keys\.command\]\]/ { flush(); buffering = 1; block = $0 "\n"; next }
+    /^\[/ && buffering { flush(); buffering = 0 }
+    buffering { block = block $0 "\n"; if (index($0, old)) drop = 1; next }
+    { print }
+    END { flush() }
+  ' "$CONFIG" >"$CONFIG.collie-new" && mv "$CONFIG.collie-new" "$CONFIG"
+}
+
 add_binding() { # key action description
   if grep -q "command = \"$PLUGIN_ID.$2\"" "$CONFIG" 2>/dev/null; then
     say "Keybinding for $2 already present"
@@ -67,6 +90,7 @@ TOML
 }
 
 mkdir -p "$(dirname "$CONFIG")"
+drop_old_bindings
 add_binding "prefix+f"       pick   "Run a workflow"
 add_binding "prefix+u"       resume "Resume a workflow run"
 add_binding "prefix+shift+f" fork   "Fork a workflow or persona"

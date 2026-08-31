@@ -303,7 +303,7 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (herdr: Herdr,
   if (!chosen) return 0;
 
   const run = yield* store.load(chosen.id);
-  const resumed = yield* resumeRun(env, run, yield* newRequestId());
+  const resumed = yield* resumeRun(env, run);
   if (!resumed.ok) return yield* bail(`${run.record.slug}: ${resumed.error.message}`);
   try {
     yield* herdr.popupClose();
@@ -602,13 +602,7 @@ export const stopRun = Effect.fn("Flows.stopRun")(function* (
   const row = view.active[0];
   if (!row) return "nothing running here to stop";
   const run = yield* new RunStore(session.stateDir).load(row.id);
-  const stopped = yield* stopRunOperation(
-    session.stateDir,
-    session.herdr,
-    run,
-    session,
-    yield* newRequestId(),
-  );
+  const stopped = yield* stopRunOperation(session.stateDir, session.herdr, run, session);
   return stopped.ok ? `stopped ${row.title}` : `${row.title}: ${stopped.error.message}`;
 });
 

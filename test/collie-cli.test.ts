@@ -76,3 +76,36 @@ test("persona discovery uses the same command boundary", () =>
       });
     }),
   ));
+
+test("invalid input is one envelope on stdout, its reason on stderr, and exit 2", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const missing = yield* cli(["--json", "workflow", "show"]);
+
+      // No usage text: under --json stdout carries the envelope and nothing else.
+      expect(yield* parseEnvelope(missing.stdout)).toEqual({
+        ok: false,
+        error: {
+          code: "invalid_input",
+          message: "Missing required argument: workflow",
+          details: {},
+        },
+      });
+      expect(missing.stdout).not.toContain("USAGE");
+      expect(missing.exit).toBe(2);
+      // The diagnostic is still there for a human, on the stream that cannot corrupt it.
+      expect(missing.stderr).toContain("Missing required argument");
+
+      const unknownFlag = yield* cli(["--json", "workflow", "list", "--nope"]);
+      expect(yield* parseEnvelope(unknownFlag.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
+      expect(unknownFlag.exit).toBe(2);
+
+      // Asking for help is nobody's failure, and the release gate runs it.
+      const help = yield* cli(["--help"]);
+      expect(help.exit).toBe(0);
+      expect(help.stdout).toContain("USAGE");
+    }),
+  ));

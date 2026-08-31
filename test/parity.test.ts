@@ -356,7 +356,7 @@ effectTest("resuming through the operation and through the CLI leave the same tr
     yield* run.save();
   }
 
-  const resumed = yield* withDriver(resumeRun(pluginEnv(), board, "req-board"));
+  const resumed = yield* withDriver(resumeRun(pluginEnv(), board));
   expect(resumed.ok).toBe(true);
   expect((yield* cli(["run", "resume", command.id, "--request-id", "req-cli"])).exit).toBe(0);
 
@@ -404,4 +404,18 @@ effectTest("a run.json that is not a Run is reported, not trusted", function* ()
   // And the store refuses to hand it to anyone, so no reader has to check again.
   const failure = yield* Effect.result(new RunStore(env.HERDR_PLUGIN_STATE_DIR).load(run.id));
   expect(failure._tag).toBe("Failure");
+});
+
+effectTest("concurrent starts get a directory and a sequence number each", function* () {
+  const started = yield* Effect.all([makeRun(), makeRun(), makeRun(), makeRun()], {
+    concurrency: "unbounded",
+  });
+
+  // Same workflow, same input, same second: the Run directory is the thing they race
+  // for, and a shared one would mean each overwriting the other's run.json.
+  expect(new Set(started.map((run) => run.id)).size).toBe(4);
+  expect(new Set(started.map((run) => run.dir)).size).toBe(4);
+  // The sequence number is what makes their agent names unique, and herdr refuses a
+  // duplicate name outright.
+  expect(new Set(started.map((run) => run.record.seq)).size).toBe(4);
 });

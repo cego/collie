@@ -71,13 +71,18 @@ const encodeJson = Schema.encodeSync(JsonString);
 const isString = Schema.is(Schema.String);
 const isNumber = Schema.is(Schema.Number);
 
+/**
+ * A command for the Run's owning Driver. The Driver reads the inbox, so the shape
+ * lives here with it and every writer imports it; two definitions of one persisted
+ * boundary is exactly what run.json stopped having.
+ */
 export const InboxCommand = Schema.Struct({
   type: Schema.Literals(["answer", "stop", "resume"]),
   requestId: Schema.String,
   choiceId: Schema.optionalKey(Schema.String),
   answer: Schema.optionalKey(Schema.String),
 });
-const InboxCommandJson = Schema.fromJsonString(InboxCommand);
+export const InboxCommandJson = Schema.fromJsonString(InboxCommand);
 const pid = Effect.sync(() => globalThis.process.pid);
 const kill = (id: number, signal?: NodeJS.Signals | 0) =>
   Effect.sync(() => {
@@ -90,21 +95,6 @@ const kill = (id: number, signal?: NodeJS.Signals | 0) =>
   });
 
 export interface InboxCommandValue extends Schema.Schema.Type<typeof InboxCommand> {}
-
-export const writeInboxCommand = Effect.fn("writeInboxCommand")(function* (
-  dir: string,
-  command: InboxCommandValue,
-) {
-  const decoded = command;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const inbox = path.join(dir, "inbox");
-  yield* fs.makeDirectory(inbox, { recursive: true });
-  const target = path.join(inbox, `${encodeURIComponent(decoded.requestId)}.json`);
-  const tmp = `${target}.${yield* pid}.tmp`;
-  yield* fs.writeFileString(tmp, `${encodeJson(decoded)}\n`, { flag: "wx" });
-  yield* fs.rename(tmp, target);
-});
 
 function read<S extends Schema.Top>(schema: S, file: string) {
   return Effect.gen(function* () {

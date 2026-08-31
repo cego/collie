@@ -155,13 +155,20 @@ const RunSchema = Schema.Struct({
   summary: Schema.NullOr(Schema.String),
 });
 
+type Decoded = Schema.Schema.Type<typeof RunSchema>;
+
 // A field added to one side and not the other leaves the other side's Exclude
 // non-empty, and only a pair of `never`s is assignable to `true` — so the build fails
 // here rather than at the next Run that happens to carry that field.
-type Unschemad = Exclude<keyof RunRecord, keyof Schema.Schema.Type<typeof RunSchema>>;
-type Unrecorded = Exclude<keyof Schema.Schema.Type<typeof RunSchema>, keyof RunRecord>;
+type Unschemad = Exclude<keyof RunRecord, keyof Decoded>;
+type Unrecorded = Exclude<keyof Decoded, keyof RunRecord>;
 const fieldsAgree: [Unschemad, Unrecorded] extends [never, never] ? true : never = true;
 void fieldsAgree;
+
+// And the names agreeing is not enough: this fails if a field's schema type drifts
+// from the interface, leaving `readonly` as the only difference between the two.
+const typesAgree: RunRecord extends Decoded ? true : never = true;
+void typesAgree;
 
 const RunRecordJson = Schema.fromJsonString(RunSchema);
 const encodeRecord = Schema.encodeSync(RunRecordJson);
@@ -180,8 +187,10 @@ const decodeRecord = Effect.fn("RunStore.decodeRecord")(function* (id: string, r
   const decoded = yield* Schema.decodeUnknownEffect(RunRecordJson)(raw).pipe(
     Effect.mapError((cause) => new InvalidRunState({ run: id, cause: String(cause) })),
   );
-  // SAFETY: RunSchema has just accepted `raw` field for field against RunRecord,
-  // which SchemaMatchesRecord holds to the same shape.
+  // SAFETY: RunSchema has just accepted `raw`, and `fieldsAgree` and `typesAgree`
+  // above hold the schema and RunRecord to the same field names and the same field
+  // types. The assertion therefore only drops `readonly`, which the engine needs
+  // because it mutates the record in place while the Run runs.
   return decoded as RunRecord;
 });
 
@@ -393,8 +402,25 @@ const createRun = Effect.fn("RunStore.create")(function* (
     );
   const slug = `${opts.workflow}-${slugify(opts.primaryInput)}`;
   const stamp = (yield* nowIso()).replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
+  yield* fs.makeDirectory(root, { recursive: true });
+  // The mkdir is the claim, not a preceding existence check: two starts in the same
+  // second for the same workflow and primary input would both find the directory
+  // absent, pick the same id, and then overwrite each other's run.json while each
+  // spawned a Driver. A non-recursive mkdir fails if the name is taken, so only one
+  // of them can own it.
   let id = `${slug}-${stamp}`;
-  for (let n = 2; yield* fs.exists(path.join(root, id)); n++) id = `${slug}-${stamp}-${n}`;
+  let claimed = false;
+  for (let n = 2; n < 100 && !claimed; n++) {
+    claimed = yield* fs.makeDirectory(path.join(root, id)).pipe(
+      Effect.as(true),
+      Effect.catch(() => Effect.succeed(false)),
+    );
+    if (!claimed) id = `${slug}-${stamp}-${n}`;
+  }
+  if (!claimed)
+    return yield* Effect.fail(
+      new Error(`could not claim a Run directory for "${slug}" in ${root}`),
+    );
   const record: RunRecord = {
     id,
     seq: yield* store.nextSeq(),
@@ -438,19 +464,36 @@ const createRun = Effect.fn("RunStore.create")(function* (
   return run;
 });
 
+/**
+ * The next Run's sequence number. It is what makes agent names unique across Runs,
+ * and herdr refuses a duplicate name outright, so read-increment-write is held under
+ * the same pid lock the Run record uses rather than raced.
+ */
 const nextSeqRun = Effect.fn("RunStore.nextSeq")(function* (store: RunStore) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const root = yield* store.rootEffect;
   yield* fs.makeDirectory(root, { recursive: true });
   const seqPath = path.join(root, ".seq");
-  const current = yield* fs.readFileString(seqPath).pipe(
-    Effect.map((x) => Number.parseInt(x.trim(), 10)),
-    Effect.catch(() => Effect.succeed(0)),
-  );
-  const next = Number.isFinite(current) ? current + 1 : 1;
-  yield* fs.writeFileString(seqPath, String(next));
-  return next;
+  const lock = `${seqPath}.lock`;
+  let held = false;
+  for (let attempt = 0; attempt < 40 && !held; attempt++) {
+    held =
+      (yield* tryClaimLock(lock)) || ((yield* breakStaleLock(lock)) && (yield* tryClaimLock(lock)));
+    if (!held) yield* Effect.sleep("25 millis");
+  }
+  if (!held) return yield* Effect.fail(new Error(`could not claim the Run sequence lock ${lock}`));
+  try {
+    const current = yield* fs.readFileString(seqPath).pipe(
+      Effect.map((x) => Number.parseInt(x.trim(), 10)),
+      Effect.catch(() => Effect.succeed(0)),
+    );
+    const next = Number.isFinite(current) ? current + 1 : 1;
+    yield* fs.writeFileString(seqPath, String(next));
+    return next;
+  } finally {
+    yield* releaseOwnLock(lock);
+  }
 });
 
 const appendHandoffRun = Effect.fn("RunStore.appendHandoff")(function* (
