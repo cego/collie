@@ -33,7 +33,7 @@ import { answerKey, stopRun as boardStop, type ControlSession } from "../src/flo
 import { Herdr } from "../src/herdr";
 import { prepareWorkflow, resumeRun, startRun } from "../src/operations";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
-import { RunStore } from "../src/run";
+import { Run, RunStore } from "../src/run";
 import type { RunRow, WorkspaceView } from "../src/workspace";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -182,13 +182,18 @@ const withDriver = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   );
 
 /** The CLI as its own process, exactly as an agent would run it. */
-const cli = Effect.fn("parity.cli")(function* (args: string[]) {
+const cli = (args: string[]) => cliWith(env, args);
+
+const cliWith = Effect.fn("parity.cli")(function* (
+  withEnv: Record<string, string>,
+  args: string[],
+) {
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const process = yield* spawner.spawn(
     ChildProcess.make("bun", [path.join(root, "src/main.ts"), "--json", ...args], {
       cwd: root,
-      env,
+      env: withEnv,
       extendEnv: true,
       stdout: "pipe",
       // Nothing here asserts on diagnostics, and an unread pipe is a place to wedge.
@@ -220,13 +225,15 @@ const makeRun = Effect.fn("parity.makeRun")(function* () {
     item.source = "explicit";
     item.needsAsking = false;
   }
-  return yield* withDriver(
+  const started = yield* withDriver(
     startRun(pluginEnv(), {
       workflow: prepared.workflow,
       resolutions: prepared.resolutions,
       workspace: { workspaceId: "w1", label: "One", cwd: env.COLLIE_CWD, worktree: null },
     }),
   );
+  if (!(started instanceof Run)) throw new Error(started.error.message);
+  return started;
 });
 
 /** Everything about a Run that outlives the process that changed it. */
@@ -356,7 +363,7 @@ effectTest("resuming through the operation and through the CLI leave the same tr
     yield* run.save();
   }
 
-  const resumed = yield* withDriver(resumeRun(pluginEnv(), board));
+  const resumed = yield* withDriver(resumeRun(pluginEnv(), board, "req-board"));
   expect(resumed.ok).toBe(true);
   expect((yield* cli(["run", "resume", command.id, "--request-id", "req-cli"])).exit).toBe(0);
 
@@ -419,3 +426,49 @@ effectTest("concurrent starts get a directory and a sequence number each", funct
   // duplicate name outright.
   expect(new Set(started.map((run) => run.record.seq)).size).toBe(4);
 });
+
+effectTest("a Run that stops being readable ends the wait as a failure", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const run = yield* makeRun();
+  yield* fs.remove(path.join(run.dir, "run.json"), { force: true });
+
+  const waited = yield* cli(["run", "wait", run.id]);
+  expect(waited.body).toMatchObject({ ok: false, error: { code: "run_not_found" } });
+  expect(waited.exit).toBe(1);
+});
+
+effectTest(
+  "a start that cannot spawn a Driver records the Run as failed and replays",
+  function* () {
+    const path = yield* Path.Path;
+    const broken = { ...env, COLLIE_DRIVER: path.join(dir, "nope") };
+    const first = yield* cliWith(broken, [
+      "run",
+      "start",
+      "demo",
+      "--input",
+      "goal=ship",
+      "--request-id",
+      "r1",
+    ]);
+    expect(first.body).toMatchObject({ ok: false, error: { code: "operation_failed" } });
+
+    // Recorded, not left running with nothing driving it.
+    const runs = yield* new RunStore(env.HERDR_PLUGIN_STATE_DIR).list();
+    expect(runs.map((run) => run.record.status)).toEqual(["failed"]);
+
+    // And the receipt replays, so the retry does not create a second Run.
+    const again = yield* cliWith(broken, [
+      "run",
+      "start",
+      "demo",
+      "--input",
+      "goal=ship",
+      "--request-id",
+      "r1",
+    ]);
+    expect(again.body).toEqual(first.body);
+    expect((yield* new RunStore(env.HERDR_PLUGIN_STATE_DIR).list()).length).toBe(1);
+  },
+);

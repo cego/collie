@@ -525,3 +525,17 @@ effectTest("an empty state dir renders the board rather than nothing", function*
   expect(text).toContain("(none running)");
   expect(text).toContain("(nothing yet)");
 });
+
+effectTest("a register that will not decode reads as empty rather than failing", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* registryPath(rig.stateDir, scope());
+  yield* fs.makeDirectory(path.slice(0, path.lastIndexOf("/")), { recursive: true });
+
+  // Half-written by a process that died, and hand-edited into the wrong shape. The
+  // register is a cache of what herdr was last seen to have, so neither may fail a
+  // stop, a hand-off, or the Control Plane's read.
+  for (const raw of ["{not json", '[{"role":1}]', ""]) {
+    yield* fs.writeFileString(path, raw);
+    expect(yield* readRegistry(path)).toEqual([]);
+  }
+});

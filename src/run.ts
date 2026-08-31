@@ -165,9 +165,19 @@ type Unrecorded = Exclude<keyof Decoded, keyof RunRecord>;
 const fieldsAgree: [Unschemad, Unrecorded] extends [never, never] ? true : never = true;
 void fieldsAgree;
 
-// And the names agreeing is not enough: this fails if a field's schema type drifts
-// from the interface, leaving `readonly` as the only difference between the two.
-const typesAgree: RunRecord extends Decoded ? true : never = true;
+/** The decoded shape with `readonly` taken off, all the way down. */
+type Mutable<T> =
+  T extends ReadonlyArray<infer E>
+    ? Array<Mutable<E>>
+    : T extends object
+      ? { -readonly [K in keyof T]: Mutable<T[K]> }
+      : T;
+
+// Names agreeing is not enough, and neither is `RunRecord extends Decoded`: that also
+// holds when a schema field is *wider* than the interface's, which would hand the
+// engine a value the schema never constrained. This is the direction the assertion
+// below actually needs, and `readonly` is the only thing it forgives.
+const typesAgree: Mutable<Decoded> extends RunRecord ? true : never = true;
 void typesAgree;
 
 const RunRecordJson = Schema.fromJsonString(RunSchema);
@@ -187,10 +197,11 @@ const decodeRecord = Effect.fn("RunStore.decodeRecord")(function* (id: string, r
   const decoded = yield* Schema.decodeUnknownEffect(RunRecordJson)(raw).pipe(
     Effect.mapError((cause) => new InvalidRunState({ run: id, cause: String(cause) })),
   );
-  // SAFETY: RunSchema has just accepted `raw`, and `fieldsAgree` and `typesAgree`
-  // above hold the schema and RunRecord to the same field names and the same field
-  // types. The assertion therefore only drops `readonly`, which the engine needs
-  // because it mutates the record in place while the Run runs.
+  // SAFETY: RunSchema has just accepted `raw`; `fieldsAgree` holds the two shapes to
+  // the same field names, and `typesAgree` holds the decoded type — with `readonly`
+  // stripped — assignable to RunRecord, so no schema field may be wider than the
+  // interface's. The assertion therefore drops `readonly` and nothing else, which the
+  // engine needs because it mutates the record in place while the Run runs.
   return decoded as RunRecord;
 });
 

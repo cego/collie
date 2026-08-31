@@ -19,7 +19,10 @@ const CliEnvelope = Schema.fromJsonString(
   }),
 );
 
-const cli = Effect.fn("test.cli")(function* (args: string[]) {
+const cli = Effect.fn("test.cli")(function* (
+  args: string[],
+  extraEnv: Record<string, string> = {},
+) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectory({ prefix: "collie-cli-" });
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
@@ -31,6 +34,7 @@ const cli = Effect.fn("test.cli")(function* (args: string[]) {
       HERDR_PLUGIN_STATE_DIR: join(dir, "state"),
       HOME: dir,
       PWD: root,
+      ...extraEnv,
     },
     stdout: "pipe",
     stderr: "pipe",
@@ -107,5 +111,39 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
       const help = yield* cli(["--help"]);
       expect(help.exit).toBe(0);
       expect(help.stdout).toContain("USAGE");
+    }),
+  ));
+
+test("a command group named with no subcommand is invalid input, not success", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Effect's CLI raises the same ShowHelp it raises for --help, carrying no parse
+      // errors, so what tells them apart is whether help was actually asked for.
+      for (const argv of [["--json", "run"], ["--json", "workflow"], ["--json"]]) {
+        const stopped = yield* cli(argv);
+        expect(yield* parseEnvelope(stopped.stdout)).toMatchObject({
+          ok: false,
+          error: { code: "invalid_input" },
+        });
+        expect(stopped.exit).toBe(2);
+        // The envelope is the whole of stdout: no help document, and no blank line
+        // ahead of it for a consumer reading a line at a time.
+        expect(stopped.stdout.startsWith("{")).toBe(true);
+        expect(stopped.stdout.trimEnd().split("\n")).toHaveLength(1);
+      }
+    }),
+  ));
+
+test("a Driver that cannot be started fails the Run rather than orphaning it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const started = yield* cli(["--json", "run", "start", "architecture", "--request-id", "r1"], {
+        COLLIE_DRIVER: "/nonexistent/collie-bin",
+      });
+      expect(yield* parseEnvelope(started.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "operation_failed" },
+      });
+      expect(started.exit).toBe(1);
     }),
   ));

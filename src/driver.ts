@@ -184,6 +184,28 @@ const consumeInboxAnswer = Effect.fn("consumeInboxAnswer")(function* (
   return null;
 });
 
+/**
+ * A stop request handed over through the inbox, consumed so it is acted on once. The
+ * spec makes the inbox how another process gives the owning Driver a command; this is
+ * the Driver's side of that for a stop, and it reads the inbox only while waiting on
+ * a Choice — a Driver mid-Step is waiting on an agent and reads nothing, which is why
+ * `collie run stop` signals as well.
+ */
+const consumeInboxStop = Effect.fn("consumeInboxStop")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const inbox = path.join(dir, "inbox");
+  if (!(yield* fs.exists(inbox))) return false;
+  for (const name of (yield* fs.readDirectory(inbox)).filter((e) => e.endsWith(".json")).sort()) {
+    const file = path.join(inbox, name);
+    const command = yield* read(InboxCommandJson, file);
+    if (command?.type !== "stop") continue;
+    yield* fs.remove(file, { force: true });
+    return true;
+  }
+  return false;
+});
+
 const readOwner = Effect.fn("readOwner")(function* (dir: string) {
   const path = yield* Path.Path;
   const raw = yield* read(OwnerRecordJson, path.join(dir, RUNNER_PID));
@@ -289,6 +311,10 @@ export function filePrompts(opts: {
             (yield* consumeInboxAnswer(opts.dir, choice)) ??
             (yield* read(ChoiceAnswerJson, path.join(opts.dir, CHOICE_ANSWER)));
           if (answer && answer.id === choice.id) return answer;
+          // The same request the signal carries, arriving as a file. Raising it on
+          // ourselves keeps one path recording what a stop does to the Run.
+          if (yield* consumeInboxStop(opts.dir))
+            yield* Effect.sync(() => globalThis.process.kill(globalThis.process.pid, "SIGTERM"));
           yield* Effect.sleep(`${opts.pollMs ?? 500} millis`);
         }
         return null;

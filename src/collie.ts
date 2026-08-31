@@ -82,9 +82,15 @@ function print(result: Result, json: boolean): void {
 
 const printResult = (result: Result, json: boolean) => Effect.sync(() => print(result, json));
 
+/**
+ * Every command ends in exactly one envelope. `Effect.catch` sees typed failures only,
+ * so a defect — anything that throws where the error channel was not declared — used
+ * to leave both streams empty and only an exit status behind. Both are caught here.
+ */
 function attempt<E, R>(operation: Effect.Effect<Result, E, R>, json: boolean) {
   return operation.pipe(
     Effect.catch((cause) => Effect.succeed(err("operation_failed", String(cause)))),
+    Effect.catchDefect((defect) => Effect.succeed(err("operation_failed", String(defect)))),
     Effect.flatMap((result) => printResult(result, json)),
   );
 }
@@ -552,6 +558,7 @@ const runStart = Command.make(
                 resolutions: prepared.resolutions,
                 workspace: resolved.workspace,
               });
+              if (!(run instanceof Run)) return run;
               return {
                 ok: true,
                 data: { runId: run.id, run: yield* runData(run) },
@@ -697,6 +704,8 @@ const runWait = Command.make(
 
       let progressCount = 0;
       let sentSnapshot = false;
+      /** Why the Run stopped being readable, if it did. Waiting ends; success does not. */
+      let lost: Failure | null = null;
       /** One event, as the typed line a program reads or the line a human reads. */
       const say = <A>(event: A, human: string) =>
         process.stdout.write(`${global.json ? Schema.encodeSync(UnknownJson)(event) : human}\n`);
@@ -704,7 +713,12 @@ const runWait = Command.make(
       /** Reports what has happened since the last call, and whether waiting is over. */
       const emit = Effect.fn("collie.runWait.emit")(function* () {
         const fresh = yield* readRun(resolved.env, runId, workspace);
-        if (!(fresh instanceof Run)) return true;
+        if (!(fresh instanceof Run)) {
+          // Deleted or no longer decoding, mid-wait. That is the typed failure the
+          // caller is owed, not a terminal state to be reported as a success.
+          lost = fresh;
+          return true;
+        }
         const snapshot = yield* runData(fresh);
         const status = yield* runStatus(fresh);
         const terminal = ["succeeded", "failed", "stopped"].includes(status);
@@ -753,18 +767,18 @@ const runWait = Command.make(
           }),
         ),
       );
-      if (!follow && !failed) {
-        const terminal = yield* readRun(resolved.env, runId, workspace);
-        if (terminal instanceof Run)
-          yield* printResult(
-            {
-              ok: true,
-              data: { run: yield* runData(terminal) },
-              human: `${terminal.id}: ${yield* runStatus(terminal)}`,
-            },
-            global.json,
-          );
-      }
+      if (lost) return yield* printResult(lost, global.json);
+      if (follow || failed) return;
+      const terminal = yield* readRun(resolved.env, runId, workspace);
+      if (!(terminal instanceof Run)) return yield* printResult(terminal, global.json);
+      yield* printResult(
+        {
+          ok: true,
+          data: { run: yield* runData(terminal) },
+          human: `${terminal.id}: ${yield* runStatus(terminal)}`,
+        },
+        global.json,
+      );
     }),
 );
 
@@ -792,9 +806,10 @@ function runCommandMutation(
                 new Herdr(resolved.env),
                 found,
                 scopeFor(resolved.env, found.record.cwd),
+                id,
               );
             }
-            return yield* resumeRun(resolved.env, found);
+            return yield* resumeRun(resolved.env, found, id);
           }),
         );
       }),
@@ -843,12 +858,17 @@ const run = Command.make("run").pipe(
 export const app = root.pipe(Command.withSubcommands([workflow, persona, run]));
 
 /**
- * Under `--json` the caller is a program, so the help document Effect's CLI renders on
- * stdout for a parse failure is noise that breaks the one-value contract. The
- * formatter decides what that document contains, so this is where it is silenced;
- * human invocations keep it.
+ * Under `--json` the caller is a program, so anything Effect's CLI prints for a human
+ * — the help document it renders on any parse failure — must not land on stdout. The
+ * formatter empties the document and this moves what is left to stderr, where the
+ * spec puts diagnostics: `Console.log` is the framework's only stdout channel, and
+ * commands write their envelope straight to `process.stdout`. Effect's own logger
+ * already uses `console.error`, so nothing else moves.
  */
 const jsonAsked = Bun.argv.includes("--json");
+/** Help was asked for, as opposed to offered because the command line was wrong. */
+const helpAsked = Bun.argv.includes("--help") || Bun.argv.includes("-h");
+
 const cliOutput = CliOutput.defaultFormatter();
 const quietHelp = CliOutput.layer({
   formatHelpDoc: jsonAsked ? () => "" : cliOutput.formatHelpDoc,
@@ -858,29 +878,35 @@ const quietHelp = CliOutput.layer({
   formatVersion: cliOutput.formatVersion,
 });
 
+const consoleToStderr = Console.Console.of({
+  ...globalThis.console,
+  log: (...args: ReadonlyArray<unknown>) => {
+    process.stderr.write(`${args.map((arg) => String(arg)).join(" ")}\n`);
+  },
+});
+
 const isShowHelp = Schema.is(CliError.ShowHelp);
 
 /**
  * Everything a command handler did not catch, which is a parse failure or a defect.
  *
- * A parse failure is invalid input: exit 2, and under `--json` one envelope carrying
- * what Effect's CLI would otherwise only render for a human. In human mode it has
- * already printed the help and the reason itself, so this only sets the status. An
- * explicit `--help` arrives as a ShowHelp with no errors and is nobody's failure.
+ * A ShowHelp is Effect's CLI asking for the help document to be shown, and it raises
+ * one both for `--help` and for a command line it could not use — including a command
+ * group named with no subcommand, which carries no parse errors at all. Only the first
+ * is nobody's failure, so argv is the discriminator: anything else is invalid input,
+ * exit 2, and under `--json` one envelope. In human mode Effect's CLI has already
+ * printed the help and the reason, so this only sets the status.
  */
 export const program = app.pipe(
   Command.run({ version: "0.0.1" }),
   Effect.catch((cause) =>
     Effect.gen(function* () {
       const parse = isShowHelp(cause) ? cause : null;
-      // An explicit `--help` is a ShowHelp carrying no errors, and nobody's failure.
-      if (parse && parse.errors.length === 0) return;
+      if (parse && helpAsked) return;
       const failure = parse
-        ? err("invalid_input", parse.errors.map((error) => error.message).join("; "))
+        ? err("invalid_input", parseMessage(parse))
         : err("operation_failed", String(cause));
       if (jsonAsked) return print(failure, true);
-      // Effect's CLI has already printed the help and the reason for a parse failure,
-      // so saying it again here would only be a third copy.
       process.exitCode = parse ? 2 : 1;
       if (!parse) yield* Console.error(failure.error.message);
     }),
@@ -889,4 +915,11 @@ export const program = app.pipe(
   Effect.provide(
     CliConfig.layer({ builtIns: [GlobalFlag.Help, GlobalFlag.Version, GlobalFlag.LogLevel] }),
   ),
+  jsonAsked ? Effect.provideService(Console.Console, consoleToStderr) : (self) => self,
 );
+
+/** What was wrong with the command line, or that it stopped short of a command. */
+function parseMessage(parse: CliError.ShowHelp): string {
+  if (parse.errors.length > 0) return parse.errors.map((error) => error.message).join("; ");
+  return `${["collie", ...parse.commandPath.slice(1)].join(" ")} needs a subcommand.`.trim();
+}

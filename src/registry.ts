@@ -27,7 +27,7 @@ const AgentEntrySchema = Schema.Struct({
 });
 const RegistryJson = Schema.fromJsonString(Schema.Array(AgentEntrySchema));
 const encodeRegistry = Schema.encodeSync(RegistryJson);
-const decodeRegistry = Schema.decodeUnknownSync(RegistryJson);
+const decodeRegistry = Schema.decodeUnknownEffect(RegistryJson);
 
 export const registryPath = Effect.fn("registryPath")(function* (
   stateDir: string,
@@ -48,13 +48,18 @@ export function scopeFor(
   return { session: env.socketPath, workspaceId: env.workspaceId, cwd };
 }
 
+/**
+ * The Session's live agents, or none. A register half-written or edited by hand is a
+ * cache of what herdr was last seen to have, not a source of truth, so it is read as
+ * empty rather than failing a stop, a hand-off or the Control Plane. The decode runs
+ * in the error channel, not as a throw inside `Effect.map`: a `SchemaError` raised
+ * there was a defect, and the fallback on the next line never ran.
+ */
 export const readRegistry = Effect.fn("readRegistry")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
   if (!(yield* fs.exists(file))) return [];
   return yield* fs.readFileString(file).pipe(
-    Effect.map((raw) => {
-      return decodeRegistry(raw);
-    }),
+    Effect.flatMap(decodeRegistry),
     Effect.catch(() => Effect.succeed([])),
   );
 });

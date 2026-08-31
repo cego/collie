@@ -29,7 +29,7 @@ import {
 } from "./picker";
 import { forkDefinition, type DefinitionKind } from "./fork";
 import { shellQuote } from "./naming";
-import { RunStore } from "./run";
+import { Run, RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
 import {
   acquireDriver,
@@ -151,12 +151,13 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
   const line = confirmLine(resolved.name, resolutions);
   if (!(yield* confirm(line))) return 0;
 
-  yield* startRun(env, {
+  const started = yield* startRun(env, {
     workflow: resolved,
     resolutions,
     workspace: yield* workspaceInfo(herdr, env),
     note: line,
   });
+  if (!(started instanceof Run)) return yield* bail(started.error.message);
   try {
     yield* herdr.popupClose();
   } catch {
@@ -303,7 +304,7 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (herdr: Herdr,
   if (!chosen) return 0;
 
   const run = yield* store.load(chosen.id);
-  const resumed = yield* resumeRun(env, run);
+  const resumed = yield* resumeRun(env, run, yield* newRequestId());
   if (!resumed.ok) return yield* bail(`${run.record.slug}: ${resumed.error.message}`);
   try {
     yield* herdr.popupClose();
@@ -329,18 +330,36 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
   const run = yield* store.load(runId);
   const out = (line: string) => appendProgress(run.dir, line);
 
-  // Atomic: acquiring is the check. A separate liveness test then a write would
-  // let two resumes race past each other and drive the same run twice.
-  if (!(yield* acquireDriver(run.dir))) {
-    yield* out("a driver is already running this run; this one is stopping");
-    return 1;
-  }
-
+  /**
+   * Installed before the ownership claim, not after it. A SIGTERM arriving between
+   * the claim becoming visible to `collie run stop` and this handler being installed
+   * landed on Node's default handler, which kills the process outright: no stopped
+   * marker, run.json still `running`, and a stop that had already reported success.
+   */
+  let signalled = false;
+  const earlySigterm = () => {
+    signalled = true;
+  };
+  process.once("SIGTERM", earlySigterm);
   const sigterm = Effect.callback<void>((resume) => {
+    // Hands over from the early handler here, and honours a signal it already caught.
+    process.off("SIGTERM", earlySigterm);
+    if (signalled) {
+      resume(Effect.void);
+      return Effect.void;
+    }
     const stop = () => resume(Effect.void);
     process.once("SIGTERM", stop);
     return Effect.sync(() => process.off("SIGTERM", stop));
   });
+
+  // Atomic: acquiring is the check. A separate liveness test then a write would
+  // let two resumes race past each other and drive the same run twice.
+  if (!(yield* acquireDriver(run.dir))) {
+    process.off("SIGTERM", earlySigterm);
+    yield* out("a driver is already running this run; this one is stopping");
+    return 1;
+  }
 
   const markStopped = Effect.gen(function* () {
     const stoppedAt = yield* nowIso();
@@ -602,7 +621,13 @@ export const stopRun = Effect.fn("Flows.stopRun")(function* (
   const row = view.active[0];
   if (!row) return "nothing running here to stop";
   const run = yield* new RunStore(session.stateDir).load(row.id);
-  const stopped = yield* stopRunOperation(session.stateDir, session.herdr, run, session);
+  const stopped = yield* stopRunOperation(
+    session.stateDir,
+    session.herdr,
+    run,
+    session,
+    yield* newRequestId(),
+  );
   return stopped.ok ? `stopped ${row.title}` : `${row.title}: ${stopped.error.message}`;
 });
 

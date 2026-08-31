@@ -3,7 +3,7 @@
 // command cannot drift apart. What stays with each of them is presentation: picking,
 // prompting, rendering, and turning a result into text or JSON.
 
-import { Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
+import { Config, Crypto, Effect, FileSystem, Path, Schedule, Schema } from "effect";
 import { nowIso } from "./time";
 import type { PluginEnv } from "./env";
 import { Herdr, type WorkspaceInfo } from "./herdr";
@@ -27,6 +27,7 @@ import {
 } from "./driver";
 import { inferInputs, inputSources, inputValues, type Resolution } from "./inputs";
 import { readRegistry, registryPath, type RegistryScope } from "./registry";
+import { breakStaleLock, releaseOwnLock, tryClaimLock } from "./lock";
 import { Run, RunStore } from "./run";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
@@ -145,14 +146,21 @@ export const spawnDriver = Effect.fn("operations.spawnDriver")(function* (
   const commandLine = yield* driverCommand(env);
   const command = commandLine[0];
   const rest = commandLine.slice(1);
-  Bun.spawn([command, ...rest, "herdr", "drive"], {
-    cwd,
-    env: { ...env.raw, COLLIE_RUN: runId, COLLIE_CWD: cwd },
-    detached: true,
-    stdin: "ignore",
-    stdout: "ignore",
-    stderr: "ignore",
-  }).unref();
+  // Bun.spawn throws where the executable is not there, which is the ordinary state
+  // of a checkout whose bin/collie has not been built. Unwrapped it was a defect, and
+  // a defect is what left a Run created, marked running, and driven by nobody.
+  yield* Effect.try({
+    try: () =>
+      Bun.spawn([command, ...rest, "herdr", "drive"], {
+        cwd,
+        env: { ...env.raw, COLLIE_RUN: runId, COLLIE_CWD: cwd },
+        detached: true,
+        stdin: "ignore",
+        stdout: "ignore",
+        stderr: "ignore",
+      }).unref(),
+    catch: (cause) => new Error(`could not start ${command}: ${String(cause)}`),
+  });
 });
 
 /**
@@ -214,7 +222,10 @@ function primaryInput(resolutions: Resolution[]): string {
   return first.label ?? first.value;
 }
 
-/** Creates the Run and hands it to a detached Driver. Inputs are already settled. */
+/**
+ * Creates the Run and hands it to a detached Driver. Inputs are already settled.
+ * Returns the Run, or the reason no Driver could be started for it.
+ */
 export const startRun = Effect.fn("operations.startRun")(function* (
   env: PluginEnv,
   options: {
@@ -240,7 +251,24 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   });
   yield* run.log(`created from ${workflow.path} (${workflow.layer} layer)`);
   if (options.note) yield* run.log(options.note);
-  yield* spawnDriver(env, run.id, run.record.cwd);
+  const failure = yield* spawnDriver(env, run.id, run.record.cwd).pipe(
+    Effect.as(null),
+    Effect.catch((cause) => Effect.succeed(String(cause))),
+  );
+  if (failure) {
+    // Nothing is driving this Run and nothing will. Recording that keeps it from
+    // being reported as running for ever, and returning a result rather than failing
+    // lets the caller's request receipt carry it, so a retry with the same request id
+    // replays this instead of creating a second Run.
+    yield* run.log(`driver did not start: ${failure}`);
+    run.record.status = "failed";
+    run.record.finished_at = yield* nowIso();
+    yield* run.save();
+    return err("operation_failed", `Could not start a Driver for run "${run.id}".`, {
+      run: run.id,
+      cause: failure,
+    });
+  }
   return run;
 });
 
@@ -292,60 +320,98 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
  * Stops orchestration and closes only the panes this Run owns. Its agents keep
  * whatever they wrote; the repository is left exactly as it is.
  *
- * Nothing is written to the inbox: the Driver consumes answers and nothing else, so a
- * `stop` command there would sit unread for the life of the Run directory. A signal
- * is the channel to a live Driver, and the request receipt is the record.
+ * Two channels, because neither alone is enough. The inbox command is the record the
+ * spec asks for and is what a Driver waiting on a Choice consumes. The signal is what
+ * reaches a Driver that is mid-Step, waiting on an agent and reading no files.
  */
 export const stopRun = Effect.fn("operations.stopRun")(function* (
   stateDir: string,
   herdr: Herdr,
   run: Run,
   scope: RegistryScope,
+  requestId: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   if ((yield* runStatus(run)) === "succeeded")
     return err("invalid_state", `Run "${run.id}" has already succeeded.`);
+  // The request is recorded in the Run's own directory before anything is signalled,
+  // so it is there whether or not the Driver lives long enough to consume it.
+  yield* writeInbox(run.dir, { type: "stop", requestId });
+  if (yield* driverAlive(run.dir)) {
+    // Signalled before its panes are closed. stopDriver declines when it cannot
+    // establish whose process it is about to signal — a claim whose start time will
+    // not read is deliberately treated as alive — and when the kill fails. Closing
+    // panes first would leave that refusal half-applied: the Driver still
+    // orchestrating, its panes gone, and opening more the register cannot match.
+    if (!(yield* stopDriver(run.dir)))
+      return err("operation_failed", `Run "${run.id}" has a Driver that could not be signalled.`, {
+        run: run.id,
+      });
+  } else {
+    // A Run nothing is driving has no process left to notice a signal, so the stop is
+    // recorded here instead.
+    yield* fs.writeFileString(path.join(run.dir, "stopped"), `${yield* nowIso()}\n`);
+    run.record.status = "blocked";
+    yield* run.save();
+  }
   const entries = (yield* readRegistry(yield* registryPath(stateDir, scope))).filter(
     (entry) => entry.runId === run.id,
   );
   yield* Effect.all(entries.map((entry) => herdr.paneClose(entry.paneId).pipe(Effect.result)));
-  // A Run nothing is driving has no process left to notice a signal, so the stop is
-  // recorded here instead.
-  if (!(yield* driverAlive(run.dir))) {
-    yield* fs.writeFileString(path.join(run.dir, "stopped"), `${yield* nowIso()}\n`);
-    run.record.status = "blocked";
-    yield* run.save();
-  } else if (!(yield* stopDriver(run.dir))) {
-    // stopDriver declines when it cannot establish whose process it is about to
-    // signal — a claim whose start time will not read is deliberately treated as
-    // alive — and when the kill itself fails. Either way nothing was sent and the
-    // Driver is still orchestrating, so reporting a stop would be a lie the caller
-    // has no way to check.
-    return err("operation_failed", `Run "${run.id}" has a Driver that could not be signalled.`, {
-      run: run.id,
-    });
-  }
   return ok({ runId: run.id, status: "stopped" }, `Stopped run ${run.id}.`);
 });
 
 /**
  * Starts a fresh Driver for work nothing is driving. Completed Steps stay done;
- * everything else goes back to pending so the new Driver picks it up. Like a stop,
- * this writes no inbox command: the fresh Driver is the effect.
+ * everything else goes back to pending so the new Driver picks it up.
+ *
+ * One resume at a time: the lock covers the liveness check, the Step reset and the
+ * spawn together. A second Driver process can still be launched in the window before
+ * the first writes its ownership claim, and the Driver's own `acquireDriver` is what
+ * stops that one from driving; closing that window needs the resumer to hand the
+ * child a claim it adopts, which is a protocol change, not a lock.
  */
-export const resumeRun = Effect.fn("operations.resumeRun")(function* (env: PluginEnv, run: Run) {
+export const resumeRun = Effect.fn("operations.resumeRun")(function* (
+  env: PluginEnv,
+  run: Run,
+  requestId: string,
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if (yield* driverAlive(run.dir))
-    return err("run_already_active", `Run "${run.id}" is already active.`);
-  if ((yield* runStatus(run)) === "succeeded")
-    return err("invalid_state", `Run "${run.id}" has already succeeded.`);
-  yield* fs.remove(path.join(run.dir, "stopped"), { force: true });
-  for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
-  run.record.status = "running";
-  run.record.finished_at = null;
-  yield* run.save();
-  yield* spawnDriver(env, run.id, run.record.cwd);
-  return ok({ runId: run.id, status: "running" }, `Resumed run ${run.id}.`);
+  // driverAlive is a look, not a claim. Two resumes could both find no owner, both
+  // reset the Steps and save `running`, and the loser's snapshot could then land on
+  // top of a Run the winner had already begun advancing. This lock is what makes the
+  // look and the reset one decision.
+  const lock = path.join(run.dir, "resume.lock");
+  const claim = Effect.gen(function* () {
+    if (yield* tryClaimLock(lock)) return;
+    if ((yield* breakStaleLock(lock)) && (yield* tryClaimLock(lock))) return;
+    return yield* Effect.fail(new Error(`another resume of run "${run.id}" is in progress`));
+  });
+  yield* claim.pipe(Effect.retry({ times: 40, schedule: Schedule.spaced("25 millis") }));
+  try {
+    if (yield* driverAlive(run.dir))
+      return err("run_already_active", `Run "${run.id}" is already active.`);
+    if ((yield* runStatus(run)) === "succeeded")
+      return err("invalid_state", `Run "${run.id}" has already succeeded.`);
+    yield* fs.remove(path.join(run.dir, "stopped"), { force: true });
+    for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
+    run.record.status = "running";
+    run.record.finished_at = null;
+    yield* run.save();
+    yield* writeInbox(run.dir, { type: "resume", requestId });
+    const failure = yield* spawnDriver(env, run.id, run.record.cwd).pipe(
+      Effect.as(null),
+      Effect.catch((cause) => Effect.succeed(String(cause))),
+    );
+    if (failure)
+      return err("operation_failed", `Could not start a Driver for run "${run.id}".`, {
+        run: run.id,
+        cause: failure,
+      });
+    return ok({ runId: run.id, status: "running" }, `Resumed run ${run.id}.`);
+  } finally {
+    yield* releaseOwnLock(lock);
+  }
 });
