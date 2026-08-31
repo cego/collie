@@ -215,7 +215,7 @@ the picker marks it `(stale — the original has changed since this copy)`.
 ```json
 {
   "harness": "claude",
-  "model": "default",
+  "model": "opus",
   "effort": "high",
   "max_iterations": 5,
   "handoff_timeout_ms": 7200000,
@@ -224,9 +224,11 @@ the picker marks it `(stale — the original has changed since this copy)`.
 }
 ```
 
-`models` adds models the harness adapter table does not already accept. `model:
-"default"` means "pass no model flag" — the harness picks its own, and Collie
-never has to keep a list in step with it. `effort` is optional — leave it out and each
+`models` adds models the harness adapter table does not already accept. The base
+Claude model is `opus` (the Claude CLI alias for the current Opus, presently Opus 5),
+and Collie always passes it with `--model` unless a Step or user config selects another.
+`model: "default"` uses the harness adapter's pinned default; adapters without one keep
+their native default. `effort` is optional — leave it out and each
 harness uses its own default. An unknown harness, model or effort fails validation
 before a single tab opens. `trust` is what a run does
 about a directory the harness has not been trusted with: see "The first run in a repo".
@@ -267,11 +269,11 @@ runtime rather than at validation.
 | `pi` | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` |
 | `opencode` | `--model <provider/model>` | prompt prefix | — |
 
-`model: default` is accepted by every harness and means the model flag is left off
-entirely, so the harness starts on whatever it would start on by itself. A pane for such
-a variant is named after the harness (`claude`) rather than a model.
+`model: default` is accepted by every harness and uses its adapter's pinned default.
+Claude pins that default to `opus`, so every base Claude agent receives `--model opus`;
+adapters without a pinned default omit the model flag.
 
-The baseline `implement` builds on `model: default` at `effort: medium` — one implementer
+The baseline `implement` builds on Claude's pinned `opus` default at `effort: medium` — one implementer
 agent for `build`, `architecture`, `simplify`, `fix` and `mr` — and reviews with two
 claude reviewers, `opus` at `medium` and `sonnet` at `xhigh`; the synthesiser takes the
 implementer's setting because it names none of its own. Mixing in codex or opencode is a

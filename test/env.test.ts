@@ -37,7 +37,7 @@ test("cwd and ids fall back to the invocation context", () => {
   expect(env.paneId).toBe("3-1");
   expect(env.cwd).toBe("/ws");
   expect(env.binPath).toBe("herdr");
-  expect(env.configDir).toBe("/home/x/.config/herdr/plugins/cego.collie");
+  expect(env.configDir).toBe("/home/x/.config/herdr/plugins/config/cego.collie");
 });
 
 test("a malformed context json does not throw", () => {

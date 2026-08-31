@@ -7,7 +7,7 @@ import { basename, join } from "node:path";
 import { skillsIn } from "./template";
 import { unsafePathComponent } from "./naming";
 import { parseDocument, YamlError } from "./yaml";
-import { HARNESSES, harnessNames, knownModel, modelHint } from "./harness";
+import { DEFAULT_MODEL, HARNESSES, harnessNames, knownModel, modelHint } from "./harness";
 import type { Defaults } from "./config";
 
 export type LayerName = "baseline" | "user" | "project";
@@ -861,9 +861,10 @@ function chainErrors(
 /** The harness/model/effort one Choice round runs with. */
 export function roundVariant(round: RoundDef, step: ResolvedStep, defaults: Defaults): Variant {
   const effort = round.effort ?? step.effort ?? defaults.effort;
+  const harness = round.harness ?? step.harness ?? defaults.harness;
   const variant: Variant = {
-    harness: round.harness ?? step.harness ?? defaults.harness,
-    model: round.model ?? step.model ?? defaults.model,
+    harness,
+    model: resolvedModel(harness, round.model ?? step.model ?? defaults.model),
   };
   return effort === undefined ? variant : { ...variant, effort };
 }
@@ -880,17 +881,27 @@ export function stepVariants(step: StepDef, defaults: Defaults): Variant[] {
     return step.parallel.map((v) => withEffort(
       {
         harness: v.harness || step.harness || defaults.harness,
-        model: v.model || step.model || defaults.model,
+        model: resolvedModel(
+          v.harness || step.harness || defaults.harness,
+          v.model || step.model || defaults.model,
+        ),
       },
       effortOf(v.effort),
     ));
   }
   return [
     withEffort(
-      { harness: step.harness ?? defaults.harness, model: step.model ?? defaults.model },
+      {
+        harness: step.harness ?? defaults.harness,
+        model: resolvedModel(step.harness ?? defaults.harness, step.model ?? defaults.model),
+      },
       effortOf(undefined),
     ),
   ];
+}
+
+function resolvedModel(harness: string, model: string): string {
+  return model === DEFAULT_MODEL ? (HARNESSES[harness]?.defaultModel ?? model) : model;
 }
 
 function withEffort(variant: Variant, effort: string | undefined): Variant {

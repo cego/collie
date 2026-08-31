@@ -306,7 +306,7 @@ do it
     'workflow "w" step "s": harness "opencode" has no effort setting',
   ]);
   expect(stepVariants(wf.steps[0]!, defaults)).toEqual([
-    { harness: "claude", model: "default", effort: "medium" },
+    { harness: "claude", model: "opus", effort: "medium" },
     { harness: "codex", model: "default", effort: "medium" },
     { harness: "opencode", model: "default", effort: "medium" },
   ]);
@@ -335,6 +335,7 @@ test("the body splits into a preamble plus one section per step heading", () => 
 
 test("user defaults come from config.json in the config layer", () => {
   expect(loadDefaults(rig.configDir)).toEqual(FALLBACK_DEFAULTS);
+  expect(FALLBACK_DEFAULTS.model).toBe("opus");
   writeFileSync(
     join(rig.configDir, "config.json"),
     JSON.stringify({
@@ -387,17 +388,16 @@ c
   const wf = resolveWorkflow("w", defs, withDefault);
 
   expect(stepVariants(wf.steps[0]!, withDefault)).toEqual([
-    { harness: "claude", model: "sonnet", effort: "high" },
+    { harness: "claude", model: "opus", effort: "high" },
   ]);
   expect(stepVariants(wf.steps[1]!, withDefault)).toEqual([
     { harness: "claude", model: "opus", effort: "xhigh" },
     { harness: "claude", model: "sonnet", effort: "medium" },
   ]);
   expect(stepVariants(wf.steps[2]!, withDefault)).toEqual([
-    { harness: "claude", model: "sonnet", effort: "medium" },
+    { harness: "claude", model: "opus", effort: "medium" },
   ]);
-  // No default set means the harness decides, so no flag is passed at all.
-  expect(stepVariants(wf.steps[2]!, defaults)).toEqual([{ harness: "claude", model: "sonnet" }]);
+  expect(stepVariants(wf.steps[2]!, defaults)).toEqual([{ harness: "claude", model: "opus" }]);
   expect(validateWorkflow(wf, defs, withDefault)).toEqual([]);
 });
 

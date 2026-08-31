@@ -49,14 +49,16 @@ test("effort is a flag only where the harness has one", () => {
   expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/reviewer.md", "xhigh")).toEqual(["-m", "gpt-5"]);
 });
 
-test("`default` is a model every harness takes, and it means no model flag at all", () => {
+test("`default` pins Claude to Opus while other harnesses keep their native default", () => {
   for (const harness of Object.values(HARNESSES)) {
     expect(knownModel(harness, DEFAULT_MODEL)).toBe(true);
     expect(modelHint(harness)).toContain(DEFAULT_MODEL);
   }
 
-  // Everything else about the start still applies: only the model args are gone.
+  expect(HARNESSES.claude!.defaultModel).toBe("opus");
   expect(startArgs(HARNESSES.claude!, DEFAULT_MODEL, "/p/implementer.md", "medium")).toEqual([
+    "--model",
+    "opus",
     "--effort",
     "medium",
     "--append-system-prompt-file",

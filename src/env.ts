@@ -68,7 +68,7 @@ export function readEnv(env: Record<string, string | undefined> = process.env): 
     pluginRoot,
     home,
     configDir:
-      first(env, "HERDR_PLUGIN_CONFIG_DIR") ?? `${home}/.config/herdr/plugins/${PLUGIN_ID}`,
+      first(env, "HERDR_PLUGIN_CONFIG_DIR") ?? `${home}/.config/herdr/plugins/config/${PLUGIN_ID}`,
     stateDir:
       first(env, "HERDR_PLUGIN_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
     binPath: first(env, "HERDR_BIN_PATH") ?? "herdr",

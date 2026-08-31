@@ -52,9 +52,9 @@ Planning only; settled by interview. Vocabulary: `CONTEXT.md`. Respects ADR-0001
    pushes, and — on a step that also requires `mr-target` — glab logged in to that
    project's host instead, because such a step needs no checkout. An unmet requirement is a
    skip with a note that names the gap, never a failed run.
-8. **The harness's own model** — `model: default`, at a Step or as the user's default,
-   passes no model flag, so the harness starts on whatever it would start on by itself.
-   Every harness accepts it, and a pane for such a variant is named after the harness.
+8. **Pinned harness defaults** — `model: default`, at a Step or as the user's default,
+   resolves through the harness adapter. Claude pins it to `opus` and always receives
+   `--model opus`; adapters without a pinned default keep their native default.
 9. **The Control Plane** — one tab per workspace as the Session's control
    surface: live agents by role with a key that focuses each, active Runs with their
    step and iteration, this Session's finished Runs with their outcome, and quick
@@ -141,7 +141,7 @@ Steps (one agent throughout, `agent: grill`):
 ### implement
 Inputs: `plan` (work-source: a plan dir, a Linear issue or free text). One implementer
 agent (`agent: build`) for build/architecture/simplify/fix.
-1. `build` — implementer, `model: default` at `effort: medium`. That is the whole
+1. `build` — implementer, Claude's pinned `opus` default at `effort: medium`. That is the whole
    implementer agent, so `architecture`, `simplify`, `fix` and `mr` run on it too.
    Branch off the default branch as `<slug>`; `/implement` over the tickets with `/tdd`
    at the spec's seams; commit per ticket. No separate commit step.
@@ -153,8 +153,8 @@ agent (`agent: build`) for build/architecture/simplify/fix.
    passes; report saved to `{{run.dir}}`, never opened; others → `deferred`.
 3. `simplify` — `/code-simplification`, behaviour-preserving, tests must stay green.
 4. `review` — `use: review`, `fresh: true`, parallel variants opus/medium + sonnet/xhigh.
-   The embedding step also carries `model: default` at `effort: medium`, which the named
-   variants override and `synthesize` — which names none — takes.
+   The embedding step also carries `model: default` (pinned to Claude `opus`) at
+   `effort: medium`, which the named variants override and `synthesize` takes.
 5. `fix` — `repeat: {from: review.synthesize}`, max 5: apply the one synthesised review's
    findings, `disputed` allowed, fixup commits; then loop back through `simplify` →
    `review` (simplify IS in the loop, architecture is not).

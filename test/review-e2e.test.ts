@@ -78,7 +78,7 @@ test("review runs standalone on the inferred target, and post is no longer an in
   expect(starts.map((c) => c.argv!.slice(8))).toEqual([
     ["--model", "opus", "--effort", "medium", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.claude.md")],
     ["--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.claude.md")],
-    ["--model", "sonnet", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.claude.md")],
+    ["--model", "opus", "--append-system-prompt-file", join(run.dir, "personas", "reviewer.claude.md")],
   ]);
   expect(readFileSync(join(run.dir, "personas", "reviewer.claude.md"), "utf8")).toContain("You are a reviewer");
 });

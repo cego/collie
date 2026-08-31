@@ -88,7 +88,7 @@ test("plan runs one step in a tab of its own and records the run", async () => {
     "1-2",
     "--",
   ]);
-  expect(start.slice(8, 10)).toEqual(["--model", "sonnet"]);
+  expect(start.slice(8, 10)).toEqual(["--model", "opus"]);
   expect(start[10]).toBe("--append-system-prompt-file");
   expect(start[11]).toBe(join(run.dir, "personas", "planner.claude.md"));
   expect(readFileSync(start[11]!, "utf8")).toContain("You are a planner");
@@ -115,7 +115,7 @@ test("plan runs one step in a tab of its own and records the run", async () => {
   expect(record.steps[0].status).toBe("done");
   expect(record.steps[0].variants[0]).toMatchObject({
     harness: "claude",
-    model: "sonnet",
+    model: "opus",
     agent: "solo-add-a-picker-solo-r1",
     label: "solo-add-a-picker/solo",
     status: "done",

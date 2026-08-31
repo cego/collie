@@ -19,7 +19,7 @@ export interface Defaults {
 
 export const FALLBACK_DEFAULTS: Defaults = {
   harness: "claude",
-  model: "sonnet",
+  model: "opus",
   maxIterations: 5,
   handoffTimeoutMs: 2 * 60 * 60 * 1000,
   models: {},
