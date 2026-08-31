@@ -3,10 +3,9 @@ import { join } from "node:path";
 import { loadDefaults, type Defaults } from "../../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../../src/definitions";
 import { executeRun } from "../../src/engine";
-import { Herdr } from "../../src/herdr";
+import { FakeHerdr, type Rig } from "./recorder";
 import { classifyWorkSource, inferInputs, inputSources, inputValues, targetKind } from "../../src/inputs";
 import { RunStore, type Run } from "../../src/run";
-import type { Rig } from "./recorder";
 import type { EnginePrompts } from "../../src/engine";
 import type { PickItem } from "../../src/picker";
 
@@ -92,7 +91,7 @@ export async function runWorkflow(
   } = {},
 ): Promise<RanRun> {
   const env = rig.pluginEnv(opts.env);
-  const herdr = new Herdr(env);
+  const herdr = new FakeHerdr(env);
   const defs = loadDefinitions(layers(env));
   const defaults = { ...loadDefaults(env.configDir), ...opts.defaults };
   const wf = resolveWorkflow(name, defs, defaults);

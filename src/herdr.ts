@@ -53,16 +53,7 @@ export class Herdr {
 
   /** Runs the herdr CLI; parses stdout as JSON when it is JSON. */
   async cli(args: string[]): Promise<any> {
-    const proc = Bun.spawn([this.env.binPath, ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env } as Record<string, string>,
-    });
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
+    const { code, stdout, stderr } = await this.exec(args);
     if (code !== 0) {
       throw new HerdrError(`herdr ${args.slice(0, 2).join(" ")} failed (exit ${code})`, stderr.trim() || stdout.trim());
     }
@@ -73,6 +64,21 @@ export class Herdr {
     } catch {
       return text;
     }
+  }
+
+  /** The subprocess boundary alone, so a test double can answer in-process. */
+  protected async exec(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    const proc = Bun.spawn([this.env.binPath, ...args], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env } as Record<string, string>,
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr };
   }
 
   /** One request/response over the herdr socket (newline-delimited JSON). */

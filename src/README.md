@@ -17,6 +17,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/herdr-workflows` per platform; 
 | `handoff.ts` | Giving one Run's result to another Run's live agent |
 | `output.ts` | The Output and Synthesis schemas, `review.md`, and which findings the loop still owns |
 | `run.ts` | The run directory: audit trail and resume state |
+| `lock.ts` | The pid-lock discipline shared by the run persistence lock and the Driver takeover lock |
 | `naming.ts` | herdr-legal agent names vs readable tab and pane labels |
 | `picker.ts` | The minimal TUI |
 | `fork.ts` | Take a definition into a later layer: an `extends:` stub, or a full copy |

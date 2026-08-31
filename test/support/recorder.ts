@@ -6,8 +6,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server } from "node:net";
 import { readEnv, type PluginEnv } from "../../src/env";
+import { Herdr } from "../../src/herdr";
+import { fakeHerdr } from "./fake-herdr-core";
 
 const FAKE_HERDR = new URL("./fake-herdr.ts", import.meta.url).pathname;
+
+/**
+ * The fake herdr answering in-process: the same core, the same call log and
+ * state file, without a `bun` startup per CLI call — an engine run makes
+ * hundreds of them, and the subprocesses were most of the suite's runtime.
+ * Processes a test spawns still exec the CLI wrapper on HERDR_BIN_PATH.
+ */
+export class FakeHerdr extends Herdr {
+  protected override async exec(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    return fakeHerdr(args);
+  }
+}
 
 export interface Call {
   transport: "cli" | "rpc";

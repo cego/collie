@@ -139,8 +139,8 @@ Each action opens the `picker` popup, because that is where a terminal is. The r
 is not a pane: the picker starts a detached `drive` process that outlives it and writes
 what it is doing into the run directory (`progress.jsonl`, `runner.log`), and the Control
 Plane is what renders that. A run therefore survives the picker closing, the Control Plane
-closing, and the terminal being detached; `resume` reads a pid file and refuses to start a
-second driver for a run something is already driving.
+closing, and the terminal being detached; the driver claims the run atomically, so
+`resume` refuses to start a second driver for a run something is already driving.
 
 ## Layers
 
@@ -243,6 +243,7 @@ runtime rather than at validation.
 | --- | --- | --- | --- |
 | `claude` | `--model` | `--append-system-prompt-file` | `--effort low\|medium\|high\|xhigh\|max` |
 | `codex` | `-m` | prompt prefix | — |
+| `pi` | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` |
 | `opencode` | `--model <provider/model>` | prompt prefix | — |
 
 `model: default` is accepted by every harness and means the model flag is left off
@@ -498,10 +499,18 @@ That is the audit trail and what `resume` reads.
 
 ## Working on the plugin
 
+**Bun 1.4 or newer** (`engines` in `package.json`, `.mise.toml`, and the CI image all say
+so). The runner is compiled by bun and the tests are `bun:test`, so the version is a
+prerequisite rather than a preference.
+
 ```sh
 bun install
 bun test
+bun run typecheck      # the same TypeScript gate CI runs
 bun run build          # bin/herdr-workflows for this platform
 ```
+
+`bun run build` compiles beside the binary and renames over it, because replacing a
+running runner's own file kills the process executing it.
 
 See `CONTEXT.md` for the vocabulary and `docs/` for the spec and decisions.

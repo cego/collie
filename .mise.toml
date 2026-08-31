@@ -1,0 +1,3 @@
+# The runner is compiled by bun; its tests are bun's. See package.json engines.
+[tools]
+bun = "1.4"

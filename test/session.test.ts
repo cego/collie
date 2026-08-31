@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { Rig } from "./support/recorder";
+import { FakeHerdr, Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { REVIEW_FILE } from "../src/output";
+import { record } from "../src/handoff";
 import { liveEntries, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { RunStore } from "../src/run";
 import type { AgentInfo } from "../src/herdr";
@@ -97,6 +98,7 @@ test("with an implementer live, the review hands it the findings and both runs r
   // Recorded on both runs, each from its own side.
   expect(run.record.handoffs).toEqual([
     {
+      id: expect.any(String),
       direction: "sent",
       role: "implementer",
       agent: implementer.name,
@@ -355,4 +357,199 @@ test("a run registers its long-lived agent, and a reviewer is not one", async ()
   // `review` has no `agent:` group, so nobody is registered by it — the reviewers are
   // this run's and nothing should hand them work afterwards.
   expect(existsSync(registryPath(env.stateDir, scopeFor(env, env.cwd)))).toBe(false);
+});
+
+test("a received Hand-off survives the receiving Driver's stale save, exactly once", () => {
+  const env = rig.pluginEnv();
+  const store = new RunStore(env.stateDir);
+  const mk = (workflow: string) =>
+    store.create({
+      workflow,
+      cwd: env.cwd,
+      inputs: {},
+      inputSources: {},
+      stepIds: ["build"],
+      maxIterations: 1,
+      primaryInput: workflow,
+    });
+  const receiver = mk("implement");
+  // The receiving Run's active Driver, holding an in-memory record loaded
+  // before the Hand-off arrives.
+  const driverCopy = store.load(receiver.id);
+
+  const sender = mk("review");
+  const session = { herdr: new FakeHerdr(env), stateDir: env.stateDir, ...scopeFor(env, env.cwd) };
+  record(
+    session,
+    sender,
+    { role: "implementer", agent: "impl-1", paneId: "1-9", workspaceId: "1", runId: receiver.id, workflow: "implement", at: "" },
+    "sent review.md to the implementer",
+  );
+
+  // Both sides carry the same identity and timestamp, so the trail correlates.
+  const sent = store.load(sender.id).record.handoffs[0]!;
+  const received = store.load(receiver.id).record.handoffs[0]!;
+  expect(sent.id).toBeTruthy();
+  expect(received.id).toBe(sent.id);
+  expect(received.at).toBe(sent.at);
+  expect(sent.direction).toBe("sent");
+  expect(received.direction).toBe("received");
+
+  // The Driver saves its older in-memory state — twice. The Hand-off remains,
+  // exactly once, and the Driver's own step state still wins.
+  driverCopy.step("build").status = "done";
+  driverCopy.save();
+  driverCopy.save();
+  const after = store.load(receiver.id);
+  expect(after.record.handoffs.map((h) => h.id)).toEqual([sent.id]);
+  expect(after.step("build").status).toBe("done");
+});
+
+test("a receiver that cannot be updated leaves the sender's record intact", () => {
+  const env = rig.pluginEnv();
+  const store = new RunStore(env.stateDir);
+  const sender = store.create({
+    workflow: "review",
+    cwd: env.cwd,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["review"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+  const session = { herdr: new FakeHerdr(env), stateDir: env.stateDir, ...scopeFor(env, env.cwd) };
+  const started = Date.now();
+  record(
+    session,
+    sender,
+    { role: "implementer", agent: "impl-1", paneId: "1-9", workspaceId: "1", runId: "no-such-run", workflow: "implement", at: "" },
+    "sent review.md to the implementer",
+  );
+  // A missing receiver is not lock contention: it fails fast, not after a spin.
+  expect(Date.now() - started).toBeLessThan(1_000);
+
+  const kept = store.load(sender.id).record.handoffs;
+  expect(kept).toHaveLength(1);
+  expect(kept[0]!.run).toBe("no-such-run");
+});
+
+test("recording a Hand-off can neither roll back Driver state nor duplicate on a retried write", () => {
+  const env = rig.pluginEnv();
+  const store = new RunStore(env.stateDir);
+  const receiver = store.create({
+    workflow: "implement",
+    cwd: env.cwd,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["build"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+  // The Driver has moved the Run on since the Hand-off writer last looked at it.
+  receiver.step("build").status = "done";
+  receiver.save();
+
+  const handoff = {
+    id: "exchange-1",
+    direction: "received" as const,
+    role: "implementer",
+    agent: "impl-1",
+    run: "sender-run",
+    at: new Date().toISOString(),
+    note: "sent review.md to the implementer",
+  };
+  store.appendHandoff(receiver.id, handoff);
+  // A retried write of the same exchange is kept once.
+  store.appendHandoff(receiver.id, handoff);
+
+  const after = store.load(receiver.id);
+  expect(after.record.handoffs.map((h) => h.id)).toEqual(["exchange-1"]);
+  // The append wrote only the Hand-off; the Driver's step state stands.
+  expect(after.step("build").status).toBe("done");
+});
+
+test("a Hand-off sent from a stale board snapshot cannot roll back the sender's Driver state", () => {
+  const env = rig.pluginEnv();
+  const store = new RunStore(env.stateDir);
+  const mk = (workflow: string, stepIds: string[]) =>
+    store.create({ workflow, cwd: env.cwd, inputs: {}, inputSources: {}, stepIds, maxIterations: 1, primaryInput: workflow });
+  const sender = mk("review", ["synthesize"]);
+  const receiver = mk("implement", ["build"]);
+  // The Control Plane's snapshot of the sender, loaded before its Driver finished.
+  const boardCopy = store.load(sender.id);
+  sender.step("synthesize").status = "done";
+  sender.record.summary = "done by the driver";
+  sender.save();
+
+  const session = { herdr: new FakeHerdr(env), stateDir: env.stateDir, ...scopeFor(env, env.cwd) };
+  record(
+    session,
+    boardCopy,
+    { role: "implementer", agent: "impl-1", paneId: "1-9", workspaceId: "1", runId: receiver.id, workflow: "implement", at: "" },
+    "sent review.md to the implementer",
+  );
+
+  // The sender's Driver state stands, with the sent record beside it; the
+  // receiver got exactly one received record with the same identity.
+  const after = store.load(sender.id);
+  expect(after.step("synthesize").status).toBe("done");
+  expect(after.record.summary).toBe("done by the driver");
+  expect(after.record.handoffs.map((h) => h.direction)).toEqual(["sent"]);
+  const received = store.load(receiver.id).record.handoffs;
+  expect(received.map((h) => h.direction)).toEqual(["received"]);
+  expect(received[0]!.id).toBe(after.record.handoffs[0]!.id);
+});
+
+test("a sender whose record cannot be persisted still completes the exchange", () => {
+  const env = rig.pluginEnv();
+  const store = new RunStore(env.stateDir);
+  const mk = (workflow: string) =>
+    store.create({ workflow, cwd: env.cwd, inputs: {}, inputSources: {}, stepIds: ["s"], maxIterations: 1, primaryInput: workflow });
+  const sender = mk("review");
+  const receiver = mk("implement");
+  // The prompt has already landed by the time record() runs, so a sender whose
+  // run.json has vanished must not unwind the board or the step.
+  rmSync(join(sender.dir, "run.json"));
+
+  const session = { herdr: new FakeHerdr(env), stateDir: env.stateDir, ...scopeFor(env, env.cwd) };
+  record(
+    session,
+    sender,
+    { role: "implementer", agent: "impl-1", paneId: "1-9", workspaceId: "1", runId: receiver.id, workflow: "implement", at: "" },
+    "sent review.md to the implementer",
+  );
+
+  // The exchange is kept: in the sender's memory, and on the receiver's disk.
+  expect(sender.record.handoffs.map((h) => h.direction)).toEqual(["sent"]);
+  expect(store.load(receiver.id).record.handoffs.map((h) => h.direction)).toEqual(["received"]);
+  expect(readFileSync(join(sender.dir, "log.txt"), "utf8")).toContain("not yet persisted");
+});
+
+test("a Run handing off to its own agent keeps both sides of the exchange", () => {
+  const env = rig.pluginEnv();
+  const store = new RunStore(env.stateDir);
+  // implement embeds review, so the review lands in the implement Run's own dir
+  // and its registered implementer carries that same runId.
+  const run = store.create({
+    workflow: "implement",
+    cwd: env.cwd,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["build"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+
+  const session = { herdr: new FakeHerdr(env), stateDir: env.stateDir, ...scopeFor(env, env.cwd) };
+  record(
+    session,
+    run,
+    { role: "implementer", agent: "impl-1", paneId: "1-9", workspaceId: "1", runId: run.id, workflow: "implement", at: "" },
+    "sent review.md to the implementer",
+  );
+
+  const after = store.load(run.id);
+  expect(after.record.handoffs.map((h) => h.direction).sort()).toEqual(["received", "sent"]);
+  // One exchange: both sides share the id, and neither eats the other.
+  expect(new Set(after.record.handoffs.map((h) => h.id)).size).toBe(1);
 });

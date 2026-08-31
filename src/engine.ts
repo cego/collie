@@ -1262,9 +1262,7 @@ function personaBody(o: EngineOptions, step: ResolvedStep, harness: string): str
  * and the run dir should show what each agent was actually given.
  */
 function personaFile(o: EngineOptions, step: ResolvedStep, harness: string): string {
-  const dir = join(o.run.dir, "personas");
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, `${step.persona ?? "none"}.${harness}.md`);
+  const path = o.run.personaPath(step.persona ?? "none", harness);
   writeFileSync(path, `${personaBody(o, step, harness)}\n`);
   return path;
 }
