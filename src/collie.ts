@@ -1,5 +1,5 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Config, Crypto, Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
+import { Config, Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
 import { Argument, CliConfig, Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import type { PlatformError } from "effect/PlatformError";
 import {
@@ -18,12 +18,14 @@ import { scopeFor } from "./registry";
 import {
   answerRun,
   err,
+  newRequestId,
   ExpectedError,
   prepareWorkflow,
   resumeRun,
   runStatus,
   startRun,
   stopRun,
+  type Failure,
   type OpResult,
 } from "./operations";
 import { unsafePathComponent } from "./naming";
@@ -150,9 +152,10 @@ const readRun = Effect.fn("collie.readRun")(function* (
 ) {
   if (unsafePathComponent(id))
     return err("run_not_found", `Run "${id}" was not found.`, { run: id });
-  const loaded = yield* new RunStore(env.stateDir).load(id).pipe(Effect.result);
-  if (loaded._tag === "Failure") return notLoaded(id, loaded.failure);
-  const run = loaded.success;
+  const run = yield* new RunStore(env.stateDir)
+    .load(id)
+    .pipe(Effect.catch((cause) => Effect.succeed(notLoaded(id, cause))));
+  if (!(run instanceof Run)) return run;
   if (workspace && run.record.workspace !== workspace) {
     return err("run_not_found", `Run "${id}" was not found in workspace "${workspace}".`, {
       run: id,
@@ -166,7 +169,7 @@ const readRun = Effect.fn("collie.readRun")(function* (
  * Why a Run would not load. RunStore decodes `run.json`, so a Run that exists but
  * is not a Run is `invalid_state` and anything else is simply absent.
  */
-function notLoaded(id: string, cause: unknown): Result {
+function notLoaded(id: string, cause: Error | PlatformError): Failure {
   if (cause instanceof InvalidRunState)
     return err("invalid_state", `Run "${id}" has invalid persisted state.`, {
       run: id,
@@ -185,9 +188,7 @@ const runData = Effect.fn("collie.runData")(function* (run: Run) {
 });
 
 const requestId = Effect.fn("collie.requestId")(function* (value: Option.Option<string>) {
-  if (Option.isSome(value)) return value.value;
-  const crypto = yield* Crypto.Crypto;
-  return yield* crypto.randomUUIDv4;
+  return Option.isSome(value) ? value.value : yield* newRequestId();
 });
 
 const receiptPath = Effect.fn("collie.receiptPath")(function* (
@@ -511,7 +512,7 @@ const runStart = Command.make(
           return yield* mutation(resolved.env, "run-start", request, (_id) =>
             Effect.gen(function* () {
               const prepared = yield* prepareWorkflow(resolved.env, workflow);
-              if (!("workflow" in prepared)) return prepared;
+              if (!prepared.ok) return prepared;
               const wf = prepared.workflow;
               for (const item of prepared.resolutions) {
                 const value = explicit.inputs[item.name];

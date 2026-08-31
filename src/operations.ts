@@ -1,13 +1,12 @@
 // What starting, answering, stopping and resuming a Run actually does. Both the CLI
 // and the Herdr adapters call these; neither owns the behaviour, so a pane and a
-// command cannot drift apart. Everything above this line is presentation: picking,
+// command cannot drift apart. What stays with each of them is presentation: picking,
 // prompting, rendering, and turning a result into text or JSON.
 
-import { Config, Effect, FileSystem, Path, Schema } from "effect";
+import { Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
 import { nowIso } from "./time";
 import type { PluginEnv } from "./env";
-import { Herdr } from "./herdr";
-import type { WorkspaceInfo } from "./herdr";
+import { Herdr, type WorkspaceInfo } from "./herdr";
 import { loadDefaults } from "./config";
 import {
   DefinitionError,
@@ -16,7 +15,6 @@ import {
   resolveWorkflow,
   skillDirs,
   validateWorkflow,
-  type Definitions,
   type ResolvedWorkflow,
 } from "./definitions";
 import { CHOICE, driverAlive, readChoice, stopDriver } from "./driver";
@@ -50,21 +48,21 @@ export const ExpectedError = Schema.Struct({
 });
 export interface ExpectedError extends Schema.Schema.Type<typeof ExpectedError> {}
 
-export type OpResult =
-  | { ok: true; data: unknown; human: string }
-  | { ok: false; error: ExpectedError };
+export type Failure = { ok: false; error: ExpectedError };
+export type OpResult = { ok: true; data: unknown; human: string } | Failure;
 
 export const err = (
   code: ExpectedError["code"],
   message: string,
   details: YamlMap = {},
-): OpResult =>
-  ({
-    ok: false,
-    error: ExpectedError.make({ code, message, details }),
-  }) as const;
+): Failure => ({ ok: false, error: ExpectedError.make({ code, message, details }) });
 
 const ok = <A>(data: A, human: string): OpResult => ({ ok: true, data, human });
+
+/** A fresh id for a mutation whose caller supplied none. Reusing one replays it. */
+export const newRequestId = Effect.fn("operations.newRequestId")(function* () {
+  return yield* (yield* Crypto.Crypto).randomUUIDv4;
+});
 
 export const InboxCommand = Schema.Struct({
   type: Schema.Literals(["answer", "stop", "resume"]),
@@ -170,13 +168,6 @@ export const runStatus = Effect.fn("operations.runStatus")(function* (run: Run) 
   return "running";
 });
 
-export interface Prepared {
-  readonly ok: true;
-  readonly workflow: ResolvedWorkflow;
-  readonly definitions: Definitions;
-  readonly resolutions: Resolution[];
-}
-
 /**
  * Everything a start needs before anyone is asked anything: the Workflow resolved,
  * proven runnable, and its Inputs inferred. What fills the gaps afterwards — prompts
@@ -207,11 +198,11 @@ export const prepareWorkflow = Effect.fn("operations.prepareWorkflow")(function*
     cwd: env.cwd,
     stateDir: env.stateDir,
   });
-  return { ok: true, workflow, definitions, resolutions } as const;
+  return { ok: true, workflow, resolutions } as const;
 });
 
 /** A path value would slug the whole path, so a strategy may offer a short name. */
-function primaryInput(resolutions: ReadonlyArray<Resolution>): string {
+function primaryInput(resolutions: Resolution[]): string {
   const first = resolutions.find((r) => r.value !== "");
   if (!first) return "run";
   return first.label ?? first.value;
@@ -222,7 +213,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   env: PluginEnv,
   options: {
     readonly workflow: ResolvedWorkflow;
-    readonly resolutions: ReadonlyArray<Resolution>;
+    readonly resolutions: Resolution[];
     readonly workspace: WorkspaceInfo | null;
     readonly note?: string;
   },
@@ -235,8 +226,8 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     workspace: workspace?.workspaceId ?? env.workspaceId,
     workspaceLabel: workspace?.label ?? null,
     workspaceWorktree: workspace?.worktree ?? null,
-    inputs: inputValues([...resolutions]),
-    inputSources: inputSources([...resolutions]),
+    inputs: inputValues(resolutions),
+    inputSources: inputSources(resolutions),
     stepIds: workflow.steps.map((step) => step.id),
     maxIterations: workflow.maxIterations,
     primaryInput: primaryInput(resolutions),
@@ -248,6 +239,27 @@ export const startRun = Effect.fn("operations.startRun")(function* (
 });
 
 /**
+ * Which Choices this Run's inbox already answers. A command that will not read is
+ * not an answer to anything: only the owning Driver acts on these, and it decides
+ * for itself what to do with one it cannot parse.
+ */
+const answeredChoices = Effect.fn("operations.answeredChoices")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const inbox = path.join(dir, "inbox");
+  if (!(yield* fs.exists(inbox))) return new Set<string>();
+  const answered = new Set<string>();
+  for (const name of yield* fs.readDirectory(inbox)) {
+    const command = yield* fs.readFileString(path.join(inbox, name)).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(InboxAnswerCommandJson)),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    if (command) answered.add(command.choiceId);
+  }
+  return answered;
+});
+
+/**
  * Answers the Run's current Choice. Only the owning Driver moves the Run on; this
  * checks that there is something to answer and that the answer is one of its own.
  */
@@ -256,27 +268,10 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
   answer: string,
   requestId: string,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
   const choice = yield* readChoice(run.dir);
   if (!choice) return err("run_not_waiting", `Run "${run.id}" is not waiting for a Choice.`);
-  const inbox = path.join(run.dir, "inbox");
-  if (yield* fs.exists(inbox)) {
-    for (const name of yield* fs.readDirectory(inbox)) {
-      const command = yield* fs.readFileString(path.join(inbox, name)).pipe(
-        Effect.map((raw) => {
-          try {
-            return Schema.decodeUnknownSync(InboxAnswerCommandJson)(raw);
-          } catch {
-            return null;
-          }
-        }),
-        Effect.catch(() => Effect.succeed(null)),
-      );
-      if (command?.type === "answer" && command.choiceId === choice.id)
-        return err("choice_already_answered", `Choice "${choice.id}" already has an answer.`);
-    }
-  }
+  if ((yield* answeredChoices(run.dir)).has(choice.id))
+    return err("choice_already_answered", `Choice "${choice.id}" already has an answer.`);
   // An empty answer is how a menu is dismissed; it leaves the Run open for a resume.
   if (choice.kind === "menu" && answer !== "" && !choice.items.some((item) => item.id === answer)) {
     return err("invalid_answer", `"${answer}" is not a valid answer.`, {

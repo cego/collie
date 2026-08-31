@@ -2,7 +2,7 @@ import { nowIso, nowMillis } from "./time";
 // What each plugin action does. Actions have no tty, so they only open a pane;
 // the interactive work happens in the `picker` and `runner` pane entrypoints.
 
-import { Config, Console, Crypto, Effect, FileSystem, Path } from "effect";
+import { Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { loadDefaults } from "./config";
 import {
   bodySections,
@@ -42,7 +42,9 @@ import {
 import { scopeFor } from "./registry";
 import {
   answerRun,
+  newRequestId,
   prepareWorkflow,
+  type ExpectedError,
   resumeRun,
   startRun,
   stopRun as stopRunOperation,
@@ -62,6 +64,8 @@ export interface ControlSession extends Omit<Session, "herdr"> {
 }
 
 export type Mode = "pick" | "resume" | "fork";
+
+const ProblemDetails = Schema.Struct({ problems: Schema.Array(Schema.String) });
 
 export interface AnswerKeyResult {
   asking: Asking;
@@ -125,16 +129,7 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
 
   // Resolving, validating and inferring is what `collie run start` does too.
   const prepared = yield* prepareWorkflow(env, chosen.id);
-  if (!("workflow" in prepared)) {
-    const problems = prepared.ok ? [] : (prepared.error.details["problems"] ?? []);
-    return yield* bail(
-      Array.isArray(problems) && problems.length > 0
-        ? [`${chosen.id} is not runnable:`, ...problems.map((p) => `  ${String(p)}`)].join("\n")
-        : prepared.ok
-          ? `${chosen.id} could not be prepared.`
-          : prepared.error.message,
-    );
-  }
+  if (!prepared.ok) return yield* bail(whyNotRunnable(chosen.id, prepared.error));
   const resolved = prepared.workflow;
   const resolutions = prepared.resolutions;
   // An embedded workflow's inputs belong to the run that embeds it, which never asks.
@@ -169,6 +164,16 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
   }
   return 0;
 });
+
+/**
+ * The same failure the CLI reports as one line plus `details`, as the several lines a
+ * pane has room for. Validation problems are the only detail worth spelling out.
+ */
+function whyNotRunnable(workflow: string, error: ExpectedError): string {
+  const detail = Schema.decodeUnknownOption(ProblemDetails)(error.details);
+  if (Option.isNone(detail)) return error.message;
+  return [`${workflow} is not runnable:`, ...detail.value.problems.map((p) => `  ${p}`)].join("\n");
+}
 
 export const forkFlow = Effect.fn("Flows.forkFlow")(function* (herdr: Herdr, env: PluginEnv) {
   const layerList = yield* layers(env);
@@ -298,8 +303,7 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (herdr: Herdr,
   if (!chosen) return 0;
 
   const run = yield* store.load(chosen.id);
-  const crypto = yield* Crypto.Crypto;
-  const resumed = yield* resumeRun(env, run, yield* crypto.randomUUIDv4);
+  const resumed = yield* resumeRun(env, run, yield* newRequestId());
   if (!resumed.ok) return yield* bail(`${run.record.slug}: ${resumed.error.message}`);
   try {
     yield* herdr.popupClose();
@@ -516,8 +520,7 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
     if (value === null) value = picked?.id ?? null;
   }
   if (value !== null) {
-    const crypto = yield* Crypto.Crypto;
-    const answered = yield* answerRun(waiting, value, yield* crypto.randomUUIDv4);
+    const answered = yield* answerRun(waiting, value, yield* newRequestId());
     return {
       asking: { index: 0, typed: "" },
       note: answered.ok
@@ -598,14 +601,13 @@ export const stopRun = Effect.fn("Flows.stopRun")(function* (
 ) {
   const row = view.active[0];
   if (!row) return "nothing running here to stop";
-  const crypto = yield* Crypto.Crypto;
   const run = yield* new RunStore(session.stateDir).load(row.id);
   const stopped = yield* stopRunOperation(
     session.stateDir,
     session.herdr,
     run,
     session,
-    yield* crypto.randomUUIDv4,
+    yield* newRequestId(),
   );
   return stopped.ok ? `stopped ${row.title}` : `${row.title}: ${stopped.error.message}`;
 });

@@ -144,6 +144,7 @@ afterEach(() =>
 const EnvelopeJson = Schema.fromJsonString(
   Schema.Struct({
     ok: Schema.Boolean,
+    data: Schema.optionalKey(Schema.Struct({ runId: Schema.optionalKey(Schema.String) })),
     error: Schema.optionalKey(Schema.Struct({ code: Schema.String, message: Schema.String })),
   }),
 );
@@ -170,10 +171,6 @@ const RecordJson = Schema.fromJsonString(
   }),
 );
 
-const StartJson = Schema.fromJsonString(
-  Schema.Struct({ data: Schema.Struct({ runId: Schema.String }) }),
-);
-
 const pluginEnv = (): PluginEnv => readEnv(env);
 
 /** The in-process half reads the driver override the way a spawned one reads its env. */
@@ -194,7 +191,8 @@ const cli = Effect.fn("parity.cli")(function* (args: string[]) {
       env,
       extendEnv: true,
       stdout: "pipe",
-      stderr: "pipe",
+      // Nothing here asserts on diagnostics, and an unread pipe is a place to wedge.
+      stderr: "ignore",
     }),
   );
   const [stdout, exit] = yield* Effect.all(
@@ -210,16 +208,12 @@ const cli = Effect.fn("parity.cli")(function* (args: string[]) {
     ],
     { concurrency: "unbounded" },
   ).pipe(Effect.scoped);
-  return {
-    body: yield* Schema.decodeUnknownEffect(EnvelopeJson)(stdout),
-    stdout,
-    exit: Number(exit),
-  };
+  return { body: yield* Schema.decodeUnknownEffect(EnvelopeJson)(stdout), exit: Number(exit) };
 });
 
 const makeRun = Effect.fn("parity.makeRun")(function* () {
   const prepared = yield* prepareWorkflow(pluginEnv(), "demo");
-  if (!("workflow" in prepared)) throw new Error("demo is not runnable");
+  if (!prepared.ok) throw new Error(prepared.error.message);
   for (const item of prepared.resolutions) {
     if (item.name !== "goal") continue;
     item.value = "ship";
@@ -378,7 +372,7 @@ effectTest("starting through the operation and through the CLI record the same R
   const path = yield* Path.Path;
   const started = yield* cli(["run", "start", "demo", "--input", "goal=ship"]);
   expect(started.exit).toBe(0);
-  const runId = (yield* Schema.decodeUnknownEffect(StartJson)(started.stdout)).data.runId;
+  const runId = started.body.data?.runId ?? "";
   const fromCli = yield* observed(path.join(env.HERDR_PLUGIN_STATE_DIR, "runs", runId));
 
   // The slug carries the Run's own id, and only that differs.

@@ -155,8 +155,9 @@ const RunSchema = Schema.Struct({
   summary: Schema.NullOr(Schema.String),
 });
 
-// A field added to one side and not the other fails the build here rather than at
-// the next Run that happens to carry it.
+// A field added to one side and not the other leaves the other side's Exclude
+// non-empty, and only a pair of `never`s is assignable to `true` — so the build fails
+// here rather than at the next Run that happens to carry that field.
 type Unschemad = Exclude<keyof RunRecord, keyof Schema.Schema.Type<typeof RunSchema>>;
 type Unrecorded = Exclude<keyof Schema.Schema.Type<typeof RunSchema>, keyof RunRecord>;
 const fieldsAgree: [Unschemad, Unrecorded] extends [never, never] ? true : never = true;
