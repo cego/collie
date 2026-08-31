@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { readFileSync, writeFileSync } from "node:fs";
-import { Rig } from "./support/recorder";
+import { FakeHerdr, Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { installBaseline, plannedRun } from "./support/engine";
 import { loadDefaults } from "../src/config";
 import { layers, loadDefinitions, resolveWorkflow } from "../src/definitions";
 import { executeRun } from "../src/engine";
-import { Herdr } from "../src/herdr";
 import { RunStore, type Run } from "../src/run";
 
 let rig: Rig;
@@ -79,7 +78,7 @@ async function resume(run: Run, queue: unknown[]) {
   const wf = resolveWorkflow(run.record.workflow, defs, defaults);
   const lines: string[] = [];
   const status = await executeRun({
-    herdr: new Herdr(env),
+    herdr: new FakeHerdr(env),
     defs,
     defaults,
     wf,

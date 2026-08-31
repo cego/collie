@@ -710,3 +710,86 @@ test("a file with no extends still replaces the whole definition", () => {
   expect(wf.inputs).toEqual({});
   expect(bodySections(wf.body).sections.get("s")).toBe("mine");
 });
+
+test("names that cannot be one path component inside the Run are rejected, naming the field", () => {
+  writeDef(rig.baselineDir, "workflows", "w", `---
+name: w
+steps:
+  - id: ../evil
+    persona: reviewer
+    output: build.json
+  - id: ok
+    persona: reviewer
+    output: /etc/passwd
+  - id: menu
+    persona: reviewer
+    choices:
+      - title: Refine
+        prompt: refine
+        output: sub/dir.json
+---
+## ../evil
+a
+
+## ok
+b
+
+## refine
+c
+`);
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+  const defs = loadDefinitions(ls());
+  const errors = validateWorkflow(resolveWorkflow("w", defs, defaults), defs, defaults);
+
+  expect(errors.some((e) => e.includes('workflow "w" step "../evil"') && e.includes("id"))).toBe(true);
+  expect(errors.some((e) => e.includes('step "ok"') && e.includes('output "/etc/passwd"'))).toBe(true);
+  expect(errors.some((e) => e.includes('choice "Refine"') && e.includes('output "sub/dir.json"'))).toBe(true);
+});
+
+test("a persona whose name cannot be a filename component is rejected", () => {
+  writeDef(rig.baselineDir, "workflows", "w", "---\nname: w\nsteps:\n  - id: s\n    persona: ../escape\n---\n## s\nx");
+  writeDef(rig.baselineDir, "personas", "escape", "---\nname: ../escape\n---\nEvil.");
+
+  const defs = loadDefinitions(ls());
+  const errors = validateWorkflow(resolveWorkflow("w", defs, defaults), defs, defaults);
+
+  expect(errors.some((e) => e.includes('step "s"') && e.includes('persona "../escape"'))).toBe(true);
+});
+
+test("dots inside an id are fine; empty, dot and separator components are not", () => {
+  writeDef(rig.baselineDir, "workflows", "w", "---\nname: w\nsteps:\n  - id: build.tickets\n    persona: reviewer\n    output: out.json\n---\n## build.tickets\nx");
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+  const defs = loadDefinitions(ls());
+  expect(validateWorkflow(resolveWorkflow("w", defs, defaults), defs, defaults)).toEqual([]);
+});
+
+test("a provider-qualified model becomes one safe directory component in its variant key", () => {
+  expect(
+    variantKeys([
+      { harness: "pi", model: "openai-codex/gpt-5.6-sol" },
+      { harness: "claude", model: "opus" },
+    ]),
+  ).toEqual(["pi-openai-codex-gpt-5.6-sol", "claude-opus"]);
+});
+
+test("a workflow whose own name cannot be a path component is rejected before a Run exists", () => {
+  writeDef(rig.baselineDir, "workflows", "evil", "---\nname: ../../escaped\nsteps:\n  - id: s\n    persona: reviewer\n---\n## s\nx");
+  writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+  const defs = loadDefinitions(ls());
+  const errors = validateWorkflow(resolveWorkflow("../../escaped", defs, defaults), defs, defaults);
+
+  expect(errors.some((e) => e.includes('workflow "../../escaped"') && e.includes("Run directory"))).toBe(true);
+});
+
+test("variant keys stay unique even when encoding makes different models collide", () => {
+  expect(
+    variantKeys([
+      { harness: "pi", model: "p/foo:bar" },
+      { harness: "pi", model: "p/foo-bar" },
+      { harness: "pi", model: "p/foo-bar-2" },
+    ]),
+  ).toEqual(["pi-p-foo-bar", "pi-p-foo-bar-2", "pi-p-foo-bar-2-2"]);
+});

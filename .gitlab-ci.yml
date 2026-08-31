@@ -2,14 +2,15 @@
 stages: [test, build, release]
 
 default:
-  image: oven/bun:1.3
+  image: oven/bun:1.4
 
 test:
   stage: test
   script:
     - bun install --frozen-lockfile
     - bun test
-    - bunx tsc --noEmit
+    # The same script contributors run, so the local gate and CI cannot drift.
+    - bun run typecheck
 
 build:
   stage: build

@@ -27,19 +27,37 @@ export interface HandoffResult {
  * arrived from somewhere else is otherwise invisible in its audit trail.
  */
 export function record(session: Session, from: Run, target: AgentEntry, note: string): void {
+  // One identity and one timestamp for the exchange, so either side's audit
+  // trail correlates to the other and a merge can deduplicate a retried write.
+  const id = crypto.randomUUID();
   const at = new Date().toISOString();
-  from.record.handoffs.push({ direction: "sent", role: target.role, agent: target.agent, run: target.runId, at, note });
-  from.save();
-  from.log(`handoff sent: ${note} -> ${target.agent}`);
-
   const store = new RunStore(session.stateDir);
+
+  // The sender may be a snapshot the Control Plane loaded while that Run's own
+  // Driver is still saving, so its entry also goes through the merge-safe append
+  // rather than a whole-Run save that would revert the Driver's newer state. The
+  // in-memory record keeps it too, for the sender's own later saves.
+  const sent = { id, direction: "sent" as const, role: target.role, agent: target.agent, run: target.runId, at, note };
+  from.record.handoffs.push(sent);
   try {
-    const to = store.load(target.runId);
-    to.record.handoffs.push({ direction: "received", role: target.role, agent: target.agent, run: from.id, at, note });
-    to.save();
+    store.appendHandoff(from.id, sent);
+  } catch (e) {
+    // The prompt has already landed, so a persistence failure here must not
+    // unwind the caller — the board would die mid-keypress, or the step would
+    // fail a Run whose exchange really happened. The in-memory entry stands and
+    // the sender's next save merges it in.
+    from.log(`handoff sent but not yet persisted: ${(e as Error).message}`);
+  }
+  from.log(`handoff sent: ${note} -> ${target.agent}`);
+  try {
+    // Appended under the run lock to a freshly loaded record, so the receiving
+    // Run's active Driver can neither erase this entry with a later save nor
+    // have its own state rolled back by this write.
+    const to = store.appendHandoff(target.runId, { id, direction: "received", role: target.role, agent: target.agent, run: from.id, at, note });
     to.log(`handoff received: ${note} from run ${from.id}`);
-  } catch {
+  } catch (e) {
     // The other run's dir may be gone; the sender's record is the one that matters.
+    from.log(`handoff not recorded on run ${target.runId}: ${(e as Error).message}`);
   }
 }
 

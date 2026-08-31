@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { skillsIn } from "./template";
+import { unsafePathComponent } from "./naming";
 import { parseDocument, YamlError } from "./yaml";
 import { HARNESSES, harnessNames, knownModel, modelHint } from "./harness";
 import type { Defaults } from "./config";
@@ -504,6 +505,12 @@ function missingSkills(wf: ResolvedWorkflow, defs: Definitions, dirs: string[]):
 
 export class DefinitionError extends Error {}
 
+/** The error for one Workflow-controlled name, or nothing when it is safe. */
+function nameErrors(where: string, label: string, value: string, names: string): string[] {
+  const bad = unsafePathComponent(value);
+  return bad ? [`${where}: ${label} ${bad}, and it names ${names}`] : [];
+}
+
 export function resolveWorkflow(
   name: string,
   defs: Definitions,
@@ -665,6 +672,10 @@ export function validateWorkflow(
 
   if (skills) errors.push(...missingSkills(wf, defs, skills));
 
+  // The workflow's own name becomes the Run directory, so it is held to the same
+  // rule as every other Workflow-controlled name.
+  errors.push(...nameErrors(`workflow "${wf.name}"`, "name", wf.name, "the Run directory"));
+
   for (const step of wf.steps) {
     for (const need of step.requires ?? []) {
       if (!(STEP_REQUIREMENTS as readonly string[]).includes(need)) {
@@ -688,8 +699,16 @@ export function validateWorkflow(
     if (seen.has(step.id)) errors.push(`${where(step.id)}: duplicate step id`);
     seen.add(step.id);
 
+    errors.push(...nameErrors(where(step.id), "step id", step.id, "a directory inside the Run"));
+    if (step.output) {
+      errors.push(...nameErrors(where(step.id), `output "${step.output}"`, step.output, "a file inside the Step directory"));
+    }
+
     const isChoice = (step.choices?.length ?? 0) > 0;
     const personaName = step.persona;
+    if (personaName) {
+      errors.push(...nameErrors(where(step.id), `persona "${personaName}"`, personaName, "the Persona file in the Run"));
+    }
     if (!personaName && !isChoice) errors.push(`${where(step.id)}: no persona`);
     else if (personaName && !defs.personas.has(personaName)) {
       const known = [...defs.personas.keys()].sort().join(", ") || "none";
@@ -792,9 +811,15 @@ function choiceErrors(
       }
       const persona = round.persona ?? step.persona;
       if (!round.agent && !persona) errors.push(`${where}: needs a persona or an agent`);
+      if (persona) {
+        errors.push(...nameErrors(where, `persona "${persona}"`, persona, "the Persona file in the Run"));
+      }
       if (persona && !defs.personas.has(persona)) {
         const known = [...defs.personas.keys()].sort().join(", ") || "none";
         errors.push(`${where}: unknown persona "${persona}" (known: ${known})`);
+      }
+      if (round.output) {
+        errors.push(...nameErrors(where, `output "${round.output}"`, round.output, "a file inside the Step directory"));
       }
       if (round.agent && !earlier(wf, step, round.agent)) {
         errors.push(`${where}: agent "${round.agent}" is not an earlier step`);
@@ -879,8 +904,20 @@ function withEffort(variant: Variant, effort: string | undefined): Variant {
  */
 export function variantKeys(variants: Variant[]): (string | null)[] {
   if (variants.length < 2) return variants.map(() => null);
-  const base = variants.map((v) => `${v.harness}-${v.model}`);
+  // A key becomes a directory under the Step, so a provider-qualified model
+  // (`openai-codex/gpt-5.6-sol`) is encoded to one component rather than two.
+  const component = (text: string) => text.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const base = variants.map((v) => component(`${v.harness}-${v.model}`));
   const withEfforts = variants.map((v, i) => (v.effort ? `${base[i]}-${v.effort}` : base[i]!));
   const keys = base.some((k, i) => base.indexOf(k) !== i) ? withEfforts : base;
-  return keys.map((key, i) => (keys.indexOf(key) === i ? key : `${key}-${i + 1}`));
+  // Uniqueness is allocated against the keys actually emitted: encoding can make
+  // two different models collide, and a bare numeric suffix could collide with a
+  // third model that already ends in one.
+  const out: string[] = [];
+  for (const key of keys) {
+    let candidate = key;
+    for (let n = 2; out.includes(candidate); n++) candidate = `${key}-${n}`;
+    out.push(candidate);
+  }
+  return out;
 }

@@ -43,6 +43,22 @@ export function stepLabel(slug: string, stepId: string, variantKey: string | nul
   return [slug, stepId, variantKey].filter((p) => p).join("/");
 }
 
+/**
+ * Workflow-controlled names become single path components inside the Run, so a
+ * definition must not be able to spell one that lands anywhere else. Returns why
+ * a value is unsafe, or null when it is a plain component. Validation wraps it
+ * in field-naming messages; Run path construction wraps it in a throw.
+ */
+export function unsafePathComponent(value: string): string | null {
+  if (value === "") return "is empty";
+  if (value === "." || value === "..") return `is "${value}"`;
+  if (value.includes("/") || value.includes("\\")) return "contains a path separator";
+  // Filesystem APIs reject NUL in paths; catching it here keeps the error a
+  // field-naming validation message instead of a raw fs throw after the Run starts.
+  if (value.includes("\0")) return "contains a NUL byte";
+  return null;
+}
+
 export function shellQuote(text: string): string {
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }

@@ -1,28 +1,29 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { Rig } from "./support/recorder";
+import { FakeHerdr, Rig } from "./support/recorder";
+import { FakeBin } from "./support/bin";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
 import {
+  acquireDriver,
   answerChoice,
   appendProgress,
   CHOICE,
   CHOICE_ANSWER,
-  clearPid,
   driverAlive,
   filePrompts,
   lastProgress,
   readChoice,
   readProgress,
+  releaseDriver,
   RUNNER_LOG,
   RUNNER_PID,
   stopDriver,
   writeChoice,
-  writePid,
 } from "../src/driver";
-import { answerKey, openLog, spawnDriver } from "../src/flows";
-import { Herdr } from "../src/herdr";
+import { answerKey, driverCommand, openLog, spawnDriver } from "../src/flows";
+import { processStartTime } from "../src/lock";
 import type { Asking } from "../src/workspace";
 import { askingRun, buildView, renderWorkspace } from "../src/workspace";
 import { scopeFor } from "../src/registry";
@@ -315,21 +316,22 @@ test("a run nothing is driving is abandoned; one with a live driver is not", () 
   run.save();
   const later = Date.now() + 3_600_000;
 
-  // This test process is a live driver as far as the pid file is concerned.
-  writePid(run.dir);
+  // This test process is a live driver as far as the ownership claim is concerned.
+  expect(acquireDriver(run.dir)).toBe(true);
   expect(driverAlive(run.dir)).toBe(true);
   expect(board(later).active.map((r) => r.title)).toEqual(["Review · worktree"]);
   // And resume will not start a second one for it.
   expect(store.resumable().filter((r) => !driverAlive(r.dir))).toEqual([]);
 
-  clearPid(run.dir);
+  releaseDriver(run.dir);
   expect(driverAlive(run.dir)).toBe(false);
   const gone = board(later);
   expect(gone.active).toEqual([]);
   // Why it stopped is on the row, because there is no pane it could have printed in.
   expect(gone.recent[0]!.detail).toBe("abandoned · herdr agent start failed (exit 1)");
 
-  // A pid file left behind by a driver that died is not a driver.
+  // A claim left behind by a driver that died is not a driver, and neither is a
+  // legacy plain-pid file naming a process that no longer exists.
   writeFileSync(join(run.dir, RUNNER_PID), "999999\n");
   expect(driverAlive(run.dir)).toBe(false);
 });
@@ -359,17 +361,17 @@ test("a failed run says why on its row, and its log opens in a pane of its own",
   // `l` puts the detail in a pane of its own, split off the board's.
   const before = rig.calls().length;
   const note = await openLog(
-    { herdr: new Herdr(env), ...scopeFor(env, env.cwd), stateDir: env.stateDir, paneId: "1-1" },
+    { herdr: new FakeHerdr(env), ...scopeFor(env, env.cwd), stateDir: env.stateDir, paneId: "1-1" },
     board(),
   );
   expect(note).toContain(row.title);
   const after = rig.calls().slice(before);
   expect(after.map((c) => c.cmd)).toEqual(["pane split", "pane run"]);
   expect(after[0]!.argv!.slice(2, 5)).toEqual(["1-1", "--direction", "down"]);
-  expect(after[1]!.argv!.at(-1)).toBe(`less +G ${run.dir}/${RUNNER_LOG}`);
+  expect(after[1]!.argv!.at(-1)).toBe(`less +G '${run.dir}/${RUNNER_LOG}'`);
 });
 
-test("a run can be stopped, because closing a pane no longer does it", () => {
+test("a run can be stopped, because closing a pane no longer does it", async () => {
   const run = new RunStore(rig.stateDir).create({
     workflow: "review",
     cwd: rig.projectDir,
@@ -388,14 +390,86 @@ test("a run can be stopped, because closing a pane no longer does it", () => {
   // A driver that is not there cannot be stopped, and says so rather than lying.
   expect(stopDriver(run.dir)).toBe(false);
 
-  // One that is: a real process, asked to stop, and its pid file goes with it.
+  // A live process whose identity does not match the claim is not the driver: a
+  // pid reused by something unrelated must never be signalled. It stays alive.
+  const bystander = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+  writeFileSync(
+    join(run.dir, RUNNER_PID),
+    `${JSON.stringify({ pid: bystander.pid, start: "not-its-start-time", at: new Date().toISOString() })}\n`,
+  );
+  expect(driverAlive(run.dir)).toBe(false);
+  expect(stopDriver(run.dir)).toBe(false);
+  expect(bystander.killed).toBe(false);
+
+  // A verified owner: a real process, asked to stop. The claim stays while it
+  // dies — a resume in that window must still see the run as owned — and reads
+  // as stale once the process is gone, which is when a new claim may be taken.
   const child = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
-  writeFileSync(join(run.dir, RUNNER_PID), `${child.pid}\n`);
+  writeFileSync(
+    join(run.dir, RUNNER_PID),
+    `${JSON.stringify({ pid: child.pid, start: processStartTime(child.pid), at: new Date().toISOString() })}\n`,
+  );
   expect(driverAlive(run.dir)).toBe(true);
   expect(stopDriver(run.dir)).toBe(true);
+  expect(existsSync(join(run.dir, RUNNER_PID))).toBe(true);
+  await child.exited;
   expect(driverAlive(run.dir)).toBe(false);
-  expect(existsSync(join(run.dir, RUNNER_PID))).toBe(false);
+  // The dead owner's claim is stale, so the next driver can take the run over.
+  expect(acquireDriver(run.dir)).toBe(true);
+  releaseDriver(run.dir);
+  bystander.kill();
 });
+
+test("ownership: one winner, stale claims recovered, and only your own claim released", async () => {
+  const run = new RunStore(rig.stateDir).create({
+    workflow: "solo",
+    cwd: rig.projectDir,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["solo"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+  const root = new URL("../", import.meta.url).pathname;
+  const claimAndHold = `const { acquireDriver } = await import(${JSON.stringify(`${root}src/driver.ts`)});
+console.log(acquireDriver(${JSON.stringify(run.dir)}));
+await Bun.sleep(5000);`;
+
+  // Two concurrent claims on one run: exactly one owner, one clean refusal. The
+  // winner holds its claim (and stays alive) until this test kills it.
+  const spawnClaim = () => Bun.spawn(["bun", "-e", claimAndHold], { stdout: "pipe", stderr: "ignore" });
+  const firstLine = async (p: ReturnType<typeof spawnClaim>) => {
+    const reader = p.stdout.getReader();
+    let text = "";
+    while (!text.includes("\n")) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      text += new TextDecoder().decode(value);
+    }
+    return text.split("\n")[0]!;
+  };
+  const a = spawnClaim();
+  const b = spawnClaim();
+  const won = await Promise.all([a, b].map(async (p) => (await firstLine(p)) === "true"));
+  expect(won.filter(Boolean)).toHaveLength(1);
+  expect(driverAlive(run.dir)).toBe(true);
+
+  // A different process cannot release the owner's claim.
+  releaseDriver(run.dir);
+  expect(driverAlive(run.dir)).toBe(true);
+
+  // The owner dies without cleanup: the stale claim is recovered, not respected.
+  a.kill();
+  b.kill();
+  await Promise.all([a.exited, b.exited]);
+  expect(driverAlive(run.dir)).toBe(false);
+  expect(acquireDriver(run.dir)).toBe(true);
+  expect(driverAlive(run.dir)).toBe(true);
+  // And a second claim while this one lives is refused.
+  expect(acquireDriver(run.dir)).toBe(false);
+  releaseDriver(run.dir);
+  expect(existsSync(join(run.dir, RUNNER_PID))).toBe(false);
+}, 20_000);
 
 test("the driver outlives the process that started it", async () => {
   const store = new RunStore(rig.stateDir);
@@ -426,7 +500,7 @@ spawnDriver(env, process.env.RUN_ID!, env.cwd);
   );
   const spawned = Bun.spawn(["bun", parent], {
     env: {
-      ...rig.env({ HERDR_WORKFLOWS_DRIVER: `bun ${root}src/main.ts`, RUN_ID: run.id }),
+      ...rig.env({ HERDR_WORKFLOWS_DRIVER: JSON.stringify(["bun", `${root}src/main.ts`]), RUN_ID: run.id }),
     } as Record<string, string>,
     stdout: "ignore",
     stderr: "ignore",
@@ -445,3 +519,157 @@ spawnDriver(env, process.env.RUN_ID!, env.cwd);
   for (let i = 0; i < 40 && driverAlive(finished.dir); i++) await sleep(50);
   expect(driverAlive(finished.dir)).toBe(false);
 }, 30_000);
+
+test("the compiled driver path is one executable, and overrides are explicit arguments", () => {
+  const env = rig.pluginEnv();
+  delete process.env.HERDR_WORKFLOWS_DRIVER;
+  expect(driverCommand(env)).toEqual([`${env.pluginRoot}/bin/herdr-workflows`]);
+
+  process.env.HERDR_WORKFLOWS_DRIVER = JSON.stringify(["bun", "/a dir with spaces/main.ts"]);
+  expect(driverCommand(env)).toEqual(["bun", "/a dir with spaces/main.ts"]);
+
+  // Anything that is not a JSON array is one executable path, spaces and all —
+  // as long as it actually exists.
+  const spaced = join(rig.root, "my tools", "herdr-workflows");
+  mkdirSync(join(rig.root, "my tools"), { recursive: true });
+  writeFileSync(spaced, "#!/bin/sh\n", { mode: 0o755 });
+  process.env.HERDR_WORKFLOWS_DRIVER = spaced;
+  expect(driverCommand(env)).toEqual([spaced]);
+
+  // The pre-JSON space-separated form gets the contract error, not a raw ENOENT.
+  process.env.HERDR_WORKFLOWS_DRIVER = "bun src/main.ts";
+  expect(() => driverCommand(env)).toThrow("JSON array");
+
+  process.env.HERDR_WORKFLOWS_DRIVER = '["bun", 42]';
+  expect(() => driverCommand(env)).toThrow("HERDR_WORKFLOWS_DRIVER");
+  process.env.HERDR_WORKFLOWS_DRIVER = "[not json";
+  expect(() => driverCommand(env)).toThrow("HERDR_WORKFLOWS_DRIVER");
+  delete process.env.HERDR_WORKFLOWS_DRIVER;
+});
+
+test("driver startup works from a plugin root with spaces and shell metacharacters", async () => {
+  const pluginRoot = join(rig.root, "plu gin's root; touch pwned");
+  const marker = join(rig.root, "launched.txt");
+  mkdirSync(join(pluginRoot, "bin"), { recursive: true });
+  writeFileSync(
+    join(pluginRoot, "bin", "herdr-workflows"),
+    `#!/bin/sh\nprintf '%s %s' "$1" "$HERDR_WORKFLOWS_RUN" > ${JSON.stringify(marker)}\n`,
+    { mode: 0o755 },
+  );
+  delete process.env.HERDR_WORKFLOWS_DRIVER;
+
+  const env = rig.pluginEnv({ HERDR_PLUGIN_ROOT: pluginRoot });
+  spawnDriver(env, "run-1", rig.projectDir);
+  for (let i = 0; i < 100 && !existsSync(marker); i++) await sleep(25);
+
+  // The path reached exec whole: the fake driver ran, with the run in its env,
+  // and the metacharacters in the path stayed path characters.
+  expect(readFileSync(marker, "utf8")).toBe("drive run-1");
+  expect(existsSync(join(rig.root, "pwned"))).toBe(false);
+  expect(existsSync("pwned")).toBe(false);
+});
+
+test("a log path with spaces and metacharacters is one argument to less, not syntax", async () => {
+  const env = rig.pluginEnv();
+  const dir = join(rig.root, "state's dir; touch pwned", "run dir");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, RUNNER_LOG), "hello\n");
+  const row = { id: "r", dir, glyph: "✓", title: "Review · x", detail: "", choice: null };
+  const view = { repo: "r", cwd: env.cwd, agents: [], extraAgents: 0, active: [], recent: [row] };
+
+  const note = await openLog(
+    { herdr: new FakeHerdr(env), ...scopeFor(env, env.cwd), stateDir: env.stateDir, paneId: "1-1" },
+    view,
+  );
+  expect(note).toContain("Review · x");
+
+  // Run the exact command the pane was given through a real shell, with `less`
+  // faked: the whole path must arrive as one argument, and nothing else must run.
+  const command = rig.calls().filter((c) => c.cmd === "pane run").at(-1)!.argv!.at(-1)!;
+  const bin = new FakeBin(join(rig.root, "fakebin"));
+  const marker = join(rig.root, "less-arg.txt");
+  bin.add("less", `printf '%s' "$2" > ${JSON.stringify(marker)}`);
+  const proc = Bun.spawnSync(["sh", "-c", command], { env: process.env as Record<string, string> });
+  bin.restore();
+
+  expect(proc.exitCode).toBe(0);
+  expect(readFileSync(marker, "utf8")).toBe(join(dir, RUNNER_LOG));
+  expect(existsSync(join(rig.root, "pwned"))).toBe(false);
+  expect(existsSync("pwned")).toBe(false);
+});
+
+test("a contender mid-takeover blocks others from clearing the claim, and its crash does not wedge the run", () => {
+  const run = new RunStore(rig.stateDir).create({
+    workflow: "solo",
+    cwd: rig.projectDir,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["solo"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+  const claim = join(run.dir, RUNNER_PID);
+  const lock = `${claim}.takeover`;
+  // A stale claim (dead pid), with a live contender holding the takeover lock —
+  // this test process stands in for that contender.
+  writeFileSync(claim, `${JSON.stringify({ pid: 999999, start: "1", at: "" })}\n`);
+  writeFileSync(lock, `${JSON.stringify({ pid: process.pid, start: processStartTime(process.pid) })}\n`);
+
+  // This attempt loses cleanly and, crucially, does not remove the claim: the
+  // lock holder may already have cleared it and written a fresh one of its own.
+  expect(acquireDriver(run.dir)).toBe(false);
+  expect(existsSync(claim)).toBe(true);
+
+  // The lock holder crashed: a dead holder's lock is broken at once — no ageing
+  // needed — and the run is not wedged.
+  writeFileSync(lock, `${JSON.stringify({ pid: 424242, start: "1" })}\n`);
+  expect(acquireDriver(run.dir)).toBe(true);
+  releaseDriver(run.dir);
+  expect(existsSync(lock)).toBe(false);
+});
+
+test("a pre-upgrade bare-pid claim from a live driver still counts as a driver", () => {
+  const run = new RunStore(rig.stateDir).create({
+    workflow: "solo",
+    cwd: rig.projectDir,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["solo"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+  // This test process stands in for a driver from the previous release.
+  writeFileSync(join(run.dir, RUNNER_PID), `${process.pid}\n`);
+
+  // Alive for liveness — a resume mid-upgrade must not start a second driver —
+  // but never verified enough to signal.
+  expect(driverAlive(run.dir)).toBe(true);
+  expect(acquireDriver(run.dir)).toBe(false);
+  expect(stopDriver(run.dir)).toBe(false);
+  expect(existsSync(join(run.dir, RUNNER_PID))).toBe(true);
+  rmSync(join(run.dir, RUNNER_PID));
+});
+
+test("an unreadable young claim is a winner mid-write, not a stale claim to remove", () => {
+  const run = new RunStore(rig.stateDir).create({
+    workflow: "solo",
+    cwd: rig.projectDir,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["solo"],
+    maxIterations: 1,
+    primaryInput: "x",
+  });
+  const claim = join(run.dir, RUNNER_PID);
+  // wx creation and the JSON write are not one operation; a contender arriving
+  // between them sees an empty claim. It must lose cleanly, not remove it.
+  writeFileSync(claim, "");
+  expect(acquireDriver(run.dir)).toBe(false);
+  expect(existsSync(claim)).toBe(true);
+
+  // Aged past any plausible write, the unreadable claim is leftovers.
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(claim, old, old);
+  expect(acquireDriver(run.dir)).toBe(true);
+  releaseDriver(run.dir);
+});

@@ -2,6 +2,7 @@
 // the interactive work happens in the `picker` and `runner` pane entrypoints.
 
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { loadDefaults } from "./config";
 import {
   bodySections,
@@ -38,19 +39,20 @@ import {
   type PickItem,
 } from "./picker";
 import { forkDefinition, type DefinitionKind } from "./fork";
+import { shellQuote } from "./naming";
 import { RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
 import {
+  acquireDriver,
   answerChoice,
   appendProgress,
-  clearPid,
   driverAlive,
   filePrompts,
   lastProgress,
   readChoice,
+  releaseDriver,
   RUNNER_LOG,
   stopDriver,
-  writePid,
   type PendingChoice,
 } from "./driver";
 import { scopeFor } from "./registry";
@@ -184,9 +186,7 @@ export async function pickFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
  * own is what actually takes the driver out of the terminal's reach.
  */
 export function spawnDriver(env: PluginEnv, runId: string, cwd: string): void {
-  const [command = "", ...rest] = (
-    process.env.HERDR_WORKFLOWS_DRIVER ?? `${env.pluginRoot}/bin/herdr-workflows`
-  ).split(" ");
+  const [command, ...rest] = driverCommand(env);
   spawn(command, [...rest, "drive"], {
     cwd,
     env: {
@@ -197,6 +197,39 @@ export function spawnDriver(env: PluginEnv, runId: string, cwd: string): void {
     detached: true,
     stdio: "ignore",
   }).unref();
+}
+
+/**
+ * The executable that drives a run, plus its arguments. The compiled driver is
+ * one path passed whole — never split, so a checkout under a directory with
+ * spaces launches normally. HERDR_WORKFLOWS_DRIVER overrides it for development
+ * and tests, with an explicit contract instead of shell parsing: a JSON array
+ * (`["bun","src/main.ts"]`) is executable-plus-arguments, anything else is one
+ * executable path.
+ */
+export function driverCommand(env: PluginEnv): [string, ...string[]] {
+  const override = process.env.HERDR_WORKFLOWS_DRIVER;
+  if (!override) return [`${env.pluginRoot}/bin/herdr-workflows`];
+  if (override.trimStart().startsWith("[")) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(override);
+    } catch {
+      parsed = null;
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0 || parsed.some((p) => typeof p !== "string")) {
+      throw new Error(`HERDR_WORKFLOWS_DRIVER must be one path or a JSON array of strings, not ${override}`);
+    }
+    return parsed as [string, ...string[]];
+  }
+  // The pre-JSON form was a space-separated command; a bare value with spaces
+  // that names no file would otherwise die as a raw spawn ENOENT.
+  if (/\s/.test(override) && !existsSync(override)) {
+    throw new Error(
+      `HERDR_WORKFLOWS_DRIVER must be one executable path or a JSON array of strings (e.g. ["bun","src/main.ts"]), not ${override}`,
+    );
+  }
+  return [override];
 }
 
 export async function forkFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
@@ -327,11 +360,12 @@ export async function driveFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
   const run = store.load(runId);
   const out = (line: string) => appendProgress(run.dir, line);
 
-  if (driverAlive(run.dir)) {
+  // Atomic: acquiring is the check. A separate liveness test then a write would
+  // let two resumes race past each other and drive the same run twice.
+  if (!acquireDriver(run.dir)) {
     out("a driver is already running this run; this one is stopping");
     return 1;
   }
-  writePid(run.dir);
 
   try {
     const defs = loadDefinitions(layers({ ...env, cwd: run.record.cwd }));
@@ -371,7 +405,7 @@ export async function driveFlow(herdr: Herdr, env: PluginEnv): Promise<number> {
     }
     return 1;
   } finally {
-    clearPid(run.dir);
+    releaseDriver(run.dir);
   }
 }
 
@@ -564,7 +598,9 @@ export async function openLog(session: Session, view: WorkspaceView): Promise<st
   const path = `${run.dir}/${RUNNER_LOG}`;
   try {
     const pane = await session.herdr.paneSplit({ paneId: session.paneId ?? "", direction: "down", ratio: 0.6 });
-    await session.herdr.paneRun(pane, `less +G ${path}`);
+    // The pane is a shell, so the path is quoted: spaces and metacharacters in a
+    // state dir are path characters here, not syntax.
+    await session.herdr.paneRun(pane, `less +G ${shellQuote(path)}`);
     return `opened ${run.title}'s log`;
   } catch (e) {
     return `${path}: ${(e as Error).message}`;

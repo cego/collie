@@ -16,7 +16,7 @@
 
 **Model** — The model a Harness is asked to use. User default, per-Step override. Unknown model ⇒ launch fails before any Tab opens.
 
-**Input** — A value a Workflow needs (plan file, diff target, goal). Inferred from context (branch, cwd, tasks/, glab); the human is asked only when inference fails.
+**Input** — A value a Workflow needs (plan directory, diff target, goal). Inferred from context (branch, cwd, earlier plan Runs, glab); the human is asked only when inference fails.
 
 **Output** — A structured JSON file a Step writes to the Run directory (e.g. a review verdict + findings). Gates and loops read Outputs, never terminal text.
 
@@ -44,9 +44,10 @@ plan does not cover. Both Runs record it.
 **Disputed** — The implementer may mark a finding `disputed` with a reason; the reviewers are shown those reasons and a disputed finding no longer drives the loop, so the run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts it back in front of the implementer.
 
 ## Baseline Workflows
-- `plan` — interviews the human, writes `tasks/<slug>/PLAN.md`.
+- `plan` — interviews the human, writes `SPEC.md` and one ticket per slice into its Run's plan directory (ADR-0002), then a Choice: implement now, second opinion, offload to Linear, refine.
 - `implement` — build from plan → parallel `review` (multi-harness/model) → fix loop, max 5 → clean review on a committed branch → `mr`, which pushes and opens the merge request. That last step is skipped where there is no GitLab to open one on.
 - `review` — standalone; you pick the target; parallel reviewers, then one Synthesis; posting it to the merge request is a Choice.
+- `architecture` — runs the architect over the project, reports into its Run's plan directory, then a Choice: implement now or stop.
 
 **Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice chains to another Workflow (`run`), prompts a named agent (`prompt`), posts the run's review to the merge request it reviewed (`post`), or just ends the Step (`stop`).
 
@@ -64,5 +65,6 @@ workspace's first tab, and holds no state of its own.
 
 **Driver** — The process that executes a Run. It has no pane: it is detached from whatever
 started it, writes its progress and any failure into the Run directory, and asks its
-questions through files there. A pid file says whether one is still running, so `resume`
-never starts a second.
+questions through files there. An ownership claim in the Run directory — acquired
+atomically and carrying the process's identity — says whether one is still driving, so
+`resume` never starts a second and a stop signal never reaches an unrelated process.
