@@ -107,6 +107,12 @@ export function tokenizeKeys(chunk: string): string[] {
   return out;
 }
 
+// Raw terminal input, which Stdio does not model: it offers stdin as a byte stream and
+// can say whether it is a terminal, but not raw mode, and a picker needs keypresses
+// unbuffered and unechoed. The stream would also compete with this reader for the same
+// fd. Output goes through Bun.write for the same reason — it is interleaved with the
+// escape sequences this file writes to move the cursor.
+//
 // One reader for the whole process: iterating process.stdin more than once
 // destroys the stream, and the picker asks for several things in a row.
 class Keyboard {

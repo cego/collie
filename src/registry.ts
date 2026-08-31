@@ -29,6 +29,11 @@ const RegistryJson = Schema.fromJsonString(Schema.Array(AgentEntrySchema));
 const encodeRegistry = Schema.encodeSync(RegistryJson);
 const decodeRegistry = Schema.decodeUnknownEffect(RegistryJson);
 
+/**
+ * `Bun.hash` and not an Effect equivalent: Effect has no non-cryptographic digest, and
+ * this only needs a short stable key for a filename. `Crypto` offers randomness and
+ * cryptographic hashing, neither of which is what a scope key is.
+ */
 export const registryPath = Effect.fn("registryPath")(function* (
   stateDir: string,
   scope: RegistryScope,

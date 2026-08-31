@@ -10,6 +10,7 @@ import {
   Option,
   Path,
   Schema,
+  Stdio,
   Stream,
 } from "effect";
 import { Argument, CliConfig, CliError, Command, Flag, GlobalFlag } from "effect/unstable/cli";
@@ -58,6 +59,18 @@ const ResultJson = Schema.fromJsonString(
 );
 
 const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
+
+/** Everything on stdin, for `--inputs-json -`, through the Stdio service. */
+const stdinText = Effect.gen(function* () {
+  const stdio = yield* Stdio.Stdio;
+  return yield* stdio.stdin.pipe(
+    Stream.decodeText(),
+    Stream.runFold(
+      (): string => "",
+      (all, chunk) => all + chunk,
+    ),
+  );
+}).pipe(Effect.orDie);
 const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 const PrettyUnknownJson = Schema.fromJsonString(Schema.Unknown, { space: 2 });
 
@@ -79,18 +92,31 @@ const REJECTED: ReadonlyArray<ExpectedError["code"]> = [
   "workspace_required",
 ];
 
-function print(result: Result, json: boolean): void {
-  if (json) {
-    process.stdout.write(
-      `${Schema.encodeSync(ResultJson)(result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error })}\n`,
-    );
-  } else {
-    process.stdout.write(`${result.ok ? result.human : result.error.message}\n`);
-  }
-  if (!result.ok) process.exitCode = REJECTED.includes(result.error.code) ? 2 : 1;
-}
+/**
+ * One line on stdout, through the Stdio sink rather than `process.stdout`, so a host
+ * that supplies its own streams — a test layer, an embedder — sees what a command
+ * wrote. The exit status has no Effect equivalent and stays a process property.
+ */
+const say = Effect.fn("collie.say")(function* (line: string) {
+  const stdio = yield* Stdio.Stdio;
+  yield* Stream.make(`${line}\n`).pipe(Stream.run(stdio.stdout({ endOnDone: false })));
+});
 
-const printResult = (result: Result, json: boolean) => Effect.sync(() => print(result, json));
+const printResult = Effect.fn("collie.printResult")(function* (result: Result, json: boolean) {
+  yield* say(
+    json
+      ? Schema.encodeSync(ResultJson)(
+          result.ok ? { ok: true, data: result.data } : { ok: false, error: result.error },
+        )
+      : result.ok
+        ? result.human
+        : result.error.message,
+  ).pipe(Effect.orDie);
+  // No Effect equivalent: the runtime decides its own exit status from the program's
+  // outcome, and these commands report failure in the envelope while still exiting
+  // non-zero, so the status is set on the process directly.
+  if (!result.ok) process.exitCode = REJECTED.includes(result.error.code) ? 2 : 1;
+});
 
 /**
  * Every command ends in exactly one envelope. `Effect.catch` sees typed failures only,
@@ -349,10 +375,10 @@ type ParsedInputs = { ok: true; inputs: Record<string, string> } | { ok: false; 
 const parseInput = Effect.fn("collie.parseInput")(function* (
   values: ReadonlyArray<string>,
   json: Option.Option<string>,
-): Effect.fn.Return<ParsedInputs, never> {
+): Effect.fn.Return<ParsedInputs, never, Stdio.Stdio> {
   let parsed: Record<string, string> = {};
   if (Option.isSome(json)) {
-    const raw = json.value === "-" ? yield* Effect.promise(() => Bun.stdin.text()) : json.value;
+    const raw = json.value === "-" ? yield* stdinText : json.value;
     try {
       parsed = Schema.decodeUnknownSync(InputsJson)(raw);
     } catch {
@@ -877,17 +903,12 @@ const waitFor = Effect.fn("collie.waitFor")(function* (
   const failed = yield* bounded.pipe(
     Effect.as(false),
     Effect.catch((cause) =>
-      Effect.sync(() => {
-        print(
-          Cause.isTimeoutError(cause)
-            ? err("timeout", `Timed out waiting for run "${runId}".`)
-            : err("operation_failed", `Could not watch run "${runId}".`, {
-                cause: String(cause),
-              }),
-          global.json,
-        );
-        return true;
-      }),
+      printResult(
+        Cause.isTimeoutError(cause)
+          ? err("timeout", `Timed out waiting for run "${runId}".`)
+          : err("operation_failed", `Could not watch run "${runId}".`, { cause: String(cause) }),
+        global.json,
+      ).pipe(Effect.as(true)),
     ),
   );
   if (lost) return yield* printResult(lost, global.json);
@@ -984,6 +1005,11 @@ const run = Command.make("run").pipe(
 
 export const app = root.pipe(Command.withSubcommands([workflow, persona, run]));
 
+/**
+ * Read from `Bun.argv` rather than Stdio's `args` because both decide how the program
+ * is *assembled* — which formatter and Console it is given — before any Effect of its
+ * own runs. Everything downstream of `Command.run` takes its arguments from Stdio.
+ */
 const jsonAsked = Bun.argv.includes("--json");
 /** Help was asked for, as opposed to offered because the command line was wrong. */
 const helpAsked = Bun.argv.includes("--help") || Bun.argv.includes("-h");
@@ -1023,7 +1049,7 @@ export const program = app.pipe(
       const failure = parse
         ? err("invalid_input", parseMessage(parse))
         : err("operation_failed", String(cause));
-      if (jsonAsked) return print(failure, true);
+      if (jsonAsked) return yield* printResult(failure, true);
       process.exitCode = parse ? 2 : 1;
       if (!parse) yield* Console.error(failure.error.message);
     }),

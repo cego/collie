@@ -332,6 +332,9 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
    * landed on Node's default handler, which kills the process outright: no stopped
    * marker, run.json still `running`, and a stop that had already reported success.
    */
+  // Signals have no Effect v4 API — the runtime installs its own handlers but exposes
+  // none — so a Driver that has to notice SIGTERM before its ownership claim is
+  // visible registers for it natively.
   let signalled = false;
   const earlySigterm = () => {
     signalled = true;

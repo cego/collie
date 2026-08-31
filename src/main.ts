@@ -5,6 +5,12 @@ import { currentEnv } from "./env";
 import { Herdr, HerdrError } from "./herdr";
 import { driveFlow, forkFlow, openPicker, pickFlow, resumeFlow, workspaceFlow } from "./flows";
 
+/**
+ * The two front doors share one entry point. `Bun.argv` rather than Stdio's `args`
+ * only here: this choice is made before any Effect runs, because it decides which
+ * program to hand to BunRuntime — and `program` itself reads its arguments through
+ * Stdio, as Command.run does.
+ */
 const args = Bun.argv.slice(2);
 
 type MainError = Error | PlatformError.PlatformError;

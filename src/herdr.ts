@@ -2,7 +2,10 @@
 // HERDR_SOCKET_PATH for the few methods 0.7.5 does not expose on the CLI.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Cause, Data, Effect, Option, Schema } from "effect";
+import { Data, Deferred, Effect, Option, Schema, Stream } from "effect";
+import * as BunSocket from "@effect/platform-bun/BunSocket";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import { PLUGIN_ID } from "./env";
 
@@ -22,6 +25,35 @@ const JsonString = Schema.fromJsonString(Schema.Json);
 const encodeJson = Schema.encodeSync(JsonString);
 
 const herdrError = (message: string, detail: string) => new HerdrError({ message, detail });
+const herdrFail = (message: string, detail: string) => Effect.fail(herdrError(message, detail));
+
+/**
+ * One line of herdr's reply: its `result`, or the error it names. Both shapes come
+ * back on the same socket, so the caller never has to look inside the envelope.
+ */
+const decodeReply = (
+  method: string,
+  line: string,
+): Effect.Effect<Schema.Json | undefined, HerdrError> => {
+  const message = Option.getOrUndefined(Schema.decodeUnknownOption(JsonString)(line));
+  if (message === undefined) return herdrFail(`${method} failed`, "invalid json response");
+  if (property(message, "error") !== undefined)
+    return herdrFail(
+      `${method} failed`,
+      stringPath(message, ["error", "message"], stringPath(message, ["error", "code"], "unknown")),
+    );
+  return Effect.succeed(property(message, "result"));
+};
+
+/** A child's whole output as text. */
+const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
+  stream.pipe(
+    Stream.decodeText(),
+    Stream.runFold(
+      (): string => "",
+      (all, chunk) => all + chunk,
+    ),
+  );
 
 function record(value: HerdrValue): Schema.JsonObject | undefined {
   return Option.getOrUndefined(Schema.decodeUnknownOption(Schema.JsonObject)(value));
@@ -117,86 +149,84 @@ export class Herdr {
 
   /** The subprocess boundary alone, so a test double can answer in-process. */
   protected exec(args: string[]): HerdrEffect<ExecResult> {
-    return Effect.tryPromise(() => {
-      const proc = Bun.spawn([this.env.binPath, ...args], {
-        stdout: "pipe",
-        stderr: "pipe",
-        env: { ...Bun.env, ...this.env.raw },
-      });
-      return Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]).then(([stdout, stderr, code]) => ({ code, stdout, stderr }));
+    const env = this.env;
+    return Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const handle = yield* spawner.spawn(
+        ChildProcess.make(env.binPath, args, {
+          stdout: "pipe",
+          stderr: "pipe",
+          // extendEnv, so herdr sees the environment this process has with the plugin's
+          // own keys over the top — what `{ ...Bun.env, ...env.raw }` used to spell.
+          env: env.raw,
+          extendEnv: true,
+        }),
+      );
+      const [stdout, stderr, code] = yield* Effect.all(
+        [collect(handle.stdout), collect(handle.stderr), handle.exitCode],
+        { concurrency: "unbounded" },
+      );
+      return { code: Number(code), stdout, stderr };
     }).pipe(
-      Effect.mapError((error: Cause.UnknownError) =>
-        herdrError("herdr subprocess failed", error.message),
-      ),
+      Effect.scoped,
+      Effect.catch((cause) => herdrFail("herdr subprocess failed", String(cause))),
     );
   }
 
-  /** One request/response over the herdr socket (newline-delimited JSON). */
+  /**
+   * One request/response over the herdr socket (newline-delimited JSON), through
+   * Effect's own Unix-domain client rather than a hand-rolled Bun.connect callback.
+   * The exchange is one line out and one line back, so the read loop resolves on the
+   * first newline and the scope closes the socket.
+   */
   rpc(method: string, params: HerdrParams = {}): HerdrEffect<Schema.Json | undefined> {
     const path = this.env.socketPath;
-    if (!path)
-      return Effect.fail(herdrError(`cannot call ${method}`, "HERDR_SOCKET_PATH is not set"));
+    if (!path) return herdrFail(`cannot call ${method}`, "HERDR_SOCKET_PATH is not set");
     const id = `hw-${++this.seq}`;
     const payload = `${encodeJson({ id, method, params })}\n`;
 
-    return Effect.callback<Schema.Json | undefined, HerdrError>((resume) => {
-      let buf = "";
-      let done = false;
-      let opened = false;
-      const fail = (socket: Bun.Socket | undefined, detail: string) => {
-        if (done) return;
-        done = true;
-        socket?.terminate();
-        resume(Effect.fail(herdrError(`${method} failed`, detail)));
-      };
+    const exchange: HerdrEffect<Schema.Json | undefined> = Effect.gen(function* () {
+      const socket = yield* BunSocket.makeNet({ path }).pipe(
+        Effect.catch((cause) => herdrFail(`${method} failed`, String(cause))),
+      );
+      const answer = yield* Deferred.make<Schema.Json | undefined, HerdrError>();
+      // Acquired in this scope, not inside onOpen: releasing the writer ends the
+      // socket's write side, and doing that the moment the request was sent closed the
+      // exchange before herdr had answered it.
+      const write = yield* socket.writer;
+      let buffered = "";
 
-      void Bun.connect({
-        unix: path,
-        socket: {
-          open(socket) {
-            opened = true;
-            socket.write(payload);
-          },
-          data(socket, chunk) {
-            buf += Buffer.from(chunk).toString("utf8");
-            const nl = buf.indexOf("\n");
-            if (nl < 0) return;
-            done = true;
-            socket.end();
-            const msg = Option.getOrUndefined(
-              Schema.decodeUnknownOption(JsonString)(buf.slice(0, nl)),
-            );
-            if (msg === undefined) {
-              fail(socket, "invalid json response");
-              return;
-            }
-            const message = stringPath(
-              msg,
-              ["error", "message"],
-              stringPath(msg, ["error", "code"], "unknown"),
-            );
-            if (property(msg, "error") !== undefined) {
-              fail(socket, message);
-              return;
-            }
-            resume(Effect.succeed(property(msg, "result")));
-          },
-          error(socket, error) {
-            fail(socket, error.message);
-          },
-          connectError(socket, error) {
-            fail(socket, error.message);
-          },
-          close(socket) {
-            if (!done && opened) fail(socket, "socket closed with no response");
-          },
+      const read = socket.runString(
+        (chunk) =>
+          Effect.gen(function* () {
+            buffered += chunk;
+            const newline = buffered.indexOf("\n");
+            if (newline < 0) return;
+            yield* Deferred.complete(answer, decodeReply(method, buffered.slice(0, newline)));
+          }),
+        {
+          onOpen: Effect.orDie(write(payload)),
         },
-      });
-    });
+      );
+
+      // The read loop ends when herdr closes the socket. If that happens before a line
+      // arrived, nobody is going to answer, and waiting on the deferred would hang.
+      yield* Effect.forkScoped(
+        read.pipe(
+          Effect.matchEffect({
+            onSuccess: () =>
+              Deferred.complete(
+                answer,
+                herdrFail(`${method} failed`, "socket closed with no response"),
+              ),
+            onFailure: (cause) =>
+              Deferred.complete(answer, herdrFail(`${method} failed`, String(cause))),
+          }),
+        ),
+      );
+      return yield* Deferred.await(answer);
+    }).pipe(Effect.scoped);
+    return exchange;
   }
 
   tabCreate(opts: { label?: string; cwd?: string; focus?: boolean }): HerdrEffect<StartedTab> {

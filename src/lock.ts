@@ -1,4 +1,5 @@
-import { Schema, FileSystem, Clock, Effect, Option } from "effect";
+import { Schema, FileSystem, Clock, Effect, Option, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { PlatformError } from "effect/PlatformError";
 
 // Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides staleness.
@@ -85,17 +86,28 @@ export const processStartTime = Effect.fn("processStartTime")(function* (id: num
     Effect.catchTag("PlatformError", () => Effect.succeed(null)),
   );
   if (proc) return proc;
-  return yield* Effect.sync(() => {
-    try {
-      return (
-        Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(id)])
-          .stdout.toString()
-          .trim() || null
-      );
-    } catch {
-      return null;
-    }
-  });
+  // No /proc, so macOS: ask ps. Through the Effect spawner, so the one command this
+  // module runs goes through the same boundary as every other.
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  return yield* Effect.gen(function* () {
+    const handle = yield* spawner.spawn(
+      ChildProcess.make("ps", ["-o", "lstart=", "-p", String(id)], {
+        stdout: "pipe",
+        stderr: "ignore",
+      }),
+    );
+    const out = yield* handle.stdout.pipe(
+      Stream.decodeText(),
+      Stream.runFold(
+        (): string => "",
+        (all, chunk) => all + chunk,
+      ),
+    );
+    return out.trim() || null;
+  }).pipe(
+    Effect.scoped,
+    Effect.catch(() => Effect.succeed(null)),
+  );
 });
 
 function decodeLockHolder(raw: string): LockHolder | null {

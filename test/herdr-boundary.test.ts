@@ -105,3 +105,29 @@ test("a failing herdr command surfaces its stderr", () => {
     runEffect(herdr.agentStart({ name: "build", kind: "claude", paneId: "9-9" })),
   ).rejects.toThrow("herdr agent start failed (exit 1)");
 });
+
+test("a method with no socket to reach fails as a typed HerdrError", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The socket client is Effect's Unix client now; its failures still have to
+      // arrive as this module's own error rather than escaping as a defect.
+      const herdr = new Herdr({ ...rig.pluginEnv(), socketPath: null });
+      const failure = yield* Effect.result(herdr.agentViewClear("run-1"));
+
+      expect(failure._tag).toBe("Failure");
+      if (failure._tag === "Failure") expect(failure.failure._tag).toBe("HerdrError");
+    }),
+  ));
+
+test("the herdr subprocess inherits this process's environment", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The CLI boundary spawns through ChildProcessSpawner with extendEnv, so herdr
+      // sees PATH and the rest; passing only the plugin's own keys would leave it
+      // without one. The fake herdr reads its own configuration from that environment,
+      // so a call that works at all is that inheritance working.
+      const herdr = new Herdr(rig.pluginEnv());
+      expect(yield* herdr.tabCreate({ label: "inherits" })).toBeTruthy();
+      expect(yield* rig.cmds()).toEqual(["tab create"]);
+    }),
+  ));

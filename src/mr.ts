@@ -94,7 +94,9 @@ export function shell(
       cwd,
       stdout: "pipe",
       stderr: "ignore",
-      env: { ...process.env },
+      // extendEnv, so git and glab inherit this process's environment and find their
+      // config and credentials — the Effect-native spelling of `{ ...process.env }`.
+      extendEnv: true,
     });
     const handle = yield* spawner.spawn(command);
     const [stdout, code] = yield* Effect.all(

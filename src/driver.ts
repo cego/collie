@@ -1,4 +1,4 @@
-import { Clock, Effect, FileSystem, Path, Schema, Option, Stream } from "effect";
+import { Clock, Crypto, Effect, FileSystem, Path, Schema, Option, Stream } from "effect";
 import { nowIso } from "./time";
 import { breakStaleLock, holdsLock, processStartTime, releaseOwnLock, tryClaimLock } from "./lock";
 import type { EnginePrompts } from "./engine";
@@ -86,6 +86,11 @@ const InboxCommand = Schema.Struct({
   answer: Schema.optionalKey(Schema.String),
 });
 export const InboxCommandJson = Schema.fromJsonString(InboxCommand);
+/**
+ * This process's own id, and signalling another. Effect models processes it starts,
+ * through ChildProcessSpawner, but has no view of the one it is running in — so an
+ * ownership claim's identity and the signal that stops a Driver stay native.
+ */
 const pid = Effect.sync(() => globalThis.process.pid);
 const kill = (id: number, signal?: NodeJS.Signals | 0) =>
   Effect.sync(() => {
@@ -347,12 +352,18 @@ export function filePrompts(opts: {
 }): EnginePrompts {
   let seq = 0;
   // Unique per Driver, not only per Choice within one: `${run}-1` from a resumed Run
-  // would otherwise repeat an id its previous Driver had already used.
-  const epoch = Bun.randomUUIDv7().slice(0, 8);
-  const wait = (choice: PendingChoice) =>
+  // would otherwise repeat an id its previous Driver had already used. Taken once,
+  // lazily, because filePrompts is a plain constructor and Crypto is a service.
+  let epoch: string | null = null;
+  const epochOnce = Effect.gen(function* () {
+    if (epoch === null) epoch = (yield* (yield* Crypto.Crypto).randomUUIDv4).slice(0, 8);
+    return epoch;
+  });
+  const wait = (asked: Omit<PendingChoice, "id">) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
+      const choice: PendingChoice = { ...asked, id: `${opts.run}-${yield* epochOnce}-${++seq}` };
       yield* clearChoice(opts.dir);
       yield* writeChoice(opts.dir, choice);
       const inbox = path.join(opts.dir, "inbox");
@@ -409,7 +420,6 @@ export function filePrompts(opts: {
   return {
     menu: (items, menuOpts) =>
       wait({
-        id: `${opts.run}-${epoch}-${++seq}`,
         kind: "menu",
         run: opts.run,
         step: opts.step(),
@@ -423,7 +433,6 @@ export function filePrompts(opts: {
       ),
     ask: (question) =>
       wait({
-        id: `${opts.run}-${epoch}-${++seq}`,
         kind: "ask",
         run: opts.run,
         step: opts.step(),

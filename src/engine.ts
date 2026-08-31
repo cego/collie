@@ -1,7 +1,7 @@
 // Executes a Run: one tab per Step, agents started with the right Harness,
 // Model and Persona, gates and loops driven by Output files.
 
-import { Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import { Crypto, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { nowIso, nowMillis } from "./time";
@@ -80,7 +80,10 @@ import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
 export const VIEW_SOURCE_PREFIX = "cego.collie:";
 
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
-export type EnginePrompts = InputPrompts<Error | PlatformError, FileSystem.FileSystem | Path.Path>;
+export type EnginePrompts = InputPrompts<
+  Error | PlatformError,
+  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
+>;
 
 export interface EngineOptions {
   herdr: Herdr;

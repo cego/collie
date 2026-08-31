@@ -4,6 +4,7 @@
 // prompting, rendering, and turning a result into text or JSON.
 
 import { Config, Crypto, Effect, FileSystem, Path, Schedule, Schema } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { nowIso } from "./time";
 import type { PluginEnv } from "./env";
 import { Herdr, type WorkspaceInfo } from "./herdr";
@@ -146,28 +147,32 @@ export const spawnDriver = Effect.fn("operations.spawnDriver")(function* (
   cwd: string,
 ) {
   const commandLine = yield* driverCommand(env);
-  const command = commandLine[0];
-  const rest = commandLine.slice(1);
-  // Bun.spawn throws where the executable is not there, which is the ordinary state
-  // of a checkout whose bin/collie has not been built. Unwrapped it was a defect, and
-  // a defect is what left a Run created, marked running, and driven by nobody.
-  yield* Effect.try({
-    try: () =>
-      Bun.spawn([command, ...rest, "herdr", "drive"], {
-        cwd,
-        // The real environment first, then what herdr gave this process. `env.raw`
-        // holds only the keys env.ts reads, so passing it alone handed the Driver no
-        // PATH: every `git`, `glab` and `herdr` it runs by bare name then resolved
-        // against execvp's /bin:/usr/bin fallback only, and `shell` reads that miss as
-        // exit 127 — which the MR and diff paths cannot tell from "no GitLab here".
-        env: { ...globalThis.process.env, ...env.raw, COLLIE_RUN: runId, COLLIE_CWD: cwd },
-        detached: true,
-        stdin: "ignore",
-        stdout: "ignore",
-        stderr: "ignore",
-      }).unref(),
-    catch: (cause) => new Error(`could not start ${command}: ${String(cause)}`),
-  });
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  yield* Effect.scoped(
+    Effect.gen(function* () {
+      const handle = yield* spawner.spawn(
+        ChildProcess.make(commandLine[0], [...commandLine.slice(1), "herdr", "drive"], {
+          cwd,
+          // extendEnv: the Driver inherits this process's environment and herdr's own
+          // keys sit on top. Handing it `env.raw` alone gave it no PATH beyond the
+          // /bin:/usr/bin fallback, and every git, glab and herdr it runs by bare name
+          // became unfindable — which `shell` reports as exit 127, indistinguishable
+          // from "no GitLab here".
+          env: { ...env.raw, COLLIE_RUN: runId, COLLIE_CWD: cwd },
+          extendEnv: true,
+          detached: true,
+          stdin: "ignore",
+          stdout: "ignore",
+          stderr: "ignore",
+        }),
+      );
+      // Unref before the scope closes, or the spawner's finalizer kills the Driver it
+      // just started: it leaves a child alone only once it is unreferenced. That is
+      // the whole point of a detached Driver — it outlives whatever asked for it,
+      // because a Run takes hours and the picker closes the moment it has started one.
+      yield* Effect.asVoid(handle.unref);
+    }),
+  );
 });
 
 /**
