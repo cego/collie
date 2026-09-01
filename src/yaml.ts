@@ -162,6 +162,13 @@ function parseBlockScalar(ls: Line[], i: number, indent: number, style: string):
   return [style.endsWith("-") ? joined : `${joined}\n`, i];
 }
 
+/** A string written back into frontmatter: bare where it reads back unchanged, quoted otherwise. */
+export function yamlScalar(value: string): string {
+  return BARE.test(value) && parseScalar(value, 0) === value ? value : JSON.stringify(value);
+}
+
+const BARE = /^[A-Za-z0-9_](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
+
 function unquote(raw: string): string {
   if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
     return raw.slice(1, -1).replace(/\\(.)/g, "$1");

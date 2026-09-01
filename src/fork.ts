@@ -6,6 +6,7 @@
 import { Effect, FileSystem, Path, type PlatformError } from "effect";
 import { bodySections, contentHash } from "./definitions";
 import { unsafePathComponent } from "./naming";
+import { yamlScalar } from "./yaml";
 
 export type DefinitionKind = "workflows" | "personas";
 
@@ -129,7 +130,10 @@ function stamped(text: string, hash: string): string {
 function renamed(text: string, source: string, target: string): string {
   return source === target
     ? text
-    : text.replace(new RegExp(`(^name:\\s*)${source}$`, "m"), `$1${target}`);
+    : text.replace(
+        new RegExp(`^name:\\s*${source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"),
+        () => `name: ${yamlScalar(target)}`,
+      );
 }
 
 /**
@@ -137,12 +141,12 @@ function renamed(text: string, source: string, target: string): string {
  * parent's, so the stub is what the fork is actually for, and nothing else.
  */
 function stub(name: string, parent: string, kind: DefinitionKind, opts: ForkOptions): string {
-  const head = ["---", `name: ${name}`, `extends: ${parent}`];
+  const head = ["---", `name: ${yamlScalar(name)}`, `extends: ${yamlScalar(parent)}`];
   const body: string[] = [];
   if (kind === "workflows" && opts.step) {
     head.push(
       "steps:",
-      `  - id: ${opts.step}`,
+      `  - id: ${yamlScalar(opts.step)}`,
       `    # Only the keys you change; the rest stay the original's.`,
     );
     body.push(`## ${opts.step}`, "", opts.section?.trim() || "Your version of this step's prompt.");

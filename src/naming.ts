@@ -56,9 +56,10 @@ export function unsafePathComponent(value: string): string | null {
   if (value === "") return "is empty";
   if (value === "." || value === "..") return `is "${value}"`;
   if (value.includes("/") || value.includes("\\")) return "contains a path separator";
-  // Filesystem APIs reject NUL in paths; catching it here keeps the error a
-  // field-naming validation message instead of a raw fs throw after the Run starts.
-  if (value.includes("\0")) return "contains a NUL byte";
+  // Filesystem APIs reject NUL in paths, and a newline corrupts the frontmatter a
+  // forked name is written into; catching both here keeps the error a field-naming
+  // validation message instead of a raw fs throw or a mangled file after the Run starts.
+  if (/\p{Cc}/u.test(value)) return "contains a control character";
   return null;
 }
 

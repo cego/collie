@@ -2,6 +2,7 @@ import { Clock, Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { forkDefinition } from "../src/fork";
+import { parseDocument } from "../src/yaml";
 import {
   bodySections,
   contentHash,
@@ -252,5 +253,32 @@ test("a fork of the baseline leaves the baseline file untouched", () =>
 
       expect(yield* readText(source.path)).toBe(before);
       expect(yield* exists(join(rig.projectDir, ".herdr", "workflows", "implement.md"))).toBe(true);
+    }),
+  ));
+
+test("a fork name that is not a bare scalar is quoted, and a corrupting one is refused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const source = (yield* loadDefinitions(yield* layers(env))).personas.get("implementer")!;
+
+      const stub = yield* forkDefinition(source.path, "personas", rig.configDir, {
+        name: "foo # bar",
+      });
+      expect(stub.ok).toBe(true);
+      expect(parseDocument(yield* readText(stub.path)).data.name).toBe("foo # bar");
+
+      const copy = yield* forkDefinition(source.path, "personas", rig.configDir, {
+        name: "foo: bar",
+        full: true,
+      });
+      expect(copy.ok).toBe(true);
+      expect(parseDocument(yield* readText(copy.path)).data.name).toBe("foo: bar");
+
+      const refused = yield* forkDefinition(source.path, "personas", rig.configDir, {
+        name: "two\nlines",
+      });
+      expect(refused.ok).toBe(false);
+      expect(refused.message).toContain("control character");
     }),
   ));
