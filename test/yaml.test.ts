@@ -92,3 +92,14 @@ test("a misaligned line is an error, not a silent truncation", () => {
   );
   expect(() => parseYaml(`steps:\n  - id: a\n   - id: b\n`)).toThrow(YamlError);
 });
+
+test("a block scalar keeps its blank lines, inner indent and hashes", () => {
+  expect(
+    parseYaml(
+      `description: |\n  first line\n\n  second line\n    indented # not a comment\nnext: 1\n`,
+    ),
+  ).toEqual({
+    description: "first line\n\nsecond line\n  indented # not a comment\n",
+    next: 1,
+  });
+});

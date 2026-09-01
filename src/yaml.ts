@@ -69,11 +69,17 @@ function toLines(src: string): Line[] {
   return out;
 }
 
+let raw: string[] = [];
+
 function isSeqItem(text: string): boolean {
   return text === "-" || text.startsWith("- ");
 }
 
 export function parseYaml(src: string): YamlValue {
+  // Block scalars are the one construct that needs the source as written — blank lines,
+  // inner indent and hashes and all — so the parse keeps it here rather than threading
+  // it through every level. Parsing is synchronous, so there is only ever one.
+  raw = src.split(/\r?\n/);
   const ls = toLines(src);
   if (ls.length === 0) return {};
   const [value, end] = parseNode(ls, 0, ls[0]!.indent);
@@ -154,11 +160,19 @@ function parseMap(ls: Line[], i: number, indent: number): [YamlMap, number] {
 
 function parseBlockScalar(ls: Line[], i: number, indent: number, style: string): [string, number] {
   const parts: string[] = [];
-  while (i < ls.length && ls[i]!.indent > indent) {
-    parts.push(ls[i]!.text);
-    i += 1;
+  if (i < ls.length && ls[i]!.indent > indent) {
+    const blockIndent = ls[i]!.indent;
+    let r = ls[i]!.n - 1;
+    for (; r < raw.length; r++) {
+      const line = raw[r]!;
+      const blank = line.trim() === "";
+      if (!blank && line.length - line.trimStart().length < blockIndent) break;
+      parts.push(blank ? "" : line.slice(blockIndent).trimEnd());
+    }
+    while (parts.at(-1) === "") parts.pop();
+    while (i < ls.length && ls[i]!.n <= r) i += 1;
   }
-  const joined = style.startsWith(">") ? parts.join(" ") : parts.join("\n");
+  const joined = style.startsWith(">") ? parts.filter((p) => p !== "").join(" ") : parts.join("\n");
   return [style.endsWith("-") ? joined : `${joined}\n`, i];
 }
 
