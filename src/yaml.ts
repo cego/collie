@@ -59,12 +59,17 @@ function stripComment(raw: string): string {
   return raw;
 }
 
+/** How far a line is indented, in characters, blank lines included. */
+function indentOf(line: string): number {
+  return line.length - line.trimStart().length;
+}
+
 function toLines(src: string): Line[] {
   const out: Line[] = [];
   src.split(/\r?\n/).forEach((raw, i) => {
     const text = stripComment(raw).trimEnd();
     if (!text.trim()) return;
-    out.push({ indent: raw.length - raw.trimStart().length, text: text.trim(), n: i + 1 });
+    out.push({ indent: indentOf(raw), text: text.trim(), n: i + 1 });
   });
   return out;
 }
@@ -174,14 +179,13 @@ function parseBlockScalar(
   let source = keyLine;
   for (; source < sourceLines.length; source++) {
     const line = sourceLines[source]!;
-    if (line.trim() !== "" && line.length - line.trimStart().length <= indent) break;
+    if (line.trim() !== "" && indentOf(line) <= indent) break;
     block.push(line);
   }
   while (block.at(-1)?.trim() === "") block.pop();
   // YAML takes the block's own indent from its first non-empty line; everything deeper
   // than that is the content's own indentation and stays.
-  const first = block.find((line) => line.trim() !== "") ?? "";
-  const blockIndent = first.length - first.trimStart().length;
+  const blockIndent = indentOf(block.find((line) => line.trim() !== "") ?? "");
   const lines = block.map((line) => (line.trim() === "" ? "" : line.slice(blockIndent).trimEnd()));
   // Lines skip the blanks and comment lines the block just took, so step the cursor on by
   // source line number rather than by count.
