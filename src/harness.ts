@@ -1,5 +1,5 @@
 // How to start each supported agent CLI, pass it a model, and inject a Persona.
-// Personas are injected, never installed as harness-native config (docs/SPEC.md).
+// Personas are injected, never installed as harness-native config (CONTEXT.md, Persona).
 
 import { claudeTrust, type Trust } from "./trust";
 

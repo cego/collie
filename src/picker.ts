@@ -1,5 +1,5 @@
 // The popup picker: a list, type-to-filter, enter. Small enough to keep in the
-// runner so the plugin needs no extra dependency (docs/SPEC.md).
+// runner so the plugin needs no extra dependency.
 
 import { Data, Effect } from "effect";
 

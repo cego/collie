@@ -1,7 +1,7 @@
 import { Config, Effect, Option, Schema } from "effect";
 
 // Plugin environment as herdr hands it to an action or pane entrypoint.
-// Names come from the herdr plugin runtime; see docs/SPEC.md.
+// Names come from the herdr plugin runtime.
 
 export const PLUGIN_ID = "cego.collie";
 

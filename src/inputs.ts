@@ -1,5 +1,5 @@
 // Input inference: branch, cwd, earlier Runs and the open MR. The human is asked
-// only when inference fails (docs/SPEC.md).
+// only when inference fails (CONTEXT.md, Input).
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";

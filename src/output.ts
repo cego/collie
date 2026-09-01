@@ -1,5 +1,5 @@
 // Step Outputs are JSON files in the run dir. Gates and loops read these,
-// never terminal text (docs/SPEC.md).
+// never terminal text (CONTEXT.md, Output).
 
 import { Schema } from "effect";
 import { isNumber, isString } from "./schema";

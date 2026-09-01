@@ -1,6 +1,6 @@
 // Minimal YAML subset for definition frontmatter: nested maps, sequences,
 // flow maps/sequences, block scalars, quoted and bare scalars. Not a general
-// YAML parser — enough for the frontmatter documented in docs/SPEC.md.
+// YAML parser — enough for the frontmatter the baseline definitions use.
 
 import { Data, Schema } from "effect";
 

@@ -138,9 +138,9 @@ The branch is reviewed and the loop is clean. Push it and open the merge request
 - MR template: `{{mr.template}}`
 - Linear tickets: `{{mr.issues}}`
 
-Push anything the earlier steps have not pushed yet. This is the only step in the whole
-run allowed to open a merge request, and opening it is all it may do: never merge the MR,
-and never pass a merge flag to `glab`.
+Push anything the earlier steps have not pushed yet. Never merge the MR, and never pass a
+merge flag to `glab`: this is the only step in the whole run allowed to open a merge
+request, and opening it is the entire job.
 
 **First check whether this branch already has a merge request** — it does when this run
 was started from a review of one (`{{inputs.plan_kind}}` is `review` and
