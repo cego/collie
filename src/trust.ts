@@ -56,23 +56,27 @@ const CHANGED = "changed" as const;
 export function claudeTrust(home: string, backupDir: string): Trust {
   const configPath = `${home}/.claude.json`;
 
-  /** The file as claude last wrote it, or null when it is not there. */
+  /** The file as claude last wrote it, or null when it is not there or cannot be read. */
   const readRaw = Effect.fn("Trust.readRaw")(function* () {
     const fs = yield* FileSystem.FileSystem;
     if (!(yield* fs.exists(configPath))) return null;
     return yield* fs.readFileString(configPath).pipe(Effect.catch(() => Effect.succeed(null)));
   });
 
-  const read = Effect.fn("Trust.read")(function* () {
+  /** Those same bytes and what they decode to, so a write can check them both. */
+  const readConfig = Effect.fn("Trust.readConfig")(function* () {
     const raw = yield* readRaw();
-    if (raw === null) return null;
-    return yield* Schema.decodeUnknownEffect(ClaudeConfigJson)(raw).pipe(
-      Effect.catch(() => Effect.succeed(null)),
-    );
+    const config =
+      raw === null
+        ? null
+        : yield* Schema.decodeUnknownEffect(ClaudeConfigJson)(raw).pipe(
+            Effect.catch(() => Effect.succeed(null)),
+          );
+    return { raw, config };
   });
 
   const state = Effect.fn("Trust.state")(function* (cwd: string) {
-    const config = yield* read();
+    const { config } = yield* readConfig();
     if (config === null) return "unknown" as const;
     return trustedIn(config, yield* paths(cwd)) ? ("trusted" as const) : ("untrusted" as const);
   });
@@ -103,13 +107,7 @@ export function claudeTrust(home: string, backupDir: string): Trust {
   const tryGrant = Effect.fn("Trust.tryGrant")(function* (cwd: string) {
     const fs = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
-    const raw = yield* readRaw();
-    const config =
-      raw === null
-        ? null
-        : yield* Schema.decodeUnknownEffect(ClaudeConfigJson)(raw).pipe(
-            Effect.catch(() => Effect.succeed(null)),
-          );
+    const { raw, config } = yield* readConfig();
     if (raw === null || config === null) {
       return {
         ok: false,

@@ -1,6 +1,5 @@
 import { Data, Schema, FileSystem, Clock, Effect, Option, Schedule, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import type { PlatformError } from "effect/PlatformError";
 
 // Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides
 // staleness. `withLock` is the way in: claiming, breaking and giving back stay in here.
@@ -130,11 +129,10 @@ const claimBreakGuard = Effect.fn("claimBreakGuard")(function* (guard: string) {
 const inspectAndBreak = Effect.fn("inspectAndBreak")((lock: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const now = yield* Clock.currentTimeMillis;
     const claim = yield* readClaim(lock);
     if (claim === null) return true;
     const holder = validHolder(claim);
-    const stale = holder ? !(yield* holderLives(holder)) : !(yield* lockWriteIsFresh(lock, now));
+    const stale = holder ? !(yield* holderLives(holder)) : !(yield* lockWriteIsFresh(lock));
     if (!stale) return false;
     if ((yield* readClaim(lock)) !== claim) return false;
     yield* fs.remove(lock, { force: true });
@@ -206,20 +204,16 @@ function decodeLockHolder(raw: string): LockHolder | null {
 }
 
 /** The claim in the lock, as written, or null when the lock is not there. */
-function readClaim(
-  lock: string,
-): Effect.Effect<string | null, PlatformError, FileSystem.FileSystem> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    return yield* fs
-      .readFileString(lock)
-      .pipe(
-        Effect.catchTag("PlatformError", (error) =>
-          error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
-        ),
-      );
-  });
-}
+const readClaim = Effect.fn("readClaim")(function* (lock: string) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs
+    .readFileString(lock)
+    .pipe(
+      Effect.catchTag("PlatformError", (error) =>
+        error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
+      ),
+    );
+});
 
 /** A claim only names a holder when it decodes to a pid that could be one. */
 function validHolder(claim: string): LockHolder | null {
@@ -228,12 +222,9 @@ function validHolder(claim: string): LockHolder | null {
 }
 
 /** A malformed claim gets this grace period to finish its atomic write. */
-export const lockWriteIsFresh = Effect.fn("lockWriteIsFresh")(function* (
-  lock: string,
-  now?: number,
-) {
+export const lockWriteIsFresh = Effect.fn("lockWriteIsFresh")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
-  const at = now ?? (yield* Clock.currentTimeMillis);
+  const at = yield* Clock.currentTimeMillis;
   const stat = yield* fs.stat(lock);
   return at - (Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : at) <= LOCK_WRITE_GRACE_MS;
 });
