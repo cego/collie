@@ -193,3 +193,21 @@ test("granting leaves the config's permissions alone — they are not ours eithe
       expect((yield* fs.stat(path)).mode & 0o777).toBe(0o600);
     }),
   ));
+
+test("a grant while another collie holds the config lock writes nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* claudeConfig({});
+      yield* fs.writeFileString(
+        `${path}.herdr-lock`,
+        `{"pid":${globalThis.process.pid},"start":null}\n`,
+      );
+      const before = yield* fs.readFileString(path);
+
+      const result = yield* trust().grant(rig.projectDir);
+
+      expect(result.ok).toBe(false);
+      expect(yield* fs.readFileString(path)).toBe(before);
+    }),
+  ));

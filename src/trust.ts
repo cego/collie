@@ -3,8 +3,9 @@
 // Claude's, so unreadable data is always left untouched.
 
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 import { isYamlMap, YamlMapSchema, type YamlMap } from "./yaml";
-import { currentPid } from "./lock";
+import { acquireLock, currentPid, releaseOwnLock } from "./lock";
 
 export type TrustState = "trusted" | "untrusted" | "unknown";
 
@@ -18,9 +19,14 @@ export interface Trust {
   readonly state: (
     cwd: string,
   ) => Effect.Effect<TrustState, PlatformError.PlatformError, FileSystem.FileSystem>;
+  /** Writing goes through the pid lock, which is what pulls in the spawner. */
   readonly grant: (
     cwd: string,
-  ) => Effect.Effect<TrustResult, PlatformError.PlatformError, FileSystem.FileSystem | Path.Path>;
+  ) => Effect.Effect<
+    TrustResult,
+    PlatformError.PlatformError | Schema.SchemaError,
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  >;
 }
 
 const ClaudeConfigJson = Schema.fromJsonString(YamlMapSchema);
@@ -57,7 +63,19 @@ export function claudeTrust(home: string, backupDir: string): Trust {
     return "untrusted" as const;
   });
 
+  /**
+   * ponytail: the lock serialises collie's own grants; claude does not take it, so a
+   * write from a claude running in the same read-modify-write window is still lost.
+   */
   const grant = Effect.fn("Trust.grant")(function* (cwd: string) {
+    const lock = `${home}/.claude.json.herdr-lock`;
+    if (!(yield* acquireLock(lock))) {
+      return { ok: false, message: `${lock} is held by another collie; nothing written` };
+    }
+    return yield* writeGrant(cwd).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+  });
+
+  const writeGrant = Effect.fn("Trust.writeGrant")(function* (cwd: string) {
     const fs = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
     const path = pathService.join(home, ".claude.json");
