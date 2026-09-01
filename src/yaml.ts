@@ -134,7 +134,7 @@ function parseMap(ls: Line[], i: number, indent: number): [YamlMap, number] {
     const key = unquote(m[1]!);
     const rest = (m[2] ?? "").trim();
     if (rest === "|" || rest === "|-" || rest === ">" || rest === ">-") {
-      const [v, ni] = parseBlockScalar(ls, i + 1, indent, rest);
+      const [v, ni] = parseBlockScalar(ls, i + 1, indent, rest, ls[i]!.n);
       out[key] = v;
       i = ni;
     } else if (rest === "") {
@@ -158,23 +158,49 @@ function parseMap(ls: Line[], i: number, indent: number): [YamlMap, number] {
   return [out, i];
 }
 
-function parseBlockScalar(ls: Line[], i: number, indent: number, style: string): [string, number] {
-  const parts: string[] = [];
-  if (i < ls.length && ls[i]!.indent > indent) {
-    const blockIndent = ls[i]!.indent;
-    let source = ls[i]!.n - 1;
-    for (; source < sourceLines.length; source++) {
-      const line = sourceLines[source]!;
-      const blank = line.trim() === "";
-      if (!blank && line.length - line.trimStart().length < blockIndent) break;
-      parts.push(blank ? "" : line.slice(blockIndent).trimEnd());
-    }
-    while (parts.at(-1) === "") parts.pop();
-    // Lines skip the blanks the block just took, so step the cursor by source line number.
-    while (i < ls.length && ls[i]!.n <= source) i += 1;
+/**
+ * The block runs from the line after the key to the first line indented no deeper than the
+ * key, and it is read from the source: `ls` has already dropped the blank lines and the
+ * `#` lines that inside a block scalar are content like any other.
+ */
+function parseBlockScalar(
+  ls: Line[],
+  i: number,
+  indent: number,
+  style: string,
+  keyLine: number,
+): [string, number] {
+  const block: string[] = [];
+  let source = keyLine;
+  for (; source < sourceLines.length; source++) {
+    const line = sourceLines[source]!;
+    if (line.trim() !== "" && line.length - line.trimStart().length <= indent) break;
+    block.push(line);
   }
-  const joined = style.startsWith(">") ? parts.filter((p) => p !== "").join(" ") : parts.join("\n");
+  while (block.at(-1)?.trim() === "") block.pop();
+  // YAML takes the block's own indent from its first non-empty line; everything deeper
+  // than that is the content's own indentation and stays.
+  const first = block.find((line) => line.trim() !== "") ?? "";
+  const blockIndent = first.length - first.trimStart().length;
+  const lines = block.map((line) => (line.trim() === "" ? "" : line.slice(blockIndent).trimEnd()));
+  // Lines skip the blanks and comment lines the block just took, so step the cursor on by
+  // source line number rather than by count.
+  while (i < ls.length && ls[i]!.n <= source) i += 1;
+  const joined = style.startsWith(">") ? folded(lines) : lines.join("\n");
   return [style.endsWith("-") ? joined : `${joined}\n`, i];
+}
+
+/** Folded style joins each paragraph onto one line and keeps the break between paragraphs. */
+function folded(lines: ReadonlyArray<string>): string {
+  const paragraphs: string[][] = [[]];
+  for (const line of lines) {
+    if (line === "") paragraphs.push([]);
+    else paragraphs.at(-1)!.push(line);
+  }
+  return paragraphs
+    .filter((p) => p.length > 0)
+    .map((p) => p.join(" "))
+    .join("\n");
 }
 
 const BARE = /^[A-Za-z0-9_](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;

@@ -103,3 +103,14 @@ test("a block scalar keeps its blank lines, inner indent and hashes", () => {
     next: 1,
   });
 });
+
+test("a block scalar keeps a leading comment line, a leading blank and its paragraphs", () => {
+  expect(parseYaml(`description: |\n\n  # Heading\n  text\n\n  more\nnext: 1\n`)).toEqual({
+    description: "\n# Heading\ntext\n\nmore\n",
+    next: 1,
+  });
+});
+
+test("a folded scalar folds each paragraph and keeps the break between them", () => {
+  expect(parseYaml(`note: >\n  a\n  b\n\n  c\n`)).toEqual({ note: "a b\nc\n" });
+});
