@@ -162,26 +162,31 @@ function parseBlockScalar(ls: Line[], i: number, indent: number, style: string):
   const parts: string[] = [];
   if (i < ls.length && ls[i]!.indent > indent) {
     const blockIndent = ls[i]!.indent;
-    let r = ls[i]!.n - 1;
-    for (; r < sourceLines.length; r++) {
-      const line = sourceLines[r]!;
+    let source = ls[i]!.n - 1;
+    for (; source < sourceLines.length; source++) {
+      const line = sourceLines[source]!;
       const blank = line.trim() === "";
       if (!blank && line.length - line.trimStart().length < blockIndent) break;
       parts.push(blank ? "" : line.slice(blockIndent).trimEnd());
     }
     while (parts.at(-1) === "") parts.pop();
-    while (i < ls.length && ls[i]!.n <= r) i += 1;
+    // Lines skip the blanks the block just took, so step the cursor by source line number.
+    while (i < ls.length && ls[i]!.n <= source) i += 1;
   }
   const joined = style.startsWith(">") ? parts.filter((p) => p !== "").join(" ") : parts.join("\n");
   return [style.endsWith("-") ? joined : `${joined}\n`, i];
 }
 
-/** A string written back into frontmatter: bare where it reads back unchanged, quoted otherwise. */
+const BARE = /^[A-Za-z0-9_](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
+
+/**
+ * A string written back into frontmatter: bare where it reads back unchanged, quoted
+ * otherwise. BARE rules out the punctuation that changes the line's meaning; the round
+ * trip through parseScalar rules out the words that are not strings (`true`, `5`, `~`).
+ */
 export function yamlScalar(value: string): string {
   return BARE.test(value) && parseScalar(value, 0) === value ? value : JSON.stringify(value);
 }
-
-const BARE = /^[A-Za-z0-9_](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
 
 function unquote(raw: string): string {
   if (raw.startsWith('"') && raw.endsWith('"') && raw.length > 1) {
