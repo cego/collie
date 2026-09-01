@@ -1,17 +1,32 @@
 {
-  "name": "herdr-workflows",
+  "name": "collie",
   "private": true,
   "type": "module",
-  "engines": {
-    "bun": ">=1.4.0"
-  },
   "scripts": {
+    "prepare": "effect-tsgo patch --oxlint",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt",
+    "format:check": "oxfmt --check",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build --compile --outfile bin/herdr-workflows.new src/main.ts && mv -f bin/herdr-workflows.new bin/herdr-workflows"
+    "build": "bun build --compile --outfile bin/collie.new src/main.ts && mv -f bin/collie.new bin/collie",
+    "smoke": "sh tools/smoke.sh bin/collie"
+  },
+  "dependencies": {
+    "@effect/platform-bun": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
+    "@effect/tsgo": "0.38.0",
+    "@oxlint/plugins": "1.80.0",
     "@types/bun": "latest",
-    "typescript": "^5"
+    "oxfmt": "0.65.0",
+    "oxlint": "1.80.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "typescript": "7.0.2"
+  },
+  "engines": {
+    "bun": ">=1.4.0"
   }
 }

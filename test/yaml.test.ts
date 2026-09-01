@@ -39,7 +39,11 @@ steps:
 });
 
 test("flow maps and sequences", () => {
-  expect(parseYaml(`parallel: [{ harness: claude, model: sonnet }, { harness: codex, model: gpt-5 }]\ntags: [a, b]`)).toEqual({
+  expect(
+    parseYaml(
+      `parallel: [{ harness: claude, model: sonnet }, { harness: codex, model: gpt-5 }]\ntags: [a, b]`,
+    ),
+  ).toEqual({
     parallel: [
       { harness: "claude", model: "sonnet" },
       { harness: "codex", model: "gpt-5" },
@@ -61,7 +65,10 @@ test("quoted strings keep colons, hashes and booleans verbatim", () => {
 });
 
 test("block scalars", () => {
-  expect(parseYaml(`note: |-\n  first\n  second\nnext: 1\n`)).toEqual({ note: "first\nsecond", next: 1 });
+  expect(parseYaml(`note: |-\n  first\n  second\nnext: 1\n`)).toEqual({
+    note: "first\nsecond",
+    next: 1,
+  });
 });
 
 test("a bad line names its line number", () => {
@@ -77,4 +84,33 @@ test("frontmatter is split from the markdown body", () => {
 
 test("a file with no frontmatter is all body", () => {
   expect(parseDocument("just text")).toEqual({ data: {}, body: "just text" });
+});
+
+test("a misaligned line is an error, not a silent truncation", () => {
+  expect(() => parseYaml(`name: implement\n max_iterations: 5\ninputs:\n  plan: p\n`)).toThrow(
+    "line 2",
+  );
+  expect(() => parseYaml(`steps:\n  - id: a\n   - id: b\n`)).toThrow(YamlError);
+});
+
+test("a block scalar keeps its blank lines, inner indent and hashes", () => {
+  expect(
+    parseYaml(
+      `description: |\n  first line\n\n  second line\n    indented # not a comment\nnext: 1\n`,
+    ),
+  ).toEqual({
+    description: "first line\n\nsecond line\n  indented # not a comment\n",
+    next: 1,
+  });
+});
+
+test("a block scalar keeps a leading comment line, a leading blank and its paragraphs", () => {
+  expect(parseYaml(`description: |\n\n  # Heading\n  text\n\n  more\nnext: 1\n`)).toEqual({
+    description: "\n# Heading\ntext\n\nmore\n",
+    next: 1,
+  });
+});
+
+test("a folded scalar folds each paragraph and keeps the break between them", () => {
+  expect(parseYaml(`note: >\n  a\n  b\n\n  c\n`)).toEqual({ note: "a b\nc\n" });
 });

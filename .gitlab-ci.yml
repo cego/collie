@@ -8,9 +8,15 @@ test:
   stage: test
   script:
     - bun install --frozen-lockfile
+    - bun run format:check
+    - bun run lint
     - bun test
     # The same script contributors run, so the local gate and CI cannot drift.
     - bun run typecheck
+    # `bun test` runs the sources; this runs the thing that actually ships, so a
+    # broken compiled entrypoint or JSON envelope cannot pass CI.
+    - bun run build
+    - bun run smoke
 
 build:
   stage: build
@@ -21,14 +27,20 @@ build:
       - TARGET: [linux-x64, linux-arm64, darwin-x64, darwin-arm64]
   script:
     - bun install --frozen-lockfile
-    - bun build --compile --target=bun-$TARGET --outfile herdr-workflows-$TARGET src/main.ts
+    - bun build --compile --target=bun-$TARGET --outfile collie-$TARGET src/main.ts
+    # Only the runner's own target can be executed here; the others are smoked by the
+    # test stage's native build. Nothing is uploaded until this passes.
+    - |
+      if [ "$TARGET" = "linux-x64" ]; then
+        sh tools/smoke.sh "./collie-$TARGET"
+      fi
     - |
       curl --fail --silent --show-error \
         --header "JOB-TOKEN: $CI_JOB_TOKEN" \
-        --upload-file herdr-workflows-$TARGET \
-        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-$TARGET"
+        --upload-file collie-$TARGET \
+        "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/collie/${CI_COMMIT_TAG}/collie-$TARGET"
   artifacts:
-    paths: [herdr-workflows-*]
+    paths: [collie-*]
     expire_in: 1 week
 
 release:
@@ -39,18 +51,18 @@ release:
   script: ["echo publishing $CI_COMMIT_TAG"]
   release:
     tag_name: $CI_COMMIT_TAG
-    description: "herdr-plugin $CI_COMMIT_TAG"
+    description: "Collie $CI_COMMIT_TAG"
     assets:
       links:
-        - name: herdr-workflows-linux-x64
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-linux-x64"
-          filepath: /herdr-workflows-linux-x64
-        - name: herdr-workflows-linux-arm64
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-linux-arm64"
-          filepath: /herdr-workflows-linux-arm64
-        - name: herdr-workflows-darwin-x64
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-darwin-x64"
-          filepath: /herdr-workflows-darwin-x64
-        - name: herdr-workflows-darwin-arm64
-          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/herdr-workflows/${CI_COMMIT_TAG}/herdr-workflows-darwin-arm64"
-          filepath: /herdr-workflows-darwin-arm64
+        - name: collie-linux-x64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/collie/${CI_COMMIT_TAG}/collie-linux-x64"
+          filepath: /collie-linux-x64
+        - name: collie-linux-arm64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/collie/${CI_COMMIT_TAG}/collie-linux-arm64"
+          filepath: /collie-linux-arm64
+        - name: collie-darwin-x64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/collie/${CI_COMMIT_TAG}/collie-darwin-x64"
+          filepath: /collie-darwin-x64
+        - name: collie-darwin-arm64
+          url: "${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/generic/collie/${CI_COMMIT_TAG}/collie-darwin-arm64"
+          filepath: /collie-darwin-arm64

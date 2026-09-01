@@ -1,46 +1,51 @@
-// The live-agent registry: which long-lived agents a Session still has, so a
-// later Run can hand work to them instead of starting its own.
-//
-// Scope is one herdr session AND one workspace AND one repo cwd, and nothing
-// wider: two checkouts of the same repo, or the same repo in two workspaces, are
-// different Sessions and must never see each other's agents.
-
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { Schema, Effect, FileSystem, Path } from "effect";
 import type { AgentInfo } from "./herdr";
 
 export interface AgentEntry {
-  /** The Persona the agent runs, which is what a hand-off asks for: `implementer`. */
   role: string;
-  /** herdr agent name, i.e. what `agent prompt` takes. */
   agent: string;
   paneId: string;
-  /** The workspace it was started in; an entry never crosses one. */
   workspaceId: string | null;
   runId: string;
   workflow: string;
   at: string;
 }
-
-/** What scopes a register: one herdr session, one workspace, one repo cwd. */
 export interface RegistryScope {
   session: string | null;
   workspaceId: string | null;
   cwd: string;
 }
 
-/** One file per Session; the hash keeps a long path out of the name. */
-export function registryPath(stateDir: string, scope: RegistryScope): string {
-  const key = createHash("sha1")
-    .update(`${scope.session ?? ""} ${scope.workspaceId ?? ""} ${scope.cwd}`)
-    .digest("hex")
-    .slice(0, 12);
-  const name = basename(scope.cwd).replace(/[^A-Za-z0-9._-]+/g, "-") || "repo";
-  return join(stateDir, "agents", `${name}-${key}.json`);
-}
+const AgentEntrySchema = Schema.Struct({
+  role: Schema.String,
+  agent: Schema.String,
+  paneId: Schema.String,
+  workspaceId: Schema.NullOr(Schema.String),
+  runId: Schema.String,
+  workflow: Schema.String,
+  at: Schema.String,
+});
+const RegistryJson = Schema.fromJsonString(Schema.Array(AgentEntrySchema));
+const encodeRegistry = Schema.encodeSync(RegistryJson);
+const decodeRegistry = Schema.decodeUnknownEffect(RegistryJson);
 
-/** The Session a plugin process is running in, as the register keys it. */
+/**
+ * `Bun.hash` and not an Effect equivalent: Effect has no non-cryptographic digest, and
+ * this only needs a short stable key for a filename. `Crypto` offers randomness and
+ * cryptographic hashing, neither of which is what a scope key is.
+ */
+export const registryPath = Effect.fn("registryPath")(function* (
+  stateDir: string,
+  scope: RegistryScope,
+) {
+  const path = yield* Path.Path;
+  const key = Bun.hash(`${scope.session ?? ""} ${scope.workspaceId ?? ""} ${scope.cwd}`)
+    .toString(16)
+    .slice(0, 12);
+  const name = path.basename(scope.cwd).replace(/[^A-Za-z0-9._-]+/g, "-") || "repo";
+  return path.join(stateDir, "agents", `${name}-${key}.json`);
+});
+
 export function scopeFor(
   env: { socketPath: string | null; workspaceId: string | null },
   cwd: string,
@@ -48,59 +53,72 @@ export function scopeFor(
   return { session: env.socketPath, workspaceId: env.workspaceId, cwd };
 }
 
-export function readRegistry(path: string): AgentEntry[] {
-  if (!existsSync(path)) return [];
-  try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
-    return Array.isArray(parsed) ? (parsed as AgentEntry[]) : [];
-  } catch {
-    // A half-written registry is not worth failing a run over; it rebuilds itself.
-    return [];
-  }
-}
-
-function write(path: string, entries: AgentEntry[]): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(entries, null, 2)}\n`);
-}
-
 /**
- * Records one long-lived agent. One agent per role per Session: a second
- * implementer replaces the first, because a hand-off has to name exactly one.
+ * The Session's live agents, or none. A register half-written or edited by hand is a
+ * cache of what herdr was last seen to have, not a source of truth, so it is read as
+ * empty rather than failing a stop, a hand-off or the Control Plane. The decode runs
+ * in the error channel, not as a throw inside `Effect.map`: a `SchemaError` raised
+ * there was a defect, and the fallback on the next line never ran.
  */
-export function registerAgent(path: string, entry: AgentEntry): AgentEntry[] {
-  const kept = readRegistry(path).filter((e) => e.role !== entry.role && e.agent !== entry.agent);
+export const readRegistry = Effect.fn("readRegistry")(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  if (!(yield* fs.exists(file))) return [];
+  return yield* fs.readFileString(file).pipe(
+    Effect.flatMap(decodeRegistry),
+    Effect.catch(() => Effect.succeed([])),
+  );
+});
+
+const write = Effect.fn("writeRegistry")(function* (
+  file: string,
+  entries: ReadonlyArray<AgentEntry>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+  yield* fs.writeFileString(file, `${encodeRegistry(entries)}\n`);
+});
+
+export const registerAgent = Effect.fn("registerAgent")(function* (
+  file: string,
+  entry: AgentEntry,
+) {
+  const kept = (yield* readRegistry(file)).filter(
+    (e) => e.role !== entry.role && e.agent !== entry.agent,
+  );
   const entries = [...kept, entry];
-  write(path, entries);
+  yield* write(file, entries);
   return entries;
-}
+});
 
-/**
- * The entries herdr still knows about. Both the agent name and its pane are
- * checked: ids compact when panes close, so a name alone can point at a pane
- * that is now somebody else's.
- */
-export function liveEntries(entries: AgentEntry[], alive: AgentInfo[]): AgentEntry[] {
+export function liveEntries(
+  entries: ReadonlyArray<AgentEntry>,
+  alive: ReadonlyArray<AgentInfo>,
+): AgentEntry[] {
   return entries.filter((e) =>
     alive.some(
       (a) =>
         a.name === e.agent &&
         a.paneId === e.paneId &&
-        // An entry belongs to one workspace; herdr's answer decides which.
         (a.workspaceId === null || e.workspaceId === null || a.workspaceId === e.workspaceId),
     ),
   );
 }
 
-/** Reads the registry, drops what is gone, and writes back only when it changed. */
-export function pruneRegistry(path: string, alive: AgentInfo[]): AgentEntry[] {
-  const entries = readRegistry(path);
+export const pruneRegistry = Effect.fn("pruneRegistry")(function* (
+  file: string,
+  alive: ReadonlyArray<AgentInfo>,
+) {
+  const entries = yield* readRegistry(file);
   const live = liveEntries(entries, alive);
-  if (live.length !== entries.length) write(path, live);
+  if (live.length !== entries.length) yield* write(file, live);
   return live;
-}
+});
 
-/** The live agent for a role, or null. Stale entries are dropped on the way. */
-export function liveAgent(path: string, alive: AgentInfo[], role: string): AgentEntry | null {
-  return pruneRegistry(path, alive).find((e) => e.role === role) ?? null;
-}
+export const liveAgent = Effect.fn("liveAgent")(function* (
+  file: string,
+  alive: AgentInfo[],
+  role: string,
+) {
+  return (yield* pruneRegistry(file, alive)).find((e) => e.role === role) ?? null;
+});

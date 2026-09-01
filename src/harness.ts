@@ -1,11 +1,10 @@
 // How to start each supported agent CLI, pass it a model, and inject a Persona.
-// Personas are injected, never installed as harness-native config (docs/SPEC.md).
+// Personas are injected, never installed as harness-native config (CONTEXT.md, Persona).
 
 import { claudeTrust, type Trust } from "./trust";
 
 /**
- * "Whatever this harness picks on its own." No model flag is passed, so the harness
- * uses its own default rather than one this plugin has to keep in step with it.
+ * The harness adapter's pinned default model. Adapters without one still omit the flag.
  */
 export const DEFAULT_MODEL = "default";
 
@@ -14,6 +13,8 @@ export interface HarnessAdapter {
   /** herdr agent kind, i.e. the canonical executable. */
   kind: string;
   modelArgs(model: string): string[];
+  /** Pinned model used when a Definition says `default`; absent keeps the harness native default. */
+  defaultModel?: string;
   /**
    * Present when the harness takes a persona file as a flag. herdr rejects agent
    * arguments it cannot encode for the shell, so this takes a path, not the text.
@@ -34,12 +35,17 @@ export interface HarnessAdapter {
   efforts?: string[];
 }
 
-export const HARNESSES: Record<string, HarnessAdapter> = {
+export interface Harnesses {
+  readonly [name: string]: HarnessAdapter;
+}
+
+export const HARNESSES: Harnesses = {
   claude: {
     id: "claude",
     kind: "claude",
     skillRef: (name) => `/${name}`,
     modelArgs: (model) => ["--model", model],
+    defaultModel: "opus",
     personaArgs: (file) => ["--append-system-prompt-file", file],
     effortArgs: (effort) => ["--effort", effort],
     trust: claudeTrust,
@@ -83,13 +89,17 @@ export function harnessNames(): string[] {
   return Object.keys(HARNESSES).sort();
 }
 
-export function knownModel(harness: HarnessAdapter, model: string, extra: string[] = []): boolean {
+export function knownModel(
+  harness: HarnessAdapter,
+  model: string,
+  extra: ReadonlyArray<string> = [],
+): boolean {
   if (model === DEFAULT_MODEL) return true;
   if (harness.models.includes(model) || extra.includes(model)) return true;
   return harness.modelPattern?.test(model) ?? false;
 }
 
-export function modelHint(harness: HarnessAdapter, extra: string[] = []): string {
+export function modelHint(harness: HarnessAdapter, extra: ReadonlyArray<string> = []): string {
   const known = [DEFAULT_MODEL, ...harness.models, ...extra];
   const parts: string[] = [];
   if (known.length > 0) parts.push(known.join(", "));
@@ -104,9 +114,9 @@ export function startArgs(
   personaFile: string,
   effort?: string,
 ): string[] {
+  const selectedModel = model === DEFAULT_MODEL ? harness.defaultModel : model;
   return [
-    // `default` is the absence of a model flag, which is how a harness is asked for its own.
-    ...(model === DEFAULT_MODEL ? [] : harness.modelArgs(model)),
+    ...(selectedModel ? harness.modelArgs(selectedModel) : []),
     ...(effort ? (harness.effortArgs?.(effort) ?? []) : []),
     ...(harness.personaArgs?.(personaFile) ?? []),
   ];

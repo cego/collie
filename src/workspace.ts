@@ -2,8 +2,7 @@
 // no engine state — it reads the run dirs and the live-agent register and draws
 // what it finds, so deleting the tab loses nothing and the next Run recreates it.
 
-import { existsSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { Clock, Effect, FileSystem, Option, Path } from "effect";
 import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
 import { CONTROL_PLANE, displayName, GLYPH, targetLabel } from "./naming";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
@@ -83,7 +82,11 @@ function belongs(record: RunRecord, key: SessionKey, hereNames: Set<string>): bo
     if (record.workspace !== key.workspaceId) return false;
     // Workspace ids compact, so a label recorded and since changed means a
     // different workspace is wearing the same id.
-    return !record.workspace_label || !key.workspaceLabel || record.workspace_label === key.workspaceLabel;
+    return (
+      !record.workspace_label ||
+      !key.workspaceLabel ||
+      record.workspace_label === key.workspaceLabel
+    );
   }
   return agentsHere(record, hereNames).length > 0;
 }
@@ -107,18 +110,19 @@ function agentTitle(variant: VariantRecord, registered: AgentEntry | undefined):
   return `${name} · ${displayName(variant.model.slice(variant.model.lastIndexOf("/") + 1))}`;
 }
 
-function activeDetail(run: Run): string {
+const activeDetail = Effect.fn("activeDetail")(function* (run: Run) {
   const record = run.record;
   if (record.awaiting) return `${record.awaiting} — your turn`;
   const step = record.steps.find((s) => s.status === "running" || s.status === "blocked");
   const where = step ? step.id : "starting";
-  const at = record.max_iterations > 1
-    ? `${where} · iteration ${record.iteration}/${record.max_iterations}`
-    : where;
+  const at =
+    record.max_iterations > 1
+      ? `${where} · iteration ${record.iteration}/${record.max_iterations}`
+      : where;
   // What the driver last said, which is what the runner pane used to show.
-  const said = lastProgress(run.dir);
+  const said = yield* lastProgress(run.dir);
   return said ? `${at} · ${said}` : at;
-}
+});
 
 function recentDetail(record: RunRecord, abandoned: boolean): string {
   const parts: string[] = [abandoned ? "abandoned" : record.status];
@@ -139,14 +143,15 @@ function glyphFor(record: RunRecord, abandoned: boolean): string {
 }
 
 /** When a run last changed: a run making progress rewrites run.json as it goes. */
-function touchedAt(run: Run): number {
-  const path = join(run.dir, "run.json");
-  try {
-    return existsSync(path) ? statSync(path).mtimeMs : 0;
-  } catch {
-    return 0;
-  }
-}
+const touchedAt = Effect.fn("touchedAt")(function* (run: Run) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = path.join(run.dir, "run.json");
+  return yield* fs.stat(file).pipe(
+    Effect.map((s) => (Option.isSome(s.mtime) ? s.mtime.value.getTime() : 0)),
+    Effect.catch(() => Effect.succeed(0)),
+  );
+});
 
 /**
  * A run whose driver is gone: still marked `running`, nothing driving it, no agent
@@ -154,12 +159,16 @@ function touchedAt(run: Run): number {
  * just started. Nothing marks such a run — the process that would have is the one
  * that died — so the board says so instead of showing it as work in progress.
  */
-function abandonedRun(run: Run, hereNames: Set<string>, now: number): boolean {
+const abandonedRun = Effect.fn("abandonedRun")(function* (
+  run: Run,
+  hereNames: Set<string>,
+  now: number,
+) {
   if (run.record.status !== "running") return false;
-  if (driverAlive(run.dir)) return false;
+  if (yield* driverAlive(run.dir)) return false;
   if (agentsHere(run.record, hereNames).length > 0) return false;
-  return now - touchedAt(run) > STALE_MS;
-}
+  return now - (yield* touchedAt(run)) > STALE_MS;
+});
 
 /**
  * Everything the tab shows, from the run dirs and one `agent list`: the runs of
@@ -167,18 +176,24 @@ function abandonedRun(run: Run, hereNames: Set<string>, now: number): boolean {
  * herdr answered, so this stays a pure function of state and is testable without
  * a herdr.
  */
-export function buildView(
+export const buildView = Effect.fn("buildView")(function* (
   opts: SessionKey & { stateDir: string; alive: AgentInfo[]; now?: number },
-): WorkspaceView {
-  const now = opts.now ?? Date.now();
+) {
+  const path = yield* Path.Path;
+  const now = opts.now ?? (yield* Clock.currentTimeMillis);
   // Only agents in this workspace count, whatever a run record claims.
-  const here = opts.alive.filter((a) => a.workspaceId === null || a.workspaceId === opts.workspaceId);
+  const here = opts.alive.filter(
+    (a) => a.workspaceId === null || a.workspaceId === opts.workspaceId,
+  );
   const hereNames = new Set(here.map((a) => a.name));
   const status = new Map(here.map((a) => [a.name, a.status]));
 
-  const runs = new RunStore(opts.stateDir).list().filter((r) => belongs(r.record, opts, hereNames));
+  const runs = (yield* new RunStore(opts.stateDir).list()).filter((r) =>
+    belongs(r.record, opts, hereNames),
+  );
+  const regPath = yield* registryPath(opts.stateDir, opts);
   const registered = new Map(
-    liveEntries(readRegistry(registryPath(opts.stateDir, opts)), here).map((e) => [e.agent, e]),
+    liveEntries(yield* readRegistry(regPath), here).map((e) => [e.agent, e]),
   );
 
   const rows: AgentRow[] = [];
@@ -198,24 +213,28 @@ export function buildView(
   rows.sort((a, b) => Number(registered.has(b.agent)) - Number(registered.has(a.agent)));
   const agents = rows.slice(0, MAX_AGENTS).map((r, i) => ({ ...r, key: String(i + 1) }));
 
-  const abandoned = new Set(runs.filter((r) => abandonedRun(r, hereNames, now)).map((r) => r.id));
+  const abandoned = new Set<string>();
+  for (const r of runs) if (yield* abandonedRun(r, hereNames, now)) abandoned.add(r.id);
   const stopped = runs.filter((r) => r.record.status !== "running" || abandoned.has(r.id));
 
+  const active: RunRow[] = [];
+  for (const r of runs.filter((r) => r.record.status === "running" && !abandoned.has(r.id))) {
+    active.push({
+      id: r.id,
+      dir: r.dir,
+      glyph: glyphFor(r.record, false),
+      title: title(r.record),
+      detail: yield* activeDetail(r),
+      choice: yield* readChoice(r.dir),
+    });
+  }
+
   return {
-    repo: basename(opts.cwd),
+    repo: path.basename(opts.cwd),
     cwd: opts.cwd,
     agents,
     extraAgents: rows.length - agents.length,
-    active: runs
-      .filter((r) => r.record.status === "running" && !abandoned.has(r.id))
-      .map((r) => ({
-        id: r.id,
-        dir: r.dir,
-        glyph: glyphFor(r.record, false),
-        title: title(r.record),
-        detail: activeDetail(r),
-        choice: readChoice(r.dir),
-      })),
+    active,
     recent: stopped.slice(0, RECENT).map((r) => ({
       id: r.id,
       dir: r.dir,
@@ -225,7 +244,7 @@ export function buildView(
       choice: null,
     })),
   };
-}
+});
 
 function section(name: string, rows: string[], empty: string): string[] {
   return ["", name, ...(rows.length > 0 ? rows : [`  (${empty})`])];
@@ -274,7 +293,9 @@ export function renderWorkspace(
 ): string {
   const lines = [`${CONTROL_PLANE} — ${view.repo}`, view.cwd];
 
-  const agents = view.agents.map((a) => `  ${a.key}  ${a.name.padEnd(22)}${a.status.padEnd(9)}${a.run}`);
+  const agents = view.agents.map(
+    (a) => `  ${a.key}  ${a.name.padEnd(22)}${a.status.padEnd(9)}${a.run}`,
+  );
   if (view.extraAgents > 0) agents.push(`     … and ${view.extraAgents} more without a key`);
 
   const waiting = askingRun(view);

@@ -1,304 +1,463 @@
-// The run dir is the channel between a detached run driver and the Control Plane.
-// The driver has no terminal of its own: it writes what it is doing, and asks its
-// questions, through files. Everything here is a plain file so both sides survive
-// the other being closed, killed or resumed.
-
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { breakStaleLock, holdsLock, processStartTime, releaseOwnLock, tryClaimLock } from "./lock";
+import { Crypto, Effect, Fiber, FileSystem, Path, Schema, Option, Queue, Stream } from "effect";
+import { nowIso } from "./time";
+import {
+  currentPid,
+  holdsLock,
+  lockWriteIsFresh,
+  processStartTime,
+  signalProcess,
+  withLock,
+} from "./lock";
 import type { EnginePrompts } from "./engine";
 import type { PickItem } from "./picker";
+import { isString } from "./schema";
 
-/** One line per thing the driver did, as the runner pane used to print it. */
 export const PROGRESS = "progress.jsonl";
-/** The same lines unstructured, plus anything that went wrong in detail. */
 export const RUNNER_LOG = "runner.log";
-/** Who is driving this run, so a resume does not start a second one. */
 export const RUNNER_PID = "runner.pid";
-/** The question a Choice step is waiting on, and the answer it is waiting for. */
+export const STOPPED = "stopped";
 export const CHOICE = "choice.json";
 export const CHOICE_ANSWER = "choice-answer.json";
-
 export interface ProgressLine {
   at: string;
   text: string;
 }
-
 export interface PendingChoice {
-  /** Stamped by the driver so an answer cannot settle a question it was not asked. */
   id: string;
   kind: "menu" | "ask";
-  /** The run this belongs to, so the board can name it without reading it twice. */
   run: string;
   step: string;
   header: string;
   footer: string;
-  items: PickItem[];
+  items: readonly PickItem[];
 }
-
 export interface ChoiceAnswer {
   id: string;
-  /** The chosen item's id, the typed text, or null for "the human backed out". */
   choice?: string | null;
   text?: string | null;
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-function read<T>(path: string): T | null {
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as T;
-  } catch {
-    // Half-written: the next poll will see it whole.
-    return null;
-  }
-}
-
-export function appendProgress(dir: string, text: string): void {
-  mkdirSync(dir, { recursive: true });
-  const at = new Date().toISOString();
-  appendFileSync(join(dir, PROGRESS), `${JSON.stringify({ at, text })}\n`);
-  appendFileSync(join(dir, RUNNER_LOG), `${at} ${text}\n`);
-}
-
-/** Whatever the driver has said, oldest first; a broken line is skipped, not fatal. */
-export function readProgress(dir: string, limit = 0): ProgressLine[] {
-  const path = join(dir, PROGRESS);
-  if (!existsSync(path)) return [];
-  const lines: ProgressLine[] = [];
-  for (const raw of readFileSync(path, "utf8").split("\n")) {
-    if (raw.trim() === "") continue;
-    try {
-      lines.push(JSON.parse(raw) as ProgressLine);
-    } catch {
-      /* a line torn by a concurrent write */
-    }
-  }
-  return limit > 0 ? lines.slice(-limit) : lines;
-}
-
-/** The last thing the driver said, which is what a run's row shows. */
-export function lastProgress(dir: string): string | null {
-  return readProgress(dir, 1)[0]?.text ?? null;
-}
-
-export function writeChoice(dir: string, choice: PendingChoice): void {
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, CHOICE), `${JSON.stringify(choice, null, 2)}\n`);
-}
-
-export function readChoice(dir: string): PendingChoice | null {
-  return read<PendingChoice>(join(dir, CHOICE));
-}
-
-export function answerChoice(dir: string, answer: ChoiceAnswer): void {
-  writeFileSync(join(dir, CHOICE_ANSWER), `${JSON.stringify(answer)}\n`);
-}
-
-export function clearChoice(dir: string): void {
-  for (const name of [CHOICE, CHOICE_ANSWER]) rmSync(join(dir, name), { force: true });
-}
-
-/** The ownership claim in `runner.pid`: which process, and which incarnation of it. */
 export interface OwnerRecord {
   pid: number;
-  /** The process's start time, so a later process reusing the pid is not the driver. */
   start: string | null;
   at: string;
 }
 
-function readOwner(dir: string): OwnerRecord | null {
-  const raw = read<OwnerRecord | number>(join(dir, RUNNER_PID));
-  // A claim from before ownership records: a bare pid, identity unknowable.
-  if (typeof raw === "number") {
-    return Number.isInteger(raw) && raw > 0 ? { pid: raw, start: null, at: "" } : null;
-  }
-  if (!raw || !Number.isInteger(raw.pid) || raw.pid <= 0) return null;
-  return raw;
-}
+const PickItemJson = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  subtitle: Schema.optionalKey(Schema.String),
+});
+const ProgressLineJson = Schema.fromJsonString(
+  Schema.Struct({ at: Schema.String, text: Schema.String }),
+);
+const PendingChoiceJson = Schema.fromJsonString(
+  Schema.Struct({
+    id: Schema.String,
+    kind: Schema.Literals(["menu", "ask"]),
+    run: Schema.String,
+    step: Schema.String,
+    header: Schema.String,
+    footer: Schema.String,
+    items: Schema.Array(PickItemJson),
+  }),
+);
+const ChoiceAnswerJson = Schema.fromJsonString(
+  Schema.Struct({
+    id: Schema.String,
+    choice: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    text: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  }),
+);
+/**
+ * The ownership claim. One shape only: the spec allows no persisted-state
+ * compatibility layer, and the bare integer a previous release wrote decoded to a
+ * claim with no start time — which `liveOwner` treats as alive and `stopDriver`
+ * refuses to signal, so such a Run could be neither stopped nor resumed, for ever.
+ */
+const OwnerRecordJson = Schema.fromJsonString(
+  Schema.Struct({ pid: Schema.Int, start: Schema.NullOr(Schema.String), at: Schema.String }),
+);
+
+const JsonString = Schema.fromJsonString(Schema.Unknown);
+const encodeJson = Schema.encodeSync(JsonString);
 
 /**
- * The live owner, or null. A dead pid, a malformed record, and a contradicted
- * identity all read as "no driver". A claim whose identity cannot be read — a
- * pre-upgrade bare pid — still counts as a driver while its pid is live, because
- * the harm on this path is starting a second driver; only stopDriver demands the
- * identity be positively verified.
+ * A command for the Run's owning Driver. The Driver reads the inbox, so the shape
+ * lives here with it and every writer imports it; two definitions of one persisted
+ * boundary is exactly what run.json stopped having.
  */
-function liveOwner(dir: string): OwnerRecord | null {
-  const owner = readOwner(dir);
-  if (!owner) return null;
-  try {
-    process.kill(owner.pid, 0);
-  } catch {
-    return null;
+const InboxCommand = Schema.Struct({
+  type: Schema.Literals(["answer", "stop", "resume"]),
+  requestId: Schema.String,
+  choiceId: Schema.optionalKey(Schema.String),
+  answer: Schema.optionalKey(Schema.String),
+});
+export const InboxCommandJson = Schema.fromJsonString(InboxCommand);
+export interface InboxCommandValue extends Schema.Schema.Type<typeof InboxCommand> {}
+
+function read<S extends Schema.Top>(schema: S, file: string) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* fs.exists(file).pipe(Effect.catch(() => Effect.succeed(false))))) return null;
+    return yield* fs.readFileString(file).pipe(
+      Effect.flatMap((raw) => Schema.decodeUnknownEffect(schema)(raw)),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+  });
+}
+
+export const appendProgress = Effect.fn("appendProgress")(function* (dir: string, text: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(dir, { recursive: true });
+  const at = yield* nowIso();
+  yield* fs.writeFileString(path.join(dir, PROGRESS), `${encodeJson({ at, text })}\n`, {
+    flag: "a",
+  });
+  yield* fs.writeFileString(path.join(dir, RUNNER_LOG), `${at} ${text}\n`, { flag: "a" });
+});
+
+export const readProgress = Effect.fn("readProgress")(function* (dir: string, limit = 0) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = path.join(dir, PROGRESS);
+  if (!(yield* fs.exists(file))) return [];
+  const lines: ProgressLine[] = [];
+  for (const raw of (yield* fs.readFileString(file)).split("\n")) {
+    if (!raw.trim()) continue;
+    try {
+      const line = Schema.decodeUnknownOption(ProgressLineJson)(raw);
+      if (Option.isSome(line)) lines.push(line.value);
+    } catch {
+      /* torn line */
+    }
   }
+  return limit > 0 ? lines.slice(-limit) : lines;
+});
+export const lastProgress = Effect.fn("lastProgress")(function* (dir: string) {
+  return (yield* readProgress(dir, 1))[0]?.text ?? null;
+});
+export const writeChoice = Effect.fn("writeChoice")(function* (dir: string, choice: PendingChoice) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(dir, { recursive: true });
+  yield* fs.writeFileString(path.join(dir, CHOICE), `${encodeJson(choice)}\n`);
+});
+export const readChoice = Effect.fn("readChoice")(function* (dir: string) {
+  const path = yield* Path.Path;
+  return yield* read(PendingChoiceJson, path.join(dir, CHOICE));
+});
+export const answerChoice = Effect.fn("answerChoice")(function* (
+  dir: string,
+  answer: ChoiceAnswer,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.writeFileString(path.join(dir, CHOICE_ANSWER), `${encodeJson(answer)}\n`);
+});
+export const clearChoice = Effect.fn("clearChoice")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  for (const name of [CHOICE, CHOICE_ANSWER])
+    yield* fs.remove(path.join(dir, name), { force: true });
+});
+
+const consumeInboxAnswer = Effect.fn("consumeInboxAnswer")(function* (
+  dir: string,
+  choice: PendingChoice,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  for (const file of yield* inboxFiles(dir)) {
+    const command = yield* read(InboxCommandJson, file);
+    if (command?.type !== "answer" || command.choiceId !== choice.id || !isString(command.answer))
+      continue;
+    // Checked against the Choice it is about to satisfy, not just its id: an empty
+    // answer dismisses a menu, and anything else has to be one of its own options.
+    if (
+      choice.kind === "menu" &&
+      command.answer !== "" &&
+      !choice.items.some((item) => item.id === command.answer)
+    )
+      continue;
+    yield* fs.remove(file, { force: true });
+    return choice.kind === "ask"
+      ? { id: choice.id, text: command.answer }
+      : { id: choice.id, choice: command.answer };
+  }
+  return null;
+});
+
+/**
+ * Every command in the Run's inbox, oldest name first, or none at all. The inbox's
+ * layout — one directory, one JSON file per request — is named here and by the writer,
+ * and nowhere else.
+ */
+export const inboxFiles = Effect.fn("inboxFiles")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const inbox = path.join(dir, "inbox");
+  if (!(yield* fs.exists(inbox))) return [];
+  const names = yield* fs
+    .readDirectory(inbox)
+    .pipe(
+      Effect.catchTag("PlatformError", (error) =>
+        error.reason._tag === "NotFound" ? Effect.succeed([]) : Effect.fail(error),
+      ),
+    );
+  return names
+    .filter((name) => name.endsWith(".json"))
+    .sort()
+    .map((name) => path.join(inbox, name));
+});
+
+/**
+ * Everything the previous Driver left behind. A command is removed only by the
+ * consumer that matches it, and the SIGTERM path consumes nothing, so a stop written
+ * while a Driver was mid-Step outlived it — and the next Driver's first Choice found
+ * that stop and killed itself, which made any Workflow that asks a question
+ * unresumable. A pending Choice is stale for the same reason: the question belonged to
+ * a process that is gone. A Driver therefore starts from an empty inbox, and only
+ * commands written during its own life reach it.
+ */
+export const clearPreviousDriver = Effect.fn("clearPreviousDriver")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* clearChoice(dir);
+  let resumedBy: string | null = null;
+  for (const file of yield* inboxFiles(dir)) {
+    // A `resume` command is addressed to this Driver, not the last one: it is the
+    // record of the request that started it, so it is read before it is cleared.
+    const command = yield* read(InboxCommandJson, file);
+    if (command?.type === "resume") resumedBy = command.requestId;
+    yield* fs.remove(file, { force: true });
+  }
+  return resumedBy;
+});
+
+/** Whether a stop already took effect on this Run before anyone came to drive it. */
+export const stoppedBefore = Effect.fn("stoppedBefore")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* fs.exists(path.join(dir, STOPPED));
+});
+
+/**
+ * A stop request handed over through the inbox, consumed so it is acted on once. The
+ * spec makes the inbox how another process gives the owning Driver a command; this is
+ * the Driver's side of that for a stop, and it reads the inbox only while waiting on
+ * a Choice — a Driver mid-Step is waiting on an agent and reads nothing, which is why
+ * `collie run stop` signals as well.
+ */
+const consumeInboxStop = Effect.fn("consumeInboxStop")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  for (const file of yield* inboxFiles(dir)) {
+    const command = yield* read(InboxCommandJson, file);
+    if (command?.type !== "stop") continue;
+    yield* fs.remove(file, { force: true });
+    return true;
+  }
+  return false;
+});
+
+const readOwner = Effect.fn("readOwner")(function* (dir: string) {
+  const path = yield* Path.Path;
+  const raw = yield* read(OwnerRecordJson, path.join(dir, RUNNER_PID));
+  return raw && raw.pid > 0 ? raw : null;
+});
+
+const liveOwner = Effect.fn("liveOwner")(function* (dir: string) {
+  const owner = yield* readOwner(dir);
+  if (!owner || !(yield* signalProcess(owner.pid))) return null;
   if (owner.start !== null) {
-    const start = processStartTime(owner.pid);
+    const start = yield* processStartTime(owner.pid);
     if (start === null || start !== owner.start) return null;
   }
   return owner;
-}
+});
 
-/**
- * Claims the run for this process. Atomic: of two concurrent claims exactly one
- * wins, and the loser gets false rather than a second driver. A stale claim — its
- * process dead, or its identity contradicted — is cleared and claimed over.
- */
-export function acquireDriver(dir: string): boolean {
-  mkdirSync(dir, { recursive: true });
-  const path = join(dir, RUNNER_PID);
-  const claim: OwnerRecord = { pid: process.pid, start: processStartTime(process.pid), at: new Date().toISOString() };
+export const acquireDriver = Effect.fn("acquireDriver")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(dir, { recursive: true });
+  const file = path.join(dir, RUNNER_PID);
+  const me = yield* currentPid;
+  const claim: OwnerRecord = { pid: me, start: yield* processStartTime(me), at: yield* nowIso() };
   for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      writeFileSync(path, `${JSON.stringify(claim)}\n`, { flag: "wx" });
-      return true;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-      if (!takeOverStale(dir, path)) return false;
-    }
+    const won = yield* fs.writeFileString(file, `${encodeJson(claim)}\n`, { flag: "wx" }).pipe(
+      Effect.as(true),
+      Effect.catchTag("PlatformError", (e) =>
+        e.reason._tag === "AlreadyExists" ? Effect.succeed(false) : Effect.fail(e),
+      ),
+    );
+    if (won) return true;
+    if (!(yield* takeOverStale(dir, file))) return false;
   }
   return false;
-}
+});
 
-/**
- * Clears a stale claim so the caller may retry its own. False means this attempt
- * loses cleanly: the run is owned, or another contender holds the takeover lock.
- * Removal happens only under that lock, with liveness re-checked inside it, so a
- * fresh claim written by a contender that won in the meantime is never the one
- * removed — the race that would otherwise yield two drivers. The lock itself is
- * judged like the run lock: a dead contender's lock is broken at once, a live
- * one's is respected, and the holder re-checks it is still its own before
- * touching the claim, in case it was broken past while suspended.
- */
-function takeOverStale(dir: string, path: string): boolean {
-  if (liveOwner(dir)) return false;
-  const lock = `${path}.takeover`;
-  if (!tryClaimLock(lock)) {
-    // Held: break it only when its holder is stale, then try exactly once more.
-    if (!breakStaleLock(lock)) return false;
-    if (!tryClaimLock(lock)) return false;
-  }
-  try {
-    if (liveOwner(dir)) return false;
-    if (midWriteClaim(dir, path)) return false;
-    if (!holdsLock(lock)) return false;
-    rmSync(path, { force: true });
-    return true;
-  } finally {
-    releaseOwnLock(lock);
-  }
-}
+const takeOverStale = Effect.fn("takeOverStale")(function* (dir: string, file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  if (yield* liveOwner(dir)) return false;
+  const lock = `${file}.takeover`;
+  return yield* withLock(
+    lock,
+    Effect.succeed(false),
+    Effect.gen(function* () {
+      if ((yield* liveOwner(dir)) || (yield* midWriteClaim(dir, file)) || !(yield* holdsLock(lock)))
+        return false;
+      yield* fs.remove(file, { force: true });
+      return true;
+    }),
+  );
+});
 
-/**
- * A claim that cannot be read yet may be a winner caught between its wx create
- * and its write — the two are not one filesystem operation — so an unreadable
- * young claim gets the same mtime grace an unreadable lock gets, rather than
- * being removed while its owner's write is still in flight.
- */
-function midWriteClaim(dir: string, path: string): boolean {
-  if (readOwner(dir) !== null) return false;
-  try {
-    return Date.now() - statSync(path).mtimeMs <= 10_000;
-  } catch {
-    // Already gone: nothing to grace.
-    return false;
-  }
-}
+const midWriteClaim = Effect.fn("midWriteClaim")(function* (dir: string, file: string) {
+  if ((yield* readOwner(dir)) !== null) return false;
+  return yield* lockWriteIsFresh(file).pipe(Effect.catch(() => Effect.succeed(false)));
+});
 
-/** Removes only this process's own claim; someone else's is never touched. */
-export function releaseDriver(dir: string): void {
-  const owner = readOwner(dir);
-  if (owner && owner.pid === process.pid) rmSync(join(dir, RUNNER_PID), { force: true });
-}
+export const releaseDriver = Effect.fn("releaseDriver")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const owner = yield* readOwner(dir);
+  if (owner && owner.pid === (yield* currentPid))
+    yield* fs.remove(path.join(dir, RUNNER_PID), { force: true });
+});
+export const driverPid = Effect.fn("driverPid")(function* (dir: string) {
+  return (yield* liveOwner(dir))?.pid ?? null;
+});
+export const driverAlive = Effect.fn("driverAlive")(function* (dir: string) {
+  return (yield* driverPid(dir)) !== null;
+});
+export const stopDriver = Effect.fn("stopDriver")(function* (dir: string) {
+  const owner = yield* liveOwner(dir);
+  return !!owner && owner.start !== null && (yield* signalProcess(owner.pid, "SIGTERM"));
+});
 
-/** The driver's pid, if a verified live one owns this run. */
-export function driverPid(dir: string): number | null {
-  return liveOwner(dir)?.pid ?? null;
-}
-
-export function driverAlive(dir: string): boolean {
-  return driverPid(dir) !== null;
-}
-
-/**
- * Stops a run. Closing a pane used to be how you did this; a detached driver has
- * no pane to close, so the board asks it to stop. The signal goes only to a
- * positively verified owner: an unrelated process behind a stale record — or a
- * pre-upgrade claim whose identity cannot be read — is never signalled. The
- * claim is left in place: while the driver is still dying it truthfully says the
- * run is owned, and once the process is gone it is a stale claim acquireDriver
- * recovers — deleting it here would hand the run to a resume while the old
- * driver still runs.
- */
-export function stopDriver(dir: string): boolean {
-  const owner = liveOwner(dir);
-  if (!owner || owner.start === null) return false;
-  try {
-    process.kill(owner.pid, "SIGTERM");
-  } catch {
-    return false;
-  }
-  return true;
-}
-
-/**
- * A Choice step's menu, asked through the run dir instead of a terminal: the
- * question goes into `choice.json`, and the driver waits for `choice-answer.json`.
- * The Control Plane is what renders it, so a pending choice survives that pane
- * being closed and reopened — the file is still there to render.
- */
 export function filePrompts(opts: {
   dir: string;
   run: string;
   step: () => string;
-  /** How long the human has before the step is left unfinished. */
   timeoutMs: number;
   pollMs?: number;
+  /** Optional synchronization hook after both watch streams have been acquired. */
+  onWatching?: Effect.Effect<void>;
 }): EnginePrompts {
   let seq = 0;
-  const wait = async (choice: PendingChoice): Promise<ChoiceAnswer | null> => {
-    clearChoice(opts.dir);
-    writeChoice(opts.dir, choice);
-    const deadline = Date.now() + opts.timeoutMs;
-    try {
-      while (Date.now() < deadline) {
-        const answer = read<ChoiceAnswer>(join(opts.dir, CHOICE_ANSWER));
-        // An answer to an earlier question is not an answer to this one.
-        if (answer && answer.id === choice.id) return answer;
-        await sleep(opts.pollMs ?? 500);
-      }
-      return null;
-    } finally {
-      clearChoice(opts.dir);
-    }
-  };
+  // Unique per Driver, not only per Choice within one: `${run}-1` from a resumed Run
+  // would otherwise repeat an id its previous Driver had already used. Taken once,
+  // lazily, because filePrompts is a plain constructor and Crypto is a service.
+  let epoch: string | null = null;
+  const epochOnce = Effect.gen(function* () {
+    if (epoch === null) epoch = (yield* (yield* Crypto.Crypto).randomUUIDv4).slice(0, 8);
+    return epoch;
+  });
+  const wait = (asked: Omit<PendingChoice, "id">) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const choice: PendingChoice = { ...asked, id: `${opts.run}-${yield* epochOnce}-${++seq}` };
+      yield* clearChoice(opts.dir);
+      const inbox = path.join(opts.dir, "inbox");
+      yield* fs.makeDirectory(inbox, { recursive: true });
 
+      /** This Choice's answer, or nothing yet. A stop found here is acted on. */
+      const check = Effect.gen(function* () {
+        const answer =
+          (yield* consumeInboxAnswer(opts.dir, choice)) ??
+          (yield* read(ChoiceAnswerJson, path.join(opts.dir, CHOICE_ANSWER)));
+        if (answer && answer.id === choice.id) return answer;
+        // The same request the signal carries, arriving as a file. Raising it on
+        // ourselves keeps one path recording what a stop does to the Run.
+        if (yield* consumeInboxStop(opts.dir)) yield* signalProcess(yield* currentPid, "SIGTERM");
+        return null;
+      });
+
+      /**
+       * What might mean something has changed. `FileSystem.watch` is not recursive —
+       * a write into `inbox/` raises nothing on a watch of the Run directory — so both
+       * are watched: the inbox for commands, the Run dir for `choice-answer.json`.
+       *
+       * The tick rides alongside them rather than driving the wait. Events are only
+       * invalidation signals, and one that never arrives — a watch the platform drops,
+       * a file written before the subscription settled — should cost latency, not the
+       * answer.
+       */
+      const watch = (directory: string) =>
+        fs.watch(directory).pipe(Stream.catchCause(() => Stream.empty));
+
+      const answered = yield* Effect.gen(function* () {
+        const runEvents = yield* Stream.toQueue(watch(opts.dir), { capacity: "unbounded" });
+        const inboxEvents = yield* Stream.toQueue(watch(inbox), { capacity: "unbounded" });
+        if (opts.onWatching) {
+          const probe = Effect.fn("filePrompts.probeWatch")(function* (
+            directory: string,
+            events: typeof runEvents,
+          ) {
+            // Queue acquisition does not guarantee that the platform watcher has
+            // finished subscribing. Keep changing a harmless marker until the real
+            // watch queue answers, synchronized by Fiber/Queue rather than a sleep.
+            const marker = path.join(directory, ".watch-ready");
+            const writer = yield* fs
+              .writeFileString(marker, ".", { flag: "a" })
+              .pipe(Effect.andThen(Effect.yieldNow), Effect.forever, Effect.forkScoped);
+            yield* Queue.take(events).pipe(
+              Effect.mapError(() => new Error(`watch ended before subscribing to ${directory}`)),
+            );
+            yield* Fiber.interrupt(writer);
+            yield* fs.remove(marker, { force: true });
+          });
+          yield* probe(opts.dir, runEvents);
+          yield* probe(inbox, inboxEvents);
+          yield* opts.onWatching;
+        }
+        const queued = (events: typeof runEvents) =>
+          Stream.fromQueue(events).pipe(Stream.catchCause(() => Stream.empty));
+        const events = Stream.merge(
+          Stream.merge(queued(runEvents), queued(inboxEvents)),
+          Stream.tick(`${opts.pollMs ?? 500} millis`),
+        );
+        const queue = yield* Stream.toQueue(events, { capacity: "unbounded" });
+        // Subscribed before the first read, so an answer written in the gap between
+        // them still arrives as an event rather than being waited on for ever.
+        yield* writeChoice(opts.dir, choice);
+        const already = yield* check;
+        if (already) return Option.some(already);
+        return yield* Stream.fromQueue(queue).pipe(
+          Stream.mapEffect(() => check),
+          Stream.filter((found): found is ChoiceAnswer => found !== null),
+          Stream.runHead,
+        );
+      }).pipe(
+        Effect.scoped,
+        Effect.timeout(opts.timeoutMs),
+        // Running out of time is this function answering nothing, not a failure.
+        Effect.catchTag("TimeoutError", () => Effect.succeed(Option.none<ChoiceAnswer>())),
+        Effect.ensuring(clearChoice(opts.dir).pipe(Effect.ignore)),
+      );
+      return Option.getOrNull(answered);
+    });
   return {
-    async menu(items, menuOpts) {
-      const answer = await wait({
-        id: `${opts.run}-${++seq}`,
+    menu: (items, menuOpts) =>
+      wait({
         kind: "menu",
         run: opts.run,
         step: opts.step(),
         header: menuOpts.header,
         footer: menuOpts.footer ?? "",
         items,
-      });
-      if (!answer?.choice) return null;
-      return items.find((i) => i.id === answer.choice) ?? null;
-    },
-    async ask(question) {
-      const answer = await wait({
-        id: `${opts.run}-${++seq}`,
+      }).pipe(
+        Effect.map((answer) =>
+          answer?.choice ? (items.find((i) => i.id === answer.choice) ?? null) : null,
+        ),
+      ),
+    ask: (question) =>
+      wait({
         kind: "ask",
         run: opts.run,
         step: opts.step(),
         header: question,
         footer: "",
         items: [],
-      });
-      return answer?.text ?? null;
-    },
+      }).pipe(Effect.map((answer) => answer?.text ?? null)),
   };
 }

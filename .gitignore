@@ -1,3 +1,10 @@
 bin/
 node_modules/
-.scratch/tmp/
+
+# One-off specs, plans, tickets and reports live in the Run directory (ADR-0002), never
+# here. What belongs in git is the durable stuff: the ADRs, CONTEXT.md, the design docs.
+.scratch/
+plans/
+advisor-plans/
+SPEC.md
+docs/WORKFLOWS-DESIGN.md

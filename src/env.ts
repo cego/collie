@@ -1,7 +1,9 @@
-// Plugin environment as herdr hands it to an action or pane entrypoint.
-// Names come from the herdr plugin runtime; see docs/SPEC.md.
+import { Config, Effect, Option, Schema } from "effect";
 
-export const PLUGIN_ID = "cego.workflows";
+// Plugin environment as herdr hands it to an action or pane entrypoint.
+// Names come from the herdr plugin runtime.
+
+export const PLUGIN_ID = "cego.collie";
 
 export interface PluginContext {
   workspace_id?: string;
@@ -27,6 +29,7 @@ export interface PluginEnv {
   paneId: string | null;
   actionId: string | null;
   entrypointId: string | null;
+  collieMode: string | null;
   /** Directory the run should treat as the project. */
   cwd: string;
   context: PluginContext;
@@ -41,46 +44,82 @@ function first(env: Record<string, string | undefined>, ...keys: string[]): stri
   return null;
 }
 
-export function readEnv(env: Record<string, string | undefined> = process.env): PluginEnv {
-  let context: PluginContext = {};
-  const json = env.HERDR_PLUGIN_CONTEXT_JSON;
-  if (json) {
-    try {
-      context = JSON.parse(json) as PluginContext;
-    } catch {
-      // A malformed context must not stop the run; inference falls back to cwd.
-    }
-  }
+export function readEnv(env: Readonly<Record<string, string | undefined>>): PluginEnv {
+  const context: PluginContext = Option.getOrElse(
+    Schema.decodeUnknownOption(PluginContextJson)(env.HERDR_PLUGIN_CONTEXT_JSON),
+    (): PluginContext => ({}),
+  );
 
   const home = env.HOME ?? "/tmp";
-  const pluginRoot = first(env, "HERDR_PLUGIN_ROOT") ?? process.cwd();
-  const cwd =
-    first(env, "HERDR_WORKFLOWS_CWD", "HERDR_ACTIVE_PANE_CWD") ??
-    context.focused_pane_cwd ??
-    context.workspace_cwd ??
-    process.cwd();
+  const pluginRoot = first(env, "HERDR_PLUGIN_ROOT") ?? env.PWD ?? ".";
+  const cwd = first(env, "COLLIE_CWD") ?? context.workspace_cwd ?? env.PWD ?? ".";
 
   const raw: Record<string, string> = {};
-  for (const [k, v] of Object.entries(env)) {
-    if (k.startsWith("HERDR_") && v !== undefined) raw[k] = v;
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) raw[key] = value;
   }
 
   return {
     pluginRoot,
     home,
     configDir:
-      first(env, "HERDR_PLUGIN_CONFIG_DIR") ?? `${home}/.config/herdr/plugins/${PLUGIN_ID}`,
+      first(env, "HERDR_PLUGIN_CONFIG_DIR") ?? `${home}/.config/herdr/plugins/config/${PLUGIN_ID}`,
     stateDir:
       first(env, "HERDR_PLUGIN_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
     binPath: first(env, "HERDR_BIN_PATH") ?? "herdr",
     socketPath: first(env, "HERDR_SOCKET_PATH"),
-    workspaceId: first(env, "HERDR_WORKSPACE_ID", "HERDR_ACTIVE_WORKSPACE_ID") ?? context.workspace_id ?? null,
+    workspaceId:
+      first(env, "HERDR_WORKSPACE_ID", "HERDR_ACTIVE_WORKSPACE_ID") ?? context.workspace_id ?? null,
     tabId: first(env, "HERDR_TAB_ID", "HERDR_ACTIVE_TAB_ID") ?? context.tab_id ?? null,
     paneId: first(env, "HERDR_PANE_ID", "HERDR_ACTIVE_PANE_ID") ?? context.focused_pane_id ?? null,
     actionId: first(env, "HERDR_PLUGIN_ACTION_ID"),
     entrypointId: first(env, "HERDR_PLUGIN_ENTRYPOINT_ID"),
+    collieMode: first(env, "COLLIE_MODE"),
     cwd,
     context,
     raw,
   };
 }
+
+const PluginContextJson = Schema.fromJsonString(
+  Schema.Struct({
+    workspace_id: Schema.optional(Schema.String),
+    workspace_cwd: Schema.optional(Schema.String),
+    workspace_label: Schema.optional(Schema.String),
+    tab_id: Schema.optional(Schema.String),
+    tab_label: Schema.optional(Schema.String),
+    focused_pane_id: Schema.optional(Schema.String),
+    focused_pane_cwd: Schema.optional(Schema.String),
+    invocation_source: Schema.optional(Schema.String),
+  }),
+);
+
+const environmentKeys = [
+  "HOME",
+  "PWD",
+  "COLLIE_CWD",
+  "COLLIE_MODE",
+  "HERDR_BIN_PATH",
+  "HERDR_SOCKET_PATH",
+  "HERDR_PLUGIN_ROOT",
+  "HERDR_PLUGIN_CONFIG_DIR",
+  "HERDR_PLUGIN_STATE_DIR",
+  "HERDR_PLUGIN_ACTION_ID",
+  "HERDR_PLUGIN_ENTRYPOINT_ID",
+  "HERDR_PLUGIN_CONTEXT_JSON",
+  "HERDR_WORKSPACE_ID",
+  "HERDR_ACTIVE_WORKSPACE_ID",
+  "HERDR_TAB_ID",
+  "HERDR_ACTIVE_TAB_ID",
+  "HERDR_PANE_ID",
+  "HERDR_ACTIVE_PANE_ID",
+] as const;
+
+export const currentEnv = Effect.gen(function* () {
+  const env: Record<string, string | undefined> = {};
+  for (const key of environmentKeys) {
+    const value = yield* Config.option(Config.string(key));
+    if (Option.isSome(value)) env[key] = value.value;
+  }
+  return readEnv(env);
+});

@@ -41,8 +41,8 @@ steps:
     agent: build
     requires: gitlab
     output: mr.json
-
 ---
+
 Work source ({{inputs.plan_kind}}): {{inputs.plan}}
 Project root: {{cwd}}
 This run's directory: {{run.dir}}
@@ -64,10 +64,10 @@ The work source above is one of four kinds. Do the one that matches
     creates the local branch for you, so the fixes land on that merge request's own branch
     and it is updated rather than replaced.
   - `{{inputs.target_kind}}` is `worktree` — stay on the branch you are on.
-  Write the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket per
-  finding under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix.
-  A finding you disagree with is `disputed` with a reason, exactly as in a fix round —
-  never silently skipped.
+    Write the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket per
+    finding under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix.
+    A finding you disagree with is `disputed` with a reason, exactly as in a fix round —
+    never silently skipped.
 - **linear** — a Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat
   its description as the spec. Before building, write that spec to
   `{{run.dir}}/plan/SPEC.md` and a short task list to `{{run.dir}}/plan/issues/NN-*.md`,
@@ -81,6 +81,10 @@ the spec's slug — short, kebab-case,
 no ticket number unless the spec has one. This prompt arrives as `{{skill:implement}}`, so build
 the tickets in their order, one at a time: `{{skill:tdd}}` at the seams the spec names, the
 project's tests green, and one commit per ticket. There is no separate commit step.
+
+Push before you finish — with upstream tracking the first time, onto the branch the work
+source named otherwise. Everything after this step is read by somebody else, and what the
+reviewers fetch has to be what you actually built.
 
 {{session.ask}}
 
@@ -118,6 +122,9 @@ A finding that arrives with `answers your dispute:` is one you rejected before a
 reviewer has now answered. Deal with it: apply it, or dispute it again with a reason that
 answers what they said.
 
+Push the fixups before you finish: the next round reviews the remote, and a fix it cannot
+see is a finding it raises again.
+
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "disputed":
 [{"file": "path", "severity": "minor", "title": "the finding", "detail": "why I
 disagree"}], "fixed": ["what you changed", ...], "tests": "what you ran and what it
@@ -131,9 +138,9 @@ The branch is reviewed and the loop is clean. Push it and open the merge request
 - MR template: `{{mr.template}}`
 - Linear tickets: `{{mr.issues}}`
 
-Push the branch with upstream tracking. This is the only step in the whole run allowed
-to touch the remote, and pushing is all it may do. Never merge the MR, and never pass a
-merge flag to `glab`; opening it is the entire job.
+Push anything the earlier steps have not pushed yet. Never merge the MR, and never pass a
+merge flag to `glab`: this is the only step in the whole run allowed to open a merge
+request, and opening it is the entire job.
 
 **First check whether this branch already has a merge request** — it does when this run
 was started from a review of one (`{{inputs.plan_kind}}` is `review` and

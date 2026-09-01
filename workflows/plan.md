@@ -50,6 +50,7 @@ steps:
         prompt: refine
         output: refine.json
 ---
+
 The goal, in my words:
 
 {{inputs.goal}}

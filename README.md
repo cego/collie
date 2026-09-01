@@ -1,4 +1,4 @@
-# herdr-plugin
+# Collie
 
 Codified agent workflows for herdr: `plan`, `implement`, `review`, `architecture` — deterministic multi-tab orchestrations you pick from a popup.
 A shared starting point, not a restriction: fork any workflow or persona into your own layer.
@@ -8,28 +8,63 @@ A shared starting point, not a restriction: fork any workflow or persona into yo
 One command, safe to re-run:
 
 ```sh
-git clone git@gitlab.cego.dk:mk/herdr-plugin.git ~/.herdr-plugin && ~/.herdr-plugin/setup.sh
+git clone git@gitlab.cego.dk:mk/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
-`setup.sh` links the plugin (`herdr plugin link`, which runs `install.sh` to fetch the
+`setup.sh` links Collie (`herdr plugin link`, which runs `install.sh` to fetch the
 prebuilt runner — no bun needed; with bun present it builds from source instead), adds
 the three keybindings below to `~/.config/herdr/config.toml` if they are missing, and
 reloads the running herdr. Run it again after a `git pull` to pick up changes; from a
-non-checkout location it clones/updates `~/.herdr-plugin` itself (`HERDR_PLUGIN_DIR`,
-`HERDR_PLUGIN_REPO` and `HERDR_CONFIG` override the defaults).
+non-checkout location it clones/updates `~/.collie` itself (`COLLIE_DIR`,
+`COLLIE_REPO` and `HERDR_CONFIG` override the defaults). It also links
+`~/.local/bin/collie` without changing PATH.
+
+### Environment variables
+
+| Variable              | Contract                                                                                                                   |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `COLLIE_DIR`          | Checkout used by `setup.sh` when it is run outside a checkout; defaults to `~/.collie`.                                    |
+| `COLLIE_REPO`         | Git URL cloned by `setup.sh`.                                                                                              |
+| `COLLIE_RELEASE_BASE` | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                           |
+| `COLLIE_DRIVER`       | Driver executable for development and tests: one executable path, or a JSON array containing the executable and arguments. |
+| `COLLIE_MODE`         | Internal picker mode passed from a Herdr action to its picker pane.                                                        |
+| `COLLIE_RUN`          | Internal Run ID passed to a detached Driver.                                                                               |
+| `COLLIE_CWD`          | Internal working directory passed to picker, agent, and Driver processes.                                                  |
+
+The last three are process-to-process contracts set by Collie; users normally do not set them.
 
 Keys it adds (`prefix` is `ctrl+b` by default; edit them in `config.toml` afterwards).
 Plain letters on purpose: `alt` chords after the prefix are not delivered reliably over
 SSH or through some terminals, and herdr's own config notes the same.
 
-| Key | Action |
-| --- | --- |
-| `prefix+f` | `cego.workflows.pick` — run a workflow |
-| `prefix+u` | `cego.workflows.resume` — resume a run with unfinished steps |
-| `prefix+shift+f` | `cego.workflows.fork` — copy a workflow or persona into your layer |
+| Key              | Action                                                          |
+| ---------------- | --------------------------------------------------------------- |
+| `prefix+f`       | `cego.collie.pick` — run a workflow                             |
+| `prefix+u`       | `cego.collie.resume` — resume a run with unfinished steps       |
+| `prefix+shift+f` | `cego.collie.fork` — copy a workflow or persona into your layer |
 
 They show up in herdr's keybind help (`prefix+?`). Without a binding, any action still
-runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`.
+runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
+
+## Command line
+
+The same operations are available without opening UI:
+
+```sh
+collie workflow list
+collie workflow show plan
+collie persona list
+collie --workspace <id> run start plan --input goal="ship it"
+collie run list
+collie run show <run-id>
+collie run wait <run-id> --follow
+collie run answer <run-id> <answer>
+collie run stop <run-id>
+collie run resume <run-id>
+```
+
+Put `--workspace <id>` and `--json` before the command. Mutations accept
+`--request-id`; retrying it returns the original result without repeating the effect.
 
 ## Using it
 
@@ -38,9 +73,9 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.workflows.pick`
 3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only
    for what could not be inferred, and shown one confirm line. Two inputs offer a menu
    instead of a guess: `implement`'s work source, and `review`'s target.
-4. The workspace's **Control Plane** tab opens, and it is always the workspace's *first*
+4. The workspace's **Control Plane** tab opens, and it is always the workspace's _first_
    tab, so `prefix+1` lands on it — the first run creates it, every run after it reuses
-   it and puts it back at the front. It is the **only pane this plugin keeps open**: the
+   it and puts it back at the front. It is the **only pane Collie keeps open**: the
    run itself is driven by a background process with no pane at all, which reports into
    its run directory. The board lists the live agents this session has, the runs going on
    now with the step and iteration each is at and the last thing each said, and the runs
@@ -69,8 +104,8 @@ board, not an engine: it watches the run dirs and the register of live agents an
 draws what it finds, so closing it loses nothing — the next run opens it again.
 
 ```
-Control Plane — herdr-plugin
-/home/mk/work/cego/herdr-plugin
+Control Plane — Collie
+/home/mk/work/cego/collie
 
 Agents
   1  Implementer           working  implement-add-a-picker-20260828-093012
@@ -117,23 +152,23 @@ in a tab you are not looking at.
 
 ## Workflows
 
-| Workflow | What it does |
-| --- | --- |
-| `plan` | Grills you, writes `SPEC.md` and tickets into the run dir, then a menu: implement now, second opinion, offload to Linear, refine |
-| `implement` | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models into one synthesised review, loops on its findings up to five times, then pushes and opens the merge request |
-| `review` | Reviews an MR (anyone's, from any directory), a branch diff or the working tree with two models, synthesises them into one review, and offers to post it to the merge request |
-| `architecture` | Runs the architect over the project, reports into the run dir, then a menu: implement now or stop |
+| Workflow       | What it does                                                                                                                                                                                                                                                               |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plan`         | Grills you, writes `SPEC.md` and tickets into the run dir, then a menu: implement now, second opinion, offload to Linear, refine                                                                                                                                           |
+| `implement`    | Builds a plan dir, a Linear issue or a description on a branch (commit per ticket), improves the architecture it touched, simplifies, reviews with two models into one synthesised review, loops on its findings up to five times, then pushes and opens the merge request |
+| `review`       | Reviews an MR (anyone's, from any directory), a branch diff or the working tree with two models, synthesises them into one review, and offers to post it to the merge request                                                                                              |
+| `architecture` | Runs the architect over the project, reports into the run dir, then a menu: implement now or stop                                                                                                                                                                          |
 
 `plan` and `architecture` can chain `implement`, which embeds `review` and the
 unattended half of `architecture`. Any of them is a fork away from being yours.
 
 ## Actions
 
-| Action | What it does |
-| --- | --- |
-| `cego.workflows.pick` | Popup picker of workflows; infers inputs, asks for the rest, then runs |
-| `cego.workflows.resume` | Popup picker of runs with unfinished steps; finished steps are skipped |
-| `cego.workflows.fork` | Copy a workflow or persona into your layer or this project's |
+| Action               | What it does                                                           |
+| -------------------- | ---------------------------------------------------------------------- |
+| `cego.collie.pick`   | Popup picker of workflows; infers inputs, asks for the rest, then runs |
+| `cego.collie.resume` | Popup picker of runs with unfinished steps; finished steps are skipped |
+| `cego.collie.fork`   | Copy a workflow or persona into your layer or this project's           |
 
 Each action opens the `picker` popup, because that is where a terminal is. The run itself
 is not a pane: the picker starts a detached `drive` process that outlives it and writes
@@ -147,7 +182,7 @@ closing, and the terminal being detached; the driver claims the run atomically, 
 Definitions are markdown files with YAML frontmatter. Same name in a later layer wins:
 
 1. `workflows/`, `personas/` in this repo (team baseline)
-2. `$(herdr plugin config-dir cego.workflows)` (yours)
+2. `$(herdr plugin config-dir cego.collie)` (yours)
 3. `.herdr/workflows`, `.herdr/personas` in the project you're in
 
 `use:` resolves through the same lookup, so overriding `workflows/review.md` changes every
@@ -194,7 +229,7 @@ the picker marks it `(stale — the original has changed since this copy)`.
 ```json
 {
   "harness": "claude",
-  "model": "default",
+  "model": "opus",
   "effort": "high",
   "max_iterations": 5,
   "handoff_timeout_ms": 7200000,
@@ -203,9 +238,11 @@ the picker marks it `(stale — the original has changed since this copy)`.
 }
 ```
 
-`models` adds models the harness adapter table does not already accept. `model:
-"default"` means "pass no model flag" — the harness picks its own, and this plugin
-never has to keep a list in step with it. `effort` is optional — leave it out and each
+`models` adds models the harness adapter table does not already accept. The base
+Claude model is `opus` (the Claude CLI alias for the current Opus, presently Opus 5),
+and Collie always passes it with `--model` unless a Step or user config selects another.
+`model: "default"` uses the harness adapter's pinned default; adapters without one keep
+their native default. `effort` is optional — leave it out and each
 harness uses its own default. An unknown harness, model or effort fails validation
 before a single tab opens. `trust` is what a run does
 about a directory the harness has not been trusted with: see "The first run in a repo".
@@ -214,10 +251,10 @@ about a directory the harness has not been trusted with: see "The first run in a
 
 Workflows and personas name the skills they drive, and the harness decides how to ask:
 
-| Harness | `{{skill:code-review}}` renders as |
-| --- | --- |
-| `claude` | `/code-review` |
-| `pi` | `/skill:code-review` |
+| Harness             | `{{skill:code-review}}` renders as                                                            |
+| ------------------- | --------------------------------------------------------------------------------------------- |
+| `claude`            | `/code-review`                                                                                |
+| `pi`                | `/skill:code-review`                                                                          |
 | `codex`, `opencode` | `the "code-review" skill` — they surface skills by description, so a slash would just be text |
 
 The skills themselves are shared: one set in `~/.agents/skills`, installed by `skills.sh`
@@ -239,18 +276,18 @@ runtime rather than at validation.
 
 ## Harnesses
 
-| Harness | Model flag | Persona | Effort |
-| --- | --- | --- | --- |
-| `claude` | `--model` | `--append-system-prompt-file` | `--effort low\|medium\|high\|xhigh\|max` |
-| `codex` | `-m` | prompt prefix | — |
-| `pi` | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` |
-| `opencode` | `--model <provider/model>` | prompt prefix | — |
+| Harness    | Model flag                 | Persona                                                  | Effort                                                   |
+| ---------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| `claude`   | `--model`                  | `--append-system-prompt-file`                            | `--effort low\|medium\|high\|xhigh\|max`                 |
+| `codex`    | `-m`                       | prompt prefix                                            | —                                                        |
+| `pi`       | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` |
+| `opencode` | `--model <provider/model>` | prompt prefix                                            | —                                                        |
 
-`model: default` is accepted by every harness and means the model flag is left off
-entirely, so the harness starts on whatever it would start on by itself. A pane for such
-a variant is named after the harness (`claude`) rather than a model.
+`model: default` is accepted by every harness and uses its adapter's pinned default.
+Claude pins that default to `opus`, so every base Claude agent receives `--model opus`;
+adapters without a pinned default omit the model flag.
 
-The baseline `implement` builds on `model: default` at `effort: medium` — one implementer
+The baseline `implement` builds on Claude's pinned `opus` default at `effort: medium` — one implementer
 agent for `build`, `architecture`, `simplify`, `fix` and `mr` — and reviews with two
 claude reviewers, `opus` at `medium` and `sonnet` at `xhigh`; the synthesiser takes the
 implementer's setting because it names none of its own. Mixing in codex or opencode is a
@@ -264,30 +301,31 @@ name: implement
 title: implement — build from a plan, review in parallel, fix until clean
 description: One line for the picker.
 inputs:
-  plan: work-source        # goal | plan-dir | work-source | diff-target | ticket | flag
+  plan: work-source # goal | plan-dir | work-source | diff-target | ticket | flag
 max_iterations: 5
 steps:
   - id: build
     persona: implementer
     output: build.json
   - id: review
-    use: review            # embeds another workflow by reference
-    fresh: true            # start a new agent each iteration
+    use: review # embeds another workflow by reference
+    fresh: true # start a new agent each iteration
     parallel:
       - { harness: claude, model: opus, effort: medium }
       - { harness: claude, model: sonnet, effort: xhigh }
   - id: synthesize
     persona: reviewer
-    fan_in: review         # reconciles that step's parallel Outputs into one
+    fan_in: review # reconciles that step's parallel Outputs into one
     output: synthesized.json
   - id: fix
-    agent: build           # keep the implementer's context
+    agent: build # keep the implementer's context
     persona: implementer
     output: fix.json
     repeat:
-      from: synthesize     # the gate: loop while that step reports findings
-      back_to: simplify    # where the next round starts (default: from)
+      from: synthesize # the gate: loop while that step reports findings
+      back_to: simplify # where the next round starts (default: from)
 ---
+
 Text before the first heading is prepended to every step's prompt.
 
 ## build
@@ -308,28 +346,28 @@ gap, never a failed run.
 A step with `choices:` asks you instead of running an agent:
 
 ```yaml
-  - id: next
-    choices:
-      - title: Implement now        # chain: a child run of another workflow
-        run: implement
-        inputs:
-          plan: "{{run.dir}}/plan"
-      - title: Second opinion       # one agent round, then the menu again
-        prompt: second-opinion      # sends the "## second-opinion" section
-        persona: reviewer
-        model: opus
-        effort: xhigh
-        fresh: true
-        output: opinion.json
-        max: 2                      # how often this choice may be taken
-        follow_up:                  # only when that round reported findings
-          agent: grill
-          prompt: revise
-          output: revise.json
-      - title: Post to MR           # the engine sends review.md as one glab mr note
-        post: true
-      - title: Stop here
-        stop: true
+- id: next
+  choices:
+    - title: Implement now # chain: a child run of another workflow
+      run: implement
+      inputs:
+        plan: "{{run.dir}}/plan"
+    - title: Second opinion # one agent round, then the menu again
+      prompt: second-opinion # sends the "## second-opinion" section
+      persona: reviewer
+      model: opus
+      effort: xhigh
+      fresh: true
+      output: opinion.json
+      max: 2 # how often this choice may be taken
+      follow_up: # only when that round reported findings
+        agent: grill
+        prompt: revise
+        output: revise.json
+    - title: Post to MR # the engine sends review.md as one glab mr note
+      post: true
+    - title: Stop here
+      stop: true
 ```
 
 Each choice needs a `title` and exactly one of `run`, `prompt`, `post` or `stop`. A
@@ -371,7 +409,7 @@ claude has not worked in /home/mk/work/some-repo before
 
 `Trust it now` writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
 which is where claude keeps the answer to its own dialog. The previous file is copied to
-`claude.json.bak` in the plugin state dir first, every other project and setting is carried
+`claude.json.bak` in Collie state dir first, every other project and setting is carried
 over as it was, and the new file is renamed into place with the old one's permissions, so no
 reader ever sees it half-written. It is still a read-modify-write of a file claude owns: if
 a claude session saves in the same instant, that save is the one that loses. Once per
@@ -399,12 +437,27 @@ and anything it cannot defend from the diff itself listed under `dropped` with a
 nothing is dropped silently. Its Output is a review plus `summary` and `dropped`:
 
 ```json
-{"verdict": "findings",
- "summary": "Two sentences: what the change does, and what is wrong with it.",
- "findings": [{"file": "cli.js", "line": 4, "severity": "blocker",
-               "title": "Exits 1 on success", "detail": "A caller cannot tell it worked."}],
- "dropped": [{"file": "pkg.json", "severity": "minor", "title": "no engines field",
-              "reason": "one reviewer only, and the diff does not support it"}]}
+{
+  "verdict": "findings",
+  "summary": "Two sentences: what the change does, and what is wrong with it.",
+  "findings": [
+    {
+      "file": "cli.js",
+      "line": 4,
+      "severity": "blocker",
+      "title": "Exits 1 on success",
+      "detail": "A caller cannot tell it worked."
+    }
+  ],
+  "dropped": [
+    {
+      "file": "pkg.json",
+      "severity": "minor",
+      "title": "no engines field",
+      "reason": "one reviewer only, and the diff does not support it"
+    }
+  ]
+}
 ```
 
 The engine renders that to `review.md` in the run dir — the summary, then the findings
@@ -491,13 +544,13 @@ recorded with its kind, and the `build` prompt reads both: `{{inputs.plan}}` and
 implementer writes the spec and a task list into `{{run.dir}}/plan/` before it builds,
 so every run leaves the same audit trail.
 
-Every run is recorded under the plugin state dir: `runs/<id>/run.json` with the
+Every run is recorded under Collie state dir: `runs/<id>/run.json` with the
 inputs and where each came from, `steps/<step>[/<variant>]/` with the exact prompt
 sent and the Output written, `personas/` with the persona as injected, `review.md`
 where the run produced one, and `log.txt`.
 That is the audit trail and what `resume` reads.
 
-## Working on the plugin
+## Working on Collie
 
 **Bun 1.4 or newer** (`engines` in `package.json`, `.mise.toml`, and the CI image all say
 so). The runner is compiled by bun and the tests are `bun:test`, so the version is a
@@ -505,9 +558,11 @@ prerequisite rather than a preference.
 
 ```sh
 bun install
+bun run format:check
+bun run lint
 bun test
-bun run typecheck      # the same TypeScript gate CI runs
-bun run build          # bin/herdr-workflows for this platform
+bun run typecheck
+bun run build          # bin/collie for this platform
 ```
 
 `bun run build` compiles beside the binary and renames over it, because replacing a

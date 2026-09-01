@@ -9,7 +9,16 @@
     "noUncheckedIndexedAccess": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "verbatimModuleSyntax": true
+    "verbatimModuleSyntax": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "diagnostics": false,
+        "refactors": true,
+        "quickinfo": true,
+        "completions": true
+      }
+    ]
   },
   "include": ["src", "test"]
 }

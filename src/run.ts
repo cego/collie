@@ -1,146 +1,188 @@
-// The Run directory: one per execution, the audit trail and the resume state.
-
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { breakStaleLock, holdsLock, releaseOwnLock, tryClaimLock } from "./lock";
+import { Data, Schema, Effect, FileSystem, Path, Struct } from "effect";
+import { nowIso } from "./time";
+import { currentPid, withLock } from "./lock";
 import { unsafePathComponent } from "./naming";
-import type { Finding } from "./output";
+import { FindingSchema } from "./output";
 import { slugify } from "./template";
 
-export type StepStatus = "pending" | "running" | "done" | "blocked" | "failed";
-export type RunStatus = "running" | "done" | "blocked" | "failed";
-
-export interface VariantRecord {
-  harness: string;
-  model: string;
-  effort: string | null;
-  agent: string;
-  /** The readable tab/pane name; the agent name is length-constrained. */
-  label: string;
-  tabId: string | null;
-  paneId: string | null;
-  status: StepStatus;
-  /** Path of the Output file, relative to the run dir. */
-  output: string | null;
-  error: string | null;
+/** A collection a Run may predate: absent reads as empty, so old is not corrupt. */
+function optionalList<S extends Schema.Top>(item: S) {
+  return Schema.Array(item).pipe(Schema.mutable, Schema.withDecodingDefaultKey(Effect.succeed([])));
 }
 
-/** A prompt one Run handed to another Run's live agent. Both Runs record it. */
-export interface HandoffRecord {
-  /** One identity for the exchange, shared by both sides, so merges deduplicate.
-   * Absent on records written before Hand-offs had ids; handoffKey falls back. */
-  id?: string;
-  direction: "sent" | "received";
-  /** The role at the other end: `implementer`, `planner`. */
-  role: string;
-  agent: string;
-  /** The other Run in the exchange. */
+const StepStatusSchema = Schema.Literals(["pending", "running", "done", "blocked", "failed"]);
+export type StepStatus = Schema.Schema.Type<typeof StepStatusSchema>;
+const RunStatusSchema = Schema.Literals(["running", "done", "blocked", "failed"]);
+export type RunStatus = Schema.Schema.Type<typeof RunStatusSchema>;
+
+const VariantRecordSchema = Schema.Struct({
+  harness: Schema.String,
+  model: Schema.String,
+  effort: Schema.NullOr(Schema.String),
+  agent: Schema.String,
+  label: Schema.String,
+  tabId: Schema.NullOr(Schema.String),
+  paneId: Schema.NullOr(Schema.String),
+  status: StepStatusSchema,
+  output: Schema.NullOr(Schema.String),
+  error: Schema.NullOr(Schema.String),
+}).mapFields(Struct.map(Schema.mutableKey));
+
+const HandoffRecordSchema = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  direction: Schema.Literals(["sent", "received"]),
+  role: Schema.String,
+  agent: Schema.String,
+  run: Schema.String,
+  at: Schema.String,
+  note: Schema.String,
+}).mapFields(Struct.map(Schema.mutableKey));
+
+const ChoiceRecordSchema = Schema.Struct({
+  step: Schema.String,
+  title: Schema.String,
+  at: Schema.String,
+}).mapFields(Struct.map(Schema.mutableKey));
+
+const StepRecordSchema = Schema.Struct({
+  id: Schema.String,
+  status: StepStatusSchema,
+  iteration: Schema.Number,
+  note: Schema.NullOr(Schema.String),
+  variants: optionalList(VariantRecordSchema),
+}).mapFields(Struct.map(Schema.mutableKey));
+export type VariantRecord = Schema.Schema.Type<typeof VariantRecordSchema>;
+export type HandoffRecord = Schema.Schema.Type<typeof HandoffRecordSchema>;
+export type ChoiceRecord = Schema.Schema.Type<typeof ChoiceRecordSchema>;
+export type StepRecord = Schema.Schema.Type<typeof StepRecordSchema>;
+
+/**
+ * The persisted Run, and the only place `run.json` is given a shape. Every reader —
+ * the CLI, the Control Plane, the Driver, the engine — loads Runs through RunStore,
+ * so a malformed Run fails where it is read rather than being trusted by whoever
+ * reads it first and re-checked by whoever cares most.
+ *
+ * The engine deliberately updates decoded Runs in place, so the exported type removes
+ * readonly recursively from this schema-derived shape.
+ */
+const RunSchema = Schema.Struct({
+  id: Schema.String,
+  seq: Schema.Number,
+  slug: Schema.String,
+  workflow: Schema.String,
+  cwd: Schema.String,
+  session: Schema.NullOr(Schema.String),
+  workspace: Schema.NullOr(Schema.String),
+  workspace_label: Schema.NullOr(Schema.String),
+  workspace_worktree: Schema.NullOr(Schema.String),
+  created_at: Schema.String,
+  finished_at: Schema.NullOr(Schema.String),
+  status: RunStatusSchema,
+  iteration: Schema.Number,
+  max_iterations: Schema.Number,
+  inputs: Schema.Record(Schema.String, Schema.String.pipe(Schema.mutableKey)),
+  input_sources: Schema.Record(Schema.String, Schema.String.pipe(Schema.mutableKey)),
+  steps: Schema.Array(StepRecordSchema).pipe(Schema.mutable),
+  parent: Schema.NullOr(Schema.String),
+  children: optionalList(Schema.String),
+  choices: optionalList(ChoiceRecordSchema),
+  awaiting: Schema.NullOr(Schema.String),
+  handoffs: optionalList(HandoffRecordSchema),
+  disputed: optionalList(FindingSchema),
+  deferred: optionalList(FindingSchema),
+  outstanding: optionalList(FindingSchema),
+  target_label: Schema.NullOr(Schema.String),
+  synthesis: Schema.NullOr(Schema.String),
+  mr_url: Schema.NullOr(Schema.String),
+  linear_issues: optionalList(Schema.String),
+  summary: Schema.NullOr(Schema.String),
+}).mapFields(Struct.map(Schema.mutableKey));
+export type RunRecord = Schema.Schema.Type<typeof RunSchema>;
+
+const RunRecordJson = Schema.fromJsonString(RunSchema);
+const encodeRecord = Schema.encodeSync(RunRecordJson);
+
+/** A `run.json` that exists but is not a Run. Readers report it; they never guess. */
+export class InvalidRunState extends Data.TaggedError("InvalidRunState")<{
   run: string;
-  at: string;
-  note: string;
-}
+  cause: string;
+}> {}
 
-export interface ChoiceRecord {
-  step: string;
-  title: string;
-  at: string;
-}
+const decodeRecord = Effect.fn("RunStore.decodeRecord")(function* (id: string, raw: string) {
+  return yield* Schema.decodeUnknownEffect(RunRecordJson)(raw).pipe(
+    Effect.mapError((cause) => new InvalidRunState({ run: id, cause: String(cause) })),
+  );
+});
 
-export interface StepRecord {
-  id: string;
-  status: StepStatus;
-  iteration: number;
-  note: string | null;
-  variants: VariantRecord[];
-}
-
-export interface RunRecord {
-  id: string;
-  /** Monotonic per state dir; keeps agent names unique inside 32 characters. */
-  seq: number;
-  slug: string;
-  workflow: string;
-  cwd: string;
-  /** The herdr session the Run was started in, as its socket path. */
-  session: string | null;
-  /** The workspace it was started in; a Session is session + workspace + cwd. */
-  workspace: string | null;
-  /** That workspace's label, so a recycled workspace id is caught. */
-  workspace_label: string | null;
-  created_at: string;
-  finished_at: string | null;
-  status: RunStatus;
-  iteration: number;
-  max_iterations: number;
-  inputs: Record<string, string>;
-  input_sources: Record<string, string>;
-  steps: StepRecord[];
-  /** Set when this Run was chained from a Choice in another Run. */
-  parent: string | null;
-  /** Runs chained from a Choice in this one. */
-  children: string[];
-  choices: ChoiceRecord[];
-  /** The step this Run is waiting on the human for, so the workspace tab can say so. */
-  awaiting: string | null;
-  /** Prompts this Run sent to another Run's live agents. */
-  handoffs: HandoffRecord[];
-  disputed: Finding[];
-  /** Architecture candidates the architect did not apply. */
-  deferred: Finding[];
-  /** Findings still open when a fix loop hit max_iterations. */
-  outstanding: Finding[];
-  /** What the run is pointed at, as its tab shows it; the engine fills it in. */
-  target_label: string | null;
-  /** The Synthesis Output `review.md` was rendered from, relative to the run dir. */
-  synthesis: string | null;
-  /** The merge request the `mr` step opened, when it ran. */
-  mr_url: string | null;
-  /** Linear tickets this run answered, as the MR step resolved them. */
-  linear_issues: string[];
-  summary: string | null;
-}
-
+const RUN_FILE = "run.json";
 export class Run {
   constructor(
     readonly dir: string,
     readonly record: RunRecord,
   ) {}
-
   get id(): string {
     return this.record.id;
   }
 
-  save(): void {
-    mkdirSync(this.dir, { recursive: true });
-    // Under the run lock, so the merge-read and the rename are one step against
-    // a Hand-off writer in another process: nothing lands between them and is lost.
-    withRunLock(this.dir, () => {
-      this.mergeHandoffs(join(this.dir, RUN_FILE));
-      writeRecord(this.dir, this.record);
-    });
+  save() {
+    const { dir, record } = this;
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* withRunLock(
+        dir,
+        Effect.gen(function* () {
+          yield* mergeHandoffs(dir, record);
+          yield* writeRecord(dir, record);
+        }),
+      );
+    }).pipe(Effect.withSpan("Run.save"));
   }
 
-  /**
-   * Another process may have recorded a Hand-off here since this record was
-   * loaded; a save from that older in-memory state must keep it, exactly once.
-   * Everything else is this Driver's to overwrite — the merge is only the list
-   * another process appends to.
-   */
-  private mergeHandoffs(path: string): void {
-    let disk: RunRecord;
-    try {
-      disk = JSON.parse(readFileSync(path, "utf8")) as RunRecord;
-    } catch {
-      // No file yet, or one mid-write: nothing external to preserve.
-      return;
-    }
-    const have = new Set(this.record.handoffs.map(handoffKey));
-    for (const handoff of disk.handoffs ?? []) {
-      const key = handoffKey(handoff);
-      if (have.has(key)) continue;
-      have.add(key);
-      this.record.handoffs.push(handoff);
-    }
+  stepDir(stepId: string, variantKey: string | null) {
+    const dirRoot = this.dir;
+    const component = (value: string) => this.component(value);
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = variantKey
+        ? path.join(dirRoot, "steps", component(stepId), component(variantKey))
+        : path.join(dirRoot, "steps", component(stepId));
+      yield* fs.makeDirectory(dir, { recursive: true });
+      return dir;
+    }).pipe(Effect.withSpan("Run.stepDir"));
+  }
+
+  outputPath(stepId: string, variantKey: string | null, filename: string) {
+    const stepDir = () => this.stepDir(stepId, variantKey);
+    const component = (value: string) => this.component(value);
+    return Effect.gen(function* () {
+      const path = yield* Path.Path;
+      return path.join(yield* stepDir(), component(filename));
+    }).pipe(Effect.withSpan("Run.outputPath"));
+  }
+
+  personaPath(persona: string, harness: string) {
+    const dirRoot = this.dir;
+    const component = (value: string) => this.component(value);
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = path.join(dirRoot, "personas");
+      yield* fs.makeDirectory(dir, { recursive: true });
+      return path.join(dir, component(`${persona}.${harness}.md`));
+    }).pipe(Effect.withSpan("Run.personaPath"));
+  }
+
+  log(line: string) {
+    const dir = this.dir;
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fs.makeDirectory(dir, { recursive: true });
+      const at = yield* nowIso();
+      yield* fs.writeFileString(path.join(dir, "log.txt"), `${at} ${line}\n`, { flag: "a" });
+    }).pipe(Effect.withSpan("Run.log"));
   }
 
   step(id: string): StepRecord {
@@ -149,233 +191,252 @@ export class Run {
     return found;
   }
 
-  /**
-   * Defence in depth behind definition validation: a value that is not a plain
-   * path component must never become a path, or it could land outside the Run.
-   */
-  private component(value: string): string {
-    // The same predicate the validation layer uses, so the two cannot drift.
-    if (unsafePathComponent(value) !== null) {
-      throw new Error(`run ${this.record.id}: "${value}" cannot name a file or directory inside the run`);
-    }
+  component(value: string): string {
+    if (unsafePathComponent(value) !== null)
+      throw new Error(
+        `run ${this.record.id}: "${value}" cannot name a file or directory inside the run`,
+      );
     return value;
   }
 
-  stepDir(stepId: string, variantKey: string | null): string {
-    const dir = variantKey
-      ? join(this.dir, "steps", this.component(stepId), this.component(variantKey))
-      : join(this.dir, "steps", this.component(stepId));
-    mkdirSync(dir, { recursive: true });
-    return dir;
-  }
-
-  outputPath(stepId: string, variantKey: string | null, filename: string): string {
-    return join(this.stepDir(stepId, variantKey), this.component(filename));
-  }
-
-  /**
-   * Where a Persona is written for one harness. Guarded here because a resumed
-   * Run re-resolves its definitions without re-validating them, so a persona
-   * name edited to something unsafe since the Run was created must still be
-   * unable to name a file outside the Run.
-   */
-  personaPath(persona: string, harness: string): string {
-    const dir = join(this.dir, "personas");
-    mkdirSync(dir, { recursive: true });
-    return join(dir, this.component(`${persona}.${harness}.md`));
-  }
-
-  log(line: string): void {
-    mkdirSync(this.dir, { recursive: true });
-    appendFileSync(join(this.dir, "log.txt"), `${new Date().toISOString()} ${line}\n`);
-  }
-
-  /** Steps that still have work, i.e. what a resume would restart. */
   unfinished(): StepRecord[] {
     return this.record.steps.filter((s) => s.status !== "done");
   }
 }
 
-/**
- * The dedupe identity of one side of one exchange. Direction is part of it:
- * a Run handing off to its own agent carries both sides under one id, and the
- * "received" entry must not be dropped as a duplicate of the "sent" one. A
- * record written before Hand-offs had ids is identified by its fields instead.
- */
+const mergeHandoffs = Effect.fn("Run.mergeHandoffs")(function* (dir: string, record: RunRecord) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const disk = yield* fs.readFileString(path.join(dir, RUN_FILE)).pipe(
+    Effect.flatMap((raw) => decodeRecord(record.id, raw)),
+    Effect.catch(() => Effect.succeed(null)),
+  );
+  if (!disk) return;
+  const have = new Set(record.handoffs.map(handoffKey));
+  for (const handoff of disk.handoffs ?? []) {
+    const key = handoffKey(handoff);
+    if (!have.has(key)) {
+      have.add(key);
+      record.handoffs.push(handoff);
+    }
+  }
+});
+
 export function handoffKey(h: HandoffRecord): string {
   return h.id ? `${h.direction}|${h.id}` : [h.direction, h.role, h.run, h.at, h.note].join("|");
 }
 
-const RUN_FILE = "run.json";
+const writeRecord = Effect.fn("writeRecord")(function* (dir: string, record: RunRecord) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const me = yield* currentPid;
+  const tmp = path.join(dir, `${RUN_FILE}.tmp-${me}`);
+  yield* fs.writeFileString(tmp, `${encodeRecord(record)}\n`);
+  yield* fs.rename(tmp, path.join(dir, RUN_FILE));
+});
 
-/** Whole file, then renamed into place, so a concurrent reader never sees a torn record. */
-function writeRecord(dir: string, record: RunRecord): void {
-  const tmp = join(dir, `${RUN_FILE}.tmp-${process.pid}`);
-  writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`);
-  renameSync(tmp, join(dir, RUN_FILE));
+function withRunLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) {
+  return Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const lock = path.join(dir, `${RUN_FILE}.lock`);
+    return yield* withLock(
+      lock,
+      Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`)),
+      effect,
+    );
+  });
 }
 
-/**
- * run.json is read-modify-written by its Driver and by Hand-off writers in other
- * processes; this lock serialises those critical sections, and fn never runs
- * without it. A crashed holder's lock is broken the moment its pid is dead and a
- * reused pid is spotted by its start time, so waiting is only ever for a live
- * holder, whose critical section is microseconds. A verified-live holder wedged
- * past the deadline — a suspended process — makes this throw rather than write
- * unlocked or break a living lock: the lost update and the broken lock are each
- * worse than a loud failure.
- */
-function withRunLock<T>(dir: string, fn: () => T): T {
-  const lock = join(dir, `${RUN_FILE}.lock`);
-  const deadline = Date.now() + 15_000;
-  let held = false;
-  while (!held && Date.now() < deadline) {
-    // Anything but contention — the run directory itself missing, say — throws
-    // out of the claim; spinning on it here would burn the deadline hot.
-    // The claim is re-read after winning it: a contender that raced the same
-    // stale break may have removed this one's fresh lock before claiming its own.
-    if (tryClaimLock(lock) && holdsLock(lock)) held = true;
-    else if (!breakStaleLock(lock)) Bun.sleepSync(5);
-  }
-  if (!held) throw new Error(`${lock} could not be acquired; not writing unlocked`);
-  try {
-    return fn();
-  } finally {
-    releaseOwnLock(lock);
-  }
+export interface CreateRunOptions {
+  workflow: string;
+  cwd: string;
+  inputs: Record<string, string>;
+  inputSources: Record<string, string>;
+  stepIds: string[];
+  maxIterations: number;
+  primaryInput: string;
+  parent?: string;
+  session?: string | null;
+  workspace?: string | null;
+  workspaceLabel?: string | null;
+  workspaceWorktree?: string | null;
 }
 
 export class RunStore {
   constructor(private readonly stateDir: string) {}
 
-  get root(): string {
-    return join(this.stateDir, "runs");
-  }
-
-  create(opts: {
-    workflow: string;
-    cwd: string;
-    inputs: Record<string, string>;
-    inputSources: Record<string, string>;
-    stepIds: string[];
-    maxIterations: number;
-    primaryInput: string;
-    parent?: string;
-    session?: string | null;
-    workspace?: string | null;
-    workspaceLabel?: string | null;
-  }): Run {
-    // Validation rejects such a name earlier with a friendlier error; this is the
-    // defence in depth, because the workflow name becomes the Run directory itself.
-    const badWorkflow = unsafePathComponent(opts.workflow);
-    if (badWorkflow) {
-      throw new Error(`workflow name "${opts.workflow}" ${badWorkflow}, so it cannot name a Run directory`);
-    }
-    const slug = `${opts.workflow}-${slugify(opts.primaryInput)}`;
-    const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
-    let id = `${slug}-${stamp}`;
-    for (let n = 2; existsSync(join(this.root, id)); n++) id = `${slug}-${stamp}-${n}`;
-
-    const record: RunRecord = {
-      id,
-      seq: this.nextSeq(),
-      slug,
-      workflow: opts.workflow,
-      cwd: opts.cwd,
-      session: opts.session ?? null,
-      workspace: opts.workspace ?? null,
-      workspace_label: opts.workspaceLabel ?? null,
-      created_at: new Date().toISOString(),
-      finished_at: null,
-      status: "running",
-      iteration: 1,
-      max_iterations: opts.maxIterations,
-      inputs: opts.inputs,
-      input_sources: opts.inputSources,
-      steps: opts.stepIds.map((id) => ({ id, status: "pending", iteration: 0, note: null, variants: [] })),
-      parent: opts.parent ?? null,
-      children: [],
-      choices: [],
-      awaiting: null,
-      handoffs: [],
-      disputed: [],
-      deferred: [],
-      outstanding: [],
-      target_label: null,
-      synthesis: null,
-      mr_url: null,
-      linear_issues: [],
-      summary: null,
-    };
-    const run = new Run(join(this.root, id), record);
-    run.save();
-    return run;
-  }
-
-  private nextSeq(): number {
-    mkdirSync(this.root, { recursive: true });
-    const path = join(this.root, ".seq");
-    const current = existsSync(path) ? Number.parseInt(readFileSync(path, "utf8").trim(), 10) : 0;
-    const next = Number.isFinite(current) ? current + 1 : 1;
-    writeFileSync(path, String(next));
-    return next;
-  }
-
-  /**
-   * Records one Hand-off on a Run another process may be driving. Loaded fresh
-   * and written under the run lock, so the entry can neither be lost to a
-   * concurrent save nor roll back state that Run's Driver wrote in the meantime,
-   * and the same exchange appended twice is kept once.
-   */
-  appendHandoff(runId: string, handoff: HandoffRecord): Run {
-    return withRunLock(join(this.root, runId), () => {
-      const run = this.load(runId);
-      if (!run.record.handoffs.some((h) => handoffKey(h) === handoffKey(handoff))) {
-        run.record.handoffs.push(handoff);
-        writeRecord(run.dir, run.record);
-      }
-      return run;
+  get rootEffect() {
+    const stateDir = this.stateDir;
+    return Effect.gen(function* () {
+      const path = yield* Path.Path;
+      return path.join(stateDir, "runs");
     });
   }
 
-  load(id: string): Run {
-    const dir = join(this.root, id);
-    const path = join(dir, "run.json");
-    if (!existsSync(path)) throw new Error(`no run "${id}" in ${this.root}`);
-    const record = JSON.parse(readFileSync(path, "utf8")) as RunRecord;
-    // A run recorded by an older version has fewer lists than this one expects.
-    record.children ??= [];
-    record.choices ??= [];
-    record.session ??= null;
-    record.workspace ??= null;
-    record.workspace_label ??= null;
-    record.awaiting ??= null;
-    record.handoffs ??= [];
-    record.deferred ??= [];
-    record.target_label ??= null;
-    record.synthesis ??= null;
-    record.mr_url ??= null;
-    record.linear_issues ??= [];
-    record.parent ??= null;
-    return new Run(dir, record);
-  }
-
-  /** Newest first. */
-  list(): Run[] {
-    if (!existsSync(this.root)) return [];
-    const runs: Run[] = [];
-    for (const name of readdirSync(this.root)) {
-      if (name.startsWith(".")) continue;
-      try {
-        runs.push(this.load(name));
-      } catch {
-        // A half-written run dir must not break the resume list.
+  create(opts: CreateRunOptions) {
+    const rootEffect = this.rootEffect;
+    const nextSeq = () => this.nextSeq();
+    return Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* rootEffect;
+      const badWorkflow = unsafePathComponent(opts.workflow);
+      if (badWorkflow)
+        return yield* Effect.fail(
+          new Error(
+            `workflow name "${opts.workflow}" ${badWorkflow}, so it cannot name a Run directory`,
+          ),
+        );
+      const slug = `${opts.workflow}-${slugify(opts.primaryInput)}`;
+      const stamp = (yield* nowIso()).replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
+      yield* fs.makeDirectory(root, { recursive: true });
+      // The mkdir is the claim, not a preceding existence check: two starts in the same
+      // second for the same workflow and primary input would both find the directory
+      // absent, pick the same id, and then overwrite each other's run.json while each
+      // spawned a Driver. A non-recursive mkdir fails if the name is taken, so only one
+      // of them can own it.
+      const claim = (candidate: string) =>
+        fs.makeDirectory(path.join(root, candidate)).pipe(
+          Effect.as(true),
+          Effect.catch(() => Effect.succeed(false)),
+        );
+      let id = `${slug}-${stamp}`;
+      for (let n = 2; !(yield* claim(id)); n++) {
+        if (n > 99)
+          return yield* Effect.fail(
+            new Error(`could not claim a Run directory for "${slug}" in ${root}`),
+          );
+        id = `${slug}-${stamp}-${n}`;
       }
-    }
-    return runs.sort((a, b) => b.record.created_at.localeCompare(a.record.created_at));
+      const record: RunRecord = {
+        id,
+        seq: yield* nextSeq(),
+        slug,
+        workflow: opts.workflow,
+        cwd: opts.cwd,
+        session: opts.session ?? null,
+        workspace: opts.workspace ?? null,
+        workspace_label: opts.workspaceLabel ?? null,
+        workspace_worktree: opts.workspaceWorktree ?? null,
+        created_at: yield* nowIso(),
+        finished_at: null,
+        status: "running",
+        iteration: 1,
+        max_iterations: opts.maxIterations,
+        inputs: opts.inputs,
+        input_sources: opts.inputSources,
+        steps: opts.stepIds.map((id) => ({
+          id,
+          status: "pending",
+          iteration: 0,
+          note: null,
+          variants: [],
+        })),
+        parent: opts.parent ?? null,
+        children: [],
+        choices: [],
+        awaiting: null,
+        handoffs: [],
+        disputed: [],
+        deferred: [],
+        outstanding: [],
+        target_label: null,
+        synthesis: null,
+        mr_url: null,
+        linear_issues: [],
+        summary: null,
+      };
+      const run = new Run(path.join(root, id), record);
+      yield* run.save();
+      return run;
+    }).pipe(Effect.withSpan("RunStore.create"));
   }
 
-  resumable(): Run[] {
-    return this.list().filter((r) => r.record.status !== "done" && r.unfinished().length > 0);
+  appendHandoff(runId: string, handoff: HandoffRecord) {
+    const rootEffect = this.rootEffect;
+    const load = () => this.load(runId);
+    return Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const root = yield* rootEffect;
+      return yield* withRunLock(
+        path.join(root, runId),
+        Effect.gen(function* () {
+          const run = yield* load();
+          if (!run.record.handoffs.some((item) => handoffKey(item) === handoffKey(handoff))) {
+            run.record.handoffs.push(handoff);
+            yield* writeRecord(run.dir, run.record);
+          }
+          return run;
+        }),
+      );
+    }).pipe(Effect.withSpan("RunStore.appendHandoff"));
+  }
+
+  load(id: string) {
+    const rootEffect = this.rootEffect;
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* rootEffect;
+      const dir = path.join(root, id);
+      const file = path.join(dir, RUN_FILE);
+      if (!(yield* fs.exists(file)))
+        return yield* Effect.fail(new Error(`no run "${id}" in ${root}`));
+      return new Run(dir, yield* decodeRecord(id, yield* fs.readFileString(file)));
+    }).pipe(Effect.withSpan("RunStore.load"));
+  }
+
+  list() {
+    const rootEffect = this.rootEffect;
+    const load = (id: string) => this.load(id);
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* rootEffect;
+      if (!(yield* fs.exists(root))) return [];
+      const runs: Run[] = [];
+      for (const name of yield* fs.readDirectory(root)) {
+        if (name.startsWith(".")) continue;
+        // Skipped rather than raised: a listing is a view, and every caller that cares
+        // which Run is broken loads that Run by id and is told exactly why.
+        const run = yield* load(name).pipe(Effect.catch(() => Effect.succeed(null)));
+        if (run) runs.push(run);
+      }
+      return runs.sort((a, b) => b.record.created_at.localeCompare(a.record.created_at));
+    }).pipe(Effect.withSpan("RunStore.list"));
+  }
+
+  resumable() {
+    const list = this.list();
+    return Effect.gen(function* () {
+      return (yield* list).filter(
+        (run) => run.record.status !== "done" && run.unfinished().length > 0,
+      );
+    }).pipe(Effect.withSpan("RunStore.resumable"));
+  }
+
+  /** Serializes the counter because herdr rejects duplicate agent names. */
+  nextSeq() {
+    const rootEffect = this.rootEffect;
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* rootEffect;
+      yield* fs.makeDirectory(root, { recursive: true });
+      const seqPath = path.join(root, ".seq");
+      const lock = `${seqPath}.lock`;
+      return yield* withLock(
+        lock,
+        Effect.fail(new Error(`could not claim the Run sequence lock ${lock}`)),
+        Effect.gen(function* () {
+          const current = yield* fs.readFileString(seqPath).pipe(
+            Effect.map((value) => Number.parseInt(value.trim(), 10)),
+            Effect.catch(() => Effect.succeed(0)),
+          );
+          const next = Number.isFinite(current) ? current + 1 : 1;
+          yield* fs.writeFileString(seqPath, String(next));
+          return next;
+        }),
+      );
+    }).pipe(Effect.withSpan("RunStore.nextSeq"));
   }
 }

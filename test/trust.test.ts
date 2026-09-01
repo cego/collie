@@ -1,128 +1,265 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
-import { join } from "node:path";
-import { Rig } from "./support/recorder";
+import { Effect, Fiber, FileSystem, Schema } from "effect";
+import { runEffect } from "./support/effect";
 import { claudeTrust } from "../src/trust";
+import { isYamlMap, YamlMapSchema, type YamlMap } from "../src/yaml";
 
-let rig: Rig;
+const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
 
-beforeEach(() => {
-  rig = new Rig();
-});
+interface TrustRig {
+  root: string;
+  stateDir: string;
+  projectDir: string;
+}
 
-afterEach(async () => {
-  await rig.close();
-});
+let rig: TrustRig;
+
+type ClaudeProjects = Record<string, YamlMap>;
+const ClaudeConfigJson = Schema.fromJsonString(YamlMapSchema);
+
+beforeEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectory({ prefix: "trust-test-" });
+      rig = { root, stateDir: join(root, "state"), projectDir: join(root, "project") };
+      yield* fs.makeDirectory(rig.stateDir, { recursive: true });
+      yield* fs.makeDirectory(rig.projectDir, { recursive: true });
+    }),
+  ),
+);
+
+afterEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(rig.root, { recursive: true, force: true });
+    }),
+  ),
+);
 
 /** A ~/.claude.json with the shape claude actually writes. */
-function claudeConfig(projects: Record<string, unknown>): string {
+const claudeConfig = Effect.fn("test.claudeConfig")(function* (projects: ClaudeProjects) {
+  const fs = yield* FileSystem.FileSystem;
   const path = join(rig.root, ".claude.json");
-  writeFileSync(
+  yield* fs.writeFileString(
     path,
-    JSON.stringify({ installMethod: "native", numStartups: 12, projects }, null, 2),
+    Schema.encodeSync(ClaudeConfigJson)({ installMethod: "native", numStartups: 12, projects }),
   );
   return path;
+});
+
+const readConfig = Effect.fn("test.readConfig")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* Schema.decodeUnknownEffect(ClaudeConfigJson)(yield* fs.readFileString(path));
+});
+
+function project(config: YamlMap, path: string): YamlMap {
+  expect(isYamlMap(config.projects)).toBe(true);
+  const projects = isYamlMap(config.projects) ? config.projects : {};
+  expect(isYamlMap(projects[path])).toBe(true);
+  return isYamlMap(projects[path]) ? projects[path] : {};
 }
 
 const trust = () => claudeTrust(rig.root, rig.stateDir);
 
-test("a directory claude has never seen is untrusted; one with the flag is trusted", () => {
-  claudeConfig({
-    [rig.projectDir]: { mcpServers: {}, hasTrustDialogAccepted: true },
-    "/somewhere/else": { mcpServers: {} },
-  });
+test("a directory claude has never seen is untrusted; one with the flag is trusted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* claudeConfig({
+        [rig.projectDir]: { mcpServers: {}, hasTrustDialogAccepted: true },
+        "/somewhere/else": { mcpServers: {} },
+      });
 
-  expect(trust().state(rig.projectDir)).toBe("trusted");
-  expect(trust().state("/somewhere/else")).toBe("untrusted");
-  expect(trust().state("/never/seen")).toBe("untrusted");
-});
+      expect(yield* trust().state(rig.projectDir)).toBe("trusted");
+      expect(yield* trust().state("/somewhere/else")).toBe("untrusted");
+      expect(yield* trust().state("/never/seen")).toBe("untrusted");
+    }),
+  ));
 
-test("no claude config at all is unknown, not untrusted — there is nothing to write into", () => {
-  expect(trust().state(rig.projectDir)).toBe("unknown");
-  expect(trust().grant(rig.projectDir).ok).toBe(false);
-  expect(trust().grant(rig.projectDir).message).toContain("has not run on this machine");
-  expect(existsSync(join(rig.root, ".claude.json"))).toBe(false);
-});
+test("no claude config at all is unknown, not untrusted — there is nothing to write into", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* trust().state(rig.projectDir)).toBe("unknown");
+      expect((yield* trust().grant(rig.projectDir)).ok).toBe(false);
+      expect((yield* trust().grant(rig.projectDir)).message).toContain(
+        "has not run on this machine",
+      );
+      expect(yield* fs.exists(join(rig.root, ".claude.json"))).toBe(false);
+    }),
+  ));
 
-test("granting adds the flag and leaves every other project and setting alone", () => {
-  const path = claudeConfig({
-    "/other/repo": { mcpServers: { local: { command: "x" } }, lastCost: 1.5 },
-  });
+test("granting adds the flag and leaves every other project and setting alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* claudeConfig({
+        "/other/repo": { mcpServers: { local: { command: "x" } }, lastCost: 1.5 },
+      });
 
-  const result = trust().grant(rig.projectDir);
+      const result = yield* trust().grant(rig.projectDir);
 
-  expect(result.ok).toBe(true);
-  expect(result.message).toContain(rig.projectDir);
-  const after = JSON.parse(readFileSync(path, "utf8"));
-  expect(after.projects[rig.projectDir]).toEqual({ mcpServers: {}, hasTrustDialogAccepted: true });
-  expect(after.projects["/other/repo"]).toEqual({ mcpServers: { local: { command: "x" } }, lastCost: 1.5 });
-  expect(after.installMethod).toBe("native");
-  expect(after.numStartups).toBe(12);
-  expect(trust().state(rig.projectDir)).toBe("trusted");
-});
+      expect(result.ok).toBe(true);
+      expect(result.message).toContain(rig.projectDir);
+      const after = yield* readConfig(path);
+      expect(project(after, rig.projectDir)).toEqual({
+        mcpServers: {},
+        hasTrustDialogAccepted: true,
+      });
+      expect(project(after, "/other/repo")).toEqual({
+        mcpServers: { local: { command: "x" } },
+        lastCost: 1.5,
+      });
+      expect(after.installMethod).toBe("native");
+      expect(after.numStartups).toBe(12);
+      expect(yield* trust().state(rig.projectDir)).toBe("trusted");
+    }),
+  ));
 
-test("granting keeps the rest of an existing entry and is idempotent", () => {
-  const path = claudeConfig({ [rig.projectDir]: { mcpServers: {}, lastCost: 2, allowedTools: ["Bash"] } });
+test("granting keeps the rest of an existing entry and is idempotent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* claudeConfig({
+        [rig.projectDir]: { mcpServers: {}, lastCost: 2, allowedTools: ["Bash"] },
+      });
 
-  expect(trust().grant(rig.projectDir).ok).toBe(true);
-  const after = JSON.parse(readFileSync(path, "utf8"));
-  expect(after.projects[rig.projectDir]).toEqual({
-    mcpServers: {},
-    lastCost: 2,
-    allowedTools: ["Bash"],
-    hasTrustDialogAccepted: true,
-  });
+      expect((yield* trust().grant(rig.projectDir)).ok).toBe(true);
+      const after = yield* readConfig(path);
+      expect(project(after, rig.projectDir)).toEqual({
+        mcpServers: {},
+        lastCost: 2,
+        allowedTools: ["Bash"],
+        hasTrustDialogAccepted: true,
+      });
 
-  const again = trust().grant(rig.projectDir);
-  expect(again.ok).toBe(true);
-  expect(again.message).toContain("already");
-});
+      const again = yield* trust().grant(rig.projectDir);
+      expect(again.ok).toBe(true);
+      expect(again.message).toContain("already");
+    }),
+  ));
 
-test("the file it overwrites is kept, because it is not ours", () => {
-  const path = claudeConfig({ "/other/repo": { mcpServers: {} } });
-  const before = readFileSync(path, "utf8");
+test("the file it overwrites is kept, because it is not ours", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* claudeConfig({ "/other/repo": { mcpServers: {} } });
+      const before = yield* fs.readFileString(path);
 
-  trust().grant(rig.projectDir);
+      yield* trust().grant(rig.projectDir);
 
-  expect(readFileSync(join(rig.stateDir, "claude.json.bak"), "utf8")).toBe(before);
-});
+      expect(yield* fs.readFileString(join(rig.stateDir, "claude.json.bak"))).toBe(before);
+    }),
+  ));
 
-test("a cwd that reaches the same place through a symlink is trusted both ways", () => {
-  claudeConfig({});
-  const real = join(rig.root, "real-repo");
-  const link = join(rig.root, "linked-repo");
-  mkdirSync(real, { recursive: true });
-  symlinkSync(real, link);
+test("a cwd that reaches the same place through a symlink is trusted both ways", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* claudeConfig({});
+      const real = join(rig.root, "real-repo");
+      const link = join(rig.root, "linked-repo");
+      yield* fs.makeDirectory(real, { recursive: true });
+      yield* fs.symlink(real, link);
 
-  expect(trust().grant(link).ok).toBe(true);
+      expect((yield* trust().grant(link)).ok).toBe(true);
 
-  expect(trust().state(link)).toBe("trusted");
-  expect(trust().state(real)).toBe("trusted");
-});
+      expect(yield* trust().state(link)).toBe("trusted");
+      expect(yield* trust().state(real)).toBe("trusted");
+    }),
+  ));
 
-test("a config that is not JSON is left exactly as it is", () => {
-  const path = join(rig.root, ".claude.json");
-  writeFileSync(path, "{ not json");
+test("a config that is not JSON is left exactly as it is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = join(rig.root, ".claude.json");
+      yield* fs.writeFileString(path, "{ not json");
 
-  expect(trust().state(rig.projectDir)).toBe("unknown");
-  expect(trust().grant(rig.projectDir).ok).toBe(false);
-  expect(readFileSync(path, "utf8")).toBe("{ not json");
-});
+      expect(yield* trust().state(rig.projectDir)).toBe("unknown");
+      expect((yield* trust().grant(rig.projectDir)).ok).toBe(false);
+      expect(yield* fs.readFileString(path)).toBe("{ not json");
+    }),
+  ));
 
+test("granting leaves the config's permissions alone — they are not ours either", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* claudeConfig({ "/other/repo": { mcpServers: {} } });
+      yield* fs.chmod(path, 0o600);
 
-test("granting leaves the config's permissions alone — they are not ours either", () => {
-  const path = claudeConfig({ "/other/repo": { mcpServers: {} } });
-  chmodSync(path, 0o600);
+      expect((yield* trust().grant(rig.projectDir)).ok).toBe(true);
 
-  expect(trust().grant(rig.projectDir).ok).toBe(true);
+      expect((yield* fs.stat(path)).mode & 0o777).toBe(0o600);
+    }),
+  ));
 
-  expect(statSync(path).mode & 0o777).toBe(0o600);
-});
+test("a grant while another collie holds the config lock writes nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* claudeConfig({});
+      yield* fs.writeFileString(
+        `${path}.herdr-lock`,
+        `{"pid":${globalThis.process.pid},"start":null}\n`,
+      );
+      const before = yield* fs.readFileString(path);
+
+      const result = yield* trust().grant(rig.projectDir);
+
+      expect(result.ok).toBe(false);
+      expect(yield* fs.readFileString(path)).toBe(before);
+    }),
+  ));
+
+test("a config claude keeps rewriting is left alone rather than overwritten", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = join(rig.root, ".claude.json");
+        // A fifo hands every read of the config different bytes, which is what a claude
+        // writing between this grant's read and its rename looks like from in here.
+        Bun.spawnSync(["mkfifo", path]);
+        const trustModule = new URL("../src/trust.ts", import.meta.url).pathname.replaceAll(
+          "'",
+          "\\'",
+        );
+        const child = Bun.spawn(
+          [
+            "bun",
+            "-e",
+            `import { BunServices } from "@effect/platform-bun"; import { ManagedRuntime } from "effect"; import { claudeTrust } from '${trustModule}'; const runtime = ManagedRuntime.make(BunServices.layer); console.log((await runtime.runPromise(claudeTrust(process.argv[1], process.argv[2]).grant(process.argv[3]))).message)`,
+            rig.root,
+            rig.stateDir,
+            rig.projectDir,
+          ],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+
+        const feeding = yield* Effect.forkScoped(
+          Effect.gen(function* () {
+            for (let n = 0; ; n++) {
+              yield* Effect.promise(() =>
+                Bun.write(
+                  path,
+                  `${Schema.encodeSync(ClaudeConfigJson)({ projects: {}, n })}\n`,
+                ).then(
+                  () => true,
+                  () => false,
+                ),
+              );
+              yield* Effect.promise(() => Bun.sleep(5));
+            }
+          }),
+        );
+        const message = yield* Effect.promise(() => new Response(child.stdout).text());
+        yield* Effect.promise(() => child.exited);
+        yield* Fiber.interrupt(feeding);
+
+        expect(message).toContain("kept changing under the grant");
+        // Never renamed over: the config is still claude's own file, untouched.
+        expect((yield* fs.stat(path)).type).toBe("FIFO");
+      }),
+    ),
+  ));

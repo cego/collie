@@ -1,4 +1,4 @@
-# herdr-plugin — Context
+# Collie — Context
 
 ## Glossary
 
@@ -44,6 +44,7 @@ plan does not cover. Both Runs record it.
 **Disputed** — The implementer may mark a finding `disputed` with a reason; the reviewers are shown those reasons and a disputed finding no longer drives the loop, so the run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts it back in front of the implementer.
 
 ## Baseline Workflows
+
 - `plan` — interviews the human, writes `SPEC.md` and one ticket per slice into its Run's plan directory (ADR-0002), then a Choice: implement now, second opinion, offload to Linear, refine.
 - `implement` — build from plan → parallel `review` (multi-harness/model) → fix loop, max 5 → clean review on a committed branch → `mr`, which pushes and opens the merge request. That last step is skipped where there is no GitLab to open one on.
 - `review` — standalone; you pick the target; parallel reviewers, then one Synthesis; posting it to the merge request is a Choice.
@@ -58,7 +59,7 @@ plan does not cover. Both Runs record it.
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
 **Control Plane** — The tab a Session keeps as its control surface, one per workspace, and
-the only pane this plugin keeps open: live agents, active Runs with their step and last
+the only pane Collie keeps open: live agents, active Runs with their step and last
 line, this Session's finished Runs, quick actions, and any question a Run is waiting on,
 rendered under that Run. It is a view over the run dirs and the register, always the
 workspace's first tab, and holds no state of its own.

@@ -1,5 +1,12 @@
 import { expect, test } from "bun:test";
-import { DEFAULT_MODEL, HARNESSES, knownModel, modelHint, personaPrefix, startArgs } from "../src/harness";
+import {
+  DEFAULT_MODEL,
+  HARNESSES,
+  knownModel,
+  modelHint,
+  personaPrefix,
+  startArgs,
+} from "../src/harness";
 import { renderTemplate, skillsIn } from "../src/template";
 
 test("the adapter table covers claude, codex and opencode with model flags", () => {
@@ -20,7 +27,10 @@ test("a persona goes in as a file flag where the harness has one, else as a prom
   ]);
   expect(personaPrefix(HARNESSES.claude!, "You review.")).toBe("");
 
-  expect(startArgs(HARNESSES.codex!, "gpt-5", "/run/personas/reviewer.md")).toEqual(["-m", "gpt-5"]);
+  expect(startArgs(HARNESSES.codex!, "gpt-5", "/run/personas/reviewer.md")).toEqual([
+    "-m",
+    "gpt-5",
+  ]);
   expect(personaPrefix(HARNESSES.codex!, "You review.")).toBe("You review.");
 });
 
@@ -45,18 +55,20 @@ test("effort is a flag only where the harness has one", () => {
   expect(HARNESSES.claude!.efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
 
   // codex and opencode have none, so asking for one is a validation error, not a flag.
-  expect(HARNESSES.codex!.effortArgs).toBeUndefined();
+  expect("effortArgs" in HARNESSES.codex!).toBe(false);
   expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/reviewer.md", "xhigh")).toEqual(["-m", "gpt-5"]);
 });
 
-test("`default` is a model every harness takes, and it means no model flag at all", () => {
+test("`default` pins Claude to Opus while other harnesses keep their native default", () => {
   for (const harness of Object.values(HARNESSES)) {
     expect(knownModel(harness, DEFAULT_MODEL)).toBe(true);
     expect(modelHint(harness)).toContain(DEFAULT_MODEL);
   }
 
-  // Everything else about the start still applies: only the model args are gone.
+  expect(HARNESSES.claude!.defaultModel).toBe("opus");
   expect(startArgs(HARNESSES.claude!, DEFAULT_MODEL, "/p/implementer.md", "medium")).toEqual([
+    "--model",
+    "opus",
     "--effort",
     "medium",
     "--append-system-prompt-file",
@@ -69,7 +81,9 @@ test("`default` is a model every harness takes, and it means no model flag at al
 test("pi takes a provider-qualified model, a thinking level and the persona file directly", () => {
   expect(knownModel(HARNESSES.pi!, "openai-codex/gpt-5.6-sol")).toBe(true);
   expect(knownModel(HARNESSES.pi!, "gpt-5.6-sol")).toBe(false);
-  expect(startArgs(HARNESSES.pi!, "openai-codex/gpt-5.6-sol", "/run/personas/reviewer.md", "medium")).toEqual([
+  expect(
+    startArgs(HARNESSES.pi!, "openai-codex/gpt-5.6-sol", "/run/personas/reviewer.md", "medium"),
+  ).toEqual([
     "--model",
     "openai-codex/gpt-5.6-sol",
     "--thinking",

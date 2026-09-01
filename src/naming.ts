@@ -30,7 +30,10 @@ export function agentName(
 ): string {
   const suffix = `r${seq}`;
   const trim = (text: string, room: number) => text.slice(0, Math.max(0, room)).replace(/-+$/g, "");
-  const core = trim(sanitize([stepId, variantKey].filter((p) => p).join("-")), MAX - suffix.length - 1);
+  const core = trim(
+    sanitize([stepId, variantKey].filter((p) => p).join("-")),
+    MAX - suffix.length - 1,
+  );
   const tail = core ? `${core}-${suffix}` : suffix;
   const room = MAX - tail.length - 1;
   const head = room > 0 ? trim(sanitize(slug), room) : "";
@@ -53,9 +56,10 @@ export function unsafePathComponent(value: string): string | null {
   if (value === "") return "is empty";
   if (value === "." || value === "..") return `is "${value}"`;
   if (value.includes("/") || value.includes("\\")) return "contains a path separator";
-  // Filesystem APIs reject NUL in paths; catching it here keeps the error a
-  // field-naming validation message instead of a raw fs throw after the Run starts.
-  if (value.includes("\0")) return "contains a NUL byte";
+  // Filesystem APIs reject NUL in paths, and a newline corrupts the frontmatter a
+  // forked name is written into; catching both here keeps the error a field-naming
+  // validation message instead of a raw fs throw or a mangled file after the Run starts.
+  if (/\p{Cc}/u.test(value)) return "contains a control character";
   return null;
 }
 
@@ -64,6 +68,14 @@ export function shellQuote(text: string): string {
 }
 
 /** ⚙ working, ⚠ your turn, ✓ finished, ✗ stopped. */
+/**
+ * What a failure says in a log line or a board row: a caught Error's own message, and
+ * anything else as it prints. Both adapters and the engine report failures this way.
+ */
+export function reason(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 export const GLYPH = { running: "⚙", waiting: "⚠", done: "✓", failed: "✗" } as const;
 
 /**
@@ -93,7 +105,11 @@ function opaque(ref: string): boolean {
  * by name, the working tree, or — for the workflows that have no target — the
  * run's own slug without the workflow it already carries.
  */
-export function targetLabel(workflow: string, slug: string, inputs: Record<string, string>): string {
+export function targetLabel(
+  workflow: string,
+  slug: string,
+  inputs: Record<string, string>,
+): string {
   const target = inputs.target ?? "";
   if (target === "worktree") return "worktree";
   // An MR target carries its project; only the iid belongs on a label.

@@ -2,12 +2,24 @@
 // at all, who to assign, which template to fill, and which Linear tickets this
 // branch is answering. Push is this step's business and nothing else's.
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import type { PlatformError } from "effect/PlatformError";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import type { YamlValue } from "./yaml";
+import { isString } from "./schema";
 
-export type Runner = (cmd: string, args: string[], cwd: string) => Promise<{ code: number; stdout: string }>;
+export type Runner<R = never> = (
+  cmd: string,
+  args: string[],
+  cwd: string,
+) => Effect.Effect<{ code: number; stdout: string }, never, R>;
 
-export const MR_TEMPLATE = join(".gitlab", "merge_request_templates", "default.md");
+const UserJson = Schema.fromJsonString(Schema.Struct({ username: Schema.String }));
+const IssueJson = Schema.fromJsonString(
+  Schema.Struct({ issue: Schema.optionalKey(Schema.String) }),
+);
+
+export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
 
 /** A Linear id, the shape it takes in a branch name, a URL, or an Output. */
 const LINEAR_ID = /\b([A-Z][A-Z0-9]+-\d+)\b/g;
@@ -57,22 +69,70 @@ export function hostOf(project: string | null): string | null {
 export function projectFromRemote(url: string): string | null {
   const text = url.trim();
   if (text === "") return null;
-  const ssh = /^(?:ssh:\/\/)?(?:[^@\s]+@)?([^:/\s]+)[:/](.+?)(?:\.git)?$/.exec(text.replace(/^https?:\/\//, ""));
+  const ssh = /^(?:ssh:\/\/)?(?:[^@\s]+@)?([^:/\s]+)[:/](.+?)(?:\.git)?$/.exec(
+    text.replace(/^https?:\/\//, ""),
+  );
   if (!ssh) return null;
   const [, host = "", path = ""] = ssh;
   if (!host.includes(".") || path === "") return null;
   return `${host}/${path.replace(/^\/+/, "").replace(/\.git$/, "")}`;
 }
 
+/**
+ * Runs a command and reports what it said, never failing: a missing executable comes
+ * back as exit 127 with no output, which is what lets callers treat "no glab here" as
+ * an answer rather than an error.
+ */
+export function shell(
+  cmd: string,
+  args: string[],
+  cwd: string,
+): Effect.Effect<{ code: number; stdout: string }, never, ChildProcessSpawner.ChildProcessSpawner> {
+  return Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const command = ChildProcess.make(cmd, args, {
+      cwd,
+      stdout: "pipe",
+      stderr: "ignore",
+      // extendEnv, so git and glab inherit this process's environment and find their
+      // config and credentials — the Effect-native spelling of `{ ...process.env }`.
+      extendEnv: true,
+    });
+    const handle = yield* spawner.spawn(command);
+    const [stdout, code] = yield* Effect.all(
+      [
+        handle.stdout.pipe(
+          Stream.decodeText(),
+          Stream.runFold(
+            () => "",
+            (out, chunk) => out + chunk,
+          ),
+        ),
+        handle.exitCode,
+      ],
+      { concurrency: "unbounded" },
+    );
+    return { code: Number(code), stdout };
+  }).pipe(
+    Effect.scoped,
+    Effect.catch(() => Effect.succeed({ code: 127, stdout: "" })),
+  );
+}
+
 /** The project this checkout pushes to, or null when there is no GitLab remote. */
-export async function projectHere(cwd: string, run: Runner): Promise<string | null> {
-  for (const remote of ["origin", "upstream"]) {
-    const url = await run("git", ["remote", "get-url", remote], cwd);
-    if (url.code !== 0) continue;
-    const project = projectFromRemote(url.stdout);
-    if (project) return project;
-  }
-  return null;
+export function projectHere<R>(
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<string | null, never, R> {
+  return Effect.gen(function* () {
+    for (const remote of ["origin", "upstream"]) {
+      const url = yield* run("git", ["remote", "get-url", remote], cwd);
+      if (url.code !== 0) continue;
+      const project = projectFromRemote(url.stdout);
+      if (project) return project;
+    }
+    return null;
+  });
 }
 
 export interface Readiness {
@@ -91,16 +151,21 @@ export interface MrFacts {
 }
 
 /** glab has to exist and the repo has to actually be on GitLab. */
-export async function gitlabReadiness(cwd: string, run: Runner): Promise<Readiness> {
-  const glab = await run("glab", ["--version"], cwd);
-  if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
+export function gitlabReadiness<R>(
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<Readiness, never, R> {
+  return Effect.gen(function* () {
+    const glab = yield* run("glab", ["--version"], cwd);
+    if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
 
-  const remotes = await run("git", ["remote", "-v"], cwd);
-  if (remotes.code !== 0 || remotes.stdout.trim() === "") {
-    return { ok: false, reason: "this repo has no remote" };
-  }
-  if (!/gitlab/i.test(remotes.stdout)) return { ok: false, reason: "no GitLab remote" };
-  return { ok: true, reason: "" };
+    const remotes = yield* run("git", ["remote", "-v"], cwd);
+    if (remotes.code !== 0 || remotes.stdout.trim() === "") {
+      return { ok: false, reason: "this repo has no remote" };
+    }
+    if (!/gitlab/i.test(remotes.stdout)) return { ok: false, reason: "no GitLab remote" };
+    return { ok: true, reason: "" };
+  });
 }
 
 /**
@@ -108,70 +173,83 @@ export async function gitlabReadiness(cwd: string, run: Runner): Promise<Readine
  * in to that host. The cwd's remotes are none of its business — the whole point of
  * carrying the project is that no checkout is required.
  */
-export async function gitlabForProject(
+export function gitlabForProject<R>(
   project: string | null,
   cwd: string,
-  run: Runner,
-): Promise<Readiness> {
-  const glab = await run("glab", ["--version"], cwd);
-  if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
+  run: Runner<R>,
+): Effect.Effect<Readiness, never, R> {
+  return Effect.gen(function* () {
+    const glab = yield* run("glab", ["--version"], cwd);
+    if (glab.code !== 0) return { ok: false, reason: "glab is not installed" };
 
-  const host = hostOf(project);
-  if (!host) {
-    // No project to check against: fall back to what this directory can prove.
-    return await gitlabReadiness(cwd, run);
-  }
-  const auth = await run("glab", ["auth", "status", "--hostname", host], cwd);
-  return auth.code === 0 ? { ok: true, reason: "" } : { ok: false, reason: `glab is not logged in to ${host}` };
+    const host = hostOf(project);
+    if (!host) {
+      // No project to check against: fall back to what this directory can prove.
+      return yield* gitlabReadiness(cwd, run);
+    }
+    const auth = yield* run("glab", ["auth", "status", "--hostname", host], cwd);
+    return auth.code === 0
+      ? { ok: true, reason: "" }
+      : { ok: false, reason: `glab is not logged in to ${host}` };
+  });
 }
 
 /** The configured assignee wins; otherwise whoever glab is logged in as. */
-export async function resolveAssignee(
+export function resolveAssignee<R>(
   cwd: string,
-  configured: unknown,
-  run: Runner,
-): Promise<string | null> {
-  if (typeof configured === "string" && configured.trim() !== "") return configured.trim();
-  const me = await run("glab", ["api", "user"], cwd);
-  if (me.code !== 0) return null;
-  try {
-    const user = JSON.parse(me.stdout) as Record<string, unknown>;
-    return typeof user.username === "string" && user.username !== "" ? user.username : null;
-  } catch {
-    return null;
-  }
+  configured: YamlValue | undefined,
+  run: Runner<R>,
+): Effect.Effect<string | null, never, R> {
+  return Effect.gen(function* () {
+    if (configured !== undefined && isString(configured) && configured.trim() !== "")
+      return configured.trim();
+    const me = yield* run("glab", ["api", "user"], cwd);
+    if (me.code !== 0) return null;
+    return Option.match(Schema.decodeUnknownOption(UserJson)(me.stdout), {
+      onNone: () => null,
+      onSome: (user) => (user.username === "" ? null : user.username),
+    });
+  });
 }
 
-export function templateFile(cwd: string): string | null {
-  return existsSync(join(cwd, MR_TEMPLATE)) ? MR_TEMPLATE : null;
+export function templateFile(
+  cwd: string,
+): Effect.Effect<string | null, PlatformError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    return (yield* fs.exists(pathService.join(cwd, MR_TEMPLATE))) ? MR_TEMPLATE : null;
+  });
 }
 
 /**
  * Every Linear ticket this branch could be answering: the work source when the
  * human named one, the branch name, and whatever a `plan` run put on the board.
  */
-export async function linearIssues(
+export function linearIssues<R>(
   opts: { cwd: string; inputs: Record<string, string>; planInput?: string },
-  run: Runner,
-): Promise<string[]> {
-  const found: string[] = [];
-  const add = (id: string) => {
-    const up = id.toUpperCase();
-    if (!found.includes(up)) found.push(up);
-  };
+  run: Runner<R>,
+): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path | R> {
+  return Effect.gen(function* () {
+    const found: string[] = [];
+    const add = (id: string) => {
+      const up = id.toUpperCase();
+      if (!found.includes(up)) found.push(up);
+    };
 
-  const plan = opts.planInput ?? "plan";
-  if (opts.inputs[`${plan}_kind`] === "linear") {
-    for (const id of matchAll(opts.inputs[plan] ?? "")) add(id);
-  }
+    const plan = opts.planInput ?? "plan";
+    if (opts.inputs[`${plan}_kind`] === "linear") {
+      for (const id of matchAll(opts.inputs[plan] ?? "")) add(id);
+    }
 
-  const branch = await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd);
-  for (const id of matchAll(branch.stdout)) add(id);
+    const branch = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd);
+    for (const id of matchAll(branch.stdout)) add(id);
 
-  if (opts.inputs[`${plan}_kind`] === "plan-dir") {
-    for (const id of offloadedIssues(opts.inputs[plan] ?? "")) add(id);
-  }
-  return found;
+    if (opts.inputs[`${plan}_kind`] === "plan-dir") {
+      for (const id of yield* offloadedIssues(opts.inputs[plan] ?? "")) add(id);
+    }
+    return found;
+  });
 }
 
 function matchAll(text: string): string[] {
@@ -182,43 +260,65 @@ function matchAll(text: string): string[] {
  * A `plan` run that took "Offload to Linear" wrote the issue id into that choice's
  * Output. The plan dir is inside the run dir, so the outputs are one level up.
  */
-function offloadedIssues(planDir: string): string[] {
-  const runDir = dirname(planDir);
-  if (planDir === "" || !existsSync(join(runDir, "run.json"))) return [];
-  const out: string[] = [];
-  for (const file of jsonFiles(join(runDir, "steps"))) {
-    try {
-      const parsed = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-      if (typeof parsed.issue === "string") out.push(...matchAll(parsed.issue));
-    } catch {
-      // A half-written Output must not stop the MR from being opened.
+function offloadedIssues(
+  planDir: string,
+): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    const runDir = pathService.dirname(planDir);
+    if (planDir === "" || !(yield* fs.exists(pathService.join(runDir, "run.json")))) return [];
+    const out: string[] = [];
+    for (const file of yield* jsonFiles(pathService.join(runDir, "steps"))) {
+      const text = yield* fs
+        .readFileString(file, "utf8")
+        .pipe(Effect.catch(() => Effect.succeed("")));
+      const parsed = Schema.decodeUnknownOption(IssueJson)(text);
+      if (Option.isSome(parsed) && parsed.value.issue !== undefined)
+        out.push(...matchAll(parsed.value.issue));
     }
-  }
-  return out;
+    return out;
+  });
 }
 
-function jsonFiles(dir: string, depth = 0): string[] {
-  if (depth > 3 || !existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    const path = join(dir, name);
-    try {
-      if (statSync(path).isDirectory()) out.push(...jsonFiles(path, depth + 1));
-      else if (name.endsWith(".json")) out.push(path);
-    } catch {
-      // Raced with a step writing its Output; the next run will see it.
+function jsonFiles(
+  dir: string,
+  depth = 0,
+): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const pathService = yield* Path.Path;
+    if (depth > 3 || !(yield* fs.exists(dir))) return [];
+    const out: string[] = [];
+    const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
+    for (const name of names) {
+      const file = pathService.join(dir, name);
+      const info = yield* fs.stat(file).pipe(Effect.option);
+      if (Option.isNone(info)) {
+        // Raced with a step writing its Output; the next run will see it.
+        continue;
+      }
+      if (info.value.type === "Directory") out.push(...(yield* jsonFiles(file, depth + 1)));
+      else if (name.endsWith(".json")) out.push(file);
     }
-  }
-  return out;
+    return out;
+  });
 }
 
-export async function mrFacts(
-  opts: { cwd: string; inputs: Record<string, string>; configuredAssignee?: unknown; planInput?: string },
-  run: Runner,
-): Promise<MrFacts> {
-  return {
-    assignee: await resolveAssignee(opts.cwd, opts.configuredAssignee, run),
-    template: templateFile(opts.cwd),
-    issues: await linearIssues(opts, run),
-  };
+export function mrFacts<R>(
+  opts: {
+    cwd: string;
+    inputs: Record<string, string>;
+    configuredAssignee?: YamlValue;
+    planInput?: string;
+  },
+  run: Runner<R>,
+): Effect.Effect<MrFacts, PlatformError, FileSystem.FileSystem | Path.Path | R> {
+  return Effect.gen(function* () {
+    return {
+      assignee: yield* resolveAssignee(opts.cwd, opts.configuredAssignee, run),
+      template: yield* templateFile(opts.cwd),
+      issues: yield* linearIssues(opts, run),
+    };
+  });
 }

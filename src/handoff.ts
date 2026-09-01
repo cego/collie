@@ -2,15 +2,15 @@
 // agent from another Run should act on prompts that agent directly, instead of
 // starting a second one that knows none of the history.
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { Crypto, Effect, FileSystem, Path } from "effect";
+import { nowIso } from "./time";
 import type { Herdr } from "./herdr";
 import { REVIEW_FILE } from "./output";
 import { liveAgent, registryPath, type AgentEntry, type RegistryScope } from "./registry";
-import { RunStore, type Run } from "./run";
+import { RunStore, type HandoffRecord, type Run } from "./run";
 
 export interface Session extends RegistryScope {
-  herdr: Herdr;
+  herdr: Pick<Herdr, "agentList" | "agentPrompt">;
   stateDir: string;
   /** The Control Plane's own pane, which is what a temporary pane splits off. */
   paneId?: string | null;
@@ -21,77 +21,110 @@ export interface HandoffResult {
   message: string;
 }
 
+function failed(message: string): HandoffResult {
+  return { ok: false, message };
+}
+
 /**
  * Writes the exchange to both Runs: the one that sent it, because that is where the
  * thing being handed over came from, and the receiver's, because a prompt that
  * arrived from somewhere else is otherwise invisible in its audit trail.
  */
-export function record(session: Session, from: Run, target: AgentEntry, note: string): void {
+export const record = Effect.fn("Handoff.record")(function* (
+  session: Session,
+  from: Run,
+  target: AgentEntry,
+  note: string,
+) {
   // One identity and one timestamp for the exchange, so either side's audit
   // trail correlates to the other and a merge can deduplicate a retried write.
-  const id = crypto.randomUUID();
-  const at = new Date().toISOString();
+  const crypto = yield* Crypto.Crypto;
+  const id = yield* crypto.randomUUIDv4;
+  const at = yield* nowIso();
   const store = new RunStore(session.stateDir);
 
   // The sender may be a snapshot the Control Plane loaded while that Run's own
   // Driver is still saving, so its entry also goes through the merge-safe append
   // rather than a whole-Run save that would revert the Driver's newer state. The
   // in-memory record keeps it too, for the sender's own later saves.
-  const sent = { id, direction: "sent" as const, role: target.role, agent: target.agent, run: target.runId, at, note };
+  const sent = {
+    id,
+    direction: "sent",
+    role: target.role,
+    agent: target.agent,
+    run: target.runId,
+    at,
+    note,
+  } satisfies HandoffRecord;
   from.record.handoffs.push(sent);
-  try {
-    store.appendHandoff(from.id, sent);
-  } catch (e) {
-    // The prompt has already landed, so a persistence failure here must not
-    // unwind the caller — the board would die mid-keypress, or the step would
-    // fail a Run whose exchange really happened. The in-memory entry stands and
-    // the sender's next save merges it in.
-    from.log(`handoff sent but not yet persisted: ${(e as Error).message}`);
-  }
-  from.log(`handoff sent: ${note} -> ${target.agent}`);
-  try {
+  yield* store.appendHandoff(from.id, sent).pipe(
+    Effect.catch((error) =>
+      // The prompt has already landed, so a persistence failure here must not
+      // unwind the caller — the board would die mid-keypress, or the step would
+      // fail a Run whose exchange really happened. The in-memory entry stands and
+      // the sender's next save merges it in.
+      from.log(`handoff sent but not yet persisted: ${String(error)}`).pipe(Effect.ignore),
+    ),
+  );
+  yield* from.log(`handoff sent: ${note} -> ${target.agent}`).pipe(Effect.ignore);
+  yield* Effect.gen(function* () {
     // Appended under the run lock to a freshly loaded record, so the receiving
     // Run's active Driver can neither erase this entry with a later save nor
     // have its own state rolled back by this write.
-    const to = store.appendHandoff(target.runId, { id, direction: "received", role: target.role, agent: target.agent, run: from.id, at, note });
-    to.log(`handoff received: ${note} from run ${from.id}`);
-  } catch (e) {
-    // The other run's dir may be gone; the sender's record is the one that matters.
-    from.log(`handoff not recorded on run ${target.runId}: ${(e as Error).message}`);
-  }
-}
+    const to = yield* store.appendHandoff(target.runId, {
+      id,
+      direction: "received",
+      role: target.role,
+      agent: target.agent,
+      run: from.id,
+      at,
+      note,
+    });
+    yield* to.log(`handoff received: ${note} from run ${from.id}`).pipe(Effect.ignore);
+  }).pipe(
+    Effect.catch((error) =>
+      // The other run's dir may be gone; the sender's record is the one that matters.
+      from.log(`handoff not recorded on run ${target.runId}: ${String(error)}`).pipe(Effect.ignore),
+    ),
+  );
+});
 
 /** The live agent for a role in this Session, or null. Stale entries are dropped. */
-export async function liveRole(session: Session, role: string): Promise<AgentEntry | null> {
-  const alive = await session.herdr.agentList();
-  return liveAgent(registryPath(session.stateDir, session), alive, role);
-}
+export const liveRole = Effect.fn("Handoff.liveRole")(function* (session: Session, role: string) {
+  const alive = yield* session.herdr.agentList();
+  const file = yield* registryPath(session.stateDir, session);
+  return yield* liveAgent(file, alive, role);
+});
 
 /** The newest Run in this Session that rendered a review. */
-export function lastReviewRun(session: Session): Run | null {
-  return (
-    new RunStore(session.stateDir)
-      .list()
-      .find(
-        (r) =>
-          r.record.cwd === session.cwd &&
-          (r.record.workspace === null || r.record.workspace === session.workspaceId) &&
-          existsSync(join(r.dir, REVIEW_FILE)),
-      ) ?? null
-  );
-}
+export const lastReviewRun = Effect.fn("Handoff.lastReviewRun")(function* (session: Session) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const runs = yield* new RunStore(session.stateDir).list();
+  for (const run of runs) {
+    if (
+      run.record.cwd === session.cwd &&
+      (run.record.workspace === null || run.record.workspace === session.workspaceId) &&
+      (yield* fs.exists(path.join(run.dir, REVIEW_FILE)))
+    ) {
+      return run;
+    }
+  }
+  return null;
+});
 
 /** What the implementer is told: the paths, and that this is a fix round. */
-export function reviewPrompt(run: Run): string {
-  const review = join(run.dir, REVIEW_FILE);
-  const synthesis = run.record.synthesis ? join(run.dir, run.record.synthesis) : null;
+export const reviewPrompt = Effect.fn("Handoff.reviewPrompt")(function* (run: Run) {
+  const path = yield* Path.Path;
+  const review = path.join(run.dir, REVIEW_FILE);
+  const synthesis = run.record.synthesis ? path.join(run.dir, run.record.synthesis) : null;
   return [
     `A review of this branch is ready in ${review}`,
     synthesis ? `and its findings as JSON in ${synthesis}.` : "(there is no JSON alongside it).",
     "Read it and apply it as a fix round: fix what it found, commit as you go, and where you",
     "disagree with a finding say so with a reason rather than dropping it silently.",
   ].join(" ");
-}
+});
 
 /**
  * Sends one Run's review to the Session's live implementer. Both sides record it:
@@ -99,50 +132,59 @@ export function reviewPrompt(run: Run): string {
  * because a prompt that arrived from somewhere else is otherwise invisible in its
  * own audit trail.
  */
-export async function sendReview(session: Session, run: Run): Promise<HandoffResult> {
-  if (!existsSync(join(run.dir, REVIEW_FILE))) {
+export const sendReview = Effect.fn("Handoff.sendReview")(function* (session: Session, run: Run) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  if (!(yield* fs.exists(path.join(run.dir, REVIEW_FILE)))) {
     return { ok: false, message: `${run.record.slug} has no ${REVIEW_FILE} to send` };
   }
-  const target = await liveRole(session, "implementer");
+  const target = yield* liveRole(session, "implementer");
   if (!target) return { ok: false, message: "no implementer is live in this workspace" };
 
-  try {
-    await session.herdr.agentPrompt(target.agent, reviewPrompt(run));
-  } catch (e) {
-    return { ok: false, message: `${target.agent} would not take the prompt: ${(e as Error).message}` };
-  }
-  record(session, run, target, `sent ${REVIEW_FILE} to the ${target.role}`);
+  const prompt = yield* reviewPrompt(run);
+  const promptFailure = yield* session.herdr.agentPrompt(target.agent, prompt).pipe(
+    Effect.as(null),
+    Effect.catch((error) =>
+      Effect.succeed(failed(`${target.agent} would not take the prompt: ${String(error)}`)),
+    ),
+  );
+  if (promptFailure) return promptFailure;
+  yield* record(session, run, target, `sent ${REVIEW_FILE} to the ${target.role}`);
   return { ok: true, message: `sent ${run.record.slug}'s review to ${target.agent}` };
-}
+});
 
 /**
  * The live implementer that is building from this plan, if there is one. Not just
  * any implementer: the hand-off is only meaningful to the run whose work source is
  * the plan that changed.
  */
-export async function implementerOfPlan(session: Session, planDir: string): Promise<AgentEntry | null> {
-  const target = await liveRole(session, "implementer");
+export const implementerOfPlan = Effect.fn("Handoff.implementerOfPlan")(function* (
+  session: Session,
+  planDir: string,
+) {
+  const target = yield* liveRole(session, "implementer");
   if (!target) return null;
-  try {
-    const run = new RunStore(session.stateDir).load(target.runId);
+  const run = yield* new RunStore(session.stateDir)
+    .load(target.runId)
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+  if (run) {
     return run.record.inputs.plan === planDir ? target : null;
-  } catch {
-    // Its run dir is gone; nothing can be said about what it is building.
-    return null;
   }
-}
+  // Its run dir is gone; nothing can be said about what it is building.
+  return null;
+});
 
 /**
  * Tells the implementer that the plan under it has moved. It is already building,
  * so this is a reconciliation, not a restart: finish what is unaffected, adjust
  * what is, and say what now conflicts.
  */
-export async function sendPlanChange(
+export const sendPlanChange = Effect.fn("Handoff.sendPlanChange")(function* (
   session: Session,
   run: Run,
   opts: { planDir: string; diff: string; changelog: string },
-): Promise<HandoffResult> {
-  const target = await implementerOfPlan(session, opts.planDir);
+) {
+  const target = yield* implementerOfPlan(session, opts.planDir);
   if (!target) return { ok: false, message: "no implementer is building from this plan" };
 
   const text = [
@@ -153,21 +195,23 @@ export async function sendPlanChange(
     "quietly undoing either side.",
   ].join(" ");
 
-  try {
-    await session.herdr.agentPrompt(target.agent, text);
-  } catch (e) {
-    return { ok: false, message: `${target.agent} would not take the prompt: ${(e as Error).message}` };
-  }
-  record(session, run, target, "sent the plan change to the implementer");
+  const promptFailure = yield* session.herdr.agentPrompt(target.agent, text).pipe(
+    Effect.as(null),
+    Effect.catch((error) =>
+      Effect.succeed(failed(`${target.agent} would not take the prompt: ${String(error)}`)),
+    ),
+  );
+  if (promptFailure) return promptFailure;
+  yield* record(session, run, target, "sent the plan change to the implementer");
   return { ok: true, message: `told ${target.agent} the plan changed` };
-}
+});
 
 /**
  * What an implementer is told about asking for a decision the plan does not cover:
  * the planner's own pane when one is live, and otherwise to stop and ask the human.
  */
-export async function askRoute(session: Session): Promise<string> {
-  const planner = await liveRole(session, "planner");
+export const askRoute = Effect.fn("Handoff.askRoute")(function* (session: Session) {
+  const planner = yield* liveRole(session, "planner");
   if (!planner) {
     return [
       "There is no planner live for this work. If you need a decision the plan does not",
@@ -181,11 +225,13 @@ export async function askRoute(session: Session): Promise<string> {
     `with \`herdr agent read ${planner.agent} --lines 40\`. Only stop and ask me if it cannot`,
     "answer.",
   ].join(" ");
-}
+});
 
 /** The board's own version: the newest review in this Session, to its implementer. */
-export async function sendReviewToImplementer(session: Session): Promise<HandoffResult> {
-  const run = lastReviewRun(session);
+export const sendReviewToImplementer = Effect.fn("Handoff.sendReviewToImplementer")(function* (
+  session: Session,
+) {
+  const run = yield* lastReviewRun(session);
   if (!run) return { ok: false, message: "no run here has produced a review yet" };
-  return await sendReview(session, run);
-}
+  return yield* sendReview(session, run);
+});

@@ -1,13 +1,31 @@
 // Input inference: branch, cwd, earlier Runs and the open MR. The human is asked
-// only when inference fails (docs/SPEC.md).
+// only when inference fails (CONTEXT.md, Input).
 
-import { existsSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import type { PlatformError } from "effect/PlatformError";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { InputStrategy } from "./definitions";
 import type { PickItem } from "./picker";
 import { RunStore } from "./run";
-import { mrTarget, parseMrTarget, projectHere } from "./mr";
+import { type Runner, mrTarget, parseMrTarget, projectHere, shell as shellRun } from "./mr";
 
+const JsonId = Schema.Union([Schema.String, Schema.Number]);
+const MrViewJson = Schema.fromJsonString(
+  Schema.Struct({
+    state: Schema.optionalKey(Schema.String),
+    iid: Schema.optionalKey(JsonId),
+    id: Schema.optionalKey(JsonId),
+  }),
+);
+const MrRowsJson = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({
+      iid: Schema.optionalKey(JsonId),
+      id: Schema.optionalKey(JsonId),
+      title: Schema.optionalKey(Schema.String),
+    }),
+  ),
+);
 /** Where the work to be done was described. */
 export type WorkSourceKind = "plan-dir" | "linear" | "text" | "review";
 
@@ -27,9 +45,12 @@ export interface Candidate {
 export type WorkSourceCandidate = Candidate;
 
 /** How a work-source reaches the human; the picker and the runner pane both supply it. */
-export interface InputPrompts {
-  menu(items: PickItem[], opts: { header: string; footer?: string }): Promise<PickItem | null>;
-  ask(question: string): Promise<string | null>;
+export interface InputPrompts<E = never, R = never> {
+  menu(
+    items: PickItem[],
+    opts: { header: string; footer?: string },
+  ): Effect.Effect<PickItem | null, E, R>;
+  ask(question: string): Effect.Effect<string | null, E, R>;
 }
 
 /** More than this and the oldest plans would bury the branch's own ticket. */
@@ -58,134 +79,156 @@ export interface Resolution {
   project?: string;
 }
 
-export interface InferContext {
+export interface InferContext<R = ChildProcessSpawner.ChildProcessSpawner> {
   cwd: string;
   /** The plugin state dir, so earlier Runs can be searched for a plan. */
   stateDir?: string;
-  run?: (cmd: string, args: string[], cwd: string) => Promise<{ code: number; stdout: string }>;
+  run?: Runner<R>;
 }
 
 /** The one place a subprocess is started for inference; the MR step borrows it too. */
-export async function shell(cmd: string, args: string[], cwd: string): Promise<{ code: number; stdout: string }> {
-  try {
-    // The env must be passed explicitly or PATH changes are not honoured.
-    const proc = Bun.spawn([cmd, ...args], {
-      cwd,
-      stdout: "pipe",
-      stderr: "ignore",
-      env: { ...process.env } as Record<string, string>,
-    });
-    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    return { code, stdout };
-  } catch {
-    return { code: 127, stdout: "" };
-  }
-}
+export const shell = shellRun;
 
-export async function inferInput(
+export function inferInput(
   name: string,
   strategy: InputStrategy,
   ctx: InferContext,
-): Promise<Resolution> {
-  const run = ctx.run ?? shell;
-  const base = { name, strategy, needsAsking: false, question: `${name}?` };
+): Effect.Effect<
+  Resolution,
+  PlatformError,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> {
+  return Effect.gen(function* () {
+    const run = ctx.run ?? shell;
+    const base = { name, strategy, needsAsking: false, question: `${name}?` };
 
-  switch (strategy) {
-    case "goal":
-      return { ...base, value: "", source: "ask", needsAsking: true, question: "What is the goal?" };
+    switch (strategy) {
+      case "goal":
+        return {
+          ...base,
+          value: "",
+          source: "ask",
+          needsAsking: true,
+          question: "What is the goal?",
+        };
 
-    case "plan-dir": {
-      const plan = ctx.stateDir ? planDirs(ctx.stateDir, ctx.cwd, 1)[0] : undefined;
-      if (plan) {
-        return { ...base, value: plan.value, source: plan.source, label: plan.label };
+      case "plan-dir": {
+        const plan = ctx.stateDir ? (yield* planDirs(ctx.stateDir, ctx.cwd, 1))[0] : undefined;
+        if (plan) {
+          return { ...base, value: plan.value, source: plan.source, label: plan.label };
+        }
+        return {
+          ...base,
+          value: "",
+          source: "ask",
+          needsAsking: true,
+          question: "Path to the plan directory (no finished run has planned this project yet)",
+        };
       }
-      return {
-        ...base,
-        value: "",
-        source: "ask",
-        needsAsking: true,
-        question: "Path to the plan directory (no finished run has planned this project yet)",
-      };
-    }
 
-    case "diff-target": {
-      const candidates = await targetCandidates(ctx);
-      // Inference still picks the value; the menu only lets the human override it,
-      // and the head of the list is what inference alone would have chosen.
-      const baseRef = (await defaultBase(run, ctx.cwd)) ?? "";
-      const project = (await projectHere(ctx.cwd, run)) ?? undefined;
-      const common = { ...base, candidates, base: baseRef, project };
-      // A directory that is not a checkout offers nothing to infer from, so the
-      // menu is one entry: type it.
-      if (candidates.length === 0) {
-        return { ...common, value: "", source: "ask", needsAsking: true, question: TARGET_QUESTION };
+      case "diff-target": {
+        const candidates = yield* targetCandidates(ctx);
+        // Inference still picks the value; the menu only lets the human override it,
+        // and the head of the list is what inference alone would have chosen.
+        const baseRef = (yield* defaultBase(run, ctx.cwd)) ?? "";
+        const project = (yield* projectHere(ctx.cwd, run)) ?? undefined;
+        const common = { ...base, candidates, base: baseRef, project };
+        // A directory that is not a checkout offers nothing to infer from, so the
+        // menu is one entry: type it.
+        if (candidates.length === 0) {
+          return {
+            ...common,
+            value: "",
+            source: "ask",
+            needsAsking: true,
+            question: TARGET_QUESTION,
+          };
+        }
+        return { ...common, ...candidates[0]! };
       }
-      return { ...common, ...candidates[0]! };
-    }
 
-    case "ticket": {
-      const found = await ticketFromBranch(run, ctx.cwd);
-      return found ? { ...base, ...found } : { ...base, value: "", source: "none" };
-    }
+      case "ticket": {
+        const found = yield* ticketFromBranch(run, ctx.cwd);
+        return found ? { ...base, ...found } : { ...base, value: "", source: "none" };
+      }
 
-    case "work-source": {
-      const candidates = await workSourceCandidates(ctx);
-      // One candidate is an answer; none or several are a question for the human.
-      if (candidates.length === 1) return { ...base, ...candidates[0]! };
-      return { ...base, value: "", source: "ask", needsAsking: true, question: WORK_SOURCE_QUESTION, candidates };
-    }
+      case "work-source": {
+        const candidates = yield* workSourceCandidates(ctx);
+        // One candidate is an answer; none or several are a question for the human.
+        if (candidates.length === 1) return { ...base, ...candidates[0]! };
+        return {
+          ...base,
+          value: "",
+          source: "ask",
+          needsAsking: true,
+          question: WORK_SOURCE_QUESTION,
+          candidates,
+        };
+      }
 
-    case "flag":
-      return { ...base, value: "false", source: "default" };
-  }
+      case "flag":
+        return { ...base, value: "false", source: "default" };
+      default:
+        return { ...base, value: "", source: "ask", needsAsking: true };
+    }
+  });
 }
 
-async function ticketFromBranch(
+function ticketFromBranch(
   run: NonNullable<InferContext["run"]>,
   cwd: string,
-): Promise<{ value: string; source: string } | null> {
-  const branch = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).stdout.trim();
-  const m = /([A-Z][A-Z0-9]+-\d+)/.exec(branch);
-  return m ? { value: m[1]!, source: `branch ${branch}` } : null;
+): Effect.Effect<
+  { value: string; source: string } | null,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> {
+  return Effect.gen(function* () {
+    const branch = (yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd)).stdout.trim();
+    const m = /([A-Z][A-Z0-9]+-\d+)/.exec(branch);
+    return m ? { value: m[1]!, source: `branch ${branch}` } : null;
+  });
 }
 
-export async function inferInputs(
+export function inferInputs(
   inputs: Record<string, InputStrategy>,
   ctx: InferContext,
-): Promise<Resolution[]> {
-  const out: Resolution[] = [];
-  for (const [name, strategy] of Object.entries(inputs)) {
-    out.push(await inferInput(name, strategy, ctx));
-  }
-  return out;
+): Effect.Effect<
+  Resolution[],
+  PlatformError,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> {
+  return Effect.forEach(Object.entries(inputs), ([name, strategy]) =>
+    inferInput(name, strategy, ctx),
+  );
 }
 
 function mrIid(stdout: string): string | null {
-  try {
-    const data = JSON.parse(stdout) as Record<string, unknown>;
-    if (typeof data.state === "string" && data.state.toLowerCase() !== "opened" && data.state.toLowerCase() !== "open") {
-      return null;
-    }
-    const iid = data.iid ?? data.id;
-    return iid === undefined || iid === null ? null : String(iid);
-  } catch {
-    return null;
-  }
+  return Option.match(Schema.decodeUnknownOption(MrViewJson)(stdout), {
+    onNone: () => null,
+    onSome: (data) => {
+      if (data.state !== undefined && !["opened", "open"].includes(data.state.toLowerCase()))
+        return null;
+      const iid = data.iid ?? data.id;
+      return iid === undefined ? null : String(iid);
+    },
+  });
 }
 
-async function defaultBase(
+function defaultBase(
   run: NonNullable<InferContext["run"]>,
   cwd: string,
-): Promise<string | null> {
-  const head = await run("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd);
-  if (head.code === 0 && head.stdout.trim()) {
-    return head.stdout.trim().replace(/^origin\//, "");
-  }
-  for (const candidate of ["main", "master"]) {
-    const exists = await run("git", ["rev-parse", "--verify", "--quiet", candidate], cwd);
-    if (exists.code === 0) return candidate;
-  }
-  return null;
+): Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner> {
+  return Effect.gen(function* () {
+    const head = yield* run("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd);
+    if (head.code === 0 && head.stdout.trim()) {
+      return head.stdout.trim().replace(/^origin\//, "");
+    }
+    for (const candidate of ["main", "master"]) {
+      const exists = yield* run("git", ["rev-parse", "--verify", "--quiet", candidate], cwd);
+      if (exists.code === 0) return candidate;
+    }
+    return null;
+  });
 }
 
 /**
@@ -193,31 +236,49 @@ async function defaultBase(
  * workflow may write one (`plan`, `architecture`), so having `plan/SPEC.md` is the
  * test, not the workflow's name (ADR-0002).
  */
-export function planDirs(stateDir: string, cwd: string, limit: number): WorkSourceCandidate[] {
-  const found: WorkSourceCandidate[] = [];
-  for (const run of new RunStore(stateDir).list()) {
-    if (found.length >= limit) break;
-    if (run.record.cwd !== cwd || run.record.status !== "done") continue;
-    const dir = join(run.dir, "plan");
-    if (!existsSync(join(dir, "SPEC.md"))) continue;
-    const prefix = `${run.record.workflow}-`;
-    const slug = run.record.slug;
-    found.push({
-      kind: "plan-dir",
-      value: dir,
-      source: `plan run ${run.id}`,
-      label: slug.startsWith(prefix) ? slug.slice(prefix.length) : slug,
-    });
-  }
-  return found;
+export function planDirs(
+  stateDir: string,
+  cwd: string,
+  limit: number,
+): Effect.Effect<WorkSourceCandidate[], PlatformError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const found: WorkSourceCandidate[] = [];
+    for (const run of yield* new RunStore(stateDir).list()) {
+      if (found.length >= limit) break;
+      if (run.record.cwd !== cwd || run.record.status !== "done") continue;
+      const dir = path.join(run.dir, "plan");
+      if (!(yield* fs.exists(path.join(dir, "SPEC.md")))) continue;
+      const prefix = `${run.record.workflow}-`;
+      const slug = run.record.slug;
+      found.push({
+        kind: "plan-dir",
+        value: dir,
+        source: `plan run ${run.id}`,
+        label: slug.startsWith(prefix) ? slug.slice(prefix.length) : slug,
+      });
+    }
+    return found;
+  });
 }
 
 /** Everything that could describe the work here: the recent plans, then the branch's ticket. */
-export async function workSourceCandidates(ctx: InferContext): Promise<WorkSourceCandidate[]> {
-  const candidates = ctx.stateDir ? planDirs(ctx.stateDir, ctx.cwd, PLAN_DIR_CANDIDATES) : [];
-  const ticket = await ticketFromBranch(ctx.run ?? shell, ctx.cwd);
-  if (ticket) candidates.push({ kind: "linear", value: ticket.value, source: ticket.source });
-  return candidates;
+export function workSourceCandidates(
+  ctx: InferContext,
+): Effect.Effect<
+  WorkSourceCandidate[],
+  PlatformError,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> {
+  return Effect.gen(function* () {
+    const candidates = ctx.stateDir
+      ? yield* planDirs(ctx.stateDir, ctx.cwd, PLAN_DIR_CANDIDATES)
+      : [];
+    const ticket = yield* ticketFromBranch(ctx.run ?? shell, ctx.cwd);
+    if (ticket) candidates.push({ kind: "linear", value: ticket.value, source: ticket.source });
+    return candidates;
+  });
 }
 
 /**
@@ -225,91 +286,109 @@ export async function workSourceCandidates(ctx: InferContext): Promise<WorkSourc
  * inference would have picked them: the branch's own MR (else mine), the branch
  * against its base, then the working tree.
  */
-export async function targetCandidates(ctx: InferContext): Promise<Candidate[]> {
-  const run = ctx.run ?? shell;
-  const out: Candidate[] = [];
-  // Whether this directory is a checkout at all decides which candidates exist:
-  // a group folder has no branch and no working tree to review.
-  const inRepo = (await run("git", ["rev-parse", "--git-dir"], ctx.cwd)).code === 0;
-  const project = inRepo ? await projectHere(ctx.cwd, run) : null;
+export function targetCandidates(
+  ctx: InferContext,
+): Effect.Effect<
+  Candidate[],
+  PlatformError,
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> {
+  return Effect.gen(function* () {
+    const run = ctx.run ?? shell;
+    const out: Candidate[] = [];
+    // Whether this directory is a checkout at all decides which candidates exist:
+    // a group folder has no branch and no working tree to review.
+    const inRepo = (yield* run("git", ["rev-parse", "--git-dir"], ctx.cwd)).code === 0;
+    const project = inRepo ? yield* projectHere(ctx.cwd, run) : null;
 
-  const view = await run("glab", ["mr", "view", "--output", "json"], ctx.cwd);
-  const iid = view.code === 0 ? mrIid(view.stdout) : null;
-  if (iid) {
-    out.push({
-      kind: "mr",
-      value: mrTarget(project, iid),
-      source: `open merge request !${iid}`,
-      label: `!${iid}`,
-    });
-  } else {
-    // This branch has no MR, so offer the ones I would otherwise go looking for.
-    for (const mine of await myOpenMrs(run, ctx.cwd, project)) out.push(mine);
-  }
-
-  if (inRepo) {
-    const branch = (await run("git", ["rev-parse", "--abbrev-ref", "HEAD"], ctx.cwd)).stdout.trim();
-    const baseRef = await defaultBase(run, ctx.cwd);
-    if (branch && baseRef && branch !== baseRef) {
+    const view = yield* run("glab", ["mr", "view", "--output", "json"], ctx.cwd);
+    const iid = view.code === 0 ? mrIid(view.stdout) : null;
+    if (iid) {
       out.push({
-        kind: "branch",
-        value: `branch:${baseRef}...${branch}`,
-        source: `${branch} vs ${baseRef}`,
-        label: branch,
+        kind: "mr",
+        value: mrTarget(project, iid),
+        source: `open merge request !${iid}`,
+        label: `!${iid}`,
       });
+    } else {
+      // This branch has no MR, so offer the ones I would otherwise go looking for.
+      for (const mine of yield* myOpenMrs(run, ctx.cwd, project)) out.push(mine);
     }
 
-    const dirty = (await run("git", ["status", "--porcelain"], ctx.cwd)).stdout.trim() !== "";
-    // Last, and always there when nothing else is: the working tree is the one
-    // target every checkout has, and inference already fell back to it.
-    if (dirty || out.length === 0) {
-      out.push({ kind: "worktree", value: "worktree", source: "working tree", label: "working tree" });
+    if (inRepo) {
+      const branch = (yield* run(
+        "git",
+        ["rev-parse", "--abbrev-ref", "HEAD"],
+        ctx.cwd,
+      )).stdout.trim();
+      const baseRef = yield* defaultBase(run, ctx.cwd);
+      if (branch && baseRef && branch !== baseRef) {
+        out.push({
+          kind: "branch",
+          value: `branch:${baseRef}...${branch}`,
+          source: `${branch} vs ${baseRef}`,
+          label: branch,
+        });
+      }
+
+      const dirty = (yield* run("git", ["status", "--porcelain"], ctx.cwd)).stdout.trim() !== "";
+      // Last, and always there when nothing else is: the working tree is the one
+      // target every checkout has, and inference already fell back to it.
+      if (dirty || out.length === 0) {
+        out.push({
+          kind: "worktree",
+          value: "worktree",
+          source: "working tree",
+          label: "working tree",
+        });
+      }
     }
-  }
-  return out;
+    return out;
+  });
 }
 
 /** Open MRs I am on either side of, deduplicated by iid. */
-async function myOpenMrs(
+function myOpenMrs(
   run: NonNullable<InferContext["run"]>,
   cwd: string,
   project: string | null,
-): Promise<Candidate[]> {
-  const seen = new Map<string, Candidate>();
-  for (const who of ["--assignee", "--author"]) {
-    const res = await run("glab", ["mr", "list", who, "@me", "--output", "json"], cwd);
-    if (res.code !== 0) continue;
-    let rows: unknown;
-    try {
-      rows = JSON.parse(res.stdout);
-    } catch {
-      continue;
+): Effect.Effect<Candidate[], never, ChildProcessSpawner.ChildProcessSpawner> {
+  return Effect.gen(function* () {
+    const seen = new Map<string, Candidate>();
+    for (const who of ["--assignee", "--author"]) {
+      const res = yield* run("glab", ["mr", "list", who, "@me", "--output", "json"], cwd);
+      if (res.code !== 0) continue;
+      const parsedRows = Schema.decodeUnknownOption(MrRowsJson)(res.stdout);
+      if (Option.isNone(parsedRows)) continue;
+      for (const row of parsedRows.value) {
+        const id = row.iid ?? row.id;
+        if (id === undefined) continue;
+        const key = String(id);
+        if (seen.has(key)) continue;
+        const title = row.title ?? "";
+        seen.set(key, {
+          kind: "mr",
+          value: mrTarget(project, key),
+          source: title ? `open MR !${key} — ${title}` : `open MR !${key}`,
+          label: `!${key}`,
+        });
+      }
     }
-    if (!Array.isArray(rows)) continue;
-    for (const row of rows as Record<string, unknown>[]) {
-      const id = row.iid ?? row.id;
-      if (id === undefined || id === null) continue;
-      const key = String(id);
-      if (seen.has(key)) continue;
-      const title = typeof row.title === "string" ? row.title : "";
-      seen.set(key, {
-        kind: "mr",
-        value: mrTarget(project, key),
-        source: title ? `open MR !${key} — ${title}` : `open MR !${key}`,
-        label: `!${key}`,
-      });
-    }
-  }
-  return [...seen.values()].sort(
-    (a, b) => Number(parseMrTarget(a.value)?.iid ?? 0) - Number(parseMrTarget(b.value)?.iid ?? 0),
-  );
+    return [...seen.values()].sort(
+      (a, b) => Number(parseMrTarget(a.value)?.iid ?? 0) - Number(parseMrTarget(b.value)?.iid ?? 0),
+    );
+  });
 }
 
 /**
  * What the human typed for a review target: an MR iid or URL, a `base...head`
  * range, the working tree, or a bare ref meaning that ref against the base.
  */
-export function classifyTarget(typed: string, baseRef: string, project: string | null = null): Candidate | null {
+export function classifyTarget(
+  typed: string,
+  baseRef: string,
+  project: string | null = null,
+): Candidate | null {
   const text = typed.trim();
   if (text === "") return null;
   const source = "typed";
@@ -317,14 +396,20 @@ export function classifyTarget(typed: string, baseRef: string, project: string |
   // A URL names its own project, which is the whole point of pasting one.
   const url = /^(?:https?:\/\/)?([^/\s]+)\/(.+?)\/-\/merge_requests\/(\d+)/.exec(text);
   if (url) {
-    return { kind: "mr", value: mrTarget(`${url[1]}/${url[2]}`, url[3]!), source, label: `!${url[3]}` };
+    return {
+      kind: "mr",
+      value: mrTarget(`${url[1]}/${url[2]}`, url[3]!),
+      source,
+      label: `!${url[3]}`,
+    };
   }
 
   // A bare iid means one in the project this directory belongs to.
   const iid = /^!?(\d+)$/.exec(text);
   if (iid) return { kind: "mr", value: mrTarget(project, iid[1]!), source, label: `!${iid[1]}` };
 
-  if (/^worktree$/i.test(text)) return { kind: "worktree", value: "worktree", source, label: "working tree" };
+  if (/^worktree$/i.test(text))
+    return { kind: "worktree", value: "worktree", source, label: "working tree" };
 
   if (text.includes("...")) return { kind: "branch", value: `branch:${text}`, source, label: text };
 
@@ -340,27 +425,45 @@ export function targetKind(value: string): CandidateKind {
 }
 
 /** What the human typed: a plan directory, a Linear issue, or the work in their own words. */
-export function classifyWorkSource(typed: string): WorkSourceCandidate {
-  const text = typed.trim();
-  const source = "typed";
+export function classifyWorkSource(
+  typed: string,
+): Effect.Effect<WorkSourceCandidate, PlatformError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const text = typed.trim();
+    const source = "typed";
 
-  const url = /linear\.app\/[^/\s]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/.exec(text);
-  if (url) return { kind: "linear", source, value: url[1]!.toUpperCase() };
+    const url = /linear\.app\/[^/\s]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/.exec(text);
+    if (url) return { kind: "linear", source, value: url[1]!.toUpperCase() };
 
-  if (/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(text)) return { kind: "linear", value: text.toUpperCase(), source };
+    if (/^[A-Za-z][A-Za-z0-9]*-\d+$/.test(text))
+      return { kind: "linear", value: text.toUpperCase(), source };
 
-  // A review run's own dir: the findings are the spec, and the reviewed target is
-  // what the work happens on.
-  if (isReviewRun(text)) return { kind: "review", value: text, source, label: textLabel(basename(text)) };
+    // A review run's own dir: the findings are the spec, and the reviewed target is
+    // what the work happens on.
+    if (yield* isReviewRun(text))
+      return { kind: "review", value: text, source, label: textLabel(path.basename(text)) };
 
-  if (isPlanDir(text)) return { kind: "plan-dir", value: text, source, label: textLabel(basename(text)) };
+    if (yield* isPlanDir(text))
+      return { kind: "plan-dir", value: text, source, label: textLabel(path.basename(text)) };
 
-  return { kind: "text", value: text, source, label: textLabel(text) };
+    return { kind: "text", value: text, source, label: textLabel(text) };
+  });
 }
 
 /** A run dir that produced a review, which is a thing `implement` can be pointed at. */
-function isReviewRun(path: string): boolean {
-  return path !== "" && existsSync(join(path, "review.md")) && existsSync(join(path, "run.json"));
+function isReviewRun(
+  dir: string,
+): Effect.Effect<boolean, PlatformError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    return (
+      dir !== "" &&
+      (yield* fs.exists(path.join(dir, "review.md"))) &&
+      (yield* fs.exists(path.join(dir, "run.json")))
+    );
+  });
 }
 
 /** What one Input's menu says, so the two of them share the machinery below. */
@@ -368,7 +471,10 @@ interface MenuSpec {
   header: string;
   hint: string;
   question: string;
-  classify(typed: string, r: Resolution): Candidate | null;
+  classify(
+    typed: string,
+    r: Resolution,
+  ): Effect.Effect<Candidate | null, PlatformError, FileSystem.FileSystem | Path.Path>;
 }
 
 const WORK_SOURCE_MENU: MenuSpec = {
@@ -382,74 +488,92 @@ const TARGET_MENU: MenuSpec = {
   header: TARGET_QUESTION,
   hint: "an MR iid or URL, or a base...head range",
   question: "MR iid or URL, or a base...head range",
-  classify: (typed, r) => classifyTarget(typed, r.base ?? "", r.project ?? null),
+  classify: (typed, r) => Effect.succeed(classifyTarget(typed, r.base ?? "", r.project ?? null)),
 };
 
 /**
  * Settles an Input the human chooses from: its candidates as a menu, plus
  * "Type it…" for anything not listed. False when they backed out.
  */
-async function resolveFromMenu(r: Resolution, prompts: InputPrompts, spec: MenuSpec): Promise<boolean> {
-  const candidates = r.candidates ?? [];
-  const items: PickItem[] = candidates.map((c, i) => ({
-    id: String(i),
-    title: c.label ?? c.value,
-    subtitle: `${c.kind} · ${c.source}`,
-  }));
-  items.push({ id: TYPE_IT, title: "Type it…", subtitle: spec.hint });
+function resolveFromMenu<E, R>(
+  r: Resolution,
+  prompts: InputPrompts<E, R>,
+  spec: MenuSpec,
+): Effect.Effect<boolean, PlatformError | E, FileSystem.FileSystem | Path.Path | R> {
+  return Effect.gen(function* () {
+    const candidates = r.candidates ?? [];
+    const items: PickItem[] = candidates.map((c, i) => ({
+      id: String(i),
+      title: c.label ?? c.value,
+      subtitle: `${c.kind} · ${c.source}`,
+    }));
+    items.push({ id: TYPE_IT, title: "Type it…", subtitle: spec.hint });
 
-  const chosen = await prompts.menu(items, {
-    header: spec.header,
-    footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
-  });
-  if (!chosen) return false;
+    const chosen = yield* prompts
+      .menu(items, {
+        header: spec.header,
+        footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
+      })
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!chosen) return false;
 
-  if (chosen.id !== TYPE_IT) {
-    settle(r, candidates[Number(chosen.id)]!);
+    if (chosen.id !== TYPE_IT) {
+      settle(r, candidates[Number(chosen.id)]!);
+      return true;
+    }
+
+    const typed = yield* prompts.ask(spec.question).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (typed === null || typed.trim() === "") return false;
+    const classified = yield* spec.classify(typed, r);
+    if (!classified) return false;
+    settle(r, classified);
     return true;
-  }
-
-  const typed = await prompts.ask(spec.question);
-  if (typed === null || typed.trim() === "") return false;
-  const classified = spec.classify(typed, r);
-  if (!classified) return false;
-  settle(r, classified);
-  return true;
-}
-
-export function resolveWorkSource(r: Resolution, prompts: InputPrompts): Promise<boolean> {
-  return resolveFromMenu(r, prompts, WORK_SOURCE_MENU);
-}
-
-export function resolveTarget(r: Resolution, prompts: InputPrompts): Promise<boolean> {
-  return resolveFromMenu(r, prompts, TARGET_MENU);
+  });
 }
 
 /** The menu an Input needs, whichever Input it is. */
-export function resolveCandidates(r: Resolution, prompts: InputPrompts): Promise<boolean> {
-  return r.strategy === "diff-target" ? resolveTarget(r, prompts) : resolveWorkSource(r, prompts);
+export function resolveCandidates<E, R>(
+  r: Resolution,
+  prompts: InputPrompts<E, R>,
+): Effect.Effect<boolean, PlatformError | E, FileSystem.FileSystem | Path.Path | R> {
+  return resolveFromMenu(r, prompts, r.strategy === "diff-target" ? TARGET_MENU : WORK_SOURCE_MENU);
 }
 
-function settle(r: Resolution, candidate: WorkSourceCandidate): void {
+export function settle(
+  r: Resolution,
+  candidate: Pick<WorkSourceCandidate, "value" | "source"> &
+    Partial<Pick<WorkSourceCandidate, "kind" | "label">>,
+): void {
   r.value = candidate.value;
-  r.kind = candidate.kind;
+  if (candidate.kind !== undefined) r.kind = candidate.kind;
   r.source = candidate.source;
-  r.label = candidate.label;
+  if (candidate.label !== undefined) r.label = candidate.label;
   r.needsAsking = false;
   delete r.candidates;
 }
 
-function isPlanDir(path: string): boolean {
-  try {
-    return statSync(path).isDirectory() && existsSync(join(path, "SPEC.md"));
-  } catch {
-    return false;
-  }
+function isPlanDir(
+  dir: string,
+): Effect.Effect<boolean, PlatformError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const info = yield* fs.stat(dir).pipe(Effect.option);
+    return (
+      Option.isSome(info) &&
+      info.value.type === "Directory" &&
+      (yield* fs.exists(path.join(dir, "SPEC.md")))
+    );
+  });
 }
 
 /** A few words, enough to name the Run after work that has no shorter name. */
 function textLabel(text: string): string {
-  const words = text.toLowerCase().replace(/[^a-z0-9]+/g, " ").split(" ").filter(Boolean);
+  const words = text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .split(" ")
+    .filter(Boolean);
   let label = "";
   for (const word of words) {
     const next = label ? `${label}-${word}` : word;
@@ -460,7 +584,7 @@ function textLabel(text: string): string {
 }
 
 /** Inputs as the prompts see them: a work-source also exposes `<name>_kind`. */
-export function inputValues(resolutions: Resolution[]): Record<string, string> {
+export function inputValues(resolutions: Resolution[]) {
   const values: Record<string, string> = {};
   for (const r of resolutions) {
     values[r.name] = r.value;
@@ -470,7 +594,7 @@ export function inputValues(resolutions: Resolution[]): Record<string, string> {
 }
 
 /** Only real Inputs have a provenance; a `<name>_kind` is a companion of its own Input. */
-export function inputSources(resolutions: Resolution[]): Record<string, string> {
+export function inputSources(resolutions: Resolution[]) {
   const sources: Record<string, string> = {};
   for (const r of resolutions) sources[r.name] = r.source;
   return sources;

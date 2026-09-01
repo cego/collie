@@ -1,19 +1,144 @@
 // The only channel to herdr: the CLI at HERDR_BIN_PATH, plus the socket at
 // HERDR_SOCKET_PATH for the few methods 0.7.5 does not expose on the CLI.
 
-import { connect } from "node:net";
+import type { BunServices } from "@effect/platform-bun/BunServices";
+import { Data, Deferred, Effect, Schema, Stream } from "effect";
+import * as BunSocket from "@effect/platform-bun/BunSocket";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import { PLUGIN_ID } from "./env";
+import { reason } from "./naming";
 
 export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 
-export class HerdrError extends Error {
-  constructor(
-    message: string,
-    readonly detail: string,
-  ) {
-    super(message);
+export class HerdrError extends Data.TaggedError("HerdrError")<{
+  readonly message: string;
+  readonly detail: string;
+}> {}
+
+export function herdrFailureReason(cause: unknown): string {
+  return cause instanceof HerdrError ? `${cause.message}: ${cause.detail}` : reason(cause);
+}
+
+type HerdrEffect<A> = Effect.Effect<A, HerdrError, BunServices>;
+type ExecResult = { code: number; stdout: string; stderr: string };
+type BoundaryValue = Schema.Json | string | undefined;
+type HerdrParams = Schema.JsonObject;
+
+const JsonString = Schema.fromJsonString(Schema.Json);
+const encodeJson = Schema.encodeSync(JsonString);
+
+const ErrorReply = Schema.Struct({
+  message: Schema.optionalKey(Schema.String),
+  code: Schema.optionalKey(Schema.String),
+});
+const SocketReply = Schema.Struct({
+  error: Schema.optionalKey(ErrorReply),
+  result: Schema.optionalKey(Schema.Json),
+});
+const TabCreateReply = Schema.Struct({
+  result: Schema.Struct({
+    tab: Schema.Struct({ tab_id: Schema.String }),
+    root_pane: Schema.Struct({ pane_id: Schema.String }),
+  }),
+});
+const WorkspaceReply = Schema.Struct({
+  workspace_id: Schema.String,
+  label: Schema.String,
+  cwd: Schema.optionalKey(Schema.String),
+  working_directory: Schema.optionalKey(Schema.String),
+  worktree: Schema.optionalKey(Schema.Struct({ path: Schema.String })),
+  worktree_path: Schema.optionalKey(Schema.String),
+});
+const WorkspaceListReply = Schema.Struct({
+  result: Schema.Struct({ workspaces: Schema.Array(WorkspaceReply) }),
+});
+const TabListReply = Schema.Struct({
+  result: Schema.Struct({
+    tabs: Schema.Array(Schema.Struct({ tab_id: Schema.String, label: Schema.String })),
+  }),
+});
+const PaneListReply = Schema.Struct({
+  result: Schema.Struct({
+    panes: Schema.Array(
+      Schema.Struct({
+        pane_id: Schema.String,
+        tab_id: Schema.String,
+        label: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  }),
+});
+const PaneSplitReply = Schema.Struct({
+  result: Schema.Struct({ pane: Schema.Struct({ pane_id: Schema.String }) }),
+});
+const AgentReply = Schema.Struct({
+  // herdr omits `name` for an agent it did not start; one of those in the workspace
+  // must not make the whole list undecodable.
+  name: Schema.optionalKey(Schema.String),
+  pane_id: Schema.String,
+  workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  agent_status: Schema.String,
+});
+const AgentListReply = Schema.Struct({
+  result: Schema.Struct({ agents: Schema.Array(AgentReply) }),
+});
+const AgentStatusReply = Schema.Struct({
+  result: Schema.Struct({ agent: Schema.Struct({ agent_status: Schema.String }) }),
+});
+const PluginPaneReply = Schema.Struct({
+  result: Schema.Struct({
+    plugin_pane: Schema.Struct({
+      pane: Schema.Struct({ tab_id: Schema.String, pane_id: Schema.String }),
+    }),
+  }),
+});
+
+const herdrError = (message: string, detail: string) => new HerdrError({ message, detail });
+const herdrFail = (message: string, detail: string) => Effect.fail(herdrError(message, detail));
+
+const decodeBoundary = <S extends Schema.Top>(operation: string, schema: S, value: BoundaryValue) =>
+  Schema.decodeUnknownEffect(schema)(value).pipe(
+    Effect.mapError((cause) =>
+      herdrError(`${operation} returned an invalid response`, String(cause)),
+    ),
+  );
+
+/**
+ * One line of herdr's reply: its `result`, or the error it names. Both shapes come
+ * back on the same socket, so the caller never has to look inside the envelope.
+ */
+const decodeReply = (
+  method: string,
+  line: string,
+): Effect.Effect<Schema.Json | undefined, HerdrError> =>
+  Schema.decodeUnknownEffect(JsonString)(line).pipe(
+    Effect.mapError(() => herdrError(`${method} failed`, "invalid json response")),
+    Effect.flatMap((message) => decodeBoundary(method, SocketReply, message)),
+    Effect.flatMap((message) =>
+      message.error
+        ? herdrFail(`${method} failed`, message.error.message ?? message.error.code ?? "unknown")
+        : Effect.succeed(message.result),
+    ),
+  );
+
+/** A child's whole output as text. */
+const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
+  stream.pipe(
+    Stream.decodeText(),
+    Stream.runFold(
+      (): string => "",
+      (all, chunk) => all + chunk,
+    ),
+  );
+
+function agentStatus(value: string): AgentStatus {
+  if (value === "idle" || value === "working" || value === "blocked" || value === "done") {
+    return value;
   }
+  return "unknown";
 }
 
 export interface StartedTab {
@@ -29,12 +154,15 @@ export interface TabInfo {
 export interface WorkspaceInfo {
   workspaceId: string;
   label: string;
+  cwd: string;
+  worktree: string | null;
 }
 
 export interface PaneInfo {
   paneId: string;
   tabId: string;
   label: string | null;
+  agent: string | null;
 }
 
 /** A live agent as herdr sees it. Only named agents — the ones this plugin started. */
@@ -52,229 +180,316 @@ export class Herdr {
   constructor(private readonly env: PluginEnv) {}
 
   /** Runs the herdr CLI; parses stdout as JSON when it is JSON. */
-  async cli(args: string[]): Promise<any> {
-    const { code, stdout, stderr } = await this.exec(args);
-    if (code !== 0) {
-      throw new HerdrError(`herdr ${args.slice(0, 2).join(" ")} failed (exit ${code})`, stderr.trim() || stdout.trim());
-    }
-    const text = stdout.trim();
-    if (!text.startsWith("{") && !text.startsWith("[")) return text;
-    try {
-      return JSON.parse(text);
-    } catch {
-      return text;
-    }
+  cli(args: string[]): HerdrEffect<Schema.Json | string> {
+    const exec = this.exec.bind(this);
+    return Effect.gen(function* () {
+      const { code, stdout, stderr } = yield* exec(args);
+      if (code !== 0) {
+        return yield* new HerdrError({
+          message: `herdr ${args.slice(0, 2).join(" ")} failed (exit ${code})`,
+          detail: stderr.trim() || stdout.trim(),
+        });
+      }
+      const text = stdout.trim();
+      if (!text.startsWith("{") && !text.startsWith("[")) return text;
+      return yield* Schema.decodeUnknownEffect(JsonString)(text).pipe(
+        Effect.catchTag("SchemaError", () => Effect.succeed(text)),
+      );
+    });
   }
 
   /** The subprocess boundary alone, so a test double can answer in-process. */
-  protected async exec(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-    const proc = Bun.spawn([this.env.binPath, ...args], {
-      stdout: "pipe",
-      stderr: "pipe",
-      env: { ...process.env } as Record<string, string>,
-    });
-    const [stdout, stderr, code] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    return { code, stdout, stderr };
+  protected exec(args: string[]): HerdrEffect<ExecResult> {
+    const env = this.env;
+    return Effect.gen(function* () {
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const handle = yield* spawner.spawn(
+        ChildProcess.make(env.binPath, args, {
+          stdout: "pipe",
+          stderr: "pipe",
+          // extendEnv, so herdr sees the environment this process has with the plugin's
+          // own keys over the top — what `{ ...Bun.env, ...env.raw }` used to spell.
+          env: env.raw,
+          extendEnv: true,
+        }),
+      );
+      const [stdout, stderr, code] = yield* Effect.all(
+        [collect(handle.stdout), collect(handle.stderr), handle.exitCode],
+        { concurrency: "unbounded" },
+      );
+      return { code: Number(code), stdout, stderr };
+    }).pipe(
+      Effect.scoped,
+      Effect.catch((cause) => herdrFail("herdr subprocess failed", String(cause))),
+    );
   }
 
-  /** One request/response over the herdr socket (newline-delimited JSON). */
-  async rpc(method: string, params: Record<string, unknown> = {}): Promise<any> {
+  /**
+   * One request/response over the herdr socket (newline-delimited JSON), through
+   * Effect's own Unix-domain client rather than a hand-rolled Bun.connect callback.
+   * The exchange is one line out and one line back, so the read loop resolves on the
+   * first newline and the scope closes the socket.
+   */
+  rpc(method: string, params: HerdrParams = {}): HerdrEffect<Schema.Json | undefined> {
     const path = this.env.socketPath;
-    if (!path) throw new HerdrError(`cannot call ${method}`, "HERDR_SOCKET_PATH is not set");
+    if (!path) return herdrFail(`cannot call ${method}`, "HERDR_SOCKET_PATH is not set");
     const id = `hw-${++this.seq}`;
-    const payload = `${JSON.stringify({ id, method, params })}\n`;
+    const payload = `${encodeJson({ id, method, params })}\n`;
 
-    return await new Promise((resolve, reject) => {
-      const sock = connect(path);
-      let buf = "";
-      const fail = (e: Error) => {
-        sock.destroy();
-        reject(new HerdrError(`${method} failed`, e.message));
+    const exchange: HerdrEffect<Schema.Json | undefined> = Effect.gen(function* () {
+      const socket = yield* BunSocket.makeNet({ path }).pipe(
+        Effect.catch((cause) => herdrFail(`${method} failed`, String(cause))),
+      );
+      const answer = yield* Deferred.make<Schema.Json | undefined, HerdrError>();
+      // Acquired in this scope, not inside onOpen: releasing the writer ends the
+      // socket's write side, and doing that the moment the request was sent closed the
+      // exchange before herdr had answered it.
+      const write = yield* socket.writer;
+      let buffered = "";
+
+      const read = socket.runString(
+        (chunk) =>
+          Effect.gen(function* () {
+            buffered += chunk;
+            const newline = buffered.indexOf("\n");
+            if (newline < 0) return;
+            yield* Deferred.complete(answer, decodeReply(method, buffered.slice(0, newline)));
+          }),
+        {
+          onOpen: Effect.orDie(write(payload)),
+        },
+      );
+
+      // The read loop ends when herdr closes the socket. If that happens before a line
+      // arrived, nobody is going to answer, and waiting on the deferred would hang.
+      yield* Effect.forkScoped(
+        read.pipe(
+          Effect.matchEffect({
+            onSuccess: () =>
+              Deferred.complete(
+                answer,
+                herdrFail(`${method} failed`, "socket closed with no response"),
+              ),
+            onFailure: (cause) =>
+              Deferred.complete(answer, herdrFail(`${method} failed`, String(cause))),
+          }),
+        ),
+      );
+      return yield* Deferred.await(answer);
+    }).pipe(Effect.scoped);
+    return exchange;
+  }
+
+  tabCreate(opts: { label?: string; cwd?: string; focus?: boolean }): HerdrEffect<StartedTab> {
+    const env = this.env;
+    const cli = this.cli.bind(this);
+    return Effect.gen(function* () {
+      const args = ["tab", "create"];
+      if (env.workspaceId) args.push("--workspace", env.workspaceId);
+      if (opts.cwd) args.push("--cwd", opts.cwd);
+      if (opts.label) args.push("--label", opts.label);
+      args.push(opts.focus ? "--focus" : "--no-focus");
+      const res = yield* cli(args);
+      const decoded = yield* decodeBoundary("herdr tab create", TabCreateReply, res);
+      return {
+        tabId: decoded.result.tab.tab_id,
+        paneId: decoded.result.root_pane.pane_id,
       };
-      sock.on("error", fail);
-      sock.on("connect", () => sock.write(payload));
-      sock.on("data", (chunk) => {
-        buf += chunk.toString();
-        const nl = buf.indexOf("\n");
-        if (nl < 0) return;
-        sock.end();
-        let msg: any;
-        try {
-          msg = JSON.parse(buf.slice(0, nl));
-        } catch (e) {
-          return fail(e as Error);
-        }
-        if (msg.error) return fail(new Error(msg.error.message ?? msg.error.code ?? "unknown"));
-        resolve(msg.result);
-      });
-      sock.on("close", () => {
-        if (buf === "") reject(new HerdrError(`${method} failed`, "socket closed with no response"));
-      });
     });
   }
 
-  async tabCreate(opts: { label?: string; cwd?: string; focus?: boolean }): Promise<StartedTab> {
-    const args = ["tab", "create"];
-    if (this.env.workspaceId) args.push("--workspace", this.env.workspaceId);
-    if (opts.cwd) args.push("--cwd", opts.cwd);
-    if (opts.label) args.push("--label", opts.label);
-    args.push(opts.focus ? "--focus" : "--no-focus");
-    const res = await this.cli(args);
-    return {
-      tabId: res?.result?.tab?.tab_id ?? "",
-      paneId: res?.result?.root_pane?.pane_id ?? "",
-    };
+  tabRename(tabId: string, label: string): HerdrEffect<void> {
+    return this.cli(["tab", "rename", tabId, label]).pipe(Effect.asVoid);
   }
 
-  async tabRename(tabId: string, label: string): Promise<void> {
-    await this.cli(["tab", "rename", tabId, label]);
+  workspaceList(): HerdrEffect<WorkspaceInfo[]> {
+    return this.cli(["workspace", "list"]).pipe(
+      Effect.flatMap((res) => decodeBoundary("herdr workspace list", WorkspaceListReply, res)),
+      Effect.map(({ result }) =>
+        result.workspaces.map((workspace) => {
+          const cwd =
+            workspace.cwd ?? workspace.working_directory ?? workspace.worktree?.path ?? "";
+          return {
+            workspaceId: workspace.workspace_id,
+            label: workspace.label,
+            cwd,
+            worktree: workspace.worktree?.path ?? workspace.worktree_path ?? null,
+          };
+        }),
+      ),
+    );
   }
 
-  async workspaceList(): Promise<WorkspaceInfo[]> {
-    const res = await this.cli(["workspace", "list"]);
-    const spaces = res?.result?.workspaces ?? [];
-    return spaces.map((w: any) => ({ workspaceId: w.workspace_id ?? "", label: w.label ?? "" }));
+  tabList(): HerdrEffect<TabInfo[]> {
+    const env = this.env;
+    const cli = this.cli.bind(this);
+    return Effect.gen(function* () {
+      const args = ["tab", "list"];
+      if (env.workspaceId) args.push("--workspace", env.workspaceId);
+      const res = yield* cli(args);
+      const decoded = yield* decodeBoundary("herdr tab list", TabListReply, res);
+      return decoded.result.tabs.map((tab) => ({
+        tabId: tab.tab_id,
+        label: tab.label,
+      }));
+    });
   }
 
-  async tabList(): Promise<TabInfo[]> {
-    const args = ["tab", "list"];
-    if (this.env.workspaceId) args.push("--workspace", this.env.workspaceId);
-    const res = await this.cli(args);
-    const tabs = res?.result?.tabs ?? [];
-    return tabs.map((t: any) => ({ tabId: t.tab_id ?? "", label: t.label ?? "" }));
-  }
-
-  async tabFocus(tabId: string): Promise<void> {
-    await this.cli(["tab", "focus", tabId]);
+  tabFocus(tabId: string): HerdrEffect<void> {
+    return this.cli(["tab", "focus", tabId]).pipe(Effect.asVoid);
   }
 
   /** Reorders a tab within its workspace; 0 is first. No CLI for it in 0.8.2. */
-  async tabMove(tabId: string, insertIndex: number): Promise<void> {
-    await this.rpc("tab.move", { tab_id: tabId, insert_index: insertIndex });
+  tabMove(tabId: string, insertIndex: number): HerdrEffect<void> {
+    return this.rpc("tab.move", { tab_id: tabId, insert_index: insertIndex }).pipe(Effect.asVoid);
   }
 
-  async paneList(): Promise<PaneInfo[]> {
-    const res = await this.cli(["pane", "list"]);
-    const panes = res?.result?.panes ?? [];
-    return panes.map((p: any) => ({
-      paneId: p.pane_id ?? "",
-      tabId: p.tab_id ?? "",
-      label: p.label ?? null,
-    }));
+  paneList(): HerdrEffect<PaneInfo[]> {
+    return this.cli(["pane", "list"]).pipe(
+      Effect.flatMap((res) => decodeBoundary("herdr pane list", PaneListReply, res)),
+      Effect.map(({ result }) => {
+        return result.panes.map((pane) => ({
+          paneId: pane.pane_id,
+          tabId: pane.tab_id,
+          label: pane.label ?? null,
+          agent: pane.agent ?? null,
+        }));
+      }),
+    );
   }
 
   /** Moves a live pane into another tab; the process in it keeps running. */
-  async paneMove(opts: {
+  paneMove(opts: {
     paneId: string;
     tabId: string;
     targetPaneId?: string;
     direction?: "right" | "down";
     ratio?: number;
-  }): Promise<void> {
+  }): HerdrEffect<void> {
     const args = ["pane", "move", opts.paneId, "--tab", opts.tabId];
     if (opts.targetPaneId) args.push("--target-pane", opts.targetPaneId);
     if (opts.direction) args.push("--split", opts.direction);
     if (opts.ratio !== undefined) args.push("--ratio", String(opts.ratio));
-    await this.cli(args);
+    return this.cli(args).pipe(Effect.asVoid);
   }
 
-  async paneSplit(opts: {
+  paneSplit(opts: {
     paneId: string;
     direction: "right" | "down";
     ratio?: number;
     cwd?: string;
     focus?: boolean;
-  }): Promise<string> {
-    const args = ["pane", "split", opts.paneId, "--direction", opts.direction];
-    if (opts.ratio !== undefined) args.push("--ratio", String(opts.ratio));
-    if (opts.cwd) args.push("--cwd", opts.cwd);
-    args.push(opts.focus ? "--focus" : "--no-focus");
-    const res = await this.cli(args);
-    return res?.result?.pane?.pane_id ?? "";
+  }): HerdrEffect<string> {
+    const cli = this.cli.bind(this);
+    return Effect.gen(function* () {
+      const args = ["pane", "split", opts.paneId, "--direction", opts.direction];
+      if (opts.ratio !== undefined) args.push("--ratio", String(opts.ratio));
+      if (opts.cwd) args.push("--cwd", opts.cwd);
+      args.push(opts.focus ? "--focus" : "--no-focus");
+      const res = yield* cli(args);
+      const decoded = yield* decodeBoundary("herdr pane split", PaneSplitReply, res);
+      return decoded.result.pane.pane_id;
+    });
   }
 
-  async paneRun(paneId: string, command: string): Promise<void> {
-    await this.cli(["pane", "run", paneId, command]);
+  paneRun(paneId: string, command: string): HerdrEffect<void> {
+    return this.cli(["pane", "run", paneId, command]).pipe(Effect.asVoid);
   }
 
   /** Exchanges two panes' positions; their slots keep their sizes. */
-  async paneSwap(sourcePaneId: string, targetPaneId: string): Promise<void> {
-    await this.cli(["pane", "swap", "--source-pane", sourcePaneId, "--target-pane", targetPaneId]);
+  paneSwap(sourcePaneId: string, targetPaneId: string): HerdrEffect<void> {
+    return this.cli([
+      "pane",
+      "swap",
+      "--source-pane",
+      sourcePaneId,
+      "--target-pane",
+      targetPaneId,
+    ]).pipe(Effect.asVoid);
   }
 
-  async paneZoom(paneId: string, on: boolean): Promise<void> {
-    await this.cli(["pane", "zoom", paneId, on ? "--on" : "--off"]);
+  paneZoom(paneId: string, on: boolean): HerdrEffect<void> {
+    return this.cli(["pane", "zoom", paneId, on ? "--on" : "--off"]).pipe(Effect.asVoid);
   }
 
-  async paneRename(paneId: string, label: string): Promise<void> {
-    await this.cli(["pane", "rename", paneId, label]);
+  paneRename(paneId: string, label: string): HerdrEffect<void> {
+    return this.cli(["pane", "rename", paneId, label]).pipe(Effect.asVoid);
   }
 
-  async agentStart(opts: {
+  agentStart(opts: {
     name: string;
     kind: string;
     paneId: string;
     args?: string[];
     timeoutMs?: number;
-  }): Promise<void> {
+  }): HerdrEffect<void> {
     const args = ["agent", "start", opts.name, "--kind", opts.kind, "--pane", opts.paneId];
     if (opts.timeoutMs) args.push("--timeout", String(opts.timeoutMs));
     if (opts.args?.length) args.push("--", ...opts.args);
-    await this.cli(args);
+    return this.cli(args).pipe(Effect.asVoid);
   }
 
   /** Submits without waiting so several agents can work at once. */
-  async agentPrompt(target: string, text: string): Promise<void> {
-    await this.cli(["agent", "prompt", target, text]);
+  agentPrompt(target: string, text: string): HerdrEffect<void> {
+    return this.cli(["agent", "prompt", target, text]).pipe(Effect.asVoid);
   }
 
-  async agentWait(
+  agentWait(
     target: string,
     opts: { until?: AgentStatus[]; timeoutMs?: number } = {},
-  ): Promise<void> {
+  ): HerdrEffect<void> {
     const args = ["agent", "wait", target];
     for (const s of opts.until ?? []) args.push("--until", s);
     if (opts.timeoutMs) args.push("--timeout", String(opts.timeoutMs));
-    await this.cli(args);
+    return this.cli(args).pipe(Effect.asVoid);
   }
 
-  async agentList(): Promise<AgentInfo[]> {
-    const res = await this.cli(["agent", "list"]);
-    const agents = res?.result?.agents ?? [];
-    return agents
-      .filter((a: any) => typeof a.name === "string" && a.name !== "")
-      .map((a: any) => ({
-        name: a.name as string,
-        paneId: (a.pane_id as string) ?? "",
-        workspaceId: (a.workspace_id as string) ?? null,
-        status: (a.agent_status as AgentStatus) ?? "unknown",
-      }));
+  agentList(): HerdrEffect<AgentInfo[]> {
+    return this.cli(["agent", "list"]).pipe(
+      Effect.flatMap((res) => decodeBoundary("herdr agent list", AgentListReply, res)),
+      Effect.map(({ result }) => {
+        return result.agents.flatMap((agent) =>
+          agent.name
+            ? [
+                {
+                  name: agent.name,
+                  paneId: agent.pane_id,
+                  workspaceId: agent.workspace_id ?? null,
+                  status: agentStatus(agent.agent_status),
+                },
+              ]
+            : [],
+        );
+      }),
+    );
   }
 
-  async agentFocus(target: string): Promise<void> {
-    await this.cli(["agent", "focus", target]);
+  agentFocus(target: string): HerdrEffect<void> {
+    return this.cli(["agent", "focus", target]).pipe(Effect.asVoid);
   }
 
-  async agentStatus(target: string): Promise<AgentStatus> {
-    const res = await this.cli(["agent", "get", target]);
-    return (res?.result?.agent?.agent_status as AgentStatus) ?? "unknown";
+  agentStatus(target: string): HerdrEffect<AgentStatus> {
+    return this.cli(["agent", "get", target]).pipe(
+      Effect.flatMap((res) => decodeBoundary("herdr agent get", AgentStatusReply, res)),
+      Effect.map(({ result }) => agentStatus(result.agent.agent_status)),
+    );
   }
 
-  async paneClose(paneId: string): Promise<void> {
-    await this.cli(["pane", "close", paneId]);
+  paneClose(paneId: string): HerdrEffect<void> {
+    return this.cli(["pane", "close", paneId]).pipe(Effect.asVoid);
   }
 
-  async notify(title: string, body?: string, sound: "none" | "done" | "request" = "done"): Promise<void> {
+  notify(
+    title: string,
+    body?: string,
+    sound: "none" | "done" | "request" = "done",
+  ): HerdrEffect<void> {
     const args = ["notification", "show", title, "--sound", sound];
     if (body) args.push("--body", body);
-    await this.cli(args);
+    return this.cli(args).pipe(Effect.asVoid);
   }
 
-  async pluginPaneOpen(opts: {
+  pluginPaneOpen(opts: {
     entrypoint: string;
     env?: Record<string, string>;
     focus?: boolean;
@@ -285,34 +500,46 @@ export class Herdr {
     placement?: "tab" | "split";
     targetPaneId?: string;
     direction?: "right" | "down";
-  }): Promise<StartedTab> {
-    const args = ["plugin", "pane", "open", "--plugin", PLUGIN_ID, "--entrypoint", opts.entrypoint];
-    if (opts.workspaceId) args.push("--workspace", opts.workspaceId);
-    if (opts.placement) args.push("--placement", opts.placement);
-    if (opts.targetPaneId) args.push("--target-pane", opts.targetPaneId);
-    if (opts.direction) args.push("--direction", opts.direction);
-    if (opts.cwd) args.push("--cwd", opts.cwd);
-    for (const [k, v] of Object.entries(opts.env ?? {})) args.push("--env", `${k}=${v}`);
-    args.push(opts.focus === false ? "--no-focus" : "--focus");
-    const res = await this.cli(args);
-    const pane = res?.result?.plugin_pane?.pane;
-    return { tabId: pane?.tab_id ?? "", paneId: pane?.pane_id ?? "" };
-  }
-
-  /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.7.5. */
-  async agentViewSet(source: string, label: string, paneIds: string[]): Promise<void> {
-    await this.rpc("agent.view.set", {
-      source,
-      label,
-      filter: { op: "in", field: "pane_id", values: paneIds },
+  }): HerdrEffect<StartedTab> {
+    const cli = this.cli.bind(this);
+    return Effect.gen(function* () {
+      const args = [
+        "plugin",
+        "pane",
+        "open",
+        "--plugin",
+        PLUGIN_ID,
+        "--entrypoint",
+        opts.entrypoint,
+      ];
+      if (opts.workspaceId) args.push("--workspace", opts.workspaceId);
+      if (opts.placement) args.push("--placement", opts.placement);
+      if (opts.targetPaneId) args.push("--target-pane", opts.targetPaneId);
+      if (opts.direction) args.push("--direction", opts.direction);
+      if (opts.cwd) args.push("--cwd", opts.cwd);
+      for (const [k, v] of Object.entries(opts.env ?? {})) args.push("--env", `${k}=${v}`);
+      args.push(opts.focus === false ? "--no-focus" : "--focus");
+      const res = yield* cli(args);
+      const decoded = yield* decodeBoundary("herdr plugin pane open", PluginPaneReply, res);
+      const pane = decoded.result.plugin_pane.pane;
+      return { tabId: pane.tab_id, paneId: pane.pane_id };
     });
   }
 
-  async agentViewClear(source: string): Promise<void> {
-    await this.rpc("agent.view.clear", { source });
+  /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.7.5. */
+  agentViewSet(source: string, label: string, paneIds: string[]): HerdrEffect<void> {
+    return this.rpc("agent.view.set", {
+      source,
+      label,
+      filter: { op: "in", field: "pane_id", values: paneIds },
+    }).pipe(Effect.asVoid);
   }
 
-  async popupClose(): Promise<void> {
-    await this.rpc("popup.close", {});
+  agentViewClear(source: string): HerdrEffect<void> {
+    return this.rpc("agent.view.clear", { source }).pipe(Effect.asVoid);
+  }
+
+  popupClose(): HerdrEffect<void> {
+    return this.rpc("popup.close", {}).pipe(Effect.asVoid);
   }
 }

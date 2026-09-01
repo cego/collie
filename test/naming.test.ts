@@ -15,10 +15,14 @@ import {
 test("a review's target is short and human, and never a sha", () => {
   expect(targetLabel("review", "review-x", { target: "mr:123" })).toBe("!123");
   expect(targetLabel("review", "review-x", { target: "worktree" })).toBe("worktree");
-  expect(targetLabel("review", "review-x", { target: "branch:main...add-picker" })).toBe("add-picker");
+  expect(targetLabel("review", "review-x", { target: "branch:main...add-picker" })).toBe(
+    "add-picker",
+  );
 
   // The case that produced `review-branch-b5571dc-head` as a run name.
-  const opaque = targetLabel("review", "review-branch-b5571dc-head", { target: "branch:b5571dc...HEAD" });
+  const opaque = targetLabel("review", "review-branch-b5571dc-head", {
+    target: "branch:b5571dc...HEAD",
+  });
   expect(opaque).toBe("diff");
   expect(opaque).not.toMatch(/[0-9a-f]{7}/i);
   // A sha base with a real head still shows the head.
@@ -56,7 +60,9 @@ test("the target is appended only to break a collision, and read back off the la
   // The workflow is Capitalized; the target stays whatever it actually is, because
   // a branch prettied up is no longer the branch's name.
   expect(tabLabel(GLYPH.running, disambiguate("review", "!123"))).toBe("⚙ Review · !123");
-  expect(tabLabel(GLYPH.done, disambiguate("implement", "add-picker"))).toBe("✓ Implement · add-picker");
+  expect(tabLabel(GLYPH.done, disambiguate("implement", "add-picker"))).toBe(
+    "✓ Implement · add-picker",
+  );
 
   // A collision is judged on the name, so the glyph a tab is wearing cannot hide one.
   expect(tabNameOf("⚙ Review")).toBe("Review");
@@ -114,9 +120,15 @@ test("a long model never truncates away the number that makes a name unique", ()
   expect(a.endsWith("-r23")).toBe(true);
   expect(b.endsWith("-r24")).toBe(true);
   // A three-digit run number still fits, and still ends the name.
-  expect(agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 1234).endsWith("-r1234")).toBe(true);
+  expect(
+    agentName("review-smoke-tab-16", "review", "pi-openai-codex/gpt-5.6-sol", 1234).endsWith(
+      "-r1234",
+    ),
+  ).toBe(true);
   // A short variant still gets its slug prefix, as before.
-  expect(agentName("review-x", "review", "claude-opus", 12)).toBe("review-x-review-claude-opus-r12");
+  expect(agentName("review-x", "review", "claude-opus", 12)).toBe(
+    "review-x-review-claude-opus-r12",
+  );
 });
 
 test("agent names stay herdr-legal and are never what a label shows", () => {

@@ -1,72 +1,172 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Effect } from "effect";
 import { Herdr } from "../src/herdr";
 import { Rig } from "./support/recorder";
+import { runEffect } from "./support/effect";
 
 let rig: Rig;
 
-beforeEach(async () => {
-  rig = new Rig();
-  await rig.startSocket();
-});
+beforeEach(() =>
+  runEffect(
+    Effect.gen(function* () {
+      rig = yield* Rig.make();
+      yield* rig.startSocket();
+    }),
+  ),
+);
 
-afterEach(async () => {
-  await rig.close();
-});
+afterEach(() => runEffect(rig.close()));
 
-test("cli calls are recorded with their full argv and return parsed json", async () => {
-  const herdr = new Herdr(rig.pluginEnv());
+test("cli calls are recorded with their full argv and return parsed json", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(rig.pluginEnv());
 
-  const tab = await herdr.tabCreate({ label: "plan/goal", cwd: rig.projectDir });
+      const tab = yield* herdr.tabCreate({ label: "plan/goal", cwd: rig.projectDir });
 
-  expect(tab).toEqual({ tabId: "1:1", paneId: "1-1" });
-  expect(rig.calls()).toEqual([
-    {
-      transport: "cli",
-      cmd: "tab create",
-      argv: ["tab", "create", "--workspace", "1", "--cwd", rig.projectDir, "--label", "plan/goal", "--no-focus"],
-    },
-  ]);
-});
+      expect(tab).toEqual({ tabId: "1:1", paneId: "1-1" });
+      expect(yield* rig.calls()).toEqual([
+        {
+          transport: "cli",
+          cmd: "tab create",
+          argv: [
+            "tab",
+            "create",
+            "--workspace",
+            "1",
+            "--cwd",
+            rig.projectDir,
+            "--label",
+            "plan/goal",
+            "--no-focus",
+          ],
+        },
+      ]);
+    }),
+  ));
 
-test("agent start passes harness kind and model args after the separator", async () => {
-  const herdr = new Herdr(rig.pluginEnv());
+test("agent start passes harness kind and model args after the separator", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(rig.pluginEnv());
 
-  await herdr.agentStart({ name: "build", kind: "claude", paneId: "1-2", args: ["--model", "sonnet"] });
+      yield* herdr.agentStart({
+        name: "build",
+        kind: "claude",
+        paneId: "1-2",
+        args: ["--model", "sonnet"],
+      });
 
-  expect(rig.calls()[0]!.argv).toEqual([
-    "agent",
-    "start",
-    "build",
-    "--kind",
-    "claude",
-    "--pane",
-    "1-2",
-    "--",
-    "--model",
-    "sonnet",
-  ]);
-});
+      const calls = yield* rig.calls();
+      expect(calls.at(0)?.argv).toEqual([
+        "agent",
+        "start",
+        "build",
+        "--kind",
+        "claude",
+        "--pane",
+        "1-2",
+        "--",
+        "--model",
+        "sonnet",
+      ]);
+    }),
+  ));
 
-test("socket calls are recorded in the same ordered log as cli calls", async () => {
-  const herdr = new Herdr(rig.pluginEnv());
+test("socket calls are recorded in the same ordered log as cli calls", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(rig.pluginEnv());
 
-  await herdr.tabCreate({ label: "a" });
-  await herdr.agentViewSet("run-1", "run 1", ["1-2", "1-3"]);
-  await herdr.notify("done");
-  await herdr.agentViewClear("run-1");
+      yield* herdr.tabCreate({ label: "a" });
+      yield* herdr.agentViewSet("run-1", "run 1", ["1-2", "1-3"]);
+      yield* herdr.notify("done");
+      yield* herdr.agentViewClear("run-1");
 
-  expect(rig.cmds()).toEqual(["tab create", "agent.view.set", "notification show", "agent.view.clear"]);
-  expect(rig.calls()[1]!.params).toEqual({
-    source: "run-1",
-    label: "run 1",
-    filter: { op: "in", field: "pane_id", values: ["1-2", "1-3"] },
-  });
-});
+      expect(yield* rig.cmds()).toEqual([
+        "tab create",
+        "agent.view.set",
+        "notification show",
+        "agent.view.clear",
+      ]);
+      const calls = yield* rig.calls();
+      expect(calls.at(1)?.params).toEqual({
+        source: "run-1",
+        label: "run 1",
+        filter: { op: "in", field: "pane_id", values: ["1-2", "1-3"] },
+      });
+    }),
+  ));
 
-test("a failing herdr command surfaces its stderr", async () => {
-  const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: JSON.stringify({ "agent start": "no such pane" }) }));
+test("a failing herdr command surfaces its stderr", () => {
+  const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"agent start":"no such pane"}' }));
 
-  await expect(
-    herdr.agentStart({ name: "build", kind: "claude", paneId: "9-9" }),
+  return expect(
+    runEffect(herdr.agentStart({ name: "build", kind: "claude", paneId: "9-9" })),
   ).rejects.toThrow("herdr agent start failed (exit 1)");
 });
+
+test("a method with no socket to reach fails as a typed HerdrError", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The socket client is Effect's Unix client now; its failures still have to
+      // arrive as this module's own error rather than escaping as a defect.
+      const herdr = new Herdr({ ...rig.pluginEnv(), socketPath: null });
+      const failure = yield* Effect.result(herdr.agentViewClear("run-1"));
+
+      expect(failure._tag).toBe("Failure");
+      if (failure._tag === "Failure") expect(failure.failure._tag).toBe("HerdrError");
+    }),
+  ));
+
+test("the herdr subprocess inherits this process's environment", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The CLI boundary spawns through ChildProcessSpawner with extendEnv, so herdr
+      // sees PATH and the rest; passing only the plugin's own keys would leave it
+      // without one. The fake herdr reads its own configuration from that environment,
+      // so a call that works at all is that inheritance working.
+      const herdr = new Herdr(rig.pluginEnv());
+      expect(yield* herdr.tabCreate({ label: "inherits" })).toBeTruthy();
+      expect(yield* rig.cmds()).toEqual(["tab create"]);
+    }),
+  ));
+
+test("malformed herdr replies fail at the boundary", () =>
+  runEffect(
+    Effect.gen(function* () {
+      class MalformedHerdr extends Herdr {
+        protected override exec() {
+          return Effect.succeed({
+            code: 0,
+            stdout: '{"result":{"workspaces":[{}]}}',
+            stderr: "",
+          });
+        }
+      }
+
+      const failure = yield* Effect.result(new MalformedHerdr(rig.pluginEnv()).workspaceList());
+
+      expect(failure._tag).toBe("Failure");
+      if (failure._tag === "Failure") expect(failure.failure._tag).toBe("HerdrError");
+    }),
+  ));
+
+test("workspace replies may omit a working directory", () =>
+  runEffect(
+    Effect.gen(function* () {
+      class CurrentHerdr extends Herdr {
+        protected override exec() {
+          return Effect.succeed({
+            code: 0,
+            stdout: '{"result":{"workspaces":[{"workspace_id":"wT","label":"Collie"}]}}',
+            stderr: "",
+          });
+        }
+      }
+
+      expect(yield* new CurrentHerdr(rig.pluginEnv()).workspaceList()).toEqual([
+        { workspaceId: "wT", label: "Collie", cwd: "", worktree: null },
+      ]);
+    }),
+  ));
