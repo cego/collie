@@ -69,7 +69,7 @@ function toLines(src: string): Line[] {
   return out;
 }
 
-let raw: string[] = [];
+let sourceLines: string[] = [];
 
 function isSeqItem(text: string): boolean {
   return text === "-" || text.startsWith("- ");
@@ -79,7 +79,7 @@ export function parseYaml(src: string): YamlValue {
   // Block scalars are the one construct that needs the source as written — blank lines,
   // inner indent and hashes and all — so the parse keeps it here rather than threading
   // it through every level. Parsing is synchronous, so there is only ever one.
-  raw = src.split(/\r?\n/);
+  sourceLines = src.split(/\r?\n/);
   const ls = toLines(src);
   if (ls.length === 0) return {};
   const [value, end] = parseNode(ls, 0, ls[0]!.indent);
@@ -163,8 +163,8 @@ function parseBlockScalar(ls: Line[], i: number, indent: number, style: string):
   if (i < ls.length && ls[i]!.indent > indent) {
     const blockIndent = ls[i]!.indent;
     let r = ls[i]!.n - 1;
-    for (; r < raw.length; r++) {
-      const line = raw[r]!;
+    for (; r < sourceLines.length; r++) {
+      const line = sourceLines[r]!;
       const blank = line.trim() === "";
       if (!blank && line.length - line.trimStart().length < blockIndent) break;
       parts.push(blank ? "" : line.slice(blockIndent).trimEnd());
