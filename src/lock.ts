@@ -55,7 +55,7 @@ export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: strin
               ),
             ),
     ),
-    Effect.catchTag("PlatformError", () => Effect.succeed(false)),
+    Effect.catchTag("PlatformError", (error) => Effect.succeed(error.reason._tag === "NotFound")),
   );
   if (!shouldBreak) return false;
   yield* fs.remove(lock, { force: true });

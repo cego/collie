@@ -1,8 +1,23 @@
 import { nowIso } from "../src/time";
 import type { BunServices } from "@effect/platform-bun";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Config, Effect, Fiber, FileSystem, Path, PlatformError, Scope, Stream } from "effect";
+import {
+  Config,
+  ConfigProvider,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Path,
+  PlatformError,
+  Schema,
+  Scope,
+  Sink,
+  Stdio,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { waitFor } from "../src/commands/run";
 import { runEffect } from "./support/effect";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -173,7 +188,9 @@ effectTest(
       "start-1",
     ]);
     expect(Number(first.exit)).toBe(0);
-    expect(retry.body.data.runId).toBe(first.body.data.runId);
+    const startedRunId = Schema.decodeUnknownSync(Schema.String)(first.body.data.runId);
+    expect(first.body.data.requestId).toBe("start-1");
+    expect(retry.body.data.runId).toBe(startedRunId);
     expect((yield* fs.readFileString(path.join(dir, "drivers"))).trim().split("\n")).toHaveLength(
       1,
     );
@@ -449,6 +466,50 @@ effectTest(
     expect(persona.body.data.path).toContain("/workspace/.herdr/personas/project-helper.md");
   },
 );
+
+effectTest("wait follow writes every event through the supplied Stdio service", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const started = yield* cli([
+    "--workspace",
+    "w1",
+    "run",
+    "start",
+    "demo",
+    "--input",
+    "goal=stdio",
+  ]);
+  const runId = Schema.decodeUnknownSync(Schema.String)(started.body.data.runId);
+  const snapshotPath = path.join(dir, "state", "runs", runId, "run.json");
+  const snapshot = parseJson(yield* fs.readFileString(snapshotPath));
+  snapshot.status = "done";
+  snapshot.finished_at = yield* nowIso();
+  snapshot.steps[0].status = "done";
+  yield* fs.writeFileString(snapshotPath, JSON.stringify(snapshot));
+
+  const written: string[] = [];
+  yield* waitFor({ workspace: Option.none(), json: true }, runId, true, Option.none()).pipe(
+    Effect.provide(
+      Stdio.layerTest({
+        stdout: () =>
+          Sink.forEach((chunk: string | Uint8Array) =>
+            Effect.sync(() => {
+              written.push(String(chunk));
+            }),
+          ),
+      }),
+    ),
+    Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(env))),
+  );
+
+  expect(
+    written
+      .join("")
+      .trim()
+      .split("\n")
+      .map((line) => parseJson(line).type),
+  ).toEqual(["snapshot", "terminal"]);
+});
 
 effectTest("wait picks up events written after it started, and ends on one terminal", function* () {
   const fs = yield* FileSystem.FileSystem;

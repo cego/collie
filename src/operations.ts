@@ -60,7 +60,13 @@ export const ExpectedError = Schema.Struct({
 export interface ExpectedError extends Schema.Schema.Type<typeof ExpectedError> {}
 
 export type Failure = { ok: false; error: ExpectedError };
-export type OpResult = { ok: true; data: unknown; human: string } | Failure;
+export type OpResult =
+  | {
+      ok: true;
+      data: object;
+      human: string;
+    }
+  | Failure;
 
 export const err = (
   code: ExpectedError["code"],
@@ -68,7 +74,11 @@ export const err = (
   details: YamlMap = {},
 ): Failure => ({ ok: false, error: ExpectedError.make({ code, message, details }) });
 
-const ok = <A>(data: A, human: string): OpResult => ({ ok: true, data, human });
+const ok = <A extends object>(data: A, human: string): OpResult => ({
+  ok: true,
+  data,
+  human,
+});
 
 /** A fresh id for a mutation whose caller supplied none. Reusing one replays it. */
 export const newRequestId = Effect.fn("operations.newRequestId")(function* () {

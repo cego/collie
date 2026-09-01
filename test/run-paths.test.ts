@@ -149,3 +149,11 @@ test("lock staleness follows the holder: dead breaks now, live and mid-claim are
       expect(yield* fs.exists(lock)).toBe(false);
     }),
   ));
+
+test("a lock that vanished before stale-lock inspection permits another claim", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      expect(yield* breakStaleLock(path.join(run.dir, "vanished.lock"))).toBe(true);
+    }),
+  ));
