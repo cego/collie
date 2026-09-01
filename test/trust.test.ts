@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { claudeTrust } from "../src/trust";
 import { isYamlMap, YamlMapSchema, type YamlMap } from "../src/yaml";
@@ -210,4 +210,56 @@ test("a grant while another collie holds the config lock writes nothing", () =>
       expect(result.ok).toBe(false);
       expect(yield* fs.readFileString(path)).toBe(before);
     }),
+  ));
+
+test("a config claude keeps rewriting is left alone rather than overwritten", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = join(rig.root, ".claude.json");
+        // A fifo hands every read of the config different bytes, which is what a claude
+        // writing between this grant's read and its rename looks like from in here.
+        Bun.spawnSync(["mkfifo", path]);
+        const trustModule = new URL("../src/trust.ts", import.meta.url).pathname.replaceAll(
+          "'",
+          "\\'",
+        );
+        const child = Bun.spawn(
+          [
+            "bun",
+            "-e",
+            `import { BunServices } from "@effect/platform-bun"; import { ManagedRuntime } from "effect"; import { claudeTrust } from '${trustModule}'; const runtime = ManagedRuntime.make(BunServices.layer); console.log((await runtime.runPromise(claudeTrust(process.argv[1], process.argv[2]).grant(process.argv[3]))).message)`,
+            rig.root,
+            rig.stateDir,
+            rig.projectDir,
+          ],
+          { stdout: "pipe", stderr: "pipe" },
+        );
+
+        const feeding = yield* Effect.forkScoped(
+          Effect.gen(function* () {
+            for (let n = 0; ; n++) {
+              yield* Effect.promise(() =>
+                Bun.write(
+                  path,
+                  `${Schema.encodeSync(ClaudeConfigJson)({ projects: {}, n })}\n`,
+                ).then(
+                  () => true,
+                  () => false,
+                ),
+              );
+              yield* Effect.promise(() => Bun.sleep(5));
+            }
+          }),
+        );
+        const message = yield* Effect.promise(() => new Response(child.stdout).text());
+        yield* Effect.promise(() => child.exited);
+        yield* Fiber.interrupt(feeding);
+
+        expect(message).toContain("kept changing under the grant");
+        // Never renamed over: the config is still claude's own file, untouched.
+        expect((yield* fs.stat(path)).type).toBe("FIFO");
+      }),
+    ),
   ));

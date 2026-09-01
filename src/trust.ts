@@ -41,13 +41,32 @@ function projects(config: YamlMap): YamlMap {
   return isYamlMap(config.projects) ? config.projects : {};
 }
 
+function trustedIn(config: YamlMap, cwds: ReadonlyArray<string>): boolean {
+  const entries = projects(config);
+  return cwds.some((path) => {
+    const entry = entries[path];
+    return isYamlMap(entry) && entry.hasTrustDialogAccepted === true;
+  });
+}
+
+/** A grant is worth retrying while claude is writing, but not for ever. */
+const GRANT_ATTEMPTS = 3;
+const CHANGED = "changed" as const;
+
 export function claudeTrust(home: string, backupDir: string): Trust {
-  const read = Effect.fn("Trust.read")(function* () {
+  const configPath = `${home}/.claude.json`;
+
+  /** The file as claude last wrote it, or null when it is not there. */
+  const readRaw = Effect.fn("Trust.readRaw")(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const path = `${home}/.claude.json`;
-    if (!(yield* fs.exists(path))) return null;
-    return yield* fs.readFileString(path).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(ClaudeConfigJson)),
+    if (!(yield* fs.exists(configPath))) return null;
+    return yield* fs.readFileString(configPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  });
+
+  const read = Effect.fn("Trust.read")(function* () {
+    const raw = yield* readRaw();
+    if (raw === null) return null;
+    return yield* Schema.decodeUnknownEffect(ClaudeConfigJson)(raw).pipe(
       Effect.catch(() => Effect.succeed(null)),
     );
   });
@@ -55,20 +74,11 @@ export function claudeTrust(home: string, backupDir: string): Trust {
   const state = Effect.fn("Trust.state")(function* (cwd: string) {
     const config = yield* read();
     if (config === null) return "unknown" as const;
-    const entries = projects(config);
-    for (const path of yield* paths(cwd)) {
-      const entry = entries[path];
-      if (isYamlMap(entry) && entry.hasTrustDialogAccepted === true) return "trusted" as const;
-    }
-    return "untrusted" as const;
+    return trustedIn(config, yield* paths(cwd)) ? ("trusted" as const) : ("untrusted" as const);
   });
 
-  /**
-   * ponytail: the lock serialises collie's own grants; claude does not take it, so a
-   * write from a claude running in the same read-modify-write window is still lost.
-   */
   const grant = Effect.fn("Trust.grant")(function* (cwd: string) {
-    const lock = `${home}/.claude.json.herdr-lock`;
+    const lock = `${configPath}.herdr-lock`;
     return yield* withLock(
       lock,
       Effect.succeed({ ok: false, message: `${lock} is held by another collie; nothing written` }),
@@ -76,26 +86,45 @@ export function claudeTrust(home: string, backupDir: string): Trust {
     );
   });
 
+  /**
+   * The lock keeps collie's own grants apart; claude takes no lock, so its writes are kept
+   * by giving up rather than by excluding them. Each attempt is built on the bytes it just
+   * read and lands only while those bytes are still the ones on disk, so a claude write in
+   * that window costs this grant a retry instead of costing the user their configuration.
+   */
   const writeGrant = Effect.fn("Trust.writeGrant")(function* (cwd: string) {
+    for (let attempt = 0; attempt < GRANT_ATTEMPTS; attempt++) {
+      const result = yield* tryGrant(cwd);
+      if (result !== CHANGED) return result;
+    }
+    return { ok: false, message: `${configPath} kept changing under the grant; nothing written` };
+  });
+
+  const tryGrant = Effect.fn("Trust.tryGrant")(function* (cwd: string) {
     const fs = yield* FileSystem.FileSystem;
     const pathService = yield* Path.Path;
-    const path = pathService.join(home, ".claude.json");
-    const config = yield* read();
-    if (config === null) {
+    const raw = yield* readRaw();
+    const config =
+      raw === null
+        ? null
+        : yield* Schema.decodeUnknownEffect(ClaudeConfigJson)(raw).pipe(
+            Effect.catch(() => Effect.succeed(null)),
+          );
+    if (raw === null || config === null) {
       return {
         ok: false,
-        message: (yield* fs.exists(path))
-          ? `${path} is not readable JSON; left alone`
-          : "claude has not run on this machine yet, so it will ask you the first time",
+        message:
+          raw === null
+            ? "claude has not run on this machine yet, so it will ask you the first time"
+            : `${configPath} is not readable JSON; left alone`,
       };
     }
-    if ((yield* state(cwd)) === "trusted") {
-      return { ok: true, message: `${cwd} is already trusted` };
-    }
+    const cwds = yield* paths(cwd);
+    if (trustedIn(config, cwds)) return { ok: true, message: `${cwd} is already trusted` };
 
     const entries = projects(config);
     config.projects = entries;
-    for (const projectPath of yield* paths(cwd)) {
+    for (const projectPath of cwds) {
       const current = entries[projectPath];
       const updated: YamlMap = { mcpServers: {} };
       if (isYamlMap(current)) Object.assign(updated, current);
@@ -103,17 +132,24 @@ export function claudeTrust(home: string, backupDir: string): Trust {
       entries[projectPath] = updated;
     }
 
+    const info = yield* fs.stat(configPath);
     const backup = pathService.join(backupDir, "claude.json.bak");
-    yield* fs.copyFile(path, backup);
-    const tmp = `${path}.herdr-${yield* currentPid}`;
+    // The bytes this grant was built on, which are the ones a restore has to put back —
+    // and no more readable than the file they came from, which holds claude's own secrets.
+    yield* fs.writeFileString(backup, raw);
+    yield* fs.chmod(backup, info.mode & 0o777);
+    const tmp = `${configPath}.herdr-${yield* currentPid}`;
     yield* fs.writeFileString(tmp, `${Schema.encodeSync(ClaudeConfigJson)(config)}\n`);
-    const info = yield* fs.stat(path);
     yield* fs.chmod(tmp, info.mode & 0o777);
-    yield* fs.rename(tmp, path);
+    if ((yield* readRaw()) !== raw) {
+      yield* fs.remove(tmp, { force: true });
+      return CHANGED;
+    }
+    yield* fs.rename(tmp, configPath);
 
     if ((yield* state(cwd)) !== "trusted") {
-      yield* fs.copyFile(backup, path);
-      return { ok: false, message: `could not record trust for ${cwd}; ${path} restored` };
+      yield* fs.copyFile(backup, configPath);
+      return { ok: false, message: `could not record trust for ${cwd}; ${configPath} restored` };
     }
     return {
       ok: true,
