@@ -2,7 +2,8 @@ import { Data, Schema, FileSystem, Clock, Effect, Option, Schedule, Stream } fro
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { PlatformError } from "effect/PlatformError";
 
-// Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides staleness.
+// Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides
+// staleness. `withLock` is the way in: claiming, breaking and giving back stay in here.
 
 /** Brief contention gets one second to clear before the operation fails. */
 const LOCK_CLAIM_RETRIES = 40;
@@ -34,7 +35,7 @@ export const signalProcess = (id: number, signal: NodeJS.Signals | 0 = 0) =>
   });
 
 /** One wx attempt. False means the lock is held; anything but contention throws. */
-export const tryClaimLock = Effect.fn("tryClaimLock")(function* (lock: string) {
+const tryClaimLock = Effect.fn("tryClaimLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
   const me = yield* currentPid;
   const holder: LockHolder = { pid: me, start: yield* processStartTime(me) };
@@ -48,13 +49,13 @@ export const tryClaimLock = Effect.fn("tryClaimLock")(function* (lock: string) {
 });
 
 /** Claims an available lock, breaking one stale holder before the final attempt. */
-export const claimLock = Effect.fn("claimLock")(function* (lock: string) {
+const claimLock = Effect.fn("claimLock")(function* (lock: string) {
   if (yield* tryClaimLock(lock)) return true;
   return (yield* breakStaleLock(lock)) && (yield* tryClaimLock(lock));
 });
 
 /** The one acquisition policy: recover stale claims and wait out brief live contention. */
-export const acquireLock = Effect.fn("acquireLock")((lock: string) =>
+const acquireLock = Effect.fn("acquireLock")((lock: string) =>
   claimLock(lock).pipe(
     Effect.flatMap((claimed) =>
       claimed ? Effect.succeed(true) : Effect.fail(new LockContended()),
@@ -67,6 +68,22 @@ export const acquireLock = Effect.fn("acquireLock")((lock: string) =>
     Effect.catchTag("LockContended", () => Effect.succeed(false)),
   ),
 );
+
+/**
+ * Runs `effect` while this process holds `lock`, and hands the lock back whichever way it
+ * leaves. `Effect.ensuring`, not try/finally: a typed failure unwinds past a generator's
+ * finally without entering it, and the lock would outlive the caller. `contended` is what
+ * the caller gets instead when the lock is somebody else's.
+ */
+export const withLock = <A, E, R, A2, E2, R2>(
+  lock: string,
+  contended: Effect.Effect<A2, E2, R2>,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    if (!(yield* acquireLock(lock))) return yield* contended;
+    return yield* effect.pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+  });
 
 /**
  * Breaks a lock that no longer protects anything. True means the caller may retry its claim.
@@ -119,7 +136,7 @@ export const holdsLock = Effect.fn("holdsLock")(function* (lock: string) {
 });
 
 /** Removes the lock only while it is still this process's own. */
-export const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: string) {
+const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
   if (yield* holdsLock(lock)) yield* fs.remove(lock, { force: true });
 });

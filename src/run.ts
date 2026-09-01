@@ -1,6 +1,6 @@
 import { Data, Schema, Effect, FileSystem, Path, Struct } from "effect";
 import { nowIso } from "./time";
-import { acquireLock, currentPid, releaseOwnLock } from "./lock";
+import { currentPid, withLock } from "./lock";
 import { unsafePathComponent } from "./naming";
 import { FindingSchema } from "./output";
 import { slugify } from "./template";
@@ -239,9 +239,11 @@ function withRunLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) {
   return Effect.gen(function* () {
     const path = yield* Path.Path;
     const lock = path.join(dir, `${RUN_FILE}.lock`);
-    if (!(yield* acquireLock(lock)))
-      return yield* Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`));
-    return yield* effect.pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+    return yield* withLock(
+      lock,
+      Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`)),
+      effect,
+    );
   });
 }
 
@@ -422,17 +424,19 @@ export class RunStore {
       yield* fs.makeDirectory(root, { recursive: true });
       const seqPath = path.join(root, ".seq");
       const lock = `${seqPath}.lock`;
-      if (!(yield* acquireLock(lock)))
-        return yield* Effect.fail(new Error(`could not claim the Run sequence lock ${lock}`));
-      return yield* Effect.gen(function* () {
-        const current = yield* fs.readFileString(seqPath).pipe(
-          Effect.map((value) => Number.parseInt(value.trim(), 10)),
-          Effect.catch(() => Effect.succeed(0)),
-        );
-        const next = Number.isFinite(current) ? current + 1 : 1;
-        yield* fs.writeFileString(seqPath, String(next));
-        return next;
-      }).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+      return yield* withLock(
+        lock,
+        Effect.fail(new Error(`could not claim the Run sequence lock ${lock}`)),
+        Effect.gen(function* () {
+          const current = yield* fs.readFileString(seqPath).pipe(
+            Effect.map((value) => Number.parseInt(value.trim(), 10)),
+            Effect.catch(() => Effect.succeed(0)),
+          );
+          const next = Number.isFinite(current) ? current + 1 : 1;
+          yield* fs.writeFileString(seqPath, String(next));
+          return next;
+        }),
+      );
     }).pipe(Effect.withSpan("RunStore.nextSeq"));
   }
 }

@@ -3,7 +3,7 @@ import { Config, Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from 
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import type { HerdrError } from "./herdr";
-import { acquireLock, currentPid, releaseOwnLock } from "./lock";
+import { currentPid, withLock } from "./lock";
 import { err, newRequestId, ExpectedError, type OpResult } from "./operations";
 
 const ResultBoundary = Schema.Union([
@@ -134,19 +134,20 @@ export const mutation = Effect.fn("collie.mutation")(function* (
   if (yield* fs.exists(path)) return yield* readReceipt(path);
   yield* fs.makeDirectory(pathSvc.dirname(path), { recursive: true });
   const lock = `${path}.lock`;
-  if (!(yield* acquireLock(lock))) {
-    if (yield* fs.exists(path)) return yield* readReceipt(path);
-    return err("operation_failed", `Request "${id}" is already in progress.`, { requestId: id });
-  }
-  // Effect.ensuring, not try/finally: a typed failure out of `apply` unwinds past a
-  // generator's finally without entering it, and the lock would outlive the request.
-  return yield* Effect.gen(function* () {
-    const result = yield* apply(id);
-    const withRequest = withRequestId(result, id);
-    if (!withRequest.ok && REJECTED.includes(withRequest.error.code)) return withRequest;
-    const tmp = `${path}.${yield* currentPid}.tmp`;
-    yield* fs.writeFileString(tmp, `${Schema.encodeSync(ResultBoundaryJson)(withRequest)}\n`);
-    yield* fs.rename(tmp, path);
-    return withRequest;
-  }).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+  return yield* withLock(
+    lock,
+    Effect.gen(function* () {
+      if (yield* fs.exists(path)) return yield* readReceipt(path);
+      return err("operation_failed", `Request "${id}" is already in progress.`, { requestId: id });
+    }),
+    Effect.gen(function* () {
+      const result = yield* apply(id);
+      const withRequest = withRequestId(result, id);
+      if (!withRequest.ok && REJECTED.includes(withRequest.error.code)) return withRequest;
+      const tmp = `${path}.${yield* currentPid}.tmp`;
+      yield* fs.writeFileString(tmp, `${Schema.encodeSync(ResultBoundaryJson)(withRequest)}\n`);
+      yield* fs.rename(tmp, path);
+      return withRequest;
+    }),
+  );
 });

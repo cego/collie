@@ -30,7 +30,7 @@ import {
 } from "./driver";
 import { inferInputs, inputSources, inputValues, type Resolution } from "./inputs";
 import { readRegistry, registryPath, type RegistryScope } from "./registry";
-import { acquireLock, currentPid, releaseOwnLock } from "./lock";
+import { currentPid, withLock } from "./lock";
 import { Run, RunStore } from "./run";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
@@ -424,29 +424,29 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
   // top of a Run the winner had already begun advancing. This lock is what makes the
   // look and the reset one decision.
   const lock = path.join(run.dir, "resume.lock");
-  if (!(yield* acquireLock(lock)))
-    return yield* Effect.fail(new Error(`another resume of run "${run.id}" is in progress`));
-  // Effect.ensuring, not try/finally: a typed failure unwinds past a generator's
-  // finally without entering it, and the Run would stay locked against resuming.
-  return yield* Effect.gen(function* () {
-    if (yield* driverAlive(run.dir))
-      return err("run_already_active", `Run "${run.id}" is already active.`);
-    if ((yield* runStatus(run)) === "succeeded")
-      return err("invalid_state", `Run "${run.id}" has already succeeded.`);
-    yield* fs.remove(path.join(run.dir, STOPPED), { force: true });
-    for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
-    run.record.status = "running";
-    run.record.finished_at = null;
-    yield* run.save();
-    // Recorded in the Run's own directory, as the spec asks: the inbox is where a
-    // command and its outcome live, and the Driver this call is about to start is what
-    // reads it — `clearPreviousDriver` takes the request id off it before clearing.
-    yield* writeInbox(run.dir, { type: "resume", requestId });
-    // The reset has already happened and the stop marker is already gone, so a Run
-    // handOver could not place would otherwise be worse off than before it was
-    // resumed: reported as advancing, driven by nobody, nothing terminal to wait for.
-    const undriven = yield* handOver(env, run);
-    if (undriven) return undriven.result;
-    return ok({ runId: run.id, status: "running" }, `Resumed run ${run.id}.`);
-  }).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+  return yield* withLock(
+    lock,
+    Effect.fail(new Error(`another resume of run "${run.id}" is in progress`)),
+    Effect.gen(function* () {
+      if (yield* driverAlive(run.dir))
+        return err("run_already_active", `Run "${run.id}" is already active.`);
+      if ((yield* runStatus(run)) === "succeeded")
+        return err("invalid_state", `Run "${run.id}" has already succeeded.`);
+      yield* fs.remove(path.join(run.dir, STOPPED), { force: true });
+      for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
+      run.record.status = "running";
+      run.record.finished_at = null;
+      yield* run.save();
+      // Recorded in the Run's own directory, as the spec asks: the inbox is where a
+      // command and its outcome live, and the Driver this call is about to start is what
+      // reads it — `clearPreviousDriver` takes the request id off it before clearing.
+      yield* writeInbox(run.dir, { type: "resume", requestId });
+      // The reset has already happened and the stop marker is already gone, so a Run
+      // handOver could not place would otherwise be worse off than before it was
+      // resumed: reported as advancing, driven by nobody, nothing terminal to wait for.
+      const undriven = yield* handOver(env, run);
+      if (undriven) return undriven.result;
+      return ok({ runId: run.id, status: "running" }, `Resumed run ${run.id}.`);
+    }),
+  );
 });

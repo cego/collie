@@ -5,7 +5,7 @@
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { isYamlMap, YamlMapSchema, type YamlMap } from "./yaml";
-import { acquireLock, currentPid, releaseOwnLock } from "./lock";
+import { currentPid, withLock } from "./lock";
 
 export type TrustState = "trusted" | "untrusted" | "unknown";
 
@@ -69,10 +69,11 @@ export function claudeTrust(home: string, backupDir: string): Trust {
    */
   const grant = Effect.fn("Trust.grant")(function* (cwd: string) {
     const lock = `${home}/.claude.json.herdr-lock`;
-    if (!(yield* acquireLock(lock))) {
-      return { ok: false, message: `${lock} is held by another collie; nothing written` };
-    }
-    return yield* writeGrant(cwd).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+    return yield* withLock(
+      lock,
+      Effect.succeed({ ok: false, message: `${lock} is held by another collie; nothing written` }),
+      writeGrant(cwd),
+    );
   });
 
   const writeGrant = Effect.fn("Trust.writeGrant")(function* (cwd: string) {

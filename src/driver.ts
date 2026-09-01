@@ -1,13 +1,12 @@
 import { Crypto, Effect, Fiber, FileSystem, Path, Schema, Option, Queue, Stream } from "effect";
 import { nowIso } from "./time";
 import {
-  acquireLock,
   currentPid,
   holdsLock,
   lockWriteIsFresh,
   processStartTime,
-  releaseOwnLock,
   signalProcess,
+  withLock,
 } from "./lock";
 import type { EnginePrompts } from "./engine";
 import type { PickItem } from "./picker";
@@ -299,15 +298,16 @@ const takeOverStale = Effect.fn("takeOverStale")(function* (dir: string, file: s
   const fs = yield* FileSystem.FileSystem;
   if (yield* liveOwner(dir)) return false;
   const lock = `${file}.takeover`;
-  if (!(yield* acquireLock(lock))) return false;
-  // Effect.ensuring, not try/finally: a typed failure unwinds past a generator's
-  // finally without entering it, and the takeover lock would never be given back.
-  return yield* Effect.gen(function* () {
-    if ((yield* liveOwner(dir)) || (yield* midWriteClaim(dir, file)) || !(yield* holdsLock(lock)))
-      return false;
-    yield* fs.remove(file, { force: true });
-    return true;
-  }).pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
+  return yield* withLock(
+    lock,
+    Effect.succeed(false),
+    Effect.gen(function* () {
+      if ((yield* liveOwner(dir)) || (yield* midWriteClaim(dir, file)) || !(yield* holdsLock(lock)))
+        return false;
+      yield* fs.remove(file, { force: true });
+      return true;
+    }),
+  );
 });
 
 const midWriteClaim = Effect.fn("midWriteClaim")(function* (dir: string, file: string) {
