@@ -6,7 +6,7 @@
 import { Effect, FileSystem, Path, type PlatformError } from "effect";
 import { bodySections, contentHash } from "./definitions";
 import { unsafePathComponent } from "./naming";
-import { yamlScalar } from "./yaml";
+import { setFrontmatterKey, yamlScalar } from "./yaml";
 
 export type DefinitionKind = "workflows" | "personas";
 
@@ -90,7 +90,7 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
   const text =
     sourceText === null
       ? stub(name, sourceName, kind, opts)
-      : renamed(stamped(sourceText, yield* contentHash(sourceText)), sourceName, name);
+      : copied(sourceText, yield* contentHash(sourceText), sourceName, name);
 
   const exists = yield* fs.writeFileString(path, text, { flag: "wx" }).pipe(
     Effect.as(false),
@@ -119,21 +119,14 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
       };
 });
 
-/** `forked_from_hash` goes in the frontmatter, which is the first block of the file. */
-function stamped(text: string, hash: string): string {
-  const lines = text.split("\n");
-  if (lines[0]?.trim() !== "---") return `---\nforked_from_hash: ${hash}\n---\n\n${text}`;
-  lines.splice(1, 0, `forked_from_hash: ${hash}`);
-  return lines.join("\n");
-}
-
-function renamed(text: string, source: string, target: string): string {
-  return source === target
-    ? text
-    : text.replace(
-        new RegExp(`^name:\\s*${source.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"),
-        () => `name: ${yamlScalar(target)}`,
-      );
+/**
+ * A full copy records the parent it was taken from — over any hash it inherited, which
+ * would otherwise be its grandparent's — and answers to its own name, since the parent's
+ * frontmatter name would make the copy shadow it instead of being found as the fork.
+ */
+function copied(text: string, hash: string, source: string, target: string): string {
+  const stamped = setFrontmatterKey(text, "forked_from_hash", hash);
+  return source === target ? stamped : setFrontmatterKey(stamped, "name", target);
 }
 
 /**

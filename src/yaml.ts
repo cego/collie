@@ -312,6 +312,31 @@ function readFlowSeq(s: Cursor): YamlValue[] {
   }
 }
 
+/**
+ * Writes `key: value` into the document's frontmatter: over the line that already sets that
+ * key, or at the top of the block, or into a new block when the document has none. The
+ * value goes in as a scalar the parser reads back unchanged — a definition edited this way
+ * is one the loader still agrees with.
+ */
+export function setFrontmatterKey(text: string, key: string, value: string): string {
+  const lines = text.split("\n");
+  const written = `${key}: ${yamlScalar(value)}`;
+  if (lines[0]?.trim() !== "---") return `---\n${written}\n---\n\n${text}`;
+  const close = lines.findIndex((line, i) => i > 0 && line.trim() === "---");
+  const end = close < 0 ? lines.length : close;
+  const at = lines.findIndex((line, i) => i > 0 && i < end && topLevelKey(line) === key);
+  if (at < 0) lines.splice(1, 0, written);
+  else lines[at] = written;
+  return lines.join("\n");
+}
+
+/** The key a frontmatter line sets, or null for anything nested or not a mapping. */
+function topLevelKey(line: string): string | null {
+  if (/^\s/.test(line)) return null;
+  const m = KEY.exec(line.trim());
+  return m ? unquote(m[1]!) : null;
+}
+
 export interface Document {
   data: YamlMap;
   body: string;

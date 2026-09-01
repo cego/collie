@@ -281,3 +281,44 @@ test("a fork name that is not a bare scalar is quoted, and a corrupting one is r
       expect(refused.message).toContain("control character");
     }),
   ));
+
+test("re-forking a full copy records the copy's own hash, not its grandparent's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const source = (yield* loadDefinitions(yield* layers(env))).workflows.get("review")!;
+
+      const first = yield* forkDefinition(source.path, "workflows", rig.configDir, { full: true });
+      const parentText = yield* readText(first.path);
+      const second = yield* forkDefinition(
+        first.path,
+        "workflows",
+        join(rig.projectDir, ".herdr"),
+        {
+          full: true,
+        },
+      );
+
+      const text = yield* readText(second.path);
+      expect(text.match(/^forked_from_hash:/gm)).toHaveLength(1);
+      expect(parseDocument(text).data.forked_from_hash).toBe(yield* contentHash(parentText));
+    }),
+  ));
+
+test("a full copy of a definition with a quoted name answers to the fork's name", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const root = yield* tempDir("collie-fork-quoted-");
+      const source = join(root, "my-flow.md");
+      yield* writeText(source, `---\nname: "my-flow"\n---\n\nbody\n`);
+
+      const result = yield* forkDefinition(source, "personas", join(root, "target"), {
+        name: "other-flow",
+        full: true,
+      });
+
+      expect(result.ok).toBe(true);
+      expect(parseDocument(yield* readText(result.path)).data.name).toBe("other-flow");
+      yield* removeTree(root);
+    }),
+  ));
