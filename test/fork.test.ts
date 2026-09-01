@@ -188,28 +188,27 @@ test("a target occupied while a fork is being prepared is never overwritten", ()
       Bun.spawnSync(["mkfifo", source]);
       yield* mkdirp(join(targetDir, "personas"));
       const forkModule = new URL("../src/fork.ts", import.meta.url).pathname.replaceAll("'", "\\'");
+      const marker = join(root, "child-ready");
       const child = Bun.spawn(
         [
           "bun",
           "-e",
-          `import { BunServices } from "@effect/platform-bun"; import { ManagedRuntime } from "effect"; import { forkDefinition } from '${forkModule}'; const runtime = ManagedRuntime.make(BunServices.layer); console.log((await runtime.runPromise(forkDefinition(process.argv[1], "personas", process.argv[2], { full: true }))).ok ? "ok=true" : "ok=false")`,
+          `import { BunServices } from "@effect/platform-bun"; import { ManagedRuntime } from "effect"; import { forkDefinition } from '${forkModule}'; const runtime = ManagedRuntime.make(BunServices.layer); await Bun.write(process.argv[3], ""); console.log((await runtime.runPromise(forkDefinition(process.argv[1], "personas", process.argv[2], { full: true }))).ok ? "ok=true" : "ok=false")`,
           source,
           targetDir,
+          marker,
         ],
         { stdout: "pipe", stderr: "pipe" },
       );
 
-      const deadline = (yield* Clock.currentTimeMillis) + 2_000;
-      while ((yield* Clock.currentTimeMillis) < deadline) {
-        const waiting = Bun.file(`/proc/${child.pid}/wchan`);
-        const waitingExists = yield* Effect.promise(() => waiting.exists());
-        const waitingText = waitingExists ? yield* Effect.promise(() => waiting.text()) : "";
-        if (/pipe_read|wait_for_partner|ep_poll/.test(waitingText)) break;
+      // The child writes the marker on its way into the fork; from there the fifo is
+      // what holds it, so writing the source below is the handover.
+      const deadline = (yield* Clock.currentTimeMillis) + 30_000;
+      while (!(yield* exists(marker)) && (yield* Clock.currentTimeMillis) < deadline) {
         yield* Effect.promise(() => Bun.sleep(10));
       }
-      expect(yield* Effect.promise(() => Bun.file(`/proc/${child.pid}/wchan`).text())).toMatch(
-        /pipe_read|wait_for_partner|ep_poll/,
-      );
+      expect(yield* exists(marker)).toBe(true);
+
       yield* writeText(target, "winner\n");
       yield* writeText(source, "---\nname: helper\n---\nsource\n");
       const result = yield* Effect.promise(() => new Response(child.stdout).text());
