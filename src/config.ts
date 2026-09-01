@@ -1,6 +1,7 @@
 // User defaults from the plugin config dir. Optional; the baseline is neutral.
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { isNumber, isString } from "./schema";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
 
 export interface Defaults {
@@ -27,8 +28,6 @@ export const FALLBACK_DEFAULTS: Defaults = {
 };
 
 const ConfigJson = Schema.fromJsonString(YamlMapSchema);
-const isString = Schema.is(Schema.String);
-const isNumber = Schema.is(Schema.Number);
 const Models = Schema.Record(Schema.String, Schema.Array(Schema.String));
 
 /** The whole config file, for values only a prompt cares about (e.g. linear.team). */

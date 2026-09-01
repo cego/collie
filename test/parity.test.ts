@@ -3,9 +3,9 @@
 // its own process — and compares what an outside observer can see afterwards: the
 // Run dir and the herdr calls. Nothing here asserts how either side got there.
 //
-// Start and resume have no adapter half left to diverge: the picker and the resume
-// pane prompt, then call the same operation the CLI does, so those cases compare the
-// operation against the CLI process rather than a copy of itself.
+// Start, resume, and fork have no adapter half left to diverge: their panes prompt,
+// then call the same operation the CLI does, so those cases compare the operation
+// against the CLI process rather than a copy of itself.
 //
 // The env below is pinned rather than inherited because this suite may itself be
 // running inside herdr, where a leaked socket or workspace id would scope the two
@@ -35,12 +35,15 @@ import { prepareWorkflow, resumeRun, startRun } from "../src/operations";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
 import { RunStore } from "../src/run";
 import type { RunRow, WorkspaceView } from "../src/workspace";
+import { layers, loadDefinitions } from "../src/definitions";
+import { forkResolvedDefinition } from "../src/fork";
 
 const root = new URL("../", import.meta.url).pathname;
 let dir: string;
 interface ParityEnv extends Record<string, string> {
   COLLIE_CWD: string;
   COLLIE_DRIVER: string;
+  HERDR_PLUGIN_CONFIG_DIR: string;
   HERDR_PLUGIN_STATE_DIR: string;
 }
 let env: ParityEnv;
@@ -283,6 +286,52 @@ const herdrCalls = Effect.fn("parity.herdrCalls")(function* () {
   if (!(yield* fs.exists(file))) return [];
   return (yield* fs.readFileString(file)).split("\n").filter((line) => line !== "");
 });
+
+effectTest(
+  "forking through the picker operation and through the CLI writes the same fork",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const definitions = yield* loadDefinitions(yield* layers(pluginEnv()));
+    const workflow = definitions.workflows.get("demo");
+    if (!workflow) throw new Error("missing demo workflow");
+
+    const fromPicker = yield* forkResolvedDefinition(
+      {
+        path: workflow.path,
+        kind: "workflows",
+        steps: workflow.steps.map((step) => step.id),
+        body: workflow.body,
+      },
+      path.join(env.COLLIE_CWD, ".herdr"),
+      { step: "work" },
+    );
+    expect(fromPicker.ok).toBe(true);
+
+    const fromCli = yield* cli([
+      "workflow",
+      "fork",
+      "demo",
+      "--layer",
+      "user",
+      "--mode",
+      "extends",
+      "--name",
+      "demo",
+      "--step",
+      "work",
+    ]);
+    expect(fromCli.exit).toBe(0);
+
+    const pickerText = yield* fs.readFileString(
+      path.join(env.COLLIE_CWD, ".herdr", "workflows", "demo.md"),
+    );
+    const cliText = yield* fs.readFileString(
+      path.join(env.HERDR_PLUGIN_CONFIG_DIR, "workflows", "demo.md"),
+    );
+    expect(cliText).toBe(pickerText);
+  },
+);
 
 effectTest("answering through the board and through the CLI leave the same trace", function* () {
   const board = yield* makeRun();

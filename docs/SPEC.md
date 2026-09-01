@@ -103,7 +103,8 @@ UI-only focus, navigation, selection, and popup operations are not CLI capabilit
 Resolve workspace scope in this order:
 
 1. `--workspace <workspace-id>`
-2. `HERDR_WORKSPACE_ID`
+2. `HERDR_WORKSPACE_ID`, then Herdr's equivalent active-session value
+   `HERDR_ACTIVE_WORKSPACE_ID`
 3. `HERDR_PLUGIN_CONTEXT_JSON.workspace_id`
 4. no scope
 

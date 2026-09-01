@@ -1,7 +1,6 @@
 import { Effect, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
-import { bodySections } from "../definitions";
-import { forkDefinition } from "../fork";
+import { forkResolvedDefinition } from "../fork";
 import { err } from "../operations";
 import { attempt, mutation } from "../envelope";
 import {
@@ -54,7 +53,14 @@ const workflowShow = Command.make(
             ? {
                 ok: true,
                 data: { workflow: workflowData(wf) },
-                human: `${wf.title}\n${wf.description}\nInputs: ${Schema.encodeSync(UnknownJson)(wf.inputs)}`,
+                human: [
+                  wf.title,
+                  wf.description,
+                  `Inputs: ${Schema.encodeSync(UnknownJson)(wf.inputs)}`,
+                  "Steps:",
+                  ...wf.steps.map((step) => `  ${step.id}`),
+                  `Defined in: ${wf.path}`,
+                ].join("\n"),
               }
             : err("workflow_not_found", `Workflow "${workflow}" was not found.`);
         }),
@@ -88,21 +94,28 @@ const workflowFork = Command.make(
               const wf = (yield* definitions(resolved.env)).workflows.get(workflow);
               if (!wf) return err("workflow_not_found", `Workflow "${workflow}" was not found.`);
               const pickedStep = Option.isSome(step) ? step.value : undefined;
-              if (pickedStep && !wf.steps.some((item) => item.id === pickedStep)) {
-                return err("invalid_input", `Workflow "${workflow}" has no Step "${pickedStep}".`);
-              }
-              const result = yield* forkDefinition(
-                wf.path,
-                "workflows",
+              const result = yield* forkResolvedDefinition(
+                {
+                  path: wf.path,
+                  kind: "workflows",
+                  steps: wf.steps.map((item) => item.id),
+                  body: wf.body,
+                },
                 yield* layerDir(resolved.env, layer),
                 {
                   name,
                   full: mode === "copy",
                   step: pickedStep,
-                  section: pickedStep ? bodySections(wf.body).sections.get(pickedStep) : undefined,
                 },
               );
-              if (!result.ok) return err(result.code, result.message, { path: result.path });
+              if (!result.ok)
+                return err(
+                  result.code,
+                  result.code === "invalid_input"
+                    ? `Workflow "${workflow}" has no Step "${pickedStep}".`
+                    : result.message,
+                  result.path ? { path: result.path } : undefined,
+                );
               return {
                 ok: true,
                 data: { path: result.path, name, layer, mode },

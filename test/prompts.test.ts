@@ -3,7 +3,19 @@
 // drives it directly rather than through a Run.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, Fiber, FileSystem, Path, PlatformError, Schema, Scope } from "effect";
+import {
+  Clock,
+  Deferred,
+  Effect,
+  Fiber,
+  FileSystem,
+  Option,
+  Path,
+  PlatformError,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 import type { BunServices } from "@effect/platform-bun";
 import { runEffect } from "./support/effect";
 import { CHOICE, CHOICE_ANSWER, filePrompts, readChoice } from "../src/driver";
@@ -41,22 +53,20 @@ const MENU = [
   { id: "two", title: "Two" },
 ];
 
-/**
- * Waits for the Driver to have written its question, so an answer can name it — and
- * then for quiet, because `Stream.tick` emits once at subscription. Without the pause
- * an answer written immediately can be found on that first tick, and a test meaning to
- * prove the watch delivers would pass whether it does or not.
- */
-const pendingChoice = Effect.fn("test.pendingChoice")(function* (settle = true) {
-  for (let attempt = 0; attempt < 200; attempt++) {
-    const choice = yield* readChoice(dir);
-    if (choice) {
-      if (settle) yield* Effect.sleep("400 millis");
-      return choice;
-    }
-    yield* Effect.sleep("10 millis");
-  }
-  throw new Error("no choice was written");
+/** The question file is written only after filePrompts has subscribed its watches. */
+const pendingChoice = Effect.fn("test.pendingChoice")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const changes = yield* Stream.toQueue(fs.watch(dir), { capacity: "unbounded" });
+  const already = yield* readChoice(dir);
+  if (already) return already;
+  const found = yield* Stream.fromQueue(changes).pipe(
+    Stream.mapEffect(() => readChoice(dir)),
+    Stream.filter((choice) => choice !== null),
+    Stream.runHead,
+    Effect.timeout("2 seconds"),
+  );
+  if (Option.isNone(found)) return yield* Effect.fail(new Error("no choice was written"));
+  return found.value;
 });
 
 const InboxCommandJson = Schema.fromJsonString(
@@ -91,15 +101,18 @@ const writeInboxAnswer = Effect.fn("test.writeInboxAnswer")(function* (
 effectTest("an answer in the inbox arrives on a watch event, not on the next tick", function* () {
   // The tick cannot fire inside the timeout, so only FileSystem.watch can deliver
   // this. Before the watch, a 30s poll meant a 30s wait for an answer already there.
+  const watching = yield* Deferred.make<void>();
   const prompts = filePrompts({
     dir,
     run: "r",
     step: () => "next",
     timeoutMs: 8_000,
     pollMs: 30_000,
+    onWatching: Deferred.succeed(watching, undefined).pipe(Effect.asVoid),
   });
   const asked = yield* Effect.forkScoped(prompts.menu(MENU, { header: "Pick" }));
   const choice = yield* pendingChoice();
+  yield* Deferred.await(watching);
 
   const started = yield* Clock.currentTimeMillis;
   yield* writeInboxAnswer(choice.id, "two");
@@ -115,6 +128,7 @@ effectTest("an answer in the inbox arrives on a watch event, not on the next tic
 effectTest("an answer written straight to the Run dir arrives the same way", function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const watching = yield* Deferred.make<void>();
   // choice-answer.json is a child of the Run dir, not the inbox, and the Control Plane
   // writes it. Both directories are watched because the watch is not recursive.
   const prompts = filePrompts({
@@ -123,9 +137,11 @@ effectTest("an answer written straight to the Run dir arrives the same way", fun
     step: () => "next",
     timeoutMs: 8_000,
     pollMs: 30_000,
+    onWatching: Deferred.succeed(watching, undefined).pipe(Effect.asVoid),
   });
   const asked = yield* Effect.forkScoped(prompts.ask("What?"));
   const choice = yield* pendingChoice();
+  yield* Deferred.await(watching);
 
   yield* fs.writeFileString(
     path.join(dir, CHOICE_ANSWER),
@@ -141,9 +157,9 @@ effectTest(
     const path = yield* Path.Path;
     // The Driver signals itself so one path records what a stop does to the Run. This
     // test stands in for that Driver, so it has to catch the signal it asked for.
-    let signalled = false;
+    const signalled = yield* Deferred.make<void>();
     const onSigterm = () => {
-      signalled = true;
+      Effect.runFork(Deferred.succeed(signalled, undefined));
     };
     process.once("SIGTERM", onSigterm);
 
@@ -165,9 +181,7 @@ effectTest(
         `${Schema.encodeSync(InboxCommandJson)({ type: "stop", requestId: "stop-1" })}\n`,
       );
 
-      for (let attempt = 0; attempt < 200 && !signalled; attempt++)
-        yield* Effect.sleep("10 millis");
-      expect(signalled).toBe(true);
+      yield* Deferred.await(signalled).pipe(Effect.timeout("2 seconds"));
       // Consumed, so a later Driver cannot find it and stop itself over again.
       expect(yield* fs.readDirectory(inbox)).toEqual([]);
       yield* Fiber.interrupt(asked);
@@ -195,9 +209,18 @@ effectTest("a question nobody answers times out, and takes its choice file with 
 effectTest("the wait survives its watched directories being replaced underneath it", function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const prompts = filePrompts({ dir, run: "r", step: () => "next", timeoutMs: 8_000, pollMs: 60 });
+  const watching = yield* Deferred.make<void>();
+  const prompts = filePrompts({
+    dir,
+    run: "r",
+    step: () => "next",
+    timeoutMs: 8_000,
+    pollMs: 60,
+    onWatching: Deferred.succeed(watching, undefined).pipe(Effect.asVoid),
+  });
   const asked = yield* Effect.forkScoped(prompts.menu(MENU, { header: "Pick" }));
   const choice = yield* pendingChoice();
+  yield* Deferred.await(watching);
 
   // The inbox is removed and remade while the wait is running, which is what a resume
   // rebuilding a Run directory looks like from here.

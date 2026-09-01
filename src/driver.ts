@@ -1,8 +1,17 @@
-import { Clock, Crypto, Effect, FileSystem, Path, Schema, Option, Stream } from "effect";
+import { Crypto, Effect, Fiber, FileSystem, Path, Schema, Option, Queue, Stream } from "effect";
 import { nowIso } from "./time";
-import { breakStaleLock, holdsLock, processStartTime, releaseOwnLock, tryClaimLock } from "./lock";
+import {
+  acquireLock,
+  currentPid,
+  holdsLock,
+  lockWriteIsFresh,
+  processStartTime,
+  releaseOwnLock,
+  signalProcess,
+} from "./lock";
 import type { EnginePrompts } from "./engine";
 import type { PickItem } from "./picker";
+import { isString } from "./schema";
 
 export const PROGRESS = "progress.jsonl";
 export const RUNNER_LOG = "runner.log";
@@ -72,7 +81,6 @@ const OwnerRecordJson = Schema.fromJsonString(
 
 const JsonString = Schema.fromJsonString(Schema.Unknown);
 const encodeJson = Schema.encodeSync(JsonString);
-const isString = Schema.is(Schema.String);
 
 /**
  * A command for the Run's owning Driver. The Driver reads the inbox, so the shape
@@ -86,22 +94,6 @@ const InboxCommand = Schema.Struct({
   answer: Schema.optionalKey(Schema.String),
 });
 export const InboxCommandJson = Schema.fromJsonString(InboxCommand);
-/**
- * This process's own id, and signalling another. Effect models processes it starts,
- * through ChildProcessSpawner, but has no view of the one it is running in — so an
- * ownership claim's identity and the signal that stops a Driver stay native.
- */
-const pid = Effect.sync(() => globalThis.process.pid);
-const kill = (id: number, signal?: NodeJS.Signals | 0) =>
-  Effect.sync(() => {
-    try {
-      globalThis.process.kill(id, signal ?? 0);
-      return true;
-    } catch {
-      return false;
-    }
-  });
-
 export interface InboxCommandValue extends Schema.Schema.Type<typeof InboxCommand> {}
 
 function read<S extends Schema.Top>(schema: S, file: string) {
@@ -206,7 +198,14 @@ export const inboxFiles = Effect.fn("inboxFiles")(function* (dir: string) {
   const path = yield* Path.Path;
   const inbox = path.join(dir, "inbox");
   if (!(yield* fs.exists(inbox))) return [];
-  return (yield* fs.readDirectory(inbox))
+  const names = yield* fs
+    .readDirectory(inbox)
+    .pipe(
+      Effect.catchTag("PlatformError", (error) =>
+        error.reason._tag === "NotFound" ? Effect.succeed([]) : Effect.fail(error),
+      ),
+    );
+  return names
     .filter((name) => name.endsWith(".json"))
     .sort()
     .map((name) => path.join(inbox, name));
@@ -268,7 +267,7 @@ const readOwner = Effect.fn("readOwner")(function* (dir: string) {
 
 const liveOwner = Effect.fn("liveOwner")(function* (dir: string) {
   const owner = yield* readOwner(dir);
-  if (!owner || !(yield* kill(owner.pid))) return null;
+  if (!owner || !(yield* signalProcess(owner.pid))) return null;
   if (owner.start !== null) {
     const start = yield* processStartTime(owner.pid);
     if (start === null || start !== owner.start) return null;
@@ -281,7 +280,7 @@ export const acquireDriver = Effect.fn("acquireDriver")(function* (dir: string) 
   const path = yield* Path.Path;
   yield* fs.makeDirectory(dir, { recursive: true });
   const file = path.join(dir, RUNNER_PID);
-  const me = yield* pid;
+  const me = yield* currentPid;
   const claim: OwnerRecord = { pid: me, start: yield* processStartTime(me), at: yield* nowIso() };
   for (let attempt = 0; attempt < 2; attempt++) {
     const won = yield* fs.writeFileString(file, `${encodeJson(claim)}\n`, { flag: "wx" }).pipe(
@@ -300,11 +299,7 @@ const takeOverStale = Effect.fn("takeOverStale")(function* (dir: string, file: s
   const fs = yield* FileSystem.FileSystem;
   if (yield* liveOwner(dir)) return false;
   const lock = `${file}.takeover`;
-  if (
-    !(yield* tryClaimLock(lock)) &&
-    (!(yield* breakStaleLock(lock)) || !(yield* tryClaimLock(lock)))
-  )
-    return false;
+  if (!(yield* acquireLock(lock))) return false;
   // Effect.ensuring, not try/finally: a typed failure unwinds past a generator's
   // finally without entering it, and the takeover lock would never be given back.
   return yield* Effect.gen(function* () {
@@ -316,20 +311,15 @@ const takeOverStale = Effect.fn("takeOverStale")(function* (dir: string, file: s
 });
 
 const midWriteClaim = Effect.fn("midWriteClaim")(function* (dir: string, file: string) {
-  const fs = yield* FileSystem.FileSystem;
   if ((yield* readOwner(dir)) !== null) return false;
-  const now = yield* Clock.currentTimeMillis;
-  return yield* fs.stat(file).pipe(
-    Effect.map((s) => now - (Option.isSome(s.mtime) ? s.mtime.value.getTime() : now) <= 10_000),
-    Effect.catch(() => Effect.succeed(false)),
-  );
+  return yield* lockWriteIsFresh(file).pipe(Effect.catch(() => Effect.succeed(false)));
 });
 
 export const releaseDriver = Effect.fn("releaseDriver")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const owner = yield* readOwner(dir);
-  if (owner && owner.pid === (yield* pid))
+  if (owner && owner.pid === (yield* currentPid))
     yield* fs.remove(path.join(dir, RUNNER_PID), { force: true });
 });
 export const driverPid = Effect.fn("driverPid")(function* (dir: string) {
@@ -340,7 +330,7 @@ export const driverAlive = Effect.fn("driverAlive")(function* (dir: string) {
 });
 export const stopDriver = Effect.fn("stopDriver")(function* (dir: string) {
   const owner = yield* liveOwner(dir);
-  return !!owner && owner.start !== null && (yield* kill(owner.pid, "SIGTERM"));
+  return !!owner && owner.start !== null && (yield* signalProcess(owner.pid, "SIGTERM"));
 });
 
 export function filePrompts(opts: {
@@ -349,6 +339,8 @@ export function filePrompts(opts: {
   step: () => string;
   timeoutMs: number;
   pollMs?: number;
+  /** Optional synchronization hook after both watch streams have been acquired. */
+  onWatching?: Effect.Effect<void>;
 }): EnginePrompts {
   let seq = 0;
   // Unique per Driver, not only per Choice within one: `${run}-1` from a resumed Run
@@ -365,7 +357,6 @@ export function filePrompts(opts: {
       const path = yield* Path.Path;
       const choice: PendingChoice = { ...asked, id: `${opts.run}-${yield* epochOnce}-${++seq}` };
       yield* clearChoice(opts.dir);
-      yield* writeChoice(opts.dir, choice);
       const inbox = path.join(opts.dir, "inbox");
       yield* fs.makeDirectory(inbox, { recursive: true });
 
@@ -377,8 +368,7 @@ export function filePrompts(opts: {
         if (answer && answer.id === choice.id) return answer;
         // The same request the signal carries, arriving as a file. Raising it on
         // ourselves keeps one path recording what a stop does to the Run.
-        if (yield* consumeInboxStop(opts.dir))
-          yield* Effect.sync(() => globalThis.process.kill(globalThis.process.pid, "SIGTERM"));
+        if (yield* consumeInboxStop(opts.dir)) yield* signalProcess(yield* currentPid, "SIGTERM");
         return null;
       });
 
@@ -392,15 +382,44 @@ export function filePrompts(opts: {
        * a file written before the subscription settled — should cost latency, not the
        * answer.
        */
-      const events = Stream.merge(
-        Stream.merge(fs.watch(opts.dir), fs.watch(inbox)),
-        Stream.tick(`${opts.pollMs ?? 500} millis`),
-      );
+      const watch = (directory: string) =>
+        fs.watch(directory).pipe(Stream.catchCause(() => Stream.empty));
 
       const answered = yield* Effect.gen(function* () {
+        const runEvents = yield* Stream.toQueue(watch(opts.dir), { capacity: "unbounded" });
+        const inboxEvents = yield* Stream.toQueue(watch(inbox), { capacity: "unbounded" });
+        if (opts.onWatching) {
+          const probe = Effect.fn("filePrompts.probeWatch")(function* (
+            directory: string,
+            events: typeof runEvents,
+          ) {
+            // Queue acquisition does not guarantee that the platform watcher has
+            // finished subscribing. Keep changing a harmless marker until the real
+            // watch queue answers, synchronized by Fiber/Queue rather than a sleep.
+            const marker = path.join(directory, ".watch-ready");
+            const writer = yield* fs
+              .writeFileString(marker, ".", { flag: "a" })
+              .pipe(Effect.andThen(Effect.yieldNow), Effect.forever, Effect.forkScoped);
+            yield* Queue.take(events).pipe(
+              Effect.mapError(() => new Error(`watch ended before subscribing to ${directory}`)),
+            );
+            yield* Fiber.interrupt(writer);
+            yield* fs.remove(marker, { force: true });
+          });
+          yield* probe(opts.dir, runEvents);
+          yield* probe(inbox, inboxEvents);
+          yield* opts.onWatching;
+        }
+        const queued = (events: typeof runEvents) =>
+          Stream.fromQueue(events).pipe(Stream.catchCause(() => Stream.empty));
+        const events = Stream.merge(
+          Stream.merge(queued(runEvents), queued(inboxEvents)),
+          Stream.tick(`${opts.pollMs ?? 500} millis`),
+        );
+        const queue = yield* Stream.toQueue(events, { capacity: "unbounded" });
         // Subscribed before the first read, so an answer written in the gap between
         // them still arrives as an event rather than being waited on for ever.
-        const queue = yield* Stream.toQueue(events, { capacity: "unbounded" });
+        yield* writeChoice(opts.dir, choice);
         const already = yield* check;
         if (already) return Option.some(already);
         return yield* Stream.fromQueue(queue).pipe(
@@ -412,7 +431,7 @@ export function filePrompts(opts: {
         Effect.scoped,
         Effect.timeout(opts.timeoutMs),
         // Running out of time is this function answering nothing, not a failure.
-        Effect.catch(() => Effect.succeed(Option.none<ChoiceAnswer>())),
+        Effect.catchTag("TimeoutError", () => Effect.succeed(Option.none<ChoiceAnswer>())),
         Effect.ensuring(clearChoice(opts.dir).pipe(Effect.ignore)),
       );
       return Option.getOrNull(answered);

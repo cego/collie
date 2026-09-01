@@ -3,7 +3,7 @@
 // command cannot drift apart. What stays with each of them is presentation: picking,
 // prompting, rendering, and turning a result into text or JSON.
 
-import { Config, Crypto, Effect, FileSystem, Path, Schedule, Schema } from "effect";
+import { Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { nowIso } from "./time";
 import type { PluginEnv } from "./env";
@@ -30,13 +30,7 @@ import {
 } from "./driver";
 import { inferInputs, inputSources, inputValues, type Resolution } from "./inputs";
 import { readRegistry, registryPath, type RegistryScope } from "./registry";
-import {
-  breakStaleLock,
-  LOCK_CLAIM_RETRIES,
-  LOCK_CLAIM_RETRY_INTERVAL,
-  releaseOwnLock,
-  tryClaimLock,
-} from "./lock";
+import { acquireLock, currentPid, releaseOwnLock } from "./lock";
 import { Run, RunStore } from "./run";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
@@ -109,7 +103,7 @@ export const writeInbox = Effect.fn("operations.writeInbox")(function* (
   const inbox = path.join(dir, "inbox");
   yield* fs.makeDirectory(inbox, { recursive: true });
   const target = path.join(inbox, `${encodeURIComponent(command.requestId)}.json`);
-  const tmp = `${target}.${globalThis.process.pid}.tmp`;
+  const tmp = `${target}.${yield* currentPid}.tmp`;
   yield* fs.writeFileString(tmp, `${Schema.encodeSync(InboxCommandJson)(command)}\n`, {
     flag: "wx",
   });
@@ -390,8 +384,10 @@ export const stopRun = Effect.fn("operations.stopRun")(function* (
   } else {
     // A Run nothing is driving has no process left to notice a signal, so the stop is
     // recorded here instead.
-    yield* fs.writeFileString(path.join(run.dir, STOPPED), `${yield* nowIso()}\n`);
+    const stoppedAt = yield* nowIso();
+    yield* fs.writeFileString(path.join(run.dir, STOPPED), `${stoppedAt}\n`);
     run.record.status = "blocked";
+    run.record.finished_at = stoppedAt;
     yield* run.save();
   }
   const entries = (yield* readRegistry(yield* registryPath(stateDir, scope))).filter(
@@ -428,17 +424,8 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
   // top of a Run the winner had already begun advancing. This lock is what makes the
   // look and the reset one decision.
   const lock = path.join(run.dir, "resume.lock");
-  const claim = Effect.gen(function* () {
-    if (yield* tryClaimLock(lock)) return;
-    if ((yield* breakStaleLock(lock)) && (yield* tryClaimLock(lock))) return;
+  if (!(yield* acquireLock(lock)))
     return yield* Effect.fail(new Error(`another resume of run "${run.id}" is in progress`));
-  });
-  yield* claim.pipe(
-    Effect.retry({
-      times: LOCK_CLAIM_RETRIES,
-      schedule: Schedule.spaced(LOCK_CLAIM_RETRY_INTERVAL),
-    }),
-  );
   // Effect.ensuring, not try/finally: a typed failure unwinds past a generator's
   // finally without entering it, and the Run would stay locked against resuming.
   return yield* Effect.gen(function* () {

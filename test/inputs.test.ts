@@ -8,8 +8,7 @@ import {
   inferInput,
   inferInputs,
   inputValues,
-  resolveTarget,
-  resolveWorkSource,
+  resolveCandidates,
   targetCandidates,
   workSourceCandidates,
 } from "../src/inputs";
@@ -367,7 +366,7 @@ test("the menu resolves a work-source to a candidate", () =>
       const resolved = yield* inferInput("plan", "work-source", withState());
 
       const asked: string[] = [];
-      const ok = yield* resolveWorkSource(resolved, {
+      const ok = yield* resolveCandidates(resolved, {
         menu: (items, opts) => {
           asked.push(opts.header);
           return Effect.succeed(items[0]!);
@@ -393,7 +392,7 @@ test("the menu always offers Type it…, and classifies what comes back", () =>
       const resolved = yield* inferInput("plan", "work-source", withState());
 
       const titles: string[] = [];
-      const ok = yield* resolveWorkSource(resolved, {
+      const ok = yield* resolveCandidates(resolved, {
         menu: (items) => {
           titles.push(...items.map((i) => i.title));
           return Effect.succeed(items.find((i) => i.id === "type")!);
@@ -413,7 +412,7 @@ test("free text typed into the menu is kept as the work source", () =>
       yield* bin.add("git", `echo add-picker`);
       const resolved = yield* inferInput("plan", "work-source", withState());
 
-      yield* resolveWorkSource(resolved, {
+      yield* resolveCandidates(resolved, {
         menu: (items) => Effect.succeed(items.find((i) => i.id === "type")!),
         ask: () => Effect.succeed("teach the picker to remember the last workflow"),
       });
@@ -433,7 +432,7 @@ test("escaping the menu or the question leaves the work-source unresolved", () =
 
       const escaped = yield* inferInput("plan", "work-source", withState());
       expect(
-        yield* resolveWorkSource(escaped, {
+        yield* resolveCandidates(escaped, {
           menu: () => Effect.succeed(null),
           ask: () => Effect.succeed("x"),
         }),
@@ -442,7 +441,7 @@ test("escaping the menu or the question leaves the work-source unresolved", () =
 
       const blank = yield* inferInput("plan", "work-source", withState());
       expect(
-        yield* resolveWorkSource(blank, {
+        yield* resolveCandidates(blank, {
           menu: (items) => Effect.succeed(items.find((i) => i.id === "type")!),
           ask: () => Effect.succeed("   "),
         }),
@@ -643,7 +642,7 @@ test("the target menu always shows, and Type it… classifies what comes back", 
       const resolved = yield* inferInput("target", "diff-target", ctx());
 
       const titles: string[] = [];
-      const ok = yield* resolveTarget(resolved, {
+      const ok = yield* resolveCandidates(resolved, {
         menu: (items, opts) => {
           titles.push(...items.map((i) => i.title));
           expect(opts.header).toContain("Review what?");
@@ -666,7 +665,7 @@ test("picking the top of the target menu reproduces plain inference", () =>
       const resolved = yield* inferInput("target", "diff-target", ctx());
       const inferredValue = resolved.value;
 
-      const ok = yield* resolveTarget(resolved, {
+      const ok = yield* resolveCandidates(resolved, {
         menu: (items) => Effect.succeed(items[0]!),
         ask: () => Effect.succeed(null),
       });
@@ -685,7 +684,7 @@ test("escaping the target menu leaves the run unstarted", () =>
       const resolved = yield* inferInput("target", "diff-target", ctx());
 
       expect(
-        yield* resolveTarget(resolved, {
+        yield* resolveCandidates(resolved, {
           menu: () => Effect.succeed(null),
           ask: () => Effect.succeed("x"),
         }),

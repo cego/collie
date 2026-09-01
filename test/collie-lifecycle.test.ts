@@ -4,12 +4,14 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   Config,
   ConfigProvider,
+  Deferred,
   Effect,
   Fiber,
   FileSystem,
   Option,
   Path,
   PlatformError,
+  Ref,
   Schema,
   Scope,
   Sink,
@@ -295,6 +297,8 @@ effectTest(
     ]);
     expect(stopped.body.data.status).toBe("stopped");
     expect(stoppedRetry.body).toEqual(stopped.body);
+    const stoppedRun = (yield* cli(["--workspace", "w1", "run", "show", runId])).body.data.run;
+    expect(stoppedRun.finished_at).toBeString();
     const resumed = yield* cli([
       "--workspace",
       "w1",
@@ -567,9 +571,19 @@ effectTest("wait picks up events written after it started, and ends on one termi
     ),
   );
 
+  const ready = yield* Deferred.make<void>();
+  const progressSeen = yield* Deferred.make<void>();
+  const observed = yield* Ref.make("");
   const reader = yield* Effect.forkScoped(
     process.stdout.pipe(
       Stream.decodeText(),
+      Stream.tap((chunk) =>
+        Effect.gen(function* () {
+          yield* Deferred.succeed(ready, undefined);
+          const text = yield* Ref.updateAndGet(observed, (current) => current + chunk);
+          if (text.includes("step one")) yield* Deferred.succeed(progressSeen, undefined);
+        }),
+      ),
       Stream.runFold(
         (): string => "",
         (out, chunk) => out + chunk,
@@ -577,14 +591,15 @@ effectTest("wait picks up events written after it started, and ends on one termi
     ),
   );
 
-  // Written only now, one at a time, so each has to reach the waiter as an event.
-  yield* Effect.sleep("300 millis");
+  // The first snapshot proves the subprocess subscribed its watch and completed its
+  // initial read. Everything written after this must arrive through an event.
+  yield* Deferred.await(ready);
   yield* fs.writeFileString(
     path.join(runDir, "progress.jsonl"),
     `${JSON.stringify({ at: yield* nowIso(), text: "step one" })}\n`,
     { flag: "a" },
   );
-  yield* Effect.sleep("300 millis");
+  yield* Deferred.await(progressSeen);
   const snapshotPath = path.join(runDir, "run.json");
   const snapshot = parseJson(yield* fs.readFileString(snapshotPath));
   snapshot.status = "done";
@@ -640,7 +655,14 @@ effectTest("interrupting wait stops the waiter and leaves the Run alone", functi
       { cwd: root, env, extendEnv: true, stdout: "pipe", stderr: "pipe" },
     ),
   );
-  yield* Effect.sleep("500 millis");
+  const ready = yield* Deferred.make<void>();
+  yield* Effect.forkScoped(
+    process.stdout.pipe(
+      Stream.tap(() => Deferred.succeed(ready, undefined)),
+      Stream.runDrain,
+    ),
+  );
+  yield* Deferred.await(ready);
   yield* process.kill({ killSignal: "SIGINT" });
   // Dying from a signal is a failure to the spawner; that it ended is all this needs.
   yield* Effect.ignore(process.exitCode);

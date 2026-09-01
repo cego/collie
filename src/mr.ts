@@ -6,6 +6,7 @@ import { Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { YamlValue } from "./yaml";
+import { isString } from "./schema";
 
 export type Runner<R = never> = (
   cmd: string,
@@ -13,7 +14,6 @@ export type Runner<R = never> = (
   cwd: string,
 ) => Effect.Effect<{ code: number; stdout: string }, never, R>;
 
-const isString = Schema.is(Schema.String);
 const UserJson = Schema.fromJsonString(Schema.Struct({ username: Schema.String }));
 const IssueJson = Schema.fromJsonString(
   Schema.Struct({ issue: Schema.optionalKey(Schema.String) }),

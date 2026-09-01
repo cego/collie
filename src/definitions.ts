@@ -7,6 +7,7 @@ import { isYamlMap, parseDocument, YamlError, type YamlMap, type YamlValue } fro
 import { Crypto, Data, Effect, FileSystem, Path, Result, Schema, type PlatformError } from "effect";
 import { DEFAULT_MODEL, HARNESSES, harnessNames, knownModel, modelHint } from "./harness";
 import type { Defaults } from "./config";
+import { isNumber, isString } from "./schema";
 
 export type LayerName = "baseline" | "user" | "project";
 
@@ -186,8 +187,6 @@ const markdownFiles = Effect.fn("Definitions.markdownFiles")(function* (dir: str
     .map((f) => path.join(dir, f));
 });
 
-const isString = Schema.is(Schema.String);
-const isNumber = Schema.is(Schema.Number);
 const isBoolean = Schema.is(Schema.Boolean);
 
 function str(value: YamlValue | undefined, fallback = ""): string {

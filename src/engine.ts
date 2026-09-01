@@ -21,9 +21,15 @@ import { configValue, readConfig, writeConfigValue } from "./config";
 import type { PluginEnv } from "./env";
 import type { PickItem } from "./picker";
 import { slugify } from "./template";
-import { isYamlMap, YamlMapSchema, YamlValueSchema, type YamlMap, type YamlValue } from "./yaml";
+import {
+  isYamlMap,
+  YamlMapSchema,
+  YamlValueJsonSchema,
+  type YamlMap,
+  type YamlValue,
+} from "./yaml";
 import type { Herdr } from "./herdr";
-import { HerdrError } from "./herdr";
+import { HerdrError, herdrFailureReason } from "./herdr";
 import { HARNESSES, personaPrefix, startArgs } from "./harness";
 import {
   findingKey,
@@ -56,7 +62,7 @@ import { registerAgent, registryPath, scopeFor } from "./registry";
 import {
   classifyWorkSource,
   inferInputs,
-  resolveWorkSource,
+  resolveCandidates,
   shell as shellRun,
   targetKind,
   type InputPrompts,
@@ -76,6 +82,7 @@ import { askRoute, liveRole, sendPlanChange, sendReview, type Session } from "./
 import { renderTemplate } from "./template";
 import { resolveWorkflow } from "./definitions";
 import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
+import { isString } from "./schema";
 
 export const VIEW_SOURCE_PREFIX = "cego.collie:";
 
@@ -109,8 +116,6 @@ interface VariantOutcome {
   review: ReviewOutput | null;
 }
 
-const isString = Schema.is(Schema.String);
-const JsonValue = Schema.fromJsonString(YamlValueSchema);
 const choiceResult = (result: ChoiceResult): ChoiceResult => result;
 const handoffResult = (
   result: false | { ok: boolean; message: string },
@@ -224,14 +229,8 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       yield* out(`▶ ${step.id} — over to you`);
       const choiceResult = yield* runChoiceStep(o, step, ctx).pipe(Effect.result);
       if (Result.isFailure(choiceResult)) {
-        const error = choiceResult.failure;
         record.status = "failed";
-        record.note =
-          error instanceof HerdrError
-            ? `${error.message}: ${error.detail}`
-            : error instanceof Error
-              ? error.message
-              : String(error);
+        record.note = herdrFailureReason(choiceResult.failure);
         yield* run.save();
         yield* out(`✗ ${step.id} — ${record.note}`);
         return yield* finish(o, "failed", viewSource);
@@ -270,14 +269,8 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
 
     const stepResult = yield* runStep(o, step, variants, keys, ctx, extras).pipe(Effect.result);
     if (Result.isFailure(stepResult)) {
-      const error = stepResult.failure;
       record.status = "failed";
-      record.note =
-        error instanceof HerdrError
-          ? `${error.message}: ${error.detail}`
-          : error instanceof Error
-            ? error.message
-            : String(error);
+      record.note = herdrFailureReason(stepResult.failure);
       yield* run.save();
       yield* out(`✗ ${step.id} — ${record.note}`);
       return yield* finish(o, "failed", viewSource);
@@ -727,7 +720,7 @@ const chain = Effect.fn("Engine.chain")(function* (
     if (r.needsAsking) {
       // A work-source is chosen from what this repo offers; everything else is typed.
       if (r.candidates) {
-        if (!(yield* resolveWorkSource(r, prompts))) {
+        if (!(yield* resolveCandidates(r, prompts))) {
           yield* out(`  ${choice.run} needs "${r.name}" — nothing started`);
           return null;
         }
@@ -1229,10 +1222,10 @@ const collect = Effect.fn("Engine.collect")(function* (
   const text = yield* fs.readFileString(path);
   let parsed: YamlValue;
   try {
-    parsed = Schema.decodeUnknownSync(JsonValue)(text);
+    parsed = Schema.decodeUnknownSync(YamlValueJsonSchema)(text);
   } catch (e) {
     record.status = "failed";
-    record.error = `${record.output}: not valid JSON (${e instanceof Error ? e.message : String(e)})`;
+    record.error = `${record.output}: not valid JSON (${reason(e)})`;
     return { record, output: null, review: null };
   }
 

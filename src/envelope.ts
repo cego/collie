@@ -3,7 +3,7 @@ import { Config, Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from 
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import type { HerdrError } from "./herdr";
-import { breakStaleLock, releaseOwnLock, tryClaimLock } from "./lock";
+import { acquireLock, currentPid, releaseOwnLock } from "./lock";
 import { err, newRequestId, ExpectedError, type OpResult } from "./operations";
 
 const ResultBoundary = Schema.Union([
@@ -134,10 +134,7 @@ export const mutation = Effect.fn("collie.mutation")(function* (
   if (yield* fs.exists(path)) return yield* readReceipt(path);
   yield* fs.makeDirectory(pathSvc.dirname(path), { recursive: true });
   const lock = `${path}.lock`;
-  if (
-    !(yield* tryClaimLock(lock)) &&
-    (!(yield* breakStaleLock(lock)) || !(yield* tryClaimLock(lock)))
-  ) {
+  if (!(yield* acquireLock(lock))) {
     if (yield* fs.exists(path)) return yield* readReceipt(path);
     return err("operation_failed", `Request "${id}" is already in progress.`, { requestId: id });
   }
@@ -147,7 +144,7 @@ export const mutation = Effect.fn("collie.mutation")(function* (
     const result = yield* apply(id);
     const withRequest = withRequestId(result, id);
     if (!withRequest.ok && REJECTED.includes(withRequest.error.code)) return withRequest;
-    const tmp = `${path}.${globalThis.process.pid}.tmp`;
+    const tmp = `${path}.${yield* currentPid}.tmp`;
     yield* fs.writeFileString(tmp, `${Schema.encodeSync(ResultBoundaryJson)(withRequest)}\n`);
     yield* fs.rename(tmp, path);
     return withRequest;

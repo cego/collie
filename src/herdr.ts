@@ -2,12 +2,13 @@
 // HERDR_SOCKET_PATH for the few methods 0.7.5 does not expose on the CLI.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Data, Deferred, Effect, Option, Schema, Stream } from "effect";
+import { Data, Deferred, Effect, Schema, Stream } from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
 import { PLUGIN_ID } from "./env";
+import { reason } from "./naming";
 
 export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 
@@ -16,16 +17,92 @@ export class HerdrError extends Data.TaggedError("HerdrError")<{
   readonly detail: string;
 }> {}
 
+export function herdrFailureReason(cause: unknown): string {
+  return cause instanceof HerdrError ? `${cause.message}: ${cause.detail}` : reason(cause);
+}
+
 type HerdrEffect<A> = Effect.Effect<A, HerdrError, BunServices>;
 type ExecResult = { code: number; stdout: string; stderr: string };
-type HerdrValue = Schema.Json | string | undefined;
+type BoundaryValue = Schema.Json | string | undefined;
 type HerdrParams = Schema.JsonObject;
 
 const JsonString = Schema.fromJsonString(Schema.Json);
 const encodeJson = Schema.encodeSync(JsonString);
 
+const ErrorReply = Schema.Struct({
+  message: Schema.optionalKey(Schema.String),
+  code: Schema.optionalKey(Schema.String),
+});
+const SocketReply = Schema.Struct({
+  error: Schema.optionalKey(ErrorReply),
+  result: Schema.optionalKey(Schema.Json),
+});
+const TabCreateReply = Schema.Struct({
+  result: Schema.Struct({
+    tab: Schema.Struct({ tab_id: Schema.String }),
+    root_pane: Schema.Struct({ pane_id: Schema.String }),
+  }),
+});
+const WorkspaceReply = Schema.Struct({
+  workspace_id: Schema.String,
+  label: Schema.String,
+  cwd: Schema.optionalKey(Schema.String),
+  working_directory: Schema.optionalKey(Schema.String),
+  worktree: Schema.optionalKey(Schema.Struct({ path: Schema.String })),
+  worktree_path: Schema.optionalKey(Schema.String),
+});
+const WorkspaceListReply = Schema.Struct({
+  result: Schema.Struct({ workspaces: Schema.Array(WorkspaceReply) }),
+});
+const TabListReply = Schema.Struct({
+  result: Schema.Struct({
+    tabs: Schema.Array(Schema.Struct({ tab_id: Schema.String, label: Schema.String })),
+  }),
+});
+const PaneListReply = Schema.Struct({
+  result: Schema.Struct({
+    panes: Schema.Array(
+      Schema.Struct({
+        pane_id: Schema.String,
+        tab_id: Schema.String,
+        label: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  }),
+});
+const PaneSplitReply = Schema.Struct({
+  result: Schema.Struct({ pane: Schema.Struct({ pane_id: Schema.String }) }),
+});
+const AgentReply = Schema.Struct({
+  name: Schema.String,
+  pane_id: Schema.String,
+  workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  agent_status: Schema.String,
+});
+const AgentListReply = Schema.Struct({
+  result: Schema.Struct({ agents: Schema.Array(AgentReply) }),
+});
+const AgentStatusReply = Schema.Struct({
+  result: Schema.Struct({ agent: Schema.Struct({ agent_status: Schema.String }) }),
+});
+const PluginPaneReply = Schema.Struct({
+  result: Schema.Struct({
+    plugin_pane: Schema.Struct({
+      pane: Schema.Struct({ tab_id: Schema.String, pane_id: Schema.String }),
+    }),
+  }),
+});
+
 const herdrError = (message: string, detail: string) => new HerdrError({ message, detail });
 const herdrFail = (message: string, detail: string) => Effect.fail(herdrError(message, detail));
+
+const decodeBoundary = <S extends Schema.Top>(operation: string, schema: S, value: BoundaryValue) =>
+  Schema.decodeUnknownEffect(schema)(value).pipe(
+    Effect.mapError((cause) =>
+      herdrError(`${operation} returned an invalid response`, String(cause)),
+    ),
+  );
 
 /**
  * One line of herdr's reply: its `result`, or the error it names. Both shapes come
@@ -34,16 +111,16 @@ const herdrFail = (message: string, detail: string) => Effect.fail(herdrError(me
 const decodeReply = (
   method: string,
   line: string,
-): Effect.Effect<Schema.Json | undefined, HerdrError> => {
-  const message = Option.getOrUndefined(Schema.decodeUnknownOption(JsonString)(line));
-  if (message === undefined) return herdrFail(`${method} failed`, "invalid json response");
-  if (property(message, "error") !== undefined)
-    return herdrFail(
-      `${method} failed`,
-      stringPath(message, ["error", "message"], stringPath(message, ["error", "code"], "unknown")),
-    );
-  return Effect.succeed(property(message, "result"));
-};
+): Effect.Effect<Schema.Json | undefined, HerdrError> =>
+  Schema.decodeUnknownEffect(JsonString)(line).pipe(
+    Effect.mapError(() => herdrError(`${method} failed`, "invalid json response")),
+    Effect.flatMap((message) => decodeBoundary(method, SocketReply, message)),
+    Effect.flatMap((message) =>
+      message.error
+        ? herdrFail(`${method} failed`, message.error.message ?? message.error.code ?? "unknown")
+        : Effect.succeed(message.result),
+    ),
+  );
 
 /** A child's whole output as text. */
 const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
@@ -55,36 +132,7 @@ const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
     ),
   );
 
-function record(value: HerdrValue): Schema.JsonObject | undefined {
-  return Option.getOrUndefined(Schema.decodeUnknownOption(Schema.JsonObject)(value));
-}
-
-function property(value: HerdrValue, key: string): Schema.Json | undefined {
-  return record(value)?.[key];
-}
-
-function propertyPath(value: HerdrValue, path: string[]): Schema.Json | undefined {
-  let current = value;
-  for (const key of path) current = property(current, key);
-  return current;
-}
-
-function stringPath(value: HerdrValue, path: string[], fallback = ""): string {
-  const found = propertyPath(value, path);
-  return Option.getOrElse(Schema.decodeUnknownOption(Schema.String)(found), () => fallback);
-}
-
-function nullableStringPath(value: HerdrValue, path: string[]): string | null {
-  const found = propertyPath(value, path);
-  return Option.getOrElse(Schema.decodeUnknownOption(Schema.String)(found), () => null);
-}
-
-function arrayPath(value: HerdrValue, path: string[]): readonly Schema.Json[] {
-  const found = propertyPath(value, path);
-  return Option.getOrElse(Schema.decodeUnknownOption(Schema.Array(Schema.Json))(found), () => []);
-}
-
-function agentStatus(value: HerdrValue): AgentStatus {
+function agentStatus(value: string): AgentStatus {
   if (value === "idle" || value === "working" || value === "blocked" || value === "done") {
     return value;
   }
@@ -240,9 +288,10 @@ export class Herdr {
       if (opts.label) args.push("--label", opts.label);
       args.push(opts.focus ? "--focus" : "--no-focus");
       const res = yield* cli(args);
+      const decoded = yield* decodeBoundary("herdr tab create", TabCreateReply, res);
       return {
-        tabId: stringPath(res, ["result", "tab", "tab_id"]),
-        paneId: stringPath(res, ["result", "root_pane", "pane_id"]),
+        tabId: decoded.result.tab.tab_id,
+        paneId: decoded.result.root_pane.pane_id,
       };
     });
   }
@@ -253,20 +302,23 @@ export class Herdr {
 
   workspaceList(): HerdrEffect<WorkspaceInfo[]> {
     return this.cli(["workspace", "list"]).pipe(
-      Effect.map((res) => {
-        const spaces = arrayPath(res, ["result", "workspaces"]);
-        return spaces.map((w) => ({
-          workspaceId: stringPath(w, ["workspace_id"]),
-          label: stringPath(w, ["label"]),
-          cwd: stringPath(
-            w,
-            ["cwd"],
-            stringPath(w, ["working_directory"], stringPath(w, ["worktree", "path"])),
-          ),
-          worktree:
-            nullableStringPath(w, ["worktree", "path"]) ?? nullableStringPath(w, ["worktree_path"]),
-        }));
-      }),
+      Effect.flatMap((res) => decodeBoundary("herdr workspace list", WorkspaceListReply, res)),
+      Effect.flatMap(({ result }) =>
+        Effect.forEach(result.workspaces, (workspace) => {
+          const cwd = workspace.cwd ?? workspace.working_directory ?? workspace.worktree?.path;
+          if (!cwd)
+            return herdrFail(
+              "herdr workspace list returned an invalid response",
+              `workspace ${workspace.workspace_id} has no working directory`,
+            );
+          return Effect.succeed({
+            workspaceId: workspace.workspace_id,
+            label: workspace.label,
+            cwd,
+            worktree: workspace.worktree?.path ?? workspace.worktree_path ?? null,
+          });
+        }),
+      ),
     );
   }
 
@@ -277,9 +329,10 @@ export class Herdr {
       const args = ["tab", "list"];
       if (env.workspaceId) args.push("--workspace", env.workspaceId);
       const res = yield* cli(args);
-      return arrayPath(res, ["result", "tabs"]).map((t) => ({
-        tabId: stringPath(t, ["tab_id"]),
-        label: stringPath(t, ["label"]),
+      const decoded = yield* decodeBoundary("herdr tab list", TabListReply, res);
+      return decoded.result.tabs.map((tab) => ({
+        tabId: tab.tab_id,
+        label: tab.label,
       }));
     });
   }
@@ -295,12 +348,13 @@ export class Herdr {
 
   paneList(): HerdrEffect<PaneInfo[]> {
     return this.cli(["pane", "list"]).pipe(
-      Effect.map((res) => {
-        return arrayPath(res, ["result", "panes"]).map((p) => ({
-          paneId: stringPath(p, ["pane_id"]),
-          tabId: stringPath(p, ["tab_id"]),
-          label: nullableStringPath(p, ["label"]),
-          agent: nullableStringPath(p, ["agent"]),
+      Effect.flatMap((res) => decodeBoundary("herdr pane list", PaneListReply, res)),
+      Effect.map(({ result }) => {
+        return result.panes.map((pane) => ({
+          paneId: pane.pane_id,
+          tabId: pane.tab_id,
+          label: pane.label ?? null,
+          agent: pane.agent ?? null,
         }));
       }),
     );
@@ -335,7 +389,8 @@ export class Herdr {
       if (opts.cwd) args.push("--cwd", opts.cwd);
       args.push(opts.focus ? "--focus" : "--no-focus");
       const res = yield* cli(args);
-      return stringPath(res, ["result", "pane", "pane_id"]);
+      const decoded = yield* decodeBoundary("herdr pane split", PaneSplitReply, res);
+      return decoded.result.pane.pane_id;
     });
   }
 
@@ -393,15 +448,15 @@ export class Herdr {
 
   agentList(): HerdrEffect<AgentInfo[]> {
     return this.cli(["agent", "list"]).pipe(
-      Effect.map((res) => {
-        const agents = arrayPath(res, ["result", "agents"]);
-        return agents
-          .filter((a) => stringPath(a, ["name"]) !== "")
-          .map((a) => ({
-            name: stringPath(a, ["name"]),
-            paneId: stringPath(a, ["pane_id"]),
-            workspaceId: nullableStringPath(a, ["workspace_id"]),
-            status: agentStatus(property(a, "agent_status")),
+      Effect.flatMap((res) => decodeBoundary("herdr agent list", AgentListReply, res)),
+      Effect.map(({ result }) => {
+        return result.agents
+          .filter((agent) => agent.name !== "")
+          .map((agent) => ({
+            name: agent.name,
+            paneId: agent.pane_id,
+            workspaceId: agent.workspace_id ?? null,
+            status: agentStatus(agent.agent_status),
           }));
       }),
     );
@@ -413,7 +468,8 @@ export class Herdr {
 
   agentStatus(target: string): HerdrEffect<AgentStatus> {
     return this.cli(["agent", "get", target]).pipe(
-      Effect.map((res) => agentStatus(propertyPath(res, ["result", "agent", "agent_status"]))),
+      Effect.flatMap((res) => decodeBoundary("herdr agent get", AgentStatusReply, res)),
+      Effect.map(({ result }) => agentStatus(result.agent.agent_status)),
     );
   }
 
@@ -462,8 +518,9 @@ export class Herdr {
       for (const [k, v] of Object.entries(opts.env ?? {})) args.push("--env", `${k}=${v}`);
       args.push(opts.focus === false ? "--no-focus" : "--focus");
       const res = yield* cli(args);
-      const pane = propertyPath(res, ["result", "plugin_pane", "pane"]);
-      return { tabId: stringPath(pane, ["tab_id"]), paneId: stringPath(pane, ["pane_id"]) };
+      const decoded = yield* decodeBoundary("herdr plugin pane open", PluginPaneReply, res);
+      const pane = decoded.result.plugin_pane.pane;
+      return { tabId: pane.tab_id, paneId: pane.pane_id };
     });
   }
 

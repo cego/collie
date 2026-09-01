@@ -131,3 +131,23 @@ test("the herdr subprocess inherits this process's environment", () =>
       expect(yield* rig.cmds()).toEqual(["tab create"]);
     }),
   ));
+
+test("malformed herdr replies fail at the boundary", () =>
+  runEffect(
+    Effect.gen(function* () {
+      class MalformedHerdr extends Herdr {
+        protected override exec() {
+          return Effect.succeed({
+            code: 0,
+            stdout: '{"result":{"workspaces":[{}]}}',
+            stderr: "",
+          });
+        }
+      }
+
+      const failure = yield* Effect.result(new MalformedHerdr(rig.pluginEnv()).workspaceList());
+
+      expect(failure._tag).toBe("Failure");
+      if (failure._tag === "Failure") expect(failure.failure._tag).toBe("HerdrError");
+    }),
+  ));

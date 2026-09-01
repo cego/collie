@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import { Argument, Command } from "effect/unstable/cli";
-import { forkDefinition } from "../fork";
+import { forkResolvedDefinition } from "../fork";
 import { err } from "../operations";
 import { attempt, mutation } from "../envelope";
 import {
@@ -79,9 +79,8 @@ const personaFork = Command.make(
               if (resolved._tag === "ContextFailure") return resolved.result;
               const found = (yield* definitions(resolved.env)).personas.get(persona);
               if (!found) return err("persona_not_found", `Persona "${persona}" was not found.`);
-              const result = yield* forkDefinition(
-                found.path,
-                "personas",
+              const result = yield* forkResolvedDefinition(
+                { path: found.path, kind: "personas", steps: [], body: found.body },
                 yield* layerDir(resolved.env, layer),
                 {
                   name,

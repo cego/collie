@@ -2,7 +2,7 @@ import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Config, Console, Effect, FileSystem, Path, type PlatformError } from "effect";
 import { program } from "./collie";
 import { currentEnv } from "./env";
-import { Herdr, HerdrError } from "./herdr";
+import { Herdr, herdrFailureReason } from "./herdr";
 import { driveFlow, forkFlow, openPicker, pickFlow, resumeFlow, workspaceFlow } from "./flows";
 
 /**
@@ -22,11 +22,6 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
     const client = new Herdr(env);
     const configuredMode = yield* Config.option(Config.string("COLLIE_MODE"));
     const selected = mode ?? (configuredMode._tag === "Some" ? configuredMode.value : "pick");
-    if (!["pick", "resume", "fork", "picker", "drive", "workspace"].includes(command)) {
-      yield* Console.error(`Unknown Herdr entrypoint "${command}".`);
-      process.exitCode = 2;
-      return;
-    }
     const code = yield* (() => {
       switch (command) {
         case "pick":
@@ -46,7 +41,7 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
         case "workspace":
           return workspaceFlow(client, env);
         default:
-          return Effect.succeed(2);
+          return Console.error(`Unknown Herdr entrypoint "${command}".`).pipe(Effect.as(2));
       }
     })();
     process.exitCode = code;
@@ -55,9 +50,7 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
 const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
   Effect.catch((cause) =>
     Effect.gen(function* () {
-      const message =
-        cause instanceof HerdrError ? `${cause.message}: ${cause.detail}` : String(cause);
-      yield* Console.error(message);
+      yield* Console.error(herdrFailureReason(cause));
       process.exitCode = 1;
     }),
   ),

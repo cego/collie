@@ -4,6 +4,7 @@
 
 import { Effect, FileSystem, Path, Schema, type PlatformError } from "effect";
 import { isYamlMap, YamlMapSchema, type YamlMap } from "./yaml";
+import { currentPid } from "./lock";
 
 export type TrustState = "trusted" | "untrusted" | "unknown";
 
@@ -85,7 +86,7 @@ export function claudeTrust(home: string, backupDir: string): Trust {
 
     const backup = pathService.join(backupDir, "claude.json.bak");
     yield* fs.copyFile(path, backup);
-    const tmp = `${path}.herdr-${globalThis.process.pid}`;
+    const tmp = `${path}.herdr-${yield* currentPid}`;
     yield* fs.writeFileString(tmp, `${Schema.encodeSync(ClaudeConfigJson)(config)}\n`);
     const info = yield* fs.stat(path);
     yield* fs.chmod(tmp, info.mode & 0o777);

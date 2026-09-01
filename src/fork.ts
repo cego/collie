@@ -4,7 +4,7 @@
 // full copy that stops tracking the parent altogether.
 
 import { Effect, FileSystem, Path, type PlatformError } from "effect";
-import { contentHash } from "./definitions";
+import { bodySections, contentHash } from "./definitions";
 import { unsafePathComponent } from "./naming";
 
 export type DefinitionKind = "workflows" | "personas";
@@ -25,6 +25,33 @@ export interface ForkOptions {
   /** The parent's body, so a stub can carry the section it is overriding. */
   section?: string;
 }
+
+export interface ForkSource {
+  path: string;
+  kind: DefinitionKind;
+  steps: ReadonlyArray<string>;
+  body: string;
+}
+
+/** The operation both front doors use: validate the selected part, then write once. */
+export const forkResolvedDefinition = Effect.fn("Fork.forkResolvedDefinition")(function* (
+  source: ForkSource,
+  targetDir: string,
+  opts: Omit<ForkOptions, "section"> = {},
+) {
+  if (opts.step && !source.steps.includes(opts.step)) {
+    return {
+      ok: false as const,
+      code: "invalid_input" as const,
+      path: "",
+      message: `definition has no Step "${opts.step}"`,
+    };
+  }
+  return yield* forkDefinition(source.path, source.kind, targetDir, {
+    ...opts,
+    section: opts.step ? bodySections(source.body).sections.get(opts.step) : undefined,
+  });
+});
 
 /** Never overwrites: an existing fork is the one you already edited. */
 export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (

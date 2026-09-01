@@ -5,7 +5,6 @@ import { Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from
 import { nowIso } from "./time";
 import { loadDefaults } from "./config";
 import {
-  bodySections,
   isStale,
   layers,
   loadDefinitions,
@@ -27,7 +26,7 @@ import {
   takeKey,
   type PickItem,
 } from "./picker";
-import { forkDefinition, type DefinitionKind } from "./fork";
+import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { reason, shellQuote } from "./naming";
 import { RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
@@ -40,6 +39,7 @@ import {
   filePrompts,
   releaseDriver,
   RUNNER_LOG,
+  STOPPED,
 } from "./driver";
 import { scopeFor } from "./registry";
 import {
@@ -243,10 +243,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (herdr: Herdr, env
   }
 
   const dir = target.id === "user" ? layerList.user.dir : layerList.project.dir;
-  const result = yield* forkDefinition(source.path, source.kind, dir, {
+  const result = yield* forkResolvedDefinition(source, dir, {
     full: how.id === "full",
     step,
-    section: step ? bodySections(source.body).sections.get(step) : undefined,
   });
   return yield* notice(`${chosen.title}: ${result.message}`, result.ok ? 0 : 1);
 });
@@ -339,92 +338,100 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
     return Effect.sync(() => process.off("SIGTERM", stop));
   });
 
-  // Atomic: acquiring is the check. A separate liveness test then a write would
-  // let two resumes race past each other and drive the same run twice.
-  if (!(yield* acquireDriver(run.dir))) {
-    process.off("SIGTERM", earlySigterm);
-    yield* out("a driver is already running this run; this one is stopping");
-    return 1;
-  }
-  /**
-   * A stop that landed before this Driver claimed the Run. `stopRun` writes its inbox
-   * command, sees no owner in the window between the spawn and the claim, and records
-   * the stop itself — so it has already reported success and closed the panes. Driving
-   * on would overwrite that with `running` and start agents nobody is expecting, and
-   * clearing the inbox below would remove the other half of the request too.
-   */
-  if (yield* stoppedBefore(run.dir)) {
-    yield* releaseDriver(run.dir);
-    process.off("SIGTERM", earlySigterm);
-    yield* out("stopped before this driver started; nothing was run");
-    return 0;
-  }
-  // This Driver owns the Run now, so nothing the last one left in the run dir is
-  // addressed to it — except the resume that asked for it, which it records.
-  const resumedBy = yield* clearPreviousDriver(run.dir);
-  if (resumedBy) yield* out(`resumed by request ${resumedBy}`);
+  const drive = Effect.gen(function* () {
+    // Atomic: acquiring is the check. A separate liveness test then a write would
+    // let two resumes race past each other and drive the same run twice.
+    if (!(yield* acquireDriver(run.dir))) {
+      yield* out("a driver is already running this run; this one is stopping");
+      return 1;
+    }
+    /**
+     * A stop that landed before this Driver claimed the Run. `stopRun` writes its inbox
+     * command, sees no owner in the window between the spawn and the claim, and records
+     * the stop itself — so it has already reported success and closed the panes. Driving
+     * on would overwrite that with `running` and start agents nobody is expecting, and
+     * clearing the inbox below would remove the other half of the request too.
+     */
+    if (yield* stoppedBefore(run.dir)) {
+      yield* releaseDriver(run.dir);
+      yield* out("stopped before this driver started; nothing was run");
+      return 0;
+    }
+    // This Driver owns the Run now, so nothing the last one left in the run dir is
+    // addressed to it — except the resume that asked for it, which it records.
+    const resumedBy = yield* clearPreviousDriver(run.dir);
+    if (resumedBy) yield* out(`resumed by request ${resumedBy}`);
 
-  const markStopped = Effect.gen(function* () {
-    const stoppedAt = yield* nowIso();
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    yield* fs.writeFileString(path.join(run.dir, "stopped"), `${stoppedAt}\n`);
-    run.record.status = "blocked";
-    run.record.finished_at = stoppedAt;
-    yield* run.save();
-    return 0;
+    const markStopped = Effect.gen(function* () {
+      const stoppedAt = yield* nowIso();
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fs.writeFileString(path.join(run.dir, STOPPED), `${stoppedAt}\n`);
+      run.record.status = "blocked";
+      run.record.finished_at = stoppedAt;
+      yield* run.save();
+      return 0;
+    });
+
+    // Effect.catch and Effect.ensuring, not try/catch/finally: a typed failure out of
+    // executeRun unwinds past both without entering either, which left the Run marked
+    // `running` with no Driver, nothing in the log, and `collie run wait` blocking to
+    // its timeout — with the ownership claim never given back.
+    return yield* Effect.raceFirst(
+      Effect.gen(function* () {
+        const defs = yield* loadDefinitions(yield* layers({ ...env, cwd: run.record.cwd }));
+        const defaults = yield* loadDefaults(env.configDir);
+        const wf = resolveWorkflow(run.record.workflow, defs, defaults);
+        yield* out(`${wf.title}`);
+        const prompts = filePrompts({
+          dir: run.dir,
+          run: run.id,
+          step: () => run.record.steps.find((st) => st.status === "running")?.id ?? "",
+          timeoutMs: defaults.handoffTimeoutMs,
+        });
+
+        const status = yield* executeRun({
+          herdr,
+          defs,
+          defaults,
+          wf,
+          run,
+          env,
+          out,
+          handoffTimeoutMs: defaults.handoffTimeoutMs,
+          // Every question this run asks goes through the run dir to the Control Plane.
+          prompts,
+        });
+        return status === "done" ? 0 : 1;
+      }),
+      sigterm.pipe(Effect.andThen(markStopped)),
+    ).pipe(
+      Effect.catch((cause) =>
+        Effect.gen(function* () {
+          // Nobody is watching a pane for this, so the only useful place is the log.
+          const detail = reason(cause);
+          yield* out(`the driver stopped: ${detail.split("\n")[0]}`);
+          yield* run.log(`driver failed: ${detail}`);
+          run.record.status = "failed";
+          run.record.finished_at = yield* nowIso();
+          yield* run.save();
+          // A missing toast must not be the last word.
+          yield* Effect.ignore(
+            herdr.notify(
+              `${run.record.slug} failed`,
+              `see ${RUNNER_LOG} in the run dir`,
+              "request",
+            ),
+          );
+          return 1;
+        }),
+      ),
+      Effect.ensuring(releaseDriver(run.dir).pipe(Effect.ignore)),
+    );
   });
 
-  // Effect.catch and Effect.ensuring, not try/catch/finally: a typed failure out of
-  // executeRun unwinds past both without entering either, which left the Run marked
-  // `running` with no Driver, nothing in the log, and `collie run wait` blocking to
-  // its timeout — with the ownership claim never given back.
-  return yield* Effect.raceFirst(
-    Effect.gen(function* () {
-      const defs = yield* loadDefinitions(yield* layers({ ...env, cwd: run.record.cwd }));
-      const defaults = yield* loadDefaults(env.configDir);
-      const wf = resolveWorkflow(run.record.workflow, defs, defaults);
-      yield* out(`${wf.title}`);
-      const prompts = filePrompts({
-        dir: run.dir,
-        run: run.id,
-        step: () => run.record.steps.find((st) => st.status === "running")?.id ?? "",
-        timeoutMs: defaults.handoffTimeoutMs,
-      });
-
-      const status = yield* executeRun({
-        herdr,
-        defs,
-        defaults,
-        wf,
-        run,
-        env,
-        out,
-        handoffTimeoutMs: defaults.handoffTimeoutMs,
-        // Every question this run asks goes through the run dir to the Control Plane.
-        prompts,
-      });
-      return status === "done" ? 0 : 1;
-    }),
-    sigterm.pipe(Effect.andThen(markStopped)),
-  ).pipe(
-    Effect.catch((cause) =>
-      Effect.gen(function* () {
-        // Nobody is watching a pane for this, so the only useful place is the log.
-        const detail = cause instanceof Error ? (cause.stack ?? cause.message) : String(cause);
-        yield* out(`the driver stopped: ${detail.split("\n")[0]}`);
-        yield* run.log(`driver failed: ${detail}`);
-        run.record.status = "failed";
-        run.record.finished_at = yield* nowIso();
-        yield* run.save();
-        // A missing toast must not be the last word.
-        yield* Effect.ignore(
-          herdr.notify(`${run.record.slug} failed`, `see ${RUNNER_LOG} in the run dir`, "request"),
-        );
-        return 1;
-      }),
-    ),
-    Effect.ensuring(releaseDriver(run.dir).pipe(Effect.ignore)),
+  return yield* drive.pipe(
+    Effect.ensuring(Effect.sync(() => process.off("SIGTERM", earlySigterm))),
   );
 });
 

@@ -81,6 +81,16 @@ test("persona discovery uses the same command boundary", () =>
     }),
   ));
 
+test("human workflow show includes its steps and source", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const shown = yield* cli(["workflow", "show", "architecture"]);
+      expect(shown.exit).toBe(0);
+      expect(shown.stdout).toContain("Steps:");
+      expect(shown.stdout).toContain("Defined in:");
+    }),
+  ));
+
 test("invalid input is one envelope on stdout, its reason on stderr, and exit 2", () =>
   runEffect(
     Effect.gen(function* () {

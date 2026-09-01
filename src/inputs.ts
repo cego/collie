@@ -531,26 +531,12 @@ function resolveFromMenu<E, R>(
   });
 }
 
-export function resolveWorkSource<E, R>(
-  r: Resolution,
-  prompts: InputPrompts<E, R>,
-): Effect.Effect<boolean, PlatformError | E, FileSystem.FileSystem | Path.Path | R> {
-  return resolveFromMenu(r, prompts, WORK_SOURCE_MENU);
-}
-
-export function resolveTarget<E, R>(
-  r: Resolution,
-  prompts: InputPrompts<E, R>,
-): Effect.Effect<boolean, PlatformError | E, FileSystem.FileSystem | Path.Path | R> {
-  return resolveFromMenu(r, prompts, TARGET_MENU);
-}
-
 /** The menu an Input needs, whichever Input it is. */
 export function resolveCandidates<E, R>(
   r: Resolution,
   prompts: InputPrompts<E, R>,
 ): Effect.Effect<boolean, PlatformError | E, FileSystem.FileSystem | Path.Path | R> {
-  return r.strategy === "diff-target" ? resolveTarget(r, prompts) : resolveWorkSource(r, prompts);
+  return resolveFromMenu(r, prompts, r.strategy === "diff-target" ? TARGET_MENU : WORK_SOURCE_MENU);
 }
 
 export function settle(
@@ -597,12 +583,8 @@ function textLabel(text: string): string {
   return label || "work";
 }
 
-export interface InputValues {
-  [name: string]: string;
-}
-
 /** Inputs as the prompts see them: a work-source also exposes `<name>_kind`. */
-export function inputValues(resolutions: Resolution[]): InputValues {
+export function inputValues(resolutions: Resolution[]) {
   const values: Record<string, string> = {};
   for (const r of resolutions) {
     values[r.name] = r.value;
@@ -612,11 +594,7 @@ export function inputValues(resolutions: Resolution[]): InputValues {
 }
 
 /** Only real Inputs have a provenance; a `<name>_kind` is a companion of its own Input. */
-export interface InputSources {
-  [name: string]: string;
-}
-
-export function inputSources(resolutions: Resolution[]): InputSources {
+export function inputSources(resolutions: Resolution[]) {
   const sources: Record<string, string> = {};
   for (const r of resolutions) sources[r.name] = r.source;
   return sources;

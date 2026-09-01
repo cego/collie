@@ -1,4 +1,5 @@
 import { Cause, Duration, Effect, FileSystem, Option, Path, Ref, Schema, Stream } from "effect";
+import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { RUNNER_LOG, readProgress } from "../driver";
 import { Herdr } from "../herdr";
@@ -14,9 +15,19 @@ import {
   type Failure,
 } from "../operations";
 import { RunStore } from "../run";
+import type { Run } from "../run";
+import type { PluginEnv } from "../env";
 import { scopeFor } from "../registry";
 import { YamlMapSchema } from "../yaml";
-import { attempt, guarded, mutation, printResult, say, type Result } from "../envelope";
+import {
+  attempt,
+  guarded,
+  mutation,
+  printResult,
+  say,
+  type CollieError,
+  type Result,
+} from "../envelope";
 import {
   PrettyUnknownJson,
   UnknownJson,
@@ -208,7 +219,18 @@ const runOutput = Command.make("output", { runId: Argument.string("run-id") }, (
         return {
           ok: true,
           data: { runId, outputs },
-          human: Schema.encodeSync(PrettyUnknownJson)(outputs),
+          human:
+            outputs
+              .map((output) => {
+                const body = output.error
+                  ? `Error: ${output.error}`
+                  : Schema.encodeSync(PrettyUnknownJson)(output.value);
+                return `${output.path}\n${body
+                  .split("\n")
+                  .map((line) => `  ${line}`)
+                  .join("\n")}`;
+              })
+              .join("\n\n") || "This Run has no Outputs.",
         };
       }),
       global.json,
@@ -337,11 +359,11 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
   );
 });
 
-function runCommandMutation(
-  kind: "answer" | "stop" | "resume",
+function runMutationCommand(
+  operation: string,
   runId: string,
-  answer: string | undefined,
   requestId: Option.Option<string>,
+  apply: (env: PluginEnv, run: Run, id: string) => Effect.Effect<Result, CollieError, BunServices>,
 ) {
   return Effect.gen(function* () {
     const global = yield* root;
@@ -350,21 +372,11 @@ function runCommandMutation(
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
         const workspace = yield* selected(global);
-        return yield* mutation(resolved.env, `run-${kind}`, requestId, (id) =>
+        return yield* mutation(resolved.env, operation, requestId, (id) =>
           Effect.gen(function* () {
             const found = yield* readRun(resolved.env, runId, workspace);
             if (found._tag === "RunFailure") return found.result;
-            if (kind === "answer") return yield* answerRun(found.run, answer ?? "", id);
-            if (kind === "stop") {
-              return yield* stopRun(
-                resolved.env.stateDir,
-                new Herdr(resolved.env),
-                found.run,
-                scopeFor(resolved.env, found.run.record.cwd),
-                id,
-              );
-            }
-            return yield* resumeRun(resolved.env, found.run, id);
+            return yield* apply(resolved.env, found.run, id);
           }),
         );
       }),
@@ -380,26 +392,26 @@ const runAnswer = Command.make(
     answer: Argument.string("answer"),
     requestId: Flag.string("request-id").pipe(Flag.optional),
   },
-  ({ runId, answer, requestId }) => runCommandMutation("answer", runId, answer, requestId),
+  ({ runId, answer, requestId }) =>
+    runMutationCommand("run-answer", runId, requestId, (_env, run, id) =>
+      answerRun(run, answer, id),
+    ),
 ).pipe(Command.withDescription("Answer the Choice a waiting Run is asking"));
 
-function runStatusMutation(kind: "stop" | "resume") {
-  const described =
-    kind === "stop"
-      ? "Stop a Run and close only the panes it owns"
-      : "Start a fresh Driver for a Run, skipping the Steps that finished";
-  return Command.make(
-    kind,
-    {
-      runId: Argument.string("run-id"),
-      requestId: Flag.string("request-id").pipe(Flag.optional),
-    },
-    ({ runId, requestId }) => runCommandMutation(kind, runId, undefined, requestId),
-  ).pipe(Command.withDescription(described));
-}
+const mutationFlags = {
+  runId: Argument.string("run-id"),
+  requestId: Flag.string("request-id").pipe(Flag.optional),
+};
 
-const runStop = runStatusMutation("stop");
-const runResume = runStatusMutation("resume");
+const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
+  runMutationCommand("run-stop", runId, requestId, (env, run, id) =>
+    stopRun(env.stateDir, new Herdr(env), run, scopeFor(env, run.record.cwd), id),
+  ),
+).pipe(Command.withDescription("Stop a Run and close only the panes it owns"));
+
+const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =>
+  runMutationCommand("run-resume", runId, requestId, (env, run, id) => resumeRun(env, run, id)),
+).pipe(Command.withDescription("Start a fresh Driver for a Run, skipping finished Steps"));
 export const run = Command.make("run").pipe(
   Command.withDescription("Start Runs and follow, answer, stop or resume them"),
   Command.withSubcommands([

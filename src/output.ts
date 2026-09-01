@@ -2,7 +2,8 @@
 // never terminal text (docs/SPEC.md).
 
 import { Schema } from "effect";
-import { isYamlMap, YamlValueSchema, type YamlValue } from "./yaml";
+import { isNumber, isString } from "./schema";
+import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
 
 export const FindingSchema = Schema.Struct({
   file: Schema.optionalKey(Schema.String),
@@ -46,20 +47,16 @@ export const REVIEW_FILE = "review.md";
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 
-const JsonValue = Schema.fromJsonString(YamlValueSchema);
-const isString = Schema.is(Schema.String);
-const isNumber = Schema.is(Schema.Number);
-
 function parseJson(text: string, where: string): Parsed<YamlValue> {
   try {
-    return { ok: true, value: Schema.decodeUnknownSync(JsonValue)(text) };
+    return { ok: true, value: Schema.decodeUnknownSync(YamlValueJsonSchema)(text) };
   } catch (cause) {
     return { ok: false, error: `${where}: not valid JSON (${String(cause)})` };
   }
 }
 
 function display(value: YamlValue | undefined): string {
-  return value === undefined ? "undefined" : Schema.encodeSync(JsonValue)(value);
+  return value === undefined ? "undefined" : Schema.encodeSync(YamlValueJsonSchema)(value);
 }
 
 export function parseReviewOutput(text: string, where: string): Parsed<ReviewOutput> {

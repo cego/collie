@@ -1,12 +1,16 @@
-import { Schema, FileSystem, Clock, Effect, Option, Stream } from "effect";
+import { Data, Schema, FileSystem, Clock, Effect, Option, Schedule, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { PlatformError } from "effect/PlatformError";
 
 // Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides staleness.
 
 /** Brief contention gets one second to clear before the operation fails. */
-export const LOCK_CLAIM_RETRIES = 40;
-export const LOCK_CLAIM_RETRY_INTERVAL = "25 millis";
+const LOCK_CLAIM_RETRIES = 40;
+const LOCK_CLAIM_RETRY_INTERVAL = "25 millis";
+const LOCK_WRITE_GRACE_MS = 10_000;
+const PROC_STAT_START_TIME_INDEX = 19;
+
+class LockContended extends Data.TaggedError("LockContended") {}
 
 export interface LockHolder {
   pid: number;
@@ -18,11 +22,11 @@ const LockHolderSchema = Schema.Struct({ pid: Schema.Int, start: Schema.NullOr(S
 const LockHolderJson = Schema.fromJsonString(LockHolderSchema);
 const decodeLockHolderJson = Schema.decodeUnknownSync(LockHolderJson);
 
-const pid = Effect.sync(() => globalThis.process.pid);
-const alive = (id: number, signal?: NodeJS.Signals) =>
+export const currentPid = Effect.sync(() => globalThis.process.pid);
+export const signalProcess = (id: number, signal: NodeJS.Signals | 0 = 0) =>
   Effect.sync(() => {
     try {
-      globalThis.process.kill(id, signal ?? 0);
+      globalThis.process.kill(id, signal);
       return true;
     } catch {
       return false;
@@ -32,7 +36,7 @@ const alive = (id: number, signal?: NodeJS.Signals) =>
 /** One wx attempt. False means the lock is held; anything but contention throws. */
 export const tryClaimLock = Effect.fn("tryClaimLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
-  const me = yield* pid;
+  const me = yield* currentPid;
   const holder: LockHolder = { pid: me, start: yield* processStartTime(me) };
   const encoded = yield* Schema.encodeEffect(LockHolderJson)(holder);
   return yield* fs.writeFileString(lock, `${encoded}\n`, { flag: "wx" }).pipe(
@@ -43,6 +47,27 @@ export const tryClaimLock = Effect.fn("tryClaimLock")(function* (lock: string) {
   );
 });
 
+/** Claims an available lock, breaking one stale holder before the final attempt. */
+export const claimLock = Effect.fn("claimLock")(function* (lock: string) {
+  if (yield* tryClaimLock(lock)) return true;
+  return (yield* breakStaleLock(lock)) && (yield* tryClaimLock(lock));
+});
+
+/** The one acquisition policy: recover stale claims and wait out brief live contention. */
+export const acquireLock = Effect.fn("acquireLock")((lock: string) =>
+  claimLock(lock).pipe(
+    Effect.flatMap((claimed) =>
+      claimed ? Effect.succeed(true) : Effect.fail(new LockContended()),
+    ),
+    Effect.retry({
+      times: LOCK_CLAIM_RETRIES,
+      schedule: Schedule.spaced(LOCK_CLAIM_RETRY_INTERVAL),
+      while: (error) => error instanceof LockContended,
+    }),
+    Effect.catchTag("LockContended", () => Effect.succeed(false)),
+  ),
+);
+
 /** Breaks a lock that no longer protects anything. True means the caller may retry its claim. */
 export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -51,13 +76,7 @@ export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: strin
     Effect.flatMap((holder) =>
       holder
         ? holderLives(holder).pipe(Effect.map((live) => !live))
-        : fs
-            .stat(lock)
-            .pipe(
-              Effect.map(
-                (s) => now - (Option.isSome(s.mtime) ? s.mtime.value.getTime() : now) > 10_000,
-              ),
-            ),
+        : lockWriteIsFresh(lock, now).pipe(Effect.map((fresh) => !fresh)),
     ),
     Effect.catchTag("PlatformError", (error) => Effect.succeed(error.reason._tag === "NotFound")),
   );
@@ -69,7 +88,7 @@ export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: strin
 /** Whether the lock still carries this process's own claim. */
 export const holdsLock = Effect.fn("holdsLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
-  const me = yield* pid;
+  const me = yield* currentPid;
   return yield* fs.readFileString(lock).pipe(
     Effect.map((raw) => decodeLockHolder(raw)?.pid === me),
     Effect.catch(() => Effect.succeed(false)),
@@ -86,7 +105,10 @@ export const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: strin
 export const processStartTime = Effect.fn("processStartTime")(function* (id: number) {
   const fs = yield* FileSystem.FileSystem;
   const proc = yield* fs.readFileString(`/proc/${id}/stat`).pipe(
-    Effect.map((stat) => stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19] || null),
+    Effect.map(
+      (stat) =>
+        stat.slice(stat.lastIndexOf(")") + 2).split(" ")[PROC_STAT_START_TIME_INDEX] || null,
+    ),
     Effect.catchTag("PlatformError", () => Effect.succeed(null)),
   );
   if (proc) return proc;
@@ -128,17 +150,24 @@ function readHolder(
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const raw = yield* fs.readFileString(lock);
-    try {
-      const holder = decodeLockHolder(raw);
-      return holder && Number.isInteger(holder.pid) && holder.pid > 0 ? holder : null;
-    } catch {
-      return null;
-    }
+    const holder = decodeLockHolder(raw);
+    return holder && Number.isInteger(holder.pid) && holder.pid > 0 ? holder : null;
   });
 }
 
+/** A malformed claim gets this grace period to finish its atomic write. */
+export const lockWriteIsFresh = Effect.fn("lockWriteIsFresh")(function* (
+  lock: string,
+  now?: number,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const at = now ?? (yield* Clock.currentTimeMillis);
+  const stat = yield* fs.stat(lock);
+  return at - (Option.isSome(stat.mtime) ? stat.mtime.value.getTime() : at) <= LOCK_WRITE_GRACE_MS;
+});
+
 const holderLives = Effect.fn("holderLives")(function* (holder: LockHolder) {
-  if (!(yield* alive(holder.pid))) return false;
+  if (!(yield* signalProcess(holder.pid))) return false;
   if (holder.start === null) return true;
   const start = yield* processStartTime(holder.pid);
   return start === null || start === holder.start;

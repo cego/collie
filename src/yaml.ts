@@ -21,6 +21,7 @@ export const YamlValueSchema: Schema.Codec<YamlValue> = Schema.suspend(() =>
   ]),
 );
 export const YamlMapSchema: Schema.Codec<YamlMap> = Schema.Record(Schema.String, YamlValueSchema);
+export const YamlValueJsonSchema = Schema.fromJsonString(YamlValueSchema);
 
 export class YamlError extends Data.TaggedError("YamlError")<{ message: string }> {}
 
