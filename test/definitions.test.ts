@@ -56,11 +56,16 @@ const IMPLEMENTER = "---\nname: implementer\n---\nYou implement plans.";
 test("layer dirs are baseline, user config, then the project's .herdr", () =>
   runEffect(
     Effect.gen(function* () {
-      expect(yield* layers({ pluginRoot: "/p", configDir: "/c", cwd: "/repo" })).toEqual([
-        { name: "baseline", dir: "/p" },
-        { name: "user", dir: "/c" },
-        { name: "project", dir: "/repo/.herdr" },
-      ]);
+      expect(yield* layers({ pluginRoot: "/p", configDir: "/c", cwd: "/repo" })).toEqual({
+        baseline: { name: "baseline", dir: "/p" },
+        user: { name: "user", dir: "/c" },
+        project: { name: "project", dir: "/repo/.herdr" },
+        all: [
+          { name: "baseline", dir: "/p" },
+          { name: "user", dir: "/c" },
+          { name: "project", dir: "/repo/.herdr" },
+        ],
+      });
     }),
   ));
 

@@ -27,8 +27,6 @@ export type Result = OpResult;
 export type CollieError = Config.ConfigError | Error | HerdrError | PlatformError;
 type CollieServices = BunServices;
 
-const pid = Effect.sync(() => globalThis.process.pid);
-
 /**
  * The codes that mean the command line was wrong rather than the operation failed:
  * exit 2, and no receipt, because nothing happened for a retry to replay. A caller
@@ -149,7 +147,7 @@ export const mutation = Effect.fn("collie.mutation")(function* (
     const result = yield* apply(id);
     const withRequest = withRequestId(result, id);
     if (!withRequest.ok && REJECTED.includes(withRequest.error.code)) return withRequest;
-    const tmp = `${path}.${yield* pid}.tmp`;
+    const tmp = `${path}.${globalThis.process.pid}.tmp`;
     yield* fs.writeFileString(tmp, `${Schema.encodeSync(ResultBoundaryJson)(withRequest)}\n`);
     yield* fs.rename(tmp, path);
     return withRequest;

@@ -1,5 +1,5 @@
-import { Effect, FileSystem, Path } from "effect";
-import { nowIso, nowMillis } from "../src/time";
+import { Clock, Effect, FileSystem, Path } from "effect";
+import { nowIso } from "../src/time";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { REVIEW_FILE } from "../src/output";
 import { record, type Session } from "../src/handoff";
@@ -519,7 +519,7 @@ test("a receiver that cannot be updated leaves the sender's record intact", () =
         maxIterations: 1,
         primaryInput: "x",
       });
-      const started = yield* nowMillis();
+      const started = yield* Clock.currentTimeMillis;
       yield* record(
         session(env),
         sender,
@@ -534,7 +534,7 @@ test("a receiver that cannot be updated leaves the sender's record intact", () =
         },
         "sent review.md to the implementer",
       );
-      expect((yield* nowMillis()) - started).toBeLessThan(1_000);
+      expect((yield* Clock.currentTimeMillis) - started).toBeLessThan(1_000);
 
       const kept = (yield* store.load(sender.id)).record.handoffs;
       expect(kept).toHaveLength(1);

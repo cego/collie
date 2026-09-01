@@ -77,14 +77,17 @@ test("plan runs one step in a tab of its own and records the run", () =>
 
       expect(status).toBe("done");
       // The workspace's board is found or opened and put first, and then the step opens
-      // its own tab — named after the workflow, once `tab list` says nothing else has
-      // that name. The run itself opens no pane: it is driven headlessly.
+      // its own tab — after checking whether the launch pane is a reusable numbered
+      // shell, and once `tab list` says nothing else has that name. The run itself is
+      // driven headlessly.
       expect(yield* rig.cmds()).toEqual([
         "tab list",
         "plugin pane",
         "pane rename",
         "tab rename",
         "tab.move",
+        "tab list",
+        "pane list",
         "tab list",
         "tab create",
         "tab rename",

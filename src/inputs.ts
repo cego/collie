@@ -553,11 +553,15 @@ export function resolveCandidates<E, R>(
   return r.strategy === "diff-target" ? resolveTarget(r, prompts) : resolveWorkSource(r, prompts);
 }
 
-function settle(r: Resolution, candidate: WorkSourceCandidate): void {
+export function settle(
+  r: Resolution,
+  candidate: Pick<WorkSourceCandidate, "value" | "source"> &
+    Partial<Pick<WorkSourceCandidate, "kind" | "label">>,
+): void {
   r.value = candidate.value;
-  r.kind = candidate.kind;
+  if (candidate.kind !== undefined) r.kind = candidate.kind;
   r.source = candidate.source;
-  r.label = candidate.label;
+  if (candidate.label !== undefined) r.label = candidate.label;
   r.needsAsking = false;
   delete r.candidates;
 }

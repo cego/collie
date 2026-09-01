@@ -115,28 +115,41 @@ export function tokenizeKeys(chunk: string): string[] {
 //
 // One reader for the whole process: iterating process.stdin more than once
 // destroys the stream, and the picker asks for several things in a row.
-class Keyboard {
+interface KeyboardInput {
+  readonly isTTY?: boolean;
+  setRawMode?(enabled: boolean): void;
+  resume(): void;
+  pause(): void;
+  on(event: "data", listener: (buffer: Buffer) => void): void;
+  off(event: "data", listener: (buffer: Buffer) => void): void;
+}
+
+export class Keyboard {
   private queue: string[] = [];
   private waiter: ((key: string) => void) | null = null;
   private started = false;
+
+  constructor(private readonly input: KeyboardInput = process.stdin) {}
+
+  private readonly onData = (buffer: Buffer): void => {
+    for (const key of tokenizeKeys(buffer.toString("utf8"))) {
+      const waiter = this.waiter;
+      if (waiter) {
+        this.waiter = null;
+        waiter(key);
+      } else {
+        this.queue.push(key);
+      }
+    }
+  };
 
   /** Raw mode and one data handler; everything else reads from the queue. */
   start(): void {
     if (this.started) return;
     this.started = true;
-    process.stdin.setRawMode?.(true);
-    process.stdin.resume();
-    process.stdin.on("data", (buf: Buffer) => {
-      for (const key of tokenizeKeys(buf.toString("utf8"))) {
-        const waiter = this.waiter;
-        if (waiter) {
-          this.waiter = null;
-          waiter(key);
-        } else {
-          this.queue.push(key);
-        }
-      }
-    });
+    this.input.setRawMode?.(true);
+    this.input.resume();
+    this.input.on("data", this.onData);
   }
 
   next(): PickerEffect<string> {
@@ -158,8 +171,16 @@ class Keyboard {
 
   release(): void {
     if (!this.started) return;
-    process.stdin.setRawMode?.(false);
-    process.stdin.pause();
+    this.started = false;
+    this.input.off("data", this.onData);
+    this.input.setRawMode?.(false);
+    this.input.pause();
+    this.queue = [];
+    this.waiter = null;
+  }
+
+  run<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
+    return effect.pipe(Effect.ensuring(Effect.sync(() => this.release())));
   }
 }
 
@@ -181,40 +202,42 @@ export interface PickOptions extends RenderOptions {
 
 /** Returns null when the human cancels. */
 export function pick(items: PickItem[], opts: PickOptions): PickerEffect<PickItem | null> {
-  return Effect.gen(function* () {
-    yield* requireTty();
-    let query = "";
-    let selected = 0;
-    const draw = () => {
-      const shown = filterItems(items, query);
-      selected = Math.min(selected, Math.max(0, shown.length - 1));
-      return write(
-        CLEAR +
-          (opts.banner ? `${opts.banner}\n\n` : "") +
-          renderList(shown, selected, query, opts).replace(/\n/g, "\r\n") +
-          "\r\n",
-      );
-    };
-    yield* draw();
-
-    for (;;) {
-      const key = yield* keyboard.next();
-      const shown = filterItems(items, query);
-      if (CANCEL.has(key)) return yield* clear(null);
-      if (ENTER.has(key)) {
-        const chosen = shown[selected];
-        if (chosen) return yield* clear(chosen);
-        continue;
-      }
-      if (key === "\x1b[A" || key === "\x10") selected = Math.max(0, selected - 1);
-      else if (key === "\x1b[B" || key === "\x0e")
-        selected = Math.min(shown.length - 1, selected + 1);
-      else if (BACKSPACE.has(key)) query = query.slice(0, -1);
-      else if (key === "\x15") query = "";
-      else if (/^[\x20-\x7e]$/.test(key)) query += key;
+  return keyboard.run(
+    Effect.gen(function* () {
+      yield* requireTty();
+      let query = "";
+      let selected = 0;
+      const draw = () => {
+        const shown = filterItems(items, query);
+        selected = Math.min(selected, Math.max(0, shown.length - 1));
+        return write(
+          CLEAR +
+            (opts.banner ? `${opts.banner}\n\n` : "") +
+            renderList(shown, selected, query, opts).replace(/\n/g, "\r\n") +
+            "\r\n",
+        );
+      };
       yield* draw();
-    }
-  });
+
+      for (;;) {
+        const key = yield* keyboard.next();
+        const shown = filterItems(items, query);
+        if (CANCEL.has(key)) return yield* clear(null);
+        if (ENTER.has(key)) {
+          const chosen = shown[selected];
+          if (chosen) return yield* clear(chosen);
+          continue;
+        }
+        if (key === "\x1b[A" || key === "\x10") selected = Math.max(0, selected - 1);
+        else if (key === "\x1b[B" || key === "\x0e")
+          selected = Math.min(shown.length - 1, selected + 1);
+        else if (BACKSPACE.has(key)) query = query.slice(0, -1);
+        else if (key === "\x15") query = "";
+        else if (/^[\x20-\x7e]$/.test(key)) query += key;
+        yield* draw();
+      }
+    }),
+  );
 }
 
 function clear<T>(value: T): PickerEffect<T> {
@@ -229,37 +252,41 @@ function requireTty(): PickerEffect<void> {
 
 /** One line of input. Returns null when the human cancels. */
 export function ask(question: string, initial = ""): PickerEffect<string | null> {
-  return Effect.gen(function* () {
-    yield* requireTty();
-    let value = initial;
-    const draw = () => write(`\r\x1b[2K${question}: ${value}`);
-    yield* write(CLEAR);
-    yield* draw();
-    for (;;) {
-      const key = yield* keyboard.next();
-      if (CANCEL.has(key)) return yield* clear(null);
-      if (ENTER.has(key)) {
-        yield* write("\r\n");
-        return value;
-      }
-      if (BACKSPACE.has(key)) value = value.slice(0, -1);
-      else if (key === "\x15") value = "";
-      else if (/^[\x20-\x7e]$/.test(key)) value += key;
+  return keyboard.run(
+    Effect.gen(function* () {
+      yield* requireTty();
+      let value = initial;
+      const draw = () => write(`\r\x1b[2K${question}: ${value}`);
+      yield* write(CLEAR);
       yield* draw();
-    }
-  });
+      for (;;) {
+        const key = yield* keyboard.next();
+        if (CANCEL.has(key)) return yield* clear(null);
+        if (ENTER.has(key)) {
+          yield* write("\r\n");
+          return value;
+        }
+        if (BACKSPACE.has(key)) value = value.slice(0, -1);
+        else if (key === "\x15") value = "";
+        else if (/^[\x20-\x7e]$/.test(key)) value += key;
+        yield* draw();
+      }
+    }),
+  );
 }
 
 export function confirm(text: string): PickerEffect<boolean> {
-  return Effect.gen(function* () {
-    yield* requireTty();
-    yield* write(
-      `${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n\r\nEnter to start, Esc to cancel.\r\n`,
-    );
-    for (;;) {
-      const key = yield* keyboard.next();
-      if (ENTER.has(key)) return yield* clear(true);
-      if (CANCEL.has(key) || key === "q") return yield* clear(false);
-    }
-  });
+  return keyboard.run(
+    Effect.gen(function* () {
+      yield* requireTty();
+      yield* write(
+        `${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n\r\nEnter to start, Esc to cancel.\r\n`,
+      );
+      for (;;) {
+        const key = yield* keyboard.next();
+        if (ENTER.has(key)) return yield* clear(true);
+        if (CANCEL.has(key) || key === "q") return yield* clear(false);
+      }
+    }),
+  );
 }

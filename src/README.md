@@ -3,8 +3,10 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | File             | What it owns                                                                            |
 | ---------------- | --------------------------------------------------------------------------------------- |
 | `main.ts`        | Entry: the `collie` CLI, or the actions and pane entrypoints under `herdr`              |
-| `collie.ts`      | The `collie` commands: flags, envelopes, exit statuses, request receipts                |
-| `operations.ts`  | Starting, answering, stopping and resuming a Run — what both front doors call           |
+| `collie.ts`      | CLI assembly, help behavior, and process exit handling                                  |
+| `commands/`      | Workflow, Persona, and Run command handlers plus their shared resolution context        |
+| `envelope.ts`    | CLI envelopes, stdout, exit statuses, request receipts, and mutation locks              |
+| `operations.ts`  | Workspace resolution and Run mutations shared by both front doors                       |
 | `flows.ts`       | What each action and pane entrypoint does                                               |
 | `env.ts`         | The plugin environment herdr provides                                                   |
 | `herdr.ts`       | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest                 |

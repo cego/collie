@@ -3,11 +3,10 @@
 // drives it directly rather than through a Run.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Path, PlatformError, Schema, Scope } from "effect";
+import { Clock, Effect, Fiber, FileSystem, Path, PlatformError, Schema, Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun";
 import { runEffect } from "./support/effect";
 import { CHOICE, CHOICE_ANSWER, filePrompts, readChoice } from "../src/driver";
-import { nowMillis } from "../src/time";
 
 let dir: string;
 
@@ -102,10 +101,10 @@ effectTest("an answer in the inbox arrives on a watch event, not on the next tic
   const asked = yield* Effect.forkScoped(prompts.menu(MENU, { header: "Pick" }));
   const choice = yield* pendingChoice();
 
-  const started = yield* nowMillis();
+  const started = yield* Clock.currentTimeMillis;
   yield* writeInboxAnswer(choice.id, "two");
   const picked = yield* Fiber.join(asked);
-  const took = (yield* nowMillis()) - started;
+  const took = (yield* Clock.currentTimeMillis) - started;
 
   expect(picked).toEqual({ id: "two", title: "Two" });
   // Delivered by the watch, so promptly — not on a tick that cannot fire this side of
@@ -183,9 +182,9 @@ effectTest("a question nobody answers times out, and takes its choice file with 
   const path = yield* Path.Path;
   const prompts = filePrompts({ dir, run: "r", step: () => "next", timeoutMs: 300, pollMs: 50 });
 
-  const started = yield* nowMillis();
+  const started = yield* Clock.currentTimeMillis;
   expect(yield* prompts.menu(MENU, { header: "Pick" })).toBeNull();
-  const took = (yield* nowMillis()) - started;
+  const took = (yield* Clock.currentTimeMillis) - started;
 
   // Bounded by timeoutMs, not by the poll interval, and not left pending for ever.
   expect(took).toBeGreaterThanOrEqual(250);

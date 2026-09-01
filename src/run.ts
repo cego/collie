@@ -1,6 +1,13 @@
 import { Data, Schema, Clock, Effect, FileSystem, Path, Schedule } from "effect";
 import { nowIso } from "./time";
-import { breakStaleLock, holdsLock, releaseOwnLock, tryClaimLock } from "./lock";
+import {
+  breakStaleLock,
+  holdsLock,
+  LOCK_CLAIM_RETRIES,
+  LOCK_CLAIM_RETRY_INTERVAL,
+  releaseOwnLock,
+  tryClaimLock,
+} from "./lock";
 import { unsafePathComponent } from "./naming";
 import { FindingSchema, type Finding } from "./output";
 import { slugify } from "./template";
@@ -494,7 +501,12 @@ const nextSeqRun = Effect.fn("RunStore.nextSeq")(function* (store: RunStore) {
   });
   // Contention here is momentary — another start incrementing the same counter — so
   // it is worth waiting out rather than failing the start.
-  yield* claim.pipe(Effect.retry({ times: 40, schedule: Schedule.spaced("25 millis") }));
+  yield* claim.pipe(
+    Effect.retry({
+      times: LOCK_CLAIM_RETRIES,
+      schedule: Schedule.spaced(LOCK_CLAIM_RETRY_INTERVAL),
+    }),
+  );
   // Effect.ensuring, not try/finally: a typed failure unwinds past a generator's
   // finally without entering it, and the counter would stay locked for ten seconds.
   return yield* Effect.gen(function* () {

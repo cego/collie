@@ -30,7 +30,13 @@ import {
 } from "./driver";
 import { inferInputs, inputSources, inputValues, type Resolution } from "./inputs";
 import { readRegistry, registryPath, type RegistryScope } from "./registry";
-import { breakStaleLock, releaseOwnLock, tryClaimLock } from "./lock";
+import {
+  breakStaleLock,
+  LOCK_CLAIM_RETRIES,
+  LOCK_CLAIM_RETRY_INTERVAL,
+  releaseOwnLock,
+  tryClaimLock,
+} from "./lock";
 import { Run, RunStore } from "./run";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
@@ -129,16 +135,6 @@ export const driverCommand = Effect.fn("operations.driverCommand")(function* (en
       ),
     );
   }
-  // The pre-JSON form was a space-separated command; a bare value with spaces
-  // that names no file would otherwise die as a raw spawn ENOENT.
-  const fs = yield* FileSystem.FileSystem;
-  if (/\s/.test(value) && !(yield* fs.exists(value))) {
-    return yield* Effect.fail(
-      new Error(
-        `COLLIE_DRIVER must be one executable path or a JSON array of strings (e.g. ["bun","src/main.ts"]), not ${value}`,
-      ),
-    );
-  }
   return [value] as const;
 });
 
@@ -204,6 +200,18 @@ export const runStatus = Effect.fn("operations.runStatus")(function* (run: Run) 
   return run.record.status === "running" ? "running" : "failed";
 });
 
+/** The live workspace for this environment, shared by both adapters. */
+export const resolveWorkspace = Effect.fn("operations.resolveWorkspace")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+) {
+  if (!env.workspaceId) return null;
+  return (
+    (yield* herdr.workspaceList()).find((workspace) => workspace.workspaceId === env.workspaceId) ??
+    null
+  );
+});
+
 /**
  * Everything a start needs before anyone is asked anything: the Workflow resolved,
  * proven runnable, and its Inputs inferred. What fills the gaps afterwards — prompts
@@ -246,7 +254,7 @@ function primaryInput(resolutions: Resolution[]): string {
 
 /**
  * Creates the Run and hands it to a detached Driver. Inputs are already settled.
- * Returns the Run, or the reason no Driver could be started for it.
+ * Returns an explicit started/rejected outcome so adapters cannot mistake a failure for a Run.
  */
 export const startRun = Effect.fn("operations.startRun")(function* (
   env: PluginEnv,
@@ -274,8 +282,9 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   yield* run.log(`created from ${workflow.path} (${workflow.layer} layer)`);
   if (options.note) yield* run.log(options.note);
   const undriven = yield* handOver(env, run);
-  if (undriven) return undriven.result;
-  return run;
+  return undriven
+    ? { _tag: "Rejected" as const, result: undriven.result }
+    : { _tag: "Started" as const, run };
 });
 
 /**
@@ -424,7 +433,12 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
     if ((yield* breakStaleLock(lock)) && (yield* tryClaimLock(lock))) return;
     return yield* Effect.fail(new Error(`another resume of run "${run.id}" is in progress`));
   });
-  yield* claim.pipe(Effect.retry({ times: 40, schedule: Schedule.spaced("25 millis") }));
+  yield* claim.pipe(
+    Effect.retry({
+      times: LOCK_CLAIM_RETRIES,
+      schedule: Schedule.spaced(LOCK_CLAIM_RETRY_INTERVAL),
+    }),
+  );
   // Effect.ensuring, not try/finally: a typed failure unwinds past a generator's
   // finally without entering it, and the Run would stay locked against resuming.
   return yield* Effect.gen(function* () {

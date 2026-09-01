@@ -33,7 +33,7 @@ import { answerKey, stopRun as boardStop, type ControlSession } from "../src/flo
 import { Herdr } from "../src/herdr";
 import { prepareWorkflow, resumeRun, startRun } from "../src/operations";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
-import { Run, RunStore } from "../src/run";
+import { RunStore } from "../src/run";
 import type { RunRow, WorkspaceView } from "../src/workspace";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -248,8 +248,8 @@ const makeRun = Effect.fn("parity.makeRun")(function* () {
       workspace: { workspaceId: "w1", label: "One", cwd: env.COLLIE_CWD, worktree: null },
     }),
   );
-  if (!(started instanceof Run)) throw new Error(started.error.message);
-  return started;
+  if (started._tag === "Rejected") throw new Error(started.result.error.message);
+  return started.run;
 });
 
 /** Everything about a Run that outlives the process that changed it. */
@@ -531,12 +531,12 @@ effectTest("a failed mutation carries the request id it was given", function* ()
   expect((yield* new RunStore(env.HERDR_PLUGIN_STATE_DIR).list()).length).toBe(1);
 });
 
-effectTest("run wait takes both the short duration forms and Effect's own", function* () {
+effectTest("run wait accepts Effect durations only", function* () {
   const run = yield* makeRun();
-  for (const timeout of ["50ms", "1s", "50 millis"]) {
-    const waited = yield* cli(["run", "wait", run.id, "--timeout", timeout]);
-    expect(waited.body).toMatchObject({ ok: false, error: { code: "timeout" } });
+  const waited = yield* cli(["run", "wait", run.id, "--timeout", "50 millis"]);
+  expect(waited.body).toMatchObject({ ok: false, error: { code: "timeout" } });
+  for (const timeout of ["50ms", "1s", "soon"]) {
+    const bad = yield* cli(["run", "wait", run.id, "--timeout", timeout]);
+    expect(bad.body).toMatchObject({ ok: false, error: { code: "invalid_input" } });
   }
-  const bad = yield* cli(["run", "wait", run.id, "--timeout", "soon"]);
-  expect(bad.body).toMatchObject({ ok: false, error: { code: "invalid_input" } });
 });

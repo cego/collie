@@ -1,5 +1,4 @@
-import { nowMillis } from "../src/time";
-import { Effect, FileSystem } from "effect";
+import { Clock, Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { forkDefinition } from "../src/fork";
@@ -199,8 +198,8 @@ test("a target occupied while a fork is being prepared is never overwritten", ()
         { stdout: "pipe", stderr: "pipe" },
       );
 
-      const deadline = (yield* nowMillis()) + 2_000;
-      while ((yield* nowMillis()) < deadline) {
+      const deadline = (yield* Clock.currentTimeMillis) + 2_000;
+      while ((yield* Clock.currentTimeMillis) < deadline) {
         const waiting = Bun.file(`/proc/${child.pid}/wchan`);
         const waitingExists = yield* Effect.promise(() => waiting.exists());
         const waitingText = waitingExists ? yield* Effect.promise(() => waiting.text()) : "";

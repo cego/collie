@@ -19,6 +19,20 @@ non-checkout location it clones/updates `~/.collie` itself (`COLLIE_DIR`,
 `COLLIE_REPO` and `HERDR_CONFIG` override the defaults). It also links
 `~/.local/bin/collie` without changing PATH.
 
+### Environment variables
+
+| Variable              | Contract                                                                                                                   |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `COLLIE_DIR`          | Checkout used by `setup.sh` when it is run outside a checkout; defaults to `~/.collie`.                                    |
+| `COLLIE_REPO`         | Git URL cloned by `setup.sh`.                                                                                              |
+| `COLLIE_RELEASE_BASE` | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                           |
+| `COLLIE_DRIVER`       | Driver executable for development and tests: one executable path, or a JSON array containing the executable and arguments. |
+| `COLLIE_MODE`         | Internal picker mode passed from a Herdr action to its picker pane.                                                        |
+| `COLLIE_RUN`          | Internal Run ID passed to a detached Driver.                                                                               |
+| `COLLIE_CWD`          | Internal working directory passed to picker, agent, and Driver processes.                                                  |
+
+The last three are process-to-process contracts set by Collie; users normally do not set them.
+
 Keys it adds (`prefix` is `ctrl+b` by default; edit them in `config.toml` afterwards).
 Plain letters on purpose: `alt` chords after the prefix are not delivered reliably over
 SSH or through some terminals, and herdr's own config notes the same.

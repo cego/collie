@@ -284,7 +284,17 @@ effectTest(
       "--request-id",
       "stop-1",
     ]);
+    const stoppedRetry = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "stop",
+      runId,
+      "--request-id",
+      "stop-1",
+    ]);
     expect(stopped.body.data.status).toBe("stopped");
+    expect(stoppedRetry.body).toEqual(stopped.body);
     const resumed = yield* cli([
       "--workspace",
       "w1",
@@ -294,7 +304,20 @@ effectTest(
       "--request-id",
       "resume-1",
     ]);
+    const resumedRetry = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "resume",
+      runId,
+      "--request-id",
+      "resume-1",
+    ]);
     expect(resumed.body.data.status).toBe("running");
+    expect(resumedRetry.body).toEqual(resumed.body);
+    expect((yield* fs.readFileString(path.join(dir, "drivers"))).trim().split("\n")).toHaveLength(
+      2,
+    );
     expect(
       (yield* cli(["--workspace", "w1", "run", "show", runId])).body.data.run.steps[0].status,
     ).toBe("done");
@@ -451,7 +474,7 @@ effectTest(
       ])).body.error.code,
     ).toBe("invalid_input");
 
-    const persona = yield* cli([
+    const personaArgs = [
       "persona",
       "fork",
       "helper",
@@ -461,8 +484,13 @@ effectTest(
       "project-helper",
       "--workspace",
       "w1",
-    ]);
+      "--request-id",
+      "persona-1",
+    ];
+    const persona = yield* cli(personaArgs);
+    const personaRetry = yield* cli(personaArgs);
     expect(Number(persona.exit)).toBe(0);
+    expect(personaRetry.body).toEqual(persona.body);
     expect(persona.body.data.path).toContain("/workspace/.herdr/personas/project-helper.md");
   },
 );

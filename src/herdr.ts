@@ -112,6 +112,7 @@ export interface PaneInfo {
   paneId: string;
   tabId: string;
   label: string | null;
+  agent: string | null;
 }
 
 /** A live agent as herdr sees it. Only named agents — the ones this plugin started. */
@@ -299,6 +300,7 @@ export class Herdr {
           paneId: stringPath(p, ["pane_id"]),
           tabId: stringPath(p, ["tab_id"]),
           label: nullableStringPath(p, ["label"]),
+          agent: nullableStringPath(p, ["agent"]),
         }));
       }),
     );

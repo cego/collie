@@ -170,11 +170,10 @@ export const layers = Effect.fn("Definitions.layers")(function* (env: {
   cwd: string;
 }) {
   const path = yield* Path.Path;
-  return [
-    { name: "baseline" as const, dir: env.pluginRoot },
-    { name: "user" as const, dir: env.configDir },
-    { name: "project" as const, dir: path.join(env.cwd, ".herdr") },
-  ];
+  const baseline: Layer = { name: "baseline", dir: env.pluginRoot };
+  const user: Layer = { name: "user", dir: env.configDir };
+  const project: Layer = { name: "project", dir: path.join(env.cwd, ".herdr") };
+  return { baseline, user, project, all: [baseline, user, project] };
 });
 
 const markdownFiles = Effect.fn("Definitions.markdownFiles")(function* (dir: string) {
@@ -341,12 +340,14 @@ const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
   return persona;
 });
 
-export const loadDefinitions = Effect.fn("Definitions.loadDefinitions")(function* (ls: Layer[]) {
+export const loadDefinitions = Effect.fn("Definitions.loadDefinitions")(function* (
+  layers: Layer[] | { readonly all: Layer[] },
+) {
   const workflows = new Map<string, WorkflowDef>();
   const personas = new Map<string, PersonaDef>();
   const errors: string[] = [];
 
-  for (const layer of ls) {
+  for (const layer of Array.isArray(layers) ? layers : layers.all) {
     yield* loadLayer(workflows, layer, "workflows", parseWorkflow, mergeWorkflow, errors);
     yield* loadLayer(personas, layer, "personas", parsePersona, mergePersona, errors);
   }

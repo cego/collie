@@ -4,6 +4,10 @@ import type { PlatformError } from "effect/PlatformError";
 
 // Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides staleness.
 
+/** Brief contention gets one second to clear before the operation fails. */
+export const LOCK_CLAIM_RETRIES = 40;
+export const LOCK_CLAIM_RETRY_INTERVAL = "25 millis";
+
 export interface LockHolder {
   pid: number;
   /** The process's start time, so a reused pid is not mistaken for the holder. */

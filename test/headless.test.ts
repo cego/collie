@@ -1,5 +1,5 @@
-import { DateTime } from "effect";
-import { nowIso, nowMillis } from "../src/time";
+import { Clock, DateTime } from "effect";
+import { nowIso } from "../src/time";
 import { readEnv } from "../src/env";
 
 /** A Date this far back, without reaching for the global clock. */
@@ -165,6 +165,18 @@ effectTest("a review is one run tab of agent panes, and the plugin keeps one pan
   const panes = calls.filter((c) => c.cmd === "pane rename").map((c) => c.argv?.at(-1));
   expect(panes).toEqual(["Control Plane", "Opus", "Sonnet", "Synthesize"]);
   expect(run.step("review").variants).toHaveLength(2);
+});
+
+effectTest("a workflow reuses the untouched numbered tab it was launched from", function* () {
+  const herdr = new FakeHerdr(rig.pluginEnv());
+  expect(yield* herdr.tabCreate({})).toEqual({ tabId: "1:1", paneId: "1-1" });
+  yield* rig.queueOutputs([CLEAN, CLEAN, { ...CLEAN, summary: "done", dropped: [] }]);
+
+  yield* runWorkflow(rig, "review", {}, { prompts: scriptedPrompts(["Don't post"]) });
+
+  const calls = yield* rig.calls();
+  expect(calls.filter((call) => call.cmd === "tab create")).toHaveLength(1);
+  expect(calls.find((call) => call.cmd === "agent start")?.argv).toContain("1-1");
 });
 
 effectTest("the driver's progress is a file, and the board shows the last of it", function* () {
@@ -426,7 +438,7 @@ effectTest("a run nothing is driving is abandoned; one with a live driver is not
   run.step("review").status = "running";
   run.step("review").note = "herdr agent start failed (exit 1)";
   yield* run.save();
-  const later = (yield* nowMillis()) + 3_600_000;
+  const later = (yield* Clock.currentTimeMillis) + 3_600_000;
 
   // This test process is a live driver as far as the ownership claim is concerned.
   expect(yield* acquireDriver(run.dir)).toBe(true);
@@ -709,12 +721,10 @@ effectTest(
     yield* fs.writeFileString(spaced, "#!/bin/sh\n", { mode: 0o755 });
     expect(yield* driverCommand(env).pipe(Effect.provide(configLayer(spaced)))).toEqual([spaced]);
 
-    // The pre-JSON space-separated form gets the contract error, not a raw ENOENT.
-    yield* driverCommand(env).pipe(
-      Effect.provide(configLayer("bun src/main.ts")),
-      Effect.flip,
-      Effect.map((error) => expect(error.message).toContain("JSON array")),
-    );
+    // A non-JSON override is always one executable path, spaces and all.
+    expect(yield* driverCommand(env).pipe(Effect.provide(configLayer("bun src/main.ts")))).toEqual([
+      "bun src/main.ts",
+    ]);
 
     for (const driver of ['["bun", 42]', "[not json"]) {
       yield* driverCommand(env).pipe(
@@ -871,7 +881,7 @@ effectTest(
     expect(yield* fs.exists(claim)).toBe(true);
 
     // Aged past any plausible write, the unreadable claim is leftovers.
-    const old = dateFromMillis((yield* nowMillis()) - 60_000);
+    const old = dateFromMillis((yield* Clock.currentTimeMillis) - 60_000);
     yield* fs.utimes(claim, old, old);
     expect(yield* acquireDriver(run.dir)).toBe(true);
     yield* releaseDriver(run.dir);

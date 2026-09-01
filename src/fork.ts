@@ -41,10 +41,21 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
   const path = pathSvc.join(dir, `${name}.md`);
 
   const unsafe = unsafePathComponent(name);
-  if (unsafe) return { ok: false, path, message: `target name "${name}" ${unsafe}` };
+  if (unsafe)
+    return {
+      ok: false as const,
+      code: "invalid_input" as const,
+      path,
+      message: `target name "${name}" ${unsafe}`,
+    };
 
   if (path === source) {
-    return { ok: false, path, message: `${pathSvc.basename(source)} is already in that layer` };
+    return {
+      ok: false as const,
+      code: "target_exists" as const,
+      path,
+      message: `${pathSvc.basename(source)} is already in that layer`,
+    };
   }
   yield* fs.makeDirectory(dir, { recursive: true });
   const sourceText = opts.full ? yield* fs.readFileString(source) : null;
@@ -59,16 +70,22 @@ export const forkDefinition = Effect.fn("Fork.forkDefinition")(function* (
       cause.reason._tag === "AlreadyExists" ? Effect.succeed(true) : Effect.fail(cause),
     ),
   );
-  if (exists) return { ok: false, path, message: `${path} already exists — edit it instead` };
+  if (exists)
+    return {
+      ok: false as const,
+      code: "target_exists" as const,
+      path,
+      message: `${path} already exists — edit it instead`,
+    };
 
   return opts.full
     ? {
-        ok: true,
+        ok: true as const,
         path,
         message: `copied to ${path} (a full copy: it no longer follows the original)`,
       }
     : {
-        ok: true,
+        ok: true as const,
         path,
         message: `wrote ${path} — it extends the original and changes only what you add`,
       };

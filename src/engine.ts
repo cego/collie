@@ -1,10 +1,10 @@
 // Executes a Run: one tab per Step, agents started with the right Harness,
 // Model and Persona, gates and loops driven by Output files.
 
-import { Crypto, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import { Clock, Crypto, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
-import { nowIso, nowMillis } from "./time";
+import { nowIso } from "./time";
 
 import type {
   ChoiceDef,
@@ -132,6 +132,8 @@ interface RunCtx {
   workspaceTabId: string | null;
   /** Each of this run's tabs and the name it was given; the glyph is what moves. */
   tabNames: Map<string, string>;
+  /** A lone default shell pane the workflow was launched from, consumed at most once. */
+  launchPane: { paneId: string; tabId: string } | null;
 }
 
 export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOptions) {
@@ -145,6 +147,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     viewSource,
     workspaceTabId: null,
     tabNames: new Map(),
+    launchPane: null,
   };
 
   run.record.status = "running";
@@ -155,6 +158,9 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
 
   // Before anything opens: this is where the run's own pane and its menus live.
   ctx.workspaceTabId = yield* ensureWorkspaceTab(o);
+  ctx.launchPane = yield* reusableLaunchPane(o).pipe(
+    Effect.catch((e) => o.run.log(`launch pane: ${reason(e)}`).pipe(Effect.as(null))),
+  );
   yield* ensureTrusted(o);
 
   const indexOf = (id: string) => wf.steps.findIndex((s) => s.id === id);
@@ -441,6 +447,12 @@ const runStep = Effect.fn("Engine.runStep")(function* (
           cwd: run.record.cwd,
         });
         record.tabId = records[i - 1]!.tabId;
+      } else if (ctx.launchPane) {
+        const name = yield* freeTabName(o, ctx, step);
+        record.paneId = ctx.launchPane.paneId;
+        record.tabId = ctx.launchPane.tabId;
+        ctx.tabNames.set(ctx.launchPane.tabId, name);
+        ctx.launchPane = null;
       } else {
         const name = yield* freeTabName(o, ctx, step);
         const tab = yield* herdr.tabCreate({
@@ -533,6 +545,23 @@ const runStep = Effect.fn("Engine.runStep")(function* (
     outcomes.push(yield* collect(o, step, record, key));
   }
   return outcomes;
+});
+
+/**
+ * A newly-created workspace starts with one numbered shell tab. When the workflow
+ * was launched from that untouched tab, use it for the first agent instead of
+ * leaving it behind beside the Control Plane and run tabs.
+ */
+const reusableLaunchPane = Effect.fn("Engine.reusableLaunchPane")(function* (o: EngineOptions) {
+  const launchId = o.env.paneId;
+  if (!launchId) return null;
+  const [tabs, panes] = yield* Effect.all([o.herdr.tabList(), o.herdr.paneList()]);
+  const pane = panes.find((item) => item.paneId === launchId);
+  if (!pane || pane.agent !== null) return null;
+  const tab = tabs.find((item) => item.tabId === pane.tabId);
+  if (!tab || !/^\d+$/.test(tab.label)) return null;
+  if (panes.filter((item) => item.tabId === pane.tabId).length !== 1) return null;
+  return { paneId: pane.paneId, tabId: pane.tabId };
 });
 
 interface ChoiceResult {
@@ -1100,10 +1129,10 @@ const startAgent = Effect.fn("Engine.startAgent")(function* (
     )
     .pipe(Effect.catchTag("HerdrError", () => Effect.void));
 
-  const deadline = (yield* nowMillis()) + budget;
-  while ((yield* nowMillis()) < deadline) {
+  const deadline = (yield* Clock.currentTimeMillis) + budget;
+  while ((yield* Clock.currentTimeMillis) < deadline) {
     yield* Effect.sleep(
-      Math.min(o.outputPollMs ?? 2000, Math.max(1, deadline - (yield* nowMillis()))),
+      Math.min(o.outputPollMs ?? 2000, Math.max(1, deadline - (yield* Clock.currentTimeMillis))),
     );
     if ((yield* o.herdr.agentStatus(opts.name)) !== "blocked") {
       yield* o.out(`  ▸ ${opts.name} is ready`);
@@ -1164,9 +1193,9 @@ const awaitOutput = Effect.fn("Engine.awaitOutput")(function* (
     ),
   );
   const poll = o.outputPollMs ?? 2000;
-  const deadline = (yield* nowMillis()) + budget;
-  while (!(yield* fs.exists(path)) && (yield* nowMillis()) < deadline) {
-    yield* Effect.sleep(Math.min(poll, Math.max(1, deadline - (yield* nowMillis()))));
+  const deadline = (yield* Clock.currentTimeMillis) + budget;
+  while (!(yield* fs.exists(path)) && (yield* Clock.currentTimeMillis) < deadline) {
+    yield* Effect.sleep(Math.min(poll, Math.max(1, deadline - (yield* Clock.currentTimeMillis))));
   }
   if (yield* fs.exists(path)) yield* o.out(`  ▸ ${agent} produced its Output`);
   o.run.record.awaiting = null;

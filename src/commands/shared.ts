@@ -1,5 +1,4 @@
-import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem, Option, Schema, Stdio, Stream } from "effect";
+import { Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import type { PlatformError } from "effect/PlatformError";
 import { layers, loadDefinitions, type PersonaDef, type WorkflowDef } from "../definitions";
@@ -7,10 +6,10 @@ import { readChoice, readProgress } from "../driver";
 import { currentEnv, type PluginEnv } from "../env";
 import { Herdr, type WorkspaceInfo } from "../herdr";
 import { reason, unsafePathComponent } from "../naming";
-import { err, runStatus, type Failure } from "../operations";
+import { err, resolveWorkspace, runStatus, type Failure } from "../operations";
 import { InvalidRunState, Run, RunStore } from "../run";
+import type { Result } from "../envelope";
 import type { YamlMap } from "../yaml";
-import type { CollieError, Result } from "../envelope";
 
 const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
 
@@ -29,47 +28,61 @@ export const UnknownJson = Schema.fromJsonString(Schema.Unknown);
 export const PrettyUnknownJson = Schema.fromJsonString(Schema.Unknown, { space: 2 });
 
 export type Global = { readonly workspace: Option.Option<string>; readonly json: boolean };
-type CollieServices = BunServices;
-
 export const selected = Effect.fn("collie.selected")(function* (global: Global) {
   if (Option.isSome(global.workspace)) return global.workspace.value;
   return (yield* currentEnv).workspaceId;
+});
+
+export type ContextResolution =
+  | {
+      readonly _tag: "ResolvedContext";
+      readonly env: PluginEnv;
+      readonly workspace: WorkspaceInfo | null;
+    }
+  | { readonly _tag: "ContextFailure"; readonly result: Failure };
+
+const resolvedContext = (env: PluginEnv, workspace: WorkspaceInfo | null): ContextResolution => ({
+  _tag: "ResolvedContext",
+  env,
+  workspace,
+});
+
+const contextFailure = (result: Failure): ContextResolution => ({
+  _tag: "ContextFailure",
+  result,
 });
 
 export const context = Effect.fn("collie.context")(function* (
   global: Global,
   resolveLive: boolean,
   requireScope = false,
-): Effect.fn.Return<
-  { env: PluginEnv; workspace: WorkspaceInfo | null } | Result,
-  CollieError,
-  CollieServices
-> {
+) {
   const id = yield* selected(global);
   const baseEnv = yield* currentEnv;
   const base = { ...baseEnv, workspaceId: id };
   if (!id)
     return requireScope
-      ? err("workspace_required", "This operation requires a workspace.")
-      : { env: base, workspace: null };
-  if (!resolveLive) return { env: base, workspace: null };
-  // A herdr that will not answer is a workspace that cannot be resolved, which is what
-  // the spec names this code for; the reason it could not be resolved goes in details
-  // rather than becoming a different, less useful code.
-  const live = yield* new Herdr(base).workspaceList().pipe(
-    Effect.map((workspaces) => ({ workspaces, cause: "" })),
-    Effect.catch((cause) => Effect.succeed({ workspaces: [], cause: String(cause) })),
+      ? contextFailure(err("workspace_required", "This operation requires a workspace."))
+      : resolvedContext(base, null);
+  if (!resolveLive) return resolvedContext(base, null);
+
+  const lookup = yield* resolveWorkspace(new Herdr(base), base).pipe(
+    Effect.map((workspace) => ({ workspace, cause: "" })),
+    Effect.catch((cause) => Effect.succeed({ workspace: null, cause: String(cause) })),
   );
-  const workspace = live.workspaces.find((item) => item.workspaceId === id);
-  if (!workspace) {
+  if (!lookup.workspace) {
     const details: YamlMap = { workspace: id };
-    if (live.cause) details["cause"] = live.cause;
-    return err("workspace_not_found", `Workspace "${id}" was not found.`, details);
+    if (lookup.cause) details["cause"] = lookup.cause;
+    return contextFailure(err("workspace_not_found", `Workspace "${id}" was not found.`, details));
   }
-  return {
-    workspace,
-    env: { ...base, workspaceId: id, cwd: workspace.cwd || base.context.workspace_cwd || base.cwd },
-  };
+  return resolvedContext(
+    {
+      ...base,
+      workspaceId: id,
+      cwd: lookup.workspace.cwd || base.context.workspace_cwd || base.cwd,
+    },
+    lookup.workspace,
+  );
 });
 
 /**
@@ -88,7 +101,7 @@ export const discoveryContext = Effect.fn("collie.discoveryContext")(function* (
   const tried = yield* context(global, (yield* selected(global)) !== null).pipe(
     Effect.catch(() => Effect.succeed(null)),
   );
-  if (tried !== null && !("ok" in tried)) return tried;
+  if (tried?._tag === "ResolvedContext") return tried;
   return yield* context({ ...global, workspace: Option.none() }, false);
 });
 
@@ -121,24 +134,33 @@ export function personaData(persona: PersonaDef) {
 }
 
 /** A Run named on the command line, or the reason the caller cannot have it. */
+export type RunResolution =
+  | { readonly _tag: "ResolvedRun"; readonly run: Run }
+  | { readonly _tag: "RunFailure"; readonly result: Failure };
+
+const runFailure = (result: Failure): RunResolution => ({ _tag: "RunFailure", result });
+
 export const readRun = Effect.fn("collie.readRun")(function* (
   env: PluginEnv,
   id: string,
   workspace: string | null,
-) {
+): Effect.fn.Return<RunResolution, never, FileSystem.FileSystem | Path.Path> {
   if (unsafePathComponent(id))
-    return err("run_not_found", `Run "${id}" was not found.`, { run: id });
-  const run = yield* new RunStore(env.stateDir)
-    .load(id)
-    .pipe(Effect.catch((cause) => Effect.succeed(notLoaded(id, cause))));
-  if (!(run instanceof Run)) return run;
-  if (workspace && run.record.workspace !== workspace) {
-    return err("run_not_found", `Run "${id}" was not found in workspace "${workspace}".`, {
-      run: id,
-      workspace,
-    });
+    return runFailure(err("run_not_found", `Run "${id}" was not found.`, { run: id }));
+  const loaded = yield* new RunStore(env.stateDir).load(id).pipe(
+    Effect.map((run) => ({ _tag: "ResolvedRun" as const, run })),
+    Effect.catch((cause) => Effect.succeed(runFailure(notLoaded(id, cause)))),
+  );
+  if (loaded._tag === "RunFailure") return loaded;
+  if (workspace && loaded.run.record.workspace !== workspace) {
+    return runFailure(
+      err("run_not_found", `Run "${id}" was not found in workspace "${workspace}".`, {
+        run: id,
+        workspace,
+      }),
+    );
   }
-  return run;
+  return loaded;
 });
 
 /**
@@ -191,8 +213,8 @@ export const layerDir = Effect.fn("collie.layerDir")(function* (
   env: PluginEnv,
   layer: "user" | "project",
 ) {
-  const all = yield* layers(env);
-  return layer === "user" ? all[1]!.dir : all[2]!.dir;
+  const available = yield* layers(env);
+  return available[layer].dir;
 });
 
 type ParsedInputs = { ok: true; inputs: Record<string, string> } | { ok: false; error: Result };
@@ -218,6 +240,12 @@ export const parseInput = Effect.fn("collie.parseInput")(function* (
   }
   return { ok: true, inputs: parsed };
 });
+
+export const forkFlags = {
+  layer: Flag.choice("layer", ["user", "project"]),
+  name: Flag.string("name"),
+  requestId: Flag.string("request-id").pipe(Flag.optional),
+};
 
 export const root = Command.make("collie").pipe(
   Command.withSharedFlags({

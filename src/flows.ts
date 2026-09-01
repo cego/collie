@@ -1,8 +1,8 @@
 // What each plugin action does. Actions have no tty, so they only open a pane;
 // the interactive work happens in the `picker` and `runner` pane entrypoints.
 
-import { Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
-import { nowIso, nowMillis } from "./time";
+import { Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { nowIso } from "./time";
 import { loadDefaults } from "./config";
 import {
   bodySections,
@@ -16,7 +16,7 @@ import {
 import { executeRun } from "./engine";
 import type { PluginEnv } from "./env";
 import type { AgentInfo, Herdr } from "./herdr";
-import { confirmLine, resolveCandidates } from "./inputs";
+import { confirmLine, resolveCandidates, settle } from "./inputs";
 import {
   ask,
   confirm,
@@ -29,7 +29,7 @@ import {
 } from "./picker";
 import { forkDefinition, type DefinitionKind } from "./fork";
 import { reason, shellQuote } from "./naming";
-import { Run, RunStore } from "./run";
+import { RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
 import {
   acquireDriver,
@@ -46,6 +46,7 @@ import {
   answerRun,
   newRequestId,
   prepareWorkflow,
+  resolveWorkspace,
   type ExpectedError,
   resumeRun,
   startRun,
@@ -87,19 +88,6 @@ export const openPicker = Effect.fn("Flows.openPicker")(function* (
     focus: true,
   });
   return 0;
-});
-
-/**
- * The workspace a Run is started in, by name as well as by id: ids compact, so the
- * label is what tells a recycled id from the workspace the Run actually belongs to.
- */
-const workspaceInfo = Effect.fn("Flows.workspaceInfo")(function* (herdr: Herdr, env: PluginEnv) {
-  if (!env.workspaceId) return null;
-  return yield* herdr.workspaceList().pipe(
-    Effect.map((workspaces) => workspaces.find((w) => w.workspaceId === env.workspaceId) ?? null),
-    // Without a label the Run is still scoped by session, workspace id and cwd.
-    Effect.catch(() => Effect.succeed(null)),
-  );
 });
 
 function banner(defs: Definitions): string | undefined {
@@ -145,9 +133,9 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
     if (!r.needsAsking) continue;
     const answer = yield* ask(r.question);
     if (answer === null) return 0;
-    r.value = answer.trim();
-    r.source = "asked";
-    if (r.value === "") return yield* bail(`${resolved.name} needs an input for "${r.name}".`);
+    const value = answer.trim();
+    if (value === "") return yield* bail(`${resolved.name} needs an input for "${r.name}".`);
+    settle(r, { value, source: "asked" });
   }
 
   const line = confirmLine(resolved.name, resolutions);
@@ -156,10 +144,10 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
   const started = yield* startRun(env, {
     workflow: resolved,
     resolutions,
-    workspace: yield* workspaceInfo(herdr, env),
+    workspace: yield* resolveWorkspace(herdr, env).pipe(Effect.catch(() => Effect.succeed(null))),
     note: line,
   });
-  if (!(started instanceof Run)) return yield* bail(started.error.message);
+  if (started._tag === "Rejected") return yield* bail(started.result.error.message);
   // Only a popup can close itself; running the picker in a plain pane is fine..
   yield* Effect.ignore(herdr.popupClose());
   return 0;
@@ -216,10 +204,9 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (herdr: Herdr, env
   });
   if (!chosen) return 0;
 
-  const layerDirs = layerList;
   const targets: PickItem[] = [
-    { id: "user", title: "my layer", subtitle: layerDirs[1]!.dir },
-    { id: "project", title: "this project", subtitle: layerDirs[2]!.dir },
+    { id: "user", title: "my layer", subtitle: layerList.user.dir },
+    { id: "project", title: "this project", subtitle: layerList.project.dir },
   ];
   const target = yield* pick(targets, {
     header: `Fork ${chosen.title} into`,
@@ -255,7 +242,7 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (herdr: Herdr, env
     step = which.id;
   }
 
-  const dir = target.id === "user" ? layerDirs[1]!.dir : layerDirs[2]!.dir;
+  const dir = target.id === "user" ? layerList.user.dir : layerList.project.dir;
   const result = yield* forkDefinition(source.path, source.kind, dir, {
     full: how.id === "full",
     step,
@@ -469,7 +456,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   const open = (mode: Mode) => openMode(herdr, env, mode);
   let note: string | null = null;
   let drawn = "";
-  let read = yield* nowMillis();
+  let read = yield* Clock.currentTimeMillis;
   let asking: Asking = { index: 0, typed: "" };
   let answering: string | null = null;
 
@@ -502,12 +489,12 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         note = yield* act(session, view, key, open);
       }
       view = yield* load(session);
-      read = yield* nowMillis();
+      read = yield* Clock.currentTimeMillis;
       continue;
     }
-    if ((yield* nowMillis()) - read >= REFRESH_MS) {
+    if ((yield* Clock.currentTimeMillis) - read >= REFRESH_MS) {
       view = yield* load(session);
-      read = yield* nowMillis();
+      read = yield* Clock.currentTimeMillis;
     }
     yield* Effect.sleep(TICK_MS);
   }

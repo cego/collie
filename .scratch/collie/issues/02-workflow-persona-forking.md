@@ -4,12 +4,12 @@
 
 **Blocked by:** 01: Run workspace-scoped Workflow discovery through Effect
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `collie persona list` and `collie persona show <persona>` provide readable and JSON output consistent with Workflow discovery.
-- [ ] `collie workflow fork` supports user/project Layers, extension/full-copy modes, a requested target name, and optional Step selection for an extension.
-- [ ] `collie persona fork` copies a Persona into the requested Layer and name.
-- [ ] Forking an occupied target returns `target_exists` and never overwrites it; there is no force option.
-- [ ] Supplying the same request ID returns the original result without creating or changing another fork.
-- [ ] Tests cover both Definition kinds, both Layers, both Workflow fork modes, collision handling, and retry safety through public commands.
-- [ ] `bun test` and `bun run typecheck` pass.
+- [x] `collie persona list` and `collie persona show <persona>` provide readable and JSON output consistent with Workflow discovery.
+- [x] `collie workflow fork` supports user/project Layers, extension/full-copy modes, a requested target name, and optional Step selection for an extension.
+- [x] `collie persona fork` copies a Persona into the requested Layer and name.
+- [x] Forking an occupied target returns `target_exists` and never overwrites it; there is no force option.
+- [x] Supplying the same request ID returns the original result without creating or changing another fork.
+- [x] Tests cover both Definition kinds, both Layers, both Workflow fork modes, collision handling, and retry safety through public commands.
+- [x] `bun test` and `bun run typecheck` pass.

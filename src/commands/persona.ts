@@ -1,16 +1,17 @@
 import { Effect } from "effect";
-import { Argument, Command, Flag } from "effect/unstable/cli";
+import { Argument, Command } from "effect/unstable/cli";
 import { forkDefinition } from "../fork";
-import { unsafePathComponent } from "../naming";
 import { err } from "../operations";
 import { attempt, mutation } from "../envelope";
-import { context, definitions, discoveryContext, layerDir, personaData, root } from "./shared";
-
-const forkFlags = {
-  layer: Flag.choice("layer", ["user", "project"]),
-  name: Flag.string("name"),
-  requestId: Flag.string("request-id").pipe(Flag.optional),
-};
+import {
+  context,
+  definitions,
+  discoveryContext,
+  forkFlags,
+  layerDir,
+  personaData,
+  root,
+} from "./shared";
 
 const personaList = Command.make("list", {}, () =>
   Effect.gen(function* () {
@@ -18,7 +19,7 @@ const personaList = Command.make("list", {}, () =>
     yield* attempt(
       Effect.gen(function* () {
         const resolved = yield* discoveryContext(global);
-        if ("ok" in resolved) return resolved;
+        if (resolved._tag === "ContextFailure") return resolved.result;
         const defs = yield* definitions(resolved.env);
         const personas = [...defs.personas.values()]
           .sort((a, b) => a.name.localeCompare(b.name))
@@ -42,7 +43,7 @@ const personaShow = Command.make("show", { persona: Argument.string("persona") }
     yield* attempt(
       Effect.gen(function* () {
         const resolved = yield* discoveryContext(global);
-        if ("ok" in resolved) return resolved;
+        if (resolved._tag === "ContextFailure") return resolved.result;
         const found = (yield* definitions(resolved.env)).personas.get(persona);
         return found
           ? {
@@ -69,17 +70,15 @@ const personaFork = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const base = yield* context(global, false);
-          if ("ok" in base) return base;
+          if (base._tag === "ContextFailure") return base.result;
           return yield* mutation(base.env, "persona-fork", request, (_id) =>
             Effect.gen(function* () {
               // Resolved inside the mutation, so a replayed request id returns its
               // recorded result whether or not that workspace is still open.
               const resolved = yield* context(global, layer === "project", layer === "project");
-              if ("ok" in resolved) return resolved;
+              if (resolved._tag === "ContextFailure") return resolved.result;
               const found = (yield* definitions(resolved.env)).personas.get(persona);
               if (!found) return err("persona_not_found", `Persona "${persona}" was not found.`);
-              if (unsafePathComponent(name))
-                return err("invalid_input", `"${name}" is not a valid Persona name.`);
               const result = yield* forkDefinition(
                 found.path,
                 "personas",
@@ -89,7 +88,7 @@ const personaFork = Command.make(
                   full: true,
                 },
               );
-              if (!result.ok) return err("target_exists", result.message, { path: result.path });
+              if (!result.ok) return err(result.code, result.message, { path: result.path });
               return {
                 ok: true,
                 data: { path: result.path, name, layer },
