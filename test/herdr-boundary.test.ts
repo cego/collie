@@ -151,3 +151,22 @@ test("malformed herdr replies fail at the boundary", () =>
       if (failure._tag === "Failure") expect(failure.failure._tag).toBe("HerdrError");
     }),
   ));
+
+test("workspace replies may omit a working directory", () =>
+  runEffect(
+    Effect.gen(function* () {
+      class CurrentHerdr extends Herdr {
+        protected override exec() {
+          return Effect.succeed({
+            code: 0,
+            stdout: '{"result":{"workspaces":[{"workspace_id":"wT","label":"Collie"}]}}',
+            stderr: "",
+          });
+        }
+      }
+
+      expect(yield* new CurrentHerdr(rig.pluginEnv()).workspaceList()).toEqual([
+        { workspaceId: "wT", label: "Collie", cwd: "", worktree: null },
+      ]);
+    }),
+  ));

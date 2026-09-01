@@ -303,20 +303,16 @@ export class Herdr {
   workspaceList(): HerdrEffect<WorkspaceInfo[]> {
     return this.cli(["workspace", "list"]).pipe(
       Effect.flatMap((res) => decodeBoundary("herdr workspace list", WorkspaceListReply, res)),
-      Effect.flatMap(({ result }) =>
-        Effect.forEach(result.workspaces, (workspace) => {
-          const cwd = workspace.cwd ?? workspace.working_directory ?? workspace.worktree?.path;
-          if (!cwd)
-            return herdrFail(
-              "herdr workspace list returned an invalid response",
-              `workspace ${workspace.workspace_id} has no working directory`,
-            );
-          return Effect.succeed({
+      Effect.map(({ result }) =>
+        result.workspaces.map((workspace) => {
+          const cwd =
+            workspace.cwd ?? workspace.working_directory ?? workspace.worktree?.path ?? "";
+          return {
             workspaceId: workspace.workspace_id,
             label: workspace.label,
             cwd,
             worktree: workspace.worktree?.path ?? workspace.worktree_path ?? null,
-          });
+          };
         }),
       ),
     );
