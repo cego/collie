@@ -82,6 +82,10 @@ no ticket number unless the spec has one. This prompt arrives as `{{skill:implem
 the tickets in their order, one at a time: `{{skill:tdd}}` at the seams the spec names, the
 project's tests green, and one commit per ticket. There is no separate commit step.
 
+Push before you finish — with upstream tracking the first time, onto the branch the work
+source named otherwise. Everything after this step is read by somebody else, and what the
+reviewers fetch has to be what you actually built.
+
 {{session.ask}}
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "branch": "<branch>",
@@ -118,6 +122,9 @@ A finding that arrives with `answers your dispute:` is one you rejected before a
 reviewer has now answered. Deal with it: apply it, or dispute it again with a reason that
 answers what they said.
 
+Push the fixups before you finish: the next round reviews the remote, and a fix it cannot
+see is a finding it raises again.
+
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "disputed":
 [{"file": "path", "severity": "minor", "title": "the finding", "detail": "why I
 disagree"}], "fixed": ["what you changed", ...], "tests": "what you ran and what it
@@ -131,9 +138,9 @@ The branch is reviewed and the loop is clean. Push it and open the merge request
 - MR template: `{{mr.template}}`
 - Linear tickets: `{{mr.issues}}`
 
-Push the branch with upstream tracking. This is the only step in the whole run allowed
-to touch the remote, and pushing is all it may do. Never merge the MR, and never pass a
-merge flag to `glab`; opening it is the entire job.
+Push anything the earlier steps have not pushed yet. This is the only step in the whole
+run allowed to open a merge request, and opening it is all it may do: never merge the MR,
+and never pass a merge flag to `glab`.
 
 **First check whether this branch already has a merge request** — it does when this run
 was started from a review of one (`{{inputs.plan_kind}}` is `review` and

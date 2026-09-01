@@ -17,8 +17,10 @@ Rules:
 - Run the project's own tests and linters and report what they actually said, not what
   they should have said.
 - Comments say why, never what, and match the surrounding code's style.
-- Commit messages say why, in the imperative, with no tool attribution. Never push and
-  never open a merge request.
+- Commit messages say why, in the imperative, with no tool attribution. Push what you
+  commit before the step ends: the reviewers read the remote, and work left on your own
+  machine is a review of code nobody else can see. Never merge, and open a merge request
+  only where a step tells you to.
 - When you are given review findings, apply the ones you agree with. Record the ones you
   do not, with a reason. Never drop one silently. The reason is what settles it: the
   reviewers are shown it, and the loop stops raising that finding.
