@@ -121,21 +121,30 @@ const claimBreakGuard = Effect.fn("claimBreakGuard")(function* (guard: string) {
   return yield* holdsLock(guard);
 });
 
-const inspectAndBreak = Effect.fn("inspectAndBreak")(function* (lock: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const now = yield* Clock.currentTimeMillis;
-  const shouldBreak = yield* readHolder(lock).pipe(
-    Effect.flatMap((holder) =>
-      holder
-        ? holderLives(holder).pipe(Effect.map((live) => !live))
-        : lockWriteIsFresh(lock, now).pipe(Effect.map((fresh) => !fresh)),
-    ),
+/**
+ * Under the guard: decide on the claim that is in the lock, and remove only that claim.
+ * A lock that is not there needs no removing — removing on that path would delete a claim
+ * that arrived between the two, and its owner would never learn it had lost the lock — and
+ * a claim whose bytes changed since the inspection is no longer the one judged stale.
+ */
+const inspectAndBreak = Effect.fn("inspectAndBreak")((lock: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const now = yield* Clock.currentTimeMillis;
+    const claim = yield* readClaim(lock);
+    if (claim === null) return true;
+    const holder = validHolder(claim);
+    const stale = holder ? !(yield* holderLives(holder)) : !(yield* lockWriteIsFresh(lock, now));
+    if (!stale) return false;
+    if ((yield* readClaim(lock)) !== claim) return false;
+    yield* fs.remove(lock, { force: true });
+    return true;
+  }).pipe(
+    // A lock that cannot be read is one that must not be broken; one that has gone in the
+    // meantime leaves the caller free to claim, which `wx` decides on its own.
     Effect.catchTag("PlatformError", (error) => Effect.succeed(error.reason._tag === "NotFound")),
-  );
-  if (!shouldBreak) return false;
-  yield* fs.remove(lock, { force: true });
-  return true;
-});
+  ),
+);
 
 /** Whether the lock still carries this process's own claim. */
 export const holdsLock = Effect.fn("holdsLock")(function* (lock: string) {
@@ -196,15 +205,26 @@ function decodeLockHolder(raw: string): LockHolder | null {
   }
 }
 
-function readHolder(
+/** The claim in the lock, as written, or null when the lock is not there. */
+function readClaim(
   lock: string,
-): Effect.Effect<LockHolder | null, PlatformError, FileSystem.FileSystem> {
+): Effect.Effect<string | null, PlatformError, FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const raw = yield* fs.readFileString(lock);
-    const holder = decodeLockHolder(raw);
-    return holder && Number.isInteger(holder.pid) && holder.pid > 0 ? holder : null;
+    return yield* fs
+      .readFileString(lock)
+      .pipe(
+        Effect.catchTag("PlatformError", (error) =>
+          error.reason._tag === "NotFound" ? Effect.succeed(null) : Effect.fail(error),
+        ),
+      );
   });
+}
+
+/** A claim only names a holder when it decodes to a pid that could be one. */
+function validHolder(claim: string): LockHolder | null {
+  const holder = decodeLockHolder(claim);
+  return holder && Number.isInteger(holder.pid) && holder.pid > 0 ? holder : null;
 }
 
 /** A malformed claim gets this grace period to finish its atomic write. */

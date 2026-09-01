@@ -219,3 +219,82 @@ test("taking over a crashed breaker's guard leaves this process's own claim", ()
       expect((yield* fs.readDirectory(run.dir)).some((e) => e.endsWith(".tmp"))).toBe(false);
     }),
   ));
+
+/**
+ * A fifo at the lock path makes each read block until this test writes it, which puts the
+ * inspection and the check before the removal under the test's control.
+ */
+const breakInChild = (lock: string, marker: string) => {
+  const lockModule = new URL("../src/lock.ts", import.meta.url).pathname.replaceAll("'", "\\'");
+  return Bun.spawn(
+    [
+      "bun",
+      "-e",
+      `import { BunServices } from "@effect/platform-bun"; import { ManagedRuntime } from "effect"; import { breakStaleLock } from '${lockModule}'; const runtime = ManagedRuntime.make(BunServices.layer); await Bun.write(process.argv[2], ""); console.log("broke=" + (await runtime.runPromise(breakStaleLock(process.argv[1]))))`,
+      lock,
+      marker,
+    ],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+};
+
+/** Opening a fifo for writing fails until its reader is there, so keep offering. */
+const feed = Effect.fn("test.feed")(function* (fifo: string, text: string) {
+  const deadline = (yield* Clock.currentTimeMillis) + 30_000;
+  for (;;) {
+    const written = yield* Effect.promise(() =>
+      Bun.write(fifo, text).then(
+        () => true,
+        () => false,
+      ),
+    );
+    if (written) return;
+    expect(yield* Clock.currentTimeMillis).toBeLessThan(deadline);
+    yield* Effect.promise(() => Bun.sleep(10));
+  }
+});
+
+const awaitMarker = Effect.fn("test.awaitMarker")(function* (marker: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const deadline = (yield* Clock.currentTimeMillis) + 30_000;
+  while (!(yield* fs.exists(marker)) && (yield* Clock.currentTimeMillis) < deadline) {
+    yield* Effect.promise(() => Bun.sleep(10));
+  }
+  expect(yield* fs.exists(marker)).toBe(true);
+});
+
+test("a claim that changed since it was inspected is never the one removed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const stale = `${encodeJson({ pid: 999999, start: "1" })}\n`;
+      const live = `${encodeJson({ pid: globalThis.process.pid, start: null })}\n`;
+
+      const changed = path.join(run.dir, "changed.lock");
+      Bun.spawnSync(["mkfifo", changed]);
+      const child = breakInChild(changed, path.join(run.dir, "changed.ready"));
+      yield* awaitMarker(path.join(run.dir, "changed.ready"));
+      // The inspection sees a dead holder; the check before the removal sees a live claim
+      // that arrived since, so the lock is left to its new owner.
+      yield* feed(changed, stale);
+      yield* feed(changed, live);
+
+      expect(yield* Effect.promise(() => new Response(child.stdout).text())).toContain(
+        "broke=false",
+      );
+      expect(yield* fs.exists(changed)).toBe(true);
+
+      const unchanged = path.join(run.dir, "unchanged.lock");
+      Bun.spawnSync(["mkfifo", unchanged]);
+      const second = breakInChild(unchanged, path.join(run.dir, "unchanged.ready"));
+      yield* awaitMarker(path.join(run.dir, "unchanged.ready"));
+      yield* feed(unchanged, stale);
+      yield* feed(unchanged, stale);
+
+      expect(yield* Effect.promise(() => new Response(second.stdout).text())).toContain(
+        "broke=true",
+      );
+      expect(yield* fs.exists(unchanged)).toBe(false);
+    }),
+  ));
