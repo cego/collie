@@ -193,3 +193,29 @@ test("a break guard left by a crashed breaker is recovered", () =>
       expect(yield* fs.exists(guard)).toBe(false);
     }),
   ));
+
+test("taking over a crashed breaker's guard leaves this process's own claim", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const lock = path.join(run.dir, "takeover.lock");
+      const guard = `${lock}.break`;
+
+      // A live holder, so the break stops after the guard and the guard stays claimed.
+      yield* fs.writeFileString(
+        lock,
+        `${encodeJson({ pid: globalThis.process.pid, start: yield* processStartTime(globalThis.process.pid) })}\n`,
+      );
+      yield* fs.writeFileString(guard, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      const old = DateTime.toDateUtc(
+        DateTime.makeUnsafe((yield* Clock.currentTimeMillis) - 60_000),
+      );
+      yield* fs.utimes(guard, old, old);
+
+      expect(yield* breakStaleLock(lock)).toBe(false);
+      // Released because the claim in it was this process's own, never removed blind.
+      expect(yield* fs.exists(guard)).toBe(false);
+      expect((yield* fs.readDirectory(run.dir)).some((e) => e.endsWith(".tmp"))).toBe(false);
+    }),
+  ));

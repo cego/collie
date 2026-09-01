@@ -34,13 +34,18 @@ export const signalProcess = (id: number, signal: NodeJS.Signals | 0 = 0) =>
     }
   });
 
+/** This process's claim, as it is written into a lock file. */
+const ownClaim = Effect.fn("ownClaim")(function* () {
+  const me = yield* currentPid;
+  const holder: LockHolder = { pid: me, start: yield* processStartTime(me) };
+  return `${yield* Schema.encodeEffect(LockHolderJson)(holder)}\n`;
+});
+
 /** One wx attempt. False means the lock is held; anything but contention throws. */
 const tryClaimLock = Effect.fn("tryClaimLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
-  const me = yield* currentPid;
-  const holder: LockHolder = { pid: me, start: yield* processStartTime(me) };
-  const encoded = yield* Schema.encodeEffect(LockHolderJson)(holder);
-  return yield* fs.writeFileString(lock, `${encoded}\n`, { flag: "wx" }).pipe(
+  const encoded = yield* ownClaim();
+  return yield* fs.writeFileString(lock, encoded, { flag: "wx" }).pipe(
     Effect.as(true),
     Effect.catchTag("PlatformError", (e) =>
       e.reason._tag === "AlreadyExists" ? Effect.succeed(false) : Effect.fail(e),
@@ -91,22 +96,29 @@ export const withLock = <A, E, R, A2, E2, R2>(
  * claim cannot come back later and delete the fresh claim of whoever broke it first.
  */
 export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: string) {
-  const fs = yield* FileSystem.FileSystem;
   const guard = `${lock}.break`;
   if (!(yield* claimBreakGuard(guard))) return false;
   return yield* inspectAndBreak(lock).pipe(
-    Effect.ensuring(fs.remove(guard, { force: true }).pipe(Effect.ignore)),
+    Effect.ensuring(releaseOwnLock(guard).pipe(Effect.ignore)),
   );
 });
 
-/** The guard is held for a few syscalls, so age is what tells a crashed breaker from a live one. */
+/**
+ * The guard is held for a few syscalls, so age is what tells a crashed breaker from a live
+ * one. A guard that old is taken over by renaming this process's claim over it, never by
+ * removing it first: two contenders that both find it stale would then each delete the
+ * claim the other had just made, and both would go on to break the lock. Renaming leaves
+ * exactly one claim in the file, and whoever's claim that is holds the guard.
+ */
 const claimBreakGuard = Effect.fn("claimBreakGuard")(function* (guard: string) {
   const fs = yield* FileSystem.FileSystem;
   if (yield* tryClaimLock(guard)) return true;
   const fresh = yield* lockWriteIsFresh(guard).pipe(Effect.catch(() => Effect.succeed(false)));
   if (fresh) return false;
-  yield* fs.remove(guard, { force: true });
-  return yield* tryClaimLock(guard);
+  const tmp = `${guard}.${yield* currentPid}.tmp`;
+  yield* fs.writeFileString(tmp, yield* ownClaim());
+  yield* fs.rename(tmp, guard);
+  return yield* holdsLock(guard);
 });
 
 const inspectAndBreak = Effect.fn("inspectAndBreak")(function* (lock: string) {
