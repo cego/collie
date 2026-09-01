@@ -68,8 +68,31 @@ export const acquireLock = Effect.fn("acquireLock")((lock: string) =>
   ),
 );
 
-/** Breaks a lock that no longer protects anything. True means the caller may retry its claim. */
+/**
+ * Breaks a lock that no longer protects anything. True means the caller may retry its claim.
+ * Inspection and removal happen under a break guard, so a contender that read the stale
+ * claim cannot come back later and delete the fresh claim of whoever broke it first.
+ */
 export const breakStaleLock = Effect.fn("breakStaleLock")(function* (lock: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const guard = `${lock}.break`;
+  if (!(yield* claimBreakGuard(guard))) return false;
+  return yield* inspectAndBreak(lock).pipe(
+    Effect.ensuring(fs.remove(guard, { force: true }).pipe(Effect.ignore)),
+  );
+});
+
+/** The guard is held for a few syscalls, so age is what tells a crashed breaker from a live one. */
+const claimBreakGuard = Effect.fn("claimBreakGuard")(function* (guard: string) {
+  const fs = yield* FileSystem.FileSystem;
+  if (yield* tryClaimLock(guard)) return true;
+  const fresh = yield* lockWriteIsFresh(guard).pipe(Effect.catch(() => Effect.succeed(false)));
+  if (fresh) return false;
+  yield* fs.remove(guard, { force: true });
+  return yield* tryClaimLock(guard);
+});
+
+const inspectAndBreak = Effect.fn("inspectAndBreak")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;
   const now = yield* Clock.currentTimeMillis;
   const shouldBreak = yield* readHolder(lock).pipe(

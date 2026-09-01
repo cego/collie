@@ -157,3 +157,39 @@ test("a lock that vanished before stale-lock inspection permits another claim", 
       expect(yield* breakStaleLock(path.join(run.dir, "vanished.lock"))).toBe(true);
     }),
   ));
+
+test("a break already in progress leaves the stale lock for its breaker", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const lock = path.join(run.dir, "guarded.lock");
+
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(`${lock}.break`, "");
+
+      expect(yield* breakStaleLock(lock)).toBe(false);
+      expect(yield* fs.exists(lock)).toBe(true);
+    }),
+  ));
+
+test("a break guard left by a crashed breaker is recovered", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const lock = path.join(run.dir, "crashed.lock");
+      const guard = `${lock}.break`;
+
+      yield* fs.writeFileString(lock, `${encodeJson({ pid: 999999, start: "1" })}\n`);
+      yield* fs.writeFileString(guard, "");
+      const old = DateTime.toDateUtc(
+        DateTime.makeUnsafe((yield* Clock.currentTimeMillis) - 60_000),
+      );
+      yield* fs.utimes(guard, old, old);
+
+      expect(yield* breakStaleLock(lock)).toBe(true);
+      expect(yield* fs.exists(lock)).toBe(false);
+      expect(yield* fs.exists(guard)).toBe(false);
+    }),
+  ));
