@@ -1069,7 +1069,17 @@ const ensureTrusted = Effect.fn("Engine.ensureTrusted")(function* (o: EngineOpti
         );
         if (answer?.id !== "trust") continue;
       }
-      const result = yield* trust.grant(cwd);
+      // A grant that cannot be written is not a reason to stop the run: with nothing
+      // recorded, the harness falls back to asking in its own pane, which is exactly
+      // where the question would have been without this.
+      const result = yield* trust.grant(cwd).pipe(
+        Effect.catch((cause) =>
+          Effect.succeed({
+            ok: false,
+            message: `could not record trust for ${cwd} (${reason(cause)}); ${variant.harness} will ask in its own tab`,
+          }),
+        ),
+      );
       yield* o.out(`  ${result.message}`);
       yield* o.run.log(`trust ${variant.harness}: ${result.message}`);
     }

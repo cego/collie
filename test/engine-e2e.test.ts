@@ -464,6 +464,24 @@ test("an untrusted directory is offered up front, so no tab ever stops on the di
     }),
   ));
 
+test("a trust write that fails leaves claude to ask, and the run goes ahead anyway", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* claudeSeen(rig, {});
+      // The backup is taken before the write, and it cannot be written over a directory.
+      yield* fs.makeDirectory(path.join(rig.stateDir, "claude.json.bak"), { recursive: true });
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+      const prompts = scriptedPrompts(["Trust it now"]);
+
+      const { status, lines } = yield* runWorkflowEffect(rig, "solo", { goal: "g" }, { prompts });
+
+      expect(status).toBe("done");
+      expect(lines.some((l) => l.includes("could not record trust"))).toBe(true);
+    }),
+  ));
+
 test("declining leaves claude to ask, and the run goes ahead anyway", () =>
   runEffect(
     Effect.gen(function* () {
