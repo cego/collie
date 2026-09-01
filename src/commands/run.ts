@@ -3,7 +3,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { RUNNER_LOG, readProgress } from "../driver";
 import { Herdr } from "../herdr";
-import { settle } from "../inputs";
+import { classifyWorkSource, settle, targetKind } from "../inputs";
 import {
   answerRun,
   err,
@@ -71,7 +71,17 @@ const runStart = Command.make(
               for (const item of prepared.resolutions) {
                 const value = explicit.inputs[item.name];
                 if (value === undefined) continue;
-                settle(item, { value, source: "explicit" });
+                // A given value owes the prompts its kind, exactly as the picker and a
+                // chained Run record it: the workflow body branches on `<name>_kind`,
+                // and an inferred kind left over from a candidate would describe the
+                // value that was not chosen.
+                const kind =
+                  item.strategy === "work-source"
+                    ? (yield* classifyWorkSource(value)).kind
+                    : item.strategy === "diff-target"
+                      ? targetKind(value)
+                      : undefined;
+                settle(item, { value, source: "explicit", kind });
               }
               // A command line cannot be asked; an unsettled Input is the caller's to give.
               const unresolved = prepared.resolutions.filter(

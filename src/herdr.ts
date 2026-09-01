@@ -75,7 +75,9 @@ const PaneSplitReply = Schema.Struct({
   result: Schema.Struct({ pane: Schema.Struct({ pane_id: Schema.String }) }),
 });
 const AgentReply = Schema.Struct({
-  name: Schema.String,
+  // herdr omits `name` for an agent it did not start; one of those in the workspace
+  // must not make the whole list undecodable.
+  name: Schema.optionalKey(Schema.String),
   pane_id: Schema.String,
   workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   agent_status: Schema.String,
@@ -446,14 +448,18 @@ export class Herdr {
     return this.cli(["agent", "list"]).pipe(
       Effect.flatMap((res) => decodeBoundary("herdr agent list", AgentListReply, res)),
       Effect.map(({ result }) => {
-        return result.agents
-          .filter((agent) => agent.name !== "")
-          .map((agent) => ({
-            name: agent.name,
-            paneId: agent.pane_id,
-            workspaceId: agent.workspace_id ?? null,
-            status: agentStatus(agent.agent_status),
-          }));
+        return result.agents.flatMap((agent) =>
+          agent.name
+            ? [
+                {
+                  name: agent.name,
+                  paneId: agent.pane_id,
+                  workspaceId: agent.workspace_id ?? null,
+                  status: agentStatus(agent.agent_status),
+                },
+              ]
+            : [],
+        );
       }),
     );
   }
