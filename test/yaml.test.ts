@@ -85,3 +85,10 @@ test("frontmatter is split from the markdown body", () => {
 test("a file with no frontmatter is all body", () => {
   expect(parseDocument("just text")).toEqual({ data: {}, body: "just text" });
 });
+
+test("a misaligned line is an error, not a silent truncation", () => {
+  expect(() => parseYaml(`name: implement\n max_iterations: 5\ninputs:\n  plan: p\n`)).toThrow(
+    "line 2",
+  );
+  expect(() => parseYaml(`steps:\n  - id: a\n   - id: b\n`)).toThrow(YamlError);
+});

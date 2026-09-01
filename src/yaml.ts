@@ -76,7 +76,12 @@ function isSeqItem(text: string): boolean {
 export function parseYaml(src: string): YamlValue {
   const ls = toLines(src);
   if (ls.length === 0) return {};
-  const [value] = parseNode(ls, 0, ls[0]!.indent);
+  const [value, end] = parseNode(ls, 0, ls[0]!.indent);
+  // A line the parse stopped short of is a stray indent, and these files are hand
+  // edited: truncating the definition silently is how a workflow loses its last steps.
+  if (end < ls.length) {
+    throw yamlError(`line ${ls[end]!.n}: unexpected indent, "${ls[end]!.text}" fits no block`);
+  }
   return value;
 }
 
