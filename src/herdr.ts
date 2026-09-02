@@ -69,6 +69,8 @@ const PaneListReply = Schema.Struct({
         tab_id: Schema.String,
         label: Schema.optionalKey(Schema.NullOr(Schema.String)),
         agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
       }),
     ),
   }),
@@ -178,6 +180,9 @@ export interface PaneInfo {
   tabId: string;
   label: string | null;
   agent: string | null;
+  workspaceId: string | null;
+  /** Where the pane's process was started, which is the directory it stands for. */
+  cwd: string | null;
 }
 
 /** A live agent as herdr sees it. Only named agents — the ones this plugin started. */
@@ -368,6 +373,8 @@ export class Herdr {
           tabId: pane.tab_id,
           label: pane.label ?? null,
           agent: pane.agent ?? null,
+          workspaceId: pane.workspace_id ?? null,
+          cwd: pane.cwd ?? null,
         }));
       }),
     );

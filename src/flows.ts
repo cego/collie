@@ -16,7 +16,7 @@ import {
 } from "./definitions";
 import { choiceHint, executeRun, unmetRequirementFor } from "./engine";
 import type { PluginEnv } from "./env";
-import type { AgentInfo, Herdr } from "./herdr";
+import { Herdr, type AgentInfo } from "./herdr";
 import { confirmLine, inputValues, resolveCandidates, settle, type Resolution } from "./inputs";
 import {
   ask,
@@ -383,6 +383,15 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
   const runId = maybeRunId.value;
   const store = new RunStore(env.stateDir);
   const run = yield* store.load(runId);
+  // The record, not the caller: a detached Driver inherits the invoking pane's
+  // workspace and directory, so a `--workspace` run would otherwise open its tabs,
+  // register its agents and root its work wherever the command was typed.
+  env = {
+    ...env,
+    cwd: run.record.cwd,
+    workspaceId: run.record.workspace ?? env.workspaceId,
+  };
+  herdr = new Herdr(env);
   const out = (line: string) => appendProgress(run.dir, line);
 
   /**
