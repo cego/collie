@@ -2,7 +2,7 @@ import { Data, Schema, Effect, FileSystem, Path, Struct } from "effect";
 import { nowIso } from "./time";
 import { currentPid, withLock } from "./lock";
 import { unsafePathComponent } from "./naming";
-import { FindingSchema } from "./output";
+import { FindingSchema, type Finding } from "./output";
 import { slugify } from "./template";
 
 /** A collection a Run may predate: absent reads as empty, so old is not corrupt. */
@@ -396,6 +396,30 @@ export class RunStore {
         }),
       );
     }).pipe(Effect.withSpan("RunStore.appendHandoff"));
+  }
+
+  /**
+   * A newer review of the same target is the current verdict on it, so the run that
+   * carried the older one stops reporting findings the new review no longer holds
+   * open. Under the run lock, like appendHandoff: the run is finished, but a board
+   * action may be appending a handoff to it at the same moment.
+   */
+  supersedeOutstanding(runId: string, findings: Finding[]) {
+    const rootEffect = this.rootEffect;
+    const load = () => this.load(runId);
+    return Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const root = yield* rootEffect;
+      return yield* withRunLock(
+        path.join(root, runId),
+        Effect.gen(function* () {
+          const run = yield* load();
+          run.record.outstanding = findings;
+          yield* writeRecord(run.dir, run.record);
+          return run;
+        }),
+      );
+    }).pipe(Effect.withSpan("RunStore.supersedeOutstanding"));
   }
 
   load(id: string) {

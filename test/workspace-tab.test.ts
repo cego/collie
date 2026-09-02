@@ -354,6 +354,33 @@ effectTest("one agent per role: a second implementer replaces the first", functi
   expect(after[0]!.agent).toBe("b");
 });
 
+effectTest("findings that were handed off are not presented as untouched", function* () {
+  const finished = yield* seed({
+    workflow: "review",
+    primaryInput: "worktree",
+    stepIds: ["review"],
+  });
+  finished.record.target_label = "worktree";
+  finished.record.status = "blocked";
+  finished.record.outstanding = [
+    { severity: "major", title: "t", file: "f", line: 1, detail: "d" },
+  ];
+  finished.record.handoffs.push({
+    id: "h1",
+    direction: "sent",
+    role: "implementer",
+    agent: "impl-1",
+    run: "other",
+    at: "t",
+    note: "sent review.md to the implementer",
+  });
+  yield* finished.save();
+
+  const view = yield* board([]);
+
+  expect(view.recent[0]!.detail).toBe("blocked · 1 finding(s) open · handed off");
+});
+
 effectTest("the board lists this Session's agents and runs, and nobody else's", function* () {
   const running = yield* seed({
     workflow: "implement",

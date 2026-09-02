@@ -711,6 +711,42 @@ test("a second review of the same target is given the first one", () =>
     }),
   ));
 
+test("a re-review narrows the previous run's outstanding to its own verdict", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      const target = { target: "branch:main...feature" };
+      yield* queueOutputs([
+        CLEAN,
+        CLEAN,
+        {
+          verdict: "findings",
+          summary: "It exits wrong.",
+          findings: [
+            { file: "cli.js", line: 4, severity: "blocker", title: "exit code", detail: "wrong" },
+          ],
+          dropped: [],
+        },
+      ]);
+      const first = yield* runWorkflowEffect("review", target, {
+        prompts: scriptedPrompts(["Don't post"]),
+      });
+      expect(first.run.record.outstanding).toHaveLength(1);
+
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const second = yield* runWorkflowEffect("review", target, {
+        prompts: scriptedPrompts(["Don't post"]),
+      });
+      expect(second.run.record.previous_review).toBe(first.run.id);
+
+      // The newer verdict on the same target is the current one, so the first run
+      // stops reporting a finding the re-review no longer holds open.
+      const reloaded = yield* new RunStore(rig.stateDir).load(first.run.id);
+      expect(reloaded.record.outstanding).toHaveLength(0);
+    }),
+  ));
+
 test("the working tree is never matched against an earlier review of it", () =>
   runEffect(
     Effect.gen(function* () {

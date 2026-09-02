@@ -5,6 +5,7 @@
 import { Crypto, Effect, FileSystem, Path } from "effect";
 import { nowIso } from "./time";
 import type { Herdr } from "./herdr";
+import { STOPPED } from "./driver";
 import { REVIEW_FILE } from "./output";
 import { liveAgent, registryPath, type AgentEntry, type RegistryScope } from "./registry";
 import { RunStore, type HandoffRecord, type Run } from "./run";
@@ -89,11 +90,28 @@ export const record = Effect.fn("Handoff.record")(function* (
   );
 });
 
-/** The live agent for a role in this Session, or null. Stale entries are dropped. */
+/**
+ * The live agent for a role in this Session, or null. Stale entries are dropped, and
+ * so is an agent whose Run has failed or been stopped: its pane is a transcript, not
+ * a worker, and a hand-off it takes happens outside any Run's accounting. With no
+ * live agent the caller falls back to chaining a fresh Run, which accounts properly.
+ */
 export const liveRole = Effect.fn("Handoff.liveRole")(function* (session: Session, role: string) {
   const alive = yield* session.herdr.agentList();
   const file = yield* registryPath(session.stateDir, session);
-  return yield* liveAgent(file, alive, role);
+  const entry = yield* liveAgent(file, alive, role);
+  if (!entry) return null;
+  const run = yield* new RunStore(session.stateDir)
+    .load(entry.runId)
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+  // Its run dir is gone: nothing can be said about what the agent is doing, and a
+  // hand-off into the unknown records nowhere.
+  if (!run) return null;
+  if (run.record.status === "failed") return null;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const stopped = yield* fs.exists(path.join(run.dir, STOPPED));
+  return stopped ? null : entry;
 });
 
 /** The newest Run in this Session that rendered a review. */
