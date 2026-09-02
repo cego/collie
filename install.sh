@@ -53,20 +53,73 @@ looks_executable() {
   esac
 }
 
-fetch_release() {
-  # `COLLIE_TOKEN` for a project that is not public: without it the registry answers
-  # every download with the login page above.
+# The host the release is fetched from, so a token can be borrowed from whichever CLI is
+# already logged in to it.
+# The port stays in: `glab` and `gh` key a login by host and port together, so dropping
+# it would look up a different instance's token and send it to this one.
+release_host() {
+  printf '%s\n' "$BASE" | sed -n 's|^[A-Za-z][A-Za-z0-9+.-]*://\([^/]*@\)\{0,1\}\([^/]*\).*|\2|p'
+}
+
+# Which forge, from the URL shape rather than the hostname: GitLab download paths carry
+# `/-/releases/` and GitHub's carry `/releases/download/`, and a self-hosted instance of
+# either keeps its own shape, where its hostname says nothing.
+release_forge() {
+  case "$BASE" in
+    */-/releases/*) echo gitlab ;;
+    */releases/download/*) echo github ;;
+    *) case "$(release_host)" in github.com | *.github.com) echo github ;; *) echo gitlab ;; esac ;;
+  esac
+}
+
+# `COLLIE_TOKEN` wins. Without it, borrow the login the forge's own CLI already holds, so
+# a machine set up with `glab` or `gh` needs no second credential to install from a project
+# that is not public. Both print an empty token and still exit 0 for a host they do not
+# know, so emptiness is what says there is nothing to send, not the exit status.
+release_token() {
   if [ -n "${COLLIE_TOKEN:-}" ]; then
-    set -- --header "PRIVATE-TOKEN: ${COLLIE_TOKEN}"
-  else
-    set --
+    printf '%s\n' "$COLLIE_TOKEN"
+    return 0
   fi
-  curl -fsSL "$@" "${BASE}/${ASSET}" -o bin/collie.new 2>/dev/null ||
+  host=$(release_host)
+  [ -n "$host" ] || return 1
+  case "$(release_forge)" in
+    github)
+      command -v gh >/dev/null 2>&1 && gh auth token --hostname "$host" 2>/dev/null
+      ;;
+    *)
+      command -v glab >/dev/null 2>&1 && glab config get token --host "$host" 2>/dev/null
+      ;;
+  esac
+}
+
+fetch_release() {
+  # A project that is not public answers an unauthenticated download with the login page
+  # above, so send a token wherever one can be had.
+  token=$(release_token) || token=
+  config=
+  # `Authorization`, not GitLab's `PRIVATE-TOKEN`, for both forges: curl follows redirects
+  # here, and it drops `Authorization` when one leaves the host while forwarding a custom
+  # header to wherever it points. GitLab takes a personal access token either way, so the
+  # header that a redirect cannot carry off the host is the one to send.
+  if [ -n "$token" ]; then
+    config="header = \"Authorization: Bearer ${token}\""
+  fi
+  # Through curl's config file on stdin rather than `--header`, so the token stays out of
+  # this process's arguments where `ps` would show it to every user on the machine. It may
+  # be the `glab` or `gh` login rather than something handed over for this one download.
+  printf '%s\n' "$config" |
+    curl -fsSL --config - "${BASE}/${ASSET}" -o bin/collie.new 2>/dev/null ||
     { rm -f bin/collie.new; return 1; }
   if ! looks_executable bin/collie.new; then
     rm -f bin/collie.new
-    echo "what ${BASE}/${ASSET} returned is not a program${COLLIE_TOKEN:+}" >&2
-    [ -n "${COLLIE_TOKEN:-}" ] || echo "  (set COLLIE_TOKEN if this project needs a login)" >&2
+    echo "what ${BASE}/${ASSET} returned is not a program" >&2
+    if [ -z "$token" ]; then
+      case "$(release_forge)" in
+        github) echo "  (no token: set COLLIE_TOKEN, or run \`gh auth login --hostname $(release_host)\`)" >&2 ;;
+        *) echo "  (no token: set COLLIE_TOKEN, or run \`glab auth login --hostname $(release_host)\`)" >&2 ;;
+      esac
+    fi
     return 1
   fi
   mv bin/collie.new bin/collie

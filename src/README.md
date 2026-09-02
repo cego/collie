@@ -11,7 +11,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `env.ts`         | The plugin environment herdr provides                                                   |
 | `herdr.ts`       | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest                 |
 | `definitions.ts` | Layers, `extends:` overrides, `use:` embedding, validation                              |
-| `yaml.ts`        | The frontmatter subset, so the binary needs no dependency                               |
+| `yaml.ts`        | Frontmatter split and write-back over Effect's YAML parser                              |
 | `schema.ts`      | Shared Schema predicates used across boundary decoders                                  |
 | `harness.ts`     | Per-harness start, model flag, effort flag and persona injection                        |
 | `inputs.ts`      | Input inference from branch, cwd, earlier runs and glab                                 |

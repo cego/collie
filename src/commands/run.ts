@@ -285,7 +285,7 @@ const runWait = Command.make(
       Flag.withDefault(false),
     ),
     timeout: Flag.string("timeout").pipe(
-      Flag.withDescription("Give up after this long, e.g. `30s`, `10 minutes`"),
+      Flag.withDescription("Give up after this long, e.g. `30 seconds`, `10 minutes`"),
       Flag.optional,
     ),
   },

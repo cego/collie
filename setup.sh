@@ -39,6 +39,25 @@ fi
 # one that does not, and a `collie` without that pin takes its workflows from whatever
 # directory it is standing in.
 
+# The operator skill: a link, so a `git pull` updates it without re-running anything.
+SKILLS_DIR="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
+SKILL_LINK="$SKILLS_DIR/collie"
+if [ "$(readlink "$SKILL_LINK" 2>/dev/null)" = "$ROOT/skills/collie" ]; then
+  say "Collie skill already linked"
+elif [ -e "$SKILL_LINK" ]; then
+  say "Leaving $SKILL_LINK alone; it is not ours to replace"
+elif [ -L "$SKILL_LINK" ]; then
+  # A link whose target is gone — the checkout it pointed at moved. `-e` is false for
+  # it, so without this the plain `ln -s` below fails on the directory entry that is
+  # still there, and `set -e` would end the setup with the keybindings undone.
+  say "Repointing the stale Collie skill link at $ROOT"
+  ln -sfn "$ROOT/skills/collie" "$SKILL_LINK"
+else
+  say "Linking the Collie skill into $SKILLS_DIR"
+  mkdir -p "$SKILLS_DIR"
+  ln -s "$ROOT/skills/collie" "$SKILL_LINK"
+fi
+
 add_binding() { # key action description
   if grep -q "command = \"$PLUGIN_ID.$2\"" "$CONFIG" 2>/dev/null; then
     say "Keybinding for $2 already present"
@@ -69,5 +88,6 @@ fi
 
 say "Done."
 say "Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f forks."
+say "Outside it, the collie skill lets an agent drive runs from the CLI."
 say "The first run in a workspace opens a 'Control Plane' tab as its first tab (prefix+1):"
 say "live agents, running and finished runs, and every menu a workflow asks you to answer."
