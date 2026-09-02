@@ -1707,6 +1707,22 @@ const collect = Effect.fn("Engine.collect")(function* (
     // finish announcing itself as clean whatever the review said.
     o.run.record.outstanding = result.value.findings;
     o.run.record.fixed = result.value.fixed.length;
+    // This verdict supersedes the previous review of the same target, so that run
+    // stops reporting findings this one no longer holds open. Best-effort: the old
+    // record staying stale must not fail the step that produced a good synthesis.
+    const superseded = o.run.record.previous_review;
+    if (superseded) {
+      yield* new RunStore(o.env.stateDir)
+        .supersedeOutstanding(superseded, result.value.findings)
+        .pipe(
+          Effect.tap(() =>
+            o.run.log(
+              `narrowed run ${superseded}'s outstanding to ${result.value.findings.length} finding(s), superseded by this review`,
+            ),
+          ),
+          Effect.catch((e) => o.run.log(`could not narrow run ${superseded}: ${String(e)}`)),
+        );
+    }
   } else if (hasVerdict) {
     const result = parseReviewOutput(text, record.output);
     if (!result.ok) {

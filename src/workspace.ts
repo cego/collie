@@ -126,7 +126,12 @@ const activeDetail = Effect.fn("activeDetail")(function* (run: Run) {
 
 function recentDetail(record: RunRecord, abandoned: boolean): string {
   const parts: string[] = [abandoned ? "abandoned" : record.status];
-  if (record.outstanding.length > 0) parts.push(`${record.outstanding.length} finding(s) open`);
+  if (record.outstanding.length > 0) {
+    // Open findings that were handed to another Run's agent are being worked on
+    // somewhere this record cannot see; say so instead of presenting them as untouched.
+    const handedOff = record.handoffs.some((h) => h.direction === "sent");
+    parts.push(`${record.outstanding.length} finding(s) open${handedOff ? " · handed off" : ""}`);
+  }
   // Why it stopped, which used to be in the runner pane and is now only in the log.
   const note = record.steps.filter((s) => s.note && s.status !== "done").at(-1)?.note;
   if (note && record.status !== "done") parts.push(note);

@@ -2,7 +2,8 @@ import { Clock, Effect, FileSystem, Path } from "effect";
 import { nowIso } from "../src/time";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { REVIEW_FILE } from "../src/output";
-import { record, type Session } from "../src/handoff";
+import { liveRole, record, type Session } from "../src/handoff";
+import { STOPPED } from "../src/driver";
 import { liveEntries, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { RunStore, type HandoffRecord } from "../src/run";
 import type { AgentInfo } from "../src/herdr";
@@ -115,6 +116,34 @@ const liveImplementer = Effect.fn("sessionTest.liveImplementer")(function* (
   yield* rig.addAgent(agent, paneId);
   return { name: agent, paneId, workspaceId: env.workspaceId, status: "idle" } satisfies AgentInfo;
 });
+
+test("an agent whose run failed no longer takes hand-offs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* liveImplementer();
+      const env = rig.pluginEnv();
+      const run = must((yield* new RunStore(env.stateDir).list()).at(0), "expected implement run");
+      expect(yield* liveRole(session(env), "implementer")).not.toBeNull();
+
+      run.record.status = "failed";
+      yield* run.save();
+      expect(yield* liveRole(session(env), "implementer")).toBeNull();
+    }),
+  ));
+
+test("an agent whose run was stopped no longer takes hand-offs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const fs = yield* FileSystem.FileSystem;
+      yield* liveImplementer();
+      const env = rig.pluginEnv();
+      const run = must((yield* new RunStore(env.stateDir).list()).at(0), "expected implement run");
+
+      yield* fs.writeFileString(path.join(run.dir, STOPPED), "t\n");
+      expect(yield* liveRole(session(env), "implementer")).toBeNull();
+    }),
+  ));
 
 test("with an implementer live, the review hands it the findings and both runs record it", () =>
   runEffect(
