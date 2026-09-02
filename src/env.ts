@@ -46,14 +46,32 @@ function first(env: Record<string, string | undefined>, ...keys: string[]): stri
   return null;
 }
 
-export function readEnv(env: Readonly<Record<string, string | undefined>>): PluginEnv {
+/**
+ * The installation the compiled runner was started from, so a `bin/collie` run from any
+ * directory still finds its baseline and its own driver. Bun's single-file build runs its
+ * sources from a virtual `/$bunfs/` path, and only then is `execPath` the runner itself
+ * rather than `bun`, whose location says nothing about where the plugin is.
+ */
+export function ownRoot(
+  modulePath: string = import.meta.path,
+  execPath: string = process.execPath,
+): string | null {
+  if (!modulePath.startsWith("/$bunfs/")) return null;
+  const at = execPath.lastIndexOf("/bin/");
+  return at > 0 ? execPath.slice(0, at) : null;
+}
+
+export function readEnv(
+  env: Readonly<Record<string, string | undefined>>,
+  installRoot: string | null = ownRoot(),
+): PluginEnv {
   const context: PluginContext = Option.getOrElse(
     Schema.decodeUnknownOption(PluginContextJson)(env.HERDR_PLUGIN_CONTEXT_JSON),
     (): PluginContext => ({}),
   );
 
   const home = env.HOME ?? "/tmp";
-  const pluginRoot = first(env, "HERDR_PLUGIN_ROOT") ?? env.PWD ?? ".";
+  const pluginRoot = first(env, "HERDR_PLUGIN_ROOT") ?? installRoot ?? env.PWD ?? ".";
   // `PWD` goes stale whenever something chdir'd; the real directory never does.
   const explicitCwd = first(env, "COLLIE_CWD");
   const cwd = explicitCwd ?? context.workspace_cwd ?? process.cwd();

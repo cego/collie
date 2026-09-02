@@ -702,6 +702,7 @@ function onGitLab(branch: string) {
       "rev-parse --git-dir") echo .git ;;
       "--version ") echo "glab 1.40.0" ;;
       "api user") echo '{"username": "mk"}' ;;
+      "mr update") shift 2; printf '%s\\n' "$*" >> ${path.join(rig.root, "bin", "updates.txt")} ;;
       *) exit 1 ;;
     esac`,
     );
@@ -778,6 +779,10 @@ test(
 
         // What it reported reaches the run record and the summary.
         expect(run.record.mr_url).toBe("https://gitlab.cego.dk/x/-/merge_requests/7");
+        // The engine, not the agent, puts mk on the merge request it opened.
+        expect(yield* readText(path.join(rig.root, "bin", "updates.txt"))).toBe(
+          "7 --repo gitlab.cego.dk/x --assignee +mk\n",
+        );
         expect(run.record.linear_issues).toEqual(["FRO-149"]);
         expect(run.record.summary).toContain(
           "Merge request: https://gitlab.cego.dk/x/-/merge_requests/7 (FRO-149)",

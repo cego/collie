@@ -47,6 +47,28 @@ export function parseMrTarget(target: string): MrRef | null {
   return { project: project === "" ? null : project, iid };
 }
 
+/** `https://host/group/project/-/merge_requests/7`, the way glab reports what it opened. */
+export function parseMrUrl(url: string): MrRef | null {
+  const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/merge_requests\/(\d+)/.exec(url.trim());
+  return m ? { project: `${m[1]}/${m[2]}`, iid: m[3]! } : null;
+}
+
+export type MrRole = "assignee" | "reviewer";
+
+/**
+ * Puts a user on the merge request in that role, next to whoever is there already.
+ * Who ran this is a fact, so the engine records it itself rather than asking an agent to.
+ */
+export function addMrRole<R>(
+  mr: MrRef,
+  role: MrRole,
+  who: string,
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<{ code: number; stdout: string }, never, R> {
+  return run("glab", ["mr", "update", mr.iid, ...repoArgs(mr.project), `--${role}`, `+${who}`], cwd);
+}
+
 export function mrTarget(project: string | null, iid: string): string {
   return project ? `mr:${project}!${iid}` : `mr:${iid}`;
 }

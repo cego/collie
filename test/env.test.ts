@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { readEnv } from "../src/env";
+import { ownRoot, readEnv } from "../src/env";
 
 test("plugin env is read from the herdr-provided variables", () => {
   const env = readEnv({
@@ -21,6 +21,22 @@ test("plugin env is read from the herdr-provided variables", () => {
   expect(env.actionId).toBe("pick");
   expect(env.workspaceId).toBe("2");
   expect(env.cwd).toBe("/workspace");
+});
+
+test("without HERDR_PLUGIN_ROOT the compiled runner is its own plugin root", () => {
+  // Compiled: the sources live in bun's virtual filesystem and execPath is the binary.
+  expect(ownRoot("/$bunfs/root/main", "/opt/collie/bin/collie")).toBe("/opt/collie");
+  // Development: `bun src/main.ts` runs from disk, and execPath is bun itself.
+  expect(ownRoot("/home/x/collie/src/env.ts", "/home/x/.bun/bin/bun")).toBeNull();
+  expect(ownRoot("/$bunfs/root/main", "/collie")).toBeNull();
+
+  expect(readEnv({ HOME: "/home/x", PWD: "/elsewhere" }, "/opt/collie").pluginRoot).toBe(
+    "/opt/collie",
+  );
+  expect(readEnv({ HOME: "/home/x", PWD: "/elsewhere" }, null).pluginRoot).toBe("/elsewhere");
+  expect(readEnv({ HOME: "/home/x", HERDR_PLUGIN_ROOT: "/pinned" }, "/opt/collie").pluginRoot).toBe(
+    "/pinned",
+  );
 });
 
 test("cwd and ids fall back to the invocation context", () => {

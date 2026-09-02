@@ -76,6 +76,11 @@ import {
   gitlabForProject,
   gitlabReadiness,
   mrFacts,
+  addMrRole,
+  parseMrUrl,
+  resolveAssignee,
+  type MrRef,
+  type MrRole,
   parseMrTarget,
   repoArgs,
   type MrFacts,
@@ -348,6 +353,9 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     );
     // The whole point of a synthesis is that a human can read it here.
     if (step.fanIn) yield* printReview(o);
+    // A review of a merge request makes whoever asked for it its reviewer.
+    if (step.fanIn && blocked.length === 0)
+      yield* claimMrRole(o, parseMrTarget(run.record.inputs.target ?? ""), "reviewer");
 
     if (blocked.length > 0) {
       // The real reason, not "go and look": an unusable Output is often ten seconds
@@ -1742,6 +1750,7 @@ const collect = Effect.fn("Engine.collect")(function* (
     if (o.run.record.mr_url && o.run.record.mr_url !== hadMr) {
       const iid = /\/merge_requests\/(\d+)/.exec(o.run.record.mr_url)?.[1];
       yield* notify(o, "mr-opened", o.run.record.mr_url, { subject: iid ? `!${iid}` : undefined });
+      yield* claimMrRole(o, parseMrUrl(o.run.record.mr_url), "assignee");
     }
     // A re-run step must not double-report what it disputed last time.
     for (const finding of review.disputed) {
@@ -1818,6 +1827,31 @@ function collectMr(o: EngineOptions, parsed: YamlValue): void {
     }
   }
 }
+
+/**
+ * The human on the merge request in that role: `gitlab.assignee` from config for the
+ * assignee, else whoever glab is logged in as. Nothing to do where glab or the login is
+ * missing — the step that got this far said what it could not do already.
+ */
+const claimMrRole = Effect.fn("Engine.claimMrRole")(function* (
+  o: EngineOptions,
+  mr: MrRef | null,
+  role: MrRole,
+) {
+  if (!mr) return;
+  const cwd = o.run.record.cwd;
+  const configured =
+    role === "assignee" ? configValue(yield* readConfig(o.env.configDir), "gitlab.assignee") : undefined;
+  const who = yield* resolveAssignee(cwd, configured, runShell);
+  if (!who) return;
+  const res = yield* addMrRole(mr, role, who, cwd, runShell);
+  const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
+  yield* o.out(
+    res.code === 0
+      ? `  ▸ ${who} is ${role} on ${where}`
+      : `  glab mr update ${where} --${role} failed (exit ${res.code})`,
+  );
+});
 
 /** What the MR prompt is given: never null, so a missing value reads as a gap, not "undefined". */
 function mrVars(facts: MrFacts): YamlMap {

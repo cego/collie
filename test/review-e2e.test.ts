@@ -240,6 +240,8 @@ function fakeGlab(iid: number) {
       "auth status") echo "logged in" ;;
       "mr view") echo '{"iid": ${iid}, "state": "opened"}' ;;
       "mr note") shift 2; printf '%s\\n' "$@" >> ${notes} ;;
+      "api user") echo '{"username": "mk"}' ;;
+      "mr update") shift 2; printf '%s\\n' "$*" >> ${path.join(rig.root, "bin", "updates.txt")} ;;
       *) exit 1 ;;
     esac`,
     );
@@ -468,6 +470,11 @@ test("an MR target offers the post choice, and Post sends review.md as one note"
       const where = "gitlab.cego.dk/cego/herdr-plugin!12";
       expect(run.step("post").note).toBe(`chose "Post to MR" — posted the review to ${where}`);
       expect(lines).toContain(`  posted the review to ${where}`);
+      // Reviewing it makes mk its reviewer, before the menu and whatever is chosen there.
+      expect(lines).toContain(`  ▸ mk is reviewer on ${where}`);
+      expect(yield* readText(path.join(rig.root, "bin", "updates.txt"))).toBe(
+        "12 --repo gitlab.cego.dk/cego/herdr-plugin --reviewer +mk\n",
+      );
 
       // Exactly one note, sent with --repo so no checkout is needed, and review.md
       // character for character.
