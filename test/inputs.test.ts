@@ -2,6 +2,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import {
+  classifyGivenTarget,
+  reviewedTargets,
+  targetKind,
   classifyTarget,
   classifyWorkSource,
   confirmLine,
@@ -12,7 +15,7 @@ import {
   targetCandidates,
   workSourceCandidates,
 } from "../src/inputs";
-import { Run, type RunRecord, type RunStatus } from "../src/run";
+import { Run, RunStore, type RunRecord, type RunStatus } from "../src/run";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 
@@ -480,6 +483,7 @@ function makePlanRun(
   created: string,
   status: RunStatus = "done",
   spec = true,
+  extra: Partial<RunRecord> = {},
 ) {
   return Effect.gen(function* () {
     const id = slug;
@@ -489,6 +493,11 @@ function makePlanRun(
       seq: 1,
       slug: `plan-${slug}`,
       workflow: "plan",
+      decisions: {},
+      previous_review: null,
+      notified: [],
+      fixed: 0,
+      unpushed: null,
       cwd,
       session: null,
       workspace: null,
@@ -515,6 +524,7 @@ function makePlanRun(
       mr_url: null,
       linear_issues: [],
       summary: null,
+      ...extra,
     };
     yield* mkdir(dir);
     // Saved the way a Driver saves, so the fixture cannot drift from the real shape.
@@ -634,6 +644,36 @@ test("what the human types is classified as an MR, a range or a branch", () => {
   expect(classifyTarget("   ", "main")).toBeNull();
 });
 
+test("a diff-target given on the command line is normalised, not just shaped", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("git", gitOn("add-picker"));
+
+      // A URL used to fall through to `worktree`, which left `{{target_repo}}` empty.
+      const url = yield* classifyGivenTarget(
+        "https://gitlab.cego.dk/cego/collie/-/merge_requests/2",
+        ctx(),
+      );
+      expect(url).toMatchObject({ kind: "mr", value: "mr:gitlab.cego.dk/cego/collie!2" });
+
+      expect(yield* classifyGivenTarget("worktree", ctx())).toMatchObject({ kind: "worktree" });
+      // An already-normalised target passes through rather than being nested.
+      expect(yield* classifyGivenTarget("branch:main...x", ctx())).toMatchObject({
+        kind: "branch",
+        value: "branch:main...x",
+      });
+      expect(yield* classifyGivenTarget("mr:12", ctx())).toMatchObject({
+        kind: "mr",
+        value: "mr:12",
+      });
+      // Free-form still gets the menu's classification.
+      expect(yield* classifyGivenTarget("add-picker", ctx())).toMatchObject({
+        kind: "branch",
+        value: "branch:main...add-picker",
+      });
+    }),
+  ));
+
 test("the target menu always shows, and Type it… classifies what comes back", () =>
   runEffect(
     Effect.gen(function* () {
@@ -724,5 +764,71 @@ test("an MR candidate carries the project its checkout pushes to", () =>
       });
       // And the label a tab would show is still just the iid.
       expect(mr!.label).toBe("!42");
+    }),
+  ));
+
+test("the targets this repo has already reviewed are offered without pasting them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const reviewed = (slug: string, target: string, created: string, cwd = rig.projectDir) =>
+        makePlanRun(slug, cwd, created, "done", false, {
+          workflow: "review",
+          slug: `review-${slug}`,
+          inputs: { target, target_kind: targetKind(target) },
+          target_label: null,
+          synthesis: "steps/synthesize/synthesized.json",
+        });
+      yield* reviewed("old", "mr:gitlab/x!7", "2026-08-01T10:00:00Z");
+      yield* reviewed("new", "branch:main...feature", "2026-08-30T10:00:00Z");
+      // Same target twice keeps the newest, and another repo's runs never appear.
+      yield* reviewed("again", "mr:gitlab/x!7", "2026-08-31T10:00:00Z");
+      yield* reviewed("elsewhere", "mr:other!1", "2026-08-31T11:00:00Z", "/somewhere/else");
+
+      const remembered = yield* reviewedTargets(rig.stateDir, rig.projectDir, 5);
+
+      expect(remembered.map((c) => [c.value, c.kind])).toEqual([
+        ["mr:gitlab/x!7", "mr"],
+        ["branch:main...feature", "branch"],
+      ]);
+      expect(remembered[0]!.source).toContain("reviewed");
+
+      // And they come after what inference offers, never in front of it.
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", gitOn("add-picker"));
+      const candidates = yield* targetCandidates({ cwd: rig.projectDir, stateDir: rig.stateDir });
+      const values = candidates.map((c) => c.value);
+      expect(values.indexOf("mr:gitlab/x!7")).toBeGreaterThan(values.indexOf("worktree"));
+      // Already offered by inference, so not offered twice.
+      expect(values.filter((v) => v === "branch:main...feature")).toHaveLength(1);
+    }),
+  ));
+
+test("the newest finished review of this target is the one a re-review is given", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const reviewed = (
+        slug: string,
+        created: string,
+        status: RunStatus,
+        synthesis: string | null,
+      ) =>
+        makePlanRun(slug, rig.projectDir, created, status, false, {
+          workflow: "review",
+          slug: `review-${slug}`,
+          inputs: { target: "mr:gitlab/x!7", target_kind: "mr" },
+          synthesis,
+        });
+      yield* reviewed("first", "2026-08-01T10:00:00Z", "done", "s.json");
+      yield* reviewed("second", "2026-08-20T10:00:00Z", "done", "s.json");
+      // Unfinished, and finished-but-never-synthesised, are not reviews to compare to.
+      yield* reviewed("running", "2026-08-29T10:00:00Z", "running", "s.json");
+      yield* reviewed("empty", "2026-08-30T10:00:00Z", "done", null);
+      yield* reviewed("current", "2026-08-31T10:00:00Z", "done", "s.json");
+
+      const store = new RunStore(rig.stateDir);
+      const found = yield* store.previousReview(rig.projectDir, "mr:gitlab/x!7", "current");
+      expect(found?.id).toBe("second");
+      // A run never finds itself, and a target nobody reviewed has nothing.
+      expect(yield* store.previousReview(rig.projectDir, "worktree", "current")).toBeNull();
     }),
   ));

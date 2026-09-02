@@ -48,7 +48,10 @@ inputs:
 steps:
   - id: next
     choices:
+      # Two, because a menu with one option is taken rather than asked.
       - title: Stop here
+        stop: true
+      - title: Stop here too
         stop: true
 ---
 Goal: {{inputs.goal}}
@@ -118,6 +121,8 @@ function variant(agent: string, paneId: string, label: string, model = "sonnet")
     status: "done" as const,
     output: null,
     error: null,
+    repairs: [],
+    nudges: 0,
   };
 }
 
@@ -161,10 +166,11 @@ effectTest("the first run opens the Control Plane tab and puts it first", functi
     (yield* rig.calls()).filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1)),
   ).toContain(CONTROL_PLANE);
 
-  // First tab of the workspace, over the socket: there is no CLI for it.
+  // First tab of the workspace, over the socket: there is no CLI for it. The step's
+  // own tab is placed after it, by rank.
   const move = (yield* rig.calls()).filter((c) => c.cmd === "tab.move");
-  expect(move).toHaveLength(1);
   expect(move[0]!.params).toEqual({ tab_id: "1:1", insert_index: 0 });
+  expect(move.map((c) => c.params)).toContainEqual({ tab_id: "1:2", insert_index: 1 });
 
   // The board's pane is the only one this plugin keeps: the run has none of its own,
   // so nothing is moved or swapped and nothing is a `status` strip.
@@ -186,9 +192,10 @@ effectTest("the second run reuses that tab and re-asserts its position", functio
   expect(reopened).toHaveLength(0);
   // It found the tab by its label, and put it back at the front regardless.
   expect(later.map((c) => c.cmd)).toContain("tab list");
-  expect(later.filter((c) => c.cmd === "tab.move").map((c) => c.params)).toEqual([
-    { tab_id: "1:1", insert_index: 0 },
-  ]);
+  expect(later.filter((c) => c.cmd === "tab.move").map((c) => c.params)).toContainEqual({
+    tab_id: "1:1",
+    insert_index: 0,
+  });
 });
 
 effectTest("a step that fails after starting its agents still records them", function* () {

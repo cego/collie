@@ -274,19 +274,3 @@ export function ask(question: string, initial = ""): PickerEffect<string | null>
     }),
   );
 }
-
-export function confirm(text: string): PickerEffect<boolean> {
-  return keyboard.run(
-    Effect.gen(function* () {
-      yield* requireTty();
-      yield* write(
-        `${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n\r\nEnter to start, Esc to cancel.\r\n`,
-      );
-      for (;;) {
-        const key = yield* keyboard.next();
-        if (ENTER.has(key)) return yield* clear(true);
-        if (CANCEL.has(key) || key === "q") return yield* clear(false);
-      }
-    }),
-  );
-}

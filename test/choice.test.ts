@@ -372,3 +372,181 @@ test("a choice step needs no persona and no prompt section of its own", () =>
       expect(wf.steps[1]!.choices![0]!.round!.prompt).toContain("plan-level problems only");
     }),
   ));
+
+test("a decided choice is taken without drawing the menu", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
+      const prompts = scriptedPrompts([]);
+
+      const { run, status, lines } = yield* runWorkflowEffect(
+        rig,
+        "choose",
+        { goal: "Add a picker" },
+        { prompts, decisions: { next: "Stop here" } },
+      );
+
+      expect(status).toBe("done");
+      expect(prompts.offered).toHaveLength(0);
+      expect(run.step("next").note).toBe('chose "Stop here"');
+      expect(lines).toContain("  ▸ Stop here (decided at launch)");
+    }),
+  ));
+
+test("a decided round runs once and ends the step, where a picked one asks again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN, CLEAN]);
+      const prompts = scriptedPrompts([]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "choose",
+        { goal: "Add a picker" },
+        { prompts, decisions: { next: "Refine" } },
+      );
+
+      expect(status).toBe("done");
+      expect(prompts.offered).toHaveLength(0);
+      expect(run.record.choices.map((c) => c.title)).toEqual(["Refine"]);
+      expect(run.step("next").note).toBe('decided at launch: "Refine"');
+    }),
+  ));
+
+test("a decision that is not available asks, and the run says why", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
+      const prompts = scriptedPrompts(["Stop here"]);
+
+      const { run, status, lines } = yield* runWorkflowEffect(
+        rig,
+        "choose",
+        { goal: "Add a picker" },
+        { prompts, decisions: { next: "Ship it" } },
+      );
+
+      expect(status).toBe("done");
+      expect(prompts.offered).toHaveLength(1);
+      expect(lines).toContain('  decided "Ship it", not available here');
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      expect(yield* fs.readFileString(path.join(run.dir, "log.txt"))).toContain(
+        'decided "Ship it", not available here',
+      );
+    }),
+  ));
+
+test("one offered choice is taken, and a spent round still asks", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "lonely",
+        `---
+name: lonely
+inputs:
+  goal: goal
+steps:
+  - id: next
+    choices:
+      - title: Stop here
+        stop: true
+---
+Goal: {{inputs.goal}}
+`,
+      );
+      const prompts = scriptedPrompts([]);
+
+      const { status, lines } = yield* runWorkflowEffect(rig, "lonely", { goal: "g" }, { prompts });
+
+      expect(status).toBe("done");
+      expect(prompts.offered).toHaveLength(0);
+      expect(lines).toContain("  ▸ Stop here (only option)");
+    }),
+  ));
+
+test("two choices may share a title only as a handoff and its unless twin", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const defs = yield* loadDefinitions(
+        layerSet(rig.baselineDir, rig.configDir, `${rig.projectDir}/.herdr`),
+      );
+      // The baseline pair: one decision, two implementations.
+      const review = resolveWorkflow("review", defs, FALLBACK_DEFAULTS);
+      const post = review.steps.find((s) => s.id === "post")!;
+      expect(post.choices!.filter((c) => c.title === "Fix findings")).toHaveLength(2);
+      expect(yield* validateWorkflow(review, defs, FALLBACK_DEFAULTS)).toEqual([]);
+
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "twins",
+        `---
+name: twins
+inputs:
+  goal: goal
+steps:
+  - id: next
+    choices:
+      - title: Stop here
+        stop: true
+      - title: Stop here
+        stop: true
+---
+Goal: {{inputs.goal}}
+`,
+      );
+      const again = yield* loadDefinitions(
+        layerSet(rig.baselineDir, rig.configDir, `${rig.projectDir}/.herdr`),
+      );
+      expect(
+        yield* validateWorkflow(
+          resolveWorkflow("twins", again, FALLBACK_DEFAULTS),
+          again,
+          FALLBACK_DEFAULTS,
+        ),
+      ).toEqual(['workflow "twins" step "next": duplicate choice title "Stop here"']);
+    }),
+  ));
+
+test("a decision that is not available but leaves one option is taken, not announced", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "lonely-decided",
+        `---
+name: lonely-decided
+inputs:
+  goal: goal
+steps:
+  - id: next
+    choices:
+      - title: Stop here
+        stop: true
+---
+Goal: {{inputs.goal}}
+`,
+      );
+      const prompts = scriptedPrompts([]);
+
+      const { status, lines } = yield* runWorkflowEffect(
+        rig,
+        "lonely-decided",
+        { goal: "g" },
+        { prompts, decisions: { next: "Ship it" } },
+      );
+
+      expect(status).toBe("done");
+      // The run says what happened to the decision...
+      expect(lines).toContain('  decided "Ship it", not available here');
+      expect(lines).toContain("  ▸ Stop here (only option)");
+      // ...but nobody is called to a menu that is not being drawn.
+      const toasts = (yield* rig.calls()).filter((c) => c.cmd === "notification show");
+      const titles = toasts.map((c) => c.argv![2] ?? "");
+      expect(titles.filter((title) => title.includes("asking after all"))).toEqual([]);
+    }),
+  ));

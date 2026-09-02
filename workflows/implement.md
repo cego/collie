@@ -58,12 +58,12 @@ The work source above is one of four kinds. Do the one that matches
   spec and `{{inputs.plan}}/steps/synthesize/synthesized.json` has the same findings as
   JSON; the tickets are those findings, worst severity first. You are fixing an existing
   change, so **do not branch off the default branch** — work where the review was pointed:
-  - `{{inputs.target_kind}}` is `branch` — check out its head:
+  - `target_kind` is `branch` — check out its head:
     `git checkout <head of {{inputs.target}}>`.
-  - `{{inputs.target_kind}}` is `mr` — `glab mr checkout <iid> {{target_repo}}`, which
+  - `target_kind` is `mr` — `glab mr checkout <iid> {{target_repo}}`, which
     creates the local branch for you, so the fixes land on that merge request's own branch
     and it is updated rather than replaced.
-  - `{{inputs.target_kind}}` is `worktree` — stay on the branch you are on.
+  - `target_kind` is `worktree` — stay on the branch you are on.
     Write the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket per
     finding under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix.
     A finding you disagree with is `disputed` with a reason, exactly as in a fix round —
@@ -78,30 +78,41 @@ The work source above is one of four kinds. Do the one that matches
 
 Unless the kind above says otherwise, branch off the default branch first, named after
 the spec's slug — short, kebab-case,
-no ticket number unless the spec has one. This prompt arrives as `{{skill:implement}}`, so build
-the tickets in their order, one at a time: `{{skill:tdd}}` at the seams the spec names, the
+no ticket number unless the spec has one. You were started with {{skill:implement}}, so build
+the tickets in their order, one at a time: {{skill:tdd}} at the seams the spec names, the
 project's tests green, and one commit per ticket. There is no separate commit step.
 
-Push before you finish — with upstream tracking the first time, onto the branch the work
-source named otherwise. Everything after this step is read by somebody else, and what the
-reviewers fetch has to be what you actually built.
+Push before you finish: `git push -u origin HEAD -o ci.skip`, onto the branch the work
+source named where there is one. The reviewers read the merge request when there is one,
+and a merge request shows the remote — so anything you want reviewed has to be on the
+remote before the review step runs. `ci.skip` because this state is for the reviewers;
+the `mr` step's push is the one that should build.
+
+If the push fails — no remote, no permission, a protected branch, a rejected
+non-fast-forward — say what failed, report `"pushed": false`, and carry on to your
+Output. The commits are still good and the Run is still worth finishing.
 
 {{session.ask}}
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "branch": "<branch>",
-"tickets_done": ["ticket title", ...], "commits": ["<subject>", ...], "tests": "what
+"pushed": true, "tickets_done": ["ticket title", ...], "commits": ["<subject>", ...], "tests": "what
 you ran and what it said"}`.
 
 ## simplify
 
 Iteration {{iteration}} of at most {{max_iterations}}.
 
-Run `{{skill:code-simplification}}` over what this branch changed. Behaviour stays identical:
+Run {{skill:code-simplification}} over what this branch changed. Behaviour stays identical:
 the tests you ran in `build` still pass, and you say what you ran. Do not touch code
 this branch did not.
 
+If you committed anything, push it the same way `build` did — `git push -u origin HEAD
+-o ci.skip` — so the reviewers read what you simplified rather than what you replaced. A
+push that fails is reported, not fatal.
+
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "simplified": ["what
-you collapsed and why", ...], "tests": "what you ran and what it said"}`.
+you collapsed and why", ...], "pushed": true, "tests": "what you ran and what it
+said"}`.
 
 ## fix
 
@@ -122,12 +133,13 @@ A finding that arrives with `answers your dispute:` is one you rejected before a
 reviewer has now answered. Deal with it: apply it, or dispute it again with a reason that
 answers what they said.
 
-Push the fixups before you finish: the next round reviews the remote, and a fix it cannot
-see is a finding it raises again.
+Push the fixups before you finish — `git push -u origin HEAD -o ci.skip` — every
+iteration: the next round reviews the remote, and a fix it cannot see is a finding it
+raises again. A push that fails is reported as `"pushed": false`, not fatal.
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "disputed":
 [{"file": "path", "severity": "minor", "title": "the finding", "detail": "why I
-disagree"}], "fixed": ["what you changed", ...], "tests": "what you ran and what it
+disagree"}], "fixed": ["what you changed", ...], "pushed": true, "tests": "what you ran and what it
 said"}`.
 
 ## mr
@@ -138,13 +150,20 @@ The branch is reviewed and the loop is clean. Push it and open the merge request
 - MR template: `{{mr.template}}`
 - Linear tickets: `{{mr.issues}}`
 
-Push anything the earlier steps have not pushed yet. Never merge the MR, and never pass a
-merge flag to `glab`: this is the only step in the whole run allowed to open a merge
-request, and opening it is the entire job.
+Push anything the earlier steps have not pushed yet, this time **without** `ci.skip`:
+yours is the push that runs the pipeline, and the state a human will look at.
+Never merge the MR, and never pass a merge flag to `glab`: this is the only step in the
+whole run allowed to open or update a merge request, and doing that is the entire job.
+
+**Before that push, check for auto-merge** (`glab mr view <iid> {{target_repo}}` shows
+it). If the merge request has auto-merge enabled, **do not push** — a push that goes
+green there merges someone else's merge request, and a push that causes a merge is a
+merge. Report `"pushed": false` and say that auto-merge is why. This is a rule about
+someone else's merge request; do not soften it.
 
 **First check whether this branch already has a merge request** — it does when this run
-was started from a review of one (`{{inputs.plan_kind}}` is `review` and
-`{{inputs.target_kind}}` is `mr`), and `glab mr view {{target_repo}}` tells you either
+was started from a review of one (`plan_kind` is `review` and
+`target_kind` is `mr`), and `glab mr view {{target_repo}}` tells you either
 way. If it has one, that MR is the one being fixed: push, and say so in a short note on it
 (`glab mr note <iid> {{target_repo}}`) listing what you changed. Do **not** open a second
 merge request for the same branch. Report its URL as `mr_url` exactly as if you had opened
@@ -182,4 +201,4 @@ Never write the company package scope with a leading at-sign — in the MR, in a
 message, or anywhere else. Write it as a bare name.
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "mr_url": "<url>",
-"linear_issues": [<the ids you linked>], "branch": "<what you pushed>"}`.
+"linear_issues": [<the ids you linked>], "branch": "<what you pushed>", "pushed": true}`.

@@ -5,6 +5,8 @@ import {
   displayName,
   evenRatio,
   GLYPH,
+  insertIndexFor,
+  rankOf,
   paneLabel,
   stepLabel,
   tabLabel,
@@ -137,4 +139,28 @@ test("agent names stay herdr-legal and are never what a label shows", () => {
   expect(tabLabel(GLYPH.running, "review")).not.toContain(name);
   // stepLabel is still what the run record carries for a variant.
   expect(stepLabel("review-x", "review", "claude-opus")).toBe("review-x/review/claude-opus");
+});
+
+test("a new tab lands after the last Collie tab it does not outrank", () => {
+  expect(rankOf("plan")).toBeLessThan(rankOf("implement"));
+  expect(rankOf("implement")).toBeLessThan(rankOf("review"));
+  // A fork, or a workflow nobody ordered, comes after all of them.
+  expect(rankOf("architecture")).toBeGreaterThan(rankOf("review"));
+
+  const board = { rank: null, board: true };
+  const foreign = { rank: null, board: false };
+  const tab = (workflow: string) => ({ rank: rankOf(workflow), board: false });
+
+  expect(insertIndexFor([board], rankOf("review"))).toBe(1);
+  // The case this exists for: review started first, implement still comes first.
+  expect(insertIndexFor([board, tab("plan"), tab("review")], rankOf("implement"))).toBe(2);
+  // Ties keep start order: the second implement run's tab goes after the first's.
+  expect(insertIndexFor([board, tab("implement"), tab("implement")], rankOf("implement"))).toBe(3);
+  // A tab Collie does not own is never an anchor, and never moves.
+  expect(insertIndexFor([board, foreign, tab("review"), foreign], rankOf("plan"))).toBe(1);
+  // Two unknown workflows keep the order they started in.
+  expect(insertIndexFor([board, tab("architecture")], rankOf("architecture"))).toBe(2);
+  // The pin failed, so there is no board: the tab still lands ahead of lower ranks.
+  expect(insertIndexFor([foreign, tab("review")], rankOf("plan"))).toBe(0);
+  expect(insertIndexFor([], rankOf("plan"))).toBe(0);
 });

@@ -3,12 +3,12 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { RUNNER_LOG, readProgress } from "../driver";
 import { Herdr } from "../herdr";
-import { classifyWorkSource, settle, targetKind } from "../inputs";
 import {
   answerRun,
   err,
   prepareWorkflow,
   resumeRun,
+  settleGiven,
   runStatus,
   startRun,
   stopRun,
@@ -18,7 +18,6 @@ import { RunStore } from "../run";
 import type { Run } from "../run";
 import type { PluginEnv } from "../env";
 import { scopeFor } from "../registry";
-import { YamlMapSchema } from "../yaml";
 import {
   attempt,
   guarded,
@@ -34,6 +33,8 @@ import {
   context,
   parseInput,
   readRun,
+  requestIdFlag,
+  runIdArg,
   root,
   runData,
   selected,
@@ -44,12 +45,28 @@ import {
 const runStart = Command.make(
   "start",
   {
-    workflow: Argument.string("workflow"),
-    input: Flag.string("input").pipe(Flag.atLeast(0)),
-    inputsJson: Flag.string("inputs-json").pipe(Flag.optional),
-    requestId: Flag.string("request-id").pipe(Flag.optional),
+    workflow: Argument.string("workflow").pipe(
+      Argument.withDescription("Which Workflow to run, as `workflow list` names it"),
+    ),
+    input: Flag.string("input").pipe(
+      Flag.withDescription(
+        "key=value, repeatable; the names a Workflow takes are what `workflow show` lists",
+      ),
+      Flag.atLeast(0),
+    ),
+    inputsJson: Flag.string("inputs-json").pipe(
+      Flag.withDescription("Every Input at once, as one JSON object"),
+      Flag.optional,
+    ),
+    decide: Flag.string("decide").pipe(
+      Flag.withDescription(
+        "step=title, repeatable; answers a Choice step now instead of stopping there",
+      ),
+      Flag.atLeast(0),
+    ),
+    requestId: requestIdFlag,
   },
-  ({ workflow, input, inputsJson, requestId: request }) =>
+  ({ workflow, input, inputsJson, decide, requestId: request }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
@@ -67,43 +84,15 @@ const runStart = Command.make(
               if (resolved._tag === "ContextFailure") return resolved.result;
               const prepared = yield* prepareWorkflow(resolved.env, workflow);
               if (!prepared.ok) return prepared;
-              const wf = prepared.workflow;
-              for (const item of prepared.resolutions) {
-                const value = explicit.inputs[item.name];
-                if (value === undefined) continue;
-                // A given value owes the prompts its kind, exactly as the picker and a
-                // chained Run record it: the workflow body branches on `<name>_kind`,
-                // and an inferred kind left over from a candidate would describe the
-                // value that was not chosen.
-                const kind =
-                  item.strategy === "work-source"
-                    ? (yield* classifyWorkSource(value)).kind
-                    : item.strategy === "diff-target"
-                      ? targetKind(value)
-                      : undefined;
-                settle(item, { value, source: "explicit", kind });
-              }
-              // A command line cannot be asked; an unsettled Input is the caller's to give.
-              const unresolved = prepared.resolutions.filter(
-                (item) => item.needsAsking || item.candidates,
-              );
-              if (unresolved.length > 0) {
-                return err(
-                  "needs_input",
-                  `${workflow} needs input.`,
-                  Schema.decodeUnknownSync(YamlMapSchema)({
-                    inputs: unresolved.map((item) => ({
-                      name: item.name,
-                      candidates: item.candidates ?? [],
-                      question: item.question,
-                    })),
-                    schema: wf.inputs,
-                  }),
-                );
-              }
+              const settled = yield* settleGiven(resolved.env, prepared, {
+                inputs: explicit.inputs,
+                decide,
+              });
+              if (!settled.ok) return settled;
               const started = yield* startRun(resolved.env, {
-                workflow: wf,
+                workflow: prepared.workflow,
                 resolutions: prepared.resolutions,
+                decisions: settled.decisions,
                 workspace: resolved.workspace,
               });
               if (started._tag === "Rejected") return started.result;
@@ -118,7 +107,20 @@ const runStart = Command.make(
         global.json,
       );
     }),
-).pipe(Command.withDescription("Start a Workflow and return the new Run's id"));
+).pipe(
+  Command.withDescription("Start a Workflow and return the new Run's id"),
+  Command.withExamples([
+    {
+      command:
+        "collie run start review --input target=https://gitlab.example.com/acme/app/-/merge_requests/2",
+      description: "Review a merge request, by URL or by bare iid",
+    },
+    {
+      command: "collie run start implement --input plan=ENG-123",
+      description: "Build from a Linear issue, a plan directory, or a description",
+    },
+  ]),
+);
 
 const runList = Command.make("list", {}, () =>
   Effect.gen(function* () {
@@ -163,89 +165,104 @@ const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
   return yield* readRun(resolved.env, runId, yield* selected(global));
 });
 
-const runShow = Command.make("show", { runId: Argument.string("run-id") }, ({ runId }) =>
-  Effect.gen(function* () {
-    const global = yield* root;
-    yield* attempt(
-      Effect.gen(function* () {
-        const resolved = yield* resolveCommandRun(global, runId);
-        if (resolved._tag === "RunFailure") return resolved.result;
-        return {
-          ok: true,
-          data: { run: yield* runData(resolved.run) },
-          human: `${resolved.run.id}\t${yield* runStatus(resolved.run)}\t${resolved.run.record.workflow}`,
-        };
-      }),
-      global.json,
-    );
-  }),
+const runShow = Command.make(
+  "show",
+  {
+    runId: runIdArg,
+  },
+  ({ runId }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* resolveCommandRun(global, runId);
+          if (resolved._tag === "RunFailure") return resolved.result;
+          return {
+            ok: true,
+            data: { run: yield* runData(resolved.run) },
+            human: `${resolved.run.id}\t${yield* runStatus(resolved.run)}\t${resolved.run.record.workflow}`,
+          };
+        }),
+        global.json,
+      );
+    }),
 ).pipe(
   Command.withDescription("Show one Run: its state, its Inputs, its Steps and any pending Choice"),
 );
 
-const runLogs = Command.make("logs", { runId: Argument.string("run-id") }, ({ runId }) =>
-  Effect.gen(function* () {
-    const global = yield* root;
-    yield* attempt(
-      Effect.gen(function* () {
-        const resolved = yield* resolveCommandRun(global, runId);
-        if (resolved._tag === "RunFailure") return resolved.result;
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const file = path.join(resolved.run.dir, RUNNER_LOG);
-        const logs = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : "";
-        return { ok: true, data: { runId, logs }, human: logs };
-      }),
-      global.json,
-    );
-  }),
+const runLogs = Command.make(
+  "logs",
+  {
+    runId: runIdArg,
+  },
+  ({ runId }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* resolveCommandRun(global, runId);
+          if (resolved._tag === "RunFailure") return resolved.result;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const file = path.join(resolved.run.dir, RUNNER_LOG);
+          const logs = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : "";
+          return { ok: true, data: { runId, logs }, human: logs };
+        }),
+        global.json,
+      );
+    }),
 ).pipe(Command.withDescription("Print what the Run's Driver recorded"));
 
-const runOutput = Command.make("output", { runId: Argument.string("run-id") }, ({ runId }) =>
-  Effect.gen(function* () {
-    const global = yield* root;
-    yield* attempt(
-      Effect.gen(function* () {
-        const resolved = yield* resolveCommandRun(global, runId);
-        if (resolved._tag === "RunFailure") return resolved.result;
-        const fs = yield* FileSystem.FileSystem;
-        const path = yield* Path.Path;
-        const outputs: Array<{ path: string; value?: unknown; error?: string }> = [];
-        const inside = `${path.resolve(resolved.run.dir)}/`;
-        for (const variant of resolved.run.record.steps.flatMap((step) => step.variants)) {
-          const relative = variant.output;
-          if (!relative) continue;
-          const file = path.resolve(resolved.run.dir, relative);
-          if (!file.startsWith(inside))
-            return err("invalid_state", `Run "${runId}" has an unsafe Output path.`);
-          outputs.push(
-            yield* fs.readFileString(file).pipe(
-              Effect.flatMap(Schema.decodeUnknownEffect(UnknownJson)),
-              Effect.map((value) => ({ path: relative, value })),
-              Effect.catch((cause) => Effect.succeed({ path: relative, error: String(cause) })),
-            ),
-          );
-        }
-        return {
-          ok: true,
-          data: { runId, outputs },
-          human:
-            outputs
-              .map((output) => {
-                const body = output.error
-                  ? `Error: ${output.error}`
-                  : Schema.encodeSync(PrettyUnknownJson)(output.value);
-                return `${output.path}\n${body
-                  .split("\n")
-                  .map((line) => `  ${line}`)
-                  .join("\n")}`;
-              })
-              .join("\n\n") || "This Run has no Outputs.",
-        };
-      }),
-      global.json,
-    );
-  }),
+const runOutput = Command.make(
+  "output",
+  {
+    runId: runIdArg,
+  },
+  ({ runId }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* resolveCommandRun(global, runId);
+          if (resolved._tag === "RunFailure") return resolved.result;
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const outputs: Array<{ path: string; value?: unknown; error?: string }> = [];
+          const inside = `${path.resolve(resolved.run.dir)}/`;
+          for (const variant of resolved.run.record.steps.flatMap((step) => step.variants)) {
+            const relative = variant.output;
+            if (!relative) continue;
+            const file = path.resolve(resolved.run.dir, relative);
+            if (!file.startsWith(inside))
+              return err("invalid_state", `Run "${runId}" has an unsafe Output path.`);
+            outputs.push(
+              yield* fs.readFileString(file).pipe(
+                Effect.flatMap(Schema.decodeUnknownEffect(UnknownJson)),
+                Effect.map((value) => ({ path: relative, value })),
+                Effect.catch((cause) => Effect.succeed({ path: relative, error: String(cause) })),
+              ),
+            );
+          }
+          return {
+            ok: true,
+            data: { runId, outputs },
+            human:
+              outputs
+                .map((output) => {
+                  const body = output.error
+                    ? `Error: ${output.error}`
+                    : Schema.encodeSync(PrettyUnknownJson)(output.value);
+                  return `${output.path}\n${body
+                    .split("\n")
+                    .map((line) => `  ${line}`)
+                    .join("\n")}`;
+                })
+                .join("\n\n") || "This Run has no Outputs.",
+          };
+        }),
+        global.json,
+      );
+    }),
 ).pipe(Command.withDescription("Print every Output the Run's Steps have written"));
 
 type ParsedTimeout = { ok: true; ms: number | null } | { ok: false; error: Result };
@@ -262,9 +279,15 @@ function parseTimeout(value: Option.Option<string>): ParsedTimeout {
 const runWait = Command.make(
   "wait",
   {
-    runId: Argument.string("run-id"),
-    follow: Flag.boolean("follow").pipe(Flag.withDefault(false)),
-    timeout: Flag.string("timeout").pipe(Flag.optional),
+    runId: runIdArg,
+    follow: Flag.boolean("follow").pipe(
+      Flag.withDescription("Print each Step's progress while waiting, instead of only the result"),
+      Flag.withDefault(false),
+    ),
+    timeout: Flag.string("timeout").pipe(
+      Flag.withDescription("Give up after this long, e.g. `30s`, `10 minutes`"),
+      Flag.optional,
+    ),
   },
   ({ runId, follow, timeout }) =>
     Effect.gen(function* () {
@@ -398,9 +421,11 @@ function runMutationCommand(
 const runAnswer = Command.make(
   "answer",
   {
-    runId: Argument.string("run-id"),
-    answer: Argument.string("answer"),
-    requestId: Flag.string("request-id").pipe(Flag.optional),
+    runId: runIdArg,
+    answer: Argument.string("answer").pipe(
+      Argument.withDescription("The Choice to take, as `run show` titles it"),
+    ),
+    requestId: requestIdFlag,
   },
   ({ runId, answer, requestId }) =>
     runMutationCommand("run-answer", runId, requestId, (_env, run, id) =>
@@ -409,8 +434,8 @@ const runAnswer = Command.make(
 ).pipe(Command.withDescription("Answer the Choice a waiting Run is asking"));
 
 const mutationFlags = {
-  runId: Argument.string("run-id"),
-  requestId: Flag.string("request-id").pipe(Flag.optional),
+  runId: runIdArg,
+  requestId: requestIdFlag,
 };
 
 const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>

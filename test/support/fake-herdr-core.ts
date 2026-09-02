@@ -23,6 +23,11 @@ interface State {
   tabs: number;
   panes: number;
   outputs: number;
+  statusReads: number;
+  paneReads: number;
+  failures: number;
+  prompts: number;
+  echoed: number;
   blocked: number;
   tabList: FakeTab[];
   paneList: FakePane[];
@@ -54,6 +59,11 @@ const StateJson = Schema.fromJsonString(
     tabs: Schema.optionalKey(Schema.Number),
     panes: Schema.optionalKey(Schema.Number),
     outputs: Schema.optionalKey(Schema.Number),
+    statusReads: Schema.optionalKey(Schema.Number),
+    paneReads: Schema.optionalKey(Schema.Number),
+    failures: Schema.optionalKey(Schema.Number),
+    prompts: Schema.optionalKey(Schema.Number),
+    echoed: Schema.optionalKey(Schema.Number),
     blocked: Schema.optionalKey(Schema.Number),
     tabList: Schema.optionalKey(Schema.Array(FakeTabSchema)),
     paneList: Schema.optionalKey(Schema.Array(FakePaneSchema)),
@@ -89,6 +99,11 @@ const emptyState = (): State => ({
   tabs: 0,
   panes: 0,
   outputs: 0,
+  statusReads: 0,
+  paneReads: 0,
+  failures: 0,
+  prompts: 0,
+  echoed: 0,
   blocked: 0,
   tabList: [],
   paneList: [],
@@ -100,6 +115,11 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
     tabs: state.tabs ?? 0,
     panes: state.panes ?? 0,
     outputs: state.outputs ?? 0,
+    statusReads: state.statusReads ?? 0,
+    paneReads: state.paneReads ?? 0,
+    failures: state.failures ?? 0,
+    prompts: state.prompts ?? 0,
+    echoed: state.echoed ?? 0,
     blocked: state.blocked ?? 0,
     tabList: (state.tabList ?? []).map((tab) => ({ tab_id: tab.tab_id, label: tab.label })),
     paneList: (state.paneList ?? []).map((pane) => ({
@@ -162,7 +182,18 @@ export function fakeHerdr(
       () => emptyFailures,
     );
     const failure = failures[cmd];
-    if (failure) return { code: 1, stdout: "", stderr: `${failure}\n` };
+    // `FAKE_HERDR_FAIL_TIMES` makes a failure transient: the first N calls fail and
+    // the rest answer, which is a hiccup rather than a verdict.
+    const failTimes = Number.parseInt(yield* envString("FAKE_HERDR_FAIL_TIMES", "0"), 10);
+    if (failure) {
+      const state = yield* readState(statePath);
+      const seen = (state.failures ?? 0) + 1;
+      state.failures = seen;
+      yield* writeJson(statePath, state);
+      if (failTimes <= 0 || seen <= failTimes) {
+        return { code: 1, stdout: "", stderr: `${failure}\n` };
+      }
+    }
 
     const state = yield* readState(statePath);
     const blockFor = Number.parseInt(yield* envString("FAKE_HERDR_BLOCK_START", "0"), 10);
@@ -201,7 +232,38 @@ export function fakeHerdr(
       };
     }
 
+    // `pane read` answers with terminal text, not an envelope. FAKE_HERDR_PANE_TEXT
+    // is what it says; `changing` makes it different on every read, which is what a
+    // step that is still working looks like.
+    if (cmd === "pane read") {
+      const text = yield* envString("FAKE_HERDR_PANE_TEXT", "");
+      state.paneReads += 1;
+      // `changing` is an agent that keeps working; `prompts` is a pane that only
+      // changes when something is typed into it, which is what a nudge does.
+      // `echo` is the agent that answers a nudge a moment later and then goes quiet
+      // again: this read returns what the pane held at the last one, so the change
+      // lands on the poll *after* the prompt rather than in the same breath as it.
+      let body = text;
+      if (text === "changing") body = `line ${state.paneReads}`;
+      if (text === "prompts") body = `prompt ${state.prompts}`;
+      if (text === "echo") {
+        body = `prompt ${state.echoed}`;
+        state.echoed = state.prompts;
+      }
+      yield* writeJson(statePath, state);
+      return { code: 0, stdout: `${body}\n`, stderr: "" };
+    }
+
     if (cmd === "agent prompt") {
+      state.prompts += 1;
+      yield* writeJson(statePath, state);
+      // Fails every prompt from the Nth on, so a test can let a step start and then
+      // take the channel away — which is what a repair prompt meets when its agent
+      // has gone.
+      const failFrom = Number.parseInt(yield* envString("FAKE_HERDR_FAIL_PROMPT_FROM", "0"), 10);
+      if (failFrom > 0 && state.prompts >= failFrom) {
+        return { code: 1, stdout: "", stderr: `no agent ${argv[2]}\n` };
+      }
       const line = argv[3] ?? "";
       const ref = /is in (\S+\.md) /.exec(line);
       const text =
@@ -324,7 +386,30 @@ export function fakeHerdr(
         break;
       }
       case "agent get": {
-        let status = yield* envString("FAKE_HERDR_AGENT_STATUS", "idle");
+        // A named agent herdr has been told to forget: `agent get` fails, the way it
+        // does for a closed tab or a killed pane.
+        if (
+          (yield* envString("FAKE_HERDR_AGENTS_GONE"))
+            .split(",")
+            .filter((n) => n)
+            .includes(argv[2] ?? "")
+        ) {
+          // herdr answers a missing target the way it really does: exit 0 with an
+          // error envelope naming the code, not a failed process.
+          return {
+            code: 0,
+            stdout: `${encodeJson({
+              id: "cli:agent:get",
+              error: { code: "agent_not_found", message: `agent target ${argv[2]} not found` },
+            })}\n`,
+            stderr: "",
+          };
+        }
+        // A comma-separated list is read one per call, the last value repeating, so a
+        // test can script "working for a while, then idle".
+        const scripted = (yield* envString("FAKE_HERDR_AGENT_STATUS", "idle")).split(",");
+        let status = scripted[Math.min(state.statusReads, scripted.length - 1)] ?? "idle";
+        state.statusReads += 1;
         if (state.blocked > 0 && state.blocked <= blockFor) {
           status = "blocked";
           state.blocked += 1;

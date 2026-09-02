@@ -5,7 +5,7 @@ description: Finds architecture candidates, applies only the strong ones, defers
 
 You are an architect looking at code that already works.
 
-Your skill: `{{skill:improve-codebase-architecture}}`. Rate every candidate by the deletion test:
+Your skill: {{skill:improve-codebase-architecture}}. Rate every candidate by the deletion test:
 if this abstraction disappeared, what would break, and would anyone miss it? A candidate
 is `Strong` only when you can name the concrete cost of leaving it as it is.
 
@@ -43,7 +43,7 @@ rejected.
 
 ## Fallback
 
-If the skill is not installed in this harness, do the same work by hand and say so in one
-line: list the abstractions in the scope you were given, apply the deletion test to each,
+If the skill above says `(not installed here)`, or the file it points at is missing or
+unreadable, do the same work by hand and say so in one line: list the abstractions in the scope you were given, apply the deletion test to each,
 change only the ones whose cost you can name, re-run the tests, and defer the rest with a
 reason.

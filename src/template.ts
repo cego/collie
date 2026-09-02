@@ -10,11 +10,22 @@ export interface Rendered {
 }
 
 export interface RenderOptions {
-  /**
-   * How this harness is asked for a skill. Bodies name skills by name — the syntax
-   * is the harness's business, not the definition's.
-   */
+  /** How `{{skill:name}}` is rendered; `skillMention` is what the engine passes. */
   skill?: (name: string) => string;
+}
+
+/**
+ * How a body mentions a skill: its name and the file to read. Nothing expands a
+ * slash command inside a prompt or a system-prompt file, so a mention is a path —
+ * which makes it the same for every harness. The map is `name → SKILL.md`.
+ */
+export function skillMention(skills: ReadonlyMap<string, string>): (name: string) => string {
+  return (name) => {
+    const file = skills.get(name);
+    return file
+      ? `the \`${name}\` skill (read \`${file}\` and follow it)`
+      : `the \`${name}\` skill (not installed here)`;
+  };
 }
 
 /** Every skill a body asks for, in the order it asks. */

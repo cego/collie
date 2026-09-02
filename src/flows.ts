@@ -11,14 +11,15 @@ import {
   resolveWorkflow,
   type Definitions,
   type Provenance,
+  type ResolvedStep,
+  type ResolvedWorkflow,
 } from "./definitions";
-import { executeRun } from "./engine";
+import { choiceHint, executeRun, unmetRequirementFor } from "./engine";
 import type { PluginEnv } from "./env";
 import type { AgentInfo, Herdr } from "./herdr";
-import { confirmLine, resolveCandidates, settle } from "./inputs";
+import { confirmLine, inputValues, resolveCandidates, settle, type Resolution } from "./inputs";
 import {
   ask,
-  confirm,
   nextKey,
   pick,
   releaseKeyboard,
@@ -27,6 +28,7 @@ import {
   type PickItem,
 } from "./picker";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
+import { notify } from "./notify";
 import { reason, shellQuote } from "./naming";
 import { RunStore } from "./run";
 import { sendReviewToImplementer, type Session } from "./handoff";
@@ -138,12 +140,33 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
     settle(r, { value, source: "asked" });
   }
 
+  // Every decision this run will reach, answered now: the point of walking away is
+  // that nothing after this needs the human. `Ask me then` keeps today's behaviour,
+  // one Enter each.
+  const decisions: Record<string, string> = {};
+  for (const { step, items } of yield* decidableSteps(resolved, env, resolutions)) {
+    const answer = yield* pick(
+      [
+        { id: ASK_ME_THEN, title: "Ask me then", subtitle: "stop and ask when you get there" },
+        ...items,
+      ],
+      {
+        header: `${resolved.name} — ${step.id}`,
+        footer: "↑↓ move · Enter choose · Esc cancel",
+      },
+    );
+    if (!answer) return 0;
+    if (answer.id !== ASK_ME_THEN) decisions[step.id] = answer.id;
+  }
+
+  // No confirmation: the human picked the workflow, answered its Inputs and answered
+  // its decisions, and Esc at any of those already cancelled. The line is the note.
   const line = confirmLine(resolved.name, resolutions);
-  if (!(yield* confirm(line))) return 0;
 
   const started = yield* startRun(env, {
     workflow: resolved,
     resolutions,
+    decisions,
     workspace: yield* resolveWorkspace(herdr, env).pipe(Effect.catch(() => Effect.succeed(null))),
     note: line,
   });
@@ -151,6 +174,56 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
   // Only a popup can close itself; running the picker in a plain pane is fine..
   yield* Effect.ignore(herdr.popupClose());
   return 0;
+});
+
+const ASK_ME_THEN = "\u0000ask-me-then";
+
+/**
+ * The Choice steps this Run will actually reach, and what each may be decided as. A
+ * step this environment cannot meet is skipped rather than asked about: a question
+ * about a step that will not run is worse than silence. (A `standalone:` step needs no
+ * check here — `resolveWorkflow` drops those when a workflow is embedded, and this
+ * only ever sees the one being launched.)
+ */
+export const decidableSteps = Effect.fn("Flows.decidableSteps")(function* (
+  wf: ResolvedWorkflow,
+  env: PluginEnv,
+  resolutions: Resolution[],
+) {
+  const where = { cwd: env.cwd, inputs: inputValues(resolutions) };
+  const steps: Array<{ step: ResolvedStep; items: PickItem[] }> = [];
+  for (const step of wf.steps) {
+    if (!step.choices || step.choices.length === 0) continue;
+    if (step.requires && (yield* unmetRequirementFor(where, step.requires))) continue;
+    const items = yield* decisionItems(step, where);
+    // Everything this step could have offered is out of reach here, so there is
+    // nothing to decide and nothing to ask about.
+    if (items.length > 0) steps.push({ step, items });
+  }
+  return steps;
+});
+
+/**
+ * A step's choices as decisions: by distinct title, in declaration order, and only
+ * the ones this environment could carry out. A choice whose own `requires` cannot be
+ * met here — posting to a merge request with no GitLab, or for a target that is not
+ * one — would be decided and then not offered, and the unattended run it was decided
+ * for would stop to ask after all.
+ *
+ * Liveness is deliberately not filtered: who is live at launch says nothing about who
+ * will be live an hour later, which is why a hand-off and its twin share one title.
+ */
+const decisionItems = Effect.fn("Flows.decisionItems")(function* (
+  step: ResolvedStep,
+  where: { cwd: string; inputs: Record<string, string> },
+) {
+  const items: PickItem[] = [];
+  for (const choice of step.choices ?? []) {
+    if (items.some((item) => item.id === choice.title)) continue;
+    if (choice.requires && (yield* unmetRequirementFor(where, choice.requires))) continue;
+    items.push({ id: choice.title, title: choice.title, subtitle: choiceHint(choice) });
+  }
+  return items;
 });
 
 /**
@@ -415,14 +488,14 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
           run.record.status = "failed";
           run.record.finished_at = yield* nowIso();
           yield* run.save();
-          // A missing toast must not be the last word.
-          yield* Effect.ignore(
-            herdr.notify(
-              `${run.record.slug} failed`,
-              `see ${RUNNER_LOG} in the run dir`,
-              "request",
-            ),
-          );
+          // A missing toast must not be the last word — and a kind the human turned
+          // off in config stays off here too, so the settings mean what they say.
+          const settings = (yield* loadDefaults(env.configDir)).notifications;
+          yield* notify(herdr, run, {
+            kind: "run-failed",
+            body: `${detail.split("\n")[0]} — see ${RUNNER_LOG} in the run dir`,
+            settings,
+          });
           return 1;
         }),
       ),
@@ -473,7 +546,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     if (waiting && waiting.id !== answering) {
       asking = { index: 0, typed: "" };
       answering = waiting.id;
-      yield* announce(herdr, env, waiting);
+      yield* announce(herdr, env);
     }
     if (!waiting) answering = null;
 
@@ -508,22 +581,13 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
 });
 
 /**
- * A question nobody sees is a run that has silently stopped, so the board says it
- * twice: a toast, and this tab brought to the front.
+ * A question nobody sees is a run that has silently stopped, so the board brings this
+ * tab to the front when one arrives. The toast is the Driver's — it raises `needs-you`
+ * for the step before it waits, once per `(run, kind, step)` and recorded on the run,
+ * so announcing it here as well would interrupt twice for one question and again
+ * whenever the board is reopened.
  */
-const announce = Effect.fn("Flows.announce")(function* (
-  herdr: Herdr,
-  env: PluginEnv,
-  waiting: RunRow,
-) {
-  // A missing toast must not stop the question being asked.
-  yield* Effect.ignore(
-    herdr.notify(
-      `${waiting.title} needs you`,
-      `${waiting.choice?.step}: pick what happens next`,
-      "request",
-    ),
-  );
+const announce = Effect.fn("Flows.announce")(function* (herdr: Herdr, env: PluginEnv) {
   if (!env.tabId) return;
   // A tab that will not focus is still a tab the human can reach.
   yield* Effect.ignore(herdr.tabFocus(env.tabId));

@@ -7,7 +7,7 @@ import {
   personaPrefix,
   startArgs,
 } from "../src/harness";
-import { renderTemplate, skillsIn } from "../src/template";
+import { renderTemplate, skillMention, skillsIn } from "../src/template";
 
 test("the adapter table covers claude, codex and opencode with model flags", () => {
   expect(HARNESSES.claude!.modelArgs("sonnet")).toEqual(["--model", "sonnet"]);
@@ -94,33 +94,32 @@ test("pi takes a provider-qualified model, a thinking level and the persona file
   expect(personaPrefix(HARNESSES.pi!, "You review.")).toBe("");
 });
 
-test("a skill is asked for in each harness's own syntax", () => {
+test("a skill is started in each harness's own syntax", () => {
   // The skills are shared — one ~/.agents/skills for every harness — so only the
-  // way you ask differs.
-  expect(HARNESSES.claude!.skillRef("code-review")).toBe("/code-review");
-  expect(HARNESSES.pi!.skillRef("code-review")).toBe("/skill:code-review");
+  // way the human channel starts one differs.
+  expect(HARNESSES.claude!.skillCommand("code-review")).toBe("/code-review");
+  expect(HARNESSES.pi!.skillCommand("code-review")).toBe("/skill:code-review");
   // No slash form at all: these surface skills to the model by description, so a
   // slash would be sent as literal text and do nothing.
-  expect(HARNESSES.codex!.skillRef("code-review")).toBe('the "code-review" skill');
-  expect(HARNESSES.opencode!.skillRef("code-review")).toBe('the "code-review" skill');
+  expect(HARNESSES.codex!.skillCommand("code-review")).toBe('the "code-review" skill');
+  expect(HARNESSES.opencode!.skillCommand("code-review")).toBe('the "code-review" skill');
   // Every harness in the table answers, so a definition can never name one that cannot.
   for (const adapter of Object.values(HARNESSES)) {
-    expect(adapter.skillRef("tdd")).toContain("tdd");
+    expect(adapter.skillCommand("tdd")).toContain("tdd");
   }
 });
 
-test("a body names a skill and each harness reads its own spelling of it", () => {
+test("a body names a skill and every harness is pointed at the same file", () => {
   const body = "Run {{skill:code-review}} then {{skill:tdd}}, and {{skill:code-review}} again.";
 
   expect(skillsIn(body)).toEqual(["code-review", "tdd"]);
-  expect(renderTemplate(body, {}, { skill: (n) => HARNESSES.claude!.skillRef(n) }).text).toBe(
-    "Run /code-review then /tdd, and /code-review again.",
-  );
-  expect(renderTemplate(body, {}, { skill: (n) => HARNESSES.pi!.skillRef(n) }).text).toBe(
-    "Run /skill:code-review then /skill:tdd, and /skill:code-review again.",
-  );
-  expect(renderTemplate(body, {}, { skill: (n) => HARNESSES.codex!.skillRef(n) }).text).toBe(
-    'Run the "code-review" skill then the "tdd" skill, and the "code-review" skill again.',
+  // A mention is what the agent reads, and a path is not harness-specific: nothing
+  // expands a slash command inside a file a model is handed.
+  const mention = skillMention(new Map([["code-review", "/skills/code-review/SKILL.md"]]));
+  expect(renderTemplate(body, {}, { skill: mention }).text).toBe(
+    "Run the `code-review` skill (read `/skills/code-review/SKILL.md` and follow it) then " +
+      "the `tdd` skill (not installed here), and the `code-review` skill " +
+      "(read `/skills/code-review/SKILL.md` and follow it) again.",
   );
 
   // A skill reference is not a missing variable, and is left alone with no renderer.

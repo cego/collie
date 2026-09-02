@@ -88,6 +88,7 @@ test("a synthesis is a review plus the summary and what it decided not to carry"
       },
     ],
     disputed: [],
+    fixed: [],
   });
 });
 
@@ -117,6 +118,7 @@ test("the rendered review is the summary and the findings, worst first, and noth
     summary: "Adds a --version flag. One blocker.",
     disputed: [],
     dropped: [{ severity: "minor", title: "dropped one", reason: "cannot defend it" }],
+    fixed: [],
     findings: [
       { severity: "minor", title: "Loose equality", file: "cli.js", line: 9 },
       { severity: "nit", title: "A vocabulary this repo does not use" },
@@ -166,6 +168,7 @@ test("a clean review says so in one line, and never mentions the process", () =>
     dropped: [
       { severity: "minor", title: "x", reason: "one reviewer only, and I cannot defend it" },
     ],
+    fixed: [],
   });
 
   expect(rendered).toBe(
@@ -252,4 +255,25 @@ test("a rebuttal the synthesis carried still reopens the dispute", () => {
   expect(split.rebutted).toHaveLength(1);
   expect(split.live).toHaveLength(1);
   expect(split.settled).toHaveLength(0);
+});
+
+test("what the last review raised and this one cannot find is read first", () => {
+  const parsed = synth(
+    `{"verdict": "clean", "summary": "The blocker is gone. Nothing else came back.",
+      "findings": [],
+      "fixed": [{"file": "cli.js", "title": "exit code", "note": "now exits 2"}]}`,
+  );
+  expect(parsed).toMatchObject({
+    verdict: "clean",
+    fixed: [{ file: "cli.js", title: "exit code", note: "now exits 2" }],
+  });
+
+  // A clean verdict with things fixed is the good ending, and reads as one.
+  const rendered = renderReview(parsed);
+  expect(rendered).toContain("**Fixed since last review**");
+  expect(rendered).toContain("`cli.js` — exit code");
+  expect(rendered).toContain("now exits 2");
+  expect(rendered).toContain("Nothing to fix.");
+  // The section is absent when there is no previous review to have fixed anything.
+  expect(renderReview({ ...parsed, fixed: [] })).not.toContain("Fixed since");
 });

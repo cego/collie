@@ -20,6 +20,8 @@ const JsonString = Schema.fromJsonString(Schema.Json);
 const JsonObjectString = Schema.fromJsonString(Schema.JsonObject);
 const encodeJson = Schema.encodeSync(JsonString);
 
+const FailuresSchema = Schema.Record(Schema.String, Schema.String);
+
 const RpcRequest = Schema.Struct({
   id: Schema.String,
   method: Schema.String,
@@ -222,10 +224,24 @@ export class Rig {
               for (const req of requestsFrom(String(chunk))) {
                 const params = req.params ?? {};
                 const entry = `${encodeJson({ transport: "rpc", cmd: req.method, method: req.method, params })}\n`;
+                // The same FAKE_HERDR_FAIL map the CLI side reads, so an rpc-only
+                // call like `tab.move` can be made to fail in a test.
+                const failure = Option.getOrElse(
+                  Schema.decodeUnknownOption(Schema.fromJsonString(FailuresSchema))(
+                    Bun.env.FAKE_HERDR_FAIL ?? "{}",
+                  ),
+                  (): Record<string, string> => ({}),
+                )[req.method];
                 Queue.offerUnsafe(writes, {
                   entry,
                   succeed: () =>
-                    socket.write(`${encodeJson({ id: req.id, result: { type: "ok" } })}\n`),
+                    socket.write(
+                      `${encodeJson(
+                        failure
+                          ? { id: req.id, error: { message: failure } }
+                          : { id: req.id, result: { type: "ok" } },
+                      )}\n`,
+                    ),
                   fail: () =>
                     socket.write(
                       `${encodeJson({ id: req.id, error: { message: "log write failed" } })}\n`,

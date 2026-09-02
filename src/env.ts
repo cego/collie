@@ -52,7 +52,8 @@ export function readEnv(env: Readonly<Record<string, string | undefined>>): Plug
 
   const home = env.HOME ?? "/tmp";
   const pluginRoot = first(env, "HERDR_PLUGIN_ROOT") ?? env.PWD ?? ".";
-  const cwd = first(env, "COLLIE_CWD") ?? context.workspace_cwd ?? env.PWD ?? ".";
+  // `PWD` goes stale whenever something chdir'd; the real directory never does.
+  const cwd = first(env, "COLLIE_CWD") ?? context.workspace_cwd ?? process.cwd();
 
   const raw: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {

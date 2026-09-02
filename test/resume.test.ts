@@ -84,6 +84,8 @@ function interruptedRun() {
         status: "done",
         output: "steps/build/build.json",
         error: null,
+        repairs: [],
+        nudges: 0,
       },
     ];
     const fs = yield* FileSystem.FileSystem;
@@ -261,7 +263,7 @@ test(
         const toast = (yield* rig.calls())
           .filter((c) => c.cmd === "notification show")
           .at(-1)!.argv!;
-        expect(toast[2]).toBe("implement-add-picker finished");
+        expect(toast[2]).toBe("project · implement-add-picker finished");
       }),
     ),
   20_000,

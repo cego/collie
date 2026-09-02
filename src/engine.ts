@@ -4,7 +4,7 @@
 import { Clock, Crypto, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
-import { nowIso } from "./time";
+import { ago, nowIso } from "./time";
 
 import type {
   ChoiceDef,
@@ -28,7 +28,7 @@ import {
   type YamlMap,
   type YamlValue,
 } from "./yaml";
-import type { Herdr } from "./herdr";
+import type { AgentStatus, Herdr } from "./herdr";
 import { HerdrError, herdrFailureReason } from "./herdr";
 import { HARNESSES, personaPrefix, startArgs } from "./harness";
 import {
@@ -49,7 +49,9 @@ import {
   displayName,
   evenRatio,
   GLYPH,
+  insertIndexFor,
   paneLabel,
+  rankOf,
   shellQuote,
   stepLabel,
   tabLabel,
@@ -69,6 +71,7 @@ import {
 } from "./inputs";
 import { RunStore } from "./run";
 import { handOver } from "./operations";
+import { notify as notifyRun, type NotificationKind } from "./notify";
 import {
   gitlabForProject,
   gitlabReadiness,
@@ -79,12 +82,40 @@ import {
   type Runner,
 } from "./mr";
 import { askRoute, liveRole, sendPlanChange, sendReview, type Session } from "./handoff";
-import { renderTemplate } from "./template";
-import { resolveWorkflow } from "./definitions";
-import type { Run, RunStatus, StepStatus, VariantRecord } from "./run";
+import { renderTemplate, skillMention } from "./template";
+import { resolveWorkflow, skillDirs, skillMentions } from "./definitions";
+import type { Run, RunRecord, RunStatus, StepStatus, VariantRecord } from "./run";
 import { isString } from "./schema";
 
 export const VIEW_SOURCE_PREFIX = "cego.collie:";
+
+/**
+ * Which toast a blocked step has earned, or none. Both kinds fire only after their
+ * own recovery has been tried: a repair that worked, or a nudge that was answered, is
+ * not worth interrupting anyone for.
+ */
+function blockedKind(outcome: VariantOutcome): NotificationKind | null {
+  if (outcome.record.repairs.length > 0) return "output-unusable";
+  // Being nudged is not being given up on: an agent can be nudged once and then block
+  // for a human, which is a question, not a quiet step, and has its own toast.
+  if (outcome.stuck) return "step-stuck";
+  return null;
+}
+
+/** Every toast this engine raises: one Run, one settings map, one taxonomy. */
+const notify = (
+  o: EngineOptions,
+  kind: NotificationKind,
+  body: string,
+  about: { step?: string; subject?: string } = {},
+) =>
+  notifyRun(o.herdr, o.run, {
+    kind,
+    body,
+    step: about.step ?? null,
+    subject: about.subject,
+    settings: o.defaults.notifications,
+  });
 
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
 export type EnginePrompts = InputPrompts<
@@ -102,7 +133,6 @@ export interface EngineOptions {
   out: (
     line: string,
   ) => Effect.Effect<void, Error | PlatformError, FileSystem.FileSystem | Path.Path>;
-  stepTimeoutMs?: number;
   /** How long to keep waiting for an Output after the agent hands off to the human. */
   handoffTimeoutMs?: number;
   outputPollMs?: number;
@@ -114,6 +144,10 @@ interface VariantOutcome {
   record: VariantRecord;
   output: YamlValue | null;
   review: ReviewOutput | null;
+  /** Set when the Output itself is what went wrong, which one prompt can fix. */
+  problem?: string;
+  /** True when this agent was given up on for going quiet, not merely nudged. */
+  stuck?: boolean;
 }
 
 const choiceResult = (result: ChoiceResult): ChoiceResult => result;
@@ -125,8 +159,21 @@ const handoffResult = (
 const runShell: Runner<ChildProcessSpawner.ChildProcessSpawner> = shellRun;
 
 /** What one execution accumulates as it goes: only this process's panes and agents. */
+type SkillPaths = ReadonlyMap<string, string>;
+
+/** The review this target already had, or empty strings where it had none. */
+interface PreviousReview {
+  review: string;
+  when: string;
+  run: string;
+}
+
 interface RunCtx {
   outputs: Map<string, VariantOutcome[]>;
+  /** `name → SKILL.md` for every skill this run mentions, resolved once at the start. */
+  skills: SkillPaths;
+  /** The last review of this target, so this one can say what happened to it. */
+  previous: PreviousReview;
   /** Panes this process created; a resumed run's recorded panes are gone. */
   panes: string[];
   ran: Set<string>;
@@ -139,6 +186,8 @@ interface RunCtx {
   tabNames: Map<string, string>;
   /** A lone default shell pane the workflow was launched from, consumed at most once. */
   launchPane: { paneId: string; tabId: string } | null;
+  /** Whether the last pane read failed, so the next failure is not logged twice. */
+  paneReadFailed: boolean;
 }
 
 export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOptions) {
@@ -146,6 +195,8 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
   const viewSource = `${VIEW_SOURCE_PREFIX}${run.id}`;
   const ctx: RunCtx = {
     outputs: new Map(),
+    skills: yield* resolveSkills(o),
+    previous: yield* previousReviewVars(o),
     panes: [],
     ran: new Set(),
     groups: new Map(),
@@ -153,6 +204,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     workspaceTabId: null,
     tabNames: new Map(),
     launchPane: null,
+    paneReadFailed: false,
   };
 
   run.record.status = "running";
@@ -298,7 +350,21 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     if (step.fanIn) yield* printReview(o);
 
     if (blocked.length > 0) {
-      return yield* finish(o, "blocked", viewSource, `${step.id} needs you`);
+      // The real reason, not "go and look": an unusable Output is often ten seconds
+      // of work for whoever reads the toast, and they cannot know that from "needs you".
+      const first = blocked[0]!.record;
+      const why = first.error
+        ? `${step.id}: ${first.error}${first.repairs.length > 0 ? " (asked once already)" : ""}`
+        : `${step.id} needs you`;
+      // One interrupt: where the step earns a specific toast, the ending must not
+      // announce the same event again under its own key.
+      const kind = blockedKind(blocked[0]!);
+      // Whether it was *said*, not whether one was chosen: a kind turned off in
+      // config must not take the ending's toast down with it and end a run silently.
+      const announced = kind
+        ? yield* notify(o, kind, why, { step: step.id, subject: step.id })
+        : false;
+      return yield* finish(o, "blocked", viewSource, why, announced);
     }
 
     const gate = repeats.find((r) => r.from === index);
@@ -398,6 +464,8 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       status: "running",
       output: null,
       error: null,
+      repairs: [],
+      nudges: 0,
     };
 
     // A pane says only what its tab cannot; a lone pane in its own tab says nothing.
@@ -455,6 +523,7 @@ const runStep = Effect.fn("Engine.runStep")(function* (
         record.tabId = tab.tabId;
         record.paneId = tab.paneId;
         if (record.tabId) ctx.tabNames.set(record.tabId, name);
+        yield* placeTab(o, ctx, tab.tabId);
       }
       if (record.tabId)
         yield* herdr.tabRename(record.tabId, runTab(o, ctx, record.tabId, GLYPH.running));
@@ -471,7 +540,7 @@ const runStep = Effect.fn("Engine.runStep")(function* (
         args: startArgs(
           adapter,
           variant.model,
-          yield* personaFile(o, step, variant.harness),
+          yield* personaFile(o, step, variant.harness, ctx.skills),
           variant.effort,
         ),
       });
@@ -512,30 +581,54 @@ const runStep = Effect.fn("Engine.runStep")(function* (
     );
     yield* fs.writeFileString(
       path,
-      `${yield* buildPrompt(o, step, variant, key, ctx.outputs, vars)}\n`,
+      `${yield* buildPrompt(o, step, variant, key, ctx.outputs, ctx.skills, ctx.previous, vars)}\n`,
     );
     yield* run.log(`prompt ${record.agent} -> ${pathService.relative(run.dir, path)}`);
     // A skill marked `disable-model-invocation` refuses an agent that invokes it
     // itself; `agent prompt` is the human's channel, so a slash command here runs.
-    const command = step.skill ? `${skillFor(variants[i]!.harness).call(null, step.skill)} ` : "";
+    const command = step.skill
+      ? `${skillCommandFor(variants[i]!.harness).call(null, step.skill)} `
+      : "";
     yield* herdr.agentPrompt(
       record.agent,
       `${command}Your task for this step is in ${path} — read it and follow it.`,
     );
   }
 
+  // Watched together, because they were prompted together: a second reviewer that
+  // hangs the moment it starts must not wait out the first one's whole turn before
+  // its own quiet clock even begins. Reading what they wrote stays in order — that
+  // part writes to the Run.
+  const stuckReasons = yield* Effect.forEach(
+    records,
+    (record) =>
+      Effect.gen(function* () {
+        // The agent may settle before herdr reports `working`; that is not an error.
+        yield* Effect.ignore(
+          o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 }),
+        );
+        return yield* awaitAgent(o, ctx, record);
+      }),
+    { concurrency: "unbounded" },
+  );
+
   const outcomes: VariantOutcome[] = [];
   for (const [i, record] of records.entries()) {
     const key = keys[i]!;
-    // The agent may settle before herdr reports `working`; that is not an error.
-    yield* Effect.ignore(
-      o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 }),
+    const outcome = yield* collectWatched(o, step, record, key, stuckReasons[i] ?? null);
+    // An agent that was given up on is not going to answer a prompt, so the repair
+    // round is not offered to one.
+    if (stuckReasons[i]) {
+      outcomes.push(outcome);
+      continue;
+    }
+    // A round is worth several minutes and several agents; a write is worth one
+    // prompt. Ask the agent that has the work to write its file again, once.
+    outcomes.push(
+      outcome.problem
+        ? ((yield* repairOutput(o, ctx, step, record, key, outcome.problem)) ?? outcome)
+        : outcome,
     );
-    yield* o.herdr.agentWait(record.agent, {
-      until: ["idle", "done", "blocked"],
-      timeoutMs: o.stepTimeoutMs,
-    });
-    outcomes.push(yield* collect(o, step, record, key));
   }
   return outcomes;
 });
@@ -582,6 +675,8 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
     });
   }
   const choices = step.choices ?? [];
+  // Said once, however many times the menu comes back around.
+  const decidedSaid = new Set<string>();
 
   for (;;) {
     const taken = (title: string) =>
@@ -612,19 +707,58 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
       subtitle: choiceHint(c),
     }));
 
-    yield* callAttention(o, ctx, `${step.id}: pick what happens next`, step.id);
-    const picked = yield* prompts.menu(items, {
-      header: `${run.record.slug} — ${step.id}`,
-      footer: "↑↓ move · Enter choose · Esc leave the run open",
-    });
-    run.record.awaiting = null;
-    yield* run.save();
+    // What the human already said, and what needs no saying. Both are once per step:
+    // a `prompt:` round comes back to this menu, and re-taking itself would never
+    // stop. The lookup runs against `offered`, so a decision can never make a choice
+    // happen that this Session or this environment cannot do.
+    const decided = run.record.decisions[step.id];
+    const untaken = (c: ChoiceDef) => taken(c.title) === 0;
+    const chosen =
+      offered.find((c) => c.title === decided && untaken(c)) ??
+      (offered.length === 1 && untaken(offered[0]!) ? offered[0] : undefined);
+    // `taken(decided) === 0` is the difference between a decision this Session could
+    // not offer and one whose round ran and failed: the second comes back here with
+    // the choice already spent, and saying it was unavailable would send whoever is
+    // called to look for the wrong thing.
+    if (
+      decided !== undefined &&
+      chosen?.title !== decided &&
+      taken(decided) === 0 &&
+      !decidedSaid.has(step.id)
+    ) {
+      decidedSaid.add(step.id);
+      yield* out(`  decided "${decided}", not available here`);
+      yield* run.log(`${step.id}: decided "${decided}", not available here`);
+      // The exact failure a decided, unattended Run has: it is asking after all, and
+      // without this it stalls silently until someone happens to look. Only when it
+      // really is asking, though — where one offered choice is taken instead, nothing
+      // is pending and a `request` toast would call someone to a menu that is not there.
+      if (!chosen) {
+        yield* notify(o, "decision-lost", `${step.id}: "${decided}" was not available here`, {
+          step: step.id,
+        });
+      }
+    }
+
+    const picked = chosen
+      ? { id: chosen.title, title: chosen.title }
+      : yield* Effect.gen(function* () {
+          yield* callAttention(o, ctx, `${step.id}: pick what happens next`, step.id);
+          const answer = yield* prompts.menu(items, {
+            header: `${run.record.slug} — ${step.id}`,
+            footer: "↑↓ move · Enter choose · Esc leave the run open",
+          });
+          run.record.awaiting = null;
+          yield* run.save();
+          return answer;
+        });
     if (!picked) return choiceResult({ status: "blocked", note: "no choice taken" });
 
     const choice = offered.find((c) => c.title === picked.id)!;
     run.record.choices.push({ step: step.id, title: choice.title, at: yield* nowIso() });
     yield* run.save();
-    yield* out(`  ▸ ${choice.title}`);
+    const why = !chosen ? "" : decided === chosen.title ? " (decided at launch)" : " (only option)";
+    yield* out(`  ▸ ${choice.title}${why}`);
 
     if (choice.stop) return choiceResult({ status: "done", note: `chose "${choice.title}"` });
 
@@ -676,6 +810,12 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
       if (next.record.status !== "done") {
         yield* out(`  ⚠ ${next.record.label} — ${next.record.error ?? "did not finish"}`);
       }
+    }
+    // A decided round is the whole answer to this step. Coming back to the menu would
+    // ask the human the question they already answered; a round they picked by hand
+    // still gets it back.
+    if (decided === choice.title) {
+      return choiceResult({ status: "done", note: `decided at launch: "${choice.title}"` });
     }
   }
 });
@@ -831,7 +971,8 @@ const postReview = Effect.fn("Engine.postReview")(function* (o: EngineOptions) {
     : { ok: false, message: `glab mr note ${where} failed (exit ${note.code})` };
 });
 
-function choiceHint(choice: ChoiceDef): string {
+/** What a choice does, one line, for the menu and for the launch decision. */
+export function choiceHint(choice: ChoiceDef): string {
   if (choice.run) return `runs ${choice.run}`;
   if (choice.post) return "one note on the merge request";
   if (choice.handoff) return `to the ${choice.handoff} already working here`;
@@ -953,6 +1094,44 @@ const register = Effect.fn("Engine.register")(function* (
 });
 
 /**
+ * Puts a tab where the strip says it belongs: Collie first, then plan, implement,
+ * review, then anything else in start order. Rank comes from the *Run's* workflow —
+ * `implement` embeds `review`, and those tabs belong to the implement run. Only a tab
+ * Collie just created is placed, and never again, so a tab a human dragged stays
+ * dragged. A herdr too old for `tab.move` gets a log line, never a failed Run.
+ */
+const placeTab = Effect.fn("Engine.placeTab")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  tabId: string,
+) {
+  // No board means no workspace Collie owns anything in, and a strip it has no
+  // business reordering.
+  if (!ctx.workspaceTabId) return;
+  yield* Effect.gen(function* () {
+    const owners = new Map<string, number>();
+    for (const run of yield* new RunStore(o.env.stateDir).list()) {
+      if (run.record.workspace !== o.run.record.workspace) continue;
+      const rank = rankOf(run.record.workflow);
+      for (const step of run.record.steps) {
+        for (const variant of step.variants) {
+          if (variant.tabId) owners.set(variant.tabId, rank);
+        }
+      }
+    }
+    // This run's newest tabs are in the record already, but the one being placed may
+    // not be saved yet; it is the tab being inserted, not an anchor.
+    const tabs = (yield* o.herdr.tabList())
+      .filter((tab) => tab.tabId !== tabId)
+      .map((tab) => ({
+        rank: owners.get(tab.tabId) ?? null,
+        board: tab.tabId === ctx.workspaceTabId,
+      }));
+    yield* o.herdr.tabMove(tabId, insertIndexFor(tabs, rankOf(o.run.record.workflow)));
+  }).pipe(Effect.catch((e) => o.run.log(`tab order: ${reason(e)}`)));
+});
+
+/**
  * The Session's own tab, found by its label and created when it is not there, and
  * moved to the front of the workspace either way. It is the only pane this plugin
  * keeps open in a workspace: the driver has no pane, and every question it asks is
@@ -1023,8 +1202,7 @@ const callAttention = Effect.fn("Engine.callAttention")(function* (
 ) {
   o.run.record.awaiting = stepId;
   yield* o.run.save();
-  // A missing toast must not fail the run.
-  yield* Effect.ignore(o.herdr.notify(`${o.run.record.slug} needs you`, detail, "request"));
+  yield* notify(o, "needs-you", detail, { step: stepId });
   if (!ctx.workspaceTabId) return;
   // A tab that will not focus is still a tab the human can reach.
   yield* Effect.ignore(o.herdr.tabFocus(ctx.workspaceTabId));
@@ -1124,13 +1302,7 @@ const startAgent = Effect.fn("Engine.startAgent")(function* (
   yield* o.run.log(`${opts.name}: blocked at startup, waiting for the human`);
   o.run.record.awaiting = step.id;
   yield* o.run.save();
-  yield* o.herdr
-    .notify(
-      `${o.run.record.slug} needs you`,
-      `${step.id}: answer the prompt in its pane`,
-      "request",
-    )
-    .pipe(Effect.catchTag("HerdrError", () => Effect.void));
+  yield* notify(o, "needs-you", `${step.id}: answer the prompt in its pane`, { step: step.id });
 
   const deadline = (yield* Clock.currentTimeMillis) + budget;
   while ((yield* Clock.currentTimeMillis) < deadline) {
@@ -1173,36 +1345,305 @@ const startWhenReady = Effect.fn("Engine.startWhenReady")(function* (
  * waiting for the human. The Output file is the completion signal, so keep
  * waiting for it and toast once so the human knows they are needed.
  */
+/**
+ * Has the agent written anything? A file that exists but is blank is a write that
+ * has not happened — or one caught half-done — not an empty answer.
+ */
+const written = Effect.fn("Engine.written")(function* (path: string) {
+  const fs = yield* FileSystem.FileSystem;
+  if (!(yield* fs.exists(path))) return false;
+  return (yield* fs.readFileString(path)).trim() !== "";
+});
+
 const awaitOutput = Effect.fn("Engine.awaitOutput")(function* (
   o: EngineOptions,
   agent: string,
   stepId: string,
   path: string,
 ) {
-  const fs = yield* FileSystem.FileSystem;
-  if (yield* fs.exists(path)) return;
+  if (yield* written(path)) return;
   const budget = o.handoffTimeoutMs ?? 0;
   if (budget <= 0) return;
 
   yield* o.out(`  ⏸ ${agent} is waiting for you in its tab`);
   o.run.record.awaiting = stepId;
   yield* o.run.save();
-  // A missing toast must not fail the run.
-  yield* Effect.ignore(
-    o.herdr.notify(
-      `${o.run.record.slug} needs you`,
-      `${stepId}: answer the agent in its tab`,
-      "request",
-    ),
-  );
+  yield* notify(o, "needs-you", `${stepId}: answer the agent in its tab`, { step: stepId });
   const poll = o.outputPollMs ?? 2000;
   const deadline = (yield* Clock.currentTimeMillis) + budget;
-  while (!(yield* fs.exists(path)) && (yield* Clock.currentTimeMillis) < deadline) {
+  while (!(yield* written(path)) && (yield* Clock.currentTimeMillis) < deadline) {
     yield* Effect.sleep(Math.min(poll, Math.max(1, deadline - (yield* Clock.currentTimeMillis))));
   }
-  if (yield* fs.exists(path)) yield* o.out(`  ▸ ${agent} produced its Output`);
+  if (yield* written(path)) yield* o.out(`  ▸ ${agent} produced its Output`);
   o.run.record.awaiting = null;
   yield* o.run.save();
+});
+
+/**
+ * One Output the agent could not write correctly, handed back to that same agent with
+ * the reason. It is still in its pane holding the work; re-running the step from
+ * scratch would throw a whole round away over a write. Once per variant per
+ * iteration, and never to a fresh agent — a new one has none of the context and
+ * would write a plausible, empty-headed file.
+ */
+const repairOutput = Effect.fn("Engine.repairOutput")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  step: ResolvedStep,
+  record: VariantRecord,
+  variantKey: string | null,
+  problem: string,
+) {
+  const pathService = yield* Path.Path;
+  if (!step.output || record.repairs.length > 0) return null;
+  const status = yield* o.herdr
+    .agentStatus(record.agent)
+    .pipe(Effect.catch(() => Effect.succeed("unknown" as const)));
+  if (status !== "idle" && status !== "done") return null;
+
+  const path = pathService.join(yield* o.run.stepDir(step.id, variantKey), step.output);
+  const relative = pathService.relative(o.run.record.cwd, path);
+  yield* o.out(`  ↻ ${record.label} — asking it to write ${step.output} again`);
+  yield* o.run.log(`${step.id}: repairing ${record.output ?? step.output}: ${problem}`);
+  // A prompt that cannot be delivered — the agent is gone, the socket is not there —
+  // is a repair that did not happen, not a Run that failed: the step still has the
+  // Output problem it had, and that is what the human needs to be told about.
+  const asked = yield* o.herdr
+    .agentPrompt(
+      record.agent,
+      `Your Output file is not usable: ${problem}. Write ${relative} again — the JSON your step described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${path}`,
+    )
+    .pipe(
+      Effect.as(true),
+      Effect.catch((cause) =>
+        o.run.log(`repair prompt failed: ${reason(cause)}`).pipe(Effect.as(false)),
+      ),
+    );
+  if (!asked) return null;
+  // Recorded once it has actually been asked: a repair that was never delivered must
+  // not make the summary say the Output was rewritten, or the toast say the agent was
+  // asked already.
+  record.repairs.push(problem);
+  yield* Effect.ignore(o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 }));
+  record.status = "running";
+  record.error = null;
+  // An agent that goes quiet writing one file is as stuck as one that goes quiet
+  // doing the work, and the Driver holds it to the same bound.
+  const stuck = yield* awaitAgent(o, ctx, record);
+  return yield* collectWatched(o, step, record, variantKey, stuck);
+});
+
+/**
+ * Read what an agent produced, given how its turn ended. An agent can write its Output
+ * and then sit on a background process that never returns: the work is done, only the
+ * process is stuck. So a give-up still reads what is there — without waiting, since
+ * nobody is coming — and blocks only when there is nothing.
+ */
+const collectWatched = Effect.fn("Engine.collectWatched")(function* (
+  o: EngineOptions,
+  step: ResolvedStep,
+  record: VariantRecord,
+  variantKey: string | null,
+  stuck: string | null,
+) {
+  const outcome: VariantOutcome = yield* collect(o, step, record, variantKey, !stuck);
+  if (stuck && outcome.record.status !== "done") {
+    outcome.record.status = "blocked";
+    outcome.record.error = stuck;
+    outcome.stuck = true;
+  }
+  return outcome;
+});
+
+/**
+ * The review this target already had, for the prompts that are about to look at it
+ * again. Read once per run: reviewing is a rally, and the second review's job is to
+ * say what happened to the first one's findings, not to write them again.
+ */
+const previousReviewVars = Effect.fn("Engine.previousReviewVars")(function* (o: EngineOptions) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  // Empty, not "(none)": a first review should not read a heading for a review that
+  // does not exist, and a template has no way to leave the section out itself.
+  const none = { review: "", when: "never", run: "" };
+  const target = o.run.record.inputs.target ?? "";
+  if (target === "") return none;
+  const store = new RunStore(o.env.stateDir);
+  const named = o.run.record.inputs.previous;
+  // `worktree` names no change: every review of this checkout's working tree carries
+  // it, so matching on it would hand this review an unrelated branch's findings. Only
+  // a target that identifies the change is looked up; a run named by hand still is.
+  if (!named && target === "worktree") return none;
+  const previous = named
+    ? yield* store.load(named).pipe(Effect.catch(() => Effect.succeed(null)))
+    : yield* store.previousReview(o.run.record.cwd, target, o.run.id);
+  if (!previous) return none;
+  const file = pathService.join(previous.dir, REVIEW_FILE);
+  const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
+  if (text.trim() === "") return none;
+  o.run.record.previous_review = previous.id;
+  yield* o.run.save();
+  const when = ago(
+    previous.record.finished_at ?? previous.record.created_at,
+    yield* Clock.currentTimeMillis,
+  );
+  return {
+    // The heading travels with the review, so the section disappears with it. The
+    // instructions about what to do with it stay in the workflow, where a fork can
+    // change them.
+    review: `Earlier review of this target (${when}):\n\n${text.trim()}`,
+    when,
+    run: previous.id,
+  };
+});
+
+/**
+ * Waits for an agent by watching it, not by blocking on it. Quiet — neither its
+ * status nor its pane's tail changing for `quiet_ms` — earns a nudge, a second at
+ * double, and is given up on at triple, which is what this returns. A step that is
+ * still producing output is never nudged, however long it takes: quiet is the
+ * signal, duration never is.
+ */
+const awaitAgent = Effect.fn("Engine.awaitAgent")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  record: VariantRecord,
+) {
+  const over: AgentStatus[] = ["idle", "done", "blocked"];
+  const quiet = o.defaults.quietMs;
+  if (quiet <= 0) {
+    yield* o.herdr.agentWait(record.agent, { until: over });
+    return null;
+  }
+
+  // Liveness is sampled against a budget measured in minutes, so there is nothing to
+  // learn every two seconds — and each sample costs two herdr subprocesses per agent.
+  // Never slower than a tenth of the budget, so the give-up stays close to its time.
+  const poll = o.outputPollMs ?? 2000;
+  const beat = Math.max(poll, Math.min(quiet / 10, 30_000));
+  const minutes = (ms: number) => Math.round(ms / 60_000);
+  let sample = "";
+  let quietSince = yield* Clock.currentTimeMillis;
+  // Nudges within the current quiet spell; `record.nudges` counts them for the whole
+  // turn, and two is all an agent gets however often it stirs in between.
+  let spell = 0;
+  let silentSince: number | null = null;
+  let tail = "";
+  let sampled = 0;
+  for (;;) {
+    // Told apart on purpose: herdr answering "I do not have that agent" is the answer
+    // — a closed tab, a killed pane — and waiting out a quiet budget it will never
+    // break is half an hour of nothing. Herdr not answering at all is a hiccup, and
+    // discarding a live step over a few seconds of socket noise is worse than waiting.
+    const status = yield* o.herdr
+      .agentStatus(record.agent)
+      .pipe(
+        Effect.catch((cause) =>
+          cause.code === "agent_not_found" ? Effect.succeed("gone" as const) : Effect.succeed(null),
+        ),
+      );
+    const now = yield* Clock.currentTimeMillis;
+    if (status === "gone") return `${record.agent} is gone — herdr no longer has it`;
+    if (status === null) {
+      silentSince ??= now;
+      // A whole quiet period of herdr saying nothing at all is its own answer.
+      if (now - silentSince >= quiet) {
+        return `${record.agent} could not be reached for ${minutes(now - silentSince)} minutes`;
+      }
+      yield* Effect.sleep(poll);
+      continue;
+    }
+    silentSince = null;
+    // `blocked` is herdr saying a human is needed; that path has its own wait and its
+    // own toast, and a nudge there would answer a permission dialog with prose.
+    if (over.includes(status)) return null;
+
+    // Status is what says the turn is over, so it is asked at the polling cadence;
+    // the pane is only the quiet signal, and it is the expensive half.
+    if (now - sampled >= beat) {
+      sampled = now;
+      tail = yield* paneTail(o, ctx, record);
+    }
+    const next = `${status}\n${tail}`;
+    if (next !== sample) {
+      sample = next;
+      quietSince = now;
+      spell = 0;
+    }
+    const quietFor = now - quietSince;
+    if (quietFor >= quiet * 3) {
+      return `${record.agent} produced no output for ${minutes(quietFor)} minutes and did not respond to two nudges`;
+    }
+    // An agent that answers each nudge with a line and then goes quiet again would
+    // otherwise reset the clock forever and never be given up on. Two nudges is what
+    // a step gets for its whole turn; stirring and then going quiet again once both
+    // are spent — `spell` back to nothing — is the same answer as never moving.
+    if (record.nudges >= 2 && spell === 0 && quietFor >= quiet) {
+      return `${record.agent} went quiet again after two nudges and produced nothing usable`;
+    }
+    // Whole quiet periods elapsed, and so how many nudges are owed: 0, 1 or 2, since
+    // the third is the give-up above.
+    const due = Math.floor(quietFor / quiet);
+    if (due > spell && record.nudges < 2) {
+      spell = due;
+      yield* Effect.ignore(
+        o.herdr.agentPrompt(
+          record.agent,
+          nudgeText(record.harness, minutes(quietFor), record.nudges >= 1),
+        ),
+      );
+      // The nudge is typed into the agent's own pane, so the next poll would read it
+      // as activity, reset the deadline it is counting against, and nudge forever.
+      // Re-baseline on our own writing; only the agent's next output counts.
+      sample = `${status}\n${yield* paneTail(o, ctx, record)}`;
+      record.nudges += 1;
+      yield* o.out(`  ⏱ ${record.label} — quiet for ${minutes(quietFor)} minutes, nudged`);
+      yield* o.run.log(`${record.label}: quiet for ${minutes(quietFor)} minutes, nudged`);
+      yield* o.run.save();
+    }
+    yield* Effect.sleep(poll);
+  }
+});
+
+/**
+ * What a quiet agent is told. "Do not restart the task" is not politeness: an agent
+ * that re-runs its whole step after a nudge is a worse outcome than the hang, because
+ * it looks like progress.
+ */
+function nudgeText(harness: string, minutes: number, last: boolean): string {
+  const hint = HARNESSES[harness]?.stuckHint;
+  return [
+    `You have produced no output for ${minutes} minutes. If you are waiting on something`,
+    ` that will never finish, stop waiting and carry on${hint ? `: ${hint}` : "."}`,
+    last ? " This is the last nudge before this step is given up on." : "",
+    "\n\nIf you are working normally, ignore this and continue. Do not restart the task",
+    " and do not redo work you have already done.",
+  ].join("");
+}
+
+/** The pane's tail, or nothing: a herdr that will not read it is not a failure. */
+const paneTail = Effect.fn("Engine.paneTail")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  record: VariantRecord,
+) {
+  if (!record.paneId) return "";
+  const tail = yield* o.herdr
+    .paneRead(record.paneId)
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+  if (tail === null) {
+    // Said once, not latched: a read that failed on one poll says nothing about the
+    // next one, and treating a transient failure as permanent would leave every later
+    // agent judged on its status alone — nudged and given up on while its pane is
+    // still filling.
+    if (!ctx.paneReadFailed) {
+      ctx.paneReadFailed = true;
+      yield* o.run.log(`pane read failed; liveness is agent status alone until it answers`);
+    }
+    return "";
+  }
+  ctx.paneReadFailed = false;
+  return tail;
 });
 
 const collect = Effect.fn("Engine.collect")(function* (
@@ -1210,6 +1651,8 @@ const collect = Effect.fn("Engine.collect")(function* (
   step: ResolvedStep,
   record: VariantRecord,
   variantKey: string | null,
+  /** False after a give-up: read what is there, do not wait on an agent that is gone. */
+  wait = true,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
@@ -1222,11 +1665,11 @@ const collect = Effect.fn("Engine.collect")(function* (
 
   const path = yield* o.run.outputPath(step.id, variantKey, step.output);
   record.output = pathService.relative(o.run.dir, path);
-  yield* awaitOutput(o, record.agent, step.id, path);
-  if (!(yield* fs.exists(path))) {
+  if (wait) yield* awaitOutput(o, record.agent, step.id, path);
+  if (!(yield* written(path))) {
     record.status = "blocked";
     record.error = `no Output at ${record.output}`;
-    return { record, output: null, review: null };
+    return { record, output: null, review: null, problem: record.error };
   }
 
   const text = yield* fs.readFileString(path);
@@ -1236,14 +1679,14 @@ const collect = Effect.fn("Engine.collect")(function* (
   } catch (e) {
     record.status = "failed";
     record.error = `${record.output}: not valid JSON (${reason(e)})`;
-    return { record, output: null, review: null };
+    return { record, output: null, review: null, problem: record.error };
   }
 
   const hasVerdict = isYamlMap(parsed) && "verdict" in parsed;
   if (step.fanIn && !hasVerdict) {
     record.status = "failed";
     record.error = `${record.output}: a fan-in Output needs a verdict`;
-    return { record, output: parsed, review: null };
+    return { record, output: parsed, review: null, problem: record.error };
   }
 
   let review: ReviewOutput | null = null;
@@ -1252,25 +1695,38 @@ const collect = Effect.fn("Engine.collect")(function* (
     if (!result.ok) {
       record.status = "failed";
       record.error = result.error;
-      return { record, output: parsed, review: null };
+      return { record, output: parsed, review: null, problem: result.error };
     }
     review = result.value;
     yield* fs.writeFileString(pathService.join(o.run.dir, REVIEW_FILE), renderReview(result.value));
     // A hand-off gives the implementer both the prose and the findings it came from.
     o.run.record.synthesis = record.output;
+    // What this review leaves open, and what it found already fixed, so a Run that
+    // ends here says so. A loop that runs out of iterations narrows `outstanding` to
+    // what is still disputed; a standalone review has no such step, and used to
+    // finish announcing itself as clean whatever the review said.
+    o.run.record.outstanding = result.value.findings;
+    o.run.record.fixed = result.value.fixed.length;
   } else if (hasVerdict) {
     const result = parseReviewOutput(text, record.output);
     if (!result.ok) {
       record.status = "failed";
       record.error = result.error;
-      return { record, output: parsed, review: null };
+      return { record, output: parsed, review: null, problem: result.error };
     }
     review = result.value;
   }
   if (review) {
     // The shape of a review is the engine's to decide, so every one reads alike.
     collectList(o, "deferred", parsed);
+    const hadMr = o.run.record.mr_url;
     collectMr(o, parsed);
+    // The merge request is the thing the human was waiting for; the Run finishing is
+    // only how they find out about it, and that can be a step or two later.
+    if (o.run.record.mr_url && o.run.record.mr_url !== hadMr) {
+      const iid = /\/merge_requests\/(\d+)/.exec(o.run.record.mr_url)?.[1];
+      yield* notify(o, "mr-opened", o.run.record.mr_url, { subject: iid ? `!${iid}` : undefined });
+    }
     // A re-run step must not double-report what it disputed last time.
     for (const finding of review.disputed) {
       const key = findingKey(finding);
@@ -1328,6 +1784,14 @@ export function runTarget(
 /** The MR step reports what it opened; the summary is where the human looks for it. */
 function collectMr(o: EngineOptions, parsed: YamlValue): void {
   if (!isYamlMap(parsed)) return;
+  // A step that committed and deliberately did not push — `review`'s fix round works
+  // on someone else's branch — has to be able to say so at the end. A result that
+  // looks like it landed and did not is worse than either outcome.
+  if (parsed.pushed === false && isString(parsed.branch) && parsed.branch.trim() !== "") {
+    o.run.record.unpushed = parsed.branch.trim();
+  } else if (parsed.pushed === true) {
+    o.run.record.unpushed = null;
+  }
   if (isString(parsed.mr_url) && parsed.mr_url.trim() !== "")
     o.run.record.mr_url = parsed.mr_url.trim();
   if (Array.isArray(parsed.linear_issues)) {
@@ -1365,27 +1829,34 @@ function collectList(o: EngineOptions, key: "deferred", parsed: YamlValue): void
 }
 
 /** Whether this run can give a step what it declared it needs, and why not. */
-const unmetRequirement = Effect.fn("Engine.unmetRequirement")(function* (
-  o: EngineOptions,
+/**
+ * Why a Step or a Choice cannot be done here, or null. Takes the run's facts rather
+ * than the run, so the launch menu can ask about exactly the steps that will run.
+ */
+export const unmetRequirementFor = Effect.fn("Engine.unmetRequirementFor")(function* (
+  where: { cwd: string; inputs: Record<string, string> },
   requires: StepRequirement[],
 ) {
-  const target = o.run.record.inputs.target ?? "";
+  const target = where.inputs.target ?? "";
   for (const need of requires) {
     if (need === "gitlab") {
       // A step pointed at a merge request needs glab for that project; a step that
       // pushes needs this directory to be the checkout. `mr-target` says which.
       const mr = requires.includes("mr-target") ? parseMrTarget(target) : null;
       const ready = yield* mr
-        ? gitlabForProject(mr.project, o.run.record.cwd, runShell)
-        : gitlabReadiness(o.run.record.cwd, runShell);
+        ? gitlabForProject(mr.project, where.cwd, runShell)
+        : gitlabReadiness(where.cwd, runShell);
       if (!ready.ok) return ready.reason;
     }
-    if (need === "mr-target" && o.run.record.inputs.target_kind !== "mr") {
+    if (need === "mr-target" && where.inputs.target_kind !== "mr") {
       return `${target || "this run"} is not a merge request`;
     }
   }
   return null;
 });
+
+const unmetRequirement = (o: EngineOptions, requires: StepRequirement[]) =>
+  unmetRequirementFor({ cwd: o.run.record.cwd, inputs: o.run.record.inputs }, requires);
 
 /** The pane a fan-in step splits from: the last of the Outputs it reconciles. */
 function fanInPane(step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
@@ -1428,10 +1899,10 @@ function borrowedAgent(o: EngineOptions, step: ResolvedStep, ctx: RunCtx): Varia
 }
 
 /** A Persona as the harness that will read it sees it, skills and all. */
-function personaBody(o: EngineOptions, step: ResolvedStep, harness: string): string {
+function personaBody(o: EngineOptions, step: ResolvedStep, skills: SkillPaths): string {
   const raw = step.persona ? (o.defs.personas.get(step.persona)?.body ?? "") : "";
   if (raw === "") return "";
-  return renderTemplate(raw, {}, { skill: skillFor(harness) }).text;
+  return renderTemplate(raw, {}, { skill: skillMention(skills) }).text;
 }
 
 /**
@@ -1443,18 +1914,84 @@ const personaFile = Effect.fn("Engine.personaFile")(function* (
   o: EngineOptions,
   step: ResolvedStep,
   harness: string,
+  skills: SkillPaths,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* o.run.personaPath(step.persona ?? "none", harness);
-  yield* fs.writeFileString(path, `${personaBody(o, step, harness)}\n`);
+  yield* fs.writeFileString(path, `${personaBody(o, step, skills)}\n`);
   return path;
 });
 
-/** How one harness is asked for a skill; unknown harnesses fall back to claude's. */
-function skillFor(harness: string): (name: string) => string {
+/**
+ * What the human channel types to start a Step's `skill:`; unknown harnesses fall
+ * back to claude's. A skill *mentioned* in a body is a path, not a command — see
+ * `skillMention`.
+ */
+function skillCommandFor(harness: string): (name: string) => string {
   const adapter = HARNESSES[harness];
-  return (name) => (adapter ? adapter.skillRef(name) : `/${name}`);
+  return (name) => (adapter ? adapter.skillCommand(name) : `/${name}`);
 }
+
+/**
+ * Where each skill this run mentions lives, resolved once. A mention renders the
+ * path validation found rather than a guess, and a skill that is not installed is
+ * said so once in the log instead of on every render.
+ */
+const resolveSkills = Effect.fn("Engine.resolveSkills")(function* (o: EngineOptions) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const dirs = yield* skillDirs(o.env);
+  const found = new Map<string, string>();
+  const missing: string[] = [];
+  for (const name of skillMentions(o.wf, o.defs).keys()) {
+    let file: string | null = null;
+    for (const dir of dirs) {
+      const candidate = pathService.join(dir, name, "SKILL.md");
+      if (yield* fs.exists(candidate)) {
+        file = candidate;
+        break;
+      }
+    }
+    if (file) found.set(name, file);
+    else missing.push(name);
+  }
+  if (missing.length > 0) yield* o.run.log(`skills not installed here: ${missing.join(", ")}`);
+  return found;
+});
+
+/**
+ * The variable families `buildPrompt` supplies at step time, named where they are
+ * built. A checker rendering a step ahead of a Run cannot know these and must not
+ * report them as unresolvable — and it can only stay right about that if the list
+ * lives beside the code that decides it.
+ */
+/**
+ * What `chain` renders a forwarded Choice input with — and nothing else. A value
+ * naming anything outside this renders empty and is then forwarded as a settled
+ * input, so the child never asks for what it needed.
+ */
+export const CHAIN_SUPPLIED: ReadonlySet<string> = new Set(["run", "cwd"]);
+
+export const ENGINE_SUPPLIED: ReadonlySet<string> = new Set([
+  "outputs",
+  "findings",
+  "fan_in",
+  "disputed",
+  "previous",
+  "session",
+  "config",
+  "mr",
+  "run",
+  "cwd",
+  "step",
+  "harness",
+  "model",
+  "effort",
+  "iteration",
+  "max_iterations",
+  "output_path",
+  "target_repo",
+]);
 
 const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
   o: EngineOptions,
@@ -1462,6 +1999,8 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
   variant: Variant,
   variantKey: string | null,
   outputs: Map<string, VariantOutcome[]>,
+  skills: SkillPaths,
+  previous: PreviousReview,
   extraVars?: YamlMap,
 ) {
   const adapter = HARNESSES[variant.harness]!;
@@ -1483,6 +2022,7 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
     ),
     fan_in: yield* fanInFiles(o, step, outputs),
     disputed: formatFindings(o.run.record.disputed),
+    previous: { ...previous },
     run: { dir: o.run.dir, id: o.run.id, slug: o.run.record.slug },
     output_path: outputPath,
     iteration: String(o.run.record.iteration),
@@ -1497,12 +2037,12 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
   };
 
   const parts: string[] = [];
-  const prefix = personaPrefix(adapter, personaBody(o, step, variant.harness));
+  const prefix = personaPrefix(adapter, personaBody(o, step, skills));
   if (prefix) parts.push(prefix);
   const rendered = renderTemplate(
     [step.preamble, step.prompt].filter((p) => p.trim()).join("\n\n"),
     vars,
-    { skill: skillFor(variant.harness) },
+    { skill: skillMention(skills) },
   );
   if (rendered.missing.length > 0) {
     yield* o.run.log(`unknown template keys in ${step.id}: ${rendered.missing.join(", ")}`);
@@ -1589,6 +2129,8 @@ const finish = Effect.fn("Engine.finish")(function* (
   status: RunStatus,
   viewSource: string,
   detail?: string,
+  /** True when this ending has already been announced by the step that caused it. */
+  announced = false,
 ) {
   const { run, out } = o;
   run.record.status = status;
@@ -1600,17 +2142,44 @@ const finish = Effect.fn("Engine.finish")(function* (
   yield* out(run.record.summary);
   // The sidebar filter is a nicety.
   yield* Effect.ignore(o.herdr.agentViewClear(viewSource));
-  const title = status === "done" ? `${run.record.slug} finished` : `${run.record.slug} ${status}`;
-  // A missing toast must not fail the run.
-  yield* Effect.ignore(
-    o.herdr.notify(
-      title,
-      detail ?? run.record.summary.split("\n")[0],
-      status === "done" ? "done" : "request",
-    ),
-  );
+  if (!announced) {
+    yield* notify(o, endingKind(o, status), detail ?? outcomeLine(o.run.record, status));
+  }
   return status;
 });
+
+/** Which of the three endings this is, so the toast's sound and title fit it. */
+function endingKind(o: EngineOptions, status: RunStatus): NotificationKind {
+  if (status === "done") return "run-done";
+  if (status === "blocked" && o.run.record.outstanding.length > 0) return "run-stuck";
+  return status === "failed" ? "run-failed" : "needs-you";
+}
+
+/**
+ * The one line an unattended human gets: what came of the Run, not that it ended.
+ * The same information `summarise` writes at length, in the shape a toast can hold.
+ */
+export function outcomeLine(record: RunRecord, status: RunStatus): string {
+  // Whatever else came of it, work that did not land is said: a result that looks
+  // like it shipped and did not is worse than either outcome.
+  const local = record.unpushed ? ` — commits on ${record.unpushed} are not pushed` : "";
+  if (record.mr_url) return `merge request: ${record.mr_url}${local}`;
+  const open = record.outstanding.length;
+  if (open > 0) {
+    const counts = new Map<string, number>();
+    for (const finding of record.outstanding) {
+      counts.set(finding.severity, (counts.get(finding.severity) ?? 0) + 1);
+    }
+    const bySeverity = [...counts].map(([severity, n]) => `${n} ${severity}`).join(", ");
+    return `${record.iteration} iteration(s), ${open} finding(s) still open — ${bySeverity}${local}`;
+  }
+  // "clean" alone undersells the rally: a re-review that found the last round's
+  // findings gone is the good ending, and the count is what says so.
+  if (status === "done") {
+    return `${record.fixed > 0 ? `clean — ${record.fixed} fixed` : "clean"}${local}`;
+  }
+  return `${record.summary?.split("\n")[0] ?? status}${local}`;
+}
 
 export function summarise(o: EngineOptions, status: RunStatus): string {
   const { run } = o;
@@ -1638,6 +2207,9 @@ export function summarise(o: EngineOptions, status: RunStatus): string {
   }
   if (run.record.children.length > 0) {
     lines.push("", `Chained: ${run.record.children.join(", ")}`);
+  }
+  if (run.record.unpushed) {
+    lines.push("", `Committed on ${run.record.unpushed}, not pushed.`);
   }
   if (run.record.mr_url) {
     const tickets =

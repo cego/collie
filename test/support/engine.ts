@@ -17,7 +17,7 @@ import { RunStore, type Run } from "../../src/run";
 import type { EnginePrompts } from "../../src/engine";
 import type { PickItem } from "../../src/picker";
 
-class EffectFakeHerdr extends Herdr {
+export class EffectFakeHerdr extends Herdr {
   constructor(
     env: PluginEnv,
     private readonly configEnv: Record<string, string | undefined>,
@@ -125,6 +125,8 @@ export function runWorkflow(
     promptsFor?: (run: Run) => EnginePrompts;
     env?: Record<string, string>;
     workspaceLabel?: string;
+    /** What the human answered at launch, by Choice step id. */
+    decisions?: Record<string, string>;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -163,6 +165,7 @@ export function runWorkflow(
       workspaceLabel: opts.workspaceLabel ?? "test",
       inputs: merged,
       inputSources: sources,
+      decisions: opts.decisions,
       stepIds: wf.steps.map((s) => s.id),
       maxIterations: wf.maxIterations,
       primaryInput:

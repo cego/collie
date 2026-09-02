@@ -163,3 +163,26 @@ test("every step that names a user-only skill invokes it as a slash command", ()
       expect(offenders).toEqual([]);
     }),
   ));
+
+test("every step of implement that commits pushes what the next reader will read", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const defs = yield* baseline();
+      const wf = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
+      const prompt = (id: string) => wf.steps.find((step) => step.id === id)!.prompt;
+
+      // The reviewers read the merge request, and a merge request shows the remote.
+      for (const id of ["build", "simplify", "fix"]) {
+        expect(prompt(id)).toContain("git push");
+        // Five loop iterations must not be five pipelines on unapproved code.
+        expect(prompt(id)).toContain("ci.skip");
+        expect(prompt(id)).toContain('"pushed"');
+      }
+
+      const mr = prompt("mr");
+      expect(mr).not.toContain("only step in the whole run allowed to touch the remote");
+      expect(mr).toContain("Never merge");
+      // A push to an auto-merge branch is a merge, and Collie never merges.
+      expect(mr).toContain("auto-merge");
+    }),
+  ));

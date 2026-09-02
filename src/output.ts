@@ -40,6 +40,15 @@ export interface Synthesis extends ReviewOutput {
   summary: string;
   /** What one reviewer raised that this synthesis could not defend from the diff. */
   dropped: Finding[];
+  /** What the previous review over this target raised and this one found fixed. */
+  fixed: Fixed[];
+}
+
+/** A finding the last review raised that is not there any more. */
+export interface Fixed {
+  file?: string;
+  title: string;
+  note?: string;
 }
 
 /** The human-facing review, written next to run.json. */
@@ -136,10 +145,35 @@ export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
       return { ok: false, error: `${where}: dropped[${i}]: reason is required` };
     }
   }
+  const fixed = parseFixed(obj.fixed, `${where}: fixed`);
+  if (!fixed.ok) return fixed;
   return {
     ok: true,
-    value: { ...base.value, summary: obj.summary.trim(), dropped: dropped.value },
+    value: {
+      ...base.value,
+      summary: obj.summary.trim(),
+      dropped: dropped.value,
+      fixed: fixed.value,
+    },
   };
+}
+
+/** What the last review raised and this one could not find any more. */
+function parseFixed(value: YamlValue | undefined, where: string): Parsed<Fixed[]> {
+  if (value === undefined || value === null) return { ok: true, value: [] };
+  if (!Array.isArray(value)) return { ok: false, error: `${where}: expected a list` };
+  const out: Fixed[] = [];
+  for (const [i, item] of value.entries()) {
+    if (!isYamlMap(item)) return { ok: false, error: `${where}[${i}]: expected an object` };
+    if (!isString(item.title) || item.title.trim() === "") {
+      return { ok: false, error: `${where}[${i}]: title is required` };
+    }
+    const entry: Fixed = { title: item.title.trim() };
+    if (isString(item.file)) entry.file = item.file;
+    if (isString(item.note)) entry.note = item.note;
+    out.push(entry);
+  }
+  return { ok: true, value: out };
 }
 
 /** Worst first; anything a fork's own vocabulary adds sorts after these, by name. */
@@ -158,6 +192,19 @@ function severityOrder(findings: Finding[]): string[] {
  */
 export function renderReview(synthesis: Synthesis): string {
   const blocks = [synthesis.summary.trim()];
+  // Read first: it is what says the rally is converging rather than repeating.
+  if (synthesis.fixed.length > 0) {
+    blocks.push("**Fixed since last review**");
+    blocks.push(
+      synthesis.fixed
+        .map((f) => {
+          const at = f.file ? `\`${f.file}\` — ` : "";
+          const note = f.note?.trim() ? `\n  ${f.note.trim().replace(/\s*\n\s*/g, " ")}` : "";
+          return `- ${at}${f.title.trim()}${note}`;
+        })
+        .join("\n"),
+    );
+  }
   if (synthesis.findings.length === 0) {
     blocks.push("Nothing to fix.");
   } else {

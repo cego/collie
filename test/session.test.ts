@@ -126,12 +126,16 @@ test("with an implementer live, the review hands it the findings and both runs r
         "expected implement run",
       );
       yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
-      const prompts = scriptedPrompts(["Send to implementer"]);
+      // One decision, two implementations: with an implementer live, "Fix findings"
+      // is the hand-off.
+      const prompts = scriptedPrompts(["Fix findings"]);
 
       const { run, status } = yield* runWorkflow(rig, "review", {}, { prompts });
 
       expect(status).toBe("done");
-      expect(prompts.offered).toEqual([["Send to implementer", "Don't post"]]);
+      expect(prompts.offered).toEqual([
+        ["Fix findings", "Fix findings in a full implement run", "Don't post"],
+      ]);
 
       const sent = must(
         (yield* rig.calls()).filter((c) => c.cmd === "agent prompt").at(-1)?.argv,
@@ -165,12 +169,14 @@ test("with no implementer live, the review offers to start one on the reviewed t
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
-      const prompts = scriptedPrompts(["Fix findings"]);
+      const prompts = scriptedPrompts(["Fix findings in a full implement run"]);
 
       const { run, status } = yield* runWorkflow(rig, "review", {}, { prompts });
 
       expect(status).toBe("done");
-      expect(prompts.offered).toEqual([["Fix findings", "Don't post"]]);
+      expect(prompts.offered).toEqual([
+        ["Fix findings", "Fix findings in a full implement run", "Don't post"],
+      ]);
       expect(run.record.children).toHaveLength(1);
       const childId = must(run.record.children.at(0), "expected child run");
       const child = yield* new RunStore(rig.stateDir).load(childId);
@@ -192,7 +198,7 @@ test("the build prompt for a review work source checks out what was reviewed", (
         rig,
         "review",
         {},
-        { prompts: scriptedPrompts(["Fix findings"]) },
+        { prompts: scriptedPrompts(["Fix findings in a full implement run"]) },
       );
       const childId = must(run.record.children.at(0), "expected child run");
       const child = yield* new RunStore(rig.stateDir).load(childId);
@@ -323,14 +329,17 @@ test("an implementer that herdr no longer has is not offered, and its entry goes
       const env = rig.pluginEnv();
       yield* liveImplementer("gone-1", "1-9");
       rig.dropAgent("gone-1");
-      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
-      const prompts = scriptedPrompts(["Fix findings"]);
+      // The last output is the fix round's: with nothing live, "Fix findings" is the
+      // round this run does itself.
+      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND, CLEAN]);
+      const prompts = scriptedPrompts(["Fix findings", "Don't post"]);
 
       const { status } = yield* runWorkflow(rig, "review", {}, { prompts });
 
       expect(status).toBe("done");
       const offered = must(prompts.offered.at(0), "expected offered choices");
-      expect(offered).not.toContain("Send to implementer");
+      // The hand-off twin is gone with the agent; the round that fixes it here is
+      // what "Fix findings" means now.
       expect(offered).toContain("Fix findings");
       const file = yield* registryPath(env.stateDir, scopeFor(env, env.cwd));
       expect(yield* readRegistry(file)).toEqual([]);
