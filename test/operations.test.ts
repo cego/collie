@@ -3,13 +3,13 @@
 // here it is exercised at its own interface.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 import { installFakeSkills } from "./support/defs";
 import { FakeBin } from "./support/bin";
-import { prepareWorkflow, settleGiven } from "../src/operations";
+import { prepareWorkflow, settleGiven, upgrade } from "../src/operations";
 import { RunStore } from "../src/run";
 
 let rig: Rig;
@@ -131,5 +131,77 @@ test("an Input nobody can be asked for comes back as needs_input", () =>
       });
 
       expect(settled).toMatchObject({ ok: false, error: { code: "needs_input" } });
+    }),
+  ));
+
+/** A checkout that answers `git` and an `install.sh` that says what it did. */
+const fakeTools = Effect.fn("operationsTest.fakeTools")(function* (opts: {
+  head: string;
+  pull?: string;
+  install?: string;
+}) {
+  yield* bin.add(
+    "git",
+    `case "$1 $2" in
+      "rev-parse --git-dir") echo .git ;;
+      "rev-parse --short") echo ${opts.head} ;;
+      "pull --ff-only") ${opts.pull ?? "echo Updating; exit 0"} ;;
+      *) exit 1 ;;
+    esac`,
+  );
+  // A marker, so a test can tell "the install ran" from "it was never reached".
+  yield* bin.add("sh", opts.install ?? `touch "${rig.root}/installed"; echo installed; exit 0`);
+});
+
+test("upgrade pulls the checkout, then installs, and says what moved", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = { ...rig.pluginEnv(), pluginRoot: rig.projectDir };
+      yield* fakeTools({ head: "abc1234" });
+
+      const same = yield* upgrade(env);
+
+      // Nothing moved: the same HEAD before and after is worth saying plainly rather
+      // than reporting an update that did not happen.
+      expect(same).toMatchObject({ ok: true, data: { checkout: true, updated: false } });
+      expect(same.ok && same.human).toContain("already up to date at abc1234");
+      expect(same.ok && same.human).toContain("installed");
+    }),
+  ));
+
+test("upgrade reports a pull it could not do rather than installing anyway", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = { ...rig.pluginEnv(), pluginRoot: rig.projectDir };
+      // A dirty tree, a diverged branch, no upstream: all the same answer.
+      yield* fakeTools({
+        head: "abc1234",
+        pull: `echo "would clobber local changes" >&2; exit 1`,
+      });
+
+      const refused = yield* upgrade(env);
+
+      expect(refused).toMatchObject({
+        ok: false,
+        error: { code: "operation_failed", details: { output: "would clobber local changes" } },
+      });
+      // And it did not go on to install over the top of whatever is there.
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.exists(`${rig.root}/installed`)).toBe(false);
+    }),
+  ));
+
+test("upgrade of a plain install fetches the release without asking git anything", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = { ...rig.pluginEnv(), pluginRoot: rig.projectDir };
+      // Not a checkout: `git rev-parse --git-dir` fails, and there is nothing to pull.
+      yield* bin.add("git", `exit 1`);
+      yield* bin.add("sh", `echo installed collie-linux-x64; exit 0`);
+
+      const fetched = yield* upgrade(env);
+
+      expect(fetched).toMatchObject({ ok: true, data: { checkout: false, updated: false } });
+      expect(fetched.ok && fetched.human).toContain("not a checkout");
     }),
   ));

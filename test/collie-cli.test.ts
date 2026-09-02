@@ -373,3 +373,15 @@ test("workflow show prints what a run actually gets, not what was authored", () 
       expect(steps).toHaveLength(7);
     }),
   ));
+
+test("upgrade is a command of its own, and says what it would do", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const help = yield* cli(["upgrade", "--help"]);
+      expect(help.exit).toBe(0);
+      expect(help.stdout).toContain("Update this installation");
+      // Discoverable from the root help, like every other command.
+      const root = yield* cli(["--help"]);
+      expect(root.stdout).toContain("upgrade");
+    }),
+  ));
