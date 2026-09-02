@@ -79,7 +79,13 @@ export const context = Effect.fn("collie.context")(function* (
     {
       ...base,
       workspaceId: id,
-      cwd: lookup.workspace.cwd || base.context.workspace_cwd || base.cwd,
+      // An explicitly named directory wins; the workspace's is an inference (its
+      // panes' shells move), and the caller's own cwd is the last resort.
+      cwd:
+        (base.cwdExplicit ? base.cwd : "") ||
+        lookup.workspace.cwd ||
+        base.context.workspace_cwd ||
+        base.cwd,
     },
     lookup.workspace,
   );

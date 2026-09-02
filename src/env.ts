@@ -32,6 +32,8 @@ export interface PluginEnv {
   collieMode: string | null;
   /** Directory the run should treat as the project. */
   cwd: string;
+  /** True when COLLIE_CWD named it: an explicit directory beats every inference. */
+  cwdExplicit: boolean;
   context: PluginContext;
   raw: Record<string, string>;
 }
@@ -53,7 +55,8 @@ export function readEnv(env: Readonly<Record<string, string | undefined>>): Plug
   const home = env.HOME ?? "/tmp";
   const pluginRoot = first(env, "HERDR_PLUGIN_ROOT") ?? env.PWD ?? ".";
   // `PWD` goes stale whenever something chdir'd; the real directory never does.
-  const cwd = first(env, "COLLIE_CWD") ?? context.workspace_cwd ?? process.cwd();
+  const explicitCwd = first(env, "COLLIE_CWD");
+  const cwd = explicitCwd ?? context.workspace_cwd ?? process.cwd();
 
   const raw: Record<string, string> = {};
   for (const [key, value] of Object.entries(env)) {
@@ -77,6 +80,7 @@ export function readEnv(env: Readonly<Record<string, string | undefined>>): Plug
     entrypointId: first(env, "HERDR_PLUGIN_ENTRYPOINT_ID"),
     collieMode: first(env, "COLLIE_MODE"),
     cwd,
+    cwdExplicit: explicitCwd !== null,
     context,
     raw,
   };
