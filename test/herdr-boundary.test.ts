@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect } from "effect";
-import { Herdr } from "../src/herdr";
+import { decodeWorkspaceList, Herdr } from "../src/herdr";
 import { workspaceCwdFromPanes } from "../src/operations";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
@@ -196,3 +196,32 @@ test("a workspace with no directory of its own takes it from its first pane", ()
   // No pane knows: empty, so the caller's own fallback chain decides.
   expect(workspaceCwdFromPanes("wC", panes)).toBe("");
 });
+
+test("a worktree-backed workspace decodes, and its checkout is its directory", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const list = yield* decodeWorkspaceList({
+        id: "cli:workspace:list",
+        result: {
+          type: "workspace_list",
+          workspaces: [
+            { workspace_id: "w1", label: "plain" },
+            {
+              workspace_id: "w2",
+              label: "collie",
+              worktree: {
+                checkout_path: "/home/u/.herdr/worktrees/collie/feature",
+                is_linked_worktree: true,
+                repo_key: "/home/u/collie/.git",
+                repo_name: "collie",
+                repo_root: "/home/u/collie",
+              },
+            },
+          ],
+        },
+      });
+
+      expect(list.map((w) => w.cwd)).toEqual(["", "/home/u/.herdr/worktrees/collie/feature"]);
+      expect(list[1]!.worktree).toBe("/home/u/.herdr/worktrees/collie/feature");
+    }),
+  ));

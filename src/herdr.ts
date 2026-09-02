@@ -50,7 +50,15 @@ const WorkspaceReply = Schema.Struct({
   label: Schema.String,
   cwd: Schema.optionalKey(Schema.String),
   working_directory: Schema.optionalKey(Schema.String),
-  worktree: Schema.optionalKey(Schema.Struct({ path: Schema.String })),
+  // herdr's worktree object is `{ checkout_path, repo_root, ... }`; `path` is the older
+  // name. Both optional: a required key here made every workspace undecodable the
+  // moment one of them was worktree-backed.
+  worktree: Schema.optionalKey(
+    Schema.Struct({
+      path: Schema.optionalKey(Schema.String),
+      checkout_path: Schema.optionalKey(Schema.String),
+    }),
+  ),
   worktree_path: Schema.optionalKey(Schema.String),
 });
 const WorkspaceListReply = Schema.Struct({
@@ -194,6 +202,26 @@ export interface AgentInfo {
   status: AgentStatus;
 }
 
+/** `herdr workspace list` as this plugin reads it; a worktree-backed workspace's checkout is its directory. */
+export const decodeWorkspaceList = (res: BoundaryValue) =>
+  decodeBoundary("herdr workspace list", WorkspaceListReply, res).pipe(
+    Effect.map(({ result }) =>
+      result.workspaces.map((workspace): WorkspaceInfo => {
+        const worktree =
+          workspace.worktree?.checkout_path ??
+          workspace.worktree?.path ??
+          workspace.worktree_path ??
+          null;
+        return {
+          workspaceId: workspace.workspace_id,
+          label: workspace.label,
+          cwd: workspace.cwd ?? workspace.working_directory ?? worktree ?? "",
+          worktree,
+        };
+      }),
+    ),
+  );
+
 export class Herdr {
   private seq = 0;
 
@@ -323,21 +351,7 @@ export class Herdr {
   }
 
   workspaceList(): HerdrEffect<WorkspaceInfo[]> {
-    return this.cli(["workspace", "list"]).pipe(
-      Effect.flatMap((res) => decodeBoundary("herdr workspace list", WorkspaceListReply, res)),
-      Effect.map(({ result }) =>
-        result.workspaces.map((workspace) => {
-          const cwd =
-            workspace.cwd ?? workspace.working_directory ?? workspace.worktree?.path ?? "";
-          return {
-            workspaceId: workspace.workspace_id,
-            label: workspace.label,
-            cwd,
-            worktree: workspace.worktree?.path ?? workspace.worktree_path ?? null,
-          };
-        }),
-      ),
-    );
+    return this.cli(["workspace", "list"]).pipe(Effect.flatMap(decodeWorkspaceList));
   }
 
   tabList(): HerdrEffect<TabInfo[]> {
