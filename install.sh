@@ -16,7 +16,10 @@ case "$ARCH" in
 esac
 
 ASSET="collie-${OS}-${ARCH}"
-BASE="${COLLIE_RELEASE_BASE:-https://gitlab.cego.dk/mk/collie/-/releases/v${VERSION}/downloads}"
+# The tag is the version, with no `v` in front of it: the CI jobs build every registry
+# path and release link from `$CI_COMMIT_TAG` verbatim, so a prefix here alone would
+# point the installer at a release nothing publishes.
+BASE="${COLLIE_RELEASE_BASE:-https://gitlab.cego.dk/mk/collie/-/releases/${VERSION}/downloads}"
 BIN_DIR="${COLLIE_BIN_DIR:-$HOME/.local/bin}"
 SHIM_MARKER="# installed by collie install.sh"
 
