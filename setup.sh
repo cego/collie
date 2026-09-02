@@ -43,12 +43,10 @@ else
   herdr plugin link "$ROOT"
 fi
 
-mkdir -p "$HOME/.local/bin"
-ln -sfn "$ROOT/bin/collie" "$HOME/.local/bin/collie"
-case ":$PATH:" in
-  *":$HOME/.local/bin:"*) ;;
-  *) say "$HOME/.local/bin is not on PATH; add it if you want to run collie by name" ;;
-esac
+# The `collie` on PATH is `install.sh`'s to write, and `herdr plugin link` above has
+# just run it. A symlink here would replace a shim that pins `HERDR_PLUGIN_ROOT` with
+# one that does not, and a `collie` without that pin takes its workflows from whatever
+# directory it is standing in.
 
 # The previous plugin bound the same three keys to cego.workflows.<action>. Unlinking
 # it leaves those entries behind, so every upgraded user would end up with two
