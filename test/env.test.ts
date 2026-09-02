@@ -44,3 +44,16 @@ test("a malformed context json does not throw", () => {
   const env = readEnv({ HOME: "/home/x", HERDR_PLUGIN_CONTEXT_JSON: "{oops" });
   expect(env.context).toEqual({});
 });
+
+test("COLLIE_CWD is remembered as explicit; an inferred cwd is not", () => {
+  const explicit = readEnv({ HOME: "/home/x", COLLIE_CWD: "/named/dir" });
+  expect(explicit.cwd).toBe("/named/dir");
+  expect(explicit.cwdExplicit).toBe(true);
+
+  const inferred = readEnv({
+    HOME: "/home/x",
+    HERDR_PLUGIN_CONTEXT_JSON: JSON.stringify({ workspace_cwd: "/workspace" }),
+  });
+  expect(inferred.cwd).toBe("/workspace");
+  expect(inferred.cwdExplicit).toBe(false);
+});
