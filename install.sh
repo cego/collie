@@ -38,8 +38,34 @@ build_from_source() {
   mv -f bin/collie.new bin/collie
 }
 
+# A private or internal project answers an unauthenticated download with a sign-in
+# page and HTTP 200, which `curl -f` treats as success. Checking what actually
+# arrived is the difference between falling back to a source build and installing
+# 14KB of HTML as the runner.
+looks_executable() {
+  case "$(od -An -tx1 -N4 "$1" 2>/dev/null | tr -d ' \n')" in
+    7f454c46) return 0 ;;                     # ELF
+    cffaedfe|cefaedfe|cafebabe|bebafeca) return 0 ;;  # Mach-O, and universal
+    *) return 1 ;;
+  esac
+}
+
 fetch_release() {
-  curl -fsSL "${BASE}/${ASSET}" -o bin/collie.new 2>/dev/null || { rm -f bin/collie.new; return 1; }
+  # `COLLIE_TOKEN` for a project that is not public: without it the registry answers
+  # every download with the login page above.
+  if [ -n "${COLLIE_TOKEN:-}" ]; then
+    set -- --header "PRIVATE-TOKEN: ${COLLIE_TOKEN}"
+  else
+    set --
+  fi
+  curl -fsSL "$@" "${BASE}/${ASSET}" -o bin/collie.new 2>/dev/null ||
+    { rm -f bin/collie.new; return 1; }
+  if ! looks_executable bin/collie.new; then
+    rm -f bin/collie.new
+    echo "what ${BASE}/${ASSET} returned is not a program${COLLIE_TOKEN:+}" >&2
+    [ -n "${COLLIE_TOKEN:-}" ] || echo "  (set COLLIE_TOKEN if this project needs a login)" >&2
+    return 1
+  fi
   mv bin/collie.new bin/collie
   chmod +x bin/collie
 }
