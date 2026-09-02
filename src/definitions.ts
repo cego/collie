@@ -23,6 +23,7 @@ export const INPUT_STRATEGIES = [
   "diff-target",
   "ticket",
   "flag",
+  "optional",
 ] as const;
 
 /** What a step may declare it needs before it is worth starting. */
@@ -558,6 +559,40 @@ export interface ResolvedWorkflow {
 }
 
 /**
+ * Every skill a resolved Workflow *mentions*, and where it asked for it: a step's
+ * prompt, its persona, and every Choice round's prompt and persona — a round is an
+ * agent too, and `review`'s fix round is an implementer whose skills are the point of
+ * it. One walk, because the engine resolves these to `SKILL.md` paths and the
+ * validator reports the ones nobody installed, and a place a skill can be named that
+ * only one of them knows about is a skill that silently goes missing in the other.
+ */
+export function skillMentions(wf: ResolvedWorkflow, defs: Definitions): Map<string, string> {
+  const asked = new Map<string, string>();
+  const note = (name: string, by: string) => {
+    if (!asked.has(name)) asked.set(name, by);
+  };
+  const notePersona = (name: string | undefined) => {
+    const persona = name ? defs.personas.get(name) : undefined;
+    if (persona)
+      for (const skill of skillsIn(persona.body)) note(skill, `persona "${persona.name}"`);
+  };
+  for (const step of wf.steps) {
+    for (const name of skillsIn(`${step.preamble}\n${step.prompt}`))
+      note(name, `${wf.name} step "${step.id}"`);
+    notePersona(step.persona);
+    for (const choice of step.choices ?? []) {
+      for (const round of [choice.round, choice.followUp]) {
+        if (!round) continue;
+        for (const name of skillsIn(round.prompt))
+          note(name, `${wf.name} step "${step.id}" choice "${choice.title}"`);
+        notePersona(round.persona ?? step.persona);
+      }
+    }
+  }
+  return asked;
+}
+
+/**
  * Every skill this Workflow asks for that is not installed. Named one per line with
  * the command that installs it: a run that starts without them wastes an agent's
  * whole turn discovering the same thing.
@@ -567,16 +602,24 @@ const missingSkills = Effect.fn("Definitions.missingSkills")(function* (
   defs: Definitions,
   dirs: string[],
 ) {
+  // A step's `skill:` is started rather than mentioned, and is just as missing; the
+  // rest is the same walk the engine resolves paths from.
   const asked = new Map<string, string>();
-  const note = (name: string, by: string) => {
-    if (!asked.has(name)) asked.set(name, by);
+  const started = (skill: string | undefined, where: string) => {
+    if (skill && !asked.has(skill)) asked.set(skill, where);
   };
   for (const step of wf.steps) {
-    if (step.skill) note(step.skill, `${wf.name} step "${step.id}"`);
-    for (const name of skillsIn(`${step.preamble}\n${step.prompt}`))
-      note(name, `${wf.name} step "${step.id}"`);
-    const persona = step.persona ? defs.personas.get(step.persona) : undefined;
-    if (persona) for (const name of skillsIn(persona.body)) note(name, `persona "${persona.name}"`);
+    started(step.skill, `${wf.name} step "${step.id}"`);
+    // A round drives a skill the same way a step does, and a user-only one that is
+    // not installed costs the same turn — discovered only once the agent is open.
+    for (const choice of step.choices ?? []) {
+      for (const round of [choice.round, choice.followUp]) {
+        started(round?.skill, `${wf.name} step "${step.id}" choice "${choice.title}"`);
+      }
+    }
+  }
+  for (const [name, by] of skillMentions(wf, defs)) {
+    if (!asked.has(name)) asked.set(name, by);
   }
 
   const errors: string[] = [];
@@ -585,7 +628,10 @@ const missingSkills = Effect.fn("Definitions.missingSkills")(function* (
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     for (const dir of dirs) {
-      if (yield* fs.exists(path.join(dir, name))) {
+      // The file, not the directory: a mention renders the path to `SKILL.md`, so a
+      // directory without one is a skill that validates and then reads as missing to
+      // the agent that was told to follow it.
+      if (yield* fs.exists(path.join(dir, name, "SKILL.md"))) {
         installed = true;
         break;
       }
@@ -902,6 +948,22 @@ function choiceErrors(
   defaults: Defaults,
 ): string[] {
   const errors: string[] = [];
+  // A title is what a human decides, so two choices may share one only when they can
+  // never both be offered: a hand-off and the twin that runs when nothing is live.
+  // Anything else would make a decided title resolve to whichever sorted first.
+  const byTitle = new Map<string, ChoiceDef[]>();
+  for (const choice of step.choices ?? []) {
+    if (choice.title) byTitle.set(choice.title, [...(byTitle.get(choice.title) ?? []), choice]);
+  }
+  for (const [title, sharing] of byTitle) {
+    const [a, b] = sharing;
+    const pair =
+      sharing.length === 2 &&
+      ((a!.handoff && b!.unless === a!.handoff) || (b!.handoff && a!.unless === b!.handoff));
+    if (sharing.length > 1 && !pair) {
+      errors.push(`workflow "${wf.name}" step "${step.id}": duplicate choice title "${title}"`);
+    }
+  }
   for (const [i, choice] of (step.choices ?? []).entries()) {
     const at = choice.title ? `choice "${choice.title}"` : `choice ${i + 1}`;
     const where = `workflow "${wf.name}" step "${step.id}" ${at}`;

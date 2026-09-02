@@ -12,10 +12,17 @@ export interface Defaults {
   maxIterations: number;
   /** How long a Step may wait for the human after the agent hands off. */
   handoffTimeoutMs: number;
+  /**
+   * How long an agent may produce nothing before it is nudged. Nudged again at
+   * double, given up on at triple. `0` waits for as long as it takes.
+   */
+  quietMs: number;
   /** Extra models to accept per harness, for models the adapter table does not list. */
   models: Readonly<Record<string, ReadonlyArray<string>>>;
   /** What to do about a directory the harness has not been trusted with yet. */
   trust: "ask" | "auto" | "never";
+  /** `notifications.<kind>: false` turns that kind of toast off; absent means on. */
+  notifications: Readonly<Record<string, boolean>>;
 }
 
 export const FALLBACK_DEFAULTS: Defaults = {
@@ -23,12 +30,15 @@ export const FALLBACK_DEFAULTS: Defaults = {
   model: "opus",
   maxIterations: 5,
   handoffTimeoutMs: 2 * 60 * 60 * 1000,
+  quietMs: 10 * 60 * 1000,
   models: {},
   trust: "ask",
+  notifications: {},
 };
 
 const ConfigJson = Schema.fromJsonString(YamlMapSchema);
 const Models = Schema.Record(Schema.String, Schema.Array(Schema.String));
+const Notifications = Schema.Record(Schema.String, Schema.Boolean);
 
 /** The whole config file, for values only a prompt cares about (e.g. linear.team). */
 export const readConfig = Effect.fn("Config.readConfig")(function* (configDir: string) {
@@ -91,8 +101,13 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDi
     handoffTimeoutMs: isNumber(raw.handoff_timeout_ms)
       ? raw.handoff_timeout_ms
       : FALLBACK_DEFAULTS.handoffTimeoutMs,
+    quietMs: isNumber(raw.quiet_ms) ? raw.quiet_ms : FALLBACK_DEFAULTS.quietMs,
     models: Option.getOrElse(Schema.decodeUnknownOption(Models)(raw.models), () => ({})),
     trust: raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
+    notifications: Option.getOrElse(
+      Schema.decodeUnknownOption(Notifications)(raw.notifications),
+      () => ({}),
+    ),
   };
   if (isString(raw.effort)) defaults.effort = raw.effort;
   return defaults;

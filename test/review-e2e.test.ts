@@ -5,10 +5,12 @@ import { FakeBin } from "./support/bin";
 import { installBaseline, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
+import { decidableSteps } from "../src/flows";
+import { FALLBACK_DEFAULTS } from "../src/config";
 import { REVIEW_FILE } from "../src/output";
 import { loadDefaults, type Defaults } from "../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
-import { executeRun, type EnginePrompts } from "../src/engine";
+import { executeRun, outcomeLine, type EnginePrompts } from "../src/engine";
 import { Herdr } from "../src/herdr";
 import type { PluginEnv } from "../src/env";
 import { fakeHerdr } from "./support/fake-herdr-core";
@@ -263,8 +265,17 @@ test("review runs standalone on the inferred target, and post is no longer an in
       const { run, status } = yield* runWorkflowEffect("review", {}, { prompts });
       expect(status).toBe("done");
       // The kind is recorded next to the value, so a prompt can branch on it.
-      expect(run.record.inputs).toEqual({ target: "mr:12", target_kind: "mr" });
-      expect(run.record.input_sources).toEqual({ target: "open merge request !12" });
+      expect(run.record.inputs).toEqual({
+        target: "mr:12",
+        target_kind: "mr",
+        plan: "",
+        previous: "",
+      });
+      expect(run.record.input_sources).toEqual({
+        target: "open merge request !12",
+        plan: "default",
+        previous: "default",
+      });
 
       const prompt = yield* promptOf(run);
       expect(prompt).toContain("Review target: mr:12");
@@ -451,7 +462,9 @@ test("an MR target offers the post choice, and Post sends review.md as one note"
       const { run, status, lines } = yield* runWorkflowEffect("review", {}, { prompts });
 
       expect(status).toBe("done");
-      expect(prompts.offered).toEqual([["Fix findings", "Post to MR", "Don't post"]]);
+      expect(prompts.offered).toEqual([
+        ["Fix findings", "Fix findings in a full implement run", "Post to MR", "Don't post"],
+      ]);
       const where = "gitlab.cego.dk/cego/herdr-plugin!12";
       expect(run.step("post").note).toBe(`chose "Post to MR" — posted the review to ${where}`);
       expect(lines).toContain(`  posted the review to ${where}`);
@@ -478,7 +491,9 @@ test("an explicit MR can be reviewed and posted", () =>
 
       // The step is offered and can post to the inferred MR.
       expect(status).toBe("done");
-      expect(prompts.offered).toEqual([["Fix findings", "Post to MR", "Don't post"]]);
+      expect(prompts.offered).toEqual([
+        ["Fix findings", "Fix findings in a full implement run", "Post to MR", "Don't post"],
+      ]);
       expect(run.step("post").note).toBe(
         `chose "Post to MR" — posted the review to gitlab.cego.dk/cego/herdr-plugin!7`,
       );
@@ -548,7 +563,9 @@ test("a branch target cannot be posted to, so the menu offers what it can", () =
       expect(status).toBe("done");
       expect(run.record.inputs.target_kind).toBe("branch");
       // No merge request to post to, and no implementer live, so the two that are left.
-      expect(prompts.offered).toEqual([["Fix findings", "Don't post"]]);
+      expect(prompts.offered).toEqual([
+        ["Fix findings", "Fix findings in a full implement run", "Don't post"],
+      ]);
       expect(run.step("post").note).toBe(`chose "Don't post"`);
       // The review is still written, and still printed for the human.
       expect(yield* readText(path.join(run.dir, REVIEW_FILE))).toContain("Nothing to fix.");
@@ -608,12 +625,18 @@ test("a review.json that breaks the Output schema fails the step with the schema
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
-      yield* queueOutputs([{ verdict: "findings", findings: [] }, CLEAN, SYNTH]);
+      // Twice, because one unusable Output now buys a repair round: the second is
+      // what the step is finally judged on.
+      const broken = { verdict: "findings", findings: [] };
+      // The reviewers are prompted first and collected after, so the repair's write
+      // is the third in the queue.
+      yield* queueOutputs([broken, CLEAN, broken]);
 
       const { run, status } = yield* runWorkflowEffect("review", {});
 
       expect(status).toBe("blocked");
       expect(run.record.steps[0]!.variants[0]!.status).toBe("failed");
+      expect(run.record.steps[0]!.variants[0]!.repairs).toHaveLength(1);
       expect(run.record.steps[0]!.variants[0]!.error).toBe(
         'steps/review/claude-opus/review.json: verdict "findings" with an empty findings list',
       );
@@ -631,5 +654,228 @@ test("the working tree is the last resort target", () =>
 
       expect(run.record.inputs.target).toBe("worktree");
       expect(yield* promptOf(run)).toContain("Review target: worktree");
+    }),
+  ));
+
+test("a synthesis written as one newline is repaired, not thrown away", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      // This is the failure that found the bug: the fan-in Output was one newline,
+      // and the whole round — two reviewers — was discarded over a write.
+      yield* queueOutputs([CLEAN, CLEAN, "\n", SYNTH]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Don't post"]) },
+      );
+
+      expect(status).toBe("done");
+      const synthesize = run.record.steps[1]!.variants[0]!;
+      expect(synthesize.status).toBe("done");
+      expect(synthesize.repairs).toHaveLength(1);
+    }),
+  ));
+
+test("a second review of the same target is given the first one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      // A branch, not the working tree: `worktree` names no change, so it is never
+      // matched against an earlier review (that would be another branch's findings).
+      const target = { target: "branch:main...feature" };
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const first = yield* runWorkflowEffect("review", target, {
+        prompts: scriptedPrompts(["Don't post"]),
+      });
+      expect(first.status).toBe("done");
+
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const second = yield* runWorkflowEffect("review", target, {
+        prompts: scriptedPrompts(["Don't post"]),
+      });
+
+      // The rally is traceable in both directions, and the reviewers read what was
+      // said last time rather than re-deriving it.
+      expect(second.run.record.previous_review).toBe(first.run.id);
+      const prompt = yield* promptOf(second.run);
+      expect(prompt).toContain("Nothing to fix.");
+      expect(prompt).toContain("Earlier review of this target");
+      expect(prompt).toContain("say what happened to it — still");
+      // A first review has no section at all, rather than a heading over nothing.
+      expect(yield* promptOf(first.run)).not.toContain("Earlier review of this target");
+      expect(first.run.record.previous_review).toBeNull();
+    }),
+  ));
+
+test("the working tree is never matched against an earlier review of it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      // Every review of this checkout's working tree carries the same target, so a
+      // second one would otherwise be handed a different branch's findings.
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* runWorkflowEffect(
+        "review",
+        { target: "worktree" },
+        {
+          prompts: scriptedPrompts(["Don't post"]),
+        },
+      );
+
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      const second = yield* runWorkflowEffect(
+        "review",
+        { target: "worktree" },
+        {
+          prompts: scriptedPrompts(["Don't post"]),
+        },
+      );
+
+      expect(second.run.record.previous_review).toBeNull();
+      expect(yield* promptOf(second.run)).not.toContain("Earlier review of this target");
+    }),
+  ));
+
+test("a choice this environment cannot carry out is not offered at launch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // No GitLab and a working-tree target, so posting the review is not on the table
+      // — and deciding it at launch would send the unattended run back to the menu.
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      const env = rig.pluginEnv();
+      const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
+      const wf = resolveWorkflow("review", defs, FALLBACK_DEFAULTS);
+      const resolutions = yield* inferInputs(wf.inputs, { cwd: env.cwd, stateDir: env.stateDir });
+
+      const decidable = yield* decidableSteps(wf, env, resolutions);
+
+      const post = decidable.find((entry) => entry.step.id === "post")!;
+      const titles = post.items.map((item) => item.title);
+      expect(titles).toContain("Fix findings");
+      expect(titles).toContain("Don't post");
+      expect(titles).not.toContain("Post to MR");
+      // The hand-off and its twin are one decision, offered whoever is live right now:
+      // who is live at launch says nothing about who will be live an hour later.
+      expect(titles.filter((t) => t === "Fix findings")).toHaveLength(1);
+    }),
+  ));
+
+test("a review that ends with findings does not announce itself as clean", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* queueOutputs([
+        CLEAN,
+        CLEAN,
+        {
+          verdict: "findings",
+          summary: "Adds a flag. It exits wrong.",
+          findings: [
+            { file: "cli.js", line: 4, severity: "blocker", title: "exit code", detail: "wrong" },
+            { file: "cli.js", severity: "minor", title: "no help text", detail: "missing" },
+          ],
+          dropped: [],
+        },
+      ]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Don't post"]) },
+      );
+
+      expect(status).toBe("done");
+      // The body is verdict-shaped: what came of the run, not that it ended.
+      const toast = (yield* rig.calls()).filter((c) => c.cmd === "notification show").at(-1)!.argv!;
+      expect(toast.at(-1)).toContain("2 finding(s) still open");
+      expect(toast.at(-1)).toContain("1 blocker");
+      expect(toast.at(-1)).not.toBe("clean");
+      expect(run.record.outstanding).toHaveLength(2);
+    }),
+  ));
+
+test("a review that found the last round's findings gone says how many", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* queueOutputs([
+        CLEAN,
+        CLEAN,
+        {
+          verdict: "clean",
+          summary: "The blocker is gone. Nothing else came back.",
+          findings: [],
+          dropped: [],
+          fixed: [
+            { file: "cli.js", title: "exit code", note: "now exits 2" },
+            { file: "cli.js", title: "no help text", note: "added" },
+          ],
+        },
+      ]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Don't post"]) },
+      );
+
+      expect(status).toBe("done");
+      expect(run.record.fixed).toBe(2);
+      // Clean alone undersells the rally; the count is what says it is converging.
+      const toast = (yield* rig.calls()).filter((c) => c.cmd === "notification show").at(-1)!.argv!;
+      expect(toast.at(-1)).toBe("clean — 2 fixed");
+    }),
+  ));
+
+test("a fix round that did not push says so, rather than reading as landed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      // The fix round works on someone else's branch and is told not to push; a result
+      // that looks like it landed and did not is worse than either outcome.
+      yield* queueOutputs([
+        CLEAN,
+        CLEAN,
+        {
+          verdict: "findings",
+          summary: "One blocker.",
+          findings: [{ file: "cli.js", severity: "blocker", title: "exit code", detail: "d" }],
+          dropped: [],
+        },
+        {
+          verdict: "clean",
+          findings: [],
+          fixed: ["the exit code"],
+          commits: ["fix the exit code"],
+          branch: "feature/x",
+          pushed: false,
+        },
+      ]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Fix findings", "Don't post"]) },
+      );
+
+      expect(status).toBe("done");
+      expect(run.record.unpushed).toBe("feature/x");
+      expect(run.record.summary).toContain("Committed on feature/x, not pushed.");
+      const toast = (yield* rig.calls()).filter((c) => c.cmd === "notification show").at(-1)!.argv!;
+      expect(toast.at(-1)).toContain("commits on feature/x are not pushed");
+
+      // And a merge request in the same run does not hide it: an MR URL is the first
+      // thing the ending says, and local-only work must not read as shipped under it.
+      run.record.mr_url = "https://gitlab.example.com/acme/app/-/merge_requests/7";
+      expect(outcomeLine(run.record, "done")).toContain("commits on feature/x are not pushed");
     }),
   ));

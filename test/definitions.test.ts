@@ -302,7 +302,7 @@ c prompt
       const errors = yield* validateWorkflow(resolveWorkflow("w", defs, defaults), defs, defaults);
 
       expect(errors).toEqual([
-        'workflow "w" input "goal": unknown strategy "interview" (known: goal, plan-dir, work-source, diff-target, ticket, flag)',
+        'workflow "w" input "goal": unknown strategy "interview" (known: goal, plan-dir, work-source, diff-target, ticket, flag, optional)',
         'workflow "w" step "a": unknown persona "ghost" (known: reviewer)',
         'workflow "w" step "b": no prompt (add a "## b" section to w.md)',
         'workflow "w" step "b": agent "nowhere" is not an earlier step',
@@ -513,6 +513,8 @@ test("user defaults come from config.json in the config layer", () =>
         model: "gpt-5",
         maxIterations: 2,
         handoffTimeoutMs: 60_000,
+        quietMs: FALLBACK_DEFAULTS.quietMs,
+        notifications: {},
         models: { opencode: ["local/foo"] },
         trust: "ask",
       });
@@ -763,7 +765,12 @@ Run {{skill:tdd}}.
       // Two skills are installed; the other two are not, and each is named once with the
       // command that installs it. A missing skill is a prerequisite, not a definition bug.
       const skills = join(dir, "installed");
-      for (const name of ["code-review", "tdd"]) yield* mkdirp(join(skills, name));
+      // Installed means the file a mention points an agent at, not just a directory
+      // with the right name.
+      for (const name of ["code-review", "tdd"]) {
+        yield* mkdirp(join(skills, name));
+        yield* writeText(join(skills, name, "SKILL.md"), `# ${name}\n`);
+      }
 
       const errors = yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS, [skills]);
       expect(errors).toEqual([
@@ -771,8 +778,16 @@ Run {{skill:tdd}}.
         'persona "reviewer": the skill "not-installed" is not installed — run `npx skills add not-installed`',
       ]);
 
+      // A directory with the right name and no SKILL.md in it is not installed: the
+      // agent would be pointed at a file that is not there.
+      yield* mkdirp(join(skills, "to-spec"));
+      expect(yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS, [skills])).toHaveLength(2);
+
       // Everything installed, and the workflow validates.
-      for (const name of ["to-spec", "not-installed"]) yield* mkdirp(join(skills, name));
+      for (const name of ["to-spec", "not-installed"]) {
+        yield* mkdirp(join(skills, name));
+        yield* writeText(join(skills, name, "SKILL.md"), `# ${name}\n`);
+      }
       expect(yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS, [skills])).toEqual([]);
 
       // Either dir counts, and no dirs at all means the check is not made.

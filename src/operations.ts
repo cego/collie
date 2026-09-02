@@ -28,9 +28,18 @@ import {
   stopDriver,
   type InboxCommandValue,
 } from "./driver";
-import { inferInputs, inputSources, inputValues, type Resolution } from "./inputs";
+import {
+  classifyGivenTarget,
+  classifyWorkSource,
+  inferInputs,
+  inputSources,
+  inputValues,
+  settle,
+  type Resolution,
+} from "./inputs";
 import { readRegistry, registryPath, type RegistryScope } from "./registry";
 import { currentPid, withLock } from "./lock";
+import { REVIEW_FILE } from "./output";
 import { Run, RunStore } from "./run";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
@@ -239,6 +248,115 @@ export const prepareWorkflow = Effect.fn("operations.prepareWorkflow")(function*
   return { ok: true, workflow, resolutions } as const;
 });
 
+/** `--decide step=title`, checked against the Workflow rather than taken on trust. */
+type ParsedDecisions =
+  | { ok: true; decisions: Record<string, string> }
+  | { ok: false; error: Failure };
+
+function parseDecide(values: ReadonlyArray<string>, wf: ResolvedWorkflow): ParsedDecisions {
+  const decidable = wf.steps.filter((step) => (step.choices?.length ?? 0) > 0);
+  const decisions: Record<string, string> = {};
+  for (const entry of values) {
+    const at = entry.indexOf("=");
+    if (at <= 0)
+      return { ok: false, error: err("invalid_input", `Decision "${entry}" must be step=title.`) };
+    const id = entry.slice(0, at);
+    const title = entry.slice(at + 1);
+    const step = decidable.find((s) => s.id === id);
+    if (!step) {
+      const known = decidable.map((s) => s.id).join(", ") || "none";
+      return {
+        ok: false,
+        error: err("invalid_input", `"${id}" is not a Choice step of ${wf.name} (has: ${known}).`),
+      };
+    }
+    const titles = [...new Set((step.choices ?? []).map((c) => c.title))];
+    if (!titles.includes(title)) {
+      return {
+        ok: false,
+        error: err(
+          "invalid_input",
+          `"${title}" is not a choice of ${wf.name} step "${id}" (has: ${titles.join(", ")}).`,
+        ),
+      };
+    }
+    decisions[id] = title;
+  }
+  return { ok: true, decisions };
+}
+
+/**
+ * Everything between a prepared Workflow and a Run, for a caller that was given its
+ * answers rather than asking them: the Inputs settled and classified, the decisions
+ * checked against the Workflow's own steps and titles, and one error naming what is
+ * still missing. A typo here would otherwise reach the Run — a `--decide` that
+ * silently degraded to "ask me then" hangs the unattended run the flag exists for,
+ * and a merge-request URL that is not normalised renders `{{target_repo}}` empty.
+ */
+export const settleGiven = Effect.fn("operations.settleGiven")(function* (
+  env: PluginEnv,
+  prepared: { readonly workflow: ResolvedWorkflow; readonly resolutions: Resolution[] },
+  given: {
+    readonly inputs: Record<string, string>;
+    readonly decide: ReadonlyArray<string>;
+  },
+) {
+  const { workflow, resolutions } = prepared;
+  const decisions = parseDecide(given.decide, workflow);
+  if (!decisions.ok) return decisions.error;
+
+  // A previous review named by hand has to exist, and has to have a review in it:
+  // the engine falls back to no previous review when it cannot read one, so a run id
+  // that carries nothing would review against nothing without ever saying so — the
+  // exact failure this input exists to avoid.
+  const previous = given.inputs.previous;
+  if (previous) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const run = yield* new RunStore(env.stateDir)
+      .load(previous)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (!run) return err("invalid_input", `No run "${previous}" to review against.`);
+    const review = path.join(run.dir, REVIEW_FILE);
+    const text = yield* fs.readFileString(review).pipe(Effect.catch(() => Effect.succeed("")));
+    if (text.trim() === "") {
+      return err("invalid_input", `Run "${previous}" wrote no review to review against.`);
+    }
+  }
+
+  for (const item of resolutions) {
+    const value = given.inputs[item.name];
+    if (value === undefined) continue;
+    // A given value owes the prompts its kind, exactly as the picker and a chained Run
+    // record it: the workflow body branches on `<name>_kind`, and an inferred kind left
+    // over from a candidate would describe the value that was not chosen. A diff-target
+    // is normalised as well as classified, or `{{target_repo}}` renders empty.
+    const target =
+      item.strategy === "diff-target" ? yield* classifyGivenTarget(value, { cwd: env.cwd }) : null;
+    const kind =
+      item.strategy === "work-source" ? (yield* classifyWorkSource(value)).kind : target?.kind;
+    settle(item, { value: target?.value ?? value, source: "explicit", kind });
+  }
+
+  // Nobody is here to be asked; an unsettled Input is the caller's to give.
+  const unresolved = resolutions.filter((item) => item.needsAsking || item.candidates);
+  if (unresolved.length > 0) {
+    return err(
+      "needs_input",
+      `${workflow.name} needs input.`,
+      Schema.decodeUnknownSync(YamlMapSchema)({
+        inputs: unresolved.map((item) => ({
+          name: item.name,
+          candidates: item.candidates ?? [],
+          question: item.question,
+        })),
+        schema: workflow.inputs,
+      }),
+    );
+  }
+  return { ok: true, decisions: decisions.decisions } as const;
+});
+
 /** A path value would slug the whole path, so a strategy may offer a short name. */
 function primaryInput(resolutions: Resolution[]): string {
   const first = resolutions.find((r) => r.value !== "");
@@ -255,6 +373,8 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   options: {
     readonly workflow: ResolvedWorkflow;
     readonly resolutions: Resolution[];
+    /** What the human answered at launch for this Workflow's Choice steps. */
+    readonly decisions?: Record<string, string>;
     readonly workspace: WorkspaceInfo | null;
     readonly note?: string;
   },
@@ -269,6 +389,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     workspaceWorktree: workspace?.worktree ?? null,
     inputs: inputValues(resolutions),
     inputSources: inputSources(resolutions),
+    decisions: options.decisions,
     stepIds: workflow.steps.map((step) => step.id),
     maxIterations: workflow.maxIterations,
     primaryInput: primaryInput(resolutions),

@@ -1,6 +1,17 @@
 import { Effect, Option, Schema } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { forkResolvedDefinition } from "../fork";
+import { loadDefaults } from "../config";
+import {
+  resolveWorkflow,
+  skillDirs,
+  validateWorkflow,
+  type ResolvedWorkflow,
+} from "../definitions";
+import { CHAIN_SUPPLIED, ENGINE_SUPPLIED } from "../engine";
+import { KINDED_STRATEGIES } from "../inputs";
+import { reason } from "../naming";
+import { renderTemplate } from "../template";
 import { err } from "../operations";
 import { attempt, mutation } from "../envelope";
 import {
@@ -13,6 +24,11 @@ import {
   root,
   workflowData,
 } from "./shared";
+
+/** The Workflow a `workflow` subcommand acts on. */
+const workflowArg = Argument.string("workflow").pipe(
+  Argument.withDescription("Which Workflow, as `workflow list` names it"),
+);
 
 const workflowList = Command.make("list", {}, () =>
   Effect.gen(function* () {
@@ -38,9 +54,92 @@ const workflowList = Command.make("list", {}, () =>
   }),
 ).pipe(Command.withDescription("List every Workflow, with its Inputs and the Layer it came from"));
 
-const workflowShow = Command.make(
-  "show",
-  { workflow: Argument.string("workflow") },
+/**
+ * Placeholders this workflow can never resolve. The engine already reports these —
+ * into the run log, after the Run has started; rendering each step against the
+ * workflow's own declared inputs says it before anyone waits for an agent.
+ */
+function unresolvable(wf: ResolvedWorkflow): string[] {
+  const inputs: Record<string, string> = {};
+  for (const [name, strategy] of Object.entries(wf.inputs)) {
+    inputs[name] = "";
+    // Only the strategies that carry a kind render a `<name>_kind` companion; adding
+    // one for every Input would pass a placeholder the Run then renders empty.
+    if (KINDED_STRATEGIES.has(strategy)) inputs[`${name}_kind`] = "";
+  }
+  const problems: string[] = [];
+  for (const step of wf.steps) {
+    // A body, where it is, and which engine-supplied families reach it: a step's
+    // prompt is rendered with all of them, a forwarded Choice input with two.
+    const bodies: Array<[string, string, ReadonlySet<string>]> = [
+      [`step "${step.id}"`, `${step.preamble}\n${step.prompt}`, ENGINE_SUPPLIED],
+    ];
+    for (const choice of step.choices ?? []) {
+      for (const round of [choice.round, choice.followUp]) {
+        if (round) {
+          bodies.push([
+            `step "${step.id}" choice "${choice.title}"`,
+            round.prompt,
+            ENGINE_SUPPLIED,
+          ]);
+        }
+      }
+      // What a Choice forwards to the workflow it chains is rendered from the same
+      // variables. A typo there renders empty, is forwarded as a settled value, and
+      // starts the child without the Input it needed — silently.
+      for (const [name, value] of Object.entries(choice.inputs ?? {})) {
+        bodies.push([
+          `step "${step.id}" choice "${choice.title}" input "${name}"`,
+          value,
+          CHAIN_SUPPLIED,
+        ]);
+      }
+    }
+    for (const [where, body, supplied] of bodies) {
+      const missing = renderTemplate(body, { inputs }).missing.filter(
+        (key) => !supplied.has(key.split(".")[0] ?? key),
+      );
+      for (const key of missing) {
+        problems.push(`${where}: {{${key}}} is not an input this workflow takes`);
+      }
+    }
+  }
+  return problems;
+}
+
+/** One workflow as `check` reports it, and what it is wrong about, one per line. */
+type Checked = { name: string; layer: string; problems: string[] };
+
+function checkReport(checked: Checked[], errors: ReadonlyArray<string>): string {
+  const lines = checked.map((item) =>
+    [
+      `${item.name}\t${item.layer}\t${item.problems.length === 0 ? "ok" : `${item.problems.length} problem(s)`}`,
+      ...item.problems.map((problem) => `  ${problem}`),
+    ].join("\n"),
+  );
+  return [...lines, ...errors.map((error) => `  ${error}`)].join("\n");
+}
+
+/**
+ * Whether a load error is about this workflow's own file. A definition that would not
+ * parse is skipped by `loadDefinitions` and shows up only here and in the picker's
+ * banner — and it has no name to match on, because its name is what failed to parse.
+ * The file name is what attributes it, which is what tells an author who broke a
+ * higher layer's `review.md` that `review` is not fine, however well the layer below
+ * checks out.
+ */
+function brokeFile(workflow: string): (error: string) => boolean {
+  return (error) => error.split(":")[0]?.endsWith(`/${workflow}.md`) === true;
+}
+
+const workflowCheck = Command.make(
+  "check",
+  {
+    workflow: Argument.string("workflow").pipe(
+      Argument.withDescription("Check only this Workflow; omit it to check every one"),
+      Argument.optional,
+    ),
+  },
   ({ workflow }) =>
     Effect.gen(function* () {
       const global = yield* root;
@@ -48,21 +147,103 @@ const workflowShow = Command.make(
         Effect.gen(function* () {
           const resolved = yield* discoveryContext(global);
           if (resolved._tag === "ContextFailure") return resolved.result;
-          const wf = (yield* definitions(resolved.env)).workflows.get(workflow);
-          return wf
-            ? {
-                ok: true,
-                data: { workflow: workflowData(wf) },
-                human: [
-                  wf.title,
-                  wf.description,
-                  `Inputs: ${Schema.encodeSync(UnknownJson)(wf.inputs)}`,
-                  "Steps:",
-                  ...wf.steps.map((step) => `  ${step.id}`),
-                  `Defined in: ${wf.path}`,
-                ].join("\n"),
-              }
-            : err("workflow_not_found", `Workflow "${workflow}" was not found.`);
+          const defs = yield* definitions(resolved.env);
+          const defaults = yield* loadDefaults(resolved.env.configDir);
+          const dirs = yield* skillDirs(resolved.env);
+          if (Option.isSome(workflow) && !defs.workflows.has(workflow.value)) {
+            return err("workflow_not_found", `Workflow "${workflow.value}" was not found.`);
+          }
+          const names = Option.isSome(workflow) ? [workflow.value] : [...defs.workflows.keys()];
+
+          const checked: Checked[] = [];
+          for (const name of names.sort()) {
+            const def = defs.workflows.get(name)!;
+            // A workflow that will not resolve — a cycle, an embedded workflow that is
+            // not there — has that as its one problem, and the rest are still checked.
+            const wf = yield* Effect.try(() => resolveWorkflow(name, defs, defaults)).pipe(
+              Effect.catch((cause) => Effect.succeed({ failed: reason(cause) })),
+            );
+            const problems =
+              "failed" in wf
+                ? [wf.failed]
+                : [...(yield* validateWorkflow(wf, defs, defaults, dirs)), ...unresolvable(wf)];
+            checked.push({ name, layer: def.layer, problems });
+          }
+
+          const errors = Option.isSome(workflow)
+            ? defs.errors.filter(brokeFile(workflow.value))
+            : defs.errors;
+          const bad = checked.filter((item) => item.problems.length > 0).length + errors.length;
+          const report = checkReport(checked, errors);
+
+          // The report goes in the message, not only in the details: a failing
+          // envelope prints its message and nothing else for a human, and what is
+          // wrong with which workflow is the whole reason to run this.
+          return bad === 0
+            ? { ok: true, data: { workflows: checked, errors }, human: report }
+            : err("operation_failed", `${bad} workflow(s) are not runnable.\n${report}`, {
+                workflows: checked,
+                errors,
+              });
+        }),
+        global.json,
+      );
+    }),
+).pipe(Command.withDescription("Validate Workflows in every Layer, without starting a Run"));
+
+const workflowShow = Command.make(
+  "show",
+  {
+    workflow: workflowArg,
+  },
+  ({ workflow }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* discoveryContext(global);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          const defs = yield* definitions(resolved.env);
+          if (!defs.workflows.has(workflow)) {
+            return err("workflow_not_found", `Workflow "${workflow}" was not found.`);
+          }
+          // Resolved, not as authored: a Run takes an embedded workflow's inputs and
+          // runs its expanded steps, and `show` is the command you check that with.
+          const defaults = yield* loadDefaults(resolved.env.configDir);
+          const wf = resolveWorkflow(workflow, defs, defaults);
+          const inherited = new Set(wf.embeddedInputs);
+          return {
+            ok: true,
+            data: {
+              workflow: {
+                name: wf.name,
+                title: wf.title,
+                description: wf.description,
+                inputs: wf.inputs,
+                inherited: wf.embeddedInputs,
+                steps: wf.steps.map((step) => step.id),
+                layer: wf.layer,
+                path: wf.path,
+              },
+            },
+            human: [
+              wf.title,
+              wf.description,
+              `Inputs: ${Schema.encodeSync(UnknownJson)(wf.inputs)}`,
+              ...(wf.embeddedInputs.length > 0
+                ? [`Inherited from an embedded workflow: ${[...inherited].join(", ")}`]
+                : []),
+              "Steps:",
+              // A Choice step's titles are what `run start --decide` takes.
+              ...wf.steps.map((step) => {
+                const titles = [...new Set((step.choices ?? []).map((c) => c.title))];
+                return titles.length > 0
+                  ? `  ${step.id} — decide one of: ${titles.join(", ")}`
+                  : `  ${step.id}`;
+              }),
+              `Defined in: ${wf.path}`,
+            ].join("\n"),
+          };
         }),
         global.json,
       );
@@ -72,10 +253,17 @@ const workflowShow = Command.make(
 const workflowFork = Command.make(
   "fork",
   {
-    workflow: Argument.string("workflow"),
+    workflow: workflowArg,
     ...forkFlags,
-    mode: Flag.choice("mode", ["extends", "copy"]),
-    step: Flag.string("step").pipe(Flag.optional),
+    mode: Flag.choice("mode", ["extends", "copy"]).pipe(
+      Flag.withDescription(
+        "`extends` changes only what the fork names; `copy` takes the whole definition",
+      ),
+    ),
+    step: Flag.string("step").pipe(
+      Flag.withDescription("Fork only this Step, leaving the rest following the parent"),
+      Flag.optional,
+    ),
   },
   ({ workflow, layer, mode, name, requestId: request, step }) =>
     Effect.gen(function* () {
@@ -131,5 +319,5 @@ const workflowFork = Command.make(
 
 export const workflow = Command.make("workflow").pipe(
   Command.withDescription("Inspect and fork Workflows"),
-  Command.withSubcommands([workflowList, workflowShow, workflowFork]),
+  Command.withSubcommands([workflowList, workflowShow, workflowCheck, workflowFork]),
 );

@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/unstable/cli";
 import type { PlatformError } from "effect/PlatformError";
 import { layers, loadDefinitions, type PersonaDef, type WorkflowDef } from "../definitions";
 import { readChoice, readProgress } from "../driver";
@@ -241,16 +241,33 @@ export const parseInput = Effect.fn("collie.parseInput")(function* (
   return { ok: true, inputs: parsed };
 });
 
+/** Every mutation takes one, and it means the same thing on all of them. */
+export const requestIdFlag = Flag.string("request-id").pipe(
+  Flag.withDescription("Idempotency key; retrying it returns the first result"),
+  Flag.optional,
+);
+
+/** The Run a `run` subcommand acts on. */
+export const runIdArg = Argument.string("run-id").pipe(
+  Argument.withDescription("The Run's id, as `run list` prints it"),
+);
+
 export const forkFlags = {
-  layer: Flag.choice("layer", ["user", "project"]),
-  name: Flag.string("name"),
-  requestId: Flag.string("request-id").pipe(Flag.optional),
+  layer: Flag.choice("layer", ["user", "project"]).pipe(
+    Flag.withDescription("Which Layer to fork into: your config dir, or this project's `.herdr/`"),
+  ),
+  name: Flag.string("name").pipe(
+    Flag.withDescription("Name the fork takes; it wins over the one it forked from"),
+  ),
+  requestId: requestIdFlag,
 };
 
 export const root = Command.make("collie").pipe(
   Command.withSharedFlags({
     workspace: Flag.string("workspace").pipe(
-      Flag.withDescription("Scope to this herdr workspace id"),
+      Flag.withDescription(
+        "Scope to this herdr workspace id, and root the run at that workspace's directory",
+      ),
       Flag.optional,
     ),
     json: Flag.boolean("json").pipe(

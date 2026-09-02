@@ -13,6 +13,11 @@ import {
   root,
 } from "./shared";
 
+/** The Persona a `persona` subcommand acts on. */
+const personaArg = Argument.string("persona").pipe(
+  Argument.withDescription("Which Persona, as `persona list` names it"),
+);
+
 const personaList = Command.make("list", {}, () =>
   Effect.gen(function* () {
     const global = yield* root;
@@ -37,31 +42,36 @@ const personaList = Command.make("list", {}, () =>
   }),
 ).pipe(Command.withDescription("List every Persona and the Layer it came from"));
 
-const personaShow = Command.make("show", { persona: Argument.string("persona") }, ({ persona }) =>
-  Effect.gen(function* () {
-    const global = yield* root;
-    yield* attempt(
-      Effect.gen(function* () {
-        const resolved = yield* discoveryContext(global);
-        if (resolved._tag === "ContextFailure") return resolved.result;
-        const found = (yield* definitions(resolved.env)).personas.get(persona);
-        return found
-          ? {
-              ok: true,
-              data: { persona: personaData(found) },
-              human: `${found.name}\n${found.description}\n\n${found.body}`,
-            }
-          : err("persona_not_found", `Persona "${persona}" was not found.`);
-      }),
-      global.json,
-    );
-  }),
+const personaShow = Command.make(
+  "show",
+  {
+    persona: personaArg,
+  },
+  ({ persona }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* discoveryContext(global);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          const found = (yield* definitions(resolved.env)).personas.get(persona);
+          return found
+            ? {
+                ok: true,
+                data: { persona: personaData(found) },
+                human: `${found.name}\n${found.description}\n\n${found.body}`,
+              }
+            : err("persona_not_found", `Persona "${persona}" was not found.`);
+        }),
+        global.json,
+      );
+    }),
 ).pipe(Command.withDescription("Show one Persona's instructions and where it is defined"));
 
 const personaFork = Command.make(
   "fork",
   {
-    persona: Argument.string("persona"),
+    persona: personaArg,
     ...forkFlags,
   },
   ({ persona, layer, name, requestId: request }) =>

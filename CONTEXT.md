@@ -46,11 +46,13 @@ plan does not cover. Both Runs record it.
 ## Baseline Workflows
 
 - `plan` — interviews the human, writes `SPEC.md` and one ticket per slice into its Run's plan directory (ADR-0002), then a Choice: implement now, second opinion, offload to Linear, refine.
-- `implement` — build from plan → parallel `review` (multi-harness/model) → fix loop, max 5 → clean review on a committed branch → `mr`, which pushes and opens the merge request. That last step is skipped where there is no GitLab to open one on.
+- `implement` — build from plan → parallel `review` (multi-harness/model) → fix loop, max 5 → clean review on a committed branch → `mr`, which is the only step that opens or updates the merge request. Every step that commits pushes what it committed, so the reviewers read the change rather than the state before it. That last step is skipped where there is no GitLab to open one on.
 - `review` — standalone; you pick the target; parallel reviewers, then one Synthesis; posting it to the merge request is a Choice.
 - `architecture` — runs the architect over the project, reports into its Run's plan directory, then a Choice: implement now or stop.
 
-**Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice chains to another Workflow (`run`), prompts a named agent (`prompt`), posts the run's review to the merge request it reviewed (`post`), or just ends the Step (`stop`).
+**Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice chains to another Workflow (`run`), prompts a named agent (`prompt`), posts the run's review to the merge request it reviewed (`post`), or just ends the Step (`stop`). A Choice with one thing left to offer is taken rather than asked.
+
+**Decision** — An answer given at launch to a Choice step the Run has not reached yet, kept in the Run record by step id (the picker asks each one after the Inputs; `run start --decide <step>=<title>` on the command line). Taken only if that choice is still available when the step is reached; otherwise the Run asks, and says why. Titles name decisions, so two choices that can never both be offered — a hand-off and its stand-alone twin — may share one.
 
 **Chain** — Starting a Workflow from a Choice, with Inputs forwarded. The new Run is a child of the current one.
 
@@ -62,7 +64,12 @@ plan does not cover. Both Runs record it.
 the only pane Collie keeps open: live agents, active Runs with their step and last
 line, this Session's finished Runs, quick actions, and any question a Run is waiting on,
 rendered under that Run. It is a view over the run dirs and the register, always the
-workspace's first tab, and holds no state of its own.
+workspace's first tab, and holds no state of its own. Behind it the strip reads `plan`,
+`implement`, `review`, then anything else in start order: Collie places each tab by its
+Run's workflow when it creates it, and never moves a tab it does not own or one a human
+has since dragged.
+
+**Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all: a question, a decision that turned out to be unavailable, an ending, a step that went quiet, an Output that could not be repaired, a merge request opened. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
 
 **Driver** — The process that executes a Run. It has no pane: it is detached from whatever
 started it, writes its progress and any failure into the Run directory, and asks its

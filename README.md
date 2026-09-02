@@ -53,8 +53,10 @@ The same operations are available without opening UI:
 ```sh
 collie workflow list
 collie workflow show plan
+collie workflow check
 collie persona list
 collie --workspace <id> run start plan --input goal="ship it"
+collie run start review --input target=worktree --decide post="Fix findings"
 collie run list
 collie run show <run-id>
 collie run wait <run-id> --follow
@@ -65,6 +67,21 @@ collie run resume <run-id>
 
 Put `--workspace <id>` and `--json` before the command. Mutations accept
 `--request-id`; retrying it returns the original result without repeating the effect.
+
+`collie workflow check [<workflow>]` validates every Layer's definitions without
+starting a Run — unknown models, missing personas and skills, malformed choices, and
+placeholders no declared input can fill — and exits non-zero when anything is wrong, so
+it fits a pre-commit hook. `collie workflow show` prints the _resolved_ workflow: the
+inputs and steps a Run actually gets, including those inherited from an embedded
+workflow.
+
+`--decide <step>=<title>` answers a Choice step now instead of stopping there, so a run
+can be left alone; `collie workflow show <name>` lists each Choice step's titles. An
+unknown step or title is refused before the Run is created.
+
+A run is rooted at the directory collie is standing in. To run against another
+repository, `cd` there, set `COLLIE_CWD=<path>`, or pass `--workspace <id>`, which
+re-roots the run at that workspace's directory as well as scoping to it.
 
 ## Using it
 
@@ -233,6 +250,8 @@ the picker marks it `(stale — the original has changed since this copy)`.
   "effort": "high",
   "max_iterations": 5,
   "handoff_timeout_ms": 7200000,
+  "quiet_ms": 600000,
+  "notifications": { "run-done": false },
   "models": { "opencode": ["mycorp/local-model"] },
   "trust": "ask"
 }
@@ -244,23 +263,46 @@ and Collie always passes it with `--model` unless a Step or user config selects 
 `model: "default"` uses the harness adapter's pinned default; adapters without one keep
 their native default. `effort` is optional — leave it out and each
 harness uses its own default. An unknown harness, model or effort fails validation
-before a single tab opens. `trust` is what a run does
+before a single tab opens. `notifications` turns a kind of toast off — the kinds are `needs-you`,
+`decision-lost`, `run-done`, `run-stuck`, `run-failed`, `step-stuck`,
+`output-unusable` and `mr-opened`, all on by default. Every title carries the repo and
+the run, `request` is only ever used where a human has to act, and the same question at
+the same step is announced once, even after a Driver restart.
+
+`quiet_ms` is how long a step's agent may produce nothing — no status change, no new
+output in its pane — before it is nudged to unstick itself; it is nudged once more at
+double that and given up on at triple, as blocked, with the pane left alone. Quiet is
+the signal, never duration: a step that is still printing is never nudged, however long
+it runs. `0` waits for as long as it takes. `trust` is what a run does
 about a directory the harness has not been trusted with: see "The first run in a repo".
 
 ## Skills
 
-Workflows and personas name the skills they drive, and the harness decides how to ask:
+Workflows and personas name the skills they drive, and there are two ways to refer to
+one — the difference matters, because conflating them was silently costing every review
+its axes.
 
-| Harness             | `{{skill:code-review}}` renders as                                                            |
-| ------------------- | --------------------------------------------------------------------------------------------- |
-| `claude`            | `/code-review`                                                                                |
-| `pi`                | `/skill:code-review`                                                                          |
-| `codex`, `opencode` | `the "code-review" skill` — they surface skills by description, so a slash would just be text |
+**A mention** is what an agent reads. `{{skill:code-review}}` in a prompt or a persona
+renders the skill's name and the file to read, identically for every harness:
+
+```
+the `code-review` skill (read `/home/you/.agents/skills/code-review/SKILL.md` and follow it)
+```
+
+A path is a path — nothing expands a slash command inside a file a model is handed, so
+a mention is never harness-specific. A skill that is not installed says so in the same
+place, `(not installed here)`, which is what a persona's fallback is for.
+
+**A command** is what the human channel types to _start_ a skill, and that is
+harness-specific: `/code-review` for `claude`, `/skill:code-review` for `pi`, and
+`the "code-review" skill` for `codex` and `opencode`, which surface skills by
+description. A Step's `skill:` key is sent that way, which is the only way to run a
+skill that refuses to be started by the model itself.
 
 The skills themselves are shared: one set in `~/.agents/skills`, installed by `skills.sh`
 (`npx skills add <name>`), and every harness reads the same files. So a definition never
-spells a slash command — write `{{skill:name}}` and the same body works on every harness,
-including the `skill:` key a step uses to drive one.
+spells either form — write `{{skill:name}}` in a body, or name it in a step's `skill:`,
+and the same definition works on every harness.
 
 They are a **prerequisite, like the harness binary**. A workflow that names a skill you have
 not installed fails validation before a tab opens, naming the skill and the command that
@@ -301,7 +343,7 @@ name: implement
 title: implement — build from a plan, review in parallel, fix until clean
 description: One line for the picker.
 inputs:
-  plan: work-source # goal | plan-dir | work-source | diff-target | ticket | flag
+  plan: work-source # goal | plan-dir | work-source | diff-target | ticket | flag | optional
 max_iterations: 5
 steps:
   - id: build

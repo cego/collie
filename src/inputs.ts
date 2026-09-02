@@ -1,12 +1,14 @@
 // Input inference: branch, cwd, earlier Runs and the open MR. The human is asked
 // only when inference fails (CONTEXT.md, Input).
 
-import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { InputStrategy } from "./definitions";
 import type { PickItem } from "./picker";
 import { RunStore } from "./run";
+import { targetLabel } from "./naming";
+import { ago } from "./time";
 import { type Runner, mrTarget, parseMrTarget, projectHere, shell as shellRun } from "./mr";
 
 const JsonId = Schema.Union([Schema.String, Schema.Number]);
@@ -55,6 +57,8 @@ export interface InputPrompts<E = never, R = never> {
 
 /** More than this and the oldest plans would bury the branch's own ticket. */
 const PLAN_DIR_CANDIDATES = 3;
+// Beyond five, the remembered targets bury the branch's own MR, which is the common case.
+const REVIEWED_TARGETS = 5;
 const WORK_SOURCE_QUESTION = "What should be built?";
 const TARGET_QUESTION = "Review what?";
 const TYPE_IT = "type";
@@ -168,6 +172,11 @@ export function inferInput(
 
       case "flag":
         return { ...base, value: "false", source: "default" };
+
+      // Declared so the placeholder resolves, empty until a workflow embedding this
+      // one passes a value of its own. Never asked for.
+      case "optional":
+        return { ...base, value: "", source: "default" };
       default:
         return { ...base, value: "", source: "ask", needsAsking: true };
     }
@@ -245,9 +254,8 @@ export function planDirs(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const found: WorkSourceCandidate[] = [];
-    for (const run of yield* new RunStore(stateDir).list()) {
+    for (const run of yield* new RunStore(stateDir).finished(cwd)) {
       if (found.length >= limit) break;
-      if (run.record.cwd !== cwd || run.record.status !== "done") continue;
       const dir = path.join(run.dir, "plan");
       if (!(yield* fs.exists(path.join(dir, "SPEC.md")))) continue;
       const prefix = `${run.record.workflow}-`;
@@ -257,6 +265,41 @@ export function planDirs(
         value: dir,
         source: `plan run ${run.id}`,
         label: slug.startsWith(prefix) ? slug.slice(prefix.length) : slug,
+      });
+    }
+    return found;
+  });
+}
+
+/**
+ * Targets this repo's finished Runs have reviewed, newest first, deduplicated.
+ * Reviewing is a rally, and the second review should not need the link pasted again.
+ */
+export function reviewedTargets(
+  stateDir: string,
+  cwd: string,
+  limit: number,
+): Effect.Effect<Candidate[], PlatformError, FileSystem.FileSystem | Path.Path> {
+  return Effect.gen(function* () {
+    const now = yield* Clock.currentTimeMillis;
+    const found: Candidate[] = [];
+    const seen = new Set<string>();
+    for (const run of yield* new RunStore(stateDir).finished(cwd)) {
+      if (found.length >= limit) break;
+      const target = run.record.inputs.target;
+      if (!target) continue;
+      if (seen.has(target)) continue;
+      seen.add(target);
+      // What came of it, from the record alone: the menu must not read N files.
+      const open = run.record.outstanding.length;
+      const when = ago(run.record.finished_at ?? run.record.created_at, now);
+      found.push({
+        kind: targetKind(target),
+        value: target,
+        source: open > 0 ? `reviewed ${when} · ${open} finding(s) open` : `reviewed ${when}`,
+        label:
+          run.record.target_label ??
+          targetLabel(run.record.workflow, run.record.slug, run.record.inputs),
       });
     }
     return found;
@@ -343,6 +386,14 @@ export function targetCandidates(
         });
       }
     }
+    // After inference, so "launch and take the default" is unchanged: what this repo
+    // has reviewed before, for the second review of the same thing.
+    if (ctx.stateDir) {
+      const offered = new Set(out.map((c) => c.value));
+      for (const remembered of yield* reviewedTargets(ctx.stateDir, ctx.cwd, REVIEWED_TARGETS)) {
+        if (!offered.has(remembered.value)) out.push(remembered);
+      }
+    }
     return out;
   });
 }
@@ -415,6 +466,34 @@ export function classifyTarget(
 
   if (!baseRef) return null;
   return { kind: "branch", value: `branch:${baseRef}...${text}`, source, label: text };
+}
+
+/**
+ * A `diff-target` given on the command line gets the same normalisation a typed one
+ * gets from the menu, so a pasted merge-request URL becomes `mr:<project>!<iid>`
+ * rather than falling through to `worktree` on its shape alone.
+ */
+export function classifyGivenTarget(
+  typed: string,
+  ctx: InferContext,
+): Effect.Effect<Candidate, never, ChildProcessSpawner.ChildProcessSpawner> {
+  return Effect.gen(function* () {
+    // An already-normalised target — from a chained Run, a resume, or a careful
+    // human — is passed through: classifying it again would nest its prefix.
+    if (/^(mr:|branch:|worktree$)/.test(typed.trim())) {
+      return { kind: targetKind(typed.trim()), value: typed.trim(), source: "typed" };
+    }
+    const run = ctx.run ?? shell;
+    const baseRef = (yield* defaultBase(run, ctx.cwd)) ?? "";
+    const project = yield* projectHere(ctx.cwd, run);
+    return (
+      classifyTarget(typed, baseRef, project) ?? {
+        kind: targetKind(typed),
+        value: typed,
+        source: "typed",
+      }
+    );
+  });
 }
 
 /** A target's kind is its value's shape; both the picker and a resume read it back. */
@@ -584,6 +663,14 @@ function textLabel(text: string): string {
 }
 
 /** Inputs as the prompts see them: a work-source also exposes `<name>_kind`. */
+/**
+ * The strategies whose values carry a kind, and so render a `<name>_kind` companion
+ * beside the Input itself. Named here because `inputValues` below is what puts them
+ * in a Run's inputs: a checker that renders a workflow ahead of a Run reads this to
+ * know which `_kind` placeholders can ever be filled.
+ */
+export const KINDED_STRATEGIES: ReadonlySet<string> = new Set(["work-source", "diff-target"]);
+
 export function inputValues(resolutions: Resolution[]) {
   const values: Record<string, string> = {};
   for (const r of resolutions) {

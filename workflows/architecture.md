@@ -24,7 +24,7 @@ Report: {{run.dir}}/plan/ARCHITECTURE.md
 
 ## attended
 
-This prompt arrives as `{{skill:improve-codebase-architecture}}`, over `{{cwd}}`, with the real
+You were started with {{skill:improve-codebase-architecture}}, over `{{cwd}}`, with the real
 grill: ask me about the parts you cannot judge from the code, one question at a time, and
 rate every candidate by the deletion test.
 
@@ -45,7 +45,7 @@ Nobody is watching this step. Do not ask questions and do not wait.
 Scope: only the area this run has changed — `git diff` against the branch point, plus
 the files that change with it. Leave the rest of the project alone.
 
-This prompt arrives as `{{skill:improve-codebase-architecture}}`, scoped to that. Apply `Strong`
+You were started with {{skill:improve-codebase-architecture}}, scoped to that. Apply `Strong`
 candidates only,
 largest first, then re-scan and go again; at most two passes. Behaviour stays identical
 and the project's tests stay green — say what you ran. Never open a browser.

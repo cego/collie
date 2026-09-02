@@ -174,3 +174,36 @@ export function paneLabel(
 export function evenRatio(index: number, count: number): number {
   return 1 / (count - index + 1);
 }
+
+/** Tab order: the Session's board, then these, then anything else in start order. */
+export const WORKFLOW_ORDER = ["plan", "implement", "review"] as const;
+
+/** Lower sorts first. An unknown workflow ranks after every known one. */
+export function rankOf(workflow: string): number {
+  const at = WORKFLOW_ORDER.findIndex((known) => known === workflow);
+  return at === -1 ? WORKFLOW_ORDER.length : at;
+}
+
+/** One tab of the workspace, as the placement rule sees it. */
+export interface RankedTab {
+  /** The rank of the Run that owns this tab, or null for a tab Collie does not own. */
+  rank: number | null;
+  /** The Session's board, which is pinned first. */
+  board: boolean;
+}
+
+/**
+ * Where a new tab of this rank belongs: after the last tab Collie owns whose rank is
+ * no greater, and otherwise directly after the board. One insertion, so every tab
+ * Collie does not own keeps its place and its order relative to the others — and ties
+ * fall after what is already there, which is start order.
+ */
+export function insertIndexFor(tabs: ReadonlyArray<RankedTab>, rank: number): number {
+  let after = -1;
+  for (const [at, tab] of tabs.entries()) {
+    // The board is read from the list rather than assumed to be index 0: its pin can
+    // fail, and the run carries on when it does.
+    if (tab.board || (tab.rank !== null && tab.rank <= rank)) after = at;
+  }
+  return after + 1;
+}

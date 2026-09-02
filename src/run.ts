@@ -26,6 +26,10 @@ const VariantRecordSchema = Schema.Struct({
   status: StepStatusSchema,
   output: Schema.NullOr(Schema.String),
   error: Schema.NullOr(Schema.String),
+  /** Outputs this agent was asked to write again, and why. One per iteration. */
+  repairs: optionalList(Schema.String),
+  /** How many times this agent was nudged for going quiet. */
+  nudges: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
 }).mapFields(Struct.map(Schema.mutableKey));
 
 const HandoffRecordSchema = Schema.Struct({
@@ -86,6 +90,10 @@ const RunSchema = Schema.Struct({
   parent: Schema.NullOr(Schema.String),
   children: optionalList(Schema.String),
   choices: optionalList(ChoiceRecordSchema),
+  /** Answers given at launch, by Choice step id. A step with no entry asks. */
+  decisions: Schema.Record(Schema.String, Schema.String.pipe(Schema.mutableKey)).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed({})),
+  ),
   awaiting: Schema.NullOr(Schema.String),
   handoffs: optionalList(HandoffRecordSchema),
   disputed: optionalList(FindingSchema),
@@ -93,6 +101,17 @@ const RunSchema = Schema.Struct({
   outstanding: optionalList(FindingSchema),
   target_label: Schema.NullOr(Schema.String),
   synthesis: Schema.NullOr(Schema.String),
+  /** `<kind>:<step>` for every notification already raised, so a resumed Driver
+   * does not announce what the last one already did. */
+  notified: optionalList(Schema.String),
+  /** The branch a step committed to and did not push, so the Run can say so. */
+  unpushed: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /** How many of the previous review's findings this one found fixed. */
+  fixed: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
+  /** The finished Run whose review this one was given, when it is a second look. */
+  previous_review: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
   mr_url: Schema.NullOr(Schema.String),
   linear_issues: optionalList(Schema.String),
   summary: Schema.NullOr(Schema.String),
@@ -252,6 +271,8 @@ export interface CreateRunOptions {
   cwd: string;
   inputs: Record<string, string>;
   inputSources: Record<string, string>;
+  /** What the human answered at launch for the Choice steps this Run will reach. */
+  decisions?: Record<string, string>;
   stepIds: string[];
   maxIterations: number;
   primaryInput: string;
@@ -335,6 +356,7 @@ export class RunStore {
         parent: opts.parent ?? null,
         children: [],
         choices: [],
+        decisions: opts.decisions ?? {},
         awaiting: null,
         handoffs: [],
         disputed: [],
@@ -342,6 +364,10 @@ export class RunStore {
         outstanding: [],
         target_label: null,
         synthesis: null,
+        unpushed: null,
+        fixed: 0,
+        notified: [],
+        previous_review: null,
         mr_url: null,
         linear_issues: [],
         summary: null,
@@ -378,6 +404,12 @@ export class RunStore {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const root = yield* rootEffect;
+      // A Run id is a directory name under `runs/`, and ids reach here from a command
+      // line and from Inputs. Guarding at the store rather than at each caller is what
+      // makes a `../` id impossible to read a run.json — or a review.md beside it —
+      // from outside the state dir.
+      const unsafe = unsafePathComponent(id);
+      if (unsafe) return yield* Effect.fail(new Error(`run id "${id}" ${unsafe}`));
       const dir = path.join(root, id);
       const file = path.join(dir, RUN_FILE);
       if (!(yield* fs.exists(file)))
@@ -403,6 +435,36 @@ export class RunStore {
       }
       return runs.sort((a, b) => b.record.created_at.localeCompare(a.record.created_at));
     }).pipe(Effect.withSpan("RunStore.list"));
+  }
+
+  /**
+   * This repo's finished Runs, newest first — what every "has this been done here
+   * before?" question reads: an earlier plan to build from, a target already
+   * reviewed, the review to compare a second one against. What counts as finished,
+   * and as this repo, is decided once, here.
+   */
+  finished(cwd: string) {
+    const list = this.list();
+    return Effect.gen(function* () {
+      return (yield* list).filter((run) => run.record.cwd === cwd && run.record.status === "done");
+    }).pipe(Effect.withSpan("RunStore.finished"));
+  }
+
+  /**
+   * The newest finished Run of this repo that reviewed this exact target and wrote a
+   * review. `before` is the asking Run's own id, so a Run never finds itself.
+   */
+  previousReview(cwd: string, target: string, before?: string) {
+    const finished = this.finished(cwd);
+    return Effect.gen(function* () {
+      if (target === "") return null;
+      for (const run of yield* finished) {
+        if (run.id === before) continue;
+        if (run.record.inputs.target !== target || !run.record.synthesis) continue;
+        return run;
+      }
+      return null;
+    }).pipe(Effect.withSpan("RunStore.previousReview"));
   }
 
   resumable() {

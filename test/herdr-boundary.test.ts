@@ -170,3 +170,17 @@ test("workspace replies may omit a working directory", () =>
       ]);
     }),
   ));
+
+test("a pane tail comes back as text even when the pane is showing JSON", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_PANE_TEXT: "plain output" }));
+      expect(yield* herdr.paneRead("1-1")).toContain("plain output");
+
+      // A pane showing this plugin's own output starts with `{`, which the CLI
+      // boundary parses as a reply. Liveness only needs a sample of what the pane
+      // holds, and losing the tail there would leave an agent judged on its status.
+      const json = new Herdr(rig.pluginEnv({ FAKE_HERDR_PANE_TEXT: `{"ok":true}` }));
+      expect(yield* json.paneRead("1-1")).toContain("ok");
+    }),
+  ));

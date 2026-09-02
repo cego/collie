@@ -130,6 +130,9 @@ function recentDetail(record: RunRecord, abandoned: boolean): string {
   // Why it stopped, which used to be in the runner pane and is now only in the log.
   const note = record.steps.filter((s) => s.note && s.status !== "done").at(-1)?.note;
   if (note && record.status !== "done") parts.push(note);
+  // A round that had to be rescued is not the same as one that went cleanly.
+  const repairs = record.steps.flatMap((s) => s.variants).flatMap((v) => v.repairs).length;
+  if (repairs > 0) parts.push(`${repairs} Output(s) rewritten`);
   if (record.mr_url) parts.push(record.mr_url);
   return parts.join(" · ");
 }

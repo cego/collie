@@ -1,9 +1,13 @@
 ---
 name: review
 title: review — an MR, a branch diff, or the working tree
-description: You pick the target — an MR, a branch diff or the working tree — two models review it, one review comes out, and posting it to the merge request is your call.
+description: You pick the target — an MR, a branch diff or the working tree — two models review it, one review comes out, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to the merge request.
 inputs:
   target: diff-target
+  # Empty unless a workflow embedding this one has a spec to hold the change to.
+  plan: optional
+  # A run id, when you want a particular earlier review as the one to compare against.
+  previous: optional
 steps:
   - id: review
     persona: reviewer
@@ -18,12 +22,19 @@ steps:
   - id: post
     standalone: true
     choices:
-      # One implementer per workspace: the first of these two is offered, never both.
-      - title: Send to implementer
+      # One decision, two implementations: exactly one of these is ever offered, so
+      # "Fix findings" means the same thing whether or not an implementer is live.
+      - title: Fix findings
         handoff: implementer
       - title: Fix findings
-        run: implement
         unless: implementer
+        prompt: fix
+        persona: implementer
+        fresh: true
+        output: fix.json
+        max: 1
+      - title: Fix findings in a full implement run
+        run: implement
         inputs:
           plan: "{{run.dir}}"
           target: "{{inputs.target}}"
@@ -55,6 +66,14 @@ spec axis says exactly that.
 
 ## review
 
+{{previous.review}}
+
+Where a review of this target appears above, your job is not to write it again. Check
+each of its findings against the code as it is now and say what happened to it — still
+there, changed but not fixed, or fixed. Then review what has changed since, and raise
+what is new. A finding you carry forward is the same finding: keep its words unless the
+code moved under it.
+
 Review against the project's own standards too — `CLAUDE.md`, `CONTEXT.md`, `README.md`
 and the code around the change.
 
@@ -79,6 +98,12 @@ their own review of this change:
 Read all of them, then read the target yourself, and write the one review this change
 gets — the review a careful colleague would leave on it.
 
+{{previous.review}}
+
+Where a review of this target appears above, every finding it raised is accounted for:
+carried with its own words if it is still there, or listed under `fixed` if it is not.
+The human is watching a rally, not a new list every time.
+
 - One entry per problem. Where two reviewers found the same thing, say it once, in
   whichever of their words is clearer.
 - Where they disagree, settle it against the diff. A finding only one of them raised
@@ -98,4 +123,33 @@ Then write the Output JSON: `{"verdict": "clean" | "findings", "summary": "two
 sentences", "findings": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
 "title": "one line", "detail": "what goes wrong and what it costs", "rebuttal": "kept
 from the reviewer that wrote it"}], "dropped": [{"file": "path", "severity": "minor",
-"title": "what one reviewer raised", "reason": "why it did not survive"}]}`.
+"title": "what one reviewer raised", "reason": "why it did not survive"}],
+"fixed": [{"file": "path", "title": "what the last review raised", "note": "how it was
+fixed"}]}`.
+
+## fix
+
+The review is written and you are fixing it, in this run, on this target. The findings
+are `{{run.dir}}/review.md`, and the same findings as JSON are at
+`{{run.dir}}/steps/synthesize/synthesized.json`. Worst severity first.
+
+Work where the review was pointed — `target_kind` is `{{inputs.target_kind}}`:
+
+- `branch` — check out its head.
+- `mr` — `glab mr checkout <iid> {{target_repo}}`, so the fixes land on that merge
+  request's own branch.
+- `worktree` — stay on the branch you are on.
+
+Apply the findings you agree with and commit them. A finding you believe is wrong is not
+silently skipped: record it under `disputed` with your reason, and the human sees it. Run
+the project's tests and say what you ran.
+
+**Do not push, do not open or update a merge request, and do not comment anywhere.**
+Someone asked for the findings fixed, not for the change shipped — and this is usually
+someone else's branch. Report `"pushed": false` and the `branch` your commits are on, so
+a local-only result is never mistaken for a landed one.
+
+Then write the Output JSON: `{"verdict": "clean", "findings": [], "fixed": ["what you
+changed", ...], "disputed": [{"file": "path", "severity": "minor", "title": "the
+finding", "detail": "why I disagree"}], "commits": ["<subject>", ...], "branch":
+"<branch>", "pushed": false, "tests": "what you ran and what it said"}`.

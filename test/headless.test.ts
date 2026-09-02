@@ -256,6 +256,27 @@ effectTest("a Choice asked through the run dir is answered through it", function
   expect(yield* fs.exists(path.join(run.dir, CHOICE_ANSWER))).toBe(false);
 });
 
+effectTest("a decided run finishes headless, asking nobody anything", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+
+  const { run, status } = yield* runWorkflow(
+    rig,
+    "choose",
+    { goal: "g" },
+    {
+      decisions: { next: "Carry on" },
+      promptsFor: (r) =>
+        filePrompts({ dir: r.dir, run: r.id, step: () => "next", timeoutMs: 150, pollMs: 25 }),
+    },
+  );
+
+  expect(status).toBe("done");
+  expect(run.record.choices.map((c) => c.title)).toEqual(["Carry on"]);
+  // Nothing was ever asked, so no question was written for anyone to answer.
+  expect(yield* fs.exists(path.join(run.dir, CHOICE))).toBe(false);
+});
+
 effectTest(
   "a question nobody answers leaves the step unfinished, not the run wedged",
   function* () {
@@ -490,7 +511,7 @@ effectTest(
     expect(row.detail).toContain("no such agent");
     // And a toast said so at the time.
     const toast = (yield* rig.calls()).filter((c) => c.cmd === "notification show").at(-1)?.argv;
-    expect(toast?.[2]).toBe(`${run.record.slug} failed`);
+    expect(toast?.[2]).toBe(`project · ${run.record.slug} failed`);
 
     // `l` puts the detail in a pane of its own, split off the board's.
     const before = (yield* rig.calls()).length;

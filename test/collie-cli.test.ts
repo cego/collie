@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
+import { installFakeSkills } from "./support/defs";
 
 const root = new URL("../", import.meta.url).pathname;
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
@@ -26,6 +27,7 @@ const cli = Effect.fn("test.cli")(function* (
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectory({ prefix: "collie-cli-" });
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
+  yield* installFakeSkills(dir);
   const proc = Bun.spawn([Bun.argv[0] ?? "bun", join(root, "src/main.ts"), ...args], {
     cwd: root,
     env: {
@@ -179,5 +181,195 @@ test("discovery is global when an inherited workspace id no longer resolves", ()
         error: { code: "workspace_not_found" },
       });
       expect(named.exit).toBe(1);
+    }),
+  ));
+
+test("--decide is validated against the workflow before any run exists", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A typo that degraded to "ask me then" would hang the unattended run this
+      // flag exists to make possible, so both halves are checked up front.
+      const step = yield* cli([
+        "--json",
+        "run",
+        "start",
+        "review",
+        "--input",
+        "target=worktree",
+        "--decide",
+        "nope=Don't post",
+      ]);
+      expect(yield* parseEnvelope(step.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input", message: expect.stringContaining("post") },
+      });
+
+      const title = yield* cli([
+        "--json",
+        "run",
+        "start",
+        "review",
+        "--input",
+        "target=worktree",
+        "--decide",
+        "post=Ship it",
+      ]);
+      expect(yield* parseEnvelope(title.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input", message: expect.stringContaining("Don't post") },
+      });
+
+      // And the titles are discoverable without reading the markdown.
+      const shown = yield* cli(["workflow", "show", "review"]);
+      expect(shown.stdout).toContain("post — decide one of: Fix findings");
+    }),
+  ));
+
+test("a previous review named by hand has to exist", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const unknown = yield* cli([
+        "--json",
+        "run",
+        "start",
+        "review",
+        "--input",
+        "target=worktree",
+        "--input",
+        "previous=review-nope-20260101-000000",
+      ]);
+      expect(yield* parseEnvelope(unknown.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input", message: expect.stringContaining("review-nope") },
+      });
+    }),
+  ));
+
+test("workflow check validates every layer without starting a run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      // The project layer is `<cwd>/.herdr`, and a checkout's own is a human's forked
+      // workflows — never test data. This one is a scratch directory the run is
+      // rooted at with COLLIE_CWD, so nothing outside it is written or removed.
+      const cwd = yield* fs.makeTempDirectory({ prefix: "collie-project-" });
+      const scratch = { COLLIE_CWD: cwd };
+
+      // The baseline is the acceptance test for the rule set: it must come out clean.
+      const clean = yield* cli(["workflow", "check"], scratch);
+      expect(clean.exit).toBe(0);
+      expect(clean.stdout).toContain("implement\tbaseline\tok");
+      expect(clean.stdout).toContain("review\tbaseline\tok");
+
+      const project = join(cwd, ".herdr", "workflows");
+      yield* fs.makeDirectory(project, { recursive: true });
+      yield* fs.writeFileString(
+        join(project, "broken.md"),
+        `---
+name: broken
+inputs:
+  goal: goal
+steps:
+  - id: one
+    persona: planner
+    model: opus-9
+    output: one.json
+---
+{{inputs.goal}} and {{inputs.nope}} and {{inputs.goal_kind}} and {{findings}} and {{skill:tdd}}
+`,
+      );
+      yield* fs.writeFileString(join(project, "unparseable.md"), "no frontmatter here\n");
+      // A Choice round drives a skill the same way a step does, and what a Choice
+      // forwards to the workflow it chains is rendered from the same variables.
+      yield* fs.writeFileString(
+        join(project, "chains.md"),
+        `---
+name: chains
+inputs:
+  goal: goal
+steps:
+  - id: next
+    choices:
+      - title: Grill it
+        prompt: grill
+        persona: planner
+        skill: not-a-real-skill
+        output: grill.json
+      - title: Build it
+        run: implement
+        inputs:
+          plan: "{{inputs.plna}}"
+          target: "{{outputs.next.summary}}"
+---
+Goal: {{inputs.goal}}
+
+## grill
+Grill me.
+`,
+      );
+
+      const bad = yield* cli(["--json", "workflow", "check"], scratch);
+      const envelope = yield* parseEnvelope(bad.stdout);
+
+      expect(bad.exit).not.toBe(0);
+      const problems = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
+        envelope.error?.details ?? {},
+      );
+      expect(problems).toContain("opus-9");
+      // A placeholder no input can fill is reported; the ones the engine supplies at
+      // step time are not.
+      expect(problems).toContain("inputs.nope");
+      // A `goal` never carries a kind, so `goal_kind` is a placeholder the Run cannot
+      // fill either — only a work-source and a diff-target render one.
+      expect(problems).toContain("inputs.goal_kind");
+      // A round's `skill:` is a prerequisite like a step's...
+      expect(problems).toContain("not-a-real-skill");
+      // ...and a typo in what a Choice forwards would otherwise render empty, be
+      // treated as settled, and start the child without the Input it needed.
+      expect(problems).toContain("inputs.plna");
+      // A forwarded input is rendered with `run`, `inputs` and `cwd` and nothing
+      // else, so a family a step's prompt may name is still unresolvable here.
+      expect(problems).toContain("outputs.next.summary");
+      expect(problems).not.toContain("findings");
+      expect(problems).not.toContain("skill:tdd");
+      // A file with nothing in it is reported rather than silently skipped by the
+      // loader, the way the picker's banner used to be the only place it showed.
+      expect(problems).toContain('"name":"unparseable"');
+      expect(problems).toContain("has no steps");
+      // And the workflows that are fine are still listed.
+      expect(problems).toContain('"name":"plan","layer":"baseline","problems":[]');
+
+      // Asked about one workflow, a broken file elsewhere is not its problem — the
+      // targeted check has to stay usable while another definition is being edited.
+      const named = yield* cli(["workflow", "check", "review"], scratch);
+      expect(named.exit).toBe(0);
+      expect(named.stdout).toContain("review\tbaseline\tok");
+      expect(named.stdout).not.toContain("broken");
+
+      // Its own broken file is its problem, though: a project-layer `review.md` that
+      // will not parse leaves the baseline answering for `review`, and an author who
+      // just broke it must not be told their workflow is fine.
+      yield* fs.writeFileString(join(project, "review.md"), "---\nname: [unclosed\n---\nbody\n");
+      const shadowed = yield* cli(["workflow", "check", "review"], scratch);
+      expect(shadowed.exit).not.toBe(0);
+      expect(shadowed.stdout).toContain("review.md");
+
+      yield* fs.remove(cwd, { recursive: true, force: true });
+    }),
+  ));
+
+test("workflow show prints what a run actually gets, not what was authored", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const shown = yield* cli(["workflow", "show", "implement"]);
+
+      expect(shown.exit).toBe(0);
+      // `target` reaches implement only through the embedded review; a run takes it,
+      // and this is the command an author checks that with.
+      expect(shown.stdout).toContain('"target":"diff-target"');
+      expect(shown.stdout).toContain("Inherited from an embedded workflow: target");
+      expect(shown.stdout).toContain("review.synthesize");
+      const steps = shown.stdout.split("Steps:")[1]!.split("Defined in:")[0]!.trim().split("\n");
+      expect(steps).toHaveLength(7);
     }),
   ));

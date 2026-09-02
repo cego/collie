@@ -119,10 +119,12 @@ test(
 
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
+        // A mention names the skill and the file to read; the slash form is only
+        // what the human channel types to start one.
         for (const [step, mentions] of [
-          ["grill", "/grill-with-docs"],
-          ["spec", "/to-spec"],
-          ["tickets", "/to-tickets"],
+          ["grill", "the `grill-with-docs` skill"],
+          ["spec", "the `to-spec` skill"],
+          ["tickets", "the `to-tickets` skill"],
         ] as const) {
           const prompt = yield* fs.readFileString(path.join(run.dir, "steps", step, "prompt-1.md"));
           expect(prompt).toContain(mentions);

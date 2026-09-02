@@ -529,8 +529,9 @@ test("review standalone is the same two variants, and says so when it has no spe
       expect(prompt).toContain("Review target: worktree");
       expect(prompt).toContain("Spec: \n");
       expect(prompt).toContain("there is no spec");
-      expect(yield* readText(path.join(run.dir, "log.txt"))).toContain(
-        "unknown template keys in review: inputs.plan",
+      // Declared and empty, not undeclared: the spec line resolves on every run.
+      expect(yield* readText(path.join(run.dir, "log.txt"))).not.toContain(
+        "unknown template keys in review",
       );
     }),
   ));
@@ -679,7 +680,8 @@ test("review's inputs are the embedder's when it is embedded, so implement never
       // it silently; `plan` is implement's own and is chosen normally.
       expect(implement.inputs.plan).toBe("work-source");
       expect(implement.inputs.target).toBe("diff-target");
-      expect(implement.embeddedInputs).toEqual(["target"]);
+      // `previous` is review's own too, and never asked for: it defaults to empty.
+      expect(implement.embeddedInputs).toEqual(["target", "previous"]);
       // The post choice is standalone, so embedding review drops it.
       expect(implement.steps.some((s) => s.id.endsWith("post"))).toBe(false);
       expect(resolveWorkflow("review", defs, FALLBACK_DEFAULTS).steps.at(-1)!.id).toBe("post");

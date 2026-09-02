@@ -2,7 +2,7 @@
 // HERDR_SOCKET_PATH for the few methods 0.7.5 does not expose on the CLI.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Data, Deferred, Effect, Schema, Stream } from "effect";
+import { Data, Deferred, Effect, Option, Schema, Stream } from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { PlatformError } from "effect/PlatformError";
@@ -15,6 +15,8 @@ export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 export class HerdrError extends Data.TaggedError("HerdrError")<{
   readonly message: string;
   readonly detail: string;
+  /** herdr's own code, where it answered with one — `agent_not_found` and friends. */
+  readonly code?: string;
 }> {}
 
 export function herdrFailureReason(cause: unknown): string {
@@ -96,7 +98,20 @@ const PluginPaneReply = Schema.Struct({
   }),
 });
 
-const herdrError = (message: string, detail: string) => new HerdrError({ message, detail });
+const herdrError = (message: string, detail: string, code?: string) =>
+  new HerdrError({ message, detail, code });
+
+/** herdr answers a missing target with an error envelope and exit 0, not a failure. */
+const ErrorEnvelope = Schema.Struct({ error: ErrorReply });
+
+/** The code herdr named, when what came back was one of its error envelopes. */
+function envelopeError(operation: string, value: BoundaryValue): HerdrError | null {
+  return Option.match(Schema.decodeUnknownOption(ErrorEnvelope)(value), {
+    onNone: () => null,
+    onSome: (reply) =>
+      herdrError(operation, reply.error.message ?? reply.error.code ?? "unknown", reply.error.code),
+  });
+}
 const herdrFail = (message: string, detail: string) => Effect.fail(herdrError(message, detail));
 
 const decodeBoundary = <S extends Schema.Top>(operation: string, schema: S, value: BoundaryValue) =>
@@ -412,6 +427,22 @@ export class Herdr {
     return this.cli(["pane", "zoom", paneId, on ? "--on" : "--off"]).pipe(Effect.asVoid);
   }
 
+  /** A bounded tail of a pane's output. Polled while a step runs, so never the lot. */
+  paneRead(paneId: string, lines = 40): HerdrEffect<string> {
+    // `pane read` answers with the terminal text itself, not an envelope — but a pane
+    // showing JSON (this plugin's own output, for one) starts with `{`, and `cli`
+    // parses that as a reply. Either way what comes back is a sample of what the pane
+    // holds, which is all liveness needs, so both shapes are rendered as text rather
+    // than one of them being an error that costs the tail entirely.
+    return this.cli(["pane", "read", paneId, "--lines", String(lines)]).pipe(
+      Effect.map((res) =>
+        Schema.decodeUnknownOption(Schema.String)(res).pipe(
+          Option.getOrElse(() => encodeJson(res)),
+        ),
+      ),
+    );
+  }
+
   paneRename(paneId: string, label: string): HerdrEffect<void> {
     return this.cli(["pane", "rename", paneId, label]).pipe(Effect.asVoid);
   }
@@ -470,8 +501,17 @@ export class Herdr {
 
   agentStatus(target: string): HerdrEffect<AgentStatus> {
     return this.cli(["agent", "get", target]).pipe(
-      Effect.flatMap((res) => decodeBoundary("herdr agent get", AgentStatusReply, res)),
-      Effect.map(({ result }) => agentStatus(result.agent.agent_status)),
+      Effect.flatMap((res) => {
+        // An agent herdr does not have is answered, not failed: exit 0 with an error
+        // envelope. Carrying its code is what lets a caller tell "this agent is gone"
+        // from "herdr did not answer me", which are opposite things to do about.
+        const named = envelopeError("herdr agent get", res);
+        return named
+          ? Effect.fail(named)
+          : decodeBoundary("herdr agent get", AgentStatusReply, res).pipe(
+              Effect.map(({ result }) => agentStatus(result.agent.agent_status)),
+            );
+      }),
     );
   }
 
