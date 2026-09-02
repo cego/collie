@@ -1,8 +1,11 @@
 #!/bin/sh
-# Fetches the prebuilt runner for this platform so consumers don't need bun.
-# Falls back to building from source when bun happens to be available, which is
-# only the case on a machine developing the plugin itself.
+# Puts the runner in bin/collie and a `collie` on PATH. Prefers the prebuilt release
+# so consumers do not need bun — except in a git checkout, which is a machine
+# developing the plugin and whose own source is newer than any release by definition.
 set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+cd "$ROOT"
 
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' herdr-plugin.toml)
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
@@ -14,25 +17,66 @@ esac
 
 ASSET="collie-${OS}-${ARCH}"
 BASE="${COLLIE_RELEASE_BASE:-https://gitlab.cego.dk/mk/collie/-/releases/v${VERSION}/downloads}"
+BIN_DIR="${COLLIE_BIN_DIR:-$HOME/.local/bin}"
+SHIM_MARKER="# installed by collie install.sh"
 
-mkdir -p bin
-if curl -fsSL "${BASE}/${ASSET}" -o bin/collie.new 2>/dev/null; then
+# Kept quiet unless it fails: `bun install` has a great deal to say about packages it
+# did not have to touch, and `collie upgrade` reports what its caller asked about.
+quietly() {
+  if ! out=$("$@" 2>&1); then
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+}
+
+build_from_source() {
+  quietly bun install --frozen-lockfile
+  # Build beside the binary and rename over it: replacing a running runner's own
+  # file in place kills the process executing it. `collie upgrade` runs from that
+  # very binary, so this is the load-bearing half of being able to upgrade at all.
+  quietly bun build --compile --outfile bin/collie.new src/main.ts
+  mv -f bin/collie.new bin/collie
+}
+
+fetch_release() {
+  curl -fsSL "${BASE}/${ASSET}" -o bin/collie.new 2>/dev/null || { rm -f bin/collie.new; return 1; }
   mv bin/collie.new bin/collie
   chmod +x bin/collie
+}
+
+# A `collie` on PATH that knows which checkout it belongs to. Without the plugin root
+# pinned, the baseline workflows would be whichever directory you happened to be
+# standing in, so `run list` would work anywhere and `run start` would not.
+install_shim() {
+  if [ -e "$BIN_DIR/collie" ] && ! grep -q "$SHIM_MARKER" "$BIN_DIR/collie" 2>/dev/null; then
+    echo "not replacing $BIN_DIR/collie: something else is already there" >&2
+    return 0
+  fi
+  mkdir -p "$BIN_DIR"
+  cat > "$BIN_DIR/collie" <<EOF
+#!/bin/sh
+$SHIM_MARKER
+exec env HERDR_PLUGIN_ROOT="\${HERDR_PLUGIN_ROOT:-$ROOT}" "$ROOT/bin/collie" "\$@"
+EOF
+  chmod +x "$BIN_DIR/collie"
+  case ":$PATH:" in
+    *":$BIN_DIR:"*) echo "installed $BIN_DIR/collie" ;;
+    *) echo "installed $BIN_DIR/collie — add $BIN_DIR to PATH to use it" ;;
+  esac
+}
+
+mkdir -p bin
+if [ -d .git ] && command -v bun >/dev/null 2>&1; then
+  echo "building from source: $ROOT is a checkout, and its source is what a release is cut from"
+  build_from_source
+elif fetch_release; then
   echo "installed ${ASSET} from ${BASE}"
-  exit 0
-fi
-rm -f bin/collie.new
-
-if command -v bun >/dev/null 2>&1; then
+elif command -v bun >/dev/null 2>&1; then
   echo "no release asset at ${BASE}/${ASSET}; building from source with bun"
-  bun install --frozen-lockfile >/dev/null
-  # Build beside the binary and rename over it: replacing a running runner's own
-  # file in place kills the process executing it.
-  bun build --compile --outfile bin/collie.new src/main.ts >/dev/null
-  mv -f bin/collie.new bin/collie
-  exit 0
+  build_from_source
+else
+  echo "cannot install: no ${ASSET} at ${BASE} and no bun to build from source" >&2
+  exit 1
 fi
 
-echo "cannot install: no ${ASSET} at ${BASE} and no bun to build from source" >&2
-exit 1
+install_shim

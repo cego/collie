@@ -3,11 +3,12 @@ import { CliConfig, CliError, Command, GlobalFlag } from "effect/unstable/cli";
 import { persona } from "./commands/persona";
 import { run } from "./commands/run";
 import { root } from "./commands/shared";
+import { upgrade } from "./commands/upgrade";
 import { workflow } from "./commands/workflow";
 import { printResult } from "./envelope";
 import { err } from "./operations";
 
-export const app = root.pipe(Command.withSubcommands([workflow, persona, run]));
+export const app = root.pipe(Command.withSubcommands([workflow, persona, run, upgrade]));
 
 /**
  * Read from `Bun.argv` rather than Stdio's `args` because both decide how the program

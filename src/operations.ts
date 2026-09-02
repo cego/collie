@@ -28,6 +28,7 @@ import {
   stopDriver,
   type InboxCommandValue,
 } from "./driver";
+import { shell, type Runner } from "./mr";
 import {
   classifyGivenTarget,
   classifyWorkSource,
@@ -356,6 +357,76 @@ export const settleGiven = Effect.fn("operations.settleGiven")(function* (
   }
   return { ok: true, decisions: decisions.decisions } as const;
 });
+
+/**
+ * Brings this installation up to date and reports what moved. A checkout is pulled
+ * first — its own source is what a release is cut from — and then `install.sh` does
+ * the same job it does at install time, so there is one place that decides whether
+ * this machine builds or downloads, and one place that writes the `collie` on PATH.
+ *
+ * The runner is a parameter for the same reason inference takes one: this shells out
+ * to git and sh, and a test should be able to watch it do that.
+ */
+export const upgrade = Effect.fn("operations.upgrade")(function* (
+  env: PluginEnv,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = (cmd, args, cwd) =>
+    shell(cmd, args, cwd, "say"),
+) {
+  const root = env.pluginRoot;
+  const head = () => run("git", ["rev-parse", "--short", "HEAD"], root).pipe(Effect.map(short));
+  const checkout = (yield* run("git", ["rev-parse", "--git-dir"], root)).code === 0;
+
+  let before = "";
+  let after = "";
+  if (checkout) {
+    before = yield* head();
+    // `--ff-only`: an upgrade that quietly merged or rebased someone's local work
+    // would be a surprise nobody asked this command for.
+    const pulled = yield* run("git", ["pull", "--ff-only"], root);
+    if (pulled.code !== 0) {
+      return err("operation_failed", `Could not update ${root}.`, {
+        root,
+        output: pulled.stdout.trim(),
+      });
+    }
+    after = yield* head();
+  }
+
+  const installed = yield* run("sh", ["install.sh"], root);
+  if (installed.code !== 0) {
+    return err("operation_failed", `Could not install collie in ${root}.`, {
+      root,
+      output: installed.stdout.trim(),
+    });
+  }
+
+  const moved = checkout && before !== after;
+  const log = installed.stdout.trim();
+  return {
+    ok: true as const,
+    data: { root, checkout, before, after, updated: moved, log },
+    // The last line of the install, not all of it: `bun install` says a great deal
+    // about packages it did not have to touch, and none of it is what was asked.
+    human: [
+      checkout
+        ? moved
+          ? `Updated ${root} from ${before} to ${after}.`
+          : `${root} was already up to date at ${before}.`
+        : `${root} is not a checkout, so the release was fetched.`,
+      log
+        .split("\n")
+        .filter((line) => line.trim() !== "")
+        .at(-1) ?? "",
+    ]
+      .filter((line) => line !== "")
+      .join("\n"),
+  };
+});
+
+/** `git rev-parse` prints one line; anything else means it did not answer. */
+function short(result: { code: number; stdout: string }): string {
+  return result.code === 0 ? result.stdout.trim() : "";
+}
 
 /** A path value would slug the whole path, so a strategy may offer a short name. */
 function primaryInput(resolutions: Resolution[]): string {

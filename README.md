@@ -48,9 +48,23 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
 
 ## Command line
 
+`sh install.sh` puts the runner in `bin/collie` and a `collie` on your PATH
+(`~/.local/bin`, or `COLLIE_BIN_DIR`). The one on PATH is a two-line shim that pins
+`HERDR_PLUGIN_ROOT` to the installation it came from — without that, the baseline
+workflows would be whichever directory you happened to be standing in, so `run list`
+would work anywhere and `run start` would not. It never replaces a `collie` it did not
+write. In a git checkout the install builds from source rather than fetching a release,
+because that machine's own source is what a release is cut from.
+
+`collie upgrade` does the same thing later: it pulls first where the installation is a
+checkout (`--ff-only`, so it never quietly merges local work), then runs the install,
+so there is one place that decides whether this machine builds or downloads. A pull it
+cannot do is reported rather than installed over.
+
 The same operations are available without opening UI:
 
 ```sh
+collie upgrade
 collie workflow list
 collie workflow show plan
 collie workflow check

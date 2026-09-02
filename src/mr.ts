@@ -87,32 +87,41 @@ export function shell(
   cmd: string,
   args: string[],
   cwd: string,
+  /**
+   * `"say"` folds stderr into the output. Inference wants it ignored — a probe that
+   * fails is an answer, and its noise is not — but a command a human asked for owes
+   * them the reason it failed.
+   */
+  errors: "ignore" | "say" = "ignore",
 ): Effect.Effect<{ code: number; stdout: string }, never, ChildProcessSpawner.ChildProcessSpawner> {
   return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const command = ChildProcess.make(cmd, args, {
       cwd,
       stdout: "pipe",
-      stderr: "ignore",
+      stderr: errors === "say" ? "pipe" : "ignore",
       // extendEnv, so git and glab inherit this process's environment and find their
       // config and credentials — the Effect-native spelling of `{ ...process.env }`.
       extendEnv: true,
     });
     const handle = yield* spawner.spawn(command);
-    const [stdout, code] = yield* Effect.all(
-      [
-        handle.stdout.pipe(
-          Stream.decodeText(),
-          Stream.runFold(
-            () => "",
-            (out, chunk) => out + chunk,
-          ),
+    const text = (stream: typeof handle.stdout) =>
+      stream.pipe(
+        Stream.decodeText(),
+        Stream.runFold(
+          () => "",
+          (out, chunk) => out + chunk,
         ),
+      );
+    const [stdout, stderr, code] = yield* Effect.all(
+      [
+        text(handle.stdout),
+        errors === "say" ? text(handle.stderr) : Effect.succeed(""),
         handle.exitCode,
       ],
       { concurrency: "unbounded" },
     );
-    return { code: Number(code), stdout };
+    return { code: Number(code), stdout: stdout + stderr };
   }).pipe(
     Effect.scoped,
     Effect.catch(() => Effect.succeed({ code: 127, stdout: "" })),
