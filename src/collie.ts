@@ -1,4 +1,7 @@
 import { Console, Effect, Layer, Schema } from "effect";
+// The manifest is the version: herdr reads it, `install.sh` builds the release URL
+// from it, and a `--version` that disagreed with either would be worse than none.
+import manifest from "../herdr-plugin.toml";
 import { CliConfig, CliError, Command, GlobalFlag } from "effect/unstable/cli";
 import { persona } from "./commands/persona";
 import { run } from "./commands/run";
@@ -46,7 +49,7 @@ const isShowHelp = Schema.is(CliError.ShowHelp);
  * printed the help and the reason, so this only sets the status.
  */
 export const program = app.pipe(
-  Command.run({ version: "0.0.1" }),
+  Command.run({ version: manifest.version }),
   Effect.catch((cause) =>
     Effect.gen(function* () {
       const parse = isShowHelp(cause) ? cause : null;

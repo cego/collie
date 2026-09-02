@@ -385,3 +385,19 @@ test("upgrade is a command of its own, and says what it would do", () =>
       expect(root.stdout).toContain("upgrade");
     }),
   ));
+
+test("the version the CLI reports is the one the manifest declares", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      // herdr reads the manifest, `install.sh` builds the release URL from it, and a
+      // `--version` that disagreed with either would send someone to the wrong asset.
+      const manifest = yield* fs.readFileString(join(root, "herdr-plugin.toml"));
+      const declared = /^version = "(.+)"$/m.exec(manifest)?.[1];
+
+      const shown = yield* cli(["--version"]);
+
+      expect(declared).toBeDefined();
+      expect(shown.stdout.trim()).toContain(declared!);
+    }),
+  ));
