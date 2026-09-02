@@ -7,7 +7,7 @@ import { Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { nowIso } from "./time";
 import type { PluginEnv } from "./env";
-import { Herdr, type WorkspaceInfo } from "./herdr";
+import { Herdr, type PaneInfo, type WorkspaceInfo } from "./herdr";
 import { loadDefaults } from "./config";
 import {
   DefinitionError,
@@ -210,11 +210,23 @@ export const resolveWorkspace = Effect.fn("operations.resolveWorkspace")(functio
   env: PluginEnv,
 ) {
   if (!env.workspaceId) return null;
-  return (
-    (yield* herdr.workspaceList()).find((workspace) => workspace.workspaceId === env.workspaceId) ??
-    null
-  );
+  const workspace =
+    (yield* herdr.workspaceList()).find((item) => item.workspaceId === env.workspaceId) ?? null;
+  if (!workspace || workspace.cwd !== "") return workspace;
+  // `herdr workspace list` carries no directory, so a workspace resolved by id alone
+  // would fall back to the caller's own cwd — and a `--workspace` run would root at
+  // whatever shell it was typed in. The workspace's directory is where its panes are.
+  const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
+  return { ...workspace, cwd: workspaceCwdFromPanes(env.workspaceId, panes) };
 });
+
+/** The directory a workspace stands for: where its first pane was started. */
+export function workspaceCwdFromPanes(
+  workspaceId: string,
+  panes: ReadonlyArray<Pick<PaneInfo, "workspaceId" | "cwd">>,
+): string {
+  return panes.find((pane) => pane.workspaceId === workspaceId && pane.cwd)?.cwd ?? "";
+}
 
 /**
  * Everything a start needs before anyone is asked anything: the Workflow resolved,

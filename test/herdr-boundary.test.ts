@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect } from "effect";
 import { Herdr } from "../src/herdr";
+import { workspaceCwdFromPanes } from "../src/operations";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 
@@ -184,3 +185,14 @@ test("a pane tail comes back as text even when the pane is showing JSON", () =>
       expect(yield* json.paneRead("1-1")).toContain("ok");
     }),
   ));
+
+test("a workspace with no directory of its own takes it from its first pane", () => {
+  const panes = [
+    { workspaceId: "wA", cwd: "/elsewhere" },
+    { workspaceId: "wB", cwd: null },
+    { workspaceId: "wB", cwd: "/home/user/project" },
+  ];
+  expect(workspaceCwdFromPanes("wB", panes)).toBe("/home/user/project");
+  // No pane knows: empty, so the caller's own fallback chain decides.
+  expect(workspaceCwdFromPanes("wC", panes)).toBe("");
+});
