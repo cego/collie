@@ -241,6 +241,10 @@ log, so a typo is visible rather than silent.
 | `{{mr.assignee}}`, `{{mr.template}}`, `{{mr.issues}}`, `{{mr.has_issues}}` | Merge request facts. Available in a step that declares `requires: gitlab`.      |
 | `{{skill:<name>}}`                                                         | A skill mention — see [Skills](#skills).                                        |
 
+Collie itself puts the person glab is logged in as (or `gitlab.assignee` from `config.json`)
+on the merge request: as assignee when a step reports an `mr_url`, and as reviewer when a
+`fan_in:` review of an MR target completes. No prompt has to ask for either.
+
 ## Outputs
 
 Outputs are JSON files a step writes into the run directory. Gates and loops read outputs,

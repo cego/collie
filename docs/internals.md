@@ -57,9 +57,11 @@ enough to test everything above it.
 
 `env.ts` is the plugin environment herdr provides — state directory, config directory,
 socket path, plugin root. `HERDR_PLUGIN_ROOT` is what pins the baseline definitions to the
-installation the runner came from; the `collie` on PATH is a two-line shim that sets it,
-which is why a `collie` without that pin would take its workflows from whatever directory it
-is standing in.
+installation the runner came from; the `collie` on PATH is a two-line shim that sets it.
+Without the pin the compiled runner falls back to its own installation (`process.execPath`
+is the binary when bun runs it from `/$bunfs/`), so a `bin/collie` started from another
+directory still finds its workflows and its Driver. Only `bun src/main.ts` in development
+falls all the way through to the current directory.
 
 ## Definitions and layers
 

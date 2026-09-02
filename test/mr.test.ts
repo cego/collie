@@ -3,6 +3,8 @@ import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
 import {
   MR_TEMPLATE,
+  addMrRole,
+  parseMrUrl,
   gitlabForProject,
   gitlabReadiness,
   hostOf,
@@ -175,6 +177,28 @@ test("mrFacts gathers the three things the prompt needs in one go", () =>
         template: null,
         issues: ["FRO-149"],
       });
+    }),
+  ));
+
+test("an MR url names its project and iid, and a role is added rather than replaced", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const mr = parseMrUrl("https://gitlab.cego.dk/cego/sub/deep/-/merge_requests/7\n");
+      expect(mr).toEqual({ project: "gitlab.cego.dk/cego/sub/deep", iid: "7" });
+      expect(parseMrUrl("https://gitlab.cego.dk/cego/x")).toBeNull();
+
+      const seen: string[][] = [];
+      const run = (_cmd: string, args: string[]) => {
+        seen.push(args);
+        return Effect.succeed({ code: 0, stdout: "" });
+      };
+      yield* addMrRole(mr!, "reviewer", "mk", "/x", run);
+      yield* addMrRole({ project: null, iid: "3" }, "assignee", "mk", "/x", run);
+      // `+` keeps whoever is on the merge request already.
+      expect(seen).toEqual([
+        ["mr", "update", "7", "--repo", "gitlab.cego.dk/cego/sub/deep", "--reviewer", "+mk"],
+        ["mr", "update", "3", "--assignee", "+mk"],
+      ]);
     }),
   ));
 
