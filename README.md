@@ -11,13 +11,25 @@ One command, safe to re-run:
 git clone git@gitlab.cego.dk:mk/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
-`setup.sh` links Collie (`herdr plugin link`, which runs `install.sh` to fetch the
-prebuilt runner — no bun needed; with bun present it builds from source instead), adds
-the three keybindings below to `~/.config/herdr/config.toml` if they are missing, and
-reloads the running herdr. Run it again after a `git pull` to pick up changes; from a
-non-checkout location it clones/updates `~/.collie` itself (`COLLIE_DIR`,
-`COLLIE_REPO` and `HERDR_CONFIG` override the defaults). It also links
-`~/.local/bin/collie` without changing PATH.
+`setup.sh` links Collie (`herdr plugin link`, which runs `install.sh`), adds the three
+keybindings below to `~/.config/herdr/config.toml` if they are missing, and reloads the
+running herdr. Run it again after a `git pull` to pick up changes; from a non-checkout
+location it clones/updates `~/.collie` itself (`COLLIE_DIR`, `COLLIE_REPO` and
+`HERDR_CONFIG` override the defaults). `install.sh` puts the runner in `bin/collie` and
+a `collie` on your PATH, without changing PATH itself.
+
+**This project is internal, so downloading a release asset needs a token.** An
+unauthenticated request gets a sign-in page rather than a binary, so set `COLLIE_TOKEN`
+to a personal access token with `read_api`:
+
+```sh
+COLLIE_TOKEN=glpat-… ~/.collie/setup.sh
+```
+
+Without it, a machine with bun builds the runner from source instead — which is what a
+checkout does anyway, because its own source is what a release is cut from — and a
+machine with neither a token nor bun says so and stops rather than installing whatever
+came back.
 
 ### Environment variables
 
@@ -25,6 +37,8 @@ non-checkout location it clones/updates `~/.collie` itself (`COLLIE_DIR`,
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | `COLLIE_DIR`          | Checkout used by `setup.sh` when it is run outside a checkout; defaults to `~/.collie`.                                    |
 | `COLLIE_REPO`         | Git URL cloned by `setup.sh`.                                                                                              |
+| `COLLIE_TOKEN`        | Personal access token (`read_api`) used to download a release asset; required while the project is internal.               |
+| `COLLIE_BIN_DIR`      | Where `install.sh` writes the `collie` on your PATH; defaults to `~/.local/bin`.                                           |
 | `COLLIE_RELEASE_BASE` | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                           |
 | `COLLIE_DRIVER`       | Driver executable for development and tests: one executable path, or a JSON array containing the executable and arguments. |
 | `COLLIE_MODE`         | Internal picker mode passed from a Herdr action to its picker pane.                                                        |
@@ -49,7 +63,8 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
 ## Command line
 
 `sh install.sh` puts the runner in `bin/collie` and a `collie` on your PATH
-(`~/.local/bin`, or `COLLIE_BIN_DIR`). The one on PATH is a two-line shim that pins
+(`~/.local/bin`, or `COLLIE_BIN_DIR`); `COLLIE_TOKEN` is what lets it download a release
+asset from this internal project. The one on PATH is a two-line shim that pins
 `HERDR_PLUGIN_ROOT` to the installation it came from — without that, the baseline
 workflows would be whichever directory you happened to be standing in, so `run list`
 would work anywhere and `run start` would not. It never replaces a `collie` it did not
