@@ -5,7 +5,6 @@ set -eu
 
 REPO_URL="${COLLIE_REPO:-git@gitlab.cego.dk:mk/collie.git}"
 PLUGIN_ID="cego.collie"
-OLD_PLUGIN_ID="cego.workflows"
 CONFIG="${HERDR_CONFIG:-$HOME/.config/herdr/config.toml}"
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -28,14 +27,6 @@ else
   fi
 fi
 
-OLD_STATE="$HOME/.local/state/herdr/plugins/$OLD_PLUGIN_ID"
-if herdr plugin list 2>/dev/null | grep -q "$OLD_PLUGIN_ID"; then
-  say "Unlinking $OLD_PLUGIN_ID; its state is preserved at $OLD_STATE"
-  herdr plugin unlink "$OLD_PLUGIN_ID"
-elif [ -d "$OLD_STATE" ]; then
-  say "Previous $OLD_PLUGIN_ID state is preserved at $OLD_STATE"
-fi
-
 if herdr plugin list 2>/dev/null | grep -q "$PLUGIN_ID .*\[local:$ROOT\]"; then
   say "Plugin already linked from $ROOT"
 else
@@ -47,29 +38,6 @@ fi
 # just run it. A symlink here would replace a shim that pins `HERDR_PLUGIN_ROOT` with
 # one that does not, and a `collie` without that pin takes its workflows from whatever
 # directory it is standing in.
-
-# The previous plugin bound the same three keys to cego.workflows.<action>. Unlinking
-# it leaves those entries behind, so every upgraded user would end up with two
-# bindings per key, one of them pointing at a plugin herdr no longer has.
-drop_old_bindings() {
-  [ -f "$CONFIG" ] || return 0
-  grep -q "command = \"$OLD_PLUGIN_ID\." "$CONFIG" || return 0
-  cp "$CONFIG" "$CONFIG.collie-backup"
-  say "Removing $OLD_PLUGIN_ID keybindings; previous config saved as $CONFIG.collie-backup"
-  awk -v old="command = \"$OLD_PLUGIN_ID." '
-    function flush() {
-      if (buffering && !drop) printf "%s", block
-      block = ""; drop = 0
-    }
-    # Each [[keys.command]] table is buffered so one naming the old plugin can be
-    # dropped whole; every other line passes through untouched.
-    /^\[\[keys\.command\]\]/ { flush(); buffering = 1; block = $0 "\n"; next }
-    /^\[/ && buffering { flush(); buffering = 0 }
-    buffering { block = block $0 "\n"; if (index($0, old)) drop = 1; next }
-    { print }
-    END { flush() }
-  ' "$CONFIG" >"$CONFIG.collie-new" && mv "$CONFIG.collie-new" "$CONFIG"
-}
 
 add_binding() { # key action description
   if grep -q "command = \"$PLUGIN_ID.$2\"" "$CONFIG" 2>/dev/null; then
@@ -88,7 +56,6 @@ TOML
 }
 
 mkdir -p "$(dirname "$CONFIG")"
-drop_old_bindings
 add_binding "prefix+f"       pick   "Run a workflow"
 add_binding "prefix+u"       resume "Resume a workflow run"
 add_binding "prefix+shift+f" fork   "Fork a workflow or persona"
