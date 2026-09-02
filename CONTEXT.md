@@ -22,33 +22,32 @@
 
 **Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents.
 
-**Session** — One herdr session, one workspace and one repo cwd, taken together. Runs in
-the same Session share a Control Plane tab and a register of each other's long-lived agents,
-and hand work to them; runs in another workspace, another checkout, or another herdr session
-never see them. There is only ever one agent per role in a Session.
+**Session** — One herdr session, one workspace and one repo cwd, taken together. It is the
+scope of a Control Plane tab and of the register of live agents, so only Runs in the same
+Session can hand work to each other. There is only ever one agent per role in a Session.
 
-**Hand-off** — Giving one Run's result to another Run's live agent instead of starting a
-second one. `review` → the live implementer (its findings as a fix round), or, when none is
-live, a new `implement` run on the reviewed target. `plan` → the implementer building from
-that plan, whenever the plan changes under it. `implement` → the planner, for a decision the
-plan does not cover. Both Runs record it.
+**Hand-off** — Giving one Run's result to another Run's live agent in the same Session
+instead of starting a second one. Both Runs record it. Which hand-offs exist and what each
+sends: `docs/using.md`.
 
 **Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking takes a baseline definition into a Layer.
 
-**Override** — A definition that declares `extends: <name>` and changes only what it names: steps matched by id, inputs merged by name, scalars and `## sections` replaced where given, and everything else still following the parent in the Layer below. A file without `extends:` replaces the whole definition, and a full copy records `forked_from_hash` so a parent that has moved on can be marked stale.
+**Override** — A definition that declares `extends: <name>` and changes only what it names; everything else still follows the parent in the Layer below. A file without `extends:` replaces the whole definition, and a full copy records `forked_from_hash` so a parent that has moved on can be marked stale. The merge rules are canonical in `src/definitions.ts` and `docs/authoring.md`.
 
 **Fan-in** — Combining several parallel Outputs into one. A Step declares `fan_in: <step>`, is given that Step's Output files, and reconciles them itself; it sits in that Step's tab. The engine no longer unions findings.
 
-**Synthesis** — What a fan-in Step over reviewers writes: one review of the change, deduplicated across models, disagreements settled from the diff, plus a `summary` and the findings it `dropped` with a reason for each. The engine renders it to `review.md` — summary, then findings by severity — which is what a human reads and what a Choice may post to the merge request. It is the loop's gate: the fix Step sees the Synthesis, never the raw reviews.
+**Synthesis** — What a fan-in Step over reviewers writes: one review of the change, deduplicated across models, disagreements settled from the diff, plus a `summary` and the findings it `dropped` with a reason for each. The engine renders it to `review.md`, which is what a human reads and what a Choice may post. It is the loop's gate: the fix Step sees the Synthesis, never the raw reviews.
 
-**Disputed** — The implementer may mark a finding `disputed` with a reason; the reviewers are shown those reasons and a disputed finding no longer drives the loop, so the run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts it back in front of the implementer.
+**Disputed** — A finding the implementer declined, with its reason. The reviewers are shown the reason, and a disputed finding no longer drives the loop, so the Run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts the finding back in front of the implementer.
 
 ## Baseline Workflows
 
-- `plan` — interviews the human, writes `SPEC.md` and one ticket per slice into its Run's plan directory (ADR-0002), then a Choice: implement now, second opinion, offload to Linear, refine.
-- `implement` — build from plan → parallel `review` (multi-harness/model) → fix loop, max 5 → clean review on a committed branch → `mr`, which is the only step that opens or updates the merge request. Every step that commits pushes what it committed, so the reviewers read the change rather than the state before it. That last step is skipped where there is no GitLab to open one on.
-- `review` — standalone; you pick the target; parallel reviewers, then one Synthesis; posting it to the merge request is a Choice.
-- `architecture` — runs the architect over the project, reports into its Run's plan directory, then a Choice: implement now or stop.
+What each is for, what it needs, and how they chain: `docs/workflows.md`.
+
+- `plan` — interviews the human, then writes `SPEC.md` and one ticket per slice into its Run's plan directory (ADR-0002).
+- `implement` — builds from a work source, embeds `review`, loops on the findings, and ends at `mr`, the only step that opens or updates the merge request.
+- `review` — standalone; you pick the target; parallel reviewers, then one Synthesis.
+- `architecture` — runs the architect over the project and reports into its Run's plan directory.
 
 **Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice chains to another Workflow (`run`), prompts a named agent (`prompt`), posts the run's review to the merge request it reviewed (`post`), or just ends the Step (`stop`). A Choice with one thing left to offer is taken rather than asked.
 
@@ -61,15 +60,13 @@ plan does not cover. Both Runs record it.
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
 **Control Plane** — The tab a Session keeps as its control surface, one per workspace, and
-the only pane Collie keeps open: live agents, active Runs with their step and last
-line, this Session's finished Runs, quick actions, and any question a Run is waiting on,
-rendered under that Run. It is a view over the run dirs and the register, always the
-workspace's first tab, and holds no state of its own. Behind it the strip reads `plan`,
-`implement`, `review`, then anything else in start order: Collie places each tab by its
-Run's workflow when it creates it, and never moves a tab it does not own or one a human
-has since dragged.
+the only pane Collie keeps open. It is a view over the run dirs and the register, always the
+workspace's first tab, and holds no state of its own, so closing it loses nothing. What it
+shows and what its keys do: `docs/using.md`. Behind it the strip reads `plan`, `implement`,
+`review`, then anything else in start order: Collie places each tab by its Run's workflow
+when it creates it, and never moves a tab it does not own or one a human has since dragged.
 
-**Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all: a question, a decision that turned out to be unavailable, an ending, a step that went quiet, an Output that could not be repaired, a merge request opened. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
+**Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
 
 **Driver** — The process that executes a Run. It has no pane: it is detached from whatever
 started it, writes its progress and any failure into the Run directory, and asks its

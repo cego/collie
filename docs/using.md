@@ -1,0 +1,332 @@
+# Using Collie
+
+This is the operator's guide: how to install Collie, start a run from inside herdr, read
+the Control Plane, answer what a run asks you, and pick up where you left off. For the
+vocabulary — Run, Step, Driver, Choice, Hand-off — see [`CONTEXT.md`](../CONTEXT.md).
+
+## Install
+
+One command, safe to re-run:
+
+```sh
+git clone git@gitlab.cego.dk:mk/collie.git ~/.collie && ~/.collie/setup.sh
+```
+
+`setup.sh` links Collie (`herdr plugin link`, which runs `install.sh`), adds the three
+keybindings below to `~/.config/herdr/config.toml` if they are missing, links the Collie
+operator skill into `~/.claude/skills/collie`, and reloads the running herdr. Run it again
+after a `git pull` to pick up changes. From a non-checkout location it clones or updates
+`~/.collie` itself. `install.sh` puts the runner in `bin/collie` and a `collie` on your
+PATH, without changing PATH itself.
+
+Collie is internal, so downloading a release asset needs a token. An unauthenticated
+request gets a sign-in page rather than a binary — with HTTP 200, which is why the install
+checks that what arrived is a program rather than trusting the status code.
+
+The install finds a token in this order:
+
+1. `COLLIE_TOKEN`, if you set it — a personal access token with `read_api`:
+
+   ```sh
+   COLLIE_TOKEN=glpat-… ~/.collie/setup.sh
+   ```
+
+2. The login the host's own CLI already holds. For a GitLab release that is
+   `glab config get token --host <host>`, and for a GitHub one `gh auth token --hostname
+<host>`. Which of the two it asks comes from the release URL: GitLab download paths
+   carry `/-/releases/`, GitHub's carry `/releases/download/`, so a self-hosted instance of
+   either is recognised by its shape rather than its hostname. If you have run
+   `glab auth login` for the host, the install needs nothing else from you.
+
+The token is passed to `curl` through its config file on stdin rather than `--header`, so
+it never appears in the process arguments that `ps` shows other users on the machine.
+
+Without any token, a machine with bun builds the runner from source instead — which is what
+a checkout does anyway, because its own source is what a release is cut from. A machine
+with neither a token nor bun says so and stops rather than installing whatever came back.
+
+`collie upgrade` does the same thing later: it pulls first where the installation is a
+checkout (`--ff-only`, so it never quietly merges local work), then runs the install. A
+pull it cannot do is reported rather than installed over.
+
+### Environment variables
+
+| Variable              | Contract                                                                                                                                     |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COLLIE_DIR`          | Checkout used by `setup.sh` when it is run outside a checkout; defaults to `~/.collie`.                                                      |
+| `COLLIE_REPO`         | Git URL cloned by `setup.sh`.                                                                                                                |
+| `COLLIE_TOKEN`        | Personal access token (`read_api`) used to download a release asset. Optional where `glab` or `gh` is already logged in to the release host. |
+| `COLLIE_BIN_DIR`      | Where `install.sh` writes the `collie` on your PATH; defaults to `~/.local/bin`.                                                             |
+| `CLAUDE_SKILLS_DIR`   | Where `setup.sh` links the Collie operator skill; defaults to `~/.claude/skills`.                                                            |
+| `COLLIE_RELEASE_BASE` | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                                             |
+| `COLLIE_DRIVER`       | Driver executable for development and tests: one executable path, or a JSON array containing the executable and arguments.                   |
+| `COLLIE_MODE`         | Internal picker mode passed from a herdr action to its picker pane.                                                                          |
+| `COLLIE_RUN`          | Internal Run ID passed to a detached Driver.                                                                                                 |
+| `COLLIE_CWD`          | Working directory passed to picker, agent, and Driver processes; also re-roots a CLI run.                                                    |
+
+`COLLIE_MODE` and `COLLIE_RUN` are process-to-process contracts set by Collie; you do not
+set them yourself.
+
+### Keybindings
+
+`setup.sh` adds these if they are missing (`prefix` is `ctrl+b` by default; edit them in
+`config.toml` afterwards). Plain letters on purpose: `alt` chords after the prefix are not
+delivered reliably over SSH or through some terminals, and herdr's own config notes the
+same.
+
+| Key              | Action                                                          |
+| ---------------- | --------------------------------------------------------------- |
+| `prefix+f`       | `cego.collie.pick` — run a workflow                             |
+| `prefix+u`       | `cego.collie.resume` — resume a run with unfinished steps       |
+| `prefix+shift+f` | `cego.collie.fork` — copy a workflow or persona into your layer |
+
+They show up in herdr's keybind help (`prefix+?`). Without a binding, any action still
+runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
+
+## Start a run
+
+1. Focus a pane in the workspace of the repo you want to work on and press `prefix+f`.
+2. Pick a workflow in the popup (type to filter, Enter). See
+   [Workflows](workflows.md) for what each one is for.
+3. Inputs are inferred from the branch, open MR and earlier runs; you are asked only for
+   what could not be inferred, and shown one confirm line. Two inputs offer a menu instead
+   of a guess: `implement`'s work source, and `review`'s target.
+4. The workspace's **Control Plane** tab opens, and it is always the workspace's first
+   tab, so `prefix+1` lands on it.
+5. The run's own tabs hold agents and nothing else: one tab per step, a step's parallel
+   variants side by side in it with an even share each, a step that reconciles them
+   (`fan_in:`) underneath them in the same tab, and a step that continues an earlier agent
+   opening nothing at all — it renames that pane to itself, so `build` becomes
+   `architecture`, then `simplify`, then `fix`. Tabs are named `⚙ <workflow> · <target>`
+   and carry the run's state: `⚙` working, `⚠` your turn, `✓` done — only once every pane
+   in the tab is — and `✗` stopped. Panes are named for what is in them: the model for
+   parallel variants (`opus`, `sonnet`), the step's name when it runs alone. A toast tells
+   you when a run is done or needs you.
+6. `plan` and `architecture` end in a menu, which takes over the whole pane while it is
+   open and hands it back afterwards. `prefix+u` picks up any run with unfinished steps.
+
+The same operations are available without opening UI, which is how an agent drives Collie:
+see [CLI](cli.md).
+
+## The Control Plane
+
+One tab per workspace, created by the first run and reused by every run after it, and
+moved to the front of the workspace each time so it is always `prefix+1`. It is a board,
+not an engine: it watches the run directories and the register of live agents and draws
+what it finds, so closing it loses nothing — the next run opens it again. It is the only
+pane Collie keeps open; the run itself is driven by a Driver with no pane at all.
+
+```
+Control Plane — Collie
+/home/mk/work/cego/collie
+
+Agents
+  1  Implementer           working  implement-add-a-picker-20260828-093012
+  2  Review · Opus         idle     review-2367-20260828-112336
+  3  Review · gpt-5.6-sol  done     review-2367-20260828-112336
+
+Runs
+  ⚙ Implement · add-a-picker    fix · iteration 3/5
+
+Finished
+  ✓ Review · !2367              done
+  ⚠ Review · worktree           abandoned
+
+1-9 focus that agent · p run a workflow · u resume · f fork · s send the last review to the implementer · q close this tab
+```
+
+**Agents** is every agent of this session's runs that herdr still has — reviewers and
+synthesizers as well as the implementer and the planner. The ones a hand-off can name are
+called by their role and come first; the rest are called by their step and model. A role is
+a label, not a filter.
+
+**Runs** is what is going on now. A run whose Driver died — no agent of its own left and
+nothing written for a minute — moves to **Finished** as `⚠ abandoned` rather than sitting
+there pretending to work.
+
+### Keys
+
+Keys are offered only when there is something to act on.
+
+| Key     | What it does                                                  |
+| ------- | ------------------------------------------------------------- |
+| `1`–`9` | Focus that agent's pane                                       |
+| `p`     | Run a workflow — the same picker as `prefix+f`, for this repo |
+| `u`     | Resume a run with unfinished steps                            |
+| `f`     | Fork a workflow or persona                                    |
+| `s`     | Hand the newest review in this session to a live implementer  |
+| `l`     | Open a run's `runner.log` in a temporary pane                 |
+| `k`     | Stop the newest run                                           |
+| `q`     | Close the tab                                                 |
+
+### Questions
+
+When a run asks you something, its options appear indented under its row and the keys
+become that question's — `↑↓`, Enter, Esc, or just type where it wants text. The question
+lives in the run's directory, so closing this tab, reopening it, or resuming later shows
+you the same question again rather than losing it. The Driver toasts and brings the tab to
+the front before it asks, so a question is never left unseen in a tab you are not looking
+at.
+
+The board shows this session's work and nothing else: one herdr session, one workspace, one
+repo. Another workspace's runs never appear, even for the same repo, and a workspace id
+that herdr has since given to a different workspace is caught by its label.
+
+## Actions
+
+| Action               | What it does                                                           |
+| -------------------- | ---------------------------------------------------------------------- |
+| `cego.collie.pick`   | Popup picker of workflows; infers inputs, asks for the rest, then runs |
+| `cego.collie.resume` | Popup picker of runs with unfinished steps; finished steps are skipped |
+| `cego.collie.fork`   | Copy a workflow or persona into your layer or this project's           |
+
+Each action opens the `picker` popup, because that is where a terminal is. The run itself
+is not a pane: the picker starts a detached Driver that outlives it and writes what it is
+doing into the run directory, and the Control Plane is what renders that. A run therefore
+survives the picker closing, the Control Plane closing, and the terminal being detached.
+
+## Resuming a run
+
+`prefix+u`, or `collie run resume <id>`, starts a fresh Driver for a run and skips the
+steps that already finished. A step is finished when its `output:` file exists, so an
+agent that went quiet without writing one is restarted rather than assumed done. The
+Driver claims the run atomically, so `resume` refuses to start a second Driver for a run
+something is already driving.
+
+Esc at a Choice leaves the step unfinished on purpose, so `resume` finds the run again.
+
+## Hand-offs between runs
+
+Runs in the same **session** — one herdr session, one workspace, one repo — know about
+each other's long-lived agents, and hand work over rather than starting a second one. There
+is only ever one implementer and one planner per session.
+
+**A review, to whoever can act on it.** After the synthesis, a standalone review's menu
+offers exactly one of these, never both:
+
+- **Send to implementer** — when an implementer is already working here. It is the first
+  option, so Enter takes it: that agent is prompted with `review.md` and the findings JSON
+  and applies them as a fix round, `disputed` and all. Both runs record the hand-off. The
+  `s` key on the Control Plane does the same thing for the newest review in the session.
+- **Fix findings** — when none is. It chains `implement` with the review itself as the
+  work source: `review.md` is the spec, the findings are the tickets, and the implementer
+  works where the review was pointed — checking out the branch, or `glab mr checkout` for
+  a merge request, so the fixes land on that MR's own branch and its `mr` step updates
+  that merge request instead of opening a second one.
+
+**A plan that changes under an implementer.** The planner keeps its tab after its run
+ends. If you refine the plan, take a second opinion, or just talk to the planner while an
+implementer is building from that plan, the Driver sends it the diff of `plan/` and the
+planner's own `changelog` — once per change — and asks it to reconcile.
+
+**A decision the plan does not cover.** The implementer's prompt names the live planner's
+agent and pane and tells it to ask there rather than stopping. With no planner live, the
+same prompt tells it to stop and ask you.
+
+## Reviewing someone else's merge request
+
+An MR target carries its project, not just its iid: `mr:<host>/<group>/<project>!<iid>`.
+Paste an MR URL and the project comes from the URL; type a bare `!42` and it comes from the
+remote of the directory you are in. Every `glab` call the Driver makes — and every command
+the review prompt hands the reviewers — then passes `--repo <host>/<group>/<project>`, so
+no checkout of that project is needed: you can review and comment on a colleague's MR from
+a group folder that is not a git repository at all.
+
+A step pointed at a merge request needs `glab` and `glab auth status --hostname <host>` for
+that host. The "does this directory have a GitLab remote" check stays where it belongs, on
+`implement`'s `mr` step, which is the one that pushes. In a directory that is not a
+checkout there is no branch and no working tree to review, so the target menu is one entry
+— **Type it…**.
+
+## Your defaults
+
+`config.json` in your config dir (the user layer), all keys optional:
+
+```json
+{
+  "harness": "claude",
+  "model": "opus",
+  "effort": "high",
+  "max_iterations": 5,
+  "handoff_timeout_ms": 7200000,
+  "quiet_ms": 600000,
+  "notifications": { "run-done": false },
+  "models": { "opencode": ["mycorp/local-model"] },
+  "trust": "ask"
+}
+```
+
+`models` adds models the harness adapter table does not already accept. An unknown harness,
+model or effort fails validation before a single tab opens. See
+[Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts.
+
+`notifications` turns a kind of toast off. The kinds are `needs-you`, `decision-lost`,
+`run-done`, `run-stuck`, `run-failed`, `step-stuck`, `output-unusable` and `mr-opened`, all
+on by default. Every title carries the repo and the run, `request` is only ever used where
+a human has to act, and the same question at the same step is announced once, even after a
+Driver restart.
+
+`quiet_ms` is how long a step's agent may produce nothing — no status change, no new output
+in its pane — before it is nudged to unstick itself; it is nudged once more at double that
+and given up on at triple, as blocked, with the pane left alone. Quiet is the signal, never
+duration: a step that is still printing is never nudged, however long it runs. `0` waits
+for as long as it takes.
+
+## Trust: the first run in a repo
+
+claude asks once per directory whether it may work there, and it asks inside its own tab,
+where it is easy to miss. So the Driver asks you first, before a single tab opens:
+
+```
+claude has not worked in /home/mk/work/some-repo before
+❯ Trust it now                  records it where the harness looks
+  Let claude ask me in its tab  the run waits for you
+```
+
+**Trust it now** writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
+which is where claude keeps the answer to its own dialog. The previous file is copied to
+`claude.json.bak` in the Collie state dir first, every other project and setting is carried
+over as it was, and the new file is renamed into place with the old one's permissions, so
+no reader ever sees it half-written. It is still a read-modify-write of a file claude owns:
+if a claude session saves in the same instant, that save is the one that loses. It happens
+once per directory, so the window is opened once.
+
+`trust` in `config.json` answers the question in advance: `ask` (default), `auto`, or
+`never` (leave the dialog to claude).
+
+`auto` trusts every directory a run starts in, without asking. Be deliberate about it:
+claude's question is "is this a project you created or one you trust?", and it says plainly
+that claude will then read, edit and execute files there. `auto` is for a machine where
+every repo you run workflows in is already one you would answer yes for.
+
+If you do let claude ask, nothing breaks: `agent start` reports the agent blocked, which is
+not a failure, so the Driver says which pane wants you, toasts, and waits. It cannot answer
+for you — the dialog shuffles its options between runs, so there is no safe key to send.
+
+## Troubleshooting
+
+**A change to Collie has not taken effect.** Run `~/.collie/setup.sh` again after a `git
+pull`, or `collie upgrade`. The plugin link, the keybindings and the `collie` on PATH are
+each written once and skipped when already in place, so re-running is cheap.
+
+**A keybinding does nothing over SSH.** The three bindings use plain letters after the
+prefix on purpose, because `alt` chords are not delivered reliably over SSH or through some
+terminals. If you rebound one to a chord, that is the first thing to undo. Without any
+binding, `herdr plugin action invoke cego.collie.pick` still works from a shell inside
+herdr.
+
+**A run shows as `⚠ abandoned`.** Its Driver is gone: no agent of its own is left and
+nothing has been written for a minute. The run's audit trail is intact, so
+`collie run resume <id>` starts a fresh Driver and skips the steps that finished.
+
+**A run says another Driver already owns it.** The ownership claim in the run directory is
+held by a live process. Stop it with `collie run stop <id>` before resuming.
+
+**A workflow fails validation before any tab opens.** That is by design — unknown models,
+missing personas and skills, malformed choices, and placeholders no declared input can
+fill are all caught up front. `collie workflow check` reports the same problems without
+starting a run, and names the file and the step.
+
+**A skill is missing.** Skills are a prerequisite, like the harness binary. The error names
+the skill and the command that installs it. See
+[Authoring](authoring.md#skills) for how a definition refers to one.
