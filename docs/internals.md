@@ -106,10 +106,42 @@ workspace, which is what a merged branch is supposed to do.
 
 ## The herdr boundary
 
-`herdr.ts` is the only channel to herdr: the `herdr` CLI at `HERDR_BIN_PATH` for the
-commands that have one, and the socket for the rest. Nothing else in the codebase shells
-out to `herdr` or opens that socket. That is what makes the fake herdr in `test/support/`
-enough to test everything above it.
+`herdr.ts` is the only channel to the herdr Collie is running inside: the `herdr` CLI at
+`HERDR_BIN_PATH` for the commands that have one, and the socket at `HERDR_SOCKET_PATH` for
+the rest. Nothing else in the program shells out to `herdr` or opens that socket. That is
+what makes the fake herdr in `test/support/` enough to test everything above it.
+
+One thing outside the program does run a herdr binary: `tools/herdr-schema.ts` downloads a
+named release and asks it to print its bundled schema. It is the exception the invariant
+can afford, because it is not talking to the session — no `HERDR_BIN_PATH`, no socket, no
+state, and a binary in a temp directory rather than the one the user is running. There is
+nothing above it to fake, and routing it through `herdr.ts` would mean asking the running
+herdr what some other version's schema says.
+
+### Checking the boundary against herdr
+
+The reply structs in `herdr.ts` are hand-written, and herdr releases often. `herdr api
+schema --json` prints the JSON Schema of the socket API the binary bundles, and the CLI
+answers with the same envelope, so that one document describes every reply Collie decodes
+and every socket request it sends. `test/herdr-contract.test.ts` walks the structs against
+it in the one direction that matters: Collie must accept everything herdr may send, and
+extra fields herdr sends are never a failure. `herdr.ts` exports the shapes it decodes as
+one `replySchemas` record, and the test asserts its table covers every key of it, so
+adding a decoded call without a row turns that test red rather than going unchecked.
+
+The version Collie is verified against is `herdr-pin.json`, with the schema that version
+prints committed beside it as `herdr-api-schema.json`, and `min_herdr_version` in
+`herdr-plugin.toml` equal to it. Merge-request pipelines run the test against the snapshot
+and prove the snapshot is really what the pinned binary prints, so an unrelated merge
+request never goes red because herdr released.
+
+A daily pipeline schedule runs `contract:stable` against the newest stable herdr and
+`contract:preview` against the newest preview build, which is allowed to fail. Both name
+the version and protocol they tested. A red `contract:stable` means the newest herdr moved
+something Collie reads: either widen the struct, or — when the field is genuinely gone —
+change what reads it. Bumping the pin afterwards is editing the version and checksums in
+`herdr-pin.json` and running `bun run contract:regen`. A red `contract:preview` is the same
+news weeks early, and nothing to stop for.
 
 `env.ts` is the plugin environment herdr provides — state directory, config directory,
 socket path, plugin root. `HERDR_PLUGIN_ROOT` is what pins the baseline definitions to the

@@ -13,6 +13,9 @@ actions, and the `collie` CLI.
   lookup** → [`docs/authoring.md`](docs/authoring.md), alongside `src/definitions.ts`.
 - **Changing the CLI surface, an error code, or a `--json` envelope** →
   [`docs/cli.md`](docs/cli.md), alongside `src/envelope.ts` and `src/operations.ts`.
+- **Adding a herdr call, or a red `contract:stable` pipeline** →
+  [`docs/internals.md`](docs/internals.md#checking-the-boundary-against-herdr), alongside
+  `herdr-pin.json` and `test/herdr-contract.test.ts`.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →
@@ -30,7 +33,9 @@ binary still starts.
 
 1. Every capability ships in both front doors: the CLI and the herdr actions are thin
    adapters over the same Effect services ([ADR-0003](docs/adr/0003-collie-is-one-effect-program.md)).
-2. All herdr communication goes through `src/herdr.ts`.
+2. All herdr communication goes through `src/herdr.ts`. The one exception is
+   `tools/herdr-schema.ts`, which runs a downloaded release offline to print its schema
+   and never touches the session — see [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
 3. One Driver owns a run's state. Mutate a run through the schema-validated inbox with
    request ids ([ADR-0004](docs/adr/0004-coordinate-runs-through-the-filesystem.md)).
 4. Plan artefacts live in the run directory ([ADR-0002](docs/adr/0002-plan-artefacts-live-in-the-run-directory.md)).

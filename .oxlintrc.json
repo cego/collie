@@ -19,8 +19,10 @@
     ".windsurf/**",
     "advisor-plans/**",
     "plans/**",
-    // The release build script: a Bun script that runs before any Effect program does.
+    // Bun scripts that run before any Effect program does: the release build, and the
+    // herdr download the contract check verifies.
     "tools/build.ts",
+    "tools/herdr-schema.ts",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [

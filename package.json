@@ -9,6 +9,8 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "bun test",
+    "contract:check": "bun run tools/herdr-schema.ts pinned --check",
+    "contract:regen": "bun run tools/herdr-schema.ts pinned --write",
     "typecheck": "tsc --noEmit",
     "build": "bun run tools/build.ts",
     "smoke": "sh tools/smoke.sh bin/collie"
