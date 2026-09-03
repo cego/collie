@@ -91,10 +91,15 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 
 | Flag            | What it does                                                                            |
 | --------------- | --------------------------------------------------------------------------------------- |
-| `--input k=v`   | Repeatable. The names come from `workflow show`.                                        |
+| `--input k=v`   | Repeatable. The names come from `workflow show`, plus `branch` (below).                 |
 | `--inputs-json` | Every input at once, as one JSON object.                                                |
 | `--decide s=t`  | Repeatable. Answers Choice step `s` with title `t` now, so the run does not stop there. |
 | `--request-id`  | Idempotency key — see [Retrying safely](#retrying-safely).                              |
+
+`--input branch=<name>` is the one input no workflow declares: it names the branch a
+mutating run works on, and so which worktree it gets, instead of letting Collie resolve
+one ([what a run does to your repository](using.md#what-a-run-does-to-your-repository)).
+It is ignored by a workflow that changes nothing.
 
 Examples:
 

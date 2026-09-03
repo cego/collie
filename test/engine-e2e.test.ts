@@ -422,6 +422,42 @@ test("an untrusted directory is offered up front, so no tab ever stops on the di
     }),
   ));
 
+test("a checkout Collie just created is trusted without asking anyone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* claudeSeen(rig, {});
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+      const worktree = path.join(rig.root, "worktrees", "add-picker");
+      yield* fs.makeDirectory(worktree, { recursive: true });
+      // Nothing is scripted: a question here would fail the run rather than pass it.
+      const prompts = scriptedPrompts([]);
+
+      const { status, lines } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "g" },
+        {
+          prompts,
+          worktree: {
+            path: worktree,
+            branch: "add-picker",
+            created_by_collie: true,
+            workspace_id: "w7",
+            made_at: null,
+          },
+        },
+      );
+
+      expect(status).toBe("done");
+      expect(prompts.offered).toEqual([]);
+      const config = decodeJson(yield* fs.readFileString(path.join(rig.root, ".claude.json")));
+      expect(config.projects[worktree].hasTrustDialogAccepted).toBe(true);
+      expect(lines.some((l) => l.includes("trusted"))).toBe(true);
+    }),
+  ));
+
 test("a trust write that fails leaves claude to ask, and the run goes ahead anyway", () =>
   runEffect(
     Effect.gen(function* () {

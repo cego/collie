@@ -94,6 +94,9 @@ const runStart = Command.make(
                 resolutions: prepared.resolutions,
                 decisions: settled.decisions,
                 workspace: resolved.workspace,
+                // Not one of the Workflow's own Inputs: it names the checkout the Run
+                // works in, and the Workflow never sees it.
+                branch: explicit.inputs.branch,
               });
               if (started._tag === "Rejected") return started.result;
               return {

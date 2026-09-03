@@ -166,6 +166,53 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
 The same operations are available without opening UI, which is how an agent drives Collie:
 see [CLI](cli.md).
 
+## What a run does to your repository
+
+A run that changes code never works in the checkout you started it from. `implement` — and
+`plan` or `architecture` once you let them chain into it — resolves the branch it is about
+to build and gets a **worktree** of its own on that branch, opened through herdr, so it
+arrives as its own workspace with its own tabs. Two runs can therefore build two branches
+at once without sharing a working tree, an index, or a stash stack.
+
+Which branch it is:
+
+- work described in words, a plan directory or a Linear issue → a new branch named after
+  the run, cut from `origin/HEAD`;
+- a fix round on a review → the branch that was reviewed (a merge request's source branch,
+  the head of a `branch:a...b` diff, or the branch the reviewed tree was on), so a merge
+  request is updated rather than replaced;
+- `collie run start implement --input branch=<name>` → that branch, whatever the above
+  would have said.
+
+The checkout lives under herdr's own worktree directory (`~/.herdr/worktrees/<repo>/<branch>`),
+and the run's log says which one it got. It is a fresh checkout, so the first thing the
+implementer does there is install the project's dependencies. Where herdr cannot give the
+run a worktree, the run does not start and says which branch it could not be given one
+for: working in the directory you started it from is what two runs sharing a checkout —
+and a stash stack — looks like, which is the thing this exists to prevent.
+
+The worktree outlives the merge request: it is still there when the run ends, so you can
+look at what it built. It is removed only once **settled** — the tree is clean, it holds
+no commit that is not on the remote already, nothing is working in it or could be resumed
+in it, and its merge request is merged or closed (or its remote branch is gone). Pruning happens when Collie is already awake: at every run start —
+which never touches the checkout that run is about to work in — and every few minutes
+while a Control Plane is open, including for the worktree whose own board you are looking
+at, which closes with it. The board says both what went and what is being held on to, with
+the reason:
+
+```
+Worktrees
+  ♻ removed add-a-picker · merged in !14
+  kept fix-the-parser · 2 commit(s) unpushed
+```
+
+Nothing is ever removed with a force flag, and a checkout you made yourself is never
+touched — only worktrees a run recorded as Collie's own are candidates. Removal goes
+through herdr, so if you closed a worktree's workspace it is opened again to be removed
+rather than deleted behind herdr's back. If git refuses to drop a checkout, that refusal
+stands and the board says so in git's words; if it drops the checkout but will not delete
+the branch, the board tells you which branch is left.
+
 ## The Control Plane
 
 One tab per workspace, labelled `🐕 Collie`, created by the first run and reused by every
@@ -346,6 +393,13 @@ remote of the directory you are in. Every `glab` call the Driver makes — and e
 the review prompt hands the reviewers — then passes `--repo <host>/<group>/<project>`, so
 no checkout of that project is needed: you can review and comment on a colleague's MR from
 a group folder that is not a git repository at all.
+
+Fixing one is a different matter. A fix round is an `implement` run, and a mutating run
+works in a checkout of its own branch — which `herdr worktree` can only cut from the
+repository it is asked in. So a review of a merge request in another project, or from a
+directory that is not a checkout of it, will review and comment fine, but chaining into
+`implement` from there stops and says so instead of building in the wrong repository.
+Clone that project and start the fix round from there.
 
 A step pointed at a merge request needs `glab` and `glab auth status --hostname <host>` for
 that host. The "does this directory have a GitLab remote" check stays where it belongs, on

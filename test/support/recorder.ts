@@ -38,8 +38,6 @@ const CallSchema = Schema.Struct({
 });
 const CallString = Schema.fromJsonString(CallSchema);
 
-const StateAgent = Schema.Struct({ name: Schema.String, pane_id: Schema.String });
-type StateAgentValue = Schema.Schema.Type<typeof StateAgent>;
 const StateTab = Schema.Struct({ tab_id: Schema.String, label: Schema.String });
 type StateTabValue = Schema.Schema.Type<typeof StateTab>;
 const StatePane = Schema.Struct({
@@ -202,21 +200,90 @@ export class Rig {
     });
   }
 
-  /** An agent herdr already has, matching one an earlier run started. */
-  addAgent(name: string, paneId: string): Effect.Effect<void, RigError, FileSystem.FileSystem> {
+  /**
+   * Appends one entry to a list in the fake herdr's state — the agents it has, the
+   * panes, the worktrees. The fake validates the whole state when it reads it, so
+   * this only has to keep what is already there.
+   */
+  private appendState(
+    key: string,
+    entry: Schema.JsonObject,
+  ): Effect.Effect<void, RigError, FileSystem.FileSystem> {
     const statePath = `${this.logPath}.state.json`;
     const readJsonObject = this.readJsonObject.bind(this);
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const state = yield* readJsonObject(statePath);
-      const agents: ReadonlyArray<StateAgentValue> = Option.getOrElse(
-        Schema.decodeUnknownOption(Schema.Array(StateAgent))(state.agents),
-        (): ReadonlyArray<StateAgentValue> => [],
+      const listed = Option.getOrElse(
+        Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state[key]),
+        (): ReadonlyArray<Schema.JsonObject> => [],
       );
-      const nextAgents: ReadonlyArray<StateAgentValue> = [...agents, { name, pane_id: paneId }];
       yield* fs.writeFileString(
         statePath,
-        encodeJson(Object.assign({}, state, { agents: nextAgents })),
+        encodeJson(Object.assign({}, state, { [key]: [...listed, entry] })),
+      );
+    });
+  }
+
+  /** An agent herdr already has, matching one an earlier run started. */
+  addAgent(name: string, paneId: string) {
+    return this.appendState("agents", { name, pane_id: paneId });
+  }
+
+  /** A pane herdr already has, with the directory, agent and workspace it is in. */
+  addPane(
+    paneId: string,
+    tabId: string,
+    cwd: string,
+    agent: string | null = null,
+    workspaceId: string | null = null,
+    foregroundCwd: string | null = null,
+  ) {
+    return this.appendState("paneList", {
+      pane_id: paneId,
+      tab_id: tabId,
+      label: null,
+      cwd,
+      agent,
+      workspace_id: workspaceId,
+      foreground_cwd: foregroundCwd,
+    });
+  }
+
+  /** A worktree herdr already has open, as an earlier run would have left it. */
+  addWorktree(branch: string, worktreePath: string, workspaceId: string) {
+    const append = this.appendState("worktrees", {
+      branch,
+      path: worktreePath,
+      open_workspace_id: workspaceId,
+    });
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      // A real directory, because whatever runs there has to cd into it, with the
+      // `.git` file git writes at `worktree add` — which is what says this checkout is
+      // the one a run recorded rather than another one later made at the same path.
+      yield* fs.makeDirectory(worktreePath, { recursive: true });
+      yield* fs.writeFileString(`${worktreePath}/.git`, `gitdir: ${worktreePath}/.gitdir\n`);
+      yield* append;
+    });
+  }
+
+  /** Exactly the worktrees herdr has, replacing whatever it had before. */
+  setWorktrees(
+    worktrees: ReadonlyArray<{ branch: string; path: string; open_workspace_id: string }>,
+  ): Effect.Effect<void, RigError, FileSystem.FileSystem> {
+    const statePath = `${this.logPath}.state.json`;
+    const readJsonObject = this.readJsonObject.bind(this);
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* readJsonObject(statePath);
+      for (const worktree of worktrees) {
+        yield* fs.makeDirectory(worktree.path, { recursive: true });
+        yield* fs.writeFileString(`${worktree.path}/.git`, `gitdir: ${worktree.path}/.gitdir\n`);
+      }
+      yield* fs.writeFileString(
+        statePath,
+        encodeJson(Object.assign({}, state, { worktrees: worktrees.map((w) => ({ ...w })) })),
       );
     });
   }

@@ -20,6 +20,7 @@ function board(over: Partial<WorkspaceView> = {}): WorkspaceView {
   return {
     repo: "collie",
     cwd: "/w/collie",
+    worktrees: [],
     behind: null,
     now: NOW,
     agents: [],

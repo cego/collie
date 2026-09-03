@@ -287,7 +287,7 @@ test("implement is build, architecture, simplify, review, fix — and no commit 
       expect(yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
 
       const build = wf.steps[0]!.prompt;
-      expect(build).toContain("branch off the default branch first");
+      expect(build).toContain("checkout of its own, on the branch it is building");
       expect(build).toContain("one commit per ticket");
       // The skill is named, not spelled: the harness decides whether that is `/tdd`.
       expect(skillsIn(build)).toContain("tdd");

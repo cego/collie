@@ -70,6 +70,8 @@ export interface RunRow {
 export interface WorkspaceView {
   repo: string;
   cwd: string;
+  /** What pruning did and what it is holding, one line each. */
+  worktrees: string[];
   /**
    * How many commits this installation is behind its remote, or null when there is
    * nothing to say. Shown on the board and never notified: being a few commits
@@ -227,6 +229,8 @@ export const buildView = Effect.fn("buildView")(function* (
     stateDir: string;
     alive: AgentInfo[];
     now?: number;
+    /** What the last prune said; the board reports it rather than deciding it. */
+    worktrees?: string[];
     /** The installation, when the caller has one to compare against its remote. */
     pluginRoot?: string;
     /** The Runs already read, so a caller drawing two Views scans the dir once. */
@@ -293,6 +297,7 @@ export const buildView = Effect.fn("buildView")(function* (
   return {
     repo: path.basename(opts.cwd),
     cwd: opts.cwd,
+    worktrees: opts.worktrees ?? [],
     behind: opts.pluginRoot ? yield* behindRemote(opts.pluginRoot, undefined, now) : null,
     now,
     agents,
@@ -313,6 +318,8 @@ export const buildView = Effect.fn("buildView")(function* (
     })),
   };
 });
+
+const indent = (line: string) => `  ${line}`;
 
 /**
  * "3 commits behind", in the one place that decides the plural: the app's nav says
@@ -395,6 +402,9 @@ export function renderWorkspace(
       ];
 
   lines.push(
+    // Only where there are any: a repository Collie has no checkout of has nothing to
+    // say here, and an empty section would be noise on every refresh.
+    ...(view.worktrees.length > 0 ? section("Worktrees", view.worktrees.map(indent), "") : []),
     ...section("Agents", agents, "none live here"),
     ...section("Runs", runRows(view.active, asking, waiting?.id ?? null), "none running"),
     ...section("Finished", runRows(view.recent, asking, null), "nothing yet"),

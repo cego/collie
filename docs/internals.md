@@ -48,6 +48,62 @@ and architecture reports go into the run's `plan/` directory and never into the 
 made while planning _are_ written into the repository — those are domain knowledge, not
 plans.
 
+## Worktrees and the settled rule
+
+`worktree.ts` owns the checkout a mutating run works in. The unit is the **branch**: git
+allows exactly one worktree per checked-out branch, so nothing has to invent an identity
+for a directory — `herdr worktree list` is the index, `open` gives an existing checkout
+its workspace back, and `create` cuts a new one from the default branch. The run records
+`worktree.path`, `worktree.branch` and `worktree.created_by_collie`, and its cwd,
+workspace and Driver are that worktree's. `startRun` resolves it for a run started here;
+`chain` resolves it for a chained one, which is how `plan` and `architecture` get one.
+
+A worktree is **settled**, and only then removed, when all four hold:
+
+1. `git status --porcelain` in it is empty;
+2. it holds no commit of its own: `git rev-list @{u}..HEAD` is empty where the branch
+   has an upstream, and `git rev-list origin/<default>..HEAD` is empty where it does
+   not — a branch merged and deleted loses its upstream ref to the next
+   `git fetch --prune`, and condition 4's second half would otherwise be unreachable
+   in exactly the case it names;
+3. nothing is in it: no live agent's pane (its start directory, the directory it has
+   moved to, or its workspace), and no run a `resume` could still restart there;
+4. its merge request is merged or closed, or its remote branch is gone.
+
+The checks run in that order and the first failure is what the board reports, so a kept
+worktree always says which condition kept it — including a round that could not ask
+herdr what is live, which reports every candidate as held and records nothing, so the
+next refresh asks again instead of standing on a verdict it never reached.
+
+Removal goes through herdr, always: a checkout whose workspace a human has since closed
+is opened again to be removed, rather than taken out from under herdr with a bare
+`git worktree remove`. Once the checkout has gone the entry is a removal whatever
+happens to the branch — a branch `git branch -d` refuses is what is left to look at, so
+the board says which branch and what git said about it, for as long as a removal is news.
+
+Note what condition 2 does not do on its
+own: a checkout with no upstream is still only removed once 3 and 4 hold too, so the
+branch has to be gone from the remote — or its merge request merged or closed — before
+"holds no commit of its own" removes anything. Removal is `herdr worktree remove` — which
+closes the workspace with the checkout — and then `git branch -d`. Never `--force`, never
+`-D`: git's refusals are the last guard, so a wrong judgement here can only fail to clean,
+never delete work. Only paths some run recorded with `created_by_collie` are candidates.
+
+There is no daemon and no cron: pruning runs at `run start` and, at most every few
+minutes, on the Control Plane's refresh — forked, never awaited, because the board redraws
+on every keypress and a sweep walks every due checkout with git and glab. The frame goes
+out with what the last sweep said; one sweep runs at a time, and its clock starts when it
+finishes. Each
+worktree's verdict is also kept for a few minutes in `worktrees.json` in the state
+directory, so a due check is the only thing that shells out to git and glab, and the state
+file is rewritten only when something moved.
+
+Two things are deliberately not conditions. A `run start` names the checkout it is about
+to work in, and that one is held whatever its state, because the run resolving its branch
+in a directory that had just been deleted was worse than a late clean-up. Nothing else is
+protected: a Control Plane showing a settled worktree removes it and herdr closes that
+workspace, which is what a merged branch is supposed to do.
+
 ## The herdr boundary
 
 `herdr.ts` is the only channel to herdr: the `herdr` CLI at `HERDR_BIN_PATH` for the

@@ -493,6 +493,7 @@ function makePlanRun(
       seq: 1,
       slug: `plan-${slug}`,
       workflow: "plan",
+      worktree: null,
       decisions: {},
       previous_review: null,
       notified: [],

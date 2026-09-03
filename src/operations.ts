@@ -42,6 +42,7 @@ import { readRegistry, registryPath, type RegistryScope } from "./registry";
 import { currentPid, withLock } from "./lock";
 import { REVIEW_FILE } from "./output";
 import { Run, RunStore } from "./run";
+import { checkoutFor, pruneWorktrees } from "./worktree";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
 const ErrorCode = Schema.Literals([
@@ -155,8 +156,17 @@ export const spawnDriver = Effect.fn("operations.spawnDriver")(function* (
   env: PluginEnv,
   runId: string,
   cwd: string,
+  /** The workspace the Run's tabs belong in; its own, where it has a worktree. */
+  workspaceId?: string | null,
 ) {
   const commandLine = yield* driverCommand(env);
+  // A Run in its own worktree is in its own workspace, and the Driver has to open its
+  // tabs there rather than in whatever workspace started it.
+  const workspace: Record<string, string> = {};
+  if (workspaceId) {
+    workspace.HERDR_WORKSPACE_ID = workspaceId;
+    workspace.HERDR_ACTIVE_WORKSPACE_ID = workspaceId;
+  }
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   yield* Effect.scoped(
     Effect.gen(function* () {
@@ -168,7 +178,7 @@ export const spawnDriver = Effect.fn("operations.spawnDriver")(function* (
           // /bin:/usr/bin fallback, and every git, glab and herdr it runs by bare name
           // became unfindable — which `shell` reports as exit 127, indistinguishable
           // from "no GitLab here".
-          env: { ...env.raw, COLLIE_RUN: runId, COLLIE_CWD: cwd },
+          env: { ...env.raw, ...workspace, COLLIE_RUN: runId, COLLIE_CWD: cwd },
           extendEnv: true,
           detached: true,
           stdin: "ignore",
@@ -490,18 +500,53 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     readonly decisions?: Record<string, string>;
     readonly workspace: WorkspaceInfo | null;
     readonly note?: string;
+    /** `--input branch=<name>`, which beats every branch inference. */
+    readonly branch?: string | null;
     /** The Run this one came out of, where it came out of one. */
     readonly parent?: string;
   },
 ) {
   const { workflow, resolutions, workspace } = options;
+  const herdr = new Herdr(env);
+  // Collie has no daemon, so pruning happens where it already wakes up. Before the
+  // checkout is resolved, so a settled worktree left on this Run's own branch is gone
+  // rather than reopened.
+  const pruned = yield* pruneWorktrees({
+    herdr,
+    stateDir: env.stateDir,
+    cwd: env.cwd,
+    // This Run is about to work here, so nothing may take it out from under it.
+    keep: env.cwd,
+  });
+  // A mutating Workflow owns its checkout, keyed by the branch it is about to build,
+  // so two of them never share a working tree — or a stash stack.
+  const checkout = yield* checkoutFor(herdr, {
+    cwd: env.cwd,
+    workflow: workflow.name,
+    name: primaryInput(resolutions),
+    inputs: inputValues(resolutions),
+    workspaceId: workspace?.workspaceId ?? env.workspaceId,
+    workspaceLabel: workspace?.label ?? null,
+    explicit: options.branch,
+  });
+  // Nothing has been created yet, so a Run that must not share a checkout is simply
+  // not started, and the caller is told which branch could not be given one.
+  if (checkout.refused) {
+    return {
+      _tag: "Rejected" as const,
+      result: err("operation_failed", `${workflow.name} could not be given a checkout.`, {
+        cause: checkout.refused,
+      }),
+    };
+  }
   const run = yield* new RunStore(env.stateDir).create({
     workflow: workflow.name,
-    cwd: env.cwd,
+    cwd: checkout.cwd,
     session: env.socketPath,
-    workspace: workspace?.workspaceId ?? env.workspaceId,
-    workspaceLabel: workspace?.label ?? null,
-    workspaceWorktree: workspace?.worktree ?? null,
+    workspace: checkout.workspaceId,
+    workspaceLabel: checkout.workspaceLabel,
+    workspaceWorktree: checkout.worktree?.path ?? workspace?.worktree ?? null,
+    worktree: checkout.worktree,
     inputs: inputValues(resolutions),
     inputSources: inputSources(resolutions),
     decisions: options.decisions,
@@ -511,6 +556,8 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     parent: options.parent,
   });
   yield* run.log(`created from ${workflow.path} (${workflow.layer} layer)`);
+  for (const line of pruned) yield* run.log(`worktrees: ${line}`);
+  if (checkout.note) yield* run.log(checkout.note);
   if (options.note) yield* run.log(options.note);
   const undriven = yield* handOver(env, run);
   return undriven
@@ -527,7 +574,8 @@ export const startRun = Effect.fn("operations.startRun")(function* (
  * receipt records it, and a retry with the same request id replays it.
  */
 export const handOver = Effect.fn("operations.handOver")(function* (env: PluginEnv, run: Run) {
-  const why = yield* spawnDriver(env, run.id, run.record.cwd).pipe(
+  const workspaceId = run.record.worktree?.workspace_id ?? null;
+  const why = yield* spawnDriver(env, run.id, run.record.cwd, workspaceId).pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(String(cause))),
   );

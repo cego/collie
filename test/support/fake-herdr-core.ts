@@ -12,11 +12,22 @@ interface FakePane {
   pane_id: string;
   tab_id: string;
   label: string | null;
+  /** Where the pane's process was started, which is what a worktree check reads. */
+  cwd?: string | null;
+  agent?: string | null;
+  workspace_id?: string | null;
+  foreground_cwd?: string | null;
 }
 
 interface FakeAgent {
   name: string;
   pane_id: string;
+}
+
+interface FakeWorktree {
+  path: string;
+  branch: string;
+  open_workspace_id: string;
 }
 
 interface State {
@@ -32,6 +43,9 @@ interface State {
   tabList: FakeTab[];
   paneList: FakePane[];
   agents: FakeAgent[];
+  worktrees: FakeWorktree[];
+  /** The repository's own checkout, which is what herdr answers `list` with. */
+  worktreeSource: string | undefined;
 }
 
 type FakeRecord = { transport: "cli"; cmd: string; argv: string[] };
@@ -52,8 +66,17 @@ const FakePaneSchema = Schema.Struct({
   pane_id: Schema.String,
   tab_id: Schema.String,
   label: Schema.NullOr(Schema.String),
+  cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  foreground_cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 const FakeAgentSchema = Schema.Struct({ name: Schema.String, pane_id: Schema.String });
+const FakeWorktreeSchema = Schema.Struct({
+  path: Schema.String,
+  branch: Schema.String,
+  open_workspace_id: Schema.String,
+});
 const StateJson = Schema.fromJsonString(
   Schema.Struct({
     tabs: Schema.optionalKey(Schema.Number),
@@ -68,6 +91,8 @@ const StateJson = Schema.fromJsonString(
     tabList: Schema.optionalKey(Schema.Array(FakeTabSchema)),
     paneList: Schema.optionalKey(Schema.Array(FakePaneSchema)),
     agents: Schema.optionalKey(Schema.Array(FakeAgentSchema)),
+    worktrees: Schema.optionalKey(Schema.Array(FakeWorktreeSchema)),
+    worktreeSource: Schema.optionalKey(Schema.String),
   }),
 );
 const FailuresJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
@@ -108,6 +133,8 @@ const emptyState = (): State => ({
   tabList: [],
   paneList: [],
   agents: [],
+  worktrees: [],
+  worktreeSource: undefined,
 });
 
 function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): State {
@@ -126,8 +153,14 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
       pane_id: pane.pane_id,
       tab_id: pane.tab_id,
       label: pane.label,
+      cwd: pane.cwd ?? null,
+      agent: pane.agent ?? null,
+      workspace_id: pane.workspace_id ?? null,
+      foreground_cwd: pane.foreground_cwd ?? null,
     })),
     agents: (state.agents ?? []).map((agent) => ({ name: agent.name, pane_id: agent.pane_id })),
+    worktrees: (state.worktrees ?? []).map((worktree) => ({ ...worktree })),
+    worktreeSource: state.worktreeSource,
   };
 }
 
@@ -365,7 +398,9 @@ export function fakeHerdr(
       case "pane list":
         result = {
           type: "pane_list",
-          panes: state.paneList.map((p) => ({ ...p, workspace_id: "1" })),
+          // A pane herdr made carries the workspace it was made in; one a test placed
+          // may name its own.
+          panes: state.paneList.map((p) => ({ ...p, workspace_id: p.workspace_id ?? "1" })),
         };
         break;
       case "plugin pane": {
@@ -425,6 +460,77 @@ export function fakeHerdr(
           state.blocked += 1;
         }
         result = { type: "agent", agent: { agent_status: status } };
+        break;
+      }
+      // A worktree-backed workspace, as herdr makes one: the checkout is a real
+      // directory, because whatever runs there has to be able to cd into it.
+      case "worktree list": {
+        // The repository's own checkout, whichever of its checkouts is asking: that is
+        // what herdr answers with, and it is the only place open and create may run.
+        const asked = flag("--cwd") ?? "";
+        const source = state.worktrees.some((w) => w.path === asked)
+          ? (state.worktreeSource ?? asked)
+          : asked;
+        result = {
+          type: "worktree_list",
+          source: { repo_root: source, source_checkout_path: source },
+          worktrees: state.worktrees,
+        };
+        break;
+      }
+      case "worktree create":
+      case "worktree open": {
+        // herdr answers both from the repository's own checkout only: from a linked
+        // worktree it refuses with `linked_worktree_source`.
+        const from = flag("--cwd") ?? "";
+        if (state.worktrees.some((w) => w.path === from)) {
+          return {
+            code: 0,
+            stderr: "",
+            stdout: `${encodeJson({
+              id: `cli:${cmd.replace(" ", ":")}`,
+              error: {
+                code: "linked_worktree_source",
+                message: "New and open worktree actions start from the repo parent workspace.",
+              },
+            })}\n`,
+          };
+        }
+        const branch = flag("--branch") ?? "";
+        const asked = flag("--path");
+        const known = state.worktrees.find((w) => (asked ? w.path === asked : w.branch === branch));
+        const worktree =
+          known ??
+          ({
+            path: asked ?? path.join(path.dirname(log), "worktrees", branch),
+            branch,
+            open_workspace_id: `w${state.worktrees.length + 1}`,
+          } satisfies FakeWorktree);
+        if (!known) {
+          state.worktrees.push(worktree);
+          state.worktreeSource ??= from;
+        }
+        yield* fs.makeDirectory(worktree.path, { recursive: true });
+        // The `.git` file git writes at `worktree add`, which is a checkout's identity.
+        if (!(yield* fs.exists(`${worktree.path}/.git`))) {
+          yield* fs.writeFileString(`${worktree.path}/.git`, `gitdir: ${worktree.path}/.gitdir\n`);
+        }
+        result = {
+          type: cmd === "worktree create" ? "worktree_created" : "worktree_opened",
+          worktree,
+          workspace: {
+            workspace_id: worktree.open_workspace_id,
+            label: flag("--label") ?? worktree.branch,
+            worktree: { checkout_path: worktree.path },
+          },
+        };
+        break;
+      }
+      case "worktree remove": {
+        const workspace = flag("--workspace");
+        const gone = state.worktrees.find((w) => w.open_workspace_id === workspace);
+        state.worktrees = state.worktrees.filter((w) => w !== gone);
+        result = { type: "worktree_removed", path: gone?.path ?? "", forced: false };
         break;
       }
       default:

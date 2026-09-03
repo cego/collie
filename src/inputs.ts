@@ -233,7 +233,7 @@ function mrIid(stdout: string): string | null {
   });
 }
 
-function defaultBase(
+export function defaultBase(
   run: NonNullable<InferContext["run"]>,
   cwd: string,
 ): Effect.Effect<string | null, never, ChildProcessSpawner.ChildProcessSpawner> {

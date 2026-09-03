@@ -48,6 +48,27 @@ const ChoiceRecordSchema = Schema.Struct({
   at: Schema.String,
 }).mapFields(Struct.map(Schema.mutableKey));
 
+/**
+ * The checkout a mutating Run owns, keyed by its branch. `created_by_collie` is what
+ * makes a worktree a candidate for pruning: a checkout a human made is never touched.
+ */
+const WorktreeRecordSchema = Schema.Struct({
+  path: Schema.String,
+  branch: Schema.String,
+  created_by_collie: Schema.Boolean,
+  /** The workspace herdr opened on it, which is what removing it names. */
+  workspace_id: Schema.NullOr(Schema.String),
+  /**
+   * When git wrote this checkout's `.git` file, as milliseconds. It is what says the
+   * checkout at that path is still the one Collie made: a path and a branch are not
+   * provenance, because a human can make a worktree at a path Collie's used to be at,
+   * on the same branch, and pruning must never touch a checkout it did not create. A
+   * record without it — one written before this was kept — is never a candidate.
+   */
+  made_at: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+}).mapFields(Struct.map(Schema.mutableKey));
+export type WorktreeRecord = Schema.Schema.Type<typeof WorktreeRecordSchema>;
+
 const StepRecordSchema = Schema.Struct({
   id: Schema.String,
   status: StepStatusSchema,
@@ -79,6 +100,10 @@ const RunSchema = Schema.Struct({
   workspace: Schema.NullOr(Schema.String),
   workspace_label: Schema.NullOr(Schema.String),
   workspace_worktree: Schema.NullOr(Schema.String),
+  /** This Run's own checkout, for a workflow that changes the repository. */
+  worktree: Schema.NullOr(WorktreeRecordSchema).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
   created_at: Schema.String,
   finished_at: Schema.NullOr(Schema.String),
   status: RunStatusSchema,
@@ -241,6 +266,15 @@ const mergeHandoffs = Effect.fn("Run.mergeHandoffs")(function* (dir: string, rec
   }
 });
 
+/**
+ * A Run a `resume` could pick up again: not finished, and with Steps left to run. It
+ * is not the same as "running" — a Choice nobody answered and an agent that stopped
+ * both leave a Run `blocked`, and `resume` restarts it in the directory it recorded.
+ */
+export function resumable(run: Run): boolean {
+  return run.record.status !== "done" && run.unfinished().length > 0;
+}
+
 export function handoffKey(h: HandoffRecord): string {
   return h.id ? `${h.direction}|${h.id}` : [h.direction, h.role, h.run, h.at, h.note].join("|");
 }
@@ -281,6 +315,7 @@ export interface CreateRunOptions {
   workspace?: string | null;
   workspaceLabel?: string | null;
   workspaceWorktree?: string | null;
+  worktree?: WorktreeRecord | null;
 }
 
 export class RunStore {
@@ -339,6 +374,7 @@ export class RunStore {
         workspace: opts.workspace ?? null,
         workspace_label: opts.workspaceLabel ?? null,
         workspace_worktree: opts.workspaceWorktree ?? null,
+        worktree: opts.worktree ?? null,
         created_at: yield* nowIso(),
         finished_at: null,
         status: "running",
@@ -494,9 +530,7 @@ export class RunStore {
   resumable() {
     const list = this.list();
     return Effect.gen(function* () {
-      return (yield* list).filter(
-        (run) => run.record.status !== "done" && run.unfinished().length > 0,
-      );
+      return (yield* list).filter(resumable);
     }).pipe(Effect.withSpan("RunStore.resumable"));
   }
 
