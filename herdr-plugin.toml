@@ -38,6 +38,6 @@ command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/collie" herdr picker']
 # A run itself is driven by a detached `drive` process with no pane of its own.
 [[panes]]
 id = "workspace"
-title = "Control Plane"
+title = "🐕 Collie"
 placement = "tab"
 command = ["sh", "-c", 'exec "$HERDR_PLUGIN_ROOT/bin/collie" herdr workspace']

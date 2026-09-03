@@ -79,10 +79,30 @@ export function reason(cause: unknown): string {
 export const GLYPH = { running: "⚙", waiting: "⚠", done: "✓", failed: "✗" } as const;
 
 /**
+ * The dog that marks Collie's own tab. Kept out of GLYPH — that is run status —
+ * and out of every call site: the label below is an identity, matched against
+ * herdr's own tab list, not a decoration to be assembled where it is used.
+ */
+const COLLIE_GLYPH = "\u{1F415}";
+
+/**
  * The Session's own tab, and the label on the view pane inside it. One per
  * workspace: the runner reuses it, and recreates it when it has been closed.
  */
-export const CONTROL_PLANE = "Control Plane";
+export const COLLIE_TAB = `${COLLIE_GLYPH} Collie`;
+
+/**
+ * Every name this tab has worn. An emoji prefix is the same migration as a rename —
+ * it changes the identity herdr is asked about — so a tab under an old name is found
+ * and renamed in place rather than joined by a second one. Add to this list; never
+ * replace it.
+ */
+export const LEGACY_TABS = ["Control Plane"] as const;
+
+/** Whether a tab label names Collie's own tab, under this name or an older one. */
+export function isCollieTab(label: string): boolean {
+  return label === COLLIE_TAB || LEGACY_TABS.some((legacy) => legacy === label);
+}
 
 /**
  * Everything a human reads is Capitalized. A model id that is not a word keeps
@@ -136,8 +156,10 @@ export function tabLabel(glyph: string, name: string): string {
 
 /** The name part of a tab label, i.e. what a collision is judged on. */
 export function tabNameOf(label: string): string {
-  const glyphs = Object.values(GLYPH).join("");
-  return label.replace(new RegExp(`^[${glyphs}]\\s*`), "").trim();
+  const glyphs = [...Object.values(GLYPH), COLLIE_GLYPH].join("");
+  // The u flag, or the dog (U+1F415) enters the class as its two surrogate halves
+  // and stripping matches one of them, leaving a lone surrogate in the name.
+  return label.replace(new RegExp(`^[${glyphs}]\\s*`, "u"), "").trim();
 }
 
 /** `implement` vs `implement · add-picker`, once something else owns the plain name. */

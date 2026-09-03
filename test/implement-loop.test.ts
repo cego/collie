@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Path, PlatformError, Schema } from "effect";
 import { Rig } from "./support/recorder";
+import { COLLIE_TAB } from "../src/naming";
 import { FakeBin } from "./support/bin";
 import { installBaseline, plannedRun, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
@@ -460,7 +461,7 @@ test(
         // Nothing names the run: the implementer's pane is unlabelled and the run has no
         // pane of its own, so the only other rename is the board's.
         expect(renames.some((n) => n!.includes("add-picker"))).toBe(false);
-        expect(renames[0]).toBe("Control Plane");
+        expect(renames[0]).toBe(COLLIE_TAB);
 
         const reviewer = path.join(run.dir, "personas", "reviewer.claude.md");
         const starts = (yield* rig.calls()).filter((c) => c.cmd === "agent start");

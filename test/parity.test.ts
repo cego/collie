@@ -357,6 +357,10 @@ effectTest("answering through the board and through the CLI leave the same trace
     glyph: "⚠",
     title: "Demo",
     detail: "",
+    // Hand-built, so nothing says when it last changed; only the app reads this.
+    at: 0,
+    target: null,
+    fixable: false,
     choice: menu,
   };
   yield* answerKey(row, { index: 0, typed: "" }, "\r");
@@ -403,7 +407,19 @@ effectTest("stopping through the board and through the CLI leave the same trace"
   };
   // Only the fields the board's stop reads; the rest is rendering.
   const view: Pick<WorkspaceView, "active"> = {
-    active: [{ id: board.id, dir: board.dir, glyph: "▶", title: "Demo", detail: "", choice: null }],
+    active: [
+      {
+        id: board.id,
+        dir: board.dir,
+        glyph: "▶",
+        title: "Demo",
+        detail: "",
+        at: 0,
+        target: null,
+        fixable: false,
+        choice: null,
+      },
+    ],
   };
   expect(yield* boardStop(session, view)).toContain("stopped");
   expect((yield* cli(["run", "stop", command.id])).exit).toBe(0);

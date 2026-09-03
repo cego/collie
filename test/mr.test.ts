@@ -9,12 +9,14 @@ import {
   gitlabReadiness,
   hostOf,
   linearIssues,
+  mrDetails,
   mrFacts,
   mrTarget,
   parseMrTarget,
   projectFromRemote,
   repoArgs,
   resolveAssignee,
+  sinceReview,
   templateFile,
 } from "../src/mr";
 import { Rig } from "./support/recorder";
@@ -282,5 +284,255 @@ test("not logged in to that host says so, and no project falls back to the check
       );
       // A target with no project can only be judged by the directory, as before.
       expect((yield* gitlabForProject(null, "/x", run)).reason).toBe("this repo has no remote");
+    }),
+  ));
+
+/** Every field a GitLab version or a token might not answer, nulled rather than absent. */
+const ALL_NULL = `{
+  "iid": 9,
+  "title": null,
+  "state": null,
+  "author": null,
+  "source_branch": null,
+  "target_branch": null,
+  "sha": null,
+  "updated_at": null,
+  "web_url": null,
+  "head_pipeline": null,
+  "pipeline": null,
+  "blocking_discussions_resolved": null,
+  "user_notes_count": null,
+  "approvals_required": null,
+  "approvals_left": null
+}`;
+
+const MR_JSON = JSON.stringify({
+  iid: 42,
+  title: "Make the tab an application",
+  state: "opened",
+  draft: false,
+  author: { username: "mk" },
+  source_branch: "collie-app",
+  target_branch: "master",
+  sha: "0123456789abcdef0123456789abcdef01234567",
+  updated_at: "2026-09-02T11:00:00.000Z",
+  web_url: "https://gitlab.example.com/g/p/-/merge_requests/42",
+  head_pipeline: { status: "success" },
+  blocking_discussions_resolved: false,
+  user_notes_count: 7,
+  approvals_required: 2,
+  approvals_left: 1,
+});
+
+/** A recording runner, so a test can count what was asked of glab as well as read it. */
+function recorder(table: Record<string, { code?: number; stdout?: string }>) {
+  const calls: string[][] = [];
+  const run = (cmd: string, args: string[]) => {
+    calls.push([cmd, ...args]);
+    const key = `${cmd} ${args.join(" ")}`;
+    const hit = table[key] ?? table[`${cmd} ${args[0]}`];
+    return Effect.succeed({ code: hit?.code ?? (hit ? 0 : 1), stdout: hit?.stdout ?? "" });
+  };
+  return { run, calls };
+}
+
+const READY = {
+  "glab --version": { stdout: "glab 1.40" },
+  "glab auth status --hostname gitlab.example.com": { stdout: "logged in" },
+};
+
+test("a merge request answers the whole panel in one view call", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const glab = recorder({
+        ...READY,
+        "glab mr view 42 --repo gitlab.example.com/g/p -F json": { stdout: MR_JSON },
+      });
+
+      const details = yield* mrDetails(
+        { project: "gitlab.example.com/g/p", iid: "42" },
+        "/w/p",
+        glab.run,
+      );
+
+      expect(details._tag).toBe("Details");
+      if (details._tag !== "Details") return;
+      expect(details.iid).toBe("42");
+      expect(details.title).toBe("Make the tab an application");
+      expect(details.state).toBe("opened");
+      expect(details.author).toBe("mk");
+      expect(details.sourceBranch).toBe("collie-app");
+      expect(details.targetBranch).toBe("master");
+      expect(details.pipeline).toBe("success");
+      expect(details.approvals).toBe("1 of 2 still needed");
+      expect(details.unresolved).toBe(true);
+      expect(details.notes).toBe(7);
+      // Short enough to read, long enough to tell two heads apart.
+      expect(details.headSha).toBe("0123456");
+      expect(details.updatedAt).toBe(Date.parse("2026-09-02T11:00:00.000Z"));
+      expect(details.url).toBe("https://gitlab.example.com/g/p/-/merge_requests/42");
+
+      // One call for the panel; the readiness probes are what precede it.
+      expect(glab.calls.filter((c) => c[1] === "mr")).toHaveLength(1);
+    }),
+  ));
+
+test("no glab, no login and a dead merge request each come back as one stated line", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ref = { project: "gitlab.example.com/g/p", iid: "42" };
+
+      const noGlab = yield* mrDetails(ref, "/w/p", recorder({}).run);
+      expect(noGlab).toEqual({ _tag: "Unavailable", reason: "glab is not installed" });
+
+      const loggedOut = yield* mrDetails(
+        ref,
+        "/w/p",
+        recorder({ "glab --version": { stdout: "glab 1.40" } }).run,
+      );
+      expect(loggedOut).toEqual({
+        _tag: "Unavailable",
+        reason: "glab is not logged in to gitlab.example.com",
+      });
+
+      // Ready, but glab cannot answer about this merge request.
+      const gone = yield* mrDetails(
+        ref,
+        "/w/p",
+        recorder({ ...READY, "glab mr view 42 --repo gitlab.example.com/g/p -F json": { code: 1 } })
+          .run,
+      );
+      expect(gone).toEqual({
+        _tag: "Unavailable",
+        reason: "glab could not read gitlab.example.com/g/p!42",
+      });
+
+      // Ready and answering, with something that is not a merge request.
+      const nonsense = yield* mrDetails(
+        ref,
+        "/w/p",
+        recorder({
+          ...READY,
+          "glab mr view 42 --repo gitlab.example.com/g/p -F json": { stdout: "<html>login</html>" },
+        }).run,
+      );
+      expect(nonsense).toEqual({
+        _tag: "Unavailable",
+        reason: `what glab said about gitlab.example.com/g/p!42 is not a merge request`,
+      });
+    }),
+  ));
+
+test("a merge request that has not moved since a review says so, and one that has", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const glab = recorder({
+        ...READY,
+        "glab mr view 42 --repo gitlab.example.com/g/p -F json": { stdout: MR_JSON },
+      });
+      const details = yield* mrDetails(
+        { project: "gitlab.example.com/g/p", iid: "42" },
+        "/w/p",
+        glab.run,
+      );
+      if (details._tag !== "Details") throw new Error("expected details");
+
+      // The review finished after the last change: nothing has moved, stop looking.
+      expect(sinceReview(details, Date.parse("2026-09-02T12:00:00.000Z"))).toBe(
+        "nothing has moved since this review",
+      );
+      // The review finished before it: they have pushed, review again.
+      expect(sinceReview(details, Date.parse("2026-09-02T09:00:00.000Z"))).toBe(
+        "changed 2h after this review — head 0123456",
+      );
+      // No review to compare against.
+      expect(sinceReview(details, 0)).toBe("");
+    }),
+  ));
+
+test("a real merge request decodes, nulls and absent approvals and all", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Captured verbatim from `glab mr view 17 --repo … -F json` against a live GitLab,
+      // trimmed to the fields the panel reads. `"pipeline": null` is what a merge request
+      // with no second pipeline actually sends: a schema that allowed the key to be
+      // omitted but not null rejected it, and the panel reported a merge request it had
+      // just read as "not a merge request".
+      const fs = yield* FileSystem.FileSystem;
+      const real = yield* fs.readFileString("test/support/mr-view.json");
+      const glab = recorder({
+        ...READY,
+        "glab mr view 17 --repo gitlab.example.com/g/p -F json": { stdout: real },
+      });
+
+      const details = yield* mrDetails(
+        { project: "gitlab.example.com/g/p", iid: "17" },
+        "/w/p",
+        glab.run,
+      );
+
+      expect(details._tag).toBe("Details");
+      if (details._tag !== "Details") return;
+      expect(details.iid).toBe("17");
+      expect(details.state).toBe("opened");
+      expect(details.author).toBe("mk");
+      expect(details.sourceBranch).toBe("collie-app");
+      // `head_pipeline` answers even though `pipeline` is null.
+      expect(details.pipeline).toBe("skipped");
+      expect(details.unresolved).toBe(false);
+      // Approvals are not on the merge-request object here, so the panel says nothing
+      // about them rather than claiming none are needed.
+      expect(details.approvals).toBe("");
+      expect(details.headSha).toBe("a40caaf");
+    }),
+  ));
+
+test("a required-but-unknown approval count says what is required, not that none approved", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const glab = recorder({
+        ...READY,
+        "glab mr view 8 --repo gitlab.example.com/g/p -F json": {
+          stdout: `{ "iid": 8, "approvals_required": 2 }`,
+        },
+      });
+
+      const details = yield* mrDetails(
+        { project: "gitlab.example.com/g/p", iid: "8" },
+        "/w/p",
+        glab.run,
+      );
+
+      if (details._tag !== "Details") throw new Error("expected details");
+      // How many are left is what this GitLab did not answer; "2 of 2 still needed"
+      // would assert nobody has approved, which the input does not say.
+      expect(details.approvals).toBe("2 approval(s) required");
+    }),
+  ));
+
+test("a null where a value could have been is the same as no value", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const glab = recorder({
+        ...READY,
+        "glab mr view 9 --repo gitlab.example.com/g/p -F json": { stdout: ALL_NULL },
+      });
+
+      const details = yield* mrDetails(
+        { project: "gitlab.example.com/g/p", iid: "9" },
+        "/w/p",
+        glab.run,
+      );
+
+      // Every one of them nulled: the panel renders a merge request it knows little
+      // about rather than refusing to render one at all.
+      expect(details._tag).toBe("Details");
+      if (details._tag !== "Details") return;
+      expect(details.iid).toBe("9");
+      expect(details.title).toBe("");
+      expect(details.pipeline).toBe("");
+      expect(details.approvals).toBe("");
+      expect(details.unresolved).toBe(false);
+      expect(details.updatedAt).toBe(0);
     }),
   ));

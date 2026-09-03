@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
 import {
   agentName,
+  COLLIE_TAB,
   disambiguate,
   displayName,
   evenRatio,
   GLYPH,
   insertIndexFor,
+  isCollieTab,
+  LEGACY_TABS,
   rankOf,
   paneLabel,
   stepLabel,
@@ -163,4 +166,20 @@ test("a new tab lands after the last Collie tab it does not outrank", () => {
   // The pin failed, so there is no board: the tab still lands ahead of lower ranks.
   expect(insertIndexFor([foreign, tab("review")], rankOf("plan"))).toBe(0);
   expect(insertIndexFor([], rankOf("plan"))).toBe(0);
+});
+
+test("the Collie tab's label survives its own helpers", () => {
+  expect(COLLIE_TAB).toBe("🐕 Collie");
+  const name = tabNameOf(COLLIE_TAB);
+  expect(name).toBe("Collie");
+  // Without the u flag the dog enters the character class as two surrogate halves
+  // and stripping matches one of them, leaving a lone surrogate in the name.
+  expect(Array.from(name)).toHaveLength(6);
+  // A run tab keeps its status glyph and gains no dog.
+  expect(tabNameOf(tabLabel(GLYPH.running, "implement"))).toBe("Implement");
+  // Every name this tab has worn is still matched, or a rename duplicates the tab.
+  expect(LEGACY_TABS).toContain("Control Plane");
+  expect(isCollieTab("Control Plane")).toBe(true);
+  expect(isCollieTab(COLLIE_TAB)).toBe(true);
+  expect(isCollieTab("Implement")).toBe(false);
 });

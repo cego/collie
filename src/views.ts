@@ -1,0 +1,451 @@
+// The three Views beyond the board: History, Workflows and Settings. Each is a plain
+// projection of what is already on disk — run dirs, definition layers, config — with no
+// state of its own, produced by Effect and handed to the app as data. Produced when the
+// View is first shown, because loading every run's outputs at startup is what would make
+// the tab slow the day it became useful.
+
+import { Effect, FileSystem, Path, Stream } from "effect";
+import { loadDefaults, readConfig } from "./config";
+import {
+  isStale,
+  layers,
+  loadDefinitions,
+  resolveWorkflow,
+  skillDirs,
+  validateWorkflow,
+  type LayerName,
+  type ResolvedStep,
+  type Provenance,
+} from "./definitions";
+import { RUNNER_LOG } from "./driver";
+import type { PluginEnv } from "./env";
+import { choiceHint } from "./engine";
+import { displayName, reason, targetLabel } from "./naming";
+import type { MrPanel } from "./mr";
+import { REVIEW_FILE } from "./output";
+import { RunStore, type Run, type RunRecord } from "./run";
+import { isString } from "./schema";
+import { claudeTrust } from "./trust";
+import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
+import { fixableRun, type RunRow } from "./workspace";
+
+/** Long enough to answer "what did I do here", short enough to stay one read. */
+const HISTORY = 200;
+
+function title(record: RunRecord): string {
+  const target = record.target_label ?? targetLabel(record.workflow, record.slug, record.inputs);
+  const name = displayName(record.workflow);
+  return target ? `${name} · ${target}` : name;
+}
+
+/** How long the run took, where both ends of it were recorded. */
+function took(record: RunRecord): string | null {
+  if (!record.finished_at) return null;
+  const ms = Date.parse(record.finished_at) - Date.parse(record.created_at);
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const minutes = Math.round(ms / 60_000);
+  return minutes < 1 ? "under a minute" : `${minutes}m`;
+}
+
+/**
+ * Every finished Run of this checkout, whatever session or workspace it came from —
+ * which is exactly what separates History from the board: the Runs view is this
+ * Session's live work, and this is the record of everything before it.
+ */
+export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
+  stateDir: string;
+  cwd: string;
+  /** The Runs already read, so a caller drawing two Views scans the dir once. */
+  runs?: ReadonlyArray<Run>;
+}) {
+  const all = opts.runs ?? (yield* new RunStore(opts.stateDir).list());
+  const runs = all
+    .filter((r) => r.record.cwd === opts.cwd && r.record.status !== "running")
+    .slice(0, HISTORY);
+
+  const rows: RunRow[] = [];
+  for (const run of runs) {
+    const record = run.record;
+    const parts: string[] = [record.status];
+    if (record.outstanding.length > 0) parts.push(`${record.outstanding.length} finding(s) open`);
+    if (record.fixed > 0) parts.push(`${record.fixed} fixed`);
+    const duration = took(record);
+    if (duration) parts.push(duration);
+    if (record.mr_url) parts.push(record.mr_url);
+    rows.push({
+      id: run.id,
+      dir: run.dir,
+      glyph: glyphOf(record.status),
+      title: title(record),
+      detail: parts.join(" · "),
+      at: record.finished_at ? Date.parse(record.finished_at) : 0,
+      target: record.inputs.target ?? null,
+      // The board's own rule, not a second copy of it: History and the Runs view both
+      // decide from this whether to offer the action that starts a fix run.
+      fixable: yield* fixableRun(run),
+      choice: null,
+    });
+  }
+  return rows;
+});
+
+function glyphOf(status: RunRecord["status"]): string {
+  // Imported rather than re-derived would be circular; the board's own glyphFor reads a
+  // whole record, and History has only the outcome.
+  return status === "done" ? "✓" : status === "failed" ? "✗" : "⚠";
+}
+
+/** One Workflow or Persona as the Workflows view lists it. */
+export interface DefinitionRow {
+  name: string;
+  title: string;
+  layer: LayerName;
+  /** `extends x`, `(stale …)`: where it came from and whether it has fallen behind. */
+  provenance: string;
+  path: string;
+  inputs: string[];
+  /** The steps it runs, one line each: what a definition's execution shape actually is. */
+  steps: string[];
+  /** Every Choice step and the decision titles it can be answered with. */
+  decisions: Array<{ step: string; titles: string[]; hints: string[] }>;
+  /** What `validateWorkflow` says, so a broken fork is visible without running it. */
+  problems: string[];
+}
+
+/** One step as the panel lists it: who runs it, and what shape the step has. */
+function stepLine(step: ResolvedStep): string {
+  const who = [step.harness, step.model].filter((part) => part !== undefined).join("/");
+  return [
+    step.id,
+    step.persona ?? "",
+    who,
+    step.parallel && step.parallel.length > 0 ? `${step.parallel.length} in parallel` : "",
+    step.fanIn ? `fan-in ${step.fanIn}` : "",
+    (step.choices ?? []).length > 0 ? "choice" : "",
+  ]
+    .filter((part) => part !== "")
+    .join(" · ");
+}
+
+function provenanceOf(def: Provenance): string {
+  const parts: string[] = [];
+  if (def.extends) parts.push(`extends ${def.extends}`);
+  if (isStale(def)) parts.push("stale — the original has changed since this copy");
+  return parts.join(" · ");
+}
+
+/**
+ * Every Workflow and Persona the layers offer, with the validation each would fail on.
+ * Validation is the point: a fork that cannot run should be visible here rather than at
+ * launch, so the errors are collected per row instead of aborting the view.
+ */
+export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: PluginEnv) {
+  const defs = yield* loadDefinitions(yield* layers(env));
+  const defaults = yield* loadDefaults(env.configDir);
+  const skills = yield* skillDirs(env);
+
+  const workflows: DefinitionRow[] = [];
+  for (const def of [...defs.workflows.values()].sort((a, b) => a.name.localeCompare(b.name))) {
+    // Resolving is where an `extends:` or `use:` that points at nothing shows up, and it
+    // throws rather than returning; a row that cannot resolve is still a row.
+    const attempt = yield* Effect.try(() => resolveWorkflow(def.name, defs, defaults)).pipe(
+      Effect.map((workflow) => ({ ok: true as const, workflow })),
+      Effect.catch((cause) => Effect.succeed({ ok: false as const, why: reason(cause) })),
+    );
+    if (!attempt.ok) {
+      workflows.push({
+        name: def.name,
+        title: def.title,
+        layer: def.layer,
+        provenance: provenanceOf(def),
+        path: def.path,
+        inputs: Object.keys(def.inputs),
+        // Unresolved is exactly the case where the steps cannot be listed: that is what
+        // the problem on this row says.
+        steps: [],
+        decisions: [],
+        problems: [attempt.why],
+      });
+      continue;
+    }
+    const resolved = attempt.workflow;
+    workflows.push({
+      name: resolved.name,
+      title: resolved.title,
+      layer: resolved.layer,
+      provenance: provenanceOf(def),
+      path: resolved.path,
+      inputs: Object.keys(resolved.inputs),
+      steps: resolved.steps.map(stepLine),
+      decisions: resolved.steps
+        .filter((step) => (step.choices ?? []).length > 0)
+        .map((step) => ({
+          step: step.id,
+          titles: (step.choices ?? []).map((c) => c.title),
+          hints: (step.choices ?? []).map((c) => choiceHint(c)),
+        })),
+      problems: [...(yield* validateWorkflow(resolved, defs, defaults, skills))],
+    });
+  }
+
+  const personas: DefinitionRow[] = [...defs.personas.values()]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((def) => ({
+      name: def.name,
+      title: displayName(def.name),
+      layer: def.layer,
+      provenance: provenanceOf(def),
+      path: def.path,
+      inputs: [],
+      // A persona is instructions, not a sequence: it has no steps to list.
+      steps: [],
+      decisions: [],
+      problems: [],
+    }));
+
+  // A layer that would not load at all is the view's problem too, not a silent gap.
+  return { workflows, personas, errors: defs.errors };
+});
+
+/** Text a panel read from a file, or why it has none. */
+export type Panel =
+  | { _tag: "None"; reason: string }
+  | { _tag: "Text"; text: string; truncated: boolean };
+
+/**
+ * How much of a file the panel will read. A run dir can hold a 40 MB log and a review
+ * long enough to stall a redraw; the panel is for reading, and what does not fit is
+ * said to be cut rather than quietly dropped.
+ */
+const REVIEW_CAP = 64 * 1024;
+const OUTPUT_CAP = 8 * 1024;
+/** And how much of the log the tail shows: the end of it is the part worth reading. */
+const TAIL_CAP = 8 * 1024;
+
+const capped = Effect.fn("Views.capped")(function* (file: string, cap: number) {
+  const fs = yield* FileSystem.FileSystem;
+  const info = yield* fs.stat(file).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (info === null) return null;
+  // Read the cap, rather than read the file and then slice it to the cap: an agent
+  // writes these, so a review or an Output can be any size at all, and every selection
+  // and every refresh after it would pull the whole of one into the tab's memory.
+  const text = yield* fs.stream(file, { bytesToRead: cap }).pipe(
+    Stream.decodeText(),
+    Stream.mkString,
+    Effect.catch(() => Effect.succeed(null)),
+  );
+  if (text === null) return null;
+  return { _tag: "Text" as const, text, truncated: Number(info.size) > cap };
+});
+
+/**
+ * The end of a file, for a file only the end of which is interesting. Read from an
+ * offset rather than read and sliced: a run dir can hold a 40 MB log, and the panel
+ * asking for one is not a reason to hold it in memory.
+ */
+const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: number) {
+  const fs = yield* FileSystem.FileSystem;
+  const info = yield* fs.stat(file).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (info === null) return null;
+  const from = Math.max(0, Number(info.size) - cap);
+  const text = yield* fs.stream(file, { offset: from }).pipe(
+    Stream.decodeText(),
+    Stream.mkString,
+    Effect.catch(() => Effect.succeed("")),
+  );
+  // Starting mid-line reads as corruption, so the partial first line goes.
+  return from === 0
+    ? { _tag: "Text" as const, text, truncated: false }
+    : { _tag: "Text" as const, text: text.slice(text.indexOf("\n") + 1), truncated: true };
+});
+
+/** One step's Output: what it was asked for, and what is actually there. */
+export interface OutputPanel {
+  step: string;
+  /** Where it was asked for, relative to the run dir, so the path is readable. */
+  where: string;
+  /** `recorded`, `missing`, or `unreadable` — the states `src/output.ts` already models. */
+  state: "recorded" | "missing" | "unreadable";
+  text: string;
+}
+
+/** Everything the detail panel shows for the selected Run. */
+export interface RunDetail {
+  id: string;
+  dir: string;
+  title: string;
+  status: string;
+  inputs: Array<{ name: string; value: string; source: string }>;
+  steps: Array<{ id: string; status: string; note: string; agents: string[] }>;
+  /** One line each, as the record wrote them. */
+  handoffs: string[];
+  /** The rendered review — the thing the panel exists for. */
+  review: Panel;
+  outputs: OutputPanel[];
+  /** The end of the run's log while the panel's tail is toggled on; `null` while it is off. */
+  tail: Panel | null;
+  /** When this Run finished, so the merge-request panel can say what moved since. */
+  finishedAt: number;
+  /** Filled by the bridge for a Run whose target is a merge request; never here. */
+  mr: MrPanel | null;
+}
+
+/**
+ * The selected Run, read from its own directory. Files, so this is state produced by an
+ * Effect fiber and never a read inside a component — that is what would make the app
+ * stutter, and untestable before that.
+ *
+ * The merge request is passed in rather than fetched: it is cached per ref with a TTL by
+ * the caller, because a list must never fetch and a re-selection must cost nothing.
+ */
+export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts: {
+  stateDir: string;
+  runId: string;
+  mr: MrPanel | null;
+  /** Whether the panel's log tail is showing; the log is only read while it is. */
+  tail?: boolean;
+  /** How many caps of the review to read, for one the panel has been asked to page. */
+  pages?: number;
+}) {
+  const path = yield* Path.Path;
+  const run = yield* new RunStore(opts.stateDir)
+    .load(opts.runId)
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+  // Gone, half-written, or never there: the panel shows the row's own facts instead.
+  if (!run) return null;
+  const record = run.record;
+
+  const review =
+    (yield* capped(path.join(run.dir, REVIEW_FILE), REVIEW_CAP * Math.max(1, opts.pages ?? 1))) ??
+    ({ _tag: "None", reason: `this run wrote no ${REVIEW_FILE}` } satisfies Panel);
+
+  const outputs: OutputPanel[] = [];
+  for (const step of record.steps) {
+    for (const variant of step.variants) {
+      if (!variant.output) continue;
+      const text = yield* capped(path.join(run.dir, variant.output), OUTPUT_CAP);
+      outputs.push({
+        step: step.id,
+        where: variant.output,
+        // An Output the agent never wrote, or wrote as prose, is what the variant's own
+        // error already says; the panel repeats it rather than deciding again.
+        state: text === null ? "missing" : variant.error ? "unreadable" : "recorded",
+        text: text === null ? (variant.error ?? "nothing was written here") : text.text.trim(),
+      });
+    }
+  }
+
+  return {
+    id: run.id,
+    dir: run.dir,
+    title: title(record),
+    status: record.status,
+    inputs: Object.entries(record.inputs).map(([name, value]) => ({
+      name,
+      value,
+      source: record.input_sources[name] ?? "",
+    })),
+    steps: record.steps.map((step) => ({
+      id: step.id,
+      status: step.status,
+      note: step.note ?? "",
+      agents: step.variants.map((v) => v.agent),
+    })),
+    handoffs: record.handoffs.map(
+      (h) => `${h.direction} ${h.role} (${h.agent}) · run ${h.run}${h.note ? ` · ${h.note}` : ""}`,
+    ),
+    review,
+    outputs,
+    tail: opts.tail
+      ? ((yield* tailed(path.join(run.dir, RUNNER_LOG), TAIL_CAP)) ??
+        ({ _tag: "None", reason: `this run wrote no ${RUNNER_LOG}` } satisfies Panel))
+      : null,
+    finishedAt: record.finished_at ? Date.parse(record.finished_at) : 0,
+    mr: opts.mr,
+  } satisfies RunDetail;
+});
+
+/** What Settings shows and can write back. No new store: `config.json` and the harness. */
+export interface SettingsView {
+  configPath: string;
+  /** The defaults a Run uses, resolved through the config file and the fallbacks. */
+  defaults: Array<{ key: string; value: string }>;
+  /** Values a Run remembered for next time, `linear.team` and its kind. */
+  remembered: Array<{ key: string; value: string }>;
+  /** Whether the harness will work in this directory without stopping to ask. */
+  trust: { cwd: string; state: string };
+}
+
+/** Every leaf of the config file as a dotted key, so a nested value still has a name. */
+function flatten(raw: YamlMap, prefix = ""): Array<{ key: string; value: string }> {
+  const out: Array<{ key: string; value: string }> = [];
+  for (const [key, value] of Object.entries(raw)) {
+    const dotted = prefix === "" ? key : `${prefix}.${key}`;
+    if (isYamlMap(value)) out.push(...flatten(value, dotted));
+    else out.push({ key: dotted, value: scalar(value) });
+  }
+  return out;
+}
+
+/** One config value as a line of text. A nested map has no one line, so it has none. */
+function scalar(value: YamlValue | undefined): string {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.map(scalar).join(", ");
+  if (isYamlMap(value)) return "";
+  // Serialised rather than stringified: a value the checker still reads as map-like
+  // would otherwise reach Settings as "[object Object]".
+  return isString(value) ? value : (JSON.stringify(value) ?? "");
+}
+
+/**
+ * The config keys `loadDefaults` actually reads, which are the only ones worth offering
+ * to change. They are snake_case on disk and camelCase on `Defaults`, and Settings used
+ * to name the camelCase ones — so editing "maxIterations" reported success, wrote a key
+ * nothing reads, and left the effective default exactly where it was.
+ */
+const DEFAULT_KEYS = [
+  "harness",
+  "model",
+  "effort",
+  "trust",
+  "max_iterations",
+  "handoff_timeout_ms",
+  "quiet_ms",
+] as const;
+
+/** The three that `loadDefaults` reads with `isNumber`: a string there is ignored. */
+export const NUMERIC_DEFAULTS: ReadonlyArray<string> = [
+  "max_iterations",
+  "handoff_timeout_ms",
+  "quiet_ms",
+];
+
+export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: PluginEnv) {
+  const path = yield* Path.Path;
+  const defaults = yield* loadDefaults(env.configDir);
+  const raw = yield* readConfig(env.configDir);
+  const state = yield* claudeTrust(env.home, env.stateDir)
+    .state(env.cwd)
+    .pipe(Effect.catch(() => Effect.succeed("unknown" as const)));
+
+  return {
+    configPath: path.join(env.configDir, "config.json"),
+    // Named one by one rather than looked up: these are the keys Settings writes back
+    // through `config.ts`, and a dictionary would let one drift out of `Defaults`.
+    defaults: [
+      { key: "harness", value: defaults.harness },
+      { key: "model", value: defaults.model },
+      { key: "effort", value: defaults.effort ?? "" },
+      { key: "trust", value: defaults.trust },
+      { key: "max_iterations", value: String(defaults.maxIterations) },
+      { key: "handoff_timeout_ms", value: String(defaults.handoffTimeoutMs) },
+      { key: "quiet_ms", value: String(defaults.quietMs) },
+    ],
+    // Everything else the file holds: remembered answers, per-harness model lists, the
+    // notification kinds someone turned off. Shown as written rather than interpreted.
+    remembered: flatten(raw).filter(
+      (entry) => !DEFAULT_KEYS.some((key) => entry.key === String(key)),
+    ),
+    trust: { cwd: env.cwd, state },
+  } satisfies SettingsView;
+});

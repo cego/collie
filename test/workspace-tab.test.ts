@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Rig, type RigError } from "./support/recorder";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
-import { CONTROL_PLANE } from "../src/naming";
+import { COLLIE_TAB, LEGACY_TABS } from "../src/naming";
 import {
   registerAgent,
   registryPath,
@@ -145,7 +145,7 @@ function opened(entrypoint: string) {
     );
 }
 
-effectTest("the first run opens the Control Plane tab and puts it first", function* () {
+effectTest("the first run opens the Collie tab and puts it first", function* () {
   yield* rig.queueOutputs([CLEAN]);
 
   const { status } = yield* runWorkflow(rig, "solo", { goal: "Add a picker" });
@@ -161,10 +161,10 @@ effectTest("the first run opens the Control Plane tab and puts it first", functi
   const renames = (yield* rig.calls())
     .filter((c) => c.cmd === "tab rename")
     .map((c) => c.argv!.slice(2));
-  expect(renames[0]).toEqual(["1:1", CONTROL_PLANE]);
+  expect(renames[0]).toEqual(["1:1", COLLIE_TAB]);
   expect(
     (yield* rig.calls()).filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1)),
-  ).toContain(CONTROL_PLANE);
+  ).toContain(COLLIE_TAB);
 
   // First tab of the workspace, over the socket: there is no CLI for it. The step's
   // own tab is placed after it, by rank.
@@ -196,6 +196,29 @@ effectTest("the second run reuses that tab and re-asserts its position", functio
     tab_id: "1:1",
     insert_index: 0,
   });
+});
+
+effectTest("a tab under an older name is renamed in place, not joined by a second", function* () {
+  // A session that opened this tab before the rename. Its label is the identity
+  // `findOrOpenView` matches on, so a constant flipped without this lookup would
+  // leave the human with two Collie tabs and the run asking in the one they closed.
+  const legacy = LEGACY_TABS[0]!;
+  const seeded = yield* rig.addTab(legacy, legacy);
+  yield* rig.queueOutputs([CLEAN]);
+
+  const { status } = yield* runWorkflow(rig, "solo", { goal: "one" });
+
+  expect(status).toBe("done");
+  // No second Collie tab: the pane entrypoint was never opened again.
+  expect(yield* opened("workspace")).toHaveLength(0);
+  const renamed = (yield* rig.calls())
+    .filter((c) => c.cmd === "tab rename")
+    .map((c) => c.argv!.slice(2));
+  expect(renamed).toContainEqual([seeded.tabId, COLLIE_TAB]);
+  // The view pane wears the label too, or the next run stops finding it inside the tab.
+  expect(
+    (yield* rig.calls()).filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2)),
+  ).toContainEqual([seeded.paneId, COLLIE_TAB]);
 });
 
 effectTest("a step that fails after starting its agents still records them", function* () {
@@ -458,7 +481,7 @@ effectTest("the board lists this Session's agents and runs, and nobody else's", 
   expect(view.recent[0]!.detail).toBe("blocked · 1 finding(s) open");
 
   const text = renderWorkspace(view, "sent the review");
-  expect(text.split("\n")[0]).toBe(`${CONTROL_PLANE} — ${rig.projectDir.split("/").at(-1)}`);
+  expect(text.split("\n")[0]).toBe(`${COLLIE_TAB} — ${rig.projectDir.split("/").at(-1)}`);
   expect(text).toContain("1  Implementer");
   expect(text).toContain("⚙ Implement · add-a-picker");
   expect(text).toContain("⚠ Review · worktree");

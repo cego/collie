@@ -1,6 +1,10 @@
+// The raw keypress reader, which is now only the text board's: a pane whose renderer
+// would not start still draws itself and still reads keys. OpenTUI owns raw mode
+// everywhere else. Both behaviours here were `src/picker.ts`'s and outlived it.
+
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
-import { Keyboard } from "../src/picker";
+import { Keyboard, tokenizeKeys } from "../src/keys";
 import { runEffect } from "./support/effect";
 
 class FakeInput {
@@ -55,3 +59,9 @@ test("a completed keyboard session releases its terminal reader", () =>
       expect(input.listener).toBeNull();
     }),
   ));
+
+test("a stdin chunk carrying several keypresses is split into keys", () => {
+  expect(tokenizeKeys("\x7f\x7f\x7f")).toEqual(["\x7f", "\x7f", "\x7f"]);
+  expect(tokenizeKeys("re\x1b[Bv\r")).toEqual(["r", "e", "\x1b[B", "v", "\r"]);
+  expect(tokenizeKeys("\x1b")).toEqual(["\x1b"]);
+});

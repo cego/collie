@@ -89,5 +89,5 @@ fi
 say "Done."
 say "Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f forks."
 say "Outside it, the collie skill lets an agent drive runs from the CLI."
-say "The first run in a workspace opens a 'Control Plane' tab as its first tab (prefix+1):"
+say "The first run in a workspace opens a '🐕 Collie' tab as its first tab (prefix+1):"
 say "live agents, running and finished runs, and every menu a workflow asks you to answer."

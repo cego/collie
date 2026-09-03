@@ -9,7 +9,8 @@ import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 import { installFakeSkills } from "./support/defs";
 import { FakeBin } from "./support/bin";
-import { prepareWorkflow, settleGiven, upgrade } from "../src/operations";
+import { postReview, prepareWorkflow, settleGiven, upgrade } from "../src/operations";
+import { REVIEW_FILE } from "../src/output";
 import { RunStore } from "../src/run";
 
 let rig: Rig;
@@ -203,5 +204,111 @@ test("upgrade of a plain install fetches the release without asking git anything
 
       expect(fetched).toMatchObject({ ok: true, data: { checkout: false, updated: false } });
       expect(fetched.ok && fetched.human).toContain("not a checkout");
+    }),
+  ));
+
+/** A finished Run over one target, with or without the review it wrote. */
+const reviewed = Effect.fn("operationsTest.reviewed")(function* (
+  target: string,
+  review: string | null,
+) {
+  const env = rig.pluginEnv();
+  const run = yield* new RunStore(env.stateDir).create({
+    workflow: "review",
+    cwd: env.cwd,
+    session: env.socketPath,
+    workspace: env.workspaceId,
+    workspaceLabel: "test",
+    inputs: { target },
+    inputSources: {},
+    stepIds: ["review"],
+    maxIterations: 1,
+    primaryInput: "target",
+  });
+  if (review !== null) {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.writeFileString(`${run.dir}/${REVIEW_FILE}`, review);
+  }
+  return run;
+});
+
+/**
+ * The Choice and the app's merge-request panel both post a review, so the behaviour
+ * lives in one place. These are that place's own tests; `test/review-e2e.test.ts`
+ * proves the Choice still reaches it.
+ */
+test("posting a review sends review.md to the merge request it reviewed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const notes = `${rig.root}/bin/notes.txt`;
+      yield* bin.add("glab", `printf '%s\\n' "$@" > ${notes}\nexit 0`);
+      const run = yield* reviewed("mr:gitlab.example.com/g/p!12", "# Review\n\nAll good.\n");
+
+      const posted = yield* postReview(run);
+
+      expect(posted).toEqual({
+        ok: true,
+        message: "posted the review to gitlab.example.com/g/p!12",
+      });
+      const fs = yield* FileSystem.FileSystem;
+      // One note, with --repo so no checkout is needed, and review.md verbatim.
+      expect(yield* fs.readFileString(notes)).toBe(
+        "mr\nnote\n12\n--repo\ngitlab.example.com/g/p\n--message\n# Review\n\nAll good.\n\n",
+      );
+    }),
+  ));
+
+test("a run with no review, or no merge request, says which and posts nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const notes = `${rig.root}/bin/notes.txt`;
+      yield* bin.add("glab", `printf '%s\\n' "$@" > ${notes}\nexit 0`);
+
+      const noReview = yield* reviewed("mr:gitlab.example.com/g/p!12", null);
+      expect(yield* postReview(noReview)).toEqual({
+        ok: false,
+        message: `there is no ${REVIEW_FILE} to post`,
+      });
+
+      const notAnMr = yield* reviewed("worktree", "# Review\n");
+      expect(yield* postReview(notAnMr)).toEqual({
+        ok: false,
+        message: "worktree is not a merge request",
+      });
+
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.exists(notes)).toBe(false);
+    }),
+  ));
+
+test("a glab that refuses is reported rather than reported as posted", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 3`);
+      const run = yield* reviewed("mr:gitlab.example.com/g/p!12", "# Review\n");
+
+      expect(yield* postReview(run)).toEqual({
+        ok: false,
+        message: "glab mr note gitlab.example.com/g/p!12 failed (exit 3)",
+      });
+    }),
+  ));
+
+test("a workflow that still needs an answer settles nothing and says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* installFakeSkills(rig.root);
+      const env = rig.pluginEnv();
+
+      const prepared = yield* prepareWorkflow(env, "plan");
+      if (!prepared.ok) throw new Error("expected plan to prepare");
+      const settled = yield* settleGiven(env, prepared, { inputs: {}, decide: [] });
+
+      // What `collie run start` and every non-interactive caller depend on: an Input
+      // nobody could infer is the caller's to give, and nothing is half-created for it.
+      expect(settled.ok).toBe(false);
+      if (settled.ok) return;
+      expect(settled.error.code).toBe("needs_input");
+      expect(yield* new RunStore(env.stateDir).list()).toHaveLength(0);
     }),
   ));

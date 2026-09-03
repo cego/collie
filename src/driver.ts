@@ -9,7 +9,7 @@ import {
   withLock,
 } from "./lock";
 import type { EnginePrompts } from "./engine";
-import type { PickItem } from "./picker";
+import type { PickItem } from "./inputs";
 import { isString } from "./schema";
 
 export const PROGRESS = "progress.jsonl";

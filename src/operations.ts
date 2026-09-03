@@ -28,7 +28,7 @@ import {
   stopDriver,
   type InboxCommandValue,
 } from "./driver";
-import { shell, type Runner } from "./mr";
+import { parseMrTarget, repoArgs, shell, type Runner } from "./mr";
 import {
   classifyGivenTarget,
   classifyWorkSource,
@@ -306,6 +306,30 @@ function parseDecide(values: ReadonlyArray<string>, wf: ResolvedWorkflow): Parse
  * silently degraded to "ask me then" hangs the unattended run the flag exists for,
  * and a merge-request URL that is not normalised renders `{{target_repo}}` empty.
  */
+/**
+ * Settles the Inputs a caller already knows, wherever it knew them from: the command
+ * line, a chained Run's `inputs:`, or a row in the Collie tab that named one by being
+ * clicked. A given value owes the prompts its kind, exactly as the picker and a chained
+ * Run record it: the workflow body branches on `<name>_kind`, and an inferred kind left
+ * over from a candidate would describe the value that was not chosen. A diff-target is
+ * normalised as well as classified, or `{{target_repo}}` renders empty.
+ */
+export const settleExplicit = Effect.fn("operations.settleExplicit")(function* (
+  env: PluginEnv,
+  resolutions: Resolution[],
+  inputs: Record<string, string>,
+) {
+  for (const item of resolutions) {
+    const value = inputs[item.name];
+    if (value === undefined) continue;
+    const target =
+      item.strategy === "diff-target" ? yield* classifyGivenTarget(value, { cwd: env.cwd }) : null;
+    const kind =
+      item.strategy === "work-source" ? (yield* classifyWorkSource(value)).kind : target?.kind;
+    settle(item, { value: target?.value ?? value, source: "explicit", kind });
+  }
+});
+
 export const settleGiven = Effect.fn("operations.settleGiven")(function* (
   env: PluginEnv,
   prepared: { readonly workflow: ResolvedWorkflow; readonly resolutions: Resolution[] },
@@ -337,19 +361,7 @@ export const settleGiven = Effect.fn("operations.settleGiven")(function* (
     }
   }
 
-  for (const item of resolutions) {
-    const value = given.inputs[item.name];
-    if (value === undefined) continue;
-    // A given value owes the prompts its kind, exactly as the picker and a chained Run
-    // record it: the workflow body branches on `<name>_kind`, and an inferred kind left
-    // over from a candidate would describe the value that was not chosen. A diff-target
-    // is normalised as well as classified, or `{{target_repo}}` renders empty.
-    const target =
-      item.strategy === "diff-target" ? yield* classifyGivenTarget(value, { cwd: env.cwd }) : null;
-    const kind =
-      item.strategy === "work-source" ? (yield* classifyWorkSource(value)).kind : target?.kind;
-    settle(item, { value: target?.value ?? value, source: "explicit", kind });
-  }
+  yield* settleExplicit(env, resolutions, given.inputs);
 
   // Nobody is here to be asked; an unsettled Input is the caller's to give.
   const unresolved = resolutions.filter((item) => item.needsAsking || item.candidates);
@@ -460,6 +472,8 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     readonly decisions?: Record<string, string>;
     readonly workspace: WorkspaceInfo | null;
     readonly note?: string;
+    /** The Run this one came out of, where it came out of one. */
+    readonly parent?: string;
   },
 ) {
   const { workflow, resolutions, workspace } = options;
@@ -476,6 +490,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     stepIds: workflow.steps.map((step) => step.id),
     maxIterations: workflow.maxIterations,
     primaryInput: primaryInput(resolutions),
+    parent: options.parent,
   });
   yield* run.log(`created from ${workflow.path} (${workflow.layer} layer)`);
   if (options.note) yield* run.log(options.note);
@@ -653,4 +668,32 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
       return ok({ runId: run.id, status: "running" }, `Resumed run ${run.id}.`);
     }),
   );
+});
+
+/**
+ * The review reaches the merge request as one note, and Collie sends it: asking an
+ * agent to repeat a file it has already written is how "verbatim" stops being true.
+ * Here rather than in the engine because the Choice and the app's merge-request panel
+ * are two callers of one behaviour.
+ */
+export const postReview = Effect.fn("operations.postReview")(function* (run: Run) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const file = pathService.join(run.dir, REVIEW_FILE);
+  if (!(yield* fs.exists(file)))
+    return { ok: false, message: `there is no ${REVIEW_FILE} to post` };
+  const target = run.record.inputs.target ?? "";
+  const mr = parseMrTarget(target);
+  if (!mr) return { ok: false, message: `${target || "this run"} is not a merge request` };
+
+  // `--repo` is what lets this work from a directory that is not that checkout.
+  const note = yield* shell(
+    "glab",
+    ["mr", "note", mr.iid, ...repoArgs(mr.project), "--message", yield* fs.readFileString(file)],
+    run.record.cwd,
+  );
+  const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
+  return note.code === 0
+    ? { ok: true, message: `posted the review to ${where}` }
+    : { ok: false, message: `glab mr note ${where} failed (exit ${note.code})` };
 });

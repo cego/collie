@@ -19,6 +19,8 @@
     ".windsurf/**",
     "advisor-plans/**",
     "plans/**",
+    // The release build script: a Bun script that runs before any Effect program does.
+    "tools/build.ts",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [

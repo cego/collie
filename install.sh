@@ -34,11 +34,10 @@ quietly() {
 
 build_from_source() {
   quietly bun install --frozen-lockfile
-  # Build beside the binary and rename over it: replacing a running runner's own
-  # file in place kills the process executing it. `collie upgrade` runs from that
-  # very binary, so this is the load-bearing half of being able to upgrade at all.
-  quietly bun build --compile --outfile bin/collie.new src/main.ts
-  mv -f bin/collie.new bin/collie
+  # The same script CI's release artifacts come from, not a second `bun build` that
+  # could drift from it: it owns the JSX plugin, the libc pin, the build-beside-and-
+  # rename dance, and the check that the binary carries its native renderer.
+  quietly bun run tools/build.ts
 }
 
 # A private or internal project answers an unauthenticated download with a sign-in

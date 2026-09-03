@@ -1,9 +1,10 @@
-// What each plugin action does. Actions have no tty, so they only open a pane;
-// the interactive work happens in the `picker` and `runner` pane entrypoints.
+// What each plugin action does. Actions have no tty, so they only open a pane; the
+// interactive work happens in the pane entrypoints. Every question a human answers goes
+// through `InputPrompts`, so the same flow draws in a popup pane and inline in the tab.
 
-import { Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Cause, Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { nowIso } from "./time";
-import { loadDefaults } from "./config";
+import { loadDefaults, writeConfigValue } from "./config";
 import {
   isStale,
   layers,
@@ -17,21 +18,21 @@ import {
 import { choiceHint, executeRun, unmetRequirementFor } from "./engine";
 import type { PluginEnv } from "./env";
 import { Herdr, type AgentInfo } from "./herdr";
-import { confirmLine, inputValues, resolveCandidates, settle, type Resolution } from "./inputs";
 import {
-  ask,
-  nextKey,
-  pick,
-  releaseKeyboard,
-  startKeyboard,
-  takeKey,
+  confirmLine,
+  inputValues,
+  resolveCandidates,
+  settle,
+  type InputPrompts,
   type PickItem,
-} from "./picker";
+  type Resolution,
+} from "./inputs";
+import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { notify } from "./notify";
-import { reason, shellQuote } from "./naming";
-import { RunStore } from "./run";
-import { sendReviewToImplementer, type Session } from "./handoff";
+import { COLLIE_TAB, reason, shellQuote } from "./naming";
+import { RunStore, type Run } from "./run";
+import { sendReview, sendReviewToImplementer, type Session } from "./handoff";
 import {
   acquireDriver,
   clearPreviousDriver,
@@ -49,11 +50,32 @@ import {
   newRequestId,
   prepareWorkflow,
   resolveWorkspace,
+  settleExplicit,
   type ExpectedError,
+  postReview,
   resumeRun,
   startRun,
   stopRun as stopRunOperation,
 } from "./operations";
+import { answerFor, rereads, runIdOf, type AppState, type Command } from "./ui/state";
+import type { Focus } from "./ui/bridge";
+import {
+  buildHistory,
+  buildRunDetail,
+  buildSettings,
+  buildWorkflows,
+  NUMERIC_DEFAULTS,
+} from "./views";
+import {
+  mrDetails,
+  mrTarget,
+  parseMrTarget,
+  repoArgs,
+  shell,
+  type MrPanel,
+  type Runner,
+} from "./mr";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 import {
   agentForKey,
   askingRun,
@@ -69,6 +91,13 @@ export interface ControlSession extends Omit<Session, "herdr"> {
 }
 
 export type Mode = "pick" | "resume" | "fork";
+
+/**
+ * Where a launch flow is being drawn. Only a popup can close itself, and the tab's
+ * inline placement closing "the popup" closed whatever unrelated one the session had
+ * open elsewhere.
+ */
+export type Placement = "popup" | "inline";
 
 const ProblemDetails = Schema.Struct({ problems: Schema.Array(Schema.String) });
 
@@ -97,7 +126,18 @@ function banner(defs: Definitions): string | undefined {
   return ["Definitions with errors (skipped):", ...defs.errors.map((e) => `  ${e}`)].join("\n");
 }
 
-export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env: PluginEnv) {
+/**
+ * How a flow asks. The popup and the tab hand in different implementations of the same
+ * interface, and this is the only thing any of these flows knows about either.
+ */
+export type FlowPrompts = InputPrompts;
+
+export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  placement: Placement = "popup",
+) {
   const layerList = yield* layers(env);
   const defs = yield* loadDefinitions(layerList);
 
@@ -107,36 +147,72 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
 
   if (items.length === 0) {
     return yield* bail(
+      prompts,
       "No workflows found. Check the plugin's workflows/ directory.",
       banner(defs),
     );
   }
 
-  const chosen = yield* pick(items, {
-    header: `Workflows — ${env.cwd}`,
+  const chosen = yield* prompts.menu(items, {
+    header: headed(`Workflows — ${env.cwd}`, banner(defs)),
     footer: "↑↓ move · type to filter · Enter run · Esc cancel",
-    banner: banner(defs),
   });
   if (!chosen) return 0;
 
+  yield* startChosen(herdr, env, prompts, { workflow: chosen.id, placement });
+  return 0;
+});
+
+/**
+ * A Workflow that has already been named, from its Inputs to a started Run. The half of
+ * the launch flow after the name, because there are two ways to arrive here: the picker,
+ * which asks which Workflow first, and a row action in the tab, which named one by being
+ * clicked. That second one used to hand off to the picker pane, so it asked for a
+ * Workflow again — and could start a different one from the row that was clicked.
+ *
+ * Returns the line to show, or `null` where the human backed out or was told why not.
+ */
+const startChosen = Effect.fn("Flows.startChosen")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  opts: {
+    workflow: string;
+    placement: Placement;
+    /** Inputs the caller has already settled, which are not asked for again. */
+    given?: Record<string, string>;
+    parent?: Run;
+  },
+) {
   // Resolving, validating and inferring is what `collie run start` does too.
-  const prepared = yield* prepareWorkflow(env, chosen.id);
-  if (!prepared.ok) return yield* bail(whyNotRunnable(chosen.id, prepared.error));
+  const prepared = yield* prepareWorkflow(env, opts.workflow);
+  if (!prepared.ok) {
+    yield* bail(prompts, whyNotRunnable(opts.workflow, prepared.error));
+    return null;
+  }
   const resolved = prepared.workflow;
   const resolutions = prepared.resolutions;
+  // What the caller already knows is not a question: a fix round arrives with its plan
+  // directory settled, and re-asking for it would let the human contradict the row. The
+  // operation layer's own settler, because a given value owes the prompts its kind —
+  // `implement` branches on `plan_kind`, and a hand-rolled settle here recorded none.
+  yield* settleExplicit(env, resolutions, opts.given ?? {});
   // An embedded workflow's inputs belong to the run that embeds it, which never asks.
   const embedded = new Set(resolved.embeddedInputs);
   for (const r of resolutions) {
     // An Input with candidates is chosen from what this repo offers, not typed blind.
     if (r.candidates && !embedded.has(r.name)) {
-      if (!(yield* resolveCandidates(r, { menu: pick, ask }))) return 0;
+      if (!(yield* resolveCandidates(r, prompts))) return null;
       continue;
     }
     if (!r.needsAsking) continue;
-    const answer = yield* ask(r.question);
-    if (answer === null) return 0;
+    const answer = yield* prompts.ask(r.question);
+    if (answer === null) return null;
     const value = answer.trim();
-    if (value === "") return yield* bail(`${resolved.name} needs an input for "${r.name}".`);
+    if (value === "") {
+      yield* bail(prompts, `${resolved.name} needs an input for "${r.name}".`);
+      return null;
+    }
     settle(r, { value, source: "asked" });
   }
 
@@ -145,7 +221,7 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
   // one Enter each.
   const decisions: Record<string, string> = {};
   for (const { step, items } of yield* decidableSteps(resolved, env, resolutions)) {
-    const answer = yield* pick(
+    const answer = yield* prompts.menu(
       [
         { id: ASK_ME_THEN, title: "Ask me then", subtitle: "stop and ask when you get there" },
         ...items,
@@ -155,7 +231,7 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
         footer: "↑↓ move · Enter choose · Esc cancel",
       },
     );
-    if (!answer) return 0;
+    if (!answer) return null;
     if (answer.id !== ASK_ME_THEN) decisions[step.id] = answer.id;
   }
 
@@ -169,11 +245,20 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (herdr: Herdr, env
     decisions,
     workspace: yield* resolveWorkspace(herdr, env).pipe(Effect.catch(() => Effect.succeed(null))),
     note: line,
+    parent: opts.parent?.id,
   });
-  if (started._tag === "Rejected") return yield* bail(started.result.error.message);
+  if (started._tag === "Rejected") {
+    yield* bail(prompts, started.result.error.message);
+    return null;
+  }
+  const parent = opts.parent;
+  if (parent) {
+    parent.record.children.push(started.run.id);
+    yield* parent.save();
+  }
   // Only a popup can close itself; running the picker in a plain pane is fine..
-  yield* Effect.ignore(herdr.popupClose());
-  return 0;
+  if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
+  return line;
 });
 
 const ASK_ME_THEN = "\u0000ask-me-then";
@@ -236,7 +321,11 @@ function whyNotRunnable(workflow: string, error: ExpectedError): string {
   return [`${workflow} is not runnable:`, ...detail.value.problems.map((p) => `  ${p}`)].join("\n");
 }
 
-export const forkFlow = Effect.fn("Flows.forkFlow")(function* (herdr: Herdr, env: PluginEnv) {
+export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  prompts: FlowPrompts,
+) {
   const layerList = yield* layers(env);
   const defs = yield* loadDefinitions(layerList);
   const sources = new Map<
@@ -268,12 +357,11 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (herdr: Herdr, env
     });
   }
 
-  if (items.length === 0) return yield* bail("Nothing to fork.", banner(defs));
+  if (items.length === 0) return yield* bail(prompts, "Nothing to fork.", banner(defs));
 
-  const chosen = yield* pick(items, {
-    header: "Fork a definition",
+  const chosen = yield* prompts.menu(items, {
+    header: headed("Fork a definition", banner(defs)),
     footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
-    banner: banner(defs),
   });
   if (!chosen) return 0;
 
@@ -281,14 +369,14 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (herdr: Herdr, env
     { id: "user", title: "my layer", subtitle: layerList.user.dir },
     { id: "project", title: "this project", subtitle: layerList.project.dir },
   ];
-  const target = yield* pick(targets, {
+  const target = yield* prompts.menu(targets, {
     header: `Fork ${chosen.title} into`,
     footer: "↑↓ move · Enter fork · Esc cancel",
   });
   if (!target) return 0;
 
   const source = sources.get(chosen.id)!;
-  const how = yield* pick(
+  const how = yield* prompts.menu(
     [
       {
         id: "extends",
@@ -304,7 +392,7 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (herdr: Herdr, env
   // A stub needs to name something, or there is nothing in the file to edit.
   let step: string | undefined;
   if (how.id === "extends" && source.steps.length > 0) {
-    const which = yield* pick(
+    const which = yield* prompts.menu(
       source.steps.map((id) => ({ id, title: id })),
       {
         header: `Which step of ${chosen.title}`,
@@ -320,7 +408,7 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (herdr: Herdr, env
     full: how.id === "full",
     step,
   });
-  return yield* notice(`${chosen.title}: ${result.message}`, result.ok ? 0 : 1);
+  return yield* notice(prompts, `${chosen.title}: ${result.message}`, result.ok ? 0 : 1);
 });
 
 /** The layer a definition came from, and whether a full copy has fallen behind. */
@@ -332,7 +420,12 @@ function layerOf(def: Provenance): string {
   return parts.join(" ");
 }
 
-export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (herdr: Herdr, env: PluginEnv) {
+export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  placement: Placement = "popup",
+) {
   const store = new RunStore(env.stateDir);
   // A run something is still driving is not a run to resume: a second driver would
   // fight the first over the same agents and the same run record.
@@ -341,7 +434,7 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (herdr: Herdr,
     if (!(yield* driverAlive(run.dir))) runs.push(run);
   }
   if (runs.length === 0)
-    return yield* bail("No runs with unfinished steps that nothing is already driving.");
+    return yield* bail(prompts, "No runs with unfinished steps that nothing is already driving.");
 
   const items: PickItem[] = runs.map((run) => {
     const left = run
@@ -355,7 +448,7 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (herdr: Herdr,
     };
   });
 
-  const chosen = yield* pick(items, {
+  const chosen = yield* prompts.menu(items, {
     header: "Resume a run",
     footer: "↑↓ move · type to filter · Enter resume · Esc cancel",
   });
@@ -363,9 +456,9 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (herdr: Herdr,
 
   const run = yield* store.load(chosen.id);
   const resumed = yield* resumeRun(env, run, yield* newRequestId());
-  if (!resumed.ok) return yield* bail(`${run.record.slug}: ${resumed.error.message}`);
+  if (!resumed.ok) return yield* bail(prompts, `${run.record.slug}: ${resumed.error.message}`);
   // Only a popup can close itself; running the picker in a plain pane is fine..
-  yield* Effect.ignore(herdr.popupClose());
+  if (placement === "popup") yield* Effect.ignore(herdr.popupClose());
   return 0;
 });
 
@@ -525,10 +618,29 @@ const TICK_MS = 120;
 const CLEAR = "\x1b[2J\x1b[H";
 
 /**
- * The Control Plane tab: the Session's control surface. It watches the run dirs
- * and the register and draws them; the quick actions are the plugin's own
- * actions and one hand-off. It drives no run and holds no engine state, so
- * closing it loses nothing.
+ * The narrowest pane the app is worth starting in. Below it the regions have no room
+ * and the one-screen text view says more.
+ */
+const WIDTH_FLOOR = 40;
+
+/** Why the app cannot run here, or nothing when it can. */
+const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
+  if (!process.stdout.isTTY || !process.stdin.isTTY) return "no terminal on this pane";
+  const term = yield* Config.option(Config.string("TERM"));
+  if (term._tag === "Some" && term.value === "dumb") return "TERM is dumb";
+  const width = process.stdout.columns ?? 0;
+  if (width < WIDTH_FLOOR) return `the pane is ${width} columns, and the app needs ${WIDTH_FLOOR}`;
+  return null;
+});
+
+/**
+ * The Collie tab: the Session's control surface, as an application. It watches the run
+ * dirs and the register and renders them; the actions are the plugin's own actions, one
+ * hand-off, and whatever the Selection can be asked for. It drives no run and holds no
+ * engine state, so closing it loses nothing.
+ *
+ * OpenTUI arrives through a dynamic import, so the `collie` CLI — `--json`, the receipts
+ * path, CI — neither loads the native renderer nor depends on it being there.
  */
 export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   herdr: Herdr,
@@ -540,10 +652,346 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     stateDir: env.stateDir,
     paneId: env.paneId,
   };
+  const why =
+    (yield* whyNoRenderer()) ??
+    (yield* Effect.gen(function* () {
+      const { runApp } = yield* Effect.promise(() => import("./ui/bridge"));
+      const app = appState(session, env);
+      yield* runApp({
+        stateDir: env.stateDir,
+        load: (focus) => app.load(focus),
+        act: (command, prompts) => runCommand(session, env, command, prompts),
+      });
+      return null;
+    }).pipe(
+      // A renderer that will not start must not take the tab down with it: say why and
+      // fall through to the text view, which is what that view is kept for. An interrupt
+      // is not that — the pane is closing, and a key loop started on the way out would
+      // hang it — so it is re-raised rather than fallen back from.
+      Effect.catchCause((cause) =>
+        Cause.hasInterrupts(cause)
+          ? Effect.failCause(cause)
+          : Effect.succeed(reason(cause).split("\n")[0]!),
+      ),
+    ));
+  if (why === null) return 0;
+  return yield* textBoard(session, herdr, env, why);
+});
+
+/** How long a merge request read stays good for. Re-selecting inside it costs nothing. */
+const MR_TTL_MS = 60_000;
+
+/**
+ * Everything the app draws, for whatever it is looking at. One closure, because the
+ * merge-request cache belongs with the reads it saves: a History of 40 merge-request
+ * Runs must make no `glab` call to draw, one selection makes exactly one, and
+ * re-selecting the same Run inside the TTL makes none.
+ */
+export function appState(
+  session: ControlSession,
+  env: PluginEnv,
+  /**
+   * A parameter for the same reason inference takes one: a test should watch it run.
+   * The default ignores stderr, because what this reads is JSON: glab writes non-fatal
+   * notices there while still exiting 0, and one of those folded into the output made
+   * `mrDetails` report a merge request it had just read successfully as "not a merge
+   * request" — and cached that answer for the whole TTL. `"say"` is for the calls whose
+   * output a human reads, like `OpenMr`.
+   */
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
+) {
+  const mrCache = new Map<string, { at: number; panel: MrPanel }>();
+
+  const merge = Effect.fn("Flows.mergeRequestFor")(function* (
+    target: string | null,
+    cwd: string,
+    force: boolean,
+  ) {
+    const ref = target ? parseMrTarget(target) : null;
+    if (!ref) return null;
+    const key = mrTarget(ref.project, ref.iid);
+    const now = yield* Clock.currentTimeMillis;
+    const cached = mrCache.get(key);
+    if (cached && !force && now - cached.at < MR_TTL_MS) return cached.panel;
+    const panel = yield* mrDetails(ref, cwd, run);
+    mrCache.set(key, { at: now, panel });
+    return panel;
+  });
+
+  /** The board from the last read, for whatever `rereads` says may be taken from it. */
+  let last: { focus: Focus; state: AppState } | null = null;
+
+  const load = Effect.fn("Flows.appState.load")(function* (focus: Focus) {
+    const again = rereads(last?.focus ?? null, focus);
+    const reuse = again.reuse ? last : null;
+    // One scan of the run dirs per read, shared by the board and History: they are two
+    // Views over the same directory, and reading it twice doubles the cost of a refresh.
+    const runs = reuse ? undefined : yield* new RunStore(env.stateDir).list();
+    const board = reuse ? reuse.state.board : yield* boardOf(session, runs);
+    // Before the Selection is resolved, because a History row is a row too: the board
+    // keeps five finished runs and History keeps two hundred from every session that ran
+    // here, so looking the Selection up in the board alone left every older row's panel
+    // empty while its row carried the target all along.
+    const history = reuse
+      ? reuse.state.history
+      : focus.shown.includes("history")
+        ? yield* buildHistory({ stateDir: env.stateDir, cwd: env.cwd, runs })
+        : null;
+    const runId = runIdOf(focus.selected);
+    const selected = runId
+      ? [...board.active, ...board.recent, ...(history ?? [])].find((r) => r.id === runId)
+      : undefined;
+    // Read for the Selection and never for a list: `target` is on the row already, and a
+    // badge is only ever filled from what is in the cache. When to read past that cache
+    // is `rereads`' decision, not a second copy of it here.
+    const mr = yield* merge(selected?.target ?? null, env.cwd, again.forceMr);
+    const state = {
+      view: focus.view,
+      board,
+      note: null,
+      history,
+      definitions: reuse
+        ? reuse.state.definitions
+        : focus.shown.includes("workflows")
+          ? yield* buildWorkflows(env)
+          : null,
+      settings: reuse
+        ? reuse.state.settings
+        : focus.shown.includes("settings")
+          ? yield* buildSettings(env)
+          : null,
+      // Always re-read: this is the one thing a moved Selection actually changes.
+      detail: runId
+        ? yield* buildRunDetail({
+            stateDir: env.stateDir,
+            runId,
+            mr,
+            tail: focus.tail,
+            pages: focus.reviewPages,
+          })
+        : null,
+    } satisfies AppState;
+    last = { focus, state };
+    return state;
+  });
+
+  return { load };
+}
+
+/** One command, run against the Selection it names. The string becomes the footer note. */
+export const runCommand = Effect.fn("Flows.runCommand")(function* (
+  session: ControlSession,
+  env: PluginEnv,
+  command: Command,
+  prompts: FlowPrompts,
+) {
+  /**
+   * The row a command names, from the board or from History. Both, because the board
+   * keeps five finished runs and History keeps two hundred from every session that ran
+   * here: `l` is offered on every History row, and looking only at the board answered
+   * "has gone" for a run whose directory and log were both still there.
+   */
+  const rowOf = Effect.fn("Flows.rowOf")(function* (runId: string) {
+    // One scan for both, the same way `appState.load` shares it.
+    const runs = yield* new RunStore(session.stateDir).list();
+    const view = yield* boardOf(session, runs);
+    const onBoard = [...view.active, ...view.recent].find((r) => r.id === runId);
+    if (onBoard) return onBoard;
+    const history = yield* buildHistory({
+      stateDir: session.stateDir,
+      cwd: session.cwd,
+      runs,
+    });
+    return history.find((r) => r.id === runId) ?? null;
+  });
+  /** The Run a command names, or `null` for one whose directory has gone since. */
+  const runOf = Effect.fn("Flows.runOf")(function* (runId: string) {
+    return yield* new RunStore(session.stateDir)
+      .load(runId)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+  });
+  switch (command._tag) {
+    case "FocusAgent":
+      return yield* session.herdr.agentFocus(command.agent).pipe(
+        Effect.as(`focused ${command.agent}`),
+        Effect.catch((cause) => Effect.succeed(`${command.agent}: ${reason(cause)}`)),
+      );
+    // The Selection as a one-row board: `stopRun` and `openLog` are the board's own,
+    // and the text fallback still hands them its whole view, so the row goes in rather
+    // than the functions learning about a Selection they have no other use for.
+    case "StopRun": {
+      const row = yield* rowOf(command.runId);
+      return row ? yield* stopRun(session, { active: [row] }) : `${command.runId} has gone`;
+    }
+    case "OpenLog": {
+      const row = yield* rowOf(command.runId);
+      return row
+        ? yield* openLog(session, { active: [row], recent: [] })
+        : `${command.runId} has gone`;
+    }
+    case "Answer": {
+      const row = yield* rowOf(command.runId);
+      if (!row) return `${command.runId} has gone`;
+      const answered = yield* answerRun(row, command.value, yield* newRequestId());
+      return answered.ok ? `answered ${row.title}` : `${row.title}: ${answered.error.message}`;
+    }
+    case "SendReview": {
+      // The Selection names the review to send, and a Selection with no Run behind it —
+      // a Settings or Workflows row, and `s` is on the footer in every View — names
+      // nothing. Handing off "the newest review" there is a fix round for a review
+      // nobody chose, so it says what to select instead.
+      if (command.runId === null) return "select the run whose review should be sent";
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      return (yield* sendReview(session, run)).message;
+    }
+
+    /**
+     * A run that stopped with findings, as the next run's work source. `implement`
+     * already reads a run directory with a review in it as the spec and its findings as
+     * the tickets, so the whole action is one settled Input.
+     */
+    case "FixFindings": {
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      return yield* launch(session, env, prompts, {
+        workflow: "implement",
+        inputs: { plan: run.dir },
+        note: `fixing what ${run.id} left open`,
+        parent: run,
+      });
+    }
+
+    case "ReviewAgain":
+      return yield* launch(session, env, prompts, {
+        workflow: "review",
+        inputs: { target: command.target },
+        note: `reviewing ${command.target} again`,
+      });
+
+    case "RunWorkflow":
+      return yield* launch(session, env, prompts, {
+        workflow: command.workflow,
+        inputs: {},
+        note: `started from the Workflows view`,
+      });
+
+    case "PostReview": {
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      return (yield* postReview(run)).message;
+    }
+
+    case "OpenMr": {
+      const ref = parseMrTarget(command.target);
+      if (!ref) return `${command.target} is not a merge request`;
+      const opened = yield* shell(
+        "glab",
+        ["mr", "view", ref.iid, ...repoArgs(ref.project), "--web"],
+        env.cwd,
+        "say",
+      );
+      return opened.code === 0
+        ? `opened ${command.target} in a browser`
+        : `glab could not open ${command.target} (exit ${opened.code})`;
+    }
+
+    case "SetDefault": {
+      // Three ways this used to write a default no Run could use: an empty string, which
+      // `loadDefaults` reads as configured rather than unset; a string on one of the two
+      // keys it reads with `isNumber`, which every Run then ignores; and a value written
+      // with the whitespace around it, so `codex ` displayed as `codex` and then failed
+      // harness validation. Hence: trim, then unset on empty, then reject a non-number.
+      const typed = command.value.trim();
+      const numeric = NUMERIC_DEFAULTS.includes(command.key);
+      if (typed !== "" && numeric && !/^\d+$/.test(typed)) {
+        return `${command.key} has to be a whole number, not "${command.value}"`;
+      }
+      const value = typed === "" ? null : numeric ? Number(typed) : typed;
+      return yield* writeConfigValue(env.configDir, command.key, value).pipe(
+        // What was written, so the note cannot disagree with the file.
+        Effect.as(`${command.key} is now ${value ?? "unset"}`),
+        Effect.catch((cause) => Effect.succeed(`${command.key}: ${reason(cause)}`)),
+      );
+    }
+
+    /**
+     * The launch flow, inline. A popup landed on whatever pane herdr had focused, which
+     * is rarely the workspace the board is for — and it is the same flow either way, so
+     * the tab draws it itself and the popup stays the herdr action's front door.
+     */
+    case "OpenMode":
+      switch (command.mode) {
+        case "pick":
+          return yield* pickFlow(session.herdr, env, prompts, "inline").pipe(Effect.as(null));
+        case "resume":
+          return yield* resumeFlow(session.herdr, env, prompts, "inline").pipe(Effect.as(null));
+        case "fork":
+          return yield* forkFlow(session.herdr, env, prompts).pipe(Effect.as(null));
+      }
+
+    case "EditSetting":
+    case "ShowView":
+    case "ToggleTail":
+    case "MoreReview":
+    case "Select":
+    case "Refresh":
+    case "Quit":
+      // The app and the bridge act on these themselves; they never reach a handler.
+      // `EditSetting` opens the app's own editor, and the value it gathers comes back
+      // as a `SetDefault` that carries one.
+      return null;
+  }
+});
+
+/**
+ * Start a Workflow from a row action. An Input nobody could infer is not guessed at: the
+ * picker opens instead, which is the one place a human can answer, and the note says so.
+ */
+const launch = Effect.fn("Flows.launch")(function* (
+  session: ControlSession,
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  opts: { workflow: string; inputs: Record<string, string>; note: string; parent?: Run },
+) {
+  // The same launch flow the picker runs, for the Workflow the row named and inline in
+  // the tab the row was clicked in. It used to start the Run itself whenever every Input
+  // could be inferred, which skipped the Decisions — so a Workflow with a Choice step
+  // started with none of them answered and stopped at that Choice hours later, which is
+  // the opposite of what deciding upfront is for.
+  const line = yield* startChosen(session.herdr, env, prompts, {
+    workflow: opts.workflow,
+    placement: "inline",
+    given: opts.inputs,
+    parent: opts.parent,
+  });
+  return line ?? `${opts.workflow} was not started`;
+});
+
+/**
+ * The board as one screen of text, with the key loop it always had. This is what a pane
+ * with no terminal, a dumb TERM or no renderer gets, and it is the escape hatch if
+ * OpenTUI ever becomes a problem on a supported platform — so it stays alive and tested
+ * rather than decorative.
+ */
+const textBoard = Effect.fn("Flows.textBoard")(function* (
+  session: ControlSession,
+  herdr: Herdr,
+  env: PluginEnv,
+  why: string,
+) {
+  yield* Console.error(`${COLLIE_TAB}: ${why}; showing the text view.`);
+  // Nothing to loop on: with no keyboard the board is a report, so it is printed once
+  // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
+  if (!process.stdin.isTTY) {
+    const once = renderWorkspace(yield* boardOf(session), why);
+    process.stdout.write(`${once}\n`);
+    return 0;
+  }
   startKeyboard();
-  let view = yield* load(session);
+  let view = yield* boardOf(session);
   const open = (mode: Mode) => openMode(herdr, env, mode);
-  let note: string | null = null;
+  let note: string | null = why;
   let drawn = "";
   let read = yield* Clock.currentTimeMillis;
   let asking: Asking = { index: 0, typed: "" };
@@ -577,12 +1025,12 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
       } else {
         note = yield* act(session, view, key, open);
       }
-      view = yield* load(session);
+      view = yield* boardOf(session);
       read = yield* Clock.currentTimeMillis;
       continue;
     }
     if ((yield* Clock.currentTimeMillis) - read >= REFRESH_MS) {
-      view = yield* load(session);
+      view = yield* boardOf(session);
       read = yield* Clock.currentTimeMillis;
     }
     yield* Effect.sleep(TICK_MS);
@@ -602,7 +1050,11 @@ const announce = Effect.fn("Flows.announce")(function* (herdr: Herdr, env: Plugi
   yield* Effect.ignore(herdr.tabFocus(env.tabId));
 });
 
-/** One keypress against a pending question; the answer goes back to the run dir. */
+/**
+ * One keypress against a pending question; the answer goes back to the run dir. The
+ * keystroke itself is `answerFor` in `src/ui/state.ts`, so the app and this fallback
+ * answer a question the same way rather than each having their own idea of Esc.
+ */
 export const answerKey = Effect.fn("Flows.answerKey")(function* (
   waiting: RunRow,
   asking: Asking,
@@ -610,34 +1062,13 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
 ) {
   const choice = waiting.choice;
   if (!choice) return { asking };
-  let value: string | null = null;
-
-  if (key === "\x1b" || key === "\x03") value = "";
-  if (key === "\r" || key === "\n") {
-    if (choice.kind === "ask") value = asking.typed;
-    const picked = choice.items[asking.index];
-    if (value === null) value = picked?.id ?? null;
-  }
-  if (value !== null) {
-    const answered = yield* answerRun(waiting, value, yield* newRequestId());
-    return {
-      asking: { index: 0, typed: "" },
-      note: answered.ok
-        ? `answered ${waiting.title}`
-        : `${waiting.title}: ${answered.error.message}`,
-    };
-  }
-  if (choice.kind === "ask") {
-    if (key === "\x7f" || key === "\b")
-      return { asking: { ...asking, typed: asking.typed.slice(0, -1) } };
-    if (/^[\x20-\x7e]$/.test(key)) return { asking: { ...asking, typed: asking.typed + key } };
-    return { asking };
-  }
-  if (key === "\x1b[A") return { asking: { ...asking, index: Math.max(0, asking.index - 1) } };
-  if (key === "\x1b[B") {
-    return { asking: { ...asking, index: Math.min(choice.items.length - 1, asking.index + 1) } };
-  }
-  return { asking };
+  const next = answerFor(choice, asking, key);
+  if (next.value === null) return { asking: next.asking };
+  const answered = yield* answerRun(waiting, next.value, yield* newRequestId());
+  return {
+    asking: next.asking,
+    note: answered.ok ? `answered ${waiting.title}` : `${waiting.title}: ${answered.error.message}`,
+  };
 });
 
 /**
@@ -714,7 +1145,7 @@ export const stopRun = Effect.fn("Flows.stopRun")(function* (
  */
 export const openLog = Effect.fn("Flows.openLog")(function* (
   session: ControlSession,
-  view: WorkspaceView,
+  view: Pick<WorkspaceView, "active" | "recent">,
 ) {
   const run = view.active[0] ?? view.recent[0];
   if (!run) return "no run here to open a log for";
@@ -737,7 +1168,10 @@ interface LiveWorkspace {
   label: string | null;
 }
 
-const load = Effect.fn("Flows.load")(function* (session: ControlSession) {
+const boardOf = Effect.fn("Flows.boardOf")(function* (
+  session: ControlSession,
+  runs?: ReadonlyArray<Run>,
+) {
   const live = yield* Effect.all(
     { alive: session.herdr.agentList(), workspaces: session.herdr.workspaceList() },
     { concurrency: "unbounded" },
@@ -756,23 +1190,37 @@ const load = Effect.fn("Flows.load")(function* (session: ControlSession) {
     stateDir: session.stateDir,
     workspaceLabel: live.label,
     alive: live.alive,
+    runs,
   });
 });
 
-const bail = Effect.fn("Flows.bail")(function* (message: string, extra?: string) {
-  return yield* notice(message, 1, extra);
+/** A banner above a question: definition load errors, above the list they were skipped from. */
+function headed(header: string, banner?: string): string {
+  return banner ? `${banner}\n\n${header}` : header;
+}
+
+const bail = Effect.fn("Flows.bail")(function* (
+  prompts: FlowPrompts,
+  message: string,
+  extra?: string,
+) {
+  return yield* notice(prompts, message, 1, extra);
 });
 
-const notice = Effect.fn("Flows.notice")(function* (message: string, code: number, extra?: string) {
-  process.stdout.write(
-    `\x1b[2J\x1b[H${extra ? `${extra}\n\n` : ""}${message}\n\nPress any key to close.\n`,
-  );
-  yield* anyKey();
+/**
+ * Something the human has to see before the pane goes. A menu of one, because a flow
+ * that printed and exited would close the popup over its own message — and because a
+ * thing you acknowledge is a thing you can click.
+ */
+const notice = Effect.fn("Flows.notice")(function* (
+  prompts: FlowPrompts,
+  message: string,
+  code: number,
+  extra?: string,
+) {
+  yield* prompts.menu([{ id: "ok", title: "OK" }], {
+    header: headed(message, extra),
+    footer: "Enter or Esc closes this",
+  });
   return code;
-});
-
-const anyKey = Effect.fn("Flows.anyKey")(function* () {
-  if (!process.stdin.isTTY) return;
-  yield* nextKey();
-  releaseKeyboard();
 });

@@ -19,7 +19,7 @@ import { roundVariant, stepVariants, variantKeys } from "./definitions";
 import type { Defaults } from "./config";
 import { configValue, readConfig, writeConfigValue } from "./config";
 import type { PluginEnv } from "./env";
-import type { PickItem } from "./picker";
+import type { PickItem } from "./inputs";
 import { slugify } from "./template";
 import {
   isYamlMap,
@@ -57,7 +57,8 @@ import {
   tabLabel,
   tabNameOf,
   targetLabel,
-  CONTROL_PLANE,
+  COLLIE_TAB,
+  isCollieTab,
   reason,
 } from "./naming";
 import { registerAgent, registryPath, scopeFor } from "./registry";
@@ -70,7 +71,7 @@ import {
   type InputPrompts,
 } from "./inputs";
 import { RunStore } from "./run";
-import { handOver } from "./operations";
+import { handOver, postReview } from "./operations";
 import { notify as notifyRun, type NotificationKind } from "./notify";
 import {
   gitlabForProject,
@@ -780,7 +781,7 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
     }
 
     if (choice.post) {
-      const result = yield* postReview(o);
+      const result = yield* postReview(o.run);
       yield* out(`  ${result.message}`);
       yield* run.log(result.message);
       // A note that did not land is not an answer, so the menu comes back.
@@ -951,32 +952,6 @@ const runRound = Effect.fn("Engine.runRound")(function* (
   yield* o.run.save();
   yield* markTab(o, ctx, [outcome.record]);
   return outcome;
-});
-
-/**
- * The review reaches the merge request as one note, and the engine sends it: asking
- * an agent to repeat a file it has already written is how "verbatim" stops being true.
- */
-const postReview = Effect.fn("Engine.postReview")(function* (o: EngineOptions) {
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  const path = pathService.join(o.run.dir, REVIEW_FILE);
-  if (!(yield* fs.exists(path)))
-    return { ok: false, message: `there is no ${REVIEW_FILE} to post` };
-  const target = o.run.record.inputs.target ?? "";
-  const mr = parseMrTarget(target);
-  if (!mr) return { ok: false, message: `${target || "this run"} is not a merge request` };
-
-  // `--repo` is what lets this work from a directory that is not that checkout.
-  const note = yield* shellRun(
-    "glab",
-    ["mr", "note", mr.iid, ...repoArgs(mr.project), "--message", yield* fs.readFileString(path)],
-    o.run.record.cwd,
-  );
-  const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
-  return note.code === 0
-    ? { ok: true, message: `posted the review to ${where}` }
-    : { ok: false, message: `glab mr note ${where} failed (exit ${note.code})` };
 });
 
 /** What a choice does, one line, for the menu and for the launch decision. */
@@ -1178,21 +1153,28 @@ const findOrOpenView = Effect.fn("Engine.findOrOpenView")(function* (o: EngineOp
       env: { COLLIE_CWD: o.run.record.cwd },
     });
     if (!opened.paneId) return null;
-    yield* o.herdr.paneRename(opened.paneId, CONTROL_PLANE);
+    yield* o.herdr.paneRename(opened.paneId, COLLIE_TAB);
     return opened;
   });
 
-  const tab = (yield* o.herdr.tabList()).find((t) => t.label === CONTROL_PLANE);
+  // By label, under this name or an older one: the label is the identity, so a tab
+  // opened before a rename has to be found and relabelled rather than joined by a
+  // second Collie tab the human never asked for.
+  const tab = (yield* o.herdr.tabList()).find((t) => isCollieTab(t.label));
   if (!tab) {
     const opened = yield* open("tab");
     if (!opened?.tabId) return null;
-    yield* o.herdr.tabRename(opened.tabId, CONTROL_PLANE);
+    yield* o.herdr.tabRename(opened.tabId, COLLIE_TAB);
     return opened;
   }
+  if (tab.label !== COLLIE_TAB) yield* o.herdr.tabRename(tab.tabId, COLLIE_TAB);
   // The tab is there; its view pane may not be, if someone closed just that pane.
   const panes = (yield* o.herdr.paneList()).filter((p) => p.tabId === tab.tabId);
-  const view = panes.find((p) => p.label === CONTROL_PLANE);
-  if (view) return { tabId: tab.tabId, paneId: view.paneId };
+  const view = panes.find((p) => p.label !== null && isCollieTab(p.label));
+  if (view) {
+    if (view.label !== COLLIE_TAB) yield* o.herdr.paneRename(view.paneId, COLLIE_TAB);
+    return { tabId: tab.tabId, paneId: view.paneId };
+  }
   if (panes.length === 0) return null;
   const opened = yield* open("split", panes[0]!.paneId);
   return opened ? { tabId: tab.tabId, paneId: opened.paneId } : null;
@@ -1841,7 +1823,9 @@ const claimMrRole = Effect.fn("Engine.claimMrRole")(function* (
   if (!mr) return;
   const cwd = o.run.record.cwd;
   const configured =
-    role === "assignee" ? configValue(yield* readConfig(o.env.configDir), "gitlab.assignee") : undefined;
+    role === "assignee"
+      ? configValue(yield* readConfig(o.env.configDir), "gitlab.assignee")
+      : undefined;
   const who = yield* resolveAssignee(cwd, configured, runShell);
   if (!who) return;
   const res = yield* addMrRole(mr, role, who, cwd, runShell);

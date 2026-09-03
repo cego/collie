@@ -26,8 +26,14 @@ build:
     matrix:
       - TARGET: [linux-x64, linux-arm64, darwin-x64, darwin-arm64]
   script:
-    - bun install --frozen-lockfile
-    - bun build --compile --target=bun-$TARGET --outfile collie-$TARGET src/main.ts
+    # `--os`/`--cpu` because `@opentui/core` ships its renderer as a per-platform
+    # optional package and a plain install brings only this runner's. Cross-compiling
+    # four targets from one glibc runner needs all four present at build time.
+    - bun install --frozen-lockfile --os='*' --cpu='*'
+    # The build script gates on the artifact embedding its own target's renderer and
+    # deletes it otherwise, so a cross-build that resolved the wrong native package
+    # fails the job rather than shipping a binary that dies on someone's mac.
+    - bun run tools/build.ts $TARGET collie-$TARGET
     # Only the runner's own target can be executed here; the others are smoked by the
     # test stage's native build. Nothing is uploaded until this passes.
     - |
