@@ -27,7 +27,8 @@ interface FakeAgent {
 interface FakeWorktree {
   path: string;
   branch: string;
-  open_workspace_id: string;
+  /** Null for a checkout herdr has no workspace open on, which is git's own. */
+  open_workspace_id: string | null;
 }
 
 interface State {
@@ -75,7 +76,7 @@ const FakeAgentSchema = Schema.Struct({ name: Schema.String, pane_id: Schema.Str
 const FakeWorktreeSchema = Schema.Struct({
   path: Schema.String,
   branch: Schema.String,
-  open_workspace_id: Schema.String,
+  open_workspace_id: Schema.NullOr(Schema.String),
 });
 const StateJson = Schema.fromJsonString(
   Schema.Struct({
@@ -363,6 +364,12 @@ export function fakeHerdr(
       case "tab create": {
         const tab = newTab(flag("--label") ?? String(state.tabs + 1));
         result = { type: "tab_created", tab, root_pane: newPane(tab.tab_id) };
+        break;
+      }
+      case "tab close": {
+        const tabId = argv[2] ?? "";
+        state.tabList = state.tabList.filter((t) => t.tab_id !== tabId);
+        state.paneList = state.paneList.filter((p) => p.tab_id !== tabId);
         break;
       }
       case "tab rename": {

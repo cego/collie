@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect } from "effect";
+import { Effect, FileSystem, Path } from "effect";
 import { decodeWorkspaceList, Herdr } from "../src/herdr";
 import { workspaceCwdFromPanes } from "../src/operations";
 import { Rig } from "./support/recorder";
@@ -17,6 +17,68 @@ beforeEach(() =>
 );
 
 afterEach(() => runEffect(rig.close()));
+
+test("where herdr keeps worktrees is its config's answer, or its own default", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const herdr = new Herdr(rig.pluginEnv());
+
+      // No config at all, and a config that says nothing about worktrees: herdr's own
+      // default either way, which is the path its "open worktree" UI looks in.
+      expect(yield* herdr.worktreesDirectory()).toBe(path.join(rig.root, ".herdr", "worktrees"));
+      const config = path.join(rig.root, ".config", "herdr");
+      yield* fs.makeDirectory(config, { recursive: true });
+      yield* fs.writeFileString(path.join(config, "config.toml"), "[ui]\ntheme = 'x'\n");
+      expect(yield* herdr.worktreesDirectory()).toBe(path.join(rig.root, ".herdr", "worktrees"));
+
+      yield* fs.writeFileString(
+        path.join(config, "config.toml"),
+        `[worktrees]\ndirectory = "${path.join(rig.root, "elsewhere")}"\n`,
+      );
+      expect(yield* herdr.worktreesDirectory()).toBe(path.join(rig.root, "elsewhere"));
+
+      // A config herdr itself would reject is not a reason to fail a run start.
+      yield* fs.writeFileString(path.join(config, "config.toml"), "[worktrees\n");
+      expect(yield* herdr.worktreesDirectory()).toBe(path.join(rig.root, ".herdr", "worktrees"));
+      // Nothing was asked of herdr: there is no command for this.
+      expect(yield* rig.cmds()).toEqual([]);
+    }),
+  ));
+
+test("HERDR_CONFIG_PATH moves the config herdr reads, so it moves this answer too", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // The default location says one thing; the config herdr was actually started
+      // with says another. herdr honours the override, so a checkout put at the
+      // default would be somewhere herdr never configured and would not appear in its
+      // own "open worktree" list.
+      const config = path.join(rig.root, ".config", "herdr");
+      yield* fs.makeDirectory(config, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(config, "config.toml"),
+        `[worktrees]\ndirectory = "${path.join(rig.root, "ignored")}"\n`,
+      );
+      const elsewhere = path.join(rig.root, "elsewhere.toml");
+      yield* fs.writeFileString(
+        elsewhere,
+        `[worktrees]\ndirectory = "${path.join(rig.root, "honoured")}"\n`,
+      );
+
+      const overridden = new Herdr(rig.pluginEnv({ HERDR_CONFIG_PATH: elsewhere }));
+      expect(yield* overridden.worktreesDirectory()).toBe(path.join(rig.root, "honoured"));
+
+      // And an override pointing at nothing falls back to herdr's default rather than
+      // to the config file the override said to ignore.
+      const missing = new Herdr(
+        rig.pluginEnv({ HERDR_CONFIG_PATH: path.join(rig.root, "gone.toml") }),
+      );
+      expect(yield* missing.worktreesDirectory()).toBe(path.join(rig.root, ".herdr", "worktrees"));
+    }),
+  ));
 
 test("cli calls are recorded with their full argv and return parsed json", () =>
   runEffect(

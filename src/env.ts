@@ -24,6 +24,11 @@ export interface PluginEnv {
   stateDir: string;
   binPath: string;
   socketPath: string | null;
+  /**
+   * herdr's own `config.toml`, where `HERDR_CONFIG_PATH` names one. Null means herdr
+   * is reading its default, and so is anything here that asks its config a question.
+   */
+  herdrConfigPath: string | null;
   workspaceId: string | null;
   tabId: string | null;
   paneId: string | null;
@@ -90,6 +95,7 @@ export function readEnv(
       first(env, "HERDR_PLUGIN_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
     binPath: first(env, "HERDR_BIN_PATH") ?? "herdr",
     socketPath: first(env, "HERDR_SOCKET_PATH"),
+    herdrConfigPath: first(env, "HERDR_CONFIG_PATH"),
     workspaceId:
       first(env, "HERDR_WORKSPACE_ID", "HERDR_ACTIVE_WORKSPACE_ID") ?? context.workspace_id ?? null,
     tabId: first(env, "HERDR_TAB_ID", "HERDR_ACTIVE_TAB_ID") ?? context.tab_id ?? null,
@@ -128,6 +134,9 @@ const environmentKeys = [
   "COLLIE_MODE",
   "HERDR_BIN_PATH",
   "HERDR_SOCKET_PATH",
+  // Which config.toml herdr itself is reading, which is the one that says where a
+  // repository's worktrees go.
+  "HERDR_CONFIG_PATH",
   "HERDR_PLUGIN_ROOT",
   "HERDR_PLUGIN_CONFIG_DIR",
   "HERDR_PLUGIN_STATE_DIR",

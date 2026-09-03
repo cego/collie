@@ -164,6 +164,32 @@ test("every step that names a user-only skill invokes it as a slash command", ()
     }),
   ));
 
+test("every mutating workflow declares the workspace opt-in, so both front doors reach it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const defs = yield* baseline();
+
+      // Declared rather than intercepted by one adapter: `startRun` settles it from
+      // `--input` and a chaining Choice forwards it, so the CLI, the herdr actions and
+      // a chained Run all reach the same opt-in through the same Input.
+      for (const name of ["implement", "plan", "architecture"]) {
+        const wf = resolveWorkflow(name, defs, FALLBACK_DEFAULTS);
+        expect(wf.inputs.workspace).toBe("optional");
+      }
+      // And the ones that chain `implement` hand their own answer on.
+      for (const name of ["plan", "architecture"]) {
+        const wf = resolveWorkflow(name, defs, FALLBACK_DEFAULTS);
+        const chains = wf.steps
+          .flatMap((step) => step.choices ?? [])
+          .filter((choice) => choice.run === "implement");
+        expect(chains).not.toHaveLength(0);
+        for (const choice of chains) {
+          expect(choice.inputs?.workspace).toBe("{{inputs.workspace}}");
+        }
+      }
+    }),
+  ));
+
 test("every step of implement that commits pushes what the next reader will read", () =>
   runEffect(
     Effect.gen(function* () {

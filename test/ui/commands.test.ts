@@ -7,7 +7,7 @@ import { ConfigProvider, Effect, Layer, PlatformError } from "effect";
 import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { installFakeSkills, writeDef } from "../support/defs";
-import { FakeBin } from "../support/bin";
+import { FakeBin, gitWorktreeCases } from "../support/bin";
 import { runEffect } from "../support/effect";
 import { runCommand, type ControlSession } from "../../src/flows";
 import { Herdr } from "../../src/herdr";
@@ -46,6 +46,7 @@ beforeEach(() =>
         `case "$*" in
       "rev-parse --abbrev-ref HEAD") echo feature ;;
       "symbolic-ref --short refs/remotes/origin/HEAD") echo origin/master ;;
+${gitWorktreeCases(rig.projectDir)}
       *) exit 1 ;;
     esac`,
       );

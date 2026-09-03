@@ -98,8 +98,15 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 
 `--input branch=<name>` is the one input no workflow declares: it names the branch a
 mutating run works on, and so which worktree it gets, instead of letting Collie resolve
-one ([what a run does to your repository](using.md#what-a-run-does-to-your-repository)).
-It is ignored by a workflow that changes nothing.
+one. It is ignored by a workflow that changes nothing.
+
+`--input workspace=new` is a declared input of every mutating workflow, so it reaches the
+same place from any front door and a `plan` that chains into `implement` hands its answer
+on. It asks herdr for the checkout, so the run gets a workspace of its own instead of
+staying in the workspace it was started from
+([what a run does to your repository](using.md#what-a-run-does-to-your-repository)).
+`--workspace <id>` is a different thing: it roots the run at that workspace, which is the
+workspace its tabs open in.
 
 Examples:
 

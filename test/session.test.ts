@@ -51,6 +51,9 @@ const removeFile = Effect.fn("sessionTest.removeFile")(function* (file: string) 
   yield* fs.remove(file);
 });
 
+/** The checkout the reviewed branch already has, as both the git fixture and the test see it. */
+const featureWorktree = (path: Path.Path) => path.join(rig.root, "worktrees", "feature");
+
 beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
@@ -65,6 +68,9 @@ beforeEach(() =>
         `case "$*" in
       "rev-parse --git-dir") echo .git ;;
       "rev-parse --abbrev-ref HEAD") echo feature ;;
+      # The repository and the checkout the reviewed branch already has, which is
+      # where a chained fix round has to land.
+      "worktree list --porcelain") printf 'worktree %s\nbranch refs/heads/master\n\nworktree %s\nbranch refs/heads/feature\n' "${rig.projectDir}" "${featureWorktree(path)}" ;;
       # A plan change is found with a real \`git diff --no-index\`, so that one is not faked.
       diff*) exec /usr/bin/git "$@" ;;
       *) echo main ;;
@@ -223,8 +229,8 @@ test("the implement run chained from a review lands in the reviewed branch's own
     Effect.gen(function* () {
       const path = yield* Path.Path;
       // The branch under review already has a checkout, from whoever built it.
-      const existing = path.join(rig.root, "worktrees", "feature");
-      yield* rig.addWorktree("feature", existing, "w7");
+      const existing = featureWorktree(path);
+      yield* rig.addWorktree("feature", existing, null);
       yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
 
       const { run } = yield* runWorkflow(
@@ -240,19 +246,19 @@ test("the implement run chained from a review lands in the reviewed branch's own
         path: existing,
         branch: "feature",
         created_by_collie: false,
-        workspace_id: "w7",
+        managed_by: "git",
+        workspace_id: null,
         // The checkout already existed, so git wrote its `.git` when whoever made it
         // ran `worktree add`; the rig's stand-in has one.
         made_at: expect.any(Number),
       });
       expect(child.record.cwd).toBe(existing);
-      expect(child.record.workspace).toBe("w7");
-      // Opened, never created: git allows one worktree per branch, and this branch
-      // already has one.
-      expect((yield* rig.cmds()).filter((cmd) => cmd.startsWith("worktree"))).toEqual([
-        "worktree list",
-        "worktree open",
-      ]);
+      // The workspace the review was started in: the child works in the branch's own
+      // checkout, and its tabs belong beside the run that chained it.
+      expect(child.record.workspace).toBe("1");
+      // Reused, never created: git allows one worktree per branch, and this branch
+      // already has one — and herdr is not asked for a workspace of its own.
+      expect((yield* rig.cmds()).filter((cmd) => cmd.startsWith("worktree"))).toEqual([]);
     }),
   ));
 
