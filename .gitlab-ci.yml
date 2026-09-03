@@ -4,6 +4,15 @@ stages: [test, build, release]
 default:
   image: oven/bun:1.4
 
+# The contract check needs no herdr server: `herdr api schema --json` prints the
+# schema the binary bundles.
+.contract:
+  stage: test
+  script:
+    - bun install --frozen-lockfile
+    - bun run tools/herdr-schema.ts $CHANNEL --out /tmp/herdr-schema.json
+    - HERDR_API_SCHEMA=/tmp/herdr-schema.json bun test test/herdr-contract.test.ts
+
 test:
   stage: test
   script:
@@ -17,6 +26,28 @@ test:
     # broken compiled entrypoint or JSON envelope cannot pass CI.
     - bun run build
     - bun run smoke
+    # Proves the committed snapshot is what the pinned herdr really prints, so the
+    # snapshot cannot drift away from the pin it claims to come from.
+    - bun run contract:check
+
+# herdr releases often and Collie is meant to run on the newest one, so the drift check
+# is a schedule rather than a gate on every merge request: an unrelated MR must not go
+# red because herdr shipped.
+contract:stable:
+  extends: .contract
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  variables:
+    CHANNEL: stable
+
+# Weeks of warning about a coming break, and never a reason to stop anything.
+contract:preview:
+  extends: .contract
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  variables:
+    CHANNEL: preview
+  allow_failure: true
 
 build:
   stage: build

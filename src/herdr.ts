@@ -1,5 +1,5 @@
 // The only channel to herdr: the CLI at HERDR_BIN_PATH, plus the socket at
-// HERDR_SOCKET_PATH for the few methods 0.7.5 does not expose on the CLI.
+// HERDR_SOCKET_PATH for the few methods 0.8.2 does not expose on the CLI.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Data, Deferred, Effect, Option, Schema, Stream } from "effect";
@@ -50,14 +50,17 @@ const WorkspaceReply = Schema.Struct({
   label: Schema.String,
   cwd: Schema.optionalKey(Schema.String),
   working_directory: Schema.optionalKey(Schema.String),
-  // herdr's worktree object is `{ checkout_path, repo_root, ... }`; `path` is the older
-  // name. Both optional: a required key here made every workspace undecodable the
+  // `null` for a workspace that is not worktree-backed, which is most of them. herdr's
+  // worktree object is `{ checkout_path, repo_root, ... }`; `path` is the older name.
+  // All three tolerated: a required key here made every workspace undecodable the
   // moment one of them was worktree-backed.
   worktree: Schema.optionalKey(
-    Schema.Struct({
-      path: Schema.optionalKey(Schema.String),
-      checkout_path: Schema.optionalKey(Schema.String),
-    }),
+    Schema.NullOr(
+      Schema.Struct({
+        path: Schema.optionalKey(Schema.String),
+        checkout_path: Schema.optionalKey(Schema.String),
+      }),
+    ),
   ),
   worktree_path: Schema.optionalKey(Schema.String),
 });
@@ -90,9 +93,9 @@ const PaneSplitReply = Schema.Struct({
   result: Schema.Struct({ pane: Schema.Struct({ pane_id: Schema.String }) }),
 });
 const AgentReply = Schema.Struct({
-  // herdr omits `name` for an agent it did not start; one of those in the workspace
-  // must not make the whole list undecodable.
-  name: Schema.optionalKey(Schema.String),
+  // herdr sends `null` for an agent it did not start, and older versions omitted the
+  // key; one of those in the workspace must not make the whole list undecodable.
+  name: Schema.optionalKey(Schema.NullOr(Schema.String)),
   pane_id: Schema.String,
   workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   agent_status: Schema.String,
@@ -138,6 +141,42 @@ const PluginPaneReply = Schema.Struct({
     }),
   }),
 });
+
+/**
+ * Every method this module calls over the socket. Named as a list, and `rpc` accepts
+ * nothing else, so a new socket call has to be added here — which is what lets
+ * `test/herdr-contract.test.ts` prove its request table covers all of them rather than
+ * going green on a method nobody checked.
+ */
+export const SOCKET_METHODS = [
+  "tab.move",
+  "agent.view.set",
+  "agent.view.clear",
+  "popup.close",
+] as const;
+
+export type SocketMethod = (typeof SOCKET_METHODS)[number];
+
+/**
+ * Every reply shape this module decodes, keyed by name. Exported as one record rather
+ * than twelve names so the herdr interface stays about calling herdr, and so
+ * `test/herdr-contract.test.ts` can prove its table covers all of them: a reply added
+ * here without a row there fails that test instead of going unchecked.
+ */
+export const replySchemas = {
+  ErrorReply,
+  SocketReply,
+  TabCreateReply,
+  WorkspaceListReply,
+  TabListReply,
+  PaneListReply,
+  PaneSplitReply,
+  AgentListReply,
+  AgentStatusReply,
+  WorktreeListReply,
+  WorktreeOpenReply,
+  PluginPaneReply,
+} as const;
 
 const herdrError = (message: string, detail: string, code?: string) =>
   new HerdrError({ message, detail, code });
@@ -358,7 +397,7 @@ export class Herdr {
    * The exchange is one line out and one line back, so the read loop resolves on the
    * first newline and the scope closes the socket.
    */
-  rpc(method: string, params: HerdrParams = {}): HerdrEffect<Schema.Json | undefined> {
+  rpc(method: SocketMethod, params: HerdrParams = {}): HerdrEffect<Schema.Json | undefined> {
     const path = this.env.socketPath;
     if (!path) return herdrFail(`cannot call ${method}`, "HERDR_SOCKET_PATH is not set");
     const id = `hw-${++this.seq}`;
@@ -731,7 +770,7 @@ export class Herdr {
     });
   }
 
-  /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.7.5. */
+  /** Filters the Agents sidebar to this run's panes. CLI has no equivalent in 0.8.2. */
   agentViewSet(source: string, label: string, paneIds: string[]): HerdrEffect<void> {
     return this.rpc("agent.view.set", {
       source,
