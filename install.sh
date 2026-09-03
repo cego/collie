@@ -32,6 +32,15 @@ quietly() {
   fi
 }
 
+# Whether there is anything to build: `bun build --compile` takes seconds and its
+# output is not byte-identical run to run, so rebuilding an unchanged checkout both
+# costs that and destroys the one signal `prepare.sh` has for saying the runner did
+# not change. `find -newer` is the same question `make` asks.
+needs_build() {
+  [ -f bin/collie ] || return 0
+  [ -n "$(find src package.json bun.lock herdr-plugin.toml -newer bin/collie 2>/dev/null | head -1)" ]
+}
+
 build_from_source() {
   quietly bun install --frozen-lockfile
   # The same script CI's release artifacts come from, not a second `bun build` that
@@ -148,8 +157,12 @@ EOF
 
 mkdir -p bin
 if [ -d .git ] && command -v bun >/dev/null 2>&1; then
-  echo "building from source: $ROOT is a checkout, and its source is what a release is cut from"
-  build_from_source
+  if needs_build; then
+    echo "building from source: $ROOT is a checkout, and its source is what a release is cut from"
+    build_from_source
+  else
+    echo "bin/collie is newer than everything it is built from; nothing to build"
+  fi
 elif fetch_release; then
   echo "installed ${ASSET} from ${BASE}"
 elif command -v bun >/dev/null 2>&1; then
@@ -161,3 +174,12 @@ else
 fi
 
 install_shim
+
+# The runner is one step of preparing a machine; the rest of it — the plugin link,
+# the operator skill, the skills the workflows require — is `prepare.sh`, so that a
+# plugin rebuilt through herdr's build hook is a complete installation and not just
+# a fresh binary. Skipped when this is already running inside `prepare.sh`, which is
+# what stops the two from calling each other round in a circle.
+if [ "${COLLIE_PREPARING:-}" != "1" ]; then
+  COLLIE_RUNNER_FRESH=1 sh "$ROOT/prepare.sh"
+fi

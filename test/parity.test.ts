@@ -404,6 +404,7 @@ effectTest("stopping through the board and through the CLI leave the same trace"
     ...scope,
     herdr: new Herdr(pluginEnv()),
     stateDir: pluginEnv().stateDir,
+    pluginRoot: pluginEnv().pluginRoot,
   };
   // Only the fields the board's stop reads; the rest is rendering.
   const view: Pick<WorkspaceView, "active"> = {

@@ -17,6 +17,7 @@ import { buildView, renderWorkspace } from "../src/workspace";
 import { RunStore } from "../src/run";
 import type { AgentInfo } from "../src/herdr";
 import { runEffect } from "./support/effect";
+import { FakeBin } from "./support/bin";
 
 let rig: Rig;
 
@@ -131,6 +132,102 @@ function board(alive: AgentInfo[], now?: number) {
   const env = rig.pluginEnv();
   return buildView({ ...scope(env), stateDir: env.stateDir, workspaceLabel: "test", alive, now });
 }
+
+/** The board as the pane builds it, with `git` answering for the installation. */
+const viewOfInstallation = Effect.fn("workspaceTest.viewOfInstallation")(function* (now?: number) {
+  const env = rig.pluginEnv();
+  return yield* buildView({
+    ...scope(env),
+    stateDir: env.stateDir,
+    workspaceLabel: "test",
+    alive: [],
+    pluginRoot: rig.projectDir,
+    now,
+  });
+});
+
+const boardOfInstallation = Effect.fn("workspaceTest.boardOfInstallation")(function* (
+  git: string,
+  now?: number,
+) {
+  const bin = yield* FakeBin.make(`${rig.root}/bin`);
+  yield* bin.add("git", git);
+  const view = yield* viewOfInstallation(now);
+  yield* bin.restore();
+  return view;
+});
+
+effectTest("the board says how far behind its remote the installation is", function* () {
+  const view = yield* boardOfInstallation(`echo 3`);
+
+  expect(view.behind).toBe(3);
+  expect(renderWorkspace(view)).toContain("3 commits behind");
+  // Shown, never sent: being a few commits behind is not worth interrupting anyone.
+  expect(yield* rig.cmds()).not.toContain("notify");
+});
+
+effectTest("a count stands for a moment, and not for longer than that", function* () {
+  // The board redraws every second and a half and this answer changes only when
+  // something fetches or pulls, so it is not asked again on every redraw — but
+  // `collie upgrade` in another terminal has to show up while the human is still
+  // looking at the board, so what it stands for is seconds, not minutes.
+  const start = 1_000_000;
+  const behind = yield* boardOfInstallation(`echo 3`, start);
+  const redrawn = yield* boardOfInstallation(`echo 0`, start + 1_500);
+  const later = yield* boardOfInstallation(`echo 0`, start + 60_000);
+
+  expect(behind.behind).toBe(3);
+  expect(redrawn.behind).toBe(3);
+  expect(later.behind).toBe(0);
+});
+
+effectTest("the board's fetch cannot prompt, and cannot hang the redraw", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const bin = yield* FakeBin.make(`${rig.root}/bin`);
+  // The fetch carries its no-prompt settings in front of it, so what says which
+  // command this is is the whole argument list rather than the first word. The stub
+  // records both what it was passed and what it was given to run with.
+  yield* bin.add(
+    "git",
+    `case "$*" in
+      *fetch*) echo "$* prompt=$GIT_TERMINAL_PROMPT" >> "${rig.root}/fetches" ;;
+      *) echo 2 ;;
+    esac`,
+  );
+
+  const view = yield* viewOfInstallation();
+
+  // Answered from the refs this machine already has: the board never waits on a
+  // remote. The fetch runs behind it, and the next redraw is what shows its result.
+  expect(view.behind).toBe(2);
+  // Generous, because it exits the moment the file appears: the whole suite runs
+  // beside this, and a forked subprocess is not owed a couple of seconds.
+  const fetched = `${rig.root}/fetches`;
+  for (let i = 0; i < 200 && !(yield* fs.exists(fetched)); i++) yield* Effect.sleep("50 millis");
+  expect(yield* fs.exists(fetched)).toBe(true);
+  // Nothing it runs may stop to ask a human: the pane is reading those keys.
+  const asked = yield* fs.readFileString(fetched);
+  expect(asked).toContain("prompt=0");
+  expect(asked).toContain("credential.helper=");
+  expect(asked).toContain("BatchMode=yes");
+  yield* bin.restore();
+});
+
+effectTest("an installation level with its remote says nothing", function* () {
+  const view = yield* boardOfInstallation(`echo 0`);
+
+  expect(view.behind).toBe(0);
+  expect(renderWorkspace(view)).not.toContain("behind");
+});
+
+effectTest("an installation git cannot answer for says nothing, and still renders", function* () {
+  // Not a checkout, no upstream, or an unreachable remote: all the same answer.
+  const view = yield* boardOfInstallation(`exit 1`);
+
+  expect(view.behind).toBe(null);
+  expect(renderWorkspace(view)).toContain(COLLIE_TAB);
+  expect(renderWorkspace(view)).not.toContain("behind");
+});
 
 /** The `plugin pane open` calls for one entrypoint. */
 function opened(entrypoint: string) {

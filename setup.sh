@@ -1,11 +1,15 @@
 #!/bin/sh
-# One-shot install for a teammate: link the plugin, add keybindings, reload herdr.
+# One-shot install for a teammate: prepare the machine, add keybindings, reload herdr.
+# The preparation itself is `prepare.sh`; what stays here is the first-time-only work:
+# the checkout, the keybindings, and reloading a running herdr.
 # Safe to re-run; every step skips what is already in place.
 set -eu
 
 REPO_URL="${COLLIE_REPO:-git@gitlab.cego.dk:mk/collie.git}"
 PLUGIN_ID="cego.collie"
 CONFIG="${HERDR_CONFIG:-$HOME/.config/herdr/config.toml}"
+CHECKOUT="${COLLIE_DIR:-$HOME/.collie}"
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 say() { printf '\033[1m%s\033[0m\n' "$*"; }
 die() { printf 'setup: %s\n' "$*" >&2; exit 1; }
@@ -14,49 +18,30 @@ command -v herdr >/dev/null 2>&1 || die "herdr is not installed — see https://
 command -v git >/dev/null 2>&1 || die "git is required"
 
 # Run from a checkout, or clone one next to the user's other tools.
-if [ -f "$(dirname "$0")/herdr-plugin.toml" ]; then
-  ROOT=$(cd "$(dirname "$0")" && pwd)
+if [ -f "$HERE/herdr-plugin.toml" ]; then
+  ROOT="$HERE"
 else
-  ROOT="${COLLIE_DIR:-$HOME/.collie}"
-  if [ -d "$ROOT/.git" ]; then
-    say "Updating $ROOT"
-    git -C "$ROOT" pull --ff-only
-  else
+  ROOT="$CHECKOUT"
+  if [ ! -d "$ROOT/.git" ]; then
     say "Cloning into $ROOT"
     git clone "$REPO_URL" "$ROOT"
   fi
 fi
 
-if herdr plugin list 2>/dev/null | grep -q "$PLUGIN_ID .*\[local:$ROOT\]"; then
-  say "Plugin already linked from $ROOT"
-else
-  say "Linking plugin"
-  herdr plugin link "$ROOT"
+# Update it, wherever it came from: the documented install is a clone followed by
+# this script, so re-running the same command has to be how you get newer — the
+# checkout is where the workflows, personas and skills live, not just the runner.
+# `--ff-only`, and a pull it cannot do is said out loud rather than being the end of
+# the install: someone with work in progress here still wants the rest of this run.
+if [ -d "$ROOT/.git" ]; then
+  say "Updating $ROOT"
+  git -C "$ROOT" pull --ff-only || say "Could not update $ROOT; installing what is there"
 fi
 
-# The `collie` on PATH is `install.sh`'s to write, and `herdr plugin link` above has
-# just run it. A symlink here would replace a shim that pins `HERDR_PLUGIN_ROOT` with
-# one that does not, and a `collie` without that pin takes its workflows from whatever
-# directory it is standing in.
-
-# The operator skill: a link, so a `git pull` updates it without re-running anything.
-SKILLS_DIR="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
-SKILL_LINK="$SKILLS_DIR/collie"
-if [ "$(readlink "$SKILL_LINK" 2>/dev/null)" = "$ROOT/skills/collie" ]; then
-  say "Collie skill already linked"
-elif [ -e "$SKILL_LINK" ]; then
-  say "Leaving $SKILL_LINK alone; it is not ours to replace"
-elif [ -L "$SKILL_LINK" ]; then
-  # A link whose target is gone — the checkout it pointed at moved. `-e` is false for
-  # it, so without this the plain `ln -s` below fails on the directory entry that is
-  # still there, and `set -e` would end the setup with the keybindings undone.
-  say "Repointing the stale Collie skill link at $ROOT"
-  ln -sfn "$ROOT/skills/collie" "$SKILL_LINK"
-else
-  say "Linking the Collie skill into $SKILLS_DIR"
-  mkdir -p "$SKILLS_DIR"
-  ln -s "$ROOT/skills/collie" "$SKILL_LINK"
-fi
+# Everything that is safe to do again — the plugin link, the runner and the `collie`
+# shim, the operator skill, the skills the workflows require — is one routine, so
+# that this script, `collie upgrade` and a plugin rebuild all leave the same machine.
+sh "$ROOT/prepare.sh"
 
 add_binding() { # key action description
   if grep -q "command = \"$PLUGIN_ID.$2\"" "$CONFIG" 2>/dev/null; then
@@ -91,3 +76,9 @@ say "Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f f
 say "Outside it, the collie skill lets an agent drive runs from the CLI."
 say "The first run in a workspace opens a '🐕 Collie' tab as its first tab (prefix+1):"
 say "live agents, running and finished runs, and every menu a workflow asks you to answer."
+
+# The last word, and the exit status: either everything is ready or what is missing
+# with the command that fixes each one. `exec`, so nothing here can print after it
+# and finishing means verified rather than asserted.
+say "Checking prerequisites"
+exec "$ROOT/bin/collie" doctor

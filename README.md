@@ -12,6 +12,10 @@ One command, safe to re-run:
 git clone git@gitlab.cego.dk:mk/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
+That installs the plugin, the runner, a `collie` on your PATH and the skills the workflows
+require, then runs `collie doctor` and tells you either that everything is ready or what is
+missing. `collie upgrade` brings all of it up to date later.
+
 Collie is internal, so downloading a release asset needs a token. If `glab` is already
 logged in to the host, the install borrows that login and you need nothing else; otherwise
 set `COLLIE_TOKEN`, or let a machine with bun build from source. See

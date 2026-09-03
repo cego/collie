@@ -21,6 +21,9 @@ export const upgrade = Command.make("upgrade", {}, () =>
 ).pipe(
   Command.withDescription("Update this installation of Collie and the `collie` on your PATH"),
   Command.withExamples([
-    { command: "collie upgrade", description: "Pull if this is a checkout, then reinstall" },
+    {
+      command: "collie upgrade",
+      description: "Pull if this is a checkout, then bring every prerequisite up to date",
+    },
   ]),
 );

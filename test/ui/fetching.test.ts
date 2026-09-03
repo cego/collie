@@ -63,6 +63,7 @@ function session(): ControlSession {
     ...scopeFor(env, env.cwd),
     stateDir: env.stateDir,
     paneId: env.paneId,
+    pluginRoot: env.pluginRoot,
   };
 }
 

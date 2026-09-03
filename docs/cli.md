@@ -311,6 +311,41 @@ retried `run start` is a second run.
 collie upgrade
 ```
 
-Pulls first where the installation is a checkout (`--ff-only`), then reinstalls, so one
-place decides whether this machine builds from source or downloads a release. A pull it
-cannot do is reported rather than installed over.
+Pulls first where the installation is a checkout (`--ff-only`), then runs `prepare.sh` —
+the one routine every entry point ends in, so this brings the plugin link, the runner and
+shim, the operator skill and the skills up to date together rather than replacing the
+runner alone. A pull it cannot do is reported rather than installed over.
+
+The report names what moved: the commit range where the checkout advanced, and one line
+per preparation step saying whether it was done, was already in place, or was skipped —
+so "nothing to do" reads differently from "the runner updated but the skills step could
+not run". A skipped step is not a failure: `upgrade` still succeeds. Under `--json` the
+same steps are in `data.steps`.
+
+## Checking an installation
+
+```sh
+collie doctor
+collie doctor --json
+```
+
+Every prerequisite in one pass, each with the command that fixes it: herdr present and at
+least the `min_herdr_version` the plugin manifest declares; the plugin linked from this
+installation; the runner built and the `collie` shim on PATH (installed-but-not-on-PATH is
+its own reported state); a Node runtime for the skills CLI; every skill and every harness
+the loaded workflows and personas name; whether the checkout is behind its remote; and
+`glab` present and logged in.
+
+The skills and harnesses come from the loaded definitions rather than a list in the code,
+so a forked workflow naming a different skill is checked against that one. Every executable
+it looks for has to be executable, not merely present: a shim without its bit set fails
+with permission denied at the point of use, which is the confusion this command exists to
+end. It fetches before answering whether the checkout is behind, because you are waiting
+on it.
+
+It exits non-zero when a prerequisite is missing, so it can gate a script of your own. A
+checkout that is merely behind its remote is not one of those: it is reported, with
+`collie upgrade` under it, and the run still passes — the same line the Control Plane
+shows rather than sends. `--json` carries the same checks as data. `setup.sh` ends by
+running it, and exits with its status: the last word of an install is either that
+everything is ready, or what is missing and how to fix each one.

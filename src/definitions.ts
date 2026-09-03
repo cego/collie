@@ -593,15 +593,28 @@ export function skillMentions(wf: ResolvedWorkflow, defs: Definitions): Map<stri
 }
 
 /**
- * Every skill this Workflow asks for that is not installed. Named one per line with
- * the command that installs it: a run that starts without them wastes an agent's
- * whole turn discovering the same thing.
+ * Whether one skill is installed in any of these directories. The file, not the
+ * directory: a mention renders the path to `SKILL.md`, so a directory without one is
+ * a skill that validates and then reads as missing to the agent told to follow it.
  */
-const missingSkills = Effect.fn("Definitions.missingSkills")(function* (
-  wf: ResolvedWorkflow,
-  defs: Definitions,
+export const skillInstalled = Effect.fn("Definitions.skillInstalled")(function* (
   dirs: string[],
+  name: string,
 ) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  for (const dir of dirs) {
+    if (yield* fs.exists(path.join(dir, name, "SKILL.md"))) return true;
+  }
+  return false;
+});
+
+/**
+ * Every skill this Workflow asks for, and what asked for it: the ones a Step or a
+ * Choice round *starts*, and the ones a prompt or a Persona mentions. `doctor` and
+ * validation ask the same question, so they ask it in one place.
+ */
+export function requiredSkills(wf: ResolvedWorkflow, defs: Definitions): Map<string, string> {
   // A step's `skill:` is started rather than mentioned, and is just as missing; the
   // rest is the same walk the engine resolves paths from.
   const asked = new Map<string, string>();
@@ -621,22 +634,23 @@ const missingSkills = Effect.fn("Definitions.missingSkills")(function* (
   for (const [name, by] of skillMentions(wf, defs)) {
     if (!asked.has(name)) asked.set(name, by);
   }
+  return asked;
+}
 
+/**
+ * Every skill this Workflow asks for that is not installed. Named one per line with
+ * the command that installs it: a run that starts without them wastes an agent's
+ * whole turn discovering the same thing.
+ */
+const missingSkills = Effect.fn("Definitions.missingSkills")(function* (
+  wf: ResolvedWorkflow,
+  defs: Definitions,
+  dirs: string[],
+) {
+  const asked = requiredSkills(wf, defs);
   const errors: string[] = [];
   for (const [name, by] of asked) {
-    let installed = false;
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    for (const dir of dirs) {
-      // The file, not the directory: a mention renders the path to `SKILL.md`, so a
-      // directory without one is a skill that validates and then reads as missing to
-      // the agent that was told to follow it.
-      if (yield* fs.exists(path.join(dir, name, "SKILL.md"))) {
-        installed = true;
-        break;
-      }
-    }
-    if (!installed)
+    if (!(yield* skillInstalled(dirs, name)))
       errors.push(`${by}: the skill "${name}" is not installed — run \`npx skills add ${name}\``);
   }
   return errors;

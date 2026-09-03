@@ -384,9 +384,9 @@ export const settleGiven = Effect.fn("operations.settleGiven")(function* (
 
 /**
  * Brings this installation up to date and reports what moved. A checkout is pulled
- * first — its own source is what a release is cut from — and then `install.sh` does
- * the same job it does at install time, so there is one place that decides whether
- * this machine builds or downloads, and one place that writes the `collie` on PATH.
+ * first — its own source is what a release is cut from — and then `prepare.sh` does
+ * the same job it does at install time, so there is one place that decides what a
+ * prepared machine has on it, and every entry point ends in that one place.
  *
  * The runner is a parameter for the same reason inference takes one: this shells out
  * to git and sh, and a test should be able to watch it do that.
@@ -416,36 +416,54 @@ export const upgrade = Effect.fn("operations.upgrade")(function* (
     after = yield* head();
   }
 
-  const installed = yield* run("sh", ["install.sh"], root);
+  const installed = yield* run("sh", ["prepare.sh"], root);
   if (installed.code !== 0) {
-    return err("operation_failed", `Could not install collie in ${root}.`, {
+    return err("operation_failed", `Could not prepare ${root}.`, {
       root,
       output: installed.stdout.trim(),
     });
   }
 
   const moved = checkout && before !== after;
-  const log = installed.stdout.trim();
+  const steps = prepareSteps(installed.stdout);
   return {
     ok: true as const,
-    data: { root, checkout, before, after, updated: moved, log },
-    // The last line of the install, not all of it: `bun install` says a great deal
-    // about packages it did not have to touch, and none of it is what was asked.
+    data: { root, checkout, before, after, updated: moved, steps },
     human: [
       checkout
         ? moved
           ? `Updated ${root} from ${before} to ${after}.`
           : `${root} was already up to date at ${before}.`
         : `${root} is not a checkout, so the release was fetched.`,
-      log
-        .split("\n")
-        .filter((line) => line.trim() !== "")
-        .at(-1) ?? "",
-    ]
-      .filter((line) => line !== "")
-      .join("\n"),
+      // What each preparation step did, rather than the install's own output: a
+      // step that was skipped is the thing a reader most needs to see, and `bun
+      // install` has a great deal to say about packages it did not have to touch.
+      ...steps.map(
+        (step) => `  ${step.step.padEnd(16)}${step.state}${step.detail ? ` — ${step.detail}` : ""}`,
+      ),
+    ].join("\n"),
   };
 });
+
+/**
+ * What `prepare.sh` reported, one line per step. Anything else it printed — the
+ * install's own output, a stack of npm notices — is not part of the answer.
+ *
+ * This is one half of a contract whose other half is a `printf` in a shell script,
+ * so it is exported for the test that runs the real script and reads its output back
+ * through here: a step line reworded on one side and not the other would otherwise
+ * empty this report with nothing failing.
+ */
+const PREPARE_LINE = /^prepare: ([a-z-]+): (done|already in place|skipped|failed)(?: — (.*))?$/;
+
+export function prepareSteps(
+  output: string,
+): Array<{ step: string; state: string; detail: string }> {
+  return output.split("\n").flatMap((line) => {
+    const match = PREPARE_LINE.exec(line.trim());
+    return match ? [{ step: match[1]!, state: match[2]!, detail: match[3] ?? "" }] : [];
+  });
+}
 
 /** `git rev-parse` prints one line; anything else means it did not answer. */
 function short(result: { code: number; stdout: string }): string {

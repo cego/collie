@@ -88,6 +88,8 @@ import {
 
 export interface ControlSession extends Omit<Session, "herdr"> {
   herdr: Herdr;
+  /** This installation, so the board can say when it is behind its remote. */
+  pluginRoot: string;
 }
 
 export type Mode = "pick" | "resume" | "fork";
@@ -651,6 +653,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     ...scopeFor(env, env.cwd),
     stateDir: env.stateDir,
     paneId: env.paneId,
+    pluginRoot: env.pluginRoot,
   };
   const why =
     (yield* whyNoRenderer()) ??
@@ -1190,6 +1193,7 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
     stateDir: session.stateDir,
     workspaceLabel: live.label,
     alive: live.alive,
+    pluginRoot: session.pluginRoot,
     runs,
   });
 });

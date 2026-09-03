@@ -12,12 +12,27 @@ One command, safe to re-run:
 git clone git@gitlab.cego.dk:mk/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
-`setup.sh` links Collie (`herdr plugin link`, which runs `install.sh`), adds the three
-keybindings below to `~/.config/herdr/config.toml` if they are missing, links the Collie
-operator skill into `~/.claude/skills/collie`, and reloads the running herdr. Run it again
-after a `git pull` to pick up changes. From a non-checkout location it clones or updates
-`~/.collie` itself. `install.sh` puts the runner in `bin/collie` and a `collie` on your
-PATH, without changing PATH itself.
+`setup.sh` does its own work — clone the checkout or pull it, add the three keybindings
+below to `~/.config/herdr/config.toml` if they are missing, reload a running herdr — and
+calls `prepare.sh` for everything else. That is the one routine that prepares a
+machine, and `collie upgrade` and herdr's plugin build hook end in it too, so a prerequisite
+is added in one place:
+
+| Step             | What it does                                                                |
+| ---------------- | --------------------------------------------------------------------------- |
+| `plugin-link`    | `herdr plugin link` from this checkout, if it is not already linked from it |
+| `runner`         | `install.sh`: the runner in `bin/collie`, and a `collie` shim on your PATH  |
+| `operator-skill` | Links the Collie operator skill into `~/.claude/skills/collie`              |
+| `skills`         | Installs and updates the skills the workflows require (below)               |
+
+Every step skips what is already in place, so re-running is a reflex rather than a
+decision. `install.sh` writes the shim without changing PATH itself. Keybindings are the
+one thing `prepare.sh` never touches: writing to your herdr config is not something a
+plugin rebuild may do as a side effect, so `setup.sh` alone adds them.
+
+`setup.sh` ends by running [`collie doctor`](cli.md#checking-an-installation) and exits with
+its status, so an install's last word is either that everything is ready or what is missing
+with the fix for each.
 
 Collie is internal, so downloading a release asset needs a token. An unauthenticated
 request gets a sign-in page rather than a binary — with HTTP 200, which is why the install
@@ -46,8 +61,51 @@ a checkout does anyway, because its own source is what a release is cut from. A 
 with neither a token nor bun says so and stops rather than installing whatever came back.
 
 `collie upgrade` does the same thing later: it pulls first where the installation is a
-checkout (`--ff-only`, so it never quietly merges local work), then runs the install. A
-pull it cannot do is reported rather than installed over.
+checkout (`--ff-only`, so it never quietly merges local work), then runs the same
+`prepare.sh` steps and reports what each of them did. A pull it cannot do is reported
+rather than installed over. The Control Plane says when this installation is behind its
+remote, so you upgrade because you know you are stale rather than because you remembered
+to.
+
+### The skills
+
+The baseline workflows hard-require ten skills they do not ship, and a missing skill stops
+a run before its first tab opens. `prepare.sh` installs them for you with the
+[skills.sh](https://skills.sh/) CLI (`npx skills`), from three sources:
+
+- `https://github.com/mattpocock/skills/tree/main/skills/engineering`
+- `https://github.com/mattpocock/skills/tree/main/skills/productivity`
+- `https://github.com/addyosmani/agent-skills`
+
+The CLI itself is pinned to a version, where the skills it installs are not: that is an
+executable running unattended with your shell's privileges on every install and upgrade,
+which is a different question from what a skill's text says. Bumping it is a deliberate
+one-line change.
+
+The first two sources are what that repository's own plugin manifest defines as its
+official bucket. They are added by _path_, not as a list of skill names, so a skill added upstream
+inside those directories arrives on your next upgrade.
+
+They are installed globally into `~/.agents/skills`, which is the standard location and
+the first place Collie's own skill lookup already searches — pi, codex and opencode read it
+directly and get no special handling. Claude Code does not read it, so it is named as an
+install target as well and gets a symlink per skill; nothing is copied twice.
+
+**Versions float.** Every install and every `collie upgrade` takes the latest upstream
+state; there is no lockfile and nothing is vendored here. The mechanism is the CLI's own
+global update ([ADR 0005](adr/0005-skills-float-and-are-not-pinned.md) names it), so any
+other skill you have installed globally is brought to _its_ own latest at the same time —
+each from the source it already records, never repointed at ours. If one of those cannot
+be reached, the step says so and stops there; the three sources above stay installed and
+are not fetched again on the next run. The cost is real and worth
+knowing: several steps read a skill's _output contract_, so an upstream change to what a
+skill writes can break a workflow with no change on our side. The symptom is a step whose
+output cannot be read, and upstream is the first place to look. The reasoning is
+[ADR 0005](adr/0005-skills-float-and-are-not-pinned.md).
+
+The step needs the network and a Node runtime, and neither is a reason to leave you without
+a runner. If either is missing the step says so in one line, the rest of the install
+completes, and `collie upgrade` picks it up next time.
 
 ### Environment variables
 
@@ -56,8 +114,8 @@ pull it cannot do is reported rather than installed over.
 | `COLLIE_DIR`          | Checkout used by `setup.sh` when it is run outside a checkout; defaults to `~/.collie`.                                                      |
 | `COLLIE_REPO`         | Git URL cloned by `setup.sh`.                                                                                                                |
 | `COLLIE_TOKEN`        | Personal access token (`read_api`) used to download a release asset. Optional where `glab` or `gh` is already logged in to the release host. |
-| `COLLIE_BIN_DIR`      | Where `install.sh` writes the `collie` on your PATH; defaults to `~/.local/bin`.                                                             |
-| `CLAUDE_SKILLS_DIR`   | Where `setup.sh` links the Collie operator skill; defaults to `~/.claude/skills`.                                                            |
+| `COLLIE_BIN_DIR`      | Where `install.sh` writes the `collie` on your PATH; defaults to `~/.local/bin`. `collie doctor` looks there for a shim that is not on PATH. |
+| `CLAUDE_SKILLS_DIR`   | Where `prepare.sh` links the Collie operator skill; defaults to `~/.claude/skills`.                                                          |
 | `COLLIE_RELEASE_BASE` | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                                             |
 | `COLLIE_DRIVER`       | Driver executable for development and tests: one executable path, or a JSON array containing the executable and arguments.                   |
 | `COLLIE_MODE`         | Internal picker mode passed from a herdr action to its picker pane.                                                                          |
@@ -158,6 +216,20 @@ harness is trusted here. None of them is read until it is first shown.
 synthesizers as well as the implementer and the planner. The ones a hand-off can name are
 called by their role and come first; the rest are called by their step and model. A role is
 a label, not a filter.
+
+Under the directory, a line appears when this installation is behind its remote, naming
+how far behind it is and the command that clears it:
+
+```
+Collie is 3 commits behind its remote — `collie upgrade`
+```
+
+Nothing else happens: it is shown, never sent, because being a few commits behind is not
+worth interrupting anyone for. The count is read from the refs this machine already has,
+so the board never waits on a remote; a fetch runs behind it every few minutes and the
+next redraw shows what that brought. The line is absent entirely when this installation is
+not a checkout or its branch has no upstream. `collie doctor` reports the same thing, and
+fetches before it answers because you are waiting on it.
 
 **Runs** is what is going on now. A run whose Driver died — no agent of its own left and
 nothing written for a minute — moves to **Finished** as `⚠ abandoned` rather than sitting
@@ -348,9 +420,19 @@ for you — the dialog shuffles its options between runs, so there is no safe ke
 
 ## Troubleshooting
 
-**A change to Collie has not taken effect.** Run `~/.collie/setup.sh` again after a `git
-pull`, or `collie upgrade`. The plugin link, the keybindings and the `collie` on PATH are
-each written once and skipped when already in place, so re-running is cheap.
+**A change to Collie has not taken effect.** Run `collie upgrade`, or `~/.collie/setup.sh`
+again — either one. Both pull the checkout (`--ff-only`, and a pull they cannot do is
+reported rather than forced) and both end in the same `prepare.sh`, so both bring the
+plugin link, the runner and shim, the operator skill and the skills up to date. Every step
+skips what is already in place, so re-running is cheap: an unchanged checkout is not even
+rebuilt. The one difference is the keybindings, which `setup.sh` writes and nothing else
+touches — if a binding you expect is missing, `setup.sh` is the one to run.
+
+**Something is missing and you would rather not find out mid-run.** `collie doctor` checks
+every prerequisite at once — herdr and its minimum version, the plugin link, the runner and
+the shim's directory on PATH, a Node runtime, the skills and harnesses your workflows name,
+whether this checkout is behind its remote, and whether `glab` is logged in — and prints the
+command that fixes each. It exits non-zero when any check fails.
 
 **A keybinding does nothing over SSH.** The three bindings use plain letters after the
 prefix on purpose, because `alt` chords are not delivered reliably over SSH or through some
@@ -371,5 +453,6 @@ fill are all caught up front. `collie workflow check` reports the same problems 
 starting a run, and names the file and the step.
 
 **A skill is missing.** Skills are a prerequisite, like the harness binary. The error names
-the skill and the command that installs it. See
-[Authoring](authoring.md#skills) for how a definition refers to one.
+the skill and the command that installs it, and `collie upgrade` reinstalls the whole set.
+See [Authoring](authoring.md#skills) for how a definition refers to one, and
+[the skills](#the-skills) for where they come from.

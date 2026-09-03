@@ -120,6 +120,10 @@ const PluginContextJson = Schema.fromJsonString(
 const environmentKeys = [
   "HOME",
   "PWD",
+  // Not herdr's, but the machine's: `doctor` answers "is it installed" by walking
+  // PATH, and "where would the shim be" from the directory the installer writes to.
+  "PATH",
+  "COLLIE_BIN_DIR",
   "COLLIE_CWD",
   "COLLIE_MODE",
   "HERDR_BIN_PATH",

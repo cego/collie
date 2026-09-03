@@ -254,6 +254,16 @@ export function fakeHerdr(
       return { code: 0, stdout: `${body}\n`, stderr: "" };
     }
 
+    // What `doctor` asks of herdr, both plain text rather than an envelope, and both
+    // scripted per test: the version this machine has, and what it has linked.
+    if (cmd === "--version") {
+      const version = yield* envString("FAKE_HERDR_VERSION", "herdr 0.9.0");
+      return { code: 0, stdout: `${version}\n`, stderr: "" };
+    }
+    if (cmd === "plugin list") {
+      return { code: 0, stdout: `${yield* envString("FAKE_HERDR_PLUGINS", "")}\n`, stderr: "" };
+    }
+
     if (cmd === "agent prompt") {
       state.prompts += 1;
       yield* writeJson(statePath, state);

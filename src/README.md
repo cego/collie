@@ -7,6 +7,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `commands/`      | Workflow, Persona, and Run command handlers plus their shared resolution context         |
 | `envelope.ts`    | CLI envelopes, stdout, exit statuses, request receipts, and mutation locks               |
 | `operations.ts`  | Workspace resolution and Run mutations shared by both front doors                        |
+| `doctor.ts`      | Every prerequisite an installation needs, checked in one pass, each with its fix         |
 | `flows.ts`       | What each action and pane entrypoint does                                                |
 | `env.ts`         | The plugin environment herdr provides                                                    |
 | `herdr.ts`       | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest                  |
