@@ -30,6 +30,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `keys.ts`        | Raw keypresses, for the text board a pane falls back to when the renderer will not start |
 | `fork.ts`        | Take a definition into a later layer: an `extends:` stub, or a full copy                 |
 | `trust.ts`       | Whether a harness will work in a directory, or stop and ask first                        |
+| `worktree.ts`    | The checkout a mutating Run owns, keyed by its branch, and pruning the settled ones      |
 | `mr.ts`          | Whether GitLab is reachable, who to assign, and which Linear tickets a branch answers    |
 | `template.ts`    | `{{a.b}}` prompt substitution                                                            |
 | `config.ts`      | User defaults and remembered values in `config.json`                                     |

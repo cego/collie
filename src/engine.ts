@@ -21,6 +21,7 @@ import { configValue, readConfig, writeConfigValue } from "./config";
 import type { PluginEnv } from "./env";
 import type { PickItem } from "./inputs";
 import { slugify } from "./template";
+import { checkoutFor } from "./worktree";
 import {
   isYamlMap,
   YamlMapSchema,
@@ -52,6 +53,7 @@ import {
   insertIndexFor,
   paneLabel,
   rankOf,
+  runName,
   shellQuote,
   stepLabel,
   tabLabel,
@@ -892,17 +894,33 @@ const chain = Effect.fn("Engine.chain")(function* (
   }
 
   // The parent already names the work, so the child inherits its name.
-  const prefix = `${run.record.workflow}-`;
-  const tail = run.record.slug.startsWith(prefix)
-    ? run.record.slug.slice(prefix.length)
-    : run.record.slug;
+  const tail = runName(run.record.workflow, run.record.slug);
+  // A chained Workflow that changes the repository owns its checkout too — this is
+  // where `plan` and `architecture` get one, by chaining into `implement`. The branch
+  // is resolved from the child's own inputs, so a fix round lands in the checkout the
+  // reviewed branch already has.
+  const checkout = yield* checkoutFor(o.herdr, {
+    cwd: run.record.cwd,
+    workflow: child.name,
+    name: tail,
+    inputs,
+    workspaceId: o.env.workspaceId,
+    workspaceLabel: run.record.workspace_label,
+  });
+  // A child that must not share a checkout is not started at all, and the menu comes
+  // back: sharing one is what swapped two Runs' uncommitted work in the first place.
+  if (checkout.refused) {
+    yield* out(`  ${child.name} has nowhere to work: ${checkout.refused} — nothing started`);
+    return null;
+  }
   const childRun = yield* new RunStore(o.env.stateDir).create({
     workflow: child.name,
-    cwd: run.record.cwd,
+    cwd: checkout.cwd,
     session: o.env.socketPath,
-    workspace: o.env.workspaceId,
+    workspace: checkout.workspaceId,
+    worktree: checkout.worktree,
     // A child starts where its parent is, so it inherits the workspace it recorded.
-    workspaceLabel: run.record.workspace_label,
+    workspaceLabel: checkout.workspaceLabel,
     workspaceWorktree: run.record.workspace_worktree,
     inputs,
     inputSources: sources,
@@ -912,6 +930,7 @@ const chain = Effect.fn("Engine.chain")(function* (
     parent: run.id,
   });
   yield* childRun.log(`chained from ${run.id}`);
+  if (checkout.note) yield* childRun.log(checkout.note);
   run.record.children.push(childRun.id);
   yield* run.save();
   yield* out(`  ▸ ${child.name} run ${childRun.id}`);
@@ -920,7 +939,7 @@ const chain = Effect.fn("Engine.chain")(function* (
   // over exactly as `run start` hands over. This used to open a `runner` pane, which
   // herdr-plugin.toml has never declared and main.ts has never routed, so the child
   // was created, recorded `running`, listed as a child — and driven by nobody.
-  const undriven = yield* handOver({ ...o.env, cwd: run.record.cwd }, childRun);
+  const undriven = yield* handOver({ ...o.env, cwd: childRun.record.cwd }, childRun);
   if (undriven) yield* out(`  ${child.name} was created but no driver started: ${undriven.why}`);
   return childRun.id;
 });
@@ -1215,7 +1234,9 @@ const ensureTrusted = Effect.fn("Engine.ensureTrusted")(function* (o: EngineOpti
       const trust = HARNESSES[variant.harness]?.trust?.(o.env.home, o.env.stateDir);
       if (!trust || (yield* trust.state(cwd)) !== "untrusted") continue;
 
-      if (o.defaults.trust === "ask") {
+      // A checkout Collie created a moment ago is not a directory the human has an
+      // opinion about: they said yes to the Run, and the worktree is where it happens.
+      if (o.defaults.trust === "ask" && !o.run.record.worktree?.created_by_collie) {
         if (!o.prompts) continue;
         const answer = yield* o.prompts!.menu(
           [

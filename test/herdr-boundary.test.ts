@@ -225,3 +225,83 @@ test("a worktree-backed workspace decodes, and its checkout is its directory", (
       expect(list[1]!.worktree).toBe("/home/u/.herdr/worktrees/collie/feature");
     }),
   ));
+
+test("the worktree list is read as branch, checkout and the workspace holding it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      class ListingHerdr extends Herdr {
+        protected override exec() {
+          return Effect.succeed({
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                type: "worktree_list",
+                // The repository's own checkout, which is where a command about the
+                // repository has to run: any of the others may be removed under it.
+                source: { source_checkout_path: "/repo", repo_root: "/repo" },
+                worktrees: [
+                  { branch: "master", path: "/repo", open_workspace_id: "wT" },
+                  { branch: "add-picker", path: "/wt/add-picker" },
+                ],
+              },
+            }),
+            stderr: "",
+          });
+        }
+      }
+
+      expect(yield* new ListingHerdr(rig.pluginEnv()).worktreeList("/repo")).toEqual({
+        worktrees: [
+          { branch: "master", path: "/repo", workspaceId: "wT" },
+          { branch: "add-picker", path: "/wt/add-picker", workspaceId: null },
+        ],
+        source: "/repo",
+      });
+    }),
+  ));
+
+test("creating a worktree answers with its checkout and its new workspace", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(rig.pluginEnv());
+      const made = yield* herdr.worktreeCreate({
+        cwd: "/repo",
+        branch: "add-picker",
+        base: "origin/master",
+        label: "⚙ implement · add-picker",
+      });
+
+      expect(made.branch).toBe("add-picker");
+      expect(made.path).toContain("add-picker");
+      expect(yield* rig.calls()).toEqual([
+        {
+          transport: "cli",
+          cmd: "worktree create",
+          argv: [
+            "worktree",
+            "create",
+            "--cwd",
+            "/repo",
+            "--branch",
+            "add-picker",
+            "--base",
+            "origin/master",
+            "--label",
+            "⚙ implement · add-picker",
+            "--no-focus",
+          ],
+        },
+      ]);
+    }),
+  ));
+
+test("removing a worktree names its workspace and never forces", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(rig.pluginEnv());
+      yield* herdr.worktreeRemove("w1P");
+
+      const calls = yield* rig.calls();
+      expect(calls.at(0)?.argv).toEqual(["worktree", "remove", "--workspace", "w1P"]);
+    }),
+  ));

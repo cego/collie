@@ -26,6 +26,11 @@ Rules:
   unless you can answer their reason. If you can, add a `rebuttal` that answers it. If you
   cannot, leave it: it is the human's decision, and raising it again only costs a round.
 - Do not edit files. Do not commit. Do not push.
+- Never `git stash`, and flag any `git stash` a change adds to a script, a workflow or
+  the docs: the stash stack belongs to the whole repository, so it is shared with every
+  other worktree of it and with whoever is working there. A throwaway
+  `git worktree add /tmp/<name> <ref>`, removed after, is the safe way to look at a clean
+  tree — yours and theirs.
 - Finding nothing is a real answer: an empty findings list with a `clean` verdict.
 
 ## Output

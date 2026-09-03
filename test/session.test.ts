@@ -218,6 +218,69 @@ test("with no implementer live, the review offers to start one on the reviewed t
     }),
   ));
 
+test("the implement run chained from a review lands in the reviewed branch's own worktree", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      // The branch under review already has a checkout, from whoever built it.
+      const existing = path.join(rig.root, "worktrees", "feature");
+      yield* rig.addWorktree("feature", existing, "w7");
+      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+
+      const { run } = yield* runWorkflow(
+        rig,
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Fix findings in a full implement run"]) },
+      );
+      const childId = must(run.record.children.at(0), "expected child run");
+      const child = yield* new RunStore(rig.stateDir).load(childId);
+
+      expect(child.record.worktree).toEqual({
+        path: existing,
+        branch: "feature",
+        created_by_collie: false,
+        workspace_id: "w7",
+        // The checkout already existed, so git wrote its `.git` when whoever made it
+        // ran `worktree add`; the rig's stand-in has one.
+        made_at: expect.any(Number),
+      });
+      expect(child.record.cwd).toBe(existing);
+      expect(child.record.workspace).toBe("w7");
+      // Opened, never created: git allows one worktree per branch, and this branch
+      // already has one.
+      expect((yield* rig.cmds()).filter((cmd) => cmd.startsWith("worktree"))).toEqual([
+        "worktree list",
+        "worktree open",
+      ]);
+    }),
+  ));
+
+test("a review of a merge request chains onto that merge request's own branch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // `implement` embeds `review`, so `target` is one of its resolved inputs and the
+      // chain forwards it. That is what lets the child resolve the branch from the
+      // merge request rather than from whatever branch the caller happens to be on —
+      // the fake git here answers `feature` for that, and it must not be used.
+      yield* bin.add("glab", `echo '{"source_branch": "fix-the-parser", "iid": 42}'`);
+      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+
+      const { run } = yield* runWorkflow(
+        rig,
+        "review",
+        { target: "mr:42" },
+        { prompts: scriptedPrompts(["Fix findings in a full implement run"]) },
+      );
+      const childId = must(run.record.children.at(0), "expected child run");
+      const child = yield* new RunStore(rig.stateDir).load(childId);
+
+      expect(child.record.inputs.target).toBe("mr:42");
+      expect(child.record.inputs.target_kind).toBe("mr");
+      expect(child.record.worktree?.branch).toBe("fix-the-parser");
+    }),
+  ));
+
 test("the build prompt for a review work source checks out what was reviewed", () =>
   runEffect(
     Effect.gen(function* () {
@@ -244,10 +307,12 @@ test("the build prompt for a review work source checks out what was reviewed", (
       expect(prompt).toContain("Work source (review)");
       expect(prompt).toContain(`${run.dir}/review.md`);
       expect(prompt).toContain(`${run.dir}/steps/synthesize/synthesized.json`);
-      expect(prompt).toContain("do not branch off the default branch");
-      expect(prompt).toContain("git checkout <head of branch:main...feature>");
-      expect(prompt).toContain("glab mr checkout <iid>");
-      expect(prompt).toContain("stay on the branch you are on");
+      // The branch is settled before the agent starts, so the prompt says where it
+      // already is rather than how to get there.
+      expect(prompt).toContain("this checkout is already on its branch");
+      expect(prompt).toContain("never create a branch or switch");
+      expect(prompt).not.toContain("git checkout");
+      expect(prompt).not.toContain("glab mr checkout");
       expect(child.record.inputs.plan_kind).toBe("review");
     }),
   ));

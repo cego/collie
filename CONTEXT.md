@@ -30,6 +30,26 @@ Session can hand work to each other. There is only ever one agent per role in a 
 instead of starting a second one. Both Runs record it. Which hand-offs exist and what each
 sends: `docs/using.md`.
 
+**Worktree** — The checkout a mutating Run owns: one per branch, because git allows
+exactly one worktree per checked-out branch, opened through herdr as a workspace of its
+own so the Run's tabs, its cwd and its agents are all in one place. `implement` gets one,
+and `plan`/`architecture` get one where they chain into it; `review` reads the diff or the
+caller's own tree. It outlives the merge request and is removed only once **Settled**. A
+Run records the branch, the path, whether Collie created it, and the moment git wrote the
+checkout — which is what tells Collie's own checkout from one a human later made at the
+same path on the same branch. A checkout a human made is never removed.
+
+**Settled** — A Collie-created Worktree that holds nothing which exists only there: the
+tree is clean, it holds no commit that is not on the remote already, nothing is working in
+it or could be resumed in it, and its merge request is merged or closed (or its remote
+branch is gone). "No commit of its own" is the branch's upstream where it has one, and the
+default branch where it does not — a branch merged and deleted loses its upstream ref to
+the next `git fetch --prune`, and requiring one would make the gone-branch case
+unreachable. Only then is it removed, through herdr, and only ever without a force flag:
+git's own refusal to drop a dirty or unmerged checkout is the last guard, so a wrong
+judgement can fail to clean but never delete work. The conditions and their order are
+canonical in `src/worktree.ts` and `docs/internals.md`.
+
 **Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking takes a baseline definition into a Layer.
 
 **Override** — A definition that declares `extends: <name>` and changes only what it names; everything else still follows the parent in the Layer below. A file without `extends:` replaces the whole definition, and a full copy records `forked_from_hash` so a parent that has moved on can be marked stale. The merge rules are canonical in `src/definitions.ts` and `docs/authoring.md`.

@@ -39,6 +39,16 @@ beforeEach(() =>
       // it records, and a run that cannot start one bails with a notice that drowns both.
       bin = yield* FakeBin.make(`${rig.root}/bin`);
       yield* bin.add("stub-driver", "exit 0");
+      // A mutating run resolves a branch before it starts, and the rig's project is not
+      // a real checkout: this is the branch it is on and the default it cuts from.
+      yield* bin.add(
+        "git",
+        `case "$*" in
+      "rev-parse --abbrev-ref HEAD") echo feature ;;
+      "symbolic-ref --short refs/remotes/origin/HEAD") echo origin/master ;;
+      *) exit 1 ;;
+    esac`,
+      );
     }),
   ),
 );

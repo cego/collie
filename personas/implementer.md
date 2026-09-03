@@ -26,6 +26,10 @@ Rules:
   reviewers are shown it, and the loop stops raising that finding.
 - A finding that answers one of your reasons has to be dealt with, not disputed again on
   the same ground.
+- Never `git stash`: the stash stack belongs to the whole repository, so every other
+  worktree of it — and whoever is working there — shares yours. To check what a clean
+  tree does, make a throwaway checkout instead (`git worktree add /tmp/<name> <ref>`) and
+  `git worktree remove` it when you are done.
 
 When a decision the plan does not cover comes up, the step tells you where to take it: a
 planner may still be live for this work, and asking it is better than stopping. Where the

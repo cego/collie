@@ -13,7 +13,7 @@ import {
   inputValues,
   targetKind,
 } from "../../src/inputs";
-import { RunStore, type Run } from "../../src/run";
+import { RunStore, type Run, type WorktreeRecord } from "../../src/run";
 import type { EnginePrompts } from "../../src/engine";
 import type { PickItem } from "../../src/inputs";
 
@@ -127,6 +127,8 @@ export function runWorkflow(
     workspaceLabel?: string;
     /** What the human answered at launch, by Choice step id. */
     decisions?: Record<string, string>;
+    /** The checkout the Run owns, as `startRun` would have recorded it. */
+    worktree?: WorktreeRecord | null;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -159,10 +161,11 @@ export function runWorkflow(
 
     const run = yield* new RunStore(env.stateDir).create({
       workflow: wf.name,
-      cwd: env.cwd,
+      cwd: opts.worktree?.path ?? env.cwd,
       session: env.socketPath,
       workspace: env.workspaceId,
       workspaceLabel: opts.workspaceLabel ?? "test",
+      worktree: opts.worktree,
       inputs: merged,
       inputSources: sources,
       decisions: opts.decisions,

@@ -813,6 +813,7 @@ effectTest(
     const view: WorkspaceView = {
       repo: "r",
       cwd: env.cwd,
+      worktrees: [],
       behind: null,
       now: 0,
       agents: [],

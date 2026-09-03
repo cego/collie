@@ -650,6 +650,24 @@ effectTest("a running run whose agents are all gone is abandoned, not active", f
   expect((yield* board([])).active.map((r) => r.title)).toEqual(["Review · worktree"]);
 });
 
+effectTest("the board says what pruning removed and what it is holding", function* () {
+  const env = rig.pluginEnv();
+  const view = yield* buildView({
+    ...scope(env),
+    stateDir: env.stateDir,
+    workspaceLabel: "test",
+    alive: [],
+    worktrees: ["♻ removed collie-app · merged in !14", "kept collie-tui · 2 commit(s) unpushed"],
+  });
+
+  const text = renderWorkspace(view);
+  expect(text).toContain("Worktrees");
+  expect(text).toContain("♻ removed collie-app · merged in !14");
+  expect(text).toContain("kept collie-tui · 2 commit(s) unpushed");
+  // Nothing to report is nothing on the screen, not an empty section every refresh.
+  expect(renderWorkspace(yield* board([]))).not.toContain("Worktrees");
+});
+
 effectTest("a run waiting on the human says so on the board", function* () {
   const run = yield* seed({
     workflow: "plan",

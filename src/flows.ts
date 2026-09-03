@@ -32,6 +32,7 @@ import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { notify } from "./notify";
 import { COLLIE_TAB, reason, shellQuote } from "./naming";
 import { RunStore, type Run } from "./run";
+import { pruneWorktrees } from "./worktree";
 import { sendReview, sendReviewToImplementer, type Session } from "./handoff";
 import {
   acquireDriver,
@@ -90,6 +91,12 @@ export interface ControlSession extends Omit<Session, "herdr"> {
   herdr: Herdr;
   /** This installation, so the board can say when it is behind its remote. */
   pluginRoot: string;
+  /**
+   * What the last worktree sweep said, and whether one is out working right now. A
+   * caller that keeps none — a test drawing one board, a view built to be rendered
+   * once — sweeps nothing and shows nothing about worktrees.
+   */
+  pruned?: Pruned;
 }
 
 export type Mode = "pick" | "resume" | "fork";
@@ -654,6 +661,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     stateDir: env.stateDir,
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
+    pruned: { at: 0, lines: [], running: false },
   };
   const why =
     (yield* whyNoRenderer()) ??
@@ -1171,10 +1179,52 @@ interface LiveWorkspace {
   label: string | null;
 }
 
+/**
+ * How often the board prunes. Loading the board happens on every keypress and every
+ * 1.5-second refresh; pruning lists runs, asks herdr and writes its own state, so
+ * doing it per redraw put a subprocess and a disk write behind every keystroke. The
+ * lines it last answered with are what the board shows in between.
+ */
+const PRUNE_MS = 3 * 60_000;
+
+/** The last sweep's lines, and whether one is out working right now. */
+interface Pruned {
+  at: number;
+  lines: string[];
+  running: boolean;
+}
+
+/**
+ * Prunes in the background, never in the way. A sweep walks every due checkout with
+ * git and glab, and the board is a screen that has to redraw on a keypress — so the
+ * sweep is forked and the frame goes out with whatever the last one said. One at a
+ * time, and the clock starts when it finishes, so a slow sweep does not queue more.
+ */
+const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession) {
+  const pruned = session.pruned;
+  if (!pruned || pruned.running) return;
+  const now = yield* Clock.currentTimeMillis;
+  if (pruned.at !== 0 && now - pruned.at < PRUNE_MS) return;
+  pruned.running = true;
+  yield* Effect.forkDetach(
+    Effect.gen(function* () {
+      const lines = yield* pruneWorktrees({
+        herdr: session.herdr,
+        stateDir: session.stateDir,
+        cwd: session.cwd,
+      });
+      pruned.lines = lines;
+      pruned.at = yield* Clock.currentTimeMillis;
+      pruned.running = false;
+    }),
+  );
+});
+
 const boardOf = Effect.fn("Flows.boardOf")(function* (
   session: ControlSession,
   runs?: ReadonlyArray<Run>,
 ) {
+  yield* sweep(session);
   const live = yield* Effect.all(
     { alive: session.herdr.agentList(), workspaces: session.herdr.workspaceList() },
     { concurrency: "unbounded" },
@@ -1193,6 +1243,7 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
     stateDir: session.stateDir,
     workspaceLabel: live.label,
     alive: live.alive,
+    worktrees: session.pruned?.lines ?? [],
     pluginRoot: session.pluginRoot,
     runs,
   });

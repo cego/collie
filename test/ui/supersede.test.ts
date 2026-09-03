@@ -32,6 +32,7 @@ function stateFor(selected: string | null): AppState {
     board: {
       repo: selected ?? "none",
       cwd: "/w/collie",
+      worktrees: [],
       behind: null,
       now: 0,
       agents: [],

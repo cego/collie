@@ -57,17 +57,13 @@ The work source above is one of four kinds. Do the one that matches
 - **review** — a review of work that already exists. `{{inputs.plan}}/review.md` is the
   spec and `{{inputs.plan}}/steps/synthesize/synthesized.json` has the same findings as
   JSON; the tickets are those findings, worst severity first. You are fixing an existing
-  change, so **do not branch off the default branch** — work where the review was pointed:
-  - `target_kind` is `branch` — check out its head:
-    `git checkout <head of {{inputs.target}}>`.
-  - `target_kind` is `mr` — `glab mr checkout <iid> {{target_repo}}`, which
-    creates the local branch for you, so the fixes land on that merge request's own branch
-    and it is updated rather than replaced.
-  - `target_kind` is `worktree` — stay on the branch you are on.
-    Write the findings you are working from to `{{run.dir}}/plan/SPEC.md` and one ticket per
-    finding under `{{run.dir}}/plan/issues/`, so this run records what it set out to fix.
-    A finding you disagree with is `disputed` with a reason, exactly as in a fix round —
-    never silently skipped.
+  change and this checkout is already on its branch, so there is no branch to pick and
+  nothing to check out: the fixes land on the branch that was reviewed, and a merge
+  request on it is updated rather than replaced. Write the findings you are working from
+  to `{{run.dir}}/plan/SPEC.md` and one ticket per finding under
+  `{{run.dir}}/plan/issues/`, so this run records what it set out to fix. A finding you
+  disagree with is `disputed` with a reason, exactly as in a fix round — never silently
+  skipped.
 - **linear** — a Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat
   its description as the spec. Before building, write that spec to
   `{{run.dir}}/plan/SPEC.md` and a short task list to `{{run.dir}}/plan/issues/NN-*.md`,
@@ -76,11 +72,14 @@ The work source above is one of four kinds. Do the one that matches
   write `{{run.dir}}/plan/SPEC.md` and the task list from the text, then build. If the
   text does not say enough to build from, stop and say what you need — do not guess.
 
-Unless the kind above says otherwise, branch off the default branch first, named after
-the spec's slug — short, kebab-case,
-no ticket number unless the spec has one. You were started with {{skill:implement}}, so build
-the tickets in their order, one at a time: {{skill:tdd}} at the seams the spec names, the
-project's tests green, and one commit per ticket. There is no separate commit step.
+This run has a checkout of its own, on the branch it is building: Collie resolved the
+branch and opened the worktree before you started, so never create a branch or switch
+one. It is a fresh checkout, so install the project's dependencies before you run its
+tests for the first time.
+
+You were started with {{skill:implement}}, so build the tickets in their order, one at a
+time: {{skill:tdd}} at the seams the spec names, the project's tests green, and
+one commit per ticket. There is no separate commit step.
 
 Push before you finish: `git push -u origin HEAD -o ci.skip`, onto the branch the work
 source named where there is one. The reviewers read the merge request when there is one,

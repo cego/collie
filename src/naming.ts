@@ -120,6 +120,12 @@ function opaque(ref: string): boolean {
   return ref === "" || ref === "HEAD" || /^[0-9a-f]{7,40}$/i.test(ref);
 }
 
+/** A Run's own name, without the workflow its slug already carries. */
+export function runName(workflow: string, slug: string): string {
+  const prefix = `${workflow}-`;
+  return slug.startsWith(prefix) ? slug.slice(prefix.length) : slug;
+}
+
 /**
  * What this run is pointed at, short enough for a tab: an MR as `!123`, a branch
  * by name, the working tree, or — for the workflows that have no target — the
@@ -141,8 +147,7 @@ export function targetLabel(
     if (!opaque(base)) return base;
     return "diff";
   }
-  const prefix = `${workflow}-`;
-  return slug.startsWith(prefix) ? slug.slice(prefix.length) : slug;
+  return runName(workflow, slug);
 }
 
 /**

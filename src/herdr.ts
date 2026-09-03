@@ -79,6 +79,9 @@ const PaneListReply = Schema.Struct({
         agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
         workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
         cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        // Where the process in the pane is now, which is not where it started once
+        // anything has `cd`-ed.
+        foreground_cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
       }),
     ),
   }),
@@ -99,6 +102,34 @@ const AgentListReply = Schema.Struct({
 });
 const AgentStatusReply = Schema.Struct({
   result: Schema.Struct({ agent: Schema.Struct({ agent_status: Schema.String }) }),
+});
+const WorktreeReply = Schema.Struct({
+  path: Schema.String,
+  // A detached checkout has no branch, and herdr says so by leaving it out.
+  branch: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  open_workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
+const WorktreeListReply = Schema.Struct({
+  result: Schema.Struct({
+    worktrees: Schema.Array(WorktreeReply),
+    // Which checkout the repository itself is: the one place a command about the
+    // repository can be run from and still be there afterwards.
+    source: Schema.optionalKey(
+      Schema.Struct({
+        source_checkout_path: Schema.optionalKey(Schema.String),
+        repo_root: Schema.optionalKey(Schema.String),
+      }),
+    ),
+  }),
+});
+const WorktreeOpenReply = Schema.Struct({
+  result: Schema.Struct({
+    worktree: WorktreeReply,
+    workspace: Schema.Struct({
+      workspace_id: Schema.String,
+      label: Schema.optionalKey(Schema.String),
+    }),
+  }),
 });
 const PluginPaneReply = Schema.Struct({
   result: Schema.Struct({
@@ -123,6 +154,20 @@ function envelopeError(operation: string, value: BoundaryValue): HerdrError | nu
   });
 }
 const herdrFail = (message: string, detail: string) => Effect.fail(herdrError(message, detail));
+
+/**
+ * A target herdr does not have — a branch with no checkout, a repository it cannot key
+ * — is answered, not failed: exit 0 with an error envelope. Naming its code is what
+ * lets a caller tell that from "herdr did not answer me".
+ */
+const decodeOrNamed = <S extends Schema.Top>(
+  operation: string,
+  schema: S,
+  value: BoundaryValue,
+) => {
+  const named = envelopeError(operation, value);
+  return named ? Effect.fail(named) : decodeBoundary(operation, schema, value);
+};
 
 const decodeBoundary = <S extends Schema.Top>(operation: string, schema: S, value: BoundaryValue) =>
   Schema.decodeUnknownEffect(schema)(value).pipe(
@@ -166,6 +211,18 @@ function agentStatus(value: string): AgentStatus {
   return "unknown";
 }
 
+function worktreeInfo(worktree: {
+  path: string;
+  branch?: string | null;
+  open_workspace_id?: string | null;
+}): WorktreeInfo {
+  return {
+    path: worktree.path,
+    branch: worktree.branch ?? null,
+    workspaceId: worktree.open_workspace_id ?? null,
+  };
+}
+
 export interface StartedTab {
   tabId: string;
   paneId: string;
@@ -183,6 +240,27 @@ export interface WorkspaceInfo {
   worktree: string | null;
 }
 
+/** One checkout of a repository, as `herdr worktree list` reports it. */
+export interface WorktreeInfo {
+  path: string;
+  branch: string | null;
+  /** The workspace herdr has this checkout open in, when one is open. */
+  workspaceId: string | null;
+}
+
+/** Every checkout of one repository, and which of them the repository itself is. */
+export interface WorktreeListing {
+  worktrees: WorktreeInfo[];
+  /** The source checkout, which outlives the removal of any of the others. */
+  source: string | null;
+}
+
+/** A worktree and the workspace herdr opened for it. */
+export interface WorktreeWorkspace extends WorktreeInfo {
+  workspaceId: string;
+  label: string | null;
+}
+
 export interface PaneInfo {
   paneId: string;
   tabId: string;
@@ -191,6 +269,8 @@ export interface PaneInfo {
   workspaceId: string | null;
   /** Where the pane's process was started, which is the directory it stands for. */
   cwd: string | null;
+  /** Where it is working now, where herdr can see that — an agent that `cd`-ed. */
+  foregroundCwd: string | null;
 }
 
 /** A live agent as herdr sees it. Only named agents — the ones this plugin started. */
@@ -389,6 +469,7 @@ export class Herdr {
           agent: pane.agent ?? null,
           workspaceId: pane.workspace_id ?? null,
           cwd: pane.cwd ?? null,
+          foregroundCwd: pane.foreground_cwd ?? null,
         }));
       }),
     );
@@ -533,6 +614,69 @@ export class Herdr {
               Effect.map(({ result }) => agentStatus(result.agent.agent_status)),
             );
       }),
+    );
+  }
+
+  /**
+   * Every checkout of the repository at `cwd`, the source checkout included. Git
+   * allows one worktree per checked-out branch, so this is the index a Run's
+   * checkout is looked up in.
+   */
+  worktreeList(cwd: string): HerdrEffect<WorktreeListing> {
+    return this.cli(["worktree", "list", "--cwd", cwd]).pipe(
+      Effect.flatMap((res) => decodeOrNamed("herdr worktree list", WorktreeListReply, res)),
+      Effect.map(({ result }) => ({
+        worktrees: result.worktrees.map(worktreeInfo),
+        source: result.source?.source_checkout_path ?? result.source?.repo_root ?? null,
+      })),
+    );
+  }
+
+  worktreeCreate(opts: {
+    cwd: string;
+    branch: string;
+    base?: string;
+    label?: string;
+  }): HerdrEffect<WorktreeWorkspace> {
+    const args = ["worktree", "create", "--cwd", opts.cwd, "--branch", opts.branch];
+    if (opts.base) args.push("--base", opts.base);
+    if (opts.label) args.push("--label", opts.label);
+    args.push("--no-focus");
+    return this.opened("herdr worktree create", args);
+  }
+
+  /** Opens a workspace on a checkout that already exists, or focuses the one it has. */
+  worktreeOpen(opts: {
+    cwd: string;
+    path?: string;
+    branch?: string;
+    label?: string;
+  }): HerdrEffect<WorktreeWorkspace> {
+    const args = ["worktree", "open", "--cwd", opts.cwd];
+    if (opts.path) args.push("--path", opts.path);
+    if (opts.branch) args.push("--branch", opts.branch);
+    if (opts.label) args.push("--label", opts.label);
+    args.push("--no-focus");
+    return this.opened("herdr worktree open", args);
+  }
+
+  /**
+   * Removes the checkout the workspace holds and closes the workspace with it. No
+   * `--force`, ever: git's own refusal to drop a dirty or unmerged checkout is the
+   * last guard against a wrong judgement about what is safe to delete.
+   */
+  worktreeRemove(workspaceId: string): HerdrEffect<void> {
+    return this.cli(["worktree", "remove", "--workspace", workspaceId]).pipe(Effect.asVoid);
+  }
+
+  private opened(operation: string, args: string[]): HerdrEffect<WorktreeWorkspace> {
+    return this.cli(args).pipe(
+      Effect.flatMap((res) => decodeOrNamed(operation, WorktreeOpenReply, res)),
+      Effect.map(({ result }) => ({
+        ...worktreeInfo(result.worktree),
+        workspaceId: result.workspace.workspace_id,
+        label: result.workspace.label ?? null,
+      })),
     );
   }
 
