@@ -18,12 +18,12 @@ calls `prepare.sh` for everything else. That is the one routine that prepares a
 machine, and `collie upgrade` and herdr's plugin build hook end in it too, so a prerequisite
 is added in one place:
 
-| Step             | What it does                                                                |
-| ---------------- | --------------------------------------------------------------------------- |
-| `plugin-link`    | `herdr plugin link` from this checkout, if it is not already linked from it |
-| `runner`         | `install.sh`: the runner in `bin/collie`, and a `collie` shim on your PATH  |
-| `operator-skill` | Links the Collie operator skill into `~/.claude/skills/collie`              |
-| `skills`         | Installs and updates the skills the workflows require (below)               |
+| Step             | What it does                                                                                 |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| `plugin-link`    | `herdr plugin link` from this checkout, if it is not already linked from it                  |
+| `runner`         | `install.sh`: the runner in `bin/collie`, and a `collie` shim on your PATH                   |
+| `operator-skill` | Links the Collie operator skill into `~/.claude/skills/collie` and `~/.agents/skills/collie` |
+| `skills`         | Installs and updates the skills the workflows require (below)                                |
 
 Every step skips what is already in place, so re-running is a reflex rather than a
 decision. `install.sh` writes the shim without changing PATH itself. Keybindings are the
@@ -115,7 +115,7 @@ completes, and `collie upgrade` picks it up next time.
 | `COLLIE_REPO`         | Git URL cloned by `setup.sh`.                                                                                                                |
 | `COLLIE_TOKEN`        | Personal access token (`read_api`) used to download a release asset. Optional where `glab` or `gh` is already logged in to the release host. |
 | `COLLIE_BIN_DIR`      | Where `install.sh` writes the `collie` on your PATH; defaults to `~/.local/bin`. `collie doctor` looks there for a shim that is not on PATH. |
-| `CLAUDE_SKILLS_DIR`   | Where `prepare.sh` links the Collie operator skill; defaults to `~/.claude/skills`.                                                          |
+| `CLAUDE_SKILLS_DIR`   | Claude Code's skill store, where `prepare.sh` links the operator skill beside `~/.agents/skills`; defaults to `~/.claude/skills`.            |
 | `COLLIE_RELEASE_BASE` | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                                             |
 | `COLLIE_DRIVER`       | Driver executable for development and tests: one executable path, or a JSON array containing the executable and arguments.                   |
 | `COLLIE_MODE`         | Internal picker mode passed from a herdr action to its picker pane.                                                                          |

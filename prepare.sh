@@ -58,22 +58,46 @@ else
 fi
 
 # The operator skill: a link, so a `git pull` updates it without re-running anything.
-SKILLS_DIR="${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}"
-SKILL_LINK="$SKILLS_DIR/collie"
-if [ "$(readlink "$SKILL_LINK" 2>/dev/null)" = "$ROOT/skills/collie" ]; then
-  step operator-skill "already in place"
-elif [ -e "$SKILL_LINK" ]; then
-  step operator-skill "skipped — $SKILL_LINK is not ours to replace"
-elif [ -L "$SKILL_LINK" ]; then
-  # A link whose target is gone — the checkout it pointed at moved. `-e` is false
-  # for it, so without this the plain `ln -s` below fails on the directory entry
-  # that is still there, and `set -e` would end the run with later steps undone.
-  ln -sfn "$ROOT/skills/collie" "$SKILL_LINK"
+# Into both stores, because the harnesses are split: claude-code reads only its own,
+# and everything else — Collie's own skill lookup, pi, codex, opencode — reads the
+# universal `~/.agents/skills`. A skill a harness cannot see is a skill it does not have.
+SKILL_STORE="$HOME/.agents/skills"
+link_operator_skill() { # skills dir -> done | already in place | skipped — …
+  link="$1/collie"
+  if [ "$(readlink "$link" 2>/dev/null)" = "$ROOT/skills/collie" ]; then
+    echo "already in place"
+  elif [ -e "$link" ]; then
+    echo "skipped — $link is not ours to replace"
+  elif [ -L "$link" ]; then
+    # A link whose target is gone — the checkout it pointed at moved. `-e` is false
+    # for it, so without this the plain `ln -s` below fails on the directory entry
+    # that is still there, and `set -e` would end the run with later steps undone.
+    ln -sfn "$ROOT/skills/collie" "$link"
+    echo "done"
+  else
+    mkdir -p "$1"
+    ln -s "$ROOT/skills/collie" "$link"
+    echo "done"
+  fi
+}
+
+# One step line for the two links: a store we may not touch is what the step reports,
+# but it never costs the other store its link.
+operator_skipped=""
+operator_done=""
+for skills_dir in "${CLAUDE_SKILLS_DIR:-$HOME/.claude/skills}" "$SKILL_STORE"; do
+  state=$(link_operator_skill "$skills_dir")
+  case "$state" in
+    skipped*) operator_skipped="$state" ;;
+    done) operator_done=1 ;;
+  esac
+done
+if [ -n "$operator_skipped" ]; then
+  step operator-skill "$operator_skipped"
+elif [ -n "$operator_done" ]; then
   step operator-skill "done"
 else
-  mkdir -p "$SKILLS_DIR"
-  ln -s "$ROOT/skills/collie" "$SKILL_LINK"
-  step operator-skill "done"
+  step operator-skill "already in place"
 fi
 
 # The skills the baseline workflows require. They come from the skills.sh CLI, which
@@ -99,7 +123,6 @@ https://github.com/addyosmani/agent-skills"
 # file in the store. It answers both questions this step has to ask — whether there is
 # anything to add (a source added here, or a skill deleted by hand), and afterwards
 # whether anything actually changed, which is what the step reports.
-SKILL_STORE="$HOME/.agents/skills"
 SKILL_STAMP="$HOME/.agents/.collie-sources"
 stamp_now() {
   mkdir -p "$(dirname "$SKILL_STAMP")"
