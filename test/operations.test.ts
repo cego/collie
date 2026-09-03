@@ -3,13 +3,13 @@
 // here it is exercised at its own interface.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem } from "effect";
+import { Effect, FileSystem, Option, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 import { installFakeSkills } from "./support/defs";
 import { FakeBin } from "./support/bin";
-import { postReview, prepareWorkflow, settleGiven, upgrade } from "../src/operations";
+import { postReview, prepareWorkflow, settleGiven, upgrade, type Failure } from "../src/operations";
 import { REVIEW_FILE } from "../src/output";
 import { RunStore } from "../src/run";
 
@@ -38,6 +38,16 @@ afterEach(() =>
     }),
   ),
 );
+
+const AskedInputs = Schema.Struct({ inputs: Schema.Array(Schema.Struct({ name: Schema.String })) });
+
+/** The Input names a `needs_input` refusal says are still missing. */
+function asked(result: Failure): string[] {
+  return Schema.decodeUnknownOption(AskedInputs)(result.error.details).pipe(
+    Option.map((detail) => detail.inputs.map((input) => input.name)),
+    Option.getOrElse((): string[] => []),
+  );
+}
 
 const prepared = Effect.fn("operationsTest.prepared")(function* (workflow: string) {
   const ready = yield* prepareWorkflow(rig.pluginEnv(), workflow);
@@ -120,6 +130,40 @@ test("a decision is checked against the Workflow's own steps and titles", () =>
         decide: [],
       });
       expect(traversal).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+    }),
+  ));
+
+test("the workspace opt-in settles from --input and is never asked for", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ready = yield* prepared("implement");
+
+      yield* settleGiven(rig.pluginEnv(), ready, {
+        inputs: { plan: "ENG-1", workspace: "new" },
+        decide: [],
+      });
+
+      // Settled like any other declared Input, which is what lets both front doors and
+      // a chained Run reach it: nothing intercepts it on the way.
+      const workspace = ready.resolutions.find((r) => r.name === "workspace")!;
+      expect(workspace.value).toBe("new");
+      expect(workspace.needsAsking).toBe(false);
+
+      // Left out, it settles to empty and is never one of the Inputs a run stops for:
+      // an unattended `implement` must not be held up asking where it should live.
+      const absent = yield* prepared("implement");
+      const bare = yield* settleGiven(rig.pluginEnv(), absent, {
+        inputs: { plan: "ENG-1" },
+        decide: [],
+      });
+      // `target`, inherited from the embedded `review`, is what this run still needs —
+      // stated up front so the assertion below cannot pass by asking for nothing at all.
+      if (bare.ok) throw new Error("expected implement to still need its review target");
+      expect(asked(bare)).toEqual(["target"]);
+      expect(asked(bare)).not.toContain("workspace");
+      const left = absent.resolutions.find((r) => r.name === "workspace")!;
+      expect(left.value).toBe("");
+      expect(left.needsAsking).toBe(false);
     }),
   ));
 

@@ -52,11 +52,17 @@ plans.
 
 `worktree.ts` owns the checkout a mutating run works in. The unit is the **branch**: git
 allows exactly one worktree per checked-out branch, so nothing has to invent an identity
-for a directory — `herdr worktree list` is the index, `open` gives an existing checkout
-its workspace back, and `create` cuts a new one from the default branch. The run records
-`worktree.path`, `worktree.branch` and `worktree.created_by_collie`, and its cwd,
-workspace and Driver are that worktree's. `startRun` resolves it for a run started here;
-`chain` resolves it for a chained one, which is how `plan` and `architecture` get one.
+for a directory. `git worktree list --porcelain` is the index — it names the repository's
+own checkout and every branch that already has one, in one question, whether or not herdr
+is running — and `git worktree add` cuts a new one at the path herdr would have used,
+`<worktrees.directory>/<repo>/<branch-slug>`. `--input workspace=new` asks herdr instead:
+`worktree open` gives an existing checkout its workspace back, `create` cuts a new one.
+
+The run records `worktree.path`, `worktree.branch`, `worktree.managed_by` and
+`worktree.created_by_collie`. Its cwd and Driver are that worktree's; its workspace is
+the one it was activated from unless herdr opened one for the checkout (ADR-0006).
+`startRun` resolves it for a run started here; `chain` resolves it for a chained one,
+which is how `plan` and `architecture` get one.
 
 A worktree is **settled**, and only then removed, when all four hold:
 
@@ -75,19 +81,29 @@ worktree always says which condition kept it — including a round that could no
 herdr what is live, which reports every candidate as held and records nothing, so the
 next refresh asks again instead of standing on a verdict it never reached.
 
-Removal goes through herdr, always: a checkout whose workspace a human has since closed
-is opened again to be removed, rather than taken out from under herdr with a bare
-`git worktree remove`. Once the checkout has gone the entry is a removal whatever
-happens to the branch — a branch `git branch -d` refuses is what is left to look at, so
-the board says which branch and what git said about it, for as long as a removal is news.
+Removal follows the checkout. A git-managed one is `git worktree remove` from the
+repository's own checkout, and then the finished runs' recorded tabs whose every pane
+sits inside the removed path are closed — dead shells nothing else would ever close, and
+a tab a human has since split or reused is left alone. A tab herdr will not close is
+counted on the removal line (`· 1 tab(s) left open`), because the checkout has left the
+listing by then and no later sweep has a candidate to retry it with.
+
+A checkout herdr has a workspace open on goes through `herdr worktree remove` whoever made
+it, and one herdr made whose
+workspace a human has since closed is opened again to be removed, rather than taken out
+from under herdr — that would leave herdr listing a checkout that is not there.
+
+Once the checkout has gone the entry is a removal whatever happens to the branch — a
+branch `git branch -d` refuses is what is left to look at, so the board says which branch
+and what git said about it, for as long as a removal is news.
 
 Note what condition 2 does not do on its
 own: a checkout with no upstream is still only removed once 3 and 4 hold too, so the
 branch has to be gone from the remote — or its merge request merged or closed — before
-"holds no commit of its own" removes anything. Removal is `herdr worktree remove` — which
-closes the workspace with the checkout — and then `git branch -d`. Never `--force`, never
-`-D`: git's refusals are the last guard, so a wrong judgement here can only fail to clean,
-never delete work. Only paths some run recorded with `created_by_collie` are candidates.
+"holds no commit of its own" removes anything. Never `--force`, never `-D`, whichever
+manager removes it: git's refusals are the last guard, so a wrong judgement here can only
+fail to clean, never delete work. Only paths some run recorded with `created_by_collie`
+are candidates.
 
 There is no daemon and no cron: pruning runs at `run start` and, at most every few
 minutes, on the Control Plane's refresh — forked, never awaited, because the board redraws
@@ -142,6 +158,21 @@ something Collie reads: either widen the struct, or — when the field is genuin
 change what reads it. Bumping the pin afterwards is editing the version and checksums in
 `herdr-pin.json` and running `bun run contract:regen`. A red `contract:preview` is the same
 news weeks early, and nothing to stop for.
+
+It also owns the one fact herdr settles but answers no command about: where a
+repository's worktrees go (`worktreesDirectory`, from `[worktrees] directory` in the
+`config.toml` herdr is actually reading — `HERDR_CONFIG_PATH` where it names one, herdr's
+own default otherwise). Reading that config elsewhere would be a second
+channel to herdr, and "where would herdr have put this checkout" has to have one answer
+whoever asks — the checkout Collie makes with git is found by herdr's own "open worktree"
+UI precisely because it is at that path.
+
+One gotcha the engine works around rather than reports: `tab create --cwd` and
+`pane split --cwd` echo the directory back but leave the pane's shell in the workspace
+directory (probed against herdr 0.8.2). So every pane the engine opens is `cd`-ed into
+`run.record.cwd` explicitly before its agent starts, and that `cd` is what puts a run's
+tabs in one workspace and its work in another directory. Keep both: the `--cwd` is
+harmless and right if herdr ever honours it, and the `cd` is what actually works.
 
 `env.ts` is the plugin environment herdr provides — state directory, config directory,
 socket path, plugin root. `HERDR_PLUGIN_ROOT` is what pins the baseline definitions to the

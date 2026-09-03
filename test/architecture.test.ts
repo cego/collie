@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { Rig } from "./support/recorder";
-import { FakeBin } from "./support/bin";
+import { FakeBin, gitWorktreeCases } from "./support/bin";
 import { runEffect } from "./support/effect";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
@@ -21,7 +21,13 @@ beforeEach(() =>
       yield* installBaseline(rig);
       bin = yield* FakeBin.make(path.join(rig.root, "bin"));
       yield* bin.add("glab", `exit 1`);
-      yield* bin.add("git", `echo main`);
+      yield* bin.add(
+        "git",
+        `case "$*" in
+${gitWorktreeCases(rig.projectDir)}
+      *) echo main ;;
+    esac`,
+      );
     }),
   ),
 );

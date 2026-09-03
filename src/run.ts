@@ -56,6 +56,14 @@ const WorktreeRecordSchema = Schema.Struct({
   path: Schema.String,
   branch: Schema.String,
   created_by_collie: Schema.Boolean,
+  /**
+   * Who made this checkout, and so who takes it away again: Collie with git itself,
+   * or herdr as a workspace of its own. A record written before this existed is
+   * `herdr`, which is what every checkout was then.
+   */
+  managed_by: Schema.Literals(["git", "herdr"]).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed("herdr" as const)),
+  ),
   /** The workspace herdr opened on it, which is what removing it names. */
   workspace_id: Schema.NullOr(Schema.String),
   /**

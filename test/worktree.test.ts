@@ -4,7 +4,7 @@ import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { branchFor, checkoutFor, mutates, pruneWorktrees, worktreeFor } from "../src/worktree";
-import { RunStore } from "../src/run";
+import { RunStore, type VariantRecord } from "../src/run";
 import { Herdr } from "../src/herdr";
 
 let rig: Rig;
@@ -59,6 +59,8 @@ const gitLog = () => join(rig.root, "git.log");
 const fakeGitAnswering = (
   answers: Record<string, string>,
   refusals: Record<string, string> = {},
+  /** Patterns that need to do something rather than say something, as raw shell. */
+  scripts: Record<string, string> = {},
 ) => {
   const branches = [
     // A refusal wins over an answer for the same question: `case` takes the first
@@ -71,6 +73,7 @@ const fakeGitAnswering = (
     ...Object.entries(refusals).map(
       ([match, why]) => `  "${match}"*) printf '%b' "${why}" >&2; exit 1 ;;`,
     ),
+    ...Object.entries(scripts).map(([match, body]) => `  "${match}"*) ${body} ;;`),
     "  *) exit 1 ;;",
   ].join("\n");
   // The directory as well as the question: a command about the repository has to run
@@ -82,26 +85,53 @@ const fakeGitAnswering = (
 };
 
 /**
- * A git where only the default branch — and whatever else is named — exists on the
- * remote, so new work is cut from the default branch and a reviewed branch from its
- * own tip.
+ * What a git where only the default branch — and whatever else is named — exists on
+ * the remote answers, so new work is cut from the default branch and a reviewed branch
+ * from its own tip.
  */
+const gitAnswers = (branch = "add-picker", remoteBranches: string[] = []) => ({
+  // The project this checkout belongs to, which is what an `mr:` target is checked
+  // against before anything works on its branch.
+  "remote get-url origin": "git@gitlab.example.com:acme/app.git",
+  "symbolic-ref --short refs/remotes/origin/HEAD": "origin/master",
+  // Both shapes the module asks a ref about: what a new checkout is cut from, and
+  // whether the ref is a branch at all.
+  ...Object.fromEntries(
+    ["master", ...remoteBranches].flatMap((ref) => [
+      [`rev-parse --verify origin/${ref}`, "deadbeef"],
+      [`rev-parse --verify --quiet refs/remotes/origin/${ref}`, "deadbeef"],
+    ]),
+  ),
+  "rev-parse --abbrev-ref HEAD": branch,
+});
+
 const fakeGit = (branch = "add-picker", remoteBranches: string[] = []) =>
-  fakeGitAnswering({
-    // The project this checkout belongs to, which is what an `mr:` target is checked
-    // against before anything works on its branch.
-    "remote get-url origin": "git@gitlab.example.com:acme/app.git",
-    "symbolic-ref --short refs/remotes/origin/HEAD": "origin/master",
-    // Both shapes the module asks a ref about: what a new checkout is cut from, and
-    // whether the ref is a branch at all.
-    ...Object.fromEntries(
-      ["master", ...remoteBranches].flatMap((ref) => [
-        [`rev-parse --verify origin/${ref}`, "deadbeef"],
-        [`rev-parse --verify --quiet refs/remotes/origin/${ref}`, "deadbeef"],
-      ]),
-    ),
-    "rev-parse --abbrev-ref HEAD": branch,
-  });
+  fakeGitAnswering(gitAnswers(branch, remoteBranches));
+
+/** `git worktree list --porcelain`, as git writes it. */
+const porcelain = (checkouts: ReadonlyArray<{ path: string; branch: string }>) =>
+  checkouts.map((c) => `worktree ${c.path}\nbranch refs/heads/${c.branch}\n`).join("\n");
+
+/**
+ * A git that lists the repository's own checkouts and really makes a directory when it
+ * is asked to add one — the `.git` file included, because that is what says a checkout
+ * is still the one a run recorded.
+ */
+const fakeGitWithCheckouts = (
+  checkouts: ReadonlyArray<{ path: string; branch: string }>,
+  opts: { branch?: string; remoteBranches?: string[]; refusals?: Record<string, string> } = {},
+) =>
+  fakeGitAnswering(
+    {
+      ...gitAnswers(opts.branch ?? "add-picker", opts.remoteBranches ?? []),
+      "worktree list --porcelain": porcelain(checkouts),
+    },
+    opts.refusals ?? {},
+    {
+      "worktree add": 'mkdir -p "$3" && printf "gitdir: $3/.gitdir\\n" > "$3/.git"',
+      "worktree remove": 'rm -rf "$3"',
+    },
+  );
 
 const plan = (inputs: Record<string, string>, explicit?: string) =>
   branchFor({ cwd: rig.projectDir, name: "Add a picker", inputs, explicit });
@@ -217,10 +247,40 @@ test("two unrelated runs never share a checkout", () =>
     }),
   ));
 
+/**
+ * A step's agent as the engine records one. Only the tab it was given matters to
+ * pruning — that is the tab left holding a shell in the checkout — so the rest is
+ * whatever a finished build step looks like.
+ */
+const recordedTab = (tabId: string): VariantRecord => ({
+  harness: "claude",
+  model: "default",
+  effort: null,
+  agent: `impl-${tabId}`,
+  label: "build",
+  tabId,
+  paneId: null,
+  status: "done",
+  output: null,
+  error: null,
+  repairs: [],
+  nudges: 0,
+});
+
 /** A worktree Collie made, as its run record and herdr's list would show it. */
-const collieWorktree = (branch: string, workspaceId = "w7") =>
+const collieWorktree = (
+  branch: string,
+  opts: {
+    workspaceId?: string | null;
+    managedBy?: "git" | "herdr";
+    /** The tabs the run left behind, which a removal is what closes. */
+    tabs?: ReadonlyArray<string>;
+  } = {},
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    // Not `??`: null is an answer here — a checkout herdr has no workspace open on.
+    const workspaceId = opts.workspaceId === undefined ? "w7" : opts.workspaceId;
     const worktreePath = join(rig.root, "worktrees", branch);
     yield* rig.addWorktree(branch, worktreePath, workspaceId);
     // What the run recorded when it made this checkout, which is how pruning knows it
@@ -238,11 +298,13 @@ const collieWorktree = (branch: string, workspaceId = "w7") =>
         path: worktreePath,
         branch,
         created_by_collie: true,
+        managed_by: opts.managedBy ?? "herdr",
         workspace_id: workspaceId,
         made_at: madeAt.mtime.pipe(Option.getOrNull)?.getTime() ?? null,
       },
     });
     run.record.status = "done";
+    run.record.steps[0]!.variants.push(...(opts.tabs ?? []).map(recordedTab));
     yield* run.save();
     return worktreePath;
   });
@@ -261,6 +323,7 @@ const settledGit = (
       "rev-parse --abbrev-ref --symbolic-full-name @{u}": "origin/wt",
       "rev-list @{u}..HEAD": "",
       "ls-remote --heads origin": "",
+      "worktree remove": "",
       "branch -d": "Deleted branch.",
       ...overrides,
     },
@@ -388,10 +451,117 @@ test("a worktree is not re-checked on every refresh", () =>
     }),
   ));
 
+test("a settled git-managed checkout is removed with git, and its dead tabs go with it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt", {
+        managedBy: "git",
+        workspaceId: null,
+        tabs: ["1:5", "1:6"],
+      });
+      // The run's own shell, still sitting in a directory that is about to go, and a
+      // tab a human has since reused for something outside it.
+      yield* rig.addPane("1-5", "1:5", `${worktreePath}/src`);
+      yield* rig.addPane("1-6", "1:6", rig.projectDir);
+      yield* settledGit();
+      yield* mergedMr();
+
+      expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
+      // git, from the repository's own checkout, and never forced.
+      expect(yield* askedIn()).toContainEqual({
+        cwd: rig.projectDir,
+        command: `worktree remove ${worktreePath}`,
+      });
+      expect(yield* asked()).toContain("branch -d wt");
+      // herdr is asked for nothing but the list and the tab it has left holding a
+      // shell in a directory that is gone.
+      const cmds = yield* rig.cmds();
+      expect(cmds).not.toContain("worktree remove");
+      expect(cmds).not.toContain("worktree open");
+      const closed = (yield* rig.calls()).filter((call) => call.cmd === "tab close");
+      expect(closed.map((call) => call.argv?.at(2))).toEqual(["1:5"]);
+    }),
+  ));
+
+test("a dead tab herdr would not close is reported, because nothing comes back for it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt", {
+        managedBy: "git",
+        workspaceId: null,
+        tabs: ["1:5"],
+      });
+      yield* rig.addPane("1-5", "1:5", worktreePath);
+      yield* settledGit();
+      yield* mergedMr();
+      // The checkout goes, and herdr hiccups on the tab left standing in it. The path
+      // is gone from the listing now, so no later sweep has a candidate to retry with:
+      // said here or never said.
+      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"tab close":"pane is busy"}' }));
+
+      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: rig.projectDir })).toEqual(
+        ["♻ removed wt · merged in !14 · 1 tab(s) left open"],
+      );
+      // The checkout itself still went: a tab that will not close is not a reason to
+      // keep a settled checkout, only a reason to say so.
+      expect(yield* asked()).toContain(`worktree remove ${worktreePath}`);
+      expect(yield* asked()).toContain("branch -d wt");
+    }),
+  ));
+
+test("git's refusal to remove a checkout keeps it, in git's own words", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt", {
+        managedBy: "git",
+        workspaceId: null,
+        tabs: ["1:5"],
+      });
+      yield* rig.addPane("1-5", "1:5", worktreePath);
+      yield* settledGit(
+        {},
+        { "worktree remove": `fatal: ${worktreePath} contains modified files` },
+      );
+      yield* mergedMr();
+
+      expect(yield* prune()).toEqual([`kept wt · fatal: ${worktreePath} contains modified files`]);
+      // The checkout is still there, so neither its branch nor its tabs are touched.
+      expect(yield* asked()).not.toContain("branch -d wt");
+      expect(yield* rig.cmds()).not.toContain("tab close");
+    }),
+  ));
+
+test("a git-managed checkout herdr has a workspace on is still removed through herdr", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt", {
+        managedBy: "git",
+        workspaceId: "w7",
+        tabs: ["1:5"],
+      });
+      // The run's own tab, which is in the workspace the run was activated from — not
+      // in the workspace herdr opened on the checkout, so herdr's removal cannot know
+      // about it.
+      yield* rig.addPane("1-5", "1:5", worktreePath);
+      yield* settledGit();
+      yield* mergedMr();
+
+      expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
+      // herdr owns every worktree it has open, whoever made the checkout: removing one
+      // behind its back would leave it listing a checkout that is not there.
+      const calls = (yield* rig.calls()).filter((call) => call.cmd === "worktree remove");
+      expect(calls.at(0)?.argv).toEqual(["worktree", "remove", "--workspace", "w7"]);
+      expect(yield* asked()).not.toContain(`worktree remove ${worktreePath}`);
+      // The dead tab still goes, whichever manager removed the checkout under it.
+      const closed = (yield* rig.calls()).filter((call) => call.cmd === "tab close");
+      expect(closed.map((call) => call.argv?.at(2))).toEqual(["1:5"]);
+    }),
+  ));
+
 test("a checkout herdr will not remove is kept, in the words it refused with", () =>
   runEffect(
     Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt", "");
+      const worktreePath = yield* collieWorktree("wt", { workspaceId: "" });
       yield* settledGit();
       yield* mergedMr();
       // No workspace open on it, so it is opened again to be removed — and herdr
@@ -417,7 +587,7 @@ test("a checkout herdr will not remove is kept, in the words it refused with", (
 test("a checkout whose workspace was closed is opened again to be removed", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* collieWorktree("wt", "");
+      yield* collieWorktree("wt", { workspaceId: "" });
       yield* settledGit();
       yield* mergedMr();
 
@@ -527,6 +697,192 @@ test("a review of a merge request whose branch is only on the remote is cut from
     }),
   ));
 
+test("a mutating run makes its checkout with git and stays in the workspace it started in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+
+      const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        cwd: rig.projectDir,
+        workflow: "implement",
+        name: "Add a picker",
+        inputs: { plan_kind: "text" },
+        // A workspace that is about the task, not about a checkout of the repository.
+        workspaceId: "wTasks",
+        workspaceLabel: "Tasks",
+      });
+
+      const at = join(rig.root, ".herdr", "worktrees", "project", "add-a-picker");
+      expect(checkout).toMatchObject({
+        cwd: at,
+        workspaceId: "wTasks",
+        workspaceLabel: "Tasks",
+        refused: null,
+      });
+      expect(checkout.worktree).toEqual({
+        path: at,
+        branch: "add-a-picker",
+        managed_by: "git",
+        workspace_id: null,
+        created_by_collie: true,
+        made_at: expect.any(Number),
+      });
+      // git itself, from the repository's own checkout, and no herdr workspace at all.
+      expect(yield* askedIn()).toContainEqual({
+        cwd: rig.projectDir,
+        command: `worktree add ${at} -b add-a-picker origin/master`,
+      });
+      expect(yield* rig.cmds()).toEqual([]);
+    }),
+  ));
+
+test("a workspace whose own directory is not a checkout still gets its run a worktree", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+      // A workspace that is about a task rather than about a repo directory: nothing
+      // here says its own directory is a checkout, and nothing needs to — `COLLIE_CWD`
+      // is what names the repository, and it beats the workspace's inferred directory.
+      const env = rig.pluginEnv({ COLLIE_CWD: rig.projectDir, HERDR_WORKSPACE_ID: "wTasks" });
+      expect(env.cwd).toBe(rig.projectDir);
+
+      const checkout = yield* checkoutFor(new Herdr(env), {
+        cwd: env.cwd,
+        workflow: "implement",
+        name: "Add a picker",
+        inputs: { plan_kind: "text" },
+        workspaceId: env.workspaceId,
+        workspaceLabel: "Tasks",
+      });
+
+      expect(checkout).toMatchObject({
+        cwd: join(rig.root, ".herdr", "worktrees", "project", "add-a-picker"),
+        // The workspace it was activated from, which is not a checkout of anything.
+        workspaceId: "wTasks",
+        refused: null,
+      });
+    }),
+  ));
+
+test("a branch with a slash in it nests, and never collides with the dashed name", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+      const ask = (branch: string) =>
+        checkoutFor(new Herdr(rig.pluginEnv()), {
+          cwd: rig.projectDir,
+          workflow: "implement",
+          name: "Add a picker",
+          inputs: { plan_kind: "text" },
+          explicit: branch,
+        });
+
+      const nested = yield* ask("feature/foo");
+      const dashed = yield* ask("feature-foo");
+
+      const worktrees = join(rig.root, ".herdr", "worktrees", "project");
+      expect(nested.cwd).toBe(join(worktrees, "feature", "foo"));
+      expect(dashed.cwd).toBe(join(worktrees, "feature-foo"));
+      // Two branches are two checkouts: sharing a destination is one step from
+      // sharing an index.
+      expect(nested.cwd).not.toBe(dashed.cwd);
+    }),
+  ));
+
+test("the checkout goes where herdr's own config says worktrees go", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+      yield* fs.makeDirectory(join(rig.root, ".config", "herdr"), { recursive: true });
+      yield* fs.writeFileString(
+        join(rig.root, ".config", "herdr", "config.toml"),
+        `[worktrees]\ndirectory = "${join(rig.root, "elsewhere")}"\n`,
+      );
+
+      const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        cwd: rig.projectDir,
+        workflow: "implement",
+        name: "Add a picker",
+        inputs: { plan_kind: "text" },
+      });
+
+      expect(checkout.cwd).toBe(join(rig.root, "elsewhere", "project", "add-a-picker"));
+    }),
+  ));
+
+test("the checkout a branch already has is reused, never added twice", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const existing = join(rig.root, "somewhere", "add-a-picker");
+      yield* fakeGitWithCheckouts([
+        { path: rig.projectDir, branch: "master" },
+        { path: existing, branch: "add-a-picker" },
+      ]);
+
+      const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        cwd: rig.projectDir,
+        workflow: "implement",
+        name: "Add a picker",
+        inputs: { plan_kind: "text" },
+        workspaceId: "wTasks",
+      });
+
+      expect(checkout.cwd).toBe(existing);
+      expect(checkout.worktree).toMatchObject({ created_by_collie: false, managed_by: "git" });
+      expect(yield* asked()).not.toContain(`worktree add ${existing}`);
+    }),
+  ));
+
+test("workspace=new asks herdr for the checkout and takes the workspace it opens", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        cwd: rig.projectDir,
+        workflow: "implement",
+        name: "Add a picker",
+        inputs: { plan_kind: "text", workspace: "new" },
+        workspaceId: "wTasks",
+      });
+
+      expect(checkout.worktree).toMatchObject({
+        branch: "add-a-picker",
+        managed_by: "herdr",
+        workspace_id: "w1",
+      });
+      expect(checkout.workspaceId).toBe("w1");
+      expect(yield* rig.cmds()).toEqual(["worktree list", "worktree create"]);
+      // git is asked only about the branch, never to make the checkout.
+      expect(yield* asked()).not.toContain("worktree list --porcelain");
+    }),
+  ));
+
+test("a checkout git will not add is a run that does not start", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }], {
+        refusals: { "worktree add": "fatal: could not create leading directories" },
+      });
+
+      const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        cwd: rig.projectDir,
+        workflow: "implement",
+        name: "Add a picker",
+        inputs: { plan_kind: "text" },
+        workspaceId: "wTasks",
+      });
+
+      // Never the caller's own checkout: sharing one is the bug this exists to stop.
+      expect(checkout.refused).toBe(
+        "no worktree for add-a-picker: fatal: could not create leading directories",
+      );
+      expect(checkout.worktree).toBe(null);
+      expect(checkout.cwd).toBe(rig.projectDir);
+    }),
+  ));
+
 test("a checkout Collie cannot be given is a run that does not start", () =>
   runEffect(
     Effect.gen(function* () {
@@ -539,7 +895,7 @@ test("a checkout Collie cannot be given is a run that does not start", () =>
         cwd: rig.projectDir,
         workflow: "implement",
         name: "Add a picker",
-        inputs: { plan_kind: "text" },
+        inputs: { plan_kind: "text", workspace: "new" },
         workspaceId: "wT",
       });
 
@@ -627,7 +983,7 @@ test("an agent working in a subdirectory of a checkout keeps it", () =>
 test("an agent in the checkout's own workspace keeps it, directory or no directory", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* collieWorktree("wt", "w7");
+      yield* collieWorktree("wt", { workspaceId: "w7" });
       yield* settledGit();
       yield* mergedMr();
       // herdr reports some panes without a cwd; the workspace it is in is the evidence.

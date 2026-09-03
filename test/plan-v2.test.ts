@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { Rig } from "./support/recorder";
-import { FakeBin } from "./support/bin";
+import { FakeBin, gitWorktreeCases } from "./support/bin";
 import { runEffect } from "./support/effect";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
@@ -21,7 +21,13 @@ beforeEach(() =>
       yield* installBaseline(rig);
       bin = yield* FakeBin.make(path.join(rig.root, "bin"));
       yield* bin.add("glab", `exit 1`);
-      yield* bin.add("git", `echo main`);
+      yield* bin.add(
+        "git",
+        `case "$*" in
+${gitWorktreeCases(rig.projectDir)}
+      *) echo main ;;
+    esac`,
+      );
     }),
   ),
 );
@@ -77,7 +83,12 @@ test("plan is one agent through grill, spec and tickets, then a menu", () =>
         "Refine",
       ]);
       expect(choices[0]!.run).toBe("implement");
-      expect(choices[0]!.inputs).toEqual({ plan: "{{run.dir}}/plan" });
+      // The plan it wrote, and the parent's own answer about where the run lives, so a
+      // `workspace=new` plan chains into an implement that gets one too.
+      expect(choices[0]!.inputs).toEqual({
+        plan: "{{run.dir}}/plan",
+        workspace: "{{inputs.workspace}}",
+      });
       expect(choices[1]).toMatchObject({
         max: 2,
         round: { persona: "reviewer", model: "opus", effort: "xhigh", fresh: true },
@@ -89,6 +100,34 @@ test("plan is one agent through grill, spec and tickets, then a menu", () =>
       });
       expect(choices[3]!.round!.agent).toBe("grill");
       expect(choices[3]!.max).toBeUndefined();
+    }),
+  ));
+
+test("a plan started with workspace=new chains an implement that gets one too", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN, CLEAN, CLEAN]);
+      const prompts = scriptedPrompts(["Implement now"]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "plan",
+        { goal: "Add a version flag", workspace: "new" },
+        { prompts },
+      );
+
+      expect(status).toBe("done");
+      const childId = run.record.children.at(0);
+      if (!childId) throw new Error("expected a chained implement");
+      const child = yield* new RunStore(rig.pluginEnv().stateDir).load(childId);
+      // The escape hatch survives the hand-off: herdr made the checkout and opened a
+      // workspace on it, rather than Collie making it with git in place.
+      expect(child.record.inputs.workspace).toBe("new");
+      expect(child.record.worktree).toMatchObject({ managed_by: "herdr" });
+      expect((yield* rig.cmds()).filter((cmd) => cmd.startsWith("worktree"))).toEqual([
+        "worktree list",
+        "worktree create",
+      ]);
     }),
   ));
 
@@ -250,7 +289,8 @@ steps:
       const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
       const wf = resolveWorkflow("embeds-plan", defs, FALLBACK_DEFAULTS);
 
-      expect(wf.inputs).toEqual({ goal: "goal", ticket: "ticket" });
+      // The embedder's own Inputs first, then the ones `plan` brings with it.
+      expect(wf.inputs).toEqual({ goal: "goal", ticket: "ticket", workspace: "optional" });
       expect(wf.steps.map((s) => s.id)).toEqual([
         "plan.grill",
         "plan.spec",

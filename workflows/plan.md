@@ -5,6 +5,8 @@ description: Interviews you about a goal, writes the spec and tickets into the r
 inputs:
   goal: goal
   ticket: ticket
+  # Forwarded to the implement this chains into, which is where it means anything.
+  workspace: optional
 steps:
   - id: grill
     persona: planner
@@ -26,6 +28,7 @@ steps:
         run: implement
         inputs:
           plan: "{{run.dir}}/plan"
+          workspace: "{{inputs.workspace}}"
       - title: Second opinion
         prompt: second-opinion
         persona: reviewer

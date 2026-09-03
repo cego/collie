@@ -422,6 +422,48 @@ test("an untrusted directory is offered up front, so no tab ever stops on the di
     }),
   ));
 
+test("a run in its own git checkout opens its tabs in the workspace it started in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+      const worktree = path.join(rig.root, "worktrees", "add-picker");
+      yield* fs.makeDirectory(worktree, { recursive: true });
+
+      const { status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "g" },
+        {
+          prompts: scriptedPrompts([]),
+          worktree: {
+            path: worktree,
+            branch: "add-picker",
+            created_by_collie: true,
+            managed_by: "git",
+            workspace_id: null,
+            made_at: null,
+          },
+        },
+      );
+
+      expect(status).toBe("done");
+      const calls = yield* rig.calls();
+      // The workspace the run was activated from, which is the rig's own.
+      const created = calls.filter((call) => call.cmd === "tab create");
+      expect(created).not.toHaveLength(0);
+      for (const call of created) expect(call.argv?.join(" ")).toContain("--workspace 1");
+      // herdr 0.8.2 echoes `--cwd` on `tab create` but leaves the pane's shell in the
+      // workspace directory, so the pane is `cd`-ed into the checkout explicitly.
+      expect(
+        calls.filter((call) => call.cmd === "pane run").map((call) => call.argv?.at(-1)),
+      ).toContain(`cd '${worktree}'`);
+      // No workspace of its own: the checkout was made with git.
+      expect(calls.map((call) => call.cmd)).not.toContain("worktree create");
+    }),
+  ));
+
 test("a checkout Collie just created is trusted without asking anyone", () =>
   runEffect(
     Effect.gen(function* () {
@@ -444,6 +486,7 @@ test("a checkout Collie just created is trusted without asking anyone", () =>
             path: worktree,
             branch: "add-picker",
             created_by_collie: true,
+            managed_by: "herdr",
             workspace_id: "w7",
             made_at: null,
           },

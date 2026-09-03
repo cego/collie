@@ -250,8 +250,11 @@ export class Rig {
     });
   }
 
-  /** A worktree herdr already has open, as an earlier run would have left it. */
-  addWorktree(branch: string, worktreePath: string, workspaceId: string) {
+  /**
+   * A worktree herdr already lists, as an earlier run would have left it. A null
+   * workspace is a checkout herdr has no workspace open on — one Collie made with git.
+   */
+  addWorktree(branch: string, worktreePath: string, workspaceId: string | null) {
     const append = this.appendState("worktrees", {
       branch,
       path: worktreePath,
@@ -270,7 +273,7 @@ export class Rig {
 
   /** Exactly the worktrees herdr has, replacing whatever it had before. */
   setWorktrees(
-    worktrees: ReadonlyArray<{ branch: string; path: string; open_workspace_id: string }>,
+    worktrees: ReadonlyArray<{ branch: string; path: string; open_workspace_id: string | null }>,
   ): Effect.Effect<void, RigError, FileSystem.FileSystem> {
     const statePath = `${this.logPath}.state.json`;
     const readJsonObject = this.readJsonObject.bind(this);

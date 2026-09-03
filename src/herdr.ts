@@ -1,8 +1,11 @@
 // The only channel to herdr: the CLI at HERDR_BIN_PATH, plus the socket at
-// HERDR_SOCKET_PATH for the few methods 0.8.2 does not expose on the CLI.
+// HERDR_SOCKET_PATH for the few methods 0.8.2 does not expose on the CLI — and herdr's
+// own `config.toml`, for the few things it settles but answers no question about. Every
+// fact about herdr is behind this one interface, which is what makes the fake herdr in
+// `test/support/` enough to test everything above it.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Data, Deferred, Effect, Option, Schema, Stream } from "effect";
+import { Data, Deferred, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { PlatformError } from "effect/PlatformError";
@@ -134,6 +137,11 @@ const WorktreeOpenReply = Schema.Struct({
     }),
   }),
 });
+/** herdr's `config.toml`, as far as this plugin has any business reading it. */
+const HerdrConfig = Schema.Struct({
+  worktrees: Schema.optionalKey(Schema.Struct({ directory: Schema.optionalKey(Schema.String) })),
+});
+
 const PluginPaneReply = Schema.Struct({
   result: Schema.Struct({
     plugin_pane: Schema.Struct({
@@ -465,6 +473,11 @@ export class Herdr {
     });
   }
 
+  /** Closes a tab and every pane in it; what a removed checkout's dead shells get. */
+  tabClose(tabId: string): HerdrEffect<void> {
+    return this.cli(["tab", "close", tabId]).pipe(Effect.asVoid);
+  }
+
   tabRename(tabId: string, label: string): HerdrEffect<void> {
     return this.cli(["tab", "rename", tabId, label]).pipe(Effect.asVoid);
   }
@@ -669,6 +682,41 @@ export class Herdr {
         source: result.source?.source_checkout_path ?? result.source?.repo_root ?? null,
       })),
     );
+  }
+
+  /**
+   * Where herdr keeps a repository's worktrees: what its own `config.toml` says, and
+   * herdr's default otherwise. There is no command to ask, so this is the one thing
+   * about herdr that is read from its config rather than from herdr — and it lives
+   * here so that "where would herdr have put this checkout" is a question with one
+   * answer, whoever is asking. A caller Collie makes a checkout for needs that answer
+   * for herdr's own "open worktree" UI to still list it.
+   *
+   * `HERDR_CONFIG_PATH` moves that file, and herdr honours it, so this follows it.
+   * XDG_CONFIG_HOME is not consulted: the fallback is herdr's own default, and a
+   * machine that keeps its config elsewhere says so with `HERDR_CONFIG_PATH`.
+   */
+  worktreesDirectory(): Effect.Effect<string, never, BunServices> {
+    const { home, herdrConfigPath } = this.env;
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // The config herdr is reading, which `HERDR_CONFIG_PATH` may move: asking the
+      // default while herdr honours an override would put the checkout somewhere herdr
+      // never configured, which is the one thing this must not do.
+      const configured = yield* fs
+        .readFileString(herdrConfigPath ?? path.join(home, ".config", "herdr", "config.toml"))
+        .pipe(
+          Effect.flatMap((text) => Effect.try(() => Bun.TOML.parse(text))),
+          Effect.map((parsed) =>
+            Schema.decodeUnknownOption(HerdrConfig)(parsed).pipe(Option.getOrUndefined),
+          ),
+          // No config file, one that will not parse, and one herdr itself would reject
+          // are the same answer: nothing here has moved the worktrees.
+          Effect.catch(() => Effect.succeed(undefined)),
+        );
+      return configured?.worktrees?.directory ?? path.join(home, ".herdr", "worktrees");
+    });
   }
 
   worktreeCreate(opts: {

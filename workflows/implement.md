@@ -4,6 +4,9 @@ title: implement — build the plan, tidy it, review it, fix until clean
 description: Builds from a plan dir, a Linear issue or a description, improves the architecture it touched, simplifies, fans out to reviewers, loops on findings, then opens the merge request.
 inputs:
   plan: work-source
+  # `new` gives the Run a herdr worktree workspace of its own; anything else or absent
+  # keeps it in the workspace it was started from. See docs/using.md.
+  workspace: optional
 max_iterations: 5
 steps:
   - id: build

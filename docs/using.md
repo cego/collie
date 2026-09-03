@@ -170,9 +170,14 @@ see [CLI](cli.md).
 
 A run that changes code never works in the checkout you started it from. `implement` — and
 `plan` or `architecture` once you let them chain into it — resolves the branch it is about
-to build and gets a **worktree** of its own on that branch, opened through herdr, so it
-arrives as its own workspace with its own tabs. Two runs can therefore build two branches
-at once without sharing a working tree, an index, or a stash stack.
+to build and gets a **worktree** of its own on that branch. Two runs can therefore build
+two branches at once without sharing a working tree, an index, or a stash stack.
+
+Only the run's directory moves. Its tabs open in the workspace you started it from, so
+everything about the task stays in one place — including when that workspace's own
+directory is not a checkout of the repository at all, which is what `COLLIE_CWD` or
+`collie --workspace <id>` is for. `--input workspace=new` asks herdr for the checkout
+instead, which gives the run a workspace of its own the way it used to (ADR-0006).
 
 Which branch it is:
 
@@ -184,12 +189,18 @@ Which branch it is:
 - `collie run start implement --input branch=<name>` → that branch, whatever the above
   would have said.
 
-The checkout lives under herdr's own worktree directory (`~/.herdr/worktrees/<repo>/<branch>`),
-and the run's log says which one it got. It is a fresh checkout, so the first thing the
-implementer does there is install the project's dependencies. Where herdr cannot give the
-run a worktree, the run does not start and says which branch it could not be given one
-for: working in the directory you started it from is what two runs sharing a checkout —
-and a stash stack — looks like, which is the thing this exists to prevent.
+The checkout lives under herdr's own worktree directory — `~/.herdr/worktrees/<repo>/<branch>`,
+or whatever `[worktrees] directory` says in the `config.toml` herdr is reading, which
+`HERDR_CONFIG_PATH` may move — so herdr's own "open worktree" UI still finds it; the run's
+log says which one it got. A branch with a `/` in it nests, so `feature/foo` gets
+`…/<repo>/feature/foo` and never shares a directory with a branch actually called
+`feature-foo`. A branch that already has a checkout is given that one — git allows no
+second worktree on a checked-out branch, and a fix round has to land where the reviewed
+work already is. It is otherwise a fresh checkout, so the first thing the implementer does
+there is install the project's dependencies. Where the run cannot be given a worktree, it
+does not start and says which branch it could not be given one for, in git's own words:
+working in the directory you started it from is what two runs sharing a checkout — and a
+stash stack — looks like, which is the thing this exists to prevent.
 
 The worktree outlives the merge request: it is still there when the run ends, so you can
 look at what it built. It is removed only once **settled** — the tree is clean, it holds
@@ -207,11 +218,15 @@ Worktrees
 ```
 
 Nothing is ever removed with a force flag, and a checkout you made yourself is never
-touched — only worktrees a run recorded as Collie's own are candidates. Removal goes
-through herdr, so if you closed a worktree's workspace it is opened again to be removed
-rather than deleted behind herdr's back. If git refuses to drop a checkout, that refusal
-stands and the board says so in git's words; if it drops the checkout but will not delete
-the branch, the board tells you which branch is left.
+touched — only worktrees a run recorded as Collie's own are candidates. Whoever made the
+checkout takes it away: Collie's own with `git worktree remove` and then `git branch -d`,
+and the finished run's tabs still holding a shell inside it are closed with it, since
+nothing else would ever close them. A checkout herdr has a workspace open on goes through
+herdr whoever made it — and if you closed that workspace it is opened again to be removed
+rather than deleted behind herdr's back — so herdr never lists a checkout that is gone. If
+git refuses to drop a checkout, that refusal stands and the board says so in git's words;
+if it drops the checkout but will not delete the branch, the board tells you which branch
+is left.
 
 ## The Control Plane
 

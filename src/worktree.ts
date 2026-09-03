@@ -1,12 +1,23 @@
 // The checkout a mutating Run owns. Git allows exactly one worktree per checked-out
 // branch, so the branch is the key: two Runs building the same branch share one
 // checkout, two Runs building different branches cannot collide, and nothing has to
-// invent an identity for a directory. Worktrees go through herdr, so each one is a
-// workspace of its own and removing it closes that workspace.
+// invent an identity for a directory.
+//
+// By default Collie makes the checkout with git and the Run stays in the workspace it
+// was activated from, because a Run belongs where it was started and herdr groups a
+// workspace by Git provenance alone (ADR-0006). `--input workspace=new` asks herdr for
+// the checkout instead, which gives the Run a workspace of its own. A record says which
+// it was, because that is who takes the checkout away again.
 
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
-import { herdrFailureReason, type Herdr, type WorktreeInfo, type WorktreeListing } from "./herdr";
+import {
+  herdrFailureReason,
+  type Herdr,
+  type PaneInfo,
+  type WorktreeInfo,
+  type WorktreeListing,
+} from "./herdr";
 import { defaultBase } from "./inputs";
 import { disambiguate, GLYPH, tabLabel } from "./naming";
 import { parseMrTarget, projectHere, repoArgs, shell, type Runner } from "./mr";
@@ -192,6 +203,81 @@ const isBranch = Effect.fn("worktree.isBranch")(function* (
   return false;
 });
 
+/** `--input workspace=new`: today's separate herdr worktree workspace, asked for. */
+const SEPARATE_WORKSPACE = "new";
+
+/**
+ * A branch as a path under the worktrees directory. Its own segments, so `feature/foo`
+ * nests rather than being flattened: flattening it to `feature-foo` would collide with
+ * the branch actually called `feature-foo`, and two branches that share a destination
+ * are two Runs one checkout apart from sharing an index. Nothing is truncated for the
+ * same reason. Git's own ref rules — no `..`, no leading `.`, no control characters —
+ * are what keep every segment a legal directory name.
+ */
+const branchPath = (branch: string) => branch.split("/");
+
+/**
+ * Every checkout git itself knows about, and which of them the repository is. git's own
+ * list rather than herdr's: it answers both questions at once, needs no herdr to be
+ * running, and lists a checkout however it was made.
+ */
+const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+  cwd: string,
+) {
+  const listed = yield* run("git", ["worktree", "list", "--porcelain"], cwd);
+  if (listed.code !== 0) return null;
+  const checkouts: Array<{ path: string; branch: string | null }> = [];
+  for (const block of listed.stdout.split(/\n\s*\n/)) {
+    const at = /^worktree (.+)$/m.exec(block)?.[1]?.trim();
+    if (at === undefined) continue;
+    // A detached checkout has no `branch` line at all, which is what null means here.
+    const ref = /^branch (.+)$/m.exec(block)?.[1]?.trim();
+    checkouts.push({ path: at, branch: ref?.replace(/^refs\/heads\//, "") ?? null });
+  }
+  // git lists the main worktree first, and that is the one place a command about the
+  // repository can be run and still be there once another checkout has been removed.
+  const repo = checkouts[0]?.path;
+  return repo === undefined ? null : { repo, checkouts };
+});
+
+/**
+ * The checkout for a branch, made with git. The one the branch already has where it has
+ * one — git allows no second worktree on a checked-out branch, and a fix round has to
+ * land where the reviewed work already is — and otherwise a new one at the path herdr
+ * would have chosen.
+ */
+const gitCheckout = Effect.fn("worktree.gitCheckout")(function* (opts: {
+  cwd: string;
+  branch: string;
+  base?: string | undefined;
+  /** Where a new checkout goes, which is where herdr would have put it. */
+  worktrees: string;
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+}) {
+  const path = yield* Path.Path;
+  const { run, branch } = opts;
+  const listing = yield* gitWorktrees(run, opts.cwd);
+  if (!listing) return { refused: `${opts.cwd} is not a git checkout` };
+  const existing = listing.checkouts.find((checkout) => checkout.branch === branch);
+  if (existing) return { path: existing.path, created: false };
+
+  const at = path.join(opts.worktrees, path.basename(listing.repo), ...branchPath(branch));
+  // `-b` only for a branch that does not exist yet: git refuses to create one twice,
+  // and a branch this checkout already has is what a fix round works on.
+  const known =
+    (yield* run("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], listing.repo))
+      .code === 0;
+  const args = known
+    ? ["worktree", "add", at, branch]
+    : ["worktree", "add", at, "-b", branch, ...(opts.base ? [opts.base] : [])];
+  const added = yield* run("git", args, listing.repo);
+  if (added.code !== 0) {
+    return { refused: added.stdout.trim() || `git would not add a worktree at ${at}` };
+  }
+  return { path: at, created: true };
+});
+
 /**
  * The checkout for a branch: the one it already has, or a new one. `herdr worktree
  * open` is what gives an existing checkout its workspace back, so a Run handed to a
@@ -224,6 +310,7 @@ export const worktreeFor = Effect.fn("worktree.worktreeFor")(function* (
     worktree: {
       path: opened.path,
       branch: opts.branch,
+      managed_by: "herdr",
       workspace_id: opened.workspaceId,
       created_by_collie: !existing,
       made_at: yield* madeAt(opened.path),
@@ -263,8 +350,13 @@ export interface Checkout {
 
 /**
  * Where this Run works. A Workflow that changes the repository owns its branch's
- * checkout, opened or created through herdr; every other Workflow works in the
- * directory it was started from.
+ * checkout; every other Workflow works in the directory it was started from.
+ *
+ * The Run stays in the workspace it was activated from, and only its cwd moves: the
+ * work surrounding a task is encapsulated in its workspace, and a checkout of its own
+ * is about not sharing an index, not about being somewhere else in the sidebar.
+ * `workspace=new` asks herdr for the checkout instead and takes the workspace herdr
+ * opens on it.
  *
  * A mutating Workflow that cannot be given a worktree does not start. Falling back to
  * the directory it was launched from is what this whole mechanism exists to prevent:
@@ -280,7 +372,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     workflow: string;
     name: string;
     inputs: Record<string, string>;
-    /** The workspace the Run would be in without a checkout of its own. */
+    /** The workspace the Run was activated from, and stays in. */
     workspaceId?: string | null;
     workspaceLabel?: string | null;
     explicit?: string | null | undefined;
@@ -299,24 +391,55 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   const plan = yield* branchFor(opts);
   if (plan.refused) return { ...here, refused: plan.refused } satisfies Checkout;
 
-  const label = tabLabel(GLYPH.running, disambiguate(opts.workflow, plan.branch));
-  const found = yield* Effect.result(
-    worktreeFor(herdr, { cwd: opts.cwd, branch: plan.branch, base: plan.base, label }),
-  );
-  if (found._tag === "Failure") {
+  // Whichever manager was asked, a Run with nowhere of its own to work says so the
+  // same way, naming the branch it could not be given a checkout for.
+  const refuse = (why: string) =>
+    ({ ...here, refused: `no worktree for ${plan.branch}: ${why}` }) satisfies Checkout;
+
+  // The Workflow's own `workspace` Input, so both front doors and a chained Run reach
+  // it the same way: `startRun` settles it from `--input`, and the Choice that chains
+  // `implement` forwards the parent's answer.
+  if (opts.inputs.workspace?.trim() === SEPARATE_WORKSPACE) {
+    const label = tabLabel(GLYPH.running, disambiguate(opts.workflow, plan.branch));
+    const found = yield* Effect.result(
+      worktreeFor(herdr, { cwd: opts.cwd, branch: plan.branch, base: plan.base, label }),
+    );
+    if (found._tag === "Failure") return refuse(herdrFailureReason(found.failure));
+    const { worktree, workspaceLabel } = found.success;
     return {
       ...here,
-      refused: `no worktree for ${plan.branch}: ${herdrFailureReason(found.failure)}`,
+      cwd: worktree.path,
+      // The workspace herdr just opened on the checkout, which is the whole point of
+      // asking it: this is the one path where the Run does not stay where it started.
+      workspaceId: worktree.workspace_id,
+      workspaceLabel: workspaceLabel ?? opts.workspaceLabel ?? null,
+      worktree,
+      note: `${worktree.created_by_collie ? "created" : "opened"} worktree ${worktree.path} on ${plan.branch}`,
     } satisfies Checkout;
   }
-  const { worktree, workspaceLabel } = found.success;
+
+  const made = yield* gitCheckout({
+    cwd: opts.cwd,
+    branch: plan.branch,
+    base: plan.base,
+    worktrees: yield* herdr.worktreesDirectory(),
+    // `say`, so git's own reason for refusing a worktree is what the Run is told.
+    run: (cmd, args, cwd) => shell(cmd, args, cwd, "say"),
+  });
+  if (made.refused !== undefined) return refuse(made.refused);
+  const worktree = {
+    path: made.path,
+    branch: plan.branch,
+    managed_by: "git",
+    workspace_id: null,
+    created_by_collie: made.created,
+    made_at: yield* madeAt(made.path),
+  } satisfies WorktreeRecord;
   return {
+    ...here,
     cwd: worktree.path,
-    workspaceId: worktree.workspace_id,
-    workspaceLabel: workspaceLabel ?? opts.workspaceLabel ?? null,
     worktree,
-    note: `${worktree.created_by_collie ? "created" : "opened"} worktree ${worktree.path} on ${plan.branch}`,
-    refused: null,
+    note: `${made.created ? "created" : "reused"} worktree ${worktree.path} on ${plan.branch}`,
   } satisfies Checkout;
 });
 
@@ -366,6 +489,8 @@ const MrStateJson = Schema.fromJsonString(
 interface InUse {
   paths: ReadonlyMap<string, string>;
   workspaces: ReadonlyMap<string, string>;
+  /** Every pane herdr has, so a removal can tell which tabs went with the checkout. */
+  panes: ReadonlyArray<PaneInfo>;
 }
 
 /**
@@ -394,13 +519,49 @@ const inUse = Effect.fn("worktree.inUse")(function* (
     if (pane.workspaceId) workspaces.set(pane.workspaceId, "an agent is working in it");
   }
   if (opts.keep && !paths.has(opts.keep)) paths.set(opts.keep, "a run is starting in it");
-  return { paths, workspaces } satisfies InUse;
+  return { paths, workspaces, panes: panes.success } satisfies InUse;
+});
+
+/** Whether this directory is the checkout at `at`, or somewhere inside it. */
+const inside = (at: string, dir: string | null | undefined) =>
+  dir !== null && dir !== undefined && (dir === at || dir.startsWith(`${at}/`));
+
+/**
+ * Closes the tabs a removed checkout leaves behind: shells still sitting in a
+ * directory that is gone, which nothing else would ever close. Only the tabs the
+ * finished Runs of that checkout recorded, and only while every pane in one is inside
+ * it — a tab a human has since split or reused is theirs, not the Run's leftovers.
+ *
+ * Answers with how many would not close. This is the only chance: the checkout is
+ * already gone from herdr's listing, so it is no longer a candidate and no later sweep
+ * will come back to retry. A herdr that hiccuped here has to be reported now or the
+ * dead tab is never mentioned at all.
+ */
+const closeDeadTabs = Effect.fn("worktree.closeDeadTabs")(function* (
+  herdr: Herdr,
+  opts: { at: string; tabs: ReadonlySet<string>; panes: ReadonlyArray<PaneInfo> },
+) {
+  // Where a pane was started and where it has moved to: a shell the agent `cd`-ed is
+  // in the checkout whatever its tab was opened on.
+  const isInside = (pane: PaneInfo) =>
+    inside(opts.at, pane.cwd) || inside(opts.at, pane.foregroundCwd);
+  let left = 0;
+  for (const tabId of opts.tabs) {
+    const panes = opts.panes.filter((pane) => pane.tabId === tabId);
+    // A tab herdr no longer has is nothing to close; one with a pane outside the
+    // checkout is a tab somebody has taken over.
+    const isDead = panes.length > 0 && panes.every(isInside);
+    if (!isDead) continue;
+    const closed = yield* Effect.result(herdr.tabClose(tabId));
+    if (closed._tag === "Failure") left += 1;
+  }
+  return left;
 });
 
 /** Why this checkout is in use, or null when nothing holds it. */
 function heldBy(use: InUse, worktree: { path: string; workspaceId: string | null }): string | null {
   for (const [dir, why] of use.paths) {
-    if (dir === worktree.path || dir.startsWith(`${worktree.path}/`)) return why;
+    if (inside(worktree.path, dir)) return why;
   }
   return (worktree.workspaceId && use.workspaces.get(worktree.workspaceId)) || null;
 }
@@ -494,16 +655,31 @@ const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
 const fromRuns = Effect.fn("worktree.fromRuns")(function* (stateDir: string) {
   const mine = new Map<string, WorktreeRecord>();
   const paths = new Map<string, string>();
+  /** The tabs each checkout's finished Runs opened, which are the ones left in it. */
+  const tabs = new Map<string, Set<string>>();
   for (const run of yield* new RunStore(stateDir).list()) {
-    const worktree = run.record.worktree;
-    if (worktree?.created_by_collie) mine.set(worktree.path, worktree);
     // Anything a `resume` could pick up again, by the same rule `run resume` lists
     // them: a Run left `blocked` at a Choice, or by an agent that stopped, restarts in
     // the directory it recorded. And whatever its Driver is doing, since a crashed or
     // restarting Driver is not evidence that the Run is over.
-    if (resumable(run)) paths.set(run.record.cwd, "a run could still be resumed in it");
+    const resumeCould = resumable(run);
+    if (resumeCould) paths.set(run.record.cwd, "a run could still be resumed in it");
+
+    const worktree = run.record.worktree;
+    if (!worktree?.created_by_collie) continue;
+    mine.set(worktree.path, worktree);
+    // A Run that could still be resumed keeps its checkout anyway, so its tabs are
+    // nobody's leftovers yet.
+    if (resumeCould) continue;
+    const opened = tabs.get(worktree.path) ?? new Set<string>();
+    for (const step of run.record.steps) {
+      for (const variant of step.variants) {
+        if (variant.tabId) opened.add(variant.tabId);
+      }
+    }
+    tabs.set(worktree.path, opened);
   }
-  return { mine, paths };
+  return { mine, paths, tabs };
 });
 
 /**
@@ -530,16 +706,16 @@ const prune = Effect.fn("worktree.prune")(function* (opts: {
   const run = opts.run ?? ((cmd, args, cwd) => shell(cmd, args, cwd, "say"));
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const statePath = path.join(opts.stateDir, PRUNE_FILE);
-  // What a board line calls a checkout: the last part of its path, which is the branch
-  // herdr cut it for.
-  const nameOf = (worktree: { path: string }) => path.basename(worktree.path);
+  // What a board line calls a checkout: the branch it is for. Not the last part of its
+  // path — a branch with a `/` in it nests, so `feature/foo` would read as "foo".
+  const nameOf = (worktree: { branch: string }) => worktree.branch;
   const state = yield* fs.readFileString(statePath).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(PruneStateJson)),
     Effect.catch(() => Effect.succeed<PruneState>({})),
   );
   const before = `${Schema.encodeSync(PruneStateJson)(state)}\n`;
 
-  const { mine, paths } = yield* fromRuns(opts.stateDir);
+  const { mine, paths, tabs } = yield* fromRuns(opts.stateDir);
   const listing =
     mine.size === 0
       ? null
@@ -600,11 +776,19 @@ const prune = Effect.fn("worktree.prune")(function* (opts: {
   for (const worktree of due) {
     const name = nameOf(worktree);
     const verdict = yield* settled(worktree, { repo, use, run });
-    // Through herdr, so the workspace it opened closes with the checkout. Then the
-    // branch itself, with `-d`: git refuses an unmerged one, which is the guard.
+    // Whoever made the checkout takes it away again. Then the branch itself, with
+    // `-d`: git refuses an unmerged one, which is the guard.
     const outcome =
       verdict.keep === undefined
-        ? yield* removeWorktree(opts.herdr, worktree, { name, why: verdict.why, repo, run })
+        ? yield* removeWorktree(opts.herdr, worktree, {
+            name,
+            why: verdict.why,
+            repo,
+            run,
+            managedBy: mine.get(worktree.path)?.managed_by ?? "herdr",
+            tabs: tabs.get(worktree.path) ?? new Set<string>(),
+            panes: use.panes,
+          })
         : { line: `kept ${name} · ${verdict.keep}`, removed: false };
     state[worktree.path] = { checked_at: now, repo, ...outcome };
   }
@@ -663,42 +847,66 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
     /** The repository's own checkout: this one is about to stop existing. */
     repo: string;
     run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+    /** Who made this checkout, which is who is allowed to take it away. */
+    managedBy: "git" | "herdr";
+    /** The tabs its finished Runs opened, closed with the checkout they sit in. */
+    tabs: ReadonlySet<string>;
+    panes: ReadonlyArray<PaneInfo>;
   },
 ) {
-  // herdr removes a worktree by the workspace it has open on it, so a checkout whose
-  // workspace a human has since closed is opened again first. herdr owns every
-  // worktree's whole life — removing one behind its back would leave it listing a
-  // checkout that is not there. Never forced either way: git's refusal is the guard.
-  let workspaceId = worktree.workspaceId;
-  if (!workspaceId) {
-    const opened = yield* Effect.result(
-      herdr.worktreeOpen({ cwd: opts.repo, path: worktree.path }),
-    );
-    if (opened._tag === "Failure") {
-      const why = herdrFailureReason(opened.failure);
-      return { line: `kept ${opts.name} · ${why}`, removed: false } satisfies Removal;
+  const kept = (why: string): Removal => ({ line: `kept ${opts.name} · ${why}`, removed: false });
+  // herdr removes a worktree by the workspace it has open on it, so a checkout herdr
+  // has open goes through herdr whoever made it: removing one behind its back would
+  // leave it listing a checkout that is not there. Never forced either way, and never
+  // `--force`: git's own refusal is the guard.
+  // Truthiness, not `!== null`: herdr reports a checkout it has nothing open on as an
+  // empty id as well as a missing one, and both mean the same thing here.
+  const throughHerdr = Boolean(worktree.workspaceId) || opts.managedBy === "herdr";
+  if (throughHerdr) {
+    // A checkout herdr made but whose workspace a human has since closed is opened
+    // again to be removed, because the workspace is how herdr names it.
+    let workspaceId = worktree.workspaceId;
+    if (!workspaceId) {
+      const opened = yield* Effect.result(
+        herdr.worktreeOpen({ cwd: opts.repo, path: worktree.path }),
+      );
+      if (opened._tag === "Failure") return kept(herdrFailureReason(opened.failure));
+      workspaceId = opened.success.workspaceId;
     }
-    workspaceId = opened.success.workspaceId;
+    const refused = yield* herdr.worktreeRemove(workspaceId).pipe(
+      Effect.as(null),
+      Effect.catch((cause) => Effect.succeed(herdrFailureReason(cause))),
+    );
+    if (refused !== null) return kept(refused);
+  } else {
+    const dropped = yield* opts.run("git", ["worktree", "remove", worktree.path], opts.repo);
+    if (dropped.code !== 0) return kept(dropped.stdout.trim() || "git would not remove it");
   }
-  const refused = yield* herdr.worktreeRemove(workspaceId).pipe(
-    Effect.as(null),
-    Effect.catch((cause) => Effect.succeed(herdrFailureReason(cause))),
-  );
-  if (refused !== null)
-    return { line: `kept ${opts.name} · ${refused}`, removed: false } satisfies Removal;
+
+  // The Run's leftover shells, now that the directory they sit in has gone — whichever
+  // manager removed it. herdr closes the workspace it had open on the checkout, but a
+  // Run's tabs are in the workspace it was activated from, which that closing knows
+  // nothing about. The pane list this reads was taken before the removal, which is why
+  // it still says where each of them was.
+  const openTabs = yield* closeDeadTabs(herdr, {
+    at: worktree.path,
+    tabs: opts.tabs,
+    panes: opts.panes,
+  });
 
   // The checkout has gone, so this is a removal whatever happens to the branch — a
   // branch git will not delete is what is left to look at, and an entry that says it
   // was kept would be forgotten on the next sweep, when the path is no longer listed.
   const deleted = yield* opts.run("git", ["branch", "-d", worktree.branch], opts.repo);
-  if (deleted.code === 0) {
-    return { line: `♻ removed ${opts.name} · ${opts.why}`, removed: true } satisfies Removal;
-  }
-  const why = deleted.stdout.trim() || "git would not delete it";
-  return {
-    line: `♻ removed ${opts.name} · branch ${worktree.branch} kept: ${why}`,
-    removed: true,
-  } satisfies Removal;
+  const why =
+    deleted.code === 0
+      ? opts.why
+      : `branch ${worktree.branch} kept: ${deleted.stdout.trim() || "git would not delete it"}`;
+  // Said on the same line, for the same reason the kept branch is: this checkout will
+  // not be a candidate again, so anything that did not go with it is reported here or
+  // it is never reported.
+  const tabs = openTabs === 0 ? "" : ` · ${openTabs} tab(s) left open`;
+  return { line: `♻ removed ${opts.name} · ${why}${tabs}`, removed: true } satisfies Removal;
 });
 
 /**

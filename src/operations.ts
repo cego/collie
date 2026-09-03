@@ -574,7 +574,10 @@ export const startRun = Effect.fn("operations.startRun")(function* (
  * receipt records it, and a retry with the same request id replays it.
  */
 export const handOver = Effect.fn("operations.handOver")(function* (env: PluginEnv, run: Run) {
-  const workspaceId = run.record.worktree?.workspace_id ?? null;
+  // The workspace the Run belongs in, which is the one it was activated from unless
+  // herdr opened one for its checkout. A Driver inherits the invoking pane's workspace
+  // otherwise, and a `--workspace` run would open its tabs wherever it was typed.
+  const workspaceId = run.record.workspace;
   const why = yield* spawnDriver(env, run.id, run.record.cwd, workspaceId).pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(String(cause))),

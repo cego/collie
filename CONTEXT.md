@@ -25,19 +25,30 @@
 **Session** — One herdr session, one workspace and one repo cwd, taken together. It is the
 scope of a Control Plane tab and of the register of live agents, so only Runs in the same
 Session can hand work to each other. There is only ever one agent per role in a Session.
+One workspace, always: a mutating Run's checkout does not take it out of the Session it
+was started in, which is what keeps a hand-off between `plan` and `implement` working.
 
 **Hand-off** — Giving one Run's result to another Run's live agent in the same Session
 instead of starting a second one. Both Runs record it. Which hand-offs exist and what each
 sends: `docs/using.md`.
 
 **Worktree** — The checkout a mutating Run owns: one per branch, because git allows
-exactly one worktree per checked-out branch, opened through herdr as a workspace of its
-own so the Run's tabs, its cwd and its agents are all in one place. `implement` gets one,
-and `plan`/`architecture` get one where they chain into it; `review` reads the diff or the
-caller's own tree. It outlives the merge request and is removed only once **Settled**. A
-Run records the branch, the path, whether Collie created it, and the moment git wrote the
-checkout — which is what tells Collie's own checkout from one a human later made at the
-same path on the same branch. A checkout a human made is never removed.
+exactly one worktree per checked-out branch. Only the Run's cwd moves; its tabs stay in
+the workspace it was activated from and are `cd`-ed into the checkout, because a Run
+belongs where it was started (ADR-0006). `implement` gets one, and `plan`/`architecture`
+get one where they chain into it; `review` reads the diff or the caller's own tree.
+
+Two managers, and a Run records which: Collie makes the checkout with `git worktree add`
+by default, and `--input workspace=new` asks herdr for it instead, which opens it as a
+workspace of its own. It outlives the merge request and is removed only once **Settled** —
+a git-managed checkout with `git worktree remove` then `git branch -d`, and the Run's
+tabs whose shells sit inside it closed with it; one herdr has a workspace open on through
+`herdr worktree remove`, whoever made it, so herdr never lists a checkout that is gone.
+
+A Run records the branch, the path, its manager, whether Collie created it, and the
+moment git wrote the checkout — which is what tells Collie's own checkout from one a
+human later made at the same path on the same branch. A checkout a human made is never
+removed.
 
 **Settled** — A Collie-created Worktree that holds nothing which exists only there: the
 tree is clean, it holds no commit that is not on the remote already, nothing is working in
@@ -47,8 +58,9 @@ default branch where it does not — a branch merged and deleted loses its upstr
 the next `git fetch --prune`, and requiring one would make the gone-branch case
 unreachable. Only then is it removed, through herdr, and only ever without a force flag:
 git's own refusal to drop a dirty or unmerged checkout is the last guard, so a wrong
-judgement can fail to clean but never delete work. The conditions and their order are
-canonical in `src/worktree.ts` and `docs/internals.md`.
+judgement can fail to clean but never delete work. Removal is never forced whichever
+manager does it. The conditions and their order are canonical in `src/worktree.ts` and
+`docs/internals.md`.
 
 **Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking takes a baseline definition into a Layer.
 

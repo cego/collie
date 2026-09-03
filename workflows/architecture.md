@@ -2,6 +2,9 @@
 name: architecture
 title: architecture — look at what is there, then improve it
 description: Runs the architecture skill over this project, writes a report into the run dir, then asks what next.
+inputs:
+  # Forwarded to the implement this chains into, which is where it means anything.
+  workspace: optional
 steps:
   - id: architecture
     persona: architect
@@ -15,6 +18,7 @@ steps:
         run: implement
         inputs:
           plan: "{{run.dir}}/plan"
+          workspace: "{{inputs.workspace}}"
       - title: Stop here
         stop: true
 ---
