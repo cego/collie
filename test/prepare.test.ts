@@ -136,7 +136,10 @@ test("prepare leaves a linked plugin, a collie on PATH and the operator skill", 
         `HERDR_PLUGIN_ROOT="\${HERDR_PLUGIN_ROOT:-${root}}"`,
       );
       expect(yield* fs.exists(`${root}/bin/collie`)).toBe(true);
+      // Both stores: claude-code reads only its own, everything else reads the
+      // universal one, and the skill is no use to a harness that cannot see it.
       expect(yield* fs.readLink(`${home}/.claude/skills/collie`)).toBe(`${root}/skills/collie`);
+      expect(yield* fs.readLink(`${home}/.agents/skills/collie`)).toBe(`${root}/skills/collie`);
       expect(yield* read(`${home}/linked`)).toContain(`local:${root}`);
     }),
   ));
@@ -263,6 +266,8 @@ test("prepare leaves a skill link that is not ours alone", () =>
 
       expect(run.out).toContain("prepare: operator-skill: skipped");
       expect(run.code).toBe(0);
+      // The store we may not touch does not cost the other one its link.
+      expect(yield* fs.readLink(`${home}/.agents/skills/collie`)).toBe(`${root}/skills/collie`);
     }),
   ));
 
