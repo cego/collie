@@ -64,6 +64,19 @@ the one it was activated from unless herdr opened one for the checkout (ADR-0006
 `startRun` resolves it for a run started here; `chain` resolves it for a chained one,
 which is how `plan` and `architecture` get one.
 
+Where herdr does open a workspace — `--input workspace=new`, the path ADR-0006 keeps —
+that workspace comes with one numbered shell tab, and `create` may answer with it. The
+run records it as `worktree.root_tab_id` and `worktree.root_pane_id`, and that pane is
+the run's launch pane: its first agent starts there, so the workspace opens with the
+Collie tab and the run's tabs and no bare shell tab beside them.
+
+Both keys are optional, and that is herdr's contract rather than laxity: its schema
+describes `worktree_created` twice, once with `tab` and `root_pane` and once without, so
+a reply carrying neither is legal and the run simply opens its own tab as it always did.
+Requiring them refused the run its checkout over a tab it can do without. `open` never
+carries them, because the workspace it reuses is not the run's to rearrange, and a
+git-managed checkout opens no workspace at all, so it has none.
+
 A worktree is **settled**, and only then removed, when all four hold:
 
 1. `git status --porcelain` in it is empty;

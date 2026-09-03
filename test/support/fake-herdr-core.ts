@@ -522,7 +522,7 @@ export function fakeHerdr(
         if (!(yield* fs.exists(`${worktree.path}/.git`))) {
           yield* fs.writeFileString(`${worktree.path}/.git`, `gitdir: ${worktree.path}/.gitdir\n`);
         }
-        result = {
+        const opened = {
           type: cmd === "worktree create" ? "worktree_created" : "worktree_opened",
           worktree,
           workspace: {
@@ -531,6 +531,14 @@ export function fakeHerdr(
             worktree: { checkout_path: worktree.path },
           },
         };
+        // `create` makes the workspace, so it always answers with the one numbered shell
+        // tab that workspace comes with; `open` reuses a workspace and sends neither key.
+        if (cmd === "worktree open") {
+          result = opened;
+        } else {
+          const rootTab = newTab(String(state.tabs + 1));
+          result = { ...opened, tab: rootTab, root_pane: newPane(rootTab.tab_id) };
+        }
         break;
       }
       case "worktree remove": {

@@ -249,8 +249,11 @@ test("the implement run chained from a review lands in the reviewed branch's own
         managed_by: "git",
         workspace_id: null,
         // The checkout already existed, so git wrote its `.git` when whoever made it
-        // ran `worktree add`; the rig's stand-in has one.
+        // ran `worktree add`; the rig's stand-in has one. And nothing was made for
+        // this Run, so there is no root tab of its own to take over.
         made_at: expect.any(Number),
+        root_tab_id: null,
+        root_pane_id: null,
       });
       expect(child.record.cwd).toBe(existing);
       // The workspace the review was started in: the child works in the branch's own

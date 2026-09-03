@@ -221,3 +221,39 @@ test("Ctrl-C cancels a menu and a question alike, and answers nothing", () =>
       expect(asQuestion.answers).toEqual([null]);
     }),
   ));
+
+test("a pasted answer fills the field, and its newline does not send it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The review target, typed rather than picked: the URL comes from a browser, and
+      // it used to have to be retyped because a paste is not keys.
+      const url = "https://gitlab.cego.dk/cego/collie/-/merge_requests/7";
+      const flow = yield* mount({
+        _tag: "Question",
+        header: "Which merge request?",
+        footer: "",
+        initial: "",
+      });
+
+      yield* Effect.promise(() => flow.mockInput.pasteBracketedText(`${url}\n`));
+      yield* flow.flush;
+      expect(flow.frame()).toContain(url);
+      expect(flow.answers).toEqual([]);
+
+      flow.mockInput.pressEnter();
+      yield* flow.flush;
+      expect(flow.answers).toEqual([url]);
+    }),
+  ));
+
+test("a pasted query filters the menu", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const flow = yield* mount(menu());
+
+      yield* Effect.promise(() => flow.mockInput.pasteBracketedText("implement"));
+      yield* flow.flush;
+      expect(flow.frame()).toContain("> implement");
+      expect(flow.frame()).not.toContain("architecture —");
+    }),
+  ));

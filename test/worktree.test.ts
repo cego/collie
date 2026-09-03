@@ -213,6 +213,10 @@ test("a branch with a worktree is opened, and one without gets a new one", () =>
 
       expect(made.worktree).toMatchObject({ branch: "add-picker", created_by_collie: true });
       expect(made.worktree.path).toEndWith("/worktrees/add-picker");
+      // The workspace herdr just made has one shell tab, and the record carries it so
+      // the run can put its first agent there instead of beside it.
+      expect(made.worktree.root_tab_id).toBe("1:1");
+      expect(made.worktree.root_pane_id).toBe("1-1");
 
       const again = yield* worktreeFor(herdr, {
         cwd: rig.projectDir,
@@ -222,6 +226,10 @@ test("a branch with a worktree is opened, and one without gets a new one", () =>
       expect(again.worktree).toMatchObject({
         path: made.worktree.path,
         created_by_collie: false,
+        // An existing checkout's workspace is not fresh; nothing in it is the run's
+        // to take over.
+        root_tab_id: null,
+        root_pane_id: null,
       });
       expect(yield* rig.cmds()).toEqual([
         "worktree list",
@@ -301,6 +309,8 @@ const collieWorktree = (
         managed_by: opts.managedBy ?? "herdr",
         workspace_id: workspaceId,
         made_at: madeAt.mtime.pipe(Option.getOrNull)?.getTime() ?? null,
+        root_tab_id: null,
+        root_pane_id: null,
       },
     });
     run.record.status = "done";
@@ -726,6 +736,9 @@ test("a mutating run makes its checkout with git and stays in the workspace it s
         workspace_id: null,
         created_by_collie: true,
         made_at: expect.any(Number),
+        // No workspace, so no shell tab of its own to take over.
+        root_tab_id: null,
+        root_pane_id: null,
       });
       // git itself, from the repository's own checkout, and no herdr workspace at all.
       expect(yield* askedIn()).toContainEqual({

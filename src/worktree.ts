@@ -314,6 +314,8 @@ export const worktreeFor = Effect.fn("worktree.worktreeFor")(function* (
       workspace_id: opened.workspaceId,
       created_by_collie: !existing,
       made_at: yield* madeAt(opened.path),
+      root_tab_id: opened.rootTab?.tabId ?? null,
+      root_pane_id: opened.rootTab?.paneId ?? null,
     } satisfies WorktreeRecord,
   };
 });
@@ -434,6 +436,10 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     workspace_id: null,
     created_by_collie: made.created,
     made_at: yield* madeAt(made.path),
+    // A git checkout opens no workspace, so there is no shell tab of its own to take
+    // over — the Run stays where it was started and uses that tab as it always did.
+    root_tab_id: null,
+    root_pane_id: null,
   } satisfies WorktreeRecord;
   return {
     ...here,

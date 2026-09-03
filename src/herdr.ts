@@ -128,15 +128,28 @@ const WorktreeListReply = Schema.Struct({
     ),
   }),
 });
-const WorktreeOpenReply = Schema.Struct({
-  result: Schema.Struct({
-    worktree: WorktreeReply,
-    workspace: Schema.Struct({
-      workspace_id: Schema.String,
-      label: Schema.optionalKey(Schema.String),
-    }),
+const WorktreeWorkspaceReply = Schema.Struct({
+  worktree: WorktreeReply,
+  workspace: Schema.Struct({
+    workspace_id: Schema.String,
+    label: Schema.optionalKey(Schema.String),
   }),
 });
+/**
+ * What `create` and `open` both answer with, and the shell tab that only `create` may
+ * add. Optional, and that is the contract rather than laxity: herdr's own schema gives
+ * `worktree_created` two variants — `{type, workspace, worktree}` and the same plus
+ * `{tab, root_pane}` — so a create reply without them is as legal as one with them, and
+ * requiring them refused a Run its checkout over a tab it did not need. `worktree_opened`
+ * has one variant and never carries them.
+ */
+const WorktreeReplyBody = Schema.Struct({
+  ...WorktreeWorkspaceReply.fields,
+  tab: Schema.optionalKey(Schema.Struct({ tab_id: Schema.String })),
+  root_pane: Schema.optionalKey(Schema.Struct({ pane_id: Schema.String })),
+});
+const WorktreeOpenReply = Schema.Struct({ result: WorktreeReplyBody });
+
 /** herdr's `config.toml`, as far as this plugin has any business reading it. */
 const HerdrConfig = Schema.Struct({
   worktrees: Schema.optionalKey(Schema.Struct({ directory: Schema.optionalKey(Schema.String) })),
@@ -258,6 +271,15 @@ function agentStatus(value: string): AgentStatus {
   return "unknown";
 }
 
+/** The checkout and the workspace holding it, which both `create` and `open` answer with. */
+function worktreeWorkspace(result: Schema.Schema.Type<typeof WorktreeWorkspaceReply>) {
+  return {
+    ...worktreeInfo(result.worktree),
+    workspaceId: result.workspace.workspace_id,
+    label: result.workspace.label ?? null,
+  };
+}
+
 function worktreeInfo(worktree: {
   path: string;
   branch?: string | null;
@@ -306,6 +328,11 @@ export interface WorktreeListing {
 export interface WorktreeWorkspace extends WorktreeInfo {
   workspaceId: string;
   label: string | null;
+  /**
+   * The shell tab a newly-made workspace comes with, which whoever asked for the
+   * worktree may take over. Null for a workspace that already existed.
+   */
+  rootTab: StartedTab | null;
 }
 
 export interface PaneInfo {
@@ -729,7 +756,18 @@ export class Herdr {
     if (opts.base) args.push("--base", opts.base);
     if (opts.label) args.push("--label", opts.label);
     args.push("--no-focus");
-    return this.opened("herdr worktree create", args);
+    return this.cli(args).pipe(
+      Effect.flatMap((res) => decodeOrNamed("herdr worktree create", WorktreeOpenReply, res)),
+      Effect.map(({ result }) => ({
+        ...worktreeWorkspace(result),
+        // Both keys or neither: the variant that carries the tab carries its pane too,
+        // and a Run with one and not the other has nothing it can reuse.
+        rootTab:
+          result.tab && result.root_pane
+            ? { tabId: result.tab.tab_id, paneId: result.root_pane.pane_id }
+            : null,
+      })),
+    );
   }
 
   /** Opens a workspace on a checkout that already exists, or focuses the one it has. */
@@ -759,11 +797,9 @@ export class Herdr {
   private opened(operation: string, args: string[]): HerdrEffect<WorktreeWorkspace> {
     return this.cli(args).pipe(
       Effect.flatMap((res) => decodeOrNamed(operation, WorktreeOpenReply, res)),
-      Effect.map(({ result }) => ({
-        ...worktreeInfo(result.worktree),
-        workspaceId: result.workspace.workspace_id,
-        label: result.workspace.label ?? null,
-      })),
+      // No root tab: the workspace `open` gives back is one that already existed, and
+      // nothing in it is this caller's to take over.
+      Effect.map(({ result }) => ({ ...worktreeWorkspace(result), rootTab: null })),
     );
   }
 

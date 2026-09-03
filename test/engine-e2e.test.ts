@@ -57,6 +57,43 @@ function runWorkflowEffect(...args: Parameters<typeof runWorkflow>) {
   return runWorkflow(...args).pipe(Effect.orDie);
 }
 
+test("a Collie-created worktree's own shell tab becomes the first agent's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // herdr opens a worktree workspace with one numbered shell tab in it. The run
+      // owns that workspace, so the tab is its first agent's rather than an empty one
+      // left beside the Collie tab for a human to close.
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+      const root = yield* rig.addTab("3", "");
+      const worktreePath = `${rig.root}/worktrees/add-picker`;
+      yield* rig.addWorktree("add-picker", worktreePath, "w2");
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          worktree: {
+            path: worktreePath,
+            branch: "add-picker",
+            created_by_collie: true,
+            managed_by: "herdr",
+            workspace_id: "w2",
+            made_at: null,
+            root_tab_id: root.tabId,
+            root_pane_id: root.paneId,
+          },
+        },
+      );
+
+      expect(status).toBe("done");
+      const variant = run.step("solo").variants[0]!;
+      expect(variant.paneId).toBe(root.paneId);
+      expect(variant.tabId).toBe(root.tabId);
+      expect(yield* rig.cmds()).not.toContain("tab create");
+    }),
+  ));
+
 test("plan runs one step in a tab of its own and records the run", () =>
   runEffect(
     Effect.gen(function* () {
@@ -444,6 +481,8 @@ test("a run in its own git checkout opens its tabs in the workspace it started i
             managed_by: "git",
             workspace_id: null,
             made_at: null,
+            root_tab_id: null,
+            root_pane_id: null,
           },
         },
       );
@@ -489,6 +528,8 @@ test("a checkout Collie just created is trusted without asking anyone", () =>
             managed_by: "herdr",
             workspace_id: "w7",
             made_at: null,
+            root_tab_id: null,
+            root_pane_id: null,
           },
         },
       );

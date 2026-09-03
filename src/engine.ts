@@ -648,9 +648,14 @@ const runStep = Effect.fn("Engine.runStep")(function* (
  * A newly-created workspace starts with one numbered shell tab. When the workflow
  * was launched from that untouched tab, use it for the first agent instead of
  * leaving it behind beside the Control Plane and run tabs.
+ *
+ * A Run whose worktree Collie created owns a whole workspace herdr just made, and its
+ * shell tab is that workspace's — not the launching pane's, which is in whatever
+ * workspace the human started from. So the recorded root pane comes first; the checks
+ * below are what keep a resumed Run from taking over a pane that now holds an agent.
  */
 const reusableLaunchPane = Effect.fn("Engine.reusableLaunchPane")(function* (o: EngineOptions) {
-  const launchId = o.env.paneId;
+  const launchId = o.run.record.worktree?.root_pane_id ?? o.env.paneId;
   if (!launchId) return null;
   const [tabs, panes] = yield* Effect.all([o.herdr.tabList(), o.herdr.paneList()]);
   const pane = panes.find((item) => item.paneId === launchId);

@@ -12,8 +12,9 @@ import {
   clampSelection,
   detailFor,
   emptyStateOf,
-  filterItems,
-  rowHay,
+  keyboardOn,
+  matching,
+  optionWindow,
   statusColour,
   viewRows,
   VIEWS,
@@ -21,11 +22,13 @@ import {
   type AppState,
   type Asking,
   type Command,
+  type Keyboarding,
   type Row,
   type ViewName,
 } from "./state";
 import { commitsBehind } from "../workspace";
 import { Detail } from "./detail";
+import { usePasteInto } from "./paste";
 import { Flow } from "./Flow";
 import type { Pending } from "./prompts";
 
@@ -36,6 +39,27 @@ import type { Pending } from "./prompts";
  * readable one.
  */
 const DETAIL_COLUMN_MIN = 72;
+
+/**
+ * Rows the Selection's buttons get. Two, because a finished merge-request run offers
+ * five of them and they do not fit one line of the 60 columns a Collie tab beside an
+ * editor has — and a button clipped in half is an action offered nowhere, since the
+ * footer's key list stopped repeating them when they moved here.
+ */
+const ACTION_ROWS = 2;
+
+/** Rows the key list gets: it runs to two lines at the widths a Collie tab is opened at. */
+const KEY_ROWS = 2;
+
+/**
+ * The footer's own rows — its border, its buttons, its keys and what the tab last said.
+ * Summed rather than stated, because a footer whose box and whose children disagree clips
+ * one of them, and it is what a question is anchored above.
+ */
+const FOOTER_HEIGHT = 2 + ACTION_ROWS + KEY_ROWS + 1;
+
+/** A question's border, its header and its footer: what it costs before its options. */
+const QUESTION_CHROME = 4;
 
 const DIM = "#8a8a8a";
 const ACCENT = "#7aa2f7";
@@ -54,7 +78,6 @@ export function App(props: AppProps) {
   const renderer = useRenderer();
   const dimensions = useTerminalDimensions();
   const [selected, setSelected] = createSignal<string | null>(null);
-  const [hovered, setHovered] = createSignal<string | null>(null);
   // The filter survives leaving the keyboard in it — `/` narrows the list so a row can
   // then be acted on, so Enter stops typing and keeps the text; only Esc drops it.
   const [filter, setFilter] = createSignal("");
@@ -75,7 +98,9 @@ export function App(props: AppProps) {
   });
 
   const all = createMemo(() => viewRows(props.state()));
-  const rows = createMemo(() => filterItems(all(), filter(), rowHay));
+  // `matching`, not a plain filter: the rows are nested by the time they get here, so a
+  // run whose agent matched has to come with it and the board's order has to survive.
+  const rows = createMemo(() => matching(all(), filter()));
 
   // Clamped against the list as it was, so a run finishing under the cursor leaves the
   // row that took its place selected rather than jumping to the top.
@@ -156,18 +181,42 @@ export function App(props: AppProps) {
     props.dispatch(command);
   };
 
+  /**
+   * Who has the keyboard, as one value the keys, a paste and the footer all read. They
+   * each used to decide it again from the same four signals, in an order written out by
+   * hand three times — and a paste that disagreed went into a field nobody was looking at.
+   */
+  const keyboard = createMemo<Keyboarding>(() =>
+    keyboardOn({
+      flow: flow() !== null,
+      choice: question(),
+      filtering: typing(),
+      setting: editingKey(),
+    }),
+  );
+
+  /** A paste is typing, so it goes to whichever field the keyboard is on. */
+  usePasteInto((append) => {
+    const at = keyboard();
+    if (at._tag === "Choice" && at.choice.kind === "ask") {
+      return setAsking((was) => ({ ...was, typed: append(was.typed) }));
+    }
+    if (at._tag === "Filter") return setFilter(append);
+    if (at._tag === "Setting") setEditing({ ...at.setting, value: append(at.setting.value) });
+  });
+
   useKeyboard((key) => {
+    const at = keyboard();
     // A flow asking a question owns the keyboard: `Flow` has its own handler, and a key
     // that also moved the Selection underneath would act on a board nobody is looking at.
-    if (flow()) return;
-    const choice = question();
-    if (choice) {
-      const next = answerFor(choice, asking(), key.sequence);
+    if (at._tag === "Flow") return;
+    if (at._tag === "Choice") {
+      const next = answerFor(at.choice, asking(), key.sequence);
       setAsking(next.asking);
       if (next.value !== null) answer(next.value);
       return;
     }
-    if (typing()) {
+    if (at._tag === "Filter") {
       if (key.name === "escape") {
         setFilter("");
         return setTyping(false);
@@ -179,8 +228,8 @@ export function App(props: AppProps) {
     }
     // A Settings row being given a new value: every key belongs to that until it is
     // sent or abandoned, the same rule a pending question follows.
-    const editing = editingKey();
-    if (editing !== null) {
+    if (at._tag === "Setting") {
+      const editing = at.setting;
       if (key.name === "escape") return setEditing(null);
       if (key.name === "return") {
         props.dispatch({ _tag: "SetDefault", key: editing.key, value: editing.value });
@@ -267,11 +316,7 @@ export function App(props: AppProps) {
           rows={rows()}
           empty={filter() === "" ? emptyStateOf(props.state().view) : "nothing matches"}
           selected={selected()}
-          hovered={hovered()}
           onSelect={setSelected}
-          onHover={setHovered}
-          dispatch={act}
-          asking={asking()}
         />
         <Show when={detailAsColumn()}>
           <Detail
@@ -292,15 +337,22 @@ export function App(props: AppProps) {
           dispatch={props.dispatch}
         />
       </Show>
+      {/* Over the bottom of the list, not among its rows and not beside them: a question
+          spliced between rows moved every row below the one asking, and a region that
+          took rows from the list changed how much of it there was to look at. Drawn on
+          top, so the list's own share of the pane is the same whether or not a Run is
+          asking anything. */}
+      <Show when={question()}>
+        <Question choice={question()!} asking={asking()} dispatch={props.dispatch} />
+      </Show>
       <Footer
         row={current()}
+        dispatch={act}
+        on={keyboard()}
         panel={panelKeys()}
         note={props.state().note}
         filter={filter()}
         matched={filter() === "" ? null : rows().length}
-        typing={typing()}
-        editing={editingKey()}
-        answering={question() !== null}
       />
     </box>
   );
@@ -349,11 +401,7 @@ function List(props: {
   empty: string;
   rows: readonly Row[];
   selected: string | null;
-  hovered: string | null;
-  asking: Asking;
   onSelect: (id: string) => void;
-  onHover: (id: string | null) => void;
-  dispatch: (command: Command) => void;
 }) {
   const [region, setRegion] = createSignal<ScrollBoxRenderable>();
   // Arrows move the Selection, and a Selection the region has scrolled past is one the
@@ -375,15 +423,7 @@ function List(props: {
       <Show when={props.rows.length > 0} fallback={<text fg={DIM}>{props.empty}</text>}>
         <For each={props.rows}>
           {(row) => (
-            <RowLine
-              row={row}
-              selected={row.id === props.selected}
-              hovered={row.id === props.hovered}
-              asking={props.asking}
-              onSelect={props.onSelect}
-              onHover={props.onHover}
-              dispatch={props.dispatch}
-            />
+            <RowLine row={row} selected={row.id === props.selected} onSelect={props.onSelect} />
           )}
         </For>
       </Show>
@@ -391,59 +431,42 @@ function List(props: {
   );
 }
 
-function RowLine(props: {
-  row: Row;
-  selected: boolean;
-  hovered: boolean;
-  asking: Asking;
-  onSelect: (id: string) => void;
-  onHover: (id: string | null) => void;
-  dispatch: (command: Command) => void;
-}) {
+/**
+ * One row, one line, whatever is selected. Nothing a Selection or the mouse does may
+ * change a row's height: the keys it offers are in the footer and the question it is
+ * waiting on is in its own region, because both of those used to be drawn under the row
+ * and pushed every row below it down a line as the cursor passed.
+ */
+function RowLine(props: { row: Row; selected: boolean; onSelect: (id: string) => void }) {
   // Colour reinforces the glyph and never replaces it: not everyone can see it, and
   // the glyph is what the text fallback and herdr's own tab strip show.
   const marker = () => (props.selected ? "❯" : " ");
-  const actions = () => (props.selected || props.hovered ? actionsFor(props.row) : []);
   return (
-    <box id={props.row.id} style={{ flexDirection: "column" }}>
-      <box
-        style={{ flexDirection: "row", height: 1 }}
-        onMouseDown={() => props.onSelect(props.row.id)}
-        onMouseOver={() => props.onHover(props.row.id)}
-        onMouseOut={() => props.onHover(null)}
+    <box
+      id={props.row.id}
+      style={{ flexDirection: "row", height: 1 }}
+      onMouseDown={() => props.onSelect(props.row.id)}
+    >
+      <text style={{ width: 4 }} fg={statusColour(props.row.glyph)}>
+        {`${marker()} ${props.row.key ?? props.row.glyph} `}
+      </text>
+      {/* A share of the row rather than a measured width, so the columns line up with
+          each other at whatever width the pane is dragged to. */}
+      <text
+        style={{ width: "45%", height: 1 }}
+        // A header names the group under it and can be acted on in no way at all, so it
+        // is dim: the rows it introduces are the ones a human is aiming at.
+        fg={props.row.kind === "header" ? DIM : undefined}
+        attributes={props.selected ? TextAttributes.BOLD : TextAttributes.NONE}
       >
-        <text style={{ width: 4 }} fg={statusColour(props.row.glyph)}>
-          {`${marker()} ${props.row.key ?? props.row.glyph} `}
-        </text>
-        {/* A share of the row rather than a measured width, so the columns line up with
-            each other at whatever width the pane is dragged to. */}
-        <text
-          style={{ width: "45%", height: 1 }}
-          attributes={props.selected ? TextAttributes.BOLD : TextAttributes.NONE}
-        >
-          {props.row.title}
-        </text>
-        <text style={{ flexGrow: 1, height: 1 }} fg={DIM}>
-          {props.row.detail}
-        </text>
-        <text style={{ width: 9, height: 1 }} fg={DIM}>
-          {props.row.ago === "" ? "" : ` ${props.row.ago}`}
-        </text>
-      </box>
-      {/* On a line of its own, not squeezed onto the row: a Selection can have four
-          actions, and a row that clipped them would offer keys nobody could read. */}
-      <Show when={actions().length > 0}>
-        {/* Wrapped, not clipped: a Selection can carry four actions, and a button
-            cut in half is one nobody can click. */}
-        <box style={{ flexDirection: "row", flexWrap: "wrap", paddingLeft: 4 }}>
-          <For each={actions()}>
-            {(action) => <ActionButton action={action} dispatch={props.dispatch} />}
-          </For>
-        </box>
-      </Show>
-      <Show when={props.selected && props.row.choice !== null}>
-        <Question choice={props.row.choice!} asking={props.asking} dispatch={props.dispatch} />
-      </Show>
+        {props.row.title}
+      </text>
+      <text style={{ flexGrow: 1, height: 1 }} fg={DIM}>
+        {props.row.detail}
+      </text>
+      <text style={{ width: 9, height: 1 }} fg={DIM}>
+        {props.row.ago === "" ? "" : ` ${props.row.ago}`}
+      </text>
     </box>
   );
 }
@@ -461,57 +484,119 @@ function ActionButton(props: { action: Action; dispatch: (command: Command) => v
   );
 }
 
+/**
+ * A question a Run is waiting on, in a region of its own. It draws that region and
+ * states its own height, so what it takes up is not a second thing the board has to
+ * know and keep in step — a line added here used to be a line clipped there.
+ */
 function Question(props: {
   choice: NonNullable<Row["choice"]>;
   asking: Asking;
   dispatch: (command: Command) => void;
 }) {
+  const dimensions = useTerminalDimensions();
   const send = (value: string) =>
     props.dispatch({ _tag: "Answer", runId: props.choice.run, value });
+  const options = () => (props.choice.kind === "menu" ? props.choice.items : []);
+  /**
+   * The lines it has for options. It covers the bottom of the list rather than taking
+   * rows from it, so what this bounds is how much of the list it hides: never more than
+   * half the pane. One line at the least, whatever the pane — a region that cannot show
+   * the cursor's own option is one nothing can be chosen from.
+   */
+  const room = () => Math.max(1, Math.floor(dimensions().height / 2) - QUESTION_CHROME);
+  /** The options it has room for, as a window the cursor stays inside. */
+  const window = () => optionWindow(options(), props.asking.index, room());
+  /** What it left out, said where the keys are said rather than on a line of its own. */
+  const footer = () => {
+    const { hidden } = window();
+    return hidden === 0 ? props.choice.footer : `${props.choice.footer} \u00b7 ${hidden} more`;
+  };
+  /** The option the cursor is on, which the window always contains. */
+  const cursor = () => options()[props.asking.index];
+  /** Its chrome and the options it shows — or the one line an answer is typed on. */
+  const height = () => QUESTION_CHROME + Math.max(1, window().shown.length);
   return (
-    <box style={{ flexDirection: "column", paddingLeft: 4 }}>
-      <text>{props.choice.header}</text>
+    <box
+      border
+      borderColor={ACCENT}
+      // Opaque, because it is drawn over regions that would otherwise show through it.
+      backgroundColor="default"
+      // Out of the flow, over the bottom of the list and anchored above the footer, so
+      // nothing else on the pane is a row shorter for it.
+      style={{
+        position: "absolute",
+        left: 0,
+        right: 0,
+        bottom: FOOTER_HEIGHT,
+        height: height(),
+        flexDirection: "column",
+        paddingLeft: 4,
+      }}
+    >
+      <text style={{ height: 1 }}>{props.choice.header}</text>
       <Show
         when={props.choice.kind === "menu"}
-        fallback={<text fg={ACCENT}>{`> ${props.asking.typed}`}</text>}
+        fallback={<text style={{ height: 1 }} fg={ACCENT}>{`> ${props.asking.typed}`}</text>}
       >
-        <For each={props.choice.items}>
-          {(item, i) => (
+        <For each={window().shown}>
+          {(item) => (
             <text
-              fg={i() === props.asking.index ? ACCENT : undefined}
+              style={{ height: 1 }}
+              fg={item === cursor() ? ACCENT : undefined}
               onMouseDown={() => send(item.id)}
             >
-              {`${i() === props.asking.index ? "❯" : " "} ${item.title}`}
+              {`${item === cursor() ? "\u276f" : " "} ${item.title}`}
             </text>
           )}
         </For>
       </Show>
-      <text fg={DIM}>{props.choice.footer}</text>
+      <text style={{ height: 1 }} fg={DIM}>
+        {footer()}
+      </text>
     </box>
   );
 }
 
 function Footer(props: {
   row: Row | null;
+  dispatch: (command: Command) => void;
+  /** What has the keyboard, which is what decides everything this offers. */
+  on: Keyboarding;
   /** The detail panel's keys, which depend on what is in the panel rather than the row. */
   panel: ReadonlyArray<string>;
   note: string | null;
   filter: string;
   /** How many rows the filter left, so a narrowed list says how narrow it is. */
   matched: number | null;
-  typing: boolean;
-  editing: { key: string; value: string } | null;
-  answering: boolean;
 }) {
+  /** The value being edited, where a Settings row is the one taking the keys. */
+  const editing = () => (props.on._tag === "Setting" ? props.on.setting : null);
+  /**
+   * What a field that has taken the keys says they do, and null while the board still
+   * has them. It answers both questions this footer asks — which keys to print, and
+   * whether the Selection's own are among them — because they have one answer.
+   */
+  const taken = () => {
+    if (props.on._tag === "Choice")
+      return "\u2191\u2193 move \u00b7 Enter choose \u00b7 Esc leave the run open";
+    if (props.on._tag === "Setting") return "type a value \u00b7 Enter set it \u00b7 Esc leave it";
+    // The filter has the keys too, so the board's own are as much a lie here as the
+    // Selection's buttons were: `k` typed a `k` while `[k stop]` stopped the run.
+    if (props.on._tag === "Filter") return "type to narrow \u00b7 Enter keep it \u00b7 Esc drop it";
+    return null;
+  };
+  /**
+   * The Selection's own keys, as buttons. This is the one place a row's actions are
+   * offered: they used to be drawn under the row itself, which made selecting a row
+   * push every row below it down a line. Clicking one still does what the key does.
+   */
+  const own = () => (taken() ? [] : actionsFor(props.row));
   // The keys the footer offers are the ones the Selection can actually be asked for,
   // plus the board's own; a key with nothing to act on is a lie.
-  const keys = () => {
-    if (props.answering)
-      return "\u2191\u2193 move \u00b7 Enter choose \u00b7 Esc leave the run open";
-    if (props.editing) return "type a value \u00b7 Enter set it \u00b7 Esc leave it";
-    const own = actionsFor(props.row).map((a) => `${a.key === "\r" ? "Enter" : a.key} ${a.label}`);
-    return [
-      ...own,
+  const keys = () =>
+    taken() ??
+    [
       ...props.panel,
       "Tab view",
       "1-9 agent",
@@ -523,23 +608,36 @@ function Footer(props: {
       "R re-read",
       "q close",
     ].join(" \u00b7 ");
-  };
   const status = () => {
-    if (props.editing) return `${props.editing.key} = ${props.editing.value}\u258f`;
-    if (props.filter !== "" || props.typing) {
+    const value = editing();
+    if (value) return `${value.key} = ${value.value}\u258f`;
+    const filtering = props.on._tag === "Filter";
+    if (props.filter !== "" || filtering) {
       const count = props.matched === null ? "" : `  ${props.matched} row(s)`;
-      return `/${props.filter}${props.typing ? "\u258f" : ""}${count}`;
+      return `/${props.filter}${filtering ? "\u258f" : ""}${count}`;
     }
     return props.note ?? "";
   };
-  // Two rows for the keys and one for what the tab last said, clipped to exactly that:
-  // an unbounded wrap here used to run over the line under it and render both as mojibake.
+  // Two rows for the Selection's buttons, two for the keys and one for what the tab last
+  // said, each clipped to exactly that: an unbounded wrap here used to run over the line
+  // under it and render both as mojibake. Fixed, whatever the Selection is — a footer
+  // that grew and shrank moved the list it belongs to.
   return (
-    <box border borderColor={DIM} style={{ flexDirection: "column", height: 5 }}>
-      <text style={{ height: 2 }} fg={DIM}>
+    <box
+      border
+      borderColor={DIM}
+      // Never squeezed either: the keys are how anything on this board is done at all.
+      style={{ flexDirection: "column", height: FOOTER_HEIGHT, flexShrink: 0 }}
+    >
+      <box style={{ flexDirection: "row", flexWrap: "wrap", height: ACTION_ROWS }}>
+        <For each={own()}>
+          {(action) => <ActionButton action={action} dispatch={props.dispatch} />}
+        </For>
+      </box>
+      <text style={{ height: KEY_ROWS }} fg={DIM}>
         {keys()}
       </text>
-      <text style={{ height: 1 }} fg={props.filter !== "" || props.editing ? ACCENT : undefined}>
+      <text style={{ height: 1 }} fg={props.filter !== "" || editing() ? ACCENT : undefined}>
         {status()}
       </text>
     </box>
