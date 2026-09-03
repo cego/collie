@@ -66,7 +66,11 @@ export function addMrRole<R>(
   cwd: string,
   run: Runner<R>,
 ): Effect.Effect<{ code: number; stdout: string }, never, R> {
-  return run("glab", ["mr", "update", mr.iid, ...repoArgs(mr.project), `--${role}`, `+${who}`], cwd);
+  return run(
+    "glab",
+    ["mr", "update", mr.iid, ...repoArgs(mr.project), `--${role}`, `+${who}`],
+    cwd,
+  );
 }
 
 export function mrTarget(project: string | null, iid: string): string {
@@ -164,6 +168,170 @@ export function projectHere<R>(
     }
     return null;
   });
+}
+/**
+ * Absent and `null` are the same answer here, and GitLab gives both: a merge request with
+ * no second pipeline sends `"pipeline": null`, not a missing key. A schema that allowed
+ * the key to be omitted but not null rejected real merge requests outright, and the panel
+ * reported one it had just read successfully as "not a merge request" — then cached that
+ * for the whole TTL. Every field a GitLab version or a token might not answer is optional
+ * *and* nullable for that reason.
+ */
+const optionalText = Schema.optionalKey(Schema.NullOr(Schema.String));
+const optionalFlag = Schema.optionalKey(Schema.NullOr(Schema.Boolean));
+const optionalCount = Schema.optionalKey(Schema.NullOr(Schema.Number));
+const optionalStatus = Schema.optionalKey(Schema.NullOr(Schema.Struct({ status: optionalText })));
+
+const MrDetailsJson = Schema.fromJsonString(
+  Schema.Struct({
+    iid: Schema.optionalKey(Schema.NullOr(Schema.Union([Schema.String, Schema.Number]))),
+    title: optionalText,
+    state: optionalText,
+    draft: optionalFlag,
+    work_in_progress: optionalFlag,
+    author: Schema.optionalKey(Schema.NullOr(Schema.Struct({ username: optionalText }))),
+    source_branch: optionalText,
+    target_branch: optionalText,
+    sha: optionalText,
+    updated_at: optionalText,
+    web_url: optionalText,
+    head_pipeline: optionalStatus,
+    pipeline: optionalStatus,
+    blocking_discussions_resolved: optionalFlag,
+    user_notes_count: optionalCount,
+    approvals_required: optionalCount,
+    approvals_left: optionalCount,
+  }),
+);
+
+/**
+ * The merge request behind a review, as the app's panel shows it. Every field but the
+ * iid is optional on the wire — glab's shape varies with the GitLab version and what
+ * the token may see — so a field nobody answered renders as unknown rather than
+ * taking the panel down.
+ */
+export interface MrDetails {
+  _tag: "Details";
+  iid: string;
+  project: string | null;
+  title: string;
+  /** `opened`, `merged`, `closed`, or `draft` where the MR says it is one. */
+  state: string;
+  author: string;
+  sourceBranch: string;
+  targetBranch: string;
+  /** The head pipeline's status, or `""` when there is no pipeline to report. */
+  pipeline: string;
+  /** Phrased, because "2" alone does not say whether that is good. */
+  approvals: string;
+  /** Whether a discussion is still blocking, which is the one a reviewer chases. */
+  unresolved: boolean;
+  notes: number;
+  /** Seven characters: enough to tell two heads apart, short enough to read. */
+  headSha: string;
+  /** When GitLab last saw it change, in epoch milliseconds, or 0 when it did not say. */
+  updatedAt: number;
+  url: string;
+}
+
+/** Why the panel has nothing to show — one line, and nothing else in the panel breaks. */
+export interface MrUnavailable {
+  _tag: "Unavailable";
+  reason: string;
+}
+
+export type MrPanel = MrDetails | MrUnavailable;
+
+/**
+ * One merge request, in one `glab mr view` call. `gitlabForProject` first, because "no
+ * glab" and "not logged in to that host" are answers a panel can state rather than
+ * failures a fetch should discover.
+ *
+ * Never called from a render path and never for a list: the app fetches this when a Run
+ * with a merge-request target becomes the Selection, and caches it per ref.
+ */
+export function mrDetails<R>(
+  ref: MrRef,
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<MrPanel, never, R> {
+  return Effect.gen(function* () {
+    const ready = yield* gitlabForProject(ref.project, cwd, run);
+    if (!ready.ok) return { _tag: "Unavailable", reason: ready.reason } satisfies MrUnavailable;
+
+    const where = ref.project ? `${ref.project}!${ref.iid}` : `!${ref.iid}`;
+    const view = yield* run(
+      "glab",
+      ["mr", "view", ref.iid, ...repoArgs(ref.project), "-F", "json"],
+      cwd,
+    );
+    if (view.code !== 0) {
+      return {
+        _tag: "Unavailable",
+        reason: `glab could not read ${where}`,
+      } satisfies MrUnavailable;
+    }
+    const decoded = Schema.decodeUnknownOption(MrDetailsJson)(view.stdout);
+    if (Option.isNone(decoded)) {
+      return {
+        _tag: "Unavailable",
+        reason: `what glab said about ${where} is not a merge request`,
+      } satisfies MrUnavailable;
+    }
+    const mr = decoded.value;
+    const draft = mr.draft === true || mr.work_in_progress === true;
+    const updated = mr.updated_at ? Date.parse(mr.updated_at) : Number.NaN;
+    return {
+      _tag: "Details",
+      iid: mr.iid === undefined || mr.iid === null ? ref.iid : String(mr.iid),
+      project: ref.project,
+      title: mr.title ?? "",
+      state: draft ? "draft" : (mr.state ?? ""),
+      author: mr.author?.username ?? "",
+      sourceBranch: mr.source_branch ?? "",
+      targetBranch: mr.target_branch ?? "",
+      pipeline: mr.head_pipeline?.status ?? mr.pipeline?.status ?? "",
+      approvals: approvalsLine(mr.approvals_required, mr.approvals_left),
+      unresolved: mr.blocking_discussions_resolved === false,
+      notes: mr.user_notes_count ?? 0,
+      headSha: (mr.sha ?? "").slice(0, 7),
+      updatedAt: Number.isFinite(updated) ? updated : 0,
+      url: mr.web_url ?? "",
+    } satisfies MrDetails;
+  });
+}
+
+/**
+ * Approvals are not on the merge-request object on every GitLab; where neither field is
+ * answered the panel says nothing about them rather than guessing at zero.
+ */
+function approvalsLine(
+  requiredOrNull: number | null | undefined,
+  leftOrNull: number | null | undefined,
+): string {
+  const required = requiredOrNull ?? undefined;
+  const left = leftOrNull ?? undefined;
+  if (required === undefined && left === undefined) return "";
+  if (left === 0) return "approved";
+  if (required === undefined) return `${left} still needed`;
+  // How many are still needed is the fact this GitLab did not answer, and standing the
+  // requirement in for it would claim nobody has approved yet.
+  if (left === undefined) return `${required} approval(s) required`;
+  return `${left} of ${required} still needed`;
+}
+
+/**
+ * The line that decides whether to look again: has this merge request moved since the
+ * review finished. GitLab's `updated_at` is what answers it in the one call the panel
+ * makes — a commit count would need a second, and "has anything moved" is the question
+ * a human actually has.
+ */
+export function sinceReview(details: MrDetails, reviewedAt: number): string {
+  if (reviewedAt <= 0 || details.updatedAt <= 0) return "";
+  if (details.updatedAt <= reviewedAt) return "nothing has moved since this review";
+  const hours = Math.round((details.updatedAt - reviewedAt) / 3_600_000);
+  const when = hours < 1 ? "since" : `${hours}h after`;
+  return `changed ${when} this review — head ${details.headSha}`;
 }
 
 export interface Readiness {

@@ -1,5 +1,6 @@
 import { Clock, DateTime } from "effect";
 import { nowIso } from "../src/time";
+import { COLLIE_TAB } from "../src/naming";
 import { readEnv } from "../src/env";
 
 /** A Date this far back, without reaching for the global clock. */
@@ -155,7 +156,7 @@ effectTest("a review is one run tab of agent panes, and the plugin keeps one pan
   );
 
   expect(status).toBe("done");
-  // One tab for the run — the reviewers' — plus the Control Plane's, and no pane of
+  // One tab for the run — the reviewers' — plus the Collie tab's, and no pane of
   // the run's own anywhere: no runner pane to move, swap or name.
   const cmds = yield* rig.cmds();
   const calls = yield* rig.calls();
@@ -163,7 +164,7 @@ effectTest("a review is one run tab of agent panes, and the plugin keeps one pan
   for (const cmd of ["pane move", "pane swap"]) expect(cmds).not.toContain(cmd);
   expect(calls.filter((c) => c.cmd === "plugin pane")).toHaveLength(1);
   const panes = calls.filter((c) => c.cmd === "pane rename").map((c) => c.argv?.at(-1));
-  expect(panes).toEqual(["Control Plane", "Opus", "Sonnet", "Synthesize"]);
+  expect(panes).toEqual([COLLIE_TAB, "Opus", "Sonnet", "Synthesize"]);
   expect(run.step("review").variants).toHaveLength(2);
 });
 
@@ -376,6 +377,10 @@ effectTest("the board's keys answer the question, and Esc leaves the run open", 
     glyph: "⚠",
     title: "Plan · x",
     detail: "",
+    // Hand-built, so nothing says when it last changed; only the app reads this.
+    at: 0,
+    target: null,
+    fixable: false,
     choice: menu,
   };
   const start: Asking = { index: 0, typed: "" };
@@ -793,10 +798,21 @@ effectTest(
     const dir = path.join(rig.root, "state's dir; touch pwned", "run dir");
     yield* fs.makeDirectory(dir, { recursive: true });
     yield* fs.writeFileString(path.join(dir, RUNNER_LOG), "hello\n");
-    const row = { id: "r", dir, glyph: "✓", title: "Review · x", detail: "", choice: null };
+    const row = {
+      id: "r",
+      dir,
+      glyph: "✓",
+      title: "Review · x",
+      detail: "",
+      at: 0,
+      target: null,
+      fixable: false,
+      choice: null,
+    };
     const view: WorkspaceView = {
       repo: "r",
       cwd: env.cwd,
+      now: 0,
       agents: [],
       extraAgents: 0,
       active: [],

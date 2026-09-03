@@ -15,7 +15,7 @@ import {
 } from "../../src/inputs";
 import { RunStore, type Run } from "../../src/run";
 import type { EnginePrompts } from "../../src/engine";
-import type { PickItem } from "../../src/picker";
+import type { PickItem } from "../../src/inputs";
 
 export class EffectFakeHerdr extends Herdr {
   constructor(

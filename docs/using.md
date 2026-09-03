@@ -110,30 +110,49 @@ see [CLI](cli.md).
 
 ## The Control Plane
 
-One tab per workspace, created by the first run and reused by every run after it, and
-moved to the front of the workspace each time so it is always `prefix+1`. It is a board,
-not an engine: it watches the run directories and the register of live agents and draws
-what it finds, so closing it loses nothing — the next run opens it again. It is the only
-pane Collie keeps open; the run itself is driven by a Driver with no pane at all.
+One tab per workspace, labelled `🐕 Collie`, created by the first run and reused by every
+run after it, and moved to the front of the workspace each time so it is always
+`prefix+1`. A tab still open under an older name is renamed in place rather than joined by
+a second one. It is a board, not an engine: it watches the run directories and the register
+of live agents and draws what it finds, so closing it loses nothing — the next run opens it
+again. It is the only pane Collie keeps open; the run itself is driven by a Driver with no
+pane at all.
+
+It is an application (ADR-0005): a nav rail over Runs, History, Workflows and Settings,
+the list, a detail panel beside it — or as a full-width overlay when the pane is too narrow
+for two columns — and the keys along the bottom. Click a row to select it, and the row and
+the footer both offer what that row can be asked for. Mouse reporting is on only while the
+pane has focus, so clicking another pane gives you your terminal's own text selection back
+immediately.
+
+The **Selection** is one row, wherever the mouse or the keyboard cursor put it, and every
+action applies to it. It is held by the row's id, not its position: the list re-sorts every
+refresh, and a run finishing under the cursor leaves the row that took its place selected.
 
 ```
-Control Plane — Collie
-/home/mk/work/cego/collie
-
-Agents
-  1  Implementer           working  implement-add-a-picker-20260828-093012
-  2  Review · Opus         idle     review-2367-20260828-112336
-  3  Review · gpt-5.6-sol  done     review-2367-20260828-112336
-
-Runs
-  ⚙ Implement · add-a-picker    fix · iteration 3/5
-
-Finished
-  ✓ Review · !2367              done
-  ⚠ Review · worktree           abandoned
-
-1-9 focus that agent · p run a workflow · u resume · f fork · s send the last review to the implementer · q close this tab
+🐕 collie  [Runs] History Workflows Settings
+┌─Runs─────────────────────────────────────────────┐┌─Detail──────────────┐
+│  1 Implementer  working · implement-add-a-picker ││Implement · a-picker │
+│❯ ⚙ Implement · add-a-picker  fix · iteration 3/5 ││fix · iteration 3/5  │
+│  ✓ Review · !2367            done  [l log]       ││implement-2026...    │
+│  ⚠ Review · worktree         abandoned           ││                     │
+└──────────────────────────────────────────────────┘└─────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│l log · k stop · 1-9 focus an agent · p run a workflow · u resume · ...   │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
+
+A pane with no terminal, a dumb `TERM` or one too narrow to render in prints the
+one-screen text view instead, with one line saying why, and keeps the keys it always had.
+
+### Views
+
+**Runs** is this session's live work: agents, active runs, finished runs. **History** is
+every finished run of this checkout whatever session it came from — where "review !123
+again next week" comes from once the original run is gone. **Workflows** is every workflow
+and persona with its layer, inputs, decisions and whatever validation says is wrong with
+it. **Settings** is the defaults and remembered values in `config.json`, and whether the
+harness is trusted here. None of them is read until it is first shown.
 
 **Agents** is every agent of this session's runs that herdr still has — reviewers and
 synthesizers as well as the implementer and the planner. The ones a hand-off can name are
@@ -144,29 +163,53 @@ a label, not a filter.
 nothing written for a minute — moves to **Finished** as `⚠ abandoned` rather than sitting
 there pretending to work.
 
+### The detail panel
+
+Fills with the Selection: a run's inputs, steps, hand-offs, each step's Output and — the
+point of it — the review it wrote, readable without splitting a pane. A run whose target is
+a merge request shows that above the review: state, pipeline, approvals, unresolved
+threads, and what has moved since this review finished. A workflow shows its steps, inputs,
+decisions and validation problems.
+
 ### Keys
 
-Keys are offered only when there is something to act on.
+Keys are offered only when there is something to act on, and a row's own actions are on the
+line under it as buttons. Movement is the arrows and not `j`/`k`: `k` is the stop key, and a
+destructive key that sometimes means "up" is worse than no vim binding.
 
-| Key     | What it does                                                  |
-| ------- | ------------------------------------------------------------- |
-| `1`–`9` | Focus that agent's pane                                       |
-| `p`     | Run a workflow — the same picker as `prefix+f`, for this repo |
-| `u`     | Resume a run with unfinished steps                            |
-| `f`     | Fork a workflow or persona                                    |
-| `s`     | Hand the newest review in this session to a live implementer  |
-| `l`     | Open a run's `runner.log` in a temporary pane                 |
-| `k`     | Stop the newest run                                           |
-| `q`     | Close the tab                                                 |
+| Key     | What it does                                                                    |
+| ------- | ------------------------------------------------------------------------------- |
+| `↑↓`    | Move the Selection                                                              |
+| `Tab`   | Move between views                                                              |
+| `1`–`9` | Focus that agent's pane                                                         |
+| `p`     | Run a workflow — the same launch flow as `prefix+f`, inline in this tab         |
+| `u`     | Resume a run with unfinished steps                                              |
+| `f`     | Fork a workflow or persona                                                      |
+| `s`     | Hand the **selected** run's review to a live implementer                        |
+| `l`     | Open the selected run's `runner.log` in a temporary pane                        |
+| `t`     | Tail that log inside the detail panel                                           |
+| `m`     | Read another page of a review the panel cut short                               |
+| `x`     | Start a fix run from what the selected review left open                         |
+| `a`     | Review the selected run's target again                                          |
+| `o`     | Post the selected review to its merge request                                   |
+| `w`     | Open the selected merge request in a browser                                    |
+| `c`     | Copy that merge request's URL                                                   |
+| `k`     | Stop the selected run — closing a pane no longer does that, because it has none |
+| `/`     | Filter the list, and say how much is left                                       |
+| `R`     | Re-read what is on screen, and the one merge request behind it                  |
+| `q`     | Close the tab                                                                   |
+
+`＋ New run` in the nav does what `p` does.
 
 ### Questions
 
 When a run asks you something, its options appear indented under its row and the keys
-become that question's — `↑↓`, Enter, Esc, or just type where it wants text. The question
-lives in the run's directory, so closing this tab, reopening it, or resuming later shows
-you the same question again rather than losing it. The Driver toasts and brings the tab to
-the front before it asks, so a question is never left unseen in a tab you are not looking
-at.
+become that question's — `↑↓`, Enter, Esc, or just type where it wants text — and clicking
+an option answers it. The question belongs to that run, so a second run waiting on one is
+answered by selecting it rather than waiting its turn. The question lives in the run's
+directory, so closing this tab, reopening it, or resuming later shows you the same question
+again rather than losing it. The Driver toasts and brings the tab to the front before it
+asks, so a question is never left unseen in a tab you are not looking at.
 
 The board shows this session's work and nothing else: one herdr session, one workspace, one
 repo. Another workspace's runs never appear, even for the same repo, and a workspace id

@@ -4,8 +4,9 @@
 
 import { Clock, Effect, FileSystem, Option, Path } from "effect";
 import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
-import { CONTROL_PLANE, displayName, GLYPH, targetLabel } from "./naming";
+import { COLLIE_TAB, displayName, GLYPH, targetLabel } from "./naming";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
+import { REVIEW_FILE } from "./output";
 import { RunStore, type Run, type RunRecord, type VariantRecord } from "./run";
 import type { AgentInfo } from "./herdr";
 
@@ -47,6 +48,20 @@ export interface RunRow {
   glyph: string;
   title: string;
   detail: string;
+  /**
+   * When this run last changed, in epoch milliseconds, or 0 when nothing says. A run
+   * list answers "how long has this been like this", so the app shows it as a relative
+   * time; `now` below is what it is relative to.
+   */
+  at: number;
+  /** What this run reviewed, so its merge request can be looked up on selection. */
+  target: string | null;
+  /**
+   * Whether this run can supply the work for another: `implement` takes a run directory
+   * as a work source only when there is a review in it, so "fix what is still open" is
+   * offered for those and for nothing else.
+   */
+  fixable: boolean;
   /** The question this run is waiting on, rendered under its row. */
   choice: PendingChoice | null;
 }
@@ -54,6 +69,8 @@ export interface RunRow {
 export interface WorkspaceView {
   repo: string;
   cwd: string;
+  /** When this view was built, so a row's `at` can be read as a relative time. */
+  now: number;
   agents: AgentRow[];
   /** Live agents the board had no key left for. */
   extraAgents: number;
@@ -150,6 +167,20 @@ function glyphFor(record: RunRecord, abandoned: boolean): string {
   return record.awaiting ? GLYPH.waiting : GLYPH.running;
 }
 
+/**
+ * Whether a run is something the next one can be built from: a review it wrote, and a
+ * finding still open in it. The review is what `implement` reads as its work source; the
+ * findings are what make the offer honest — a review that came back clean has a
+ * `review.md` and nothing to fix, and used to be offered "fix what is open" anyway.
+ * The synthesis writes both at once, so a run that has one has the other.
+ */
+export const fixableRun = Effect.fn("fixableRun")(function* (run: Run) {
+  if (run.record.outstanding.length === 0) return false;
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  return yield* fs.exists(path.join(run.dir, REVIEW_FILE));
+});
+
 /** When a run last changed: a run making progress rewrites run.json as it goes. */
 const touchedAt = Effect.fn("touchedAt")(function* (run: Run) {
   const fs = yield* FileSystem.FileSystem;
@@ -185,7 +216,13 @@ const abandonedRun = Effect.fn("abandonedRun")(function* (
  * a herdr.
  */
 export const buildView = Effect.fn("buildView")(function* (
-  opts: SessionKey & { stateDir: string; alive: AgentInfo[]; now?: number },
+  opts: SessionKey & {
+    stateDir: string;
+    alive: AgentInfo[];
+    now?: number;
+    /** The Runs already read, so a caller drawing two Views scans the dir once. */
+    runs?: ReadonlyArray<Run>;
+  },
 ) {
   const path = yield* Path.Path;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
@@ -196,9 +233,8 @@ export const buildView = Effect.fn("buildView")(function* (
   const hereNames = new Set(here.map((a) => a.name));
   const status = new Map(here.map((a) => [a.name, a.status]));
 
-  const runs = (yield* new RunStore(opts.stateDir).list()).filter((r) =>
-    belongs(r.record, opts, hereNames),
-  );
+  const all = opts.runs ?? (yield* new RunStore(opts.stateDir).list());
+  const runs = all.filter((r) => belongs(r.record, opts, hereNames));
   const regPath = yield* registryPath(opts.stateDir, opts);
   const registered = new Map(
     liveEntries(yield* readRegistry(regPath), here).map((e) => [e.agent, e]),
@@ -221,6 +257,9 @@ export const buildView = Effect.fn("buildView")(function* (
   rows.sort((a, b) => Number(registered.has(b.agent)) - Number(registered.has(a.agent)));
   const agents = rows.slice(0, MAX_AGENTS).map((r, i) => ({ ...r, key: String(i + 1) }));
 
+  const fixable = new Set<string>();
+  for (const r of runs) if (yield* fixableRun(r)) fixable.add(r.id);
+
   const abandoned = new Set<string>();
   for (const r of runs) if (yield* abandonedRun(r, hereNames, now)) abandoned.add(r.id);
   const stopped = runs.filter((r) => r.record.status !== "running" || abandoned.has(r.id));
@@ -233,6 +272,11 @@ export const buildView = Effect.fn("buildView")(function* (
       glyph: glyphFor(r.record, false),
       title: title(r.record),
       detail: yield* activeDetail(r),
+      at: yield* touchedAt(r),
+      target: r.record.inputs.target ?? null,
+      // The same set the finished rows read: this used to stat every active run's dir a
+      // second time, on the 3s poll and on every watch event and command.
+      fixable: fixable.has(r.id),
       choice: yield* readChoice(r.dir),
     });
   }
@@ -240,6 +284,7 @@ export const buildView = Effect.fn("buildView")(function* (
   return {
     repo: path.basename(opts.cwd),
     cwd: opts.cwd,
+    now,
     agents,
     extraAgents: rows.length - agents.length,
     active,
@@ -249,6 +294,11 @@ export const buildView = Effect.fn("buildView")(function* (
       glyph: glyphFor(r.record, abandoned.has(r.id)),
       title: title(r.record),
       detail: recentDetail(r.record, abandoned.has(r.id)),
+      // The record's own word for when it ended; a run that never recorded one has
+      // only its file's mtime to go on.
+      at: r.record.finished_at ? Date.parse(r.record.finished_at) : 0,
+      target: r.record.inputs.target ?? null,
+      fixable: fixable.has(r.id),
       choice: null,
     })),
   };
@@ -299,7 +349,7 @@ export function renderWorkspace(
   note?: string,
   asking: Asking = { index: 0, typed: "" },
 ): string {
-  const lines = [`${CONTROL_PLANE} — ${view.repo}`, view.cwd];
+  const lines = [`${COLLIE_TAB} — ${view.repo}`, view.cwd];
 
   const agents = view.agents.map(
     (a) => `  ${a.key}  ${a.name.padEnd(22)}${a.status.padEnd(9)}${a.run}`,

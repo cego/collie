@@ -1,0 +1,21 @@
+{
+  "iid": 17,
+  "title": "Three tickets of the workflow-ux arc: the Collie tab becomes an application",
+  "state": "opened",
+  "draft": false,
+  "work_in_progress": false,
+  "author": {
+    "username": "mk"
+  },
+  "source_branch": "collie-app",
+  "target_branch": "master",
+  "sha": "a40caaf339b445bbb8dc2bbea566e631bd2ffdf6",
+  "updated_at": "2026-09-02T13:42:44.7+02:00",
+  "web_url": "https://gitlab.cego.dk/mk/collie/-/merge_requests/17",
+  "head_pipeline": {
+    "status": "skipped"
+  },
+  "pipeline": null,
+  "blocking_discussions_resolved": true,
+  "user_notes_count": 0
+}

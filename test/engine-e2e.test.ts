@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Path, Schema } from "effect";
 import { FakeHerdr, Rig } from "./support/recorder";
+import { COLLIE_TAB } from "../src/naming";
 import { fakeHerdr } from "./support/fake-herdr-core";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
-import { filterItems, renderList } from "../src/picker";
 import { runEffect } from "./support/effect";
 
 const Json = Schema.fromJsonString(Schema.Any);
@@ -114,7 +114,7 @@ test("plan runs one step in a tab of its own and records the run", () =>
       // its tab, so the tab says `Solo` and the pane says nothing.
       expect(
         (yield* rig.calls()).filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2)),
-      ).toEqual([["1-1", "Control Plane"]]);
+      ).toEqual([["1-1", COLLIE_TAB]]);
       expect(
         (yield* rig.calls())
           .filter((c) => c.cmd === "tab rename")
@@ -222,44 +222,6 @@ test("the sidebar filter is set to the run's panes and cleared at the end", () =
     }),
   ));
 
-test("the picker ranks name prefix, then substring, then in-order characters", () => {
-  const items = [
-    {
-      id: "implement",
-      title: "implement — build from a plan, review in parallel",
-      subtitle: "[baseline]",
-    },
-    { id: "plan", title: "plan — interview me", subtitle: "[baseline]" },
-    { id: "review", title: "review — an MR", subtitle: "[user]" },
-  ];
-
-  expect(filterItems(items, "plan").map((i) => i.id)).toEqual(["plan", "implement"]);
-  expect(filterItems(items, "review").map((i) => i.id)).toEqual(["review", "implement"]);
-  expect(filterItems(items, "ipm").map((i) => i.id)).toEqual(["implement"]);
-  expect(filterItems(items, "user").map((i) => i.id)).toEqual(["review"]);
-  expect(filterItems(items, "zz")).toEqual([]);
-  expect(filterItems(items, "")).toEqual(items);
-});
-
-test("the picker marks the selected row and shows the query", () => {
-  const items = [
-    { id: "plan", title: "plan", subtitle: "[baseline]" },
-    { id: "review", title: "review", subtitle: "[user]" },
-  ];
-
-  const out = renderList(items, 1, "re", { header: "Workflows", footer: "Enter run" });
-
-  expect(out.split("\n")).toEqual([
-    "Workflows",
-    "> re",
-    "",
-    "  plan                          [baseline]",
-    "❯ review                        [user]",
-    "",
-    "Enter run",
-  ]);
-});
-
 test("an interviewing agent hands off, and the step finishes when the Output appears", () =>
   runEffect(
     Effect.gen(function* () {
@@ -280,17 +242,6 @@ test("an interviewing agent hands off, and the step finishes when the Output app
       const toasts = (yield* rig.calls()).filter((c) => c.cmd === "notification show");
       expect(toasts[0]!.argv![2]).toBe("project · solo-add-a-picker needs you");
       expect(toasts.at(-1)!.argv![2]).toBe("project · solo-add-a-picker finished");
-    }),
-  ));
-
-test("a stdin chunk carrying several keypresses is split into keys", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const { tokenizeKeys } = yield* Effect.promise(() => import("../src/picker"));
-
-      expect(tokenizeKeys("\x7f\x7f\x7f")).toEqual(["\x7f", "\x7f", "\x7f"]);
-      expect(tokenizeKeys("re\x1b[Bv\r")).toEqual(["r", "e", "\x1b[B", "v", "\r"]);
-      expect(tokenizeKeys("\x1b")).toEqual(["\x1b"]);
     }),
   ));
 

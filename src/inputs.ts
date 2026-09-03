@@ -5,7 +5,6 @@ import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { InputStrategy } from "./definitions";
-import type { PickItem } from "./picker";
 import { RunStore } from "./run";
 import { targetLabel } from "./naming";
 import { ago } from "./time";
@@ -28,6 +27,17 @@ const MrRowsJson = Schema.fromJsonString(
     }),
   ),
 );
+/**
+ * One thing a human may pick, whoever is drawing the list: a workflow, a candidate for
+ * an Input, an option in a Choice. Here rather than with a renderer because both
+ * `InputPrompts` and the Run directory's pending Choice are written in it.
+ */
+export interface PickItem {
+  id: string;
+  title: string;
+  subtitle?: string;
+}
+
 /** Where the work to be done was described. */
 export type WorkSourceKind = "plan-dir" | "linear" | "text" | "review";
 

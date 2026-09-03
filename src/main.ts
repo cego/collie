@@ -1,7 +1,7 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Config, Console, Effect, FileSystem, Path, type PlatformError } from "effect";
 import { program } from "./collie";
-import { currentEnv } from "./env";
+import { currentEnv, type PluginEnv } from "./env";
 import { Herdr, herdrFailureReason } from "./herdr";
 import { driveFlow, forkFlow, openPicker, pickFlow, resumeFlow, workspaceFlow } from "./flows";
 
@@ -29,13 +29,7 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
         case "fork":
           return openPicker(client, env, command);
         case "picker":
-          return selected === "pick"
-            ? pickFlow(client, env)
-            : selected === "resume"
-              ? resumeFlow(client, env)
-              : selected === "fork"
-                ? forkFlow(client, env)
-                : Effect.succeed(2);
+          return popup(client, env, selected);
         case "drive":
           return driveFlow(client, env);
         case "workspace":
@@ -46,6 +40,28 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
     })();
     process.exitCode = code;
   });
+
+/**
+ * A popup pane: the same components the tab draws, in popup placement. OpenTUI arrives
+ * through a dynamic import here for the same reason it does in the tab — the `collie`
+ * CLI must neither load the native renderer nor depend on it being there.
+ */
+const popup = Effect.fn("main.popup")(function* (
+  client: Herdr,
+  env: PluginEnv,
+  mode: string,
+): Generator<Effect.Effect<unknown, MainError, MainServices>, number> {
+  const { runFlow } = yield* Effect.promise(() => import("./ui/bridge"));
+  return yield* runFlow((prompts) =>
+    mode === "pick"
+      ? pickFlow(client, env, prompts)
+      : mode === "resume"
+        ? resumeFlow(client, env, prompts)
+        : mode === "fork"
+          ? forkFlow(client, env, prompts)
+          : Effect.succeed(2),
+  );
+});
 
 const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
   Effect.catch((cause) =>

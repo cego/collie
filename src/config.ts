@@ -63,11 +63,18 @@ export function configValue(raw: YamlMap, dotted: string): YamlValue | undefined
   return node;
 }
 
-/** Remembers an answer the human gave once, e.g. which Linear team is theirs. */
+/**
+ * Remembers an answer the human gave once, e.g. which Linear team is theirs. A number
+ * has to arrive as one: `loadDefaults` reads `max_iterations` and `quiet_ms` with
+ * `isNumber`, so a string there is silently ignored and the default stays where it was.
+ *
+ * `null` removes the key, which is the only way to say "unset": an empty string is a
+ * configured value, and an empty `harness` is one every Run then fails validation on.
+ */
 export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   configDir: string,
   dotted: string,
-  value: string,
+  value: string | number | null,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
@@ -82,7 +89,8 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   }
   const last = keys.at(-1);
   if (last === undefined) return;
-  node[last] = value;
+  if (value === null) delete node[last];
+  else node[last] = value;
   yield* fs.makeDirectory(configDir, { recursive: true });
   yield* fs.writeFileString(
     paths.join(configDir, "config.json"),

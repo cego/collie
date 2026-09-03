@@ -10,12 +10,15 @@
     "format:check": "oxfmt --check",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun build --compile --outfile bin/collie.new src/main.ts && mv -f bin/collie.new bin/collie",
+    "build": "bun run tools/build.ts",
     "smoke": "sh tools/smoke.sh bin/collie"
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-rc.112",
-    "effect": "4.0.0-rc.112"
+    "@opentui/core": "^0.5.10",
+    "@opentui/solid": "^0.5.10",
+    "effect": "4.0.0-rc.112",
+    "solid-js": "^1.9.15"
   },
   "devDependencies": {
     "@effect/tsgo": "0.38.0",

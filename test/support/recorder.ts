@@ -40,6 +40,14 @@ const CallString = Schema.fromJsonString(CallSchema);
 
 const StateAgent = Schema.Struct({ name: Schema.String, pane_id: Schema.String });
 type StateAgentValue = Schema.Schema.Type<typeof StateAgent>;
+const StateTab = Schema.Struct({ tab_id: Schema.String, label: Schema.String });
+type StateTabValue = Schema.Schema.Type<typeof StateTab>;
+const StatePane = Schema.Struct({
+  pane_id: Schema.String,
+  tab_id: Schema.String,
+  label: Schema.NullOr(Schema.String),
+});
+type StatePaneValue = Schema.Schema.Type<typeof StatePane>;
 
 type RigServices = FileSystem.FileSystem | Path.Path;
 export type RigError =
@@ -148,6 +156,49 @@ export class Rig {
       if (!exists) return {};
       const text = yield* fs.readFileString(path);
       return yield* Schema.decodeUnknownEffect(JsonObjectString)(text);
+    });
+  }
+
+  /**
+   * A tab herdr already has, with one pane in it: what a session that opened this
+   * plugin's tab under an earlier name looks like to the next run.
+   */
+  addTab(
+    label: string,
+    paneLabel: string,
+  ): Effect.Effect<{ tabId: string; paneId: string }, RigError, FileSystem.FileSystem> {
+    const statePath = `${this.logPath}.state.json`;
+    const readJsonObject = this.readJsonObject.bind(this);
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* readJsonObject(statePath);
+      const tabs = Option.getOrElse(Schema.decodeUnknownOption(Schema.Number)(state.tabs), () => 0);
+      const panes = Option.getOrElse(
+        Schema.decodeUnknownOption(Schema.Number)(state.panes),
+        () => 0,
+      );
+      const tabList = Option.getOrElse(
+        Schema.decodeUnknownOption(Schema.Array(StateTab))(state.tabList),
+        (): ReadonlyArray<StateTabValue> => [],
+      );
+      const paneList = Option.getOrElse(
+        Schema.decodeUnknownOption(Schema.Array(StatePane))(state.paneList),
+        (): ReadonlyArray<StatePaneValue> => [],
+      );
+      const tabId = `1:${tabs + 1}`;
+      const paneId = `1-${panes + 1}`;
+      yield* fs.writeFileString(
+        statePath,
+        encodeJson(
+          Object.assign({}, state, {
+            tabs: tabs + 1,
+            panes: panes + 1,
+            tabList: [...tabList, { tab_id: tabId, label }],
+            paneList: [...paneList, { pane_id: paneId, tab_id: tabId, label: paneLabel }],
+          }),
+        ),
+      );
+      return { tabId, paneId };
     });
   }
 

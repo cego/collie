@@ -59,6 +59,37 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
+**Collie tab** — The Session's own tab, labelled `🐕 Collie`: the Control Plane rendered
+as an application (ADR-0005). One per workspace. Effect produces its state and Solid renders
+it; a pane that cannot start the renderer falls back to the one-screen text view.
+
+**View** — What the Collie tab's nav switches between, one at a time, each a projection of
+state Effect produces and none of them read until it is first shown. **Runs** is this
+Session's live work: agents, active Runs, finished Runs. **History** is every finished Run
+of this checkout whatever session it came from — where "review !123 again next week" comes
+from once the original Run is gone. **Workflows** is every Workflow and Persona with its
+layer, Inputs, decisions and whatever validation says is wrong with it. **Settings** is the
+defaults and remembered values in `config.json`, and whether the harness is trusted here.
+
+**Launch flow** — The questions between "run a workflow" and a Run: which Workflow, its
+Inputs, the candidates for the ones that have them, and every Decision it will reach. One
+set of components, two placements — a popup pane for the herdr action, and inline in the
+Collie tab for `＋ New run` — because a question a human answers is a component. A
+question a Run answers is a file in its Run directory, and those two never converge.
+
+**Selection** — The one row every action applies to, whether the mouse or the keyboard
+cursor put it there. Held by the row's stable id — a Run id, an agent name — never an
+index, because the list re-sorts under it. Moving it is a change in what is read, not in
+what is true: the detail panel and the one merge request behind it are produced for the
+Selection, and a read superseded by a newer Selection is interrupted rather than finished.
+
+**Focus** — What the Collie tab is being looked at as: the showing View, every View shown
+at least once, the Selection, and whether the panel's log tail is open. It is what decides
+how much has to be read, so it is state rather than a render-local signal, and it is plain
+data: one function says where a focus command leaves it, and one says what a new one means
+for the reads behind it — whether the last board may be reused, and whether the merge
+request must be read past its cache.
+
 **Control Plane** — The tab a Session keeps as its control surface, one per workspace, and
 the only pane Collie keeps open. It is a view over the run dirs and the register, always the
 workspace's first tab, and holds no state of its own, so closing it loses nothing. What it
