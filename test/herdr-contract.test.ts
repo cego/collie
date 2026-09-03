@@ -42,8 +42,10 @@ const replies = {
   WorktreeListReply: { of: replySchemas.WorktreeListReply, at: { envelope: "worktree_list" } },
   WorktreeOpenReply: { of: replySchemas.WorktreeOpenReply, at: { envelope: "worktree_opened" } },
   PluginPaneReply: { of: replySchemas.PluginPaneReply, at: { envelope: "plugin_pane_opened" } },
-  // `worktree create` answers the same shape under a different tag, and Collie decodes
-  // both with the one struct, so it is checked against both variants.
+  // `worktree create` answers under a different tag, and Collie decodes both with the one
+  // struct, so it is checked against both variants. The tab that only `create` may answer
+  // with is optional there for that reason: herdr describes `worktree_created` twice, with
+  // those keys and without.
   "WorktreeOpenReply (create)": {
     of: replySchemas.WorktreeOpenReply,
     at: { envelope: "worktree_created" },

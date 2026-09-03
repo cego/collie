@@ -134,7 +134,7 @@ Do {{inputs.goal}}.
 `,
   );
 
-  const { workflows, personas } = yield* buildWorkflows(env);
+  const { workflows } = yield* buildWorkflows(env);
 
   const review = workflows.find((w) => w.name === "review")!;
   expect(review.layer).toBe("baseline");
@@ -150,7 +150,9 @@ Do {{inputs.goal}}.
   const broken = workflows.find((w) => w.name === "broken")!;
   expect(broken.problems.join(" ")).toContain("no-such-persona");
 
-  expect(personas.map((p) => p.name)).toContain("reviewer");
+  // Workflows and nothing else: a persona cannot be run, so the view does not list one
+  // and there is no row here to build from it.
+  expect(workflows.map((w) => w.name)).not.toContain("reviewer");
 });
 
 effectTest("Settings shows the defaults and remembered values it can write back", function* () {

@@ -74,6 +74,17 @@ const WorktreeRecordSchema = Schema.Struct({
    * record without it — one written before this was kept — is never a candidate.
    */
   made_at: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /**
+   * The shell tab and pane herdr's new workspace came with, which this Run's first
+   * agent takes over rather than leaving behind. Both null for a checkout that was
+   * opened rather than created, and for a record written before they were kept.
+   */
+  root_tab_id: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
+  root_pane_id: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
 }).mapFields(Struct.map(Schema.mutableKey));
 export type WorktreeRecord = Schema.Schema.Type<typeof WorktreeRecordSchema>;
 

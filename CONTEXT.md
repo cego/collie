@@ -47,7 +47,9 @@ tabs whose shells sit inside it closed with it; one herdr has a workspace open o
 
 A Run records the branch, the path, its manager, whether Collie created it, and the
 moment git wrote the checkout — which is what tells Collie's own checkout from one a
-human later made at the same path on the same branch. A checkout a human made is never
+human later made at the same path on the same branch. Where herdr opened a workspace for
+it, the Run also records the shell tab that workspace came with, which its first agent
+takes over so no empty tab is left beside the Run's own. A checkout a human made is never
 removed.
 
 **Settled** — A Collie-created Worktree that holds nothing which exists only there: the

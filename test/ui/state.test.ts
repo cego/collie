@@ -4,6 +4,10 @@ import {
   runIdOf,
   answerFor,
   clampSelection,
+  keyboardOn,
+  matching,
+  optionWindow,
+  pasteInto,
   rereads,
   retarget,
   rowsOf,
@@ -50,6 +54,10 @@ function run(id: string, over: Partial<WorkspaceView["active"][number]> = {}) {
   };
 }
 
+function agent(key: string, name: string, run: string) {
+  return { key, name, agent: `${name.toLowerCase()}-1`, status: "working", run };
+}
+
 const MENU: PendingChoice = {
   id: "c1",
   kind: "menu",
@@ -73,13 +81,74 @@ test("every row carries the stable id its actions are aimed at", () => {
   );
 
   expect(rows.map((r) => [r.kind, r.id])).toEqual([
-    ["agent", "agent:impl-1"],
     ["active", "run:r1"],
+    ["agent", "agent:impl-1"],
     ["recent", "run:r0"],
   ]);
   // Ids never carry a position: the list re-sorts every refresh and an index
   // would silently retarget the action.
   expect(rows.map((r) => r.id)).not.toContain("0");
+});
+
+test("an agent is listed under the run it works for", () => {
+  // A run's steps used to float above every run, so which run an agent belonged to was
+  // in the detail column or nowhere. They hang off their run now.
+  const rows = rowsOf(
+    board({
+      agents: [
+        agent("1", "Implementer", "r1"),
+        agent("2", "Reviewer", "r1"),
+        agent("3", "Planner", "r2"),
+      ],
+      active: [run("r1"), run("r2")],
+      recent: [run("r0", { glyph: "✓", detail: "done" })],
+    }),
+  );
+
+  expect(rows.map((r) => [r.kind, r.title])).toEqual([
+    ["active", "Implement · r1"],
+    ["agent", "├ Implementer"],
+    ["agent", "└ Reviewer"],
+    ["active", "Implement · r2"],
+    ["agent", "└ Planner"],
+    ["recent", "Implement · r0"],
+  ]);
+  // The run above it says which run it is, so the detail column says what it is doing
+  // instead of repeating the name.
+  expect(rows[1]!.detail).toBe("working");
+  // Every agent row keeps what a key and an action are aimed at.
+  expect(rows[1]!.agent).toBe("implementer-1");
+  expect(rows[1]!.key).toBe("1");
+  expect(actionsFor(rows[1]!).map((a) => a.key)).toEqual(["1"]);
+});
+
+test("an agent whose run is not on the board goes in a group of its own", () => {
+  const rows = rowsOf(
+    board({
+      agents: [
+        agent("1", "Implementer", "r1"),
+        // A finished run keeps its agents: the implementer a hand-off names outlives the
+        // run it was started for, so it hangs off that run like any other.
+        agent("2", "Reviewer", "r0"),
+        agent("3", "Stray", "gone"),
+      ],
+      active: [run("r1")],
+      recent: [run("r0", { glyph: "✓", detail: "done" })],
+    }),
+  );
+
+  expect(rows.map((r) => [r.kind, r.title])).toEqual([
+    ["active", "Implement · r1"],
+    ["agent", "└ Implementer"],
+    ["recent", "Implement · r0"],
+    ["agent", "└ Reviewer"],
+    ["header", "agents with no run here"],
+    ["agent", "└ Stray"],
+  ]);
+  // An orphan has no run above it, so its own row is the only place the run can be said.
+  expect(rows.find((r) => r.agent === "stray-1")!.detail).toBe("working · gone");
+  // The header names a group; it is not a row anything can be asked of.
+  expect(actionsFor(rows.find((r) => r.kind === "header")!)).toEqual([]);
 });
 
 test("a re-sorted list keeps the same run selected", () => {
@@ -114,11 +183,11 @@ test("a row's actions name the row, not the newest run", () => {
     }),
   );
   expect(rows).toHaveLength(3);
-  // SAFETY: one agent, one active and one recent row went in, and the length is
-  // asserted above, so the three rows are there in that order.
-  const [agent, active, recent] = rows as [Row, Row, Row];
+  // SAFETY: one active run with one agent under it and one recent run went in, and the
+  // length is asserted above, so the three rows are there in that order.
+  const [active, working, recent] = rows as [Row, Row, Row];
 
-  expect(actionsFor(agent).map((a) => [a.key, a.command])).toEqual([
+  expect(actionsFor(working).map((a) => [a.key, a.command])).toEqual([
     ["3", { _tag: "FocusAgent", agent: "rev-1" }],
   ]);
   expect(actionsFor(active).map((a) => [a.key, a.command])).toEqual([
@@ -142,6 +211,25 @@ test("a clean review can still be opened in a browser", () => {
   expect(actionsFor(withFindings).map((a) => a.key)).toEqual(["l", "x", "a", "o", "w"]);
 });
 
+test("one thing owns the keyboard, in one order", () => {
+  // Three things have to agree about which field the keyboard is on: the keys, a paste
+  // and what the footer offers. They each used to work it out again.
+  const setting = { key: "model", value: "opus" };
+  const all = { flow: true, choice: MENU, filtering: true, setting };
+
+  expect(keyboardOn(all)._tag).toBe("Flow");
+  expect(keyboardOn({ ...all, flow: false })).toEqual({ _tag: "Choice", choice: MENU });
+  expect(keyboardOn({ ...all, flow: false, choice: null })._tag).toBe("Filter");
+  expect(keyboardOn({ ...all, flow: false, choice: null, filtering: false })).toEqual({
+    _tag: "Setting",
+    setting,
+  });
+  // Nothing is taking typing, so the board's own keys are the ones that act.
+  expect(keyboardOn({ flow: false, choice: null, filtering: false, setting: null })._tag).toBe(
+    "Board",
+  );
+});
+
 test("a menu is answered by the option the cursor is on", () => {
   const start = { index: 0, typed: "" };
   expect(answerFor(MENU, start, "\x1b[B").asking.index).toBe(1);
@@ -154,6 +242,84 @@ test("a menu is answered by the option the cursor is on", () => {
   expect(answerFor(MENU, start, "x").value).toBeNull();
 });
 
+test("a filter keeps a matching agent under the run it works for", () => {
+  // The rows are already nested when the filter sees them, so filtering them one by one
+  // could drop a run and leave its agent behind — and an agent row no longer names its
+  // own run, so that row would say nothing about what it belongs to.
+  const rows = rowsOf(
+    board({
+      agents: [agent("1", "Reviewer", "r1"), agent("2", "Planner", "r2")],
+      active: [run("r1"), run("r2")],
+      recent: [],
+    }),
+  );
+
+  // The agent matches and its run does not, so the run comes with it, above it.
+  expect(matching(rows, "Reviewer").map((r) => [r.kind, r.title])).toEqual([
+    ["active", "Implement · r1"],
+    ["agent", "└ Reviewer"],
+  ]);
+  // A run that matches brings only itself: its agents are not what was asked for.
+  expect(matching(rows, "r2").map((r) => [r.kind, r.title])).toEqual([
+    ["active", "Implement · r2"],
+  ]);
+  // The order is the board's, whatever order the matches were ranked in: a pick list
+  // wants the best match first, and here that would lift an agent above its own run.
+  const order = (kept: Row[]) => kept.map((r) => rows.indexOf(r));
+  expect(order(matching(rows, "Planner"))).toEqual([2, 3]);
+  expect(order(matching(rows, "r"))).toEqual([0, 1, 2, 3]);
+  expect(matching(rows, "")).toEqual(rows);
+  expect(matching(rows, "zzz")).toEqual([]);
+});
+
+test("a filter keeps a matching orphan under its header", () => {
+  const rows = rowsOf(
+    board({
+      agents: [agent("1", "Stray", "gone")],
+      active: [run("r1")],
+      recent: [],
+    }),
+  );
+
+  expect(matching(rows, "Stray").map((r) => [r.kind, r.title])).toEqual([
+    ["header", "agents with no run here"],
+    ["agent", "└ Stray"],
+  ]);
+});
+
+test("a header is never kept without the group it names", () => {
+  const rows = rowsOf(
+    board({
+      agents: [agent("1", "Stray", "gone")],
+      active: [run("r1")],
+      recent: [],
+    }),
+  );
+
+  // The header's own words match, and every agent under it does not: a group heading
+  // with no group under it is a line that says nothing.
+  expect(matching(rows, "agents with no run")).toEqual([]);
+  expect(matching(rows, "no run here")).toEqual([]);
+  // It comes back the moment something in its group does match.
+  expect(matching(rows, "Stray").map((r) => r.kind)).toEqual(["header", "agent"]);
+});
+
+test("a capped question shows a window of options that follows the cursor", () => {
+  const items = ["a", "b", "c", "d", "e"];
+  const shown = (at: number, room: number) => optionWindow(items, at, room);
+
+  // Room for everything: no window at all.
+  expect(shown(0, 5)).toEqual({ shown: items, hidden: 0 });
+  // The cursor at the top, and then walked past the bottom of the window: it stays in
+  // what is shown, because an option nobody can see is one nobody can knowingly choose.
+  expect(shown(0, 3)).toEqual({ shown: ["a", "b", "c"], hidden: 2 });
+  expect(shown(2, 3)).toEqual({ shown: ["a", "b", "c"], hidden: 2 });
+  expect(shown(3, 3)).toEqual({ shown: ["b", "c", "d"], hidden: 2 });
+  expect(shown(4, 3)).toEqual({ shown: ["c", "d", "e"], hidden: 2 });
+  // A pane with room for one still shows the one the cursor is on.
+  expect(shown(4, 1)).toEqual({ shown: ["e"], hidden: 4 });
+});
+
 test("a question is answered by what was typed", () => {
   const ask: PendingChoice = { ...MENU, kind: "ask", items: [] };
   expect(answerFor(ask, { index: 0, typed: "" }, "h").asking.typed).toBe("h");
@@ -161,6 +327,21 @@ test("a question is answered by what was typed", () => {
   expect(answerFor(ask, { index: 0, typed: "hi" }, "\r").value).toBe("hi");
   // A menu key means nothing here and must not be typed into the answer.
   expect(answerFor(ask, { index: 0, typed: "hi" }, "\x1b[B").asking.typed).toBe("hi");
+});
+
+test("a paste fills a field and never submits it", () => {
+  const bytes = (text: string) => new TextEncoder().encode(text);
+  const url = "https://gitlab.cego.dk/cego/collie/-/merge_requests/7";
+
+  expect(pasteInto("", bytes(url))).toBe(url);
+  expect(pasteInto("https://", bytes("gitlab.cego.dk"))).toBe("https://gitlab.cego.dk");
+  // A copied line brings its newline with it, and a newline is the submit key: it has
+  // to reach the field as nothing at all.
+  expect(pasteInto("", bytes(`${url}\n`))).toBe(url);
+  expect(pasteInto("", bytes(`one\r\ntwo\n`))).toBe("onetwo");
+  // Escape sequences and every other control character go the same way; a pasted
+  // branch name keeps its non-ASCII letters.
+  expect(pasteInto("", bytes("\x1b[Bfix-\x07caf\u00e9"))).toBe("[Bfix-caf\u00e9");
 });
 
 test("a row says how long it has been like this, not when", () => {

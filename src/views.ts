@@ -95,7 +95,7 @@ function glyphOf(status: RunRecord["status"]): string {
   return status === "done" ? "✓" : status === "failed" ? "✗" : "⚠";
 }
 
-/** One Workflow or Persona as the Workflows view lists it. */
+/** One Workflow as the Workflows view lists it. */
 export interface DefinitionRow {
   name: string;
   title: string;
@@ -135,9 +135,13 @@ function provenanceOf(def: Provenance): string {
 }
 
 /**
- * Every Workflow and Persona the layers offer, with the validation each would fail on.
- * Validation is the point: a fork that cannot run should be visible here rather than at
- * launch, so the errors are collected per row instead of aborting the view.
+ * Every Workflow the layers offer, with the validation each would fail on. Validation is
+ * the point: a fork that cannot run should be visible here rather than at launch, so the
+ * errors are collected per row instead of aborting the view.
+ *
+ * Workflows only. A persona cannot be run, so the view stopped listing them, and there is
+ * nothing here to build a row from — `fork` reads the personas it offers straight from
+ * the definitions, and `collie persona list` has its own.
  */
 export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: PluginEnv) {
   const defs = yield* loadDefinitions(yield* layers(env));
@@ -188,23 +192,8 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
     });
   }
 
-  const personas: DefinitionRow[] = [...defs.personas.values()]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((def) => ({
-      name: def.name,
-      title: displayName(def.name),
-      layer: def.layer,
-      provenance: provenanceOf(def),
-      path: def.path,
-      inputs: [],
-      // A persona is instructions, not a sequence: it has no steps to list.
-      steps: [],
-      decisions: [],
-      problems: [],
-    }));
-
   // A layer that would not load at all is the view's problem too, not a silent gap.
-  return { workflows, personas, errors: defs.errors };
+  return { workflows, errors: defs.errors };
 });
 
 /** Text a panel read from a file, or why it has none. */

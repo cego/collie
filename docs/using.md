@@ -267,17 +267,22 @@ one-screen text view instead, with one line saying why, and keeps the keys it al
 
 ### Views
 
-**Runs** is this session's live work: agents, active runs, finished runs. **History** is
+**Runs** is this session's live work: each running run with the agents working for it
+listed under it, then the runs that have finished, with theirs. **History** is
 every finished run of this checkout whatever session it came from — where "review !123
 again next week" comes from once the original run is gone. **Workflows** is every workflow
-and persona with its layer, inputs, decisions and whatever validation says is wrong with
-it. **Settings** is the defaults and remembered values in `config.json`, and whether the
+with its layer, inputs, decisions and whatever validation says is wrong with it —
+workflows only, because a persona is instructions rather than something to run; `f` is
+where personas are acted on. **Settings** is the defaults and remembered values in `config.json`, and whether the
 harness is trusted here. None of them is read until it is first shown.
 
 **Agents** is every agent of this session's runs that herdr still has — reviewers and
-synthesizers as well as the implementer and the planner. The ones a hand-off can name are
-called by their role and come first; the rest are called by their step and model. A role is
-a label, not a filter.
+synthesizers as well as the implementer and the planner. Each hangs off its run, indented
+and joined to it by `├`/`└`, so the run above says which run it belongs to and its own row
+says what it is doing — a finished run included, because the implementer a hand-off names
+outlives the run it was started for. An agent whose run is not on the board at all goes
+under one dim `agents with no run here` header at the end. The ones a hand-off can name are called by
+their role; the rest are called by their step and model. A role is a label, not a filter.
 
 Under the directory, a line appears when this installation is behind its remote, naming
 how far behind it is and the command that clears it:
@@ -307,8 +312,13 @@ decisions and validation problems.
 
 ### Keys
 
-Keys are offered only when there is something to act on, and a row's own actions are on the
-line under it as buttons. Movement is the arrows and not `j`/`k`: `k` is the stop key, and a
+Keys are offered only when there is something to act on, and the Selection's own actions
+are buttons on the footer's first line — clicking one does what the key does. While a
+field has the keys — a run's question, a Settings value, the filter — the footer offers
+that field's keys and nothing else, because every other key is being typed rather than
+pressed. Nothing is
+drawn under a row: every row is one line whatever is selected, so the list does not move
+under the cursor. Movement is the arrows and not `j`/`k`: `k` is the stop key, and a
 destructive key that sometimes means "up" is worse than no vim binding.
 
 | Key     | What it does                                                                    |
@@ -329,16 +339,23 @@ destructive key that sometimes means "up" is worse than no vim binding.
 | `w`     | Open the selected merge request in a browser                                    |
 | `c`     | Copy that merge request's URL                                                   |
 | `k`     | Stop the selected run — closing a pane no longer does that, because it has none |
-| `/`     | Filter the list, and say how much is left                                       |
+| `/`     | Filter the list, and say how much is left — a matching agent keeps its run      |
 | `R`     | Re-read what is on screen, and the one merge request behind it                  |
 | `q`     | Close the tab                                                                   |
 
 `＋ New run` in the nav does what `p` does.
 
+Anywhere the tab takes text — a question, the launch flow's filter, `/`, a Settings value —
+a paste is accepted as typed text. The newline a copied line brings with it is dropped
+rather than delivered, so a pasted value can be read before Enter sends it.
+
 ### Questions
 
-When a run asks you something, its options appear indented under its row and the keys
-become that question's — `↑↓`, Enter, Esc, or just type where it wants text — and clicking
+When a run asks you something, its options appear in a region of their own, drawn over
+the bottom of the list and above the footer — never taller than half the pane, so a long
+menu shows the options around the cursor and says how many more there are. It covers the
+list rather than taking rows from it, so no row moves and the list is the same size
+whether or not anything is asking. The keys become that question's — `↑↓`, Enter, Esc, or just type where it wants text — and clicking
 an option answers it. The question belongs to that run, so a second run waiting on one is
 answered by selecting it rather than waiting its turn. The question lives in the run's
 directory, so closing this tab, reopening it, or resuming later shows you the same question

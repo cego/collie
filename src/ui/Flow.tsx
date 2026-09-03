@@ -8,6 +8,7 @@ import { TextAttributes } from "@opentui/core";
 import { useKeyboard } from "@opentui/solid";
 import type { PickItem } from "../inputs";
 import { filterItems, itemHay } from "./state";
+import { usePasteInto } from "./paste";
 import type { Pending } from "./prompts";
 
 const DIM = "#8a8a8a";
@@ -71,6 +72,10 @@ function Menu(props: { pending: Pending }) {
     if (/^[\x20-\x7e]$/.test(key.sequence)) return setQuery((q) => q + key.sequence);
   });
 
+  // A paste arrives on its own event, never as keys: without this the field silently
+  // drops it, which is what made a pasted merge-request URL have to be retyped.
+  usePasteInto(setQuery);
+
   return (
     <box style={{ flexDirection: "column", flexGrow: 1 }}>
       <text fg={ACCENT}>{`> ${query()}▏`}</text>
@@ -117,6 +122,8 @@ function Question(props: { pending: Pending }) {
     if (key.ctrl && key.name === "u") return setTyped("");
     if (/^[\x20-\x7e]$/.test(key.sequence)) return setTyped((value) => value + key.sequence);
   });
+
+  usePasteInto(setTyped);
 
   return (
     <box style={{ flexDirection: "column", flexGrow: 1 }}>

@@ -335,6 +335,9 @@ test("creating a worktree answers with its checkout and its new workspace", () =
 
       expect(made.branch).toBe("add-picker");
       expect(made.path).toContain("add-picker");
+      // The new workspace's own numbered shell tab, which the run reuses for its first
+      // agent rather than leaving it behind beside the run's tabs.
+      expect(made.rootTab).toEqual({ tabId: "1:1", paneId: "1-1" });
       expect(yield* rig.calls()).toEqual([
         {
           transport: "cli",
@@ -354,6 +357,60 @@ test("creating a worktree answers with its checkout and its new workspace", () =
           ],
         },
       ]);
+    }),
+  ));
+
+test("a create that answers with no root pane still gives the run its checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // herdr describes `worktree_created` twice — with the shell tab and its pane, and
+      // without them — so a reply carrying neither is as legal as one carrying both.
+      // Requiring them refused the Run its checkout over a tab it can do without: no
+      // tab to take over is the old cosmetic bug, not a reason to refuse to start.
+      class NoRootPaneHerdr extends Herdr {
+        protected override exec() {
+          return Effect.succeed({
+            code: 0,
+            stdout: JSON.stringify({
+              result: {
+                type: "worktree_created",
+                worktree: { path: "/w/add-picker", branch: "add-picker" },
+                workspace: { workspace_id: "w1" },
+                tab: { tab_id: "1:1" },
+              },
+            }),
+            stderr: "",
+          });
+        }
+      }
+
+      const made = yield* new NoRootPaneHerdr(rig.pluginEnv()).worktreeCreate({
+        cwd: "/repo",
+        branch: "add-picker",
+      });
+
+      expect(made.workspaceId).toBe("w1");
+      expect(made.branch).toBe("add-picker");
+      // Nothing to take over, so the run opens its own tab as it always did.
+      expect(made.rootTab).toBeNull();
+    }),
+  ));
+
+test("opening an existing checkout brings no root tab of its own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // `worktree open` reuses a workspace, so there is no fresh shell tab to take
+      // over: the run opens its tabs as it always did.
+      const herdr = new Herdr(rig.pluginEnv());
+      yield* rig.addWorktree("add-picker", `${rig.root}/worktrees/add-picker`, "w9");
+
+      const opened = yield* herdr.worktreeOpen({
+        cwd: "/repo",
+        path: `${rig.root}/worktrees/add-picker`,
+      });
+
+      expect(opened.workspaceId).toBe("w9");
+      expect(opened.rootTab).toBeNull();
     }),
   ));
 

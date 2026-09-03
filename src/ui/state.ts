@@ -67,13 +67,21 @@ export interface AppState {
   note: string | null;
   /** Every finished Run of this checkout, whatever session it came from. */
   history: RunRow[] | null;
-  definitions: { workflows: DefinitionRow[]; personas: DefinitionRow[]; errors: string[] } | null;
+  definitions: { workflows: DefinitionRow[]; errors: string[] } | null;
   settings: SettingsView | null;
   /** The selected Run, read from its directory. Null for any other Selection. */
   detail: RunDetail | null;
 }
 
-export type RowKind = "agent" | "active" | "recent" | "history" | "definition" | "setting";
+export type RowKind =
+  | "agent"
+  | "active"
+  | "recent"
+  | "history"
+  | "definition"
+  | "setting"
+  /** A name for the group under it, and nothing to act on. */
+  | "header";
 
 /**
  * One selectable line. `id` is stable across refreshes — an agent by name, a run by
@@ -240,18 +248,43 @@ const BLANK = {
   choice: null,
 } as const;
 
-function agentRow(a: AgentRow): Row {
+/**
+ * One agent, under the run it works for. `connector` is what joins it to that run — the
+ * last of a run's agents closes the group — and the run named by the row above it is not
+ * named again here.
+ */
+function agentRow(a: AgentRow, connector: string): Row {
   return {
     ...BLANK,
     id: `agent:${a.agent}`,
     kind: "agent",
     // An agent's row is its live status, which herdr answers with no time attached.
     key: a.key === "" ? null : a.key,
-    title: a.name,
-    detail: `${a.status} · ${a.run}`,
+    title: `${connector} ${a.name}`,
+    detail: a.status,
     runId: a.run,
     agent: a.agent,
   };
+}
+
+/**
+ * One agent in the trailing group. It has no run above it, so its own row is the only
+ * place left to say which run it names.
+ */
+function orphanRow(a: AgentRow, connector: string): Row {
+  return { ...agentRow(a, connector), detail: `${a.status} · ${a.run}` };
+}
+
+/**
+ * One group of agents as rows: a run's own, or the orphans. `├` joins each to the group
+ * and the last one closes it with `└`, which is the whole of the nesting — the list
+ * itself stays flat.
+ */
+function agentGroup(
+  agents: readonly AgentRow[],
+  row: (a: AgentRow, connector: string) => Row,
+): Row[] {
+  return agents.map((a, at) => row(a, at === agents.length - 1 ? "└" : "├"));
 }
 
 /** The prefix a Run's row id carries, minted here and read back by `runIdOf`. */
@@ -282,10 +315,10 @@ function runRow(r: RunRow, now: number, kind: "active" | "recent" | "history"): 
   };
 }
 
-function definitionRow(d: DefinitionRow, kind: "workflow" | "persona"): Row {
+function definitionRow(d: DefinitionRow): Row {
   return {
     ...BLANK,
-    id: `${kind}:${d.name}`,
+    id: `workflow:${d.name}`,
     kind: "definition",
     // A fork that cannot run should be visible here rather than at launch.
     glyph: d.problems.length > 0 ? GLYPH.failed : GLYPH.done,
@@ -318,13 +351,42 @@ function settingRow(id: string, key: string, value: string, writable: boolean): 
   };
 }
 
-/** The board as one flat, ordered list: agents, then what is running, then what is not. */
+/**
+ * The board as one flat, ordered list: each Run followed by the agents working for it,
+ * the running ones first and then the ones that have finished, and last any agent whose
+ * Run is not on the board at all. Flat because one list region, one Selection and one set
+ * of keys is the whole design — the nesting is drawn by the connector each agent row
+ * carries, not by a tree the list would have to know about.
+ *
+ * A finished Run keeps its agents: the implementer a hand-off names outlives the Run it
+ * was started for, and filing it under "no run here" while its Run sat two rows above
+ * was the board contradicting itself.
+ */
 export function rowsOf(board: WorkspaceView): Row[] {
-  return [
-    ...board.agents.map(agentRow),
-    ...board.active.map((r) => runRow(r, board.now, "active")),
-    ...board.recent.map((r) => runRow(r, board.now, "recent")),
-  ];
+  const rows: Row[] = [];
+  const listed = new Set([...board.active, ...board.recent].map((r) => r.id));
+  const under = (run: RunRow) => board.agents.filter((a) => a.run === run.id);
+  for (const run of board.active) {
+    rows.push(runRow(run, board.now, "active"), ...agentGroup(under(run), agentRow));
+  }
+  for (const run of board.recent) {
+    rows.push(runRow(run, board.now, "recent"), ...agentGroup(under(run), agentRow));
+  }
+  const orphans = board.agents.filter((a) => !listed.has(a.run));
+  if (orphans.length > 0) {
+    rows.push(headerRow("agents with no run here"));
+    rows.push(...agentGroup(orphans, orphanRow));
+  }
+  return rows;
+}
+
+/**
+ * A name for the group of rows under it. Selectable, like every row, and inert. Short
+ * enough to fit the title column, which is a share of the pane: a header clipped
+ * mid-word says less than no header at all.
+ */
+function headerRow(title: string): Row {
+  return { ...BLANK, id: `header:${title}`, kind: "header", title };
 }
 
 /**
@@ -338,10 +400,9 @@ export function viewRows(state: AppState): Row[] {
     case "history":
       return (state.history ?? []).map((r) => runRow(r, state.board.now, "history"));
     case "workflows":
-      return [
-        ...(state.definitions?.workflows ?? []).map((d) => definitionRow(d, "workflow")),
-        ...(state.definitions?.personas ?? []).map((d) => definitionRow(d, "persona")),
-      ];
+      // Workflows only: a persona is instructions, not something that can be run, so a
+      // persona row here offered a key that did nothing. Fork is where they are acted on.
+      return (state.definitions?.workflows ?? []).map(definitionRow);
     case "settings": {
       const settings = state.settings;
       if (!settings) return [];
@@ -421,16 +482,11 @@ export function actionsFor(row: Row | null): Action[] {
   if (row.kind === "definition") {
     const definition = row.definition;
     if (!definition) return [];
-    // A persona is injected into an agent; there is no persona to run on its own.
-    return row.id.startsWith("workflow:")
-      ? [
-          {
-            key: "\r",
-            label: "run",
-            command: { _tag: "RunWorkflow", workflow: definition.name },
-          },
-        ]
-      : [];
+    // Every definition row is a Workflow: a persona is instructions injected into an
+    // agent, so there is nothing to run on its own and the view stopped listing them.
+    return [
+      { key: "\r", label: "run", command: { _tag: "RunWorkflow", workflow: definition.name } },
+    ];
   }
   if (row.kind === "setting") {
     // A remembered value is a Run's own note to itself; the defaults are what a human
@@ -472,6 +528,73 @@ export function actionsFor(row: Row | null): Action[] {
     }
   }
   return actions;
+}
+
+/**
+ * What the tab's keyboard is on. Three things have to agree about it — which keys act, a
+ * paste, and what the footer offers — and they each used to work it out again from the
+ * same four facts, in the same order, by hand. One value instead, so the order is stated
+ * once: a flow asking a question owns the keyboard, then the selected run's question,
+ * then the filter, then a Settings value, and the board's own keys when nothing is
+ * taking typing.
+ */
+export type Keyboarding =
+  | { _tag: "Flow" }
+  | { _tag: "Choice"; choice: PendingChoice }
+  | { _tag: "Filter" }
+  | { _tag: "Setting"; setting: { key: string; value: string } }
+  | { _tag: "Board" };
+
+/** Where the keyboard is, from what the tab has open. Pure, and the order is the point. */
+export function keyboardOn(at: {
+  /** A flow asking a question inline; it has handlers of its own. */
+  flow: boolean;
+  /** The selected run's pending question, where it has one. */
+  choice: PendingChoice | null;
+  /** Whether the cursor is in the filter, which outlives the text being kept. */
+  filtering: boolean;
+  /** A Settings row being given a new value. */
+  setting: { key: string; value: string } | null;
+}): Keyboarding {
+  if (at.flow) return { _tag: "Flow" };
+  if (at.choice) return { _tag: "Choice", choice: at.choice };
+  if (at.filtering) return { _tag: "Filter" };
+  if (at.setting) return { _tag: "Setting", setting: at.setting };
+  return { _tag: "Board" };
+}
+
+const PASTED = new TextDecoder();
+
+/**
+ * A paste appended to the field it was pasted into. opentui delivers a paste as bytes on
+ * its own event rather than as keys, and the keyboard handlers take one printable
+ * character at a time, so this is the one place a whole pasted string becomes field text.
+ *
+ * Every control character is dropped, the trailing newline a copied line carries most of
+ * all: a newline is the submit key, and a pasted value has to be readable before it is
+ * sent. Non-ASCII letters survive — a pasted branch name keeps them.
+ */
+export function pasteInto(value: string, bytes: Uint8Array): string {
+  return value + PASTED.decode(bytes).replace(/\p{C}/gu, "");
+}
+
+/**
+ * The options a question with room for `room` lines can show, as a window that keeps the
+ * cursor inside it, and how many it leaves out. A question's region is capped so the list
+ * it belongs to keeps rows of its own, and an option the cursor is on but nobody can see
+ * is one nobody can knowingly press Enter on.
+ */
+export function optionWindow<T>(items: readonly T[], at: number, room: number): Windowed<T> {
+  if (items.length <= room) return { shown: items, hidden: 0 };
+  // The window ends one past the cursor at the earliest, and stops at the last option.
+  const end = Math.min(items.length, Math.max(room, at + 1));
+  return { shown: items.slice(end - room, end), hidden: items.length - room };
+}
+
+/** The slice of a list a capped region shows, and how many it leaves out. */
+export interface Windowed<T> {
+  shown: readonly T[];
+  hidden: number;
 }
 
 /** Where a pending question has got to: the highlighted option, or the text so far. */
@@ -564,6 +687,41 @@ export function filterItems<T>(items: readonly T[], query: string, hay: (item: T
     else if (subsequence(needle, straw)) fuzzy.push(item);
   }
   return [...prefix, ...anywhere, ...fuzzy];
+}
+
+/**
+ * The rows a filter leaves. The list is already nested when this sees it — a run, then
+ * the agents working for it — so a row is kept when it matches and a run or a header is
+ * kept when anything in its group does: filtering the rows one by one dropped a run whose
+ * agent matched and left that agent under nothing, and an agent row does not name its own
+ * run any more.
+ *
+ * The order is the board's own, not the order the matches were ranked in. Ranking is
+ * what a pick list wants; here it would lift an agent above the run it hangs off.
+ */
+export function matching(rows: readonly Row[], query: string): Row[] {
+  if (query.trim() === "") return [...rows];
+  // A header is not something to look for: it says what the group under it is, so it is
+  // never a match of its own — a heading kept over a group that was filtered out is a
+  // line that names nothing.
+  const looked = rows.filter((row) => row.kind !== "header");
+  const hit = new Set(filterItems(looked, query, rowHay).map((row) => row.id));
+  return rows.filter(
+    (row, at) => hit.has(row.id) || (opensAGroup(row) && groupHasAMatch(rows, at, hit)),
+  );
+}
+
+/** The two rows that have a group under them, which is what `rowsOf` puts there. */
+const opensAGroup = (row: Row) => row.kind === "active" || row.kind === "header";
+
+/** Whether an agent row under this one matched: the rows that follow it, until the next
+ * row that opens a group of its own. */
+function groupHasAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>): boolean {
+  for (const under of rows.slice(at + 1)) {
+    if (under.kind !== "agent") return false;
+    if (hit.has(under.id)) return true;
+  }
+  return false;
 }
 
 /** What a row is matched against: everything on it a human might type at. */

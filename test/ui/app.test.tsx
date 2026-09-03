@@ -118,6 +118,11 @@ const mount = Effect.fn("app.mount")(function* (initial: AppState, width = 100, 
         Effect.promise(() => t.mockMouse.click(x, y)),
         flush,
       ),
+    hover: (x: number, y: number) =>
+      Effect.andThen(
+        Effect.promise(() => t.mockMouse.moveTo(x, y)),
+        flush,
+      ),
     setState: (next: AppState) =>
       Effect.andThen(
         Effect.sync(() => setState(next)),
@@ -201,7 +206,59 @@ test("clicking a row selects it and points its actions at that run", () =>
       const lines = listLines(app.frame());
       expect(lines[app.lineOf("Review · worktree")]).toContain("❯");
       expect(lines[app.lineOf("Implement · add-a-picker")]).not.toContain("❯");
-      // The Selection's own buttons are offered, on the line under it.
+      // The Selection's own buttons are offered in the footer, where they cannot change
+      // the height of the row they belong to.
+      expect(app.frame()).toContain("[k stop]");
+      expect(app.acted()).toEqual([]);
+    }),
+  ));
+
+test("selecting or hovering a row leaves every other row where it was", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The list has to stay still. A row that grew when it was selected pushed every
+      // row under it down a line, so the row a human was aiming at moved out from
+      // under the cursor as soon as the one above it was touched.
+      const app = yield* mount(appState({ board: BOARD }));
+      const titles = [
+        "Implementer",
+        "Implement · add-a-picker",
+        "Review · worktree",
+        "Plan · the picker",
+      ];
+      const where = () => titles.map((title) => app.lineOf(title));
+      const before = where();
+
+      yield* app.click(4, app.lineOf("Implement · add-a-picker"));
+      expect(where()).toEqual(before);
+
+      yield* app.click(4, app.lineOf("Review · worktree"));
+      expect(where()).toEqual(before);
+
+      yield* app.hover(4, app.lineOf("Implementer"));
+      expect(where()).toEqual(before);
+    }),
+  ));
+
+test("a field that has the keys takes the footer's buttons with them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Every key belongs to the field being typed into, so a button that still acted on
+      // the Selection disagreed with the key printed on it: `k` typed a `k` into the
+      // filter while `[k stop]` stopped the run.
+      const app = yield* mount(appState({ board: BOARD }));
+      expect(app.frame()).toContain("[k stop]");
+
+      app.mockInput.pressKey("/");
+      yield* app.flush;
+      expect(app.frame()).not.toContain("[k stop]");
+      expect(app.frame()).toContain("type to narrow");
+      // And the board's own keys are not offered either, for the same reason.
+      expect(app.frame()).not.toContain("p run");
+
+      // Enter keeps the filter and gives the keys back, so the buttons come back too.
+      app.mockInput.pressEnter();
+      yield* app.flush;
       expect(app.frame()).toContain("[k stop]");
       expect(app.acted()).toEqual([]);
     }),
@@ -213,8 +270,7 @@ test("clicking a row's stop button stops that run and nothing else", () =>
       const app = yield* mount(appState({ board: BOARD }));
 
       yield* app.click(4, app.lineOf("Review · worktree"));
-      // The buttons sit on their own line under the Selection, so that is where the
-      // click lands: a row with four actions would clip them all onto one line.
+      // The buttons sit in the footer, so that is where the click lands.
       yield* app.click(app.columnOf("[k stop]", "[k stop]") + 2, app.lineOf("[k stop]"));
 
       expect(app.acted()).toEqual([{ _tag: "StopRun", runId: "r2" }]);
@@ -270,7 +326,10 @@ test("every key the board offered still does what it did, against the Selection"
 
       for (const key of ["1", "p", "u", "f", "s"]) app.mockInput.pressKey(key);
       yield* app.flush;
-      // `l` and `k` act on the Selection: the arrow keys are what puts it on a run.
+      // `l` and `k` act on the Selection: the arrow keys are what puts it on a run. Two
+      // rows down, because the first run's own agent hangs off it.
+      app.mockInput.pressArrow("down");
+      yield* app.flush;
       app.mockInput.pressArrow("down");
       yield* app.flush;
       app.mockInput.pressKey("l");
@@ -281,10 +340,10 @@ test("every key the board offered still does what it did, against the Selection"
         { _tag: "OpenMode", mode: "pick" },
         { _tag: "OpenMode", mode: "resume" },
         { _tag: "OpenMode", mode: "fork" },
-        // The Selection at that point is the first row, the agent's, and its run is
+        // The Selection at that point is the first row, the first run's, and that run is
         // what the hand-off is about: `s` names a run rather than meaning "the newest".
         { _tag: "SendReview", runId: "r1" },
-        { _tag: "OpenLog", runId: "r1" },
+        { _tag: "OpenLog", runId: "r2" },
       ]);
 
       app.mockInput.pressKey("q");
@@ -339,6 +398,167 @@ test("a second waiting run is selectable and answerable", () =>
       // Clicking an option answers that run with that option.
       yield* app.click(6, app.lineOf("Stop here"));
       expect(app.acted()).toEqual([{ _tag: "Answer", runId: "r2", value: "Stop here" }]);
+    }),
+  ));
+
+test("a long question leaves the list some rows, and keeps the cursor in view", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The question's region is a sibling of the list, so an option per line and no
+      // ceiling meant a menu could take the whole pane and leave nothing of the list.
+      const many = Array.from({ length: 8 }, (_, i) => ({
+        id: `option-${i}`,
+        title: `option number ${i}`,
+      }));
+      const app = yield* mount(
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · one", {
+                choice: { ...choice("r1", "Which one?"), items: many },
+              }),
+            ],
+          }),
+        }),
+        100,
+        20,
+      );
+
+      // The run it belongs to is still on screen: the list kept rows of its own.
+      expect(app.frame()).toContain("Implement · one");
+      expect(app.frame()).toContain("Which one?");
+
+      // The cursor can be moved onto an option the region has scrolled past, and the
+      // option it is on is one the human can see before pressing Enter.
+      for (const _ of Array.from({ length: 7 })) {
+        app.mockInput.pressArrow("down");
+        yield* app.flush;
+      }
+      expect(app.frame()).toContain("option number 7");
+      expect(app.frame()).toMatch(/❯ option number 7/);
+    }),
+  ));
+
+test("every action the Selection offers is readable in a narrow pane", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A finished merge-request run offers five, which do not fit one line of the 60
+      // columns a Collie tab beside an editor has. They used to be clipped mid-button,
+      // and the footer's key list no longer repeats them, so those actions were offered
+      // nowhere on screen at all.
+      const app = yield* mount(
+        appState({
+          board: board({
+            recent: [
+              run("r2", "Review · !42", {
+                glyph: "✓",
+                detail: "done",
+                target: "mr:gitlab.example.com/g/p!42",
+                fixable: true,
+              }),
+            ],
+          }),
+        }),
+        60,
+        24,
+      );
+
+      for (const label of [
+        "[l log]",
+        "[x fix what is open]",
+        "[a review again]",
+        "[o post to the MR]",
+        "[w open in a browser]",
+      ]) {
+        expect(app.frame()).toContain(label);
+      }
+      // And each is clickable where it is drawn, wrapped line included.
+      yield* app.click(app.columnOf("[w open", "[w open") + 2, app.lineOf("[w open"));
+      expect(app.acted()).toEqual([{ _tag: "OpenMr", target: "mr:gitlab.example.com/g/p!42" }]);
+    }),
+  ));
+
+test("no row moves when a question appears or its cursor walks the menu", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // What ticket 04 asks of the question's region: no row is shifted by it. It is
+      // drawn over the bottom of the list rather than among its rows or beside them, so
+      // the list's own share of the pane is the same whether or not a Run is asking —
+      // and its height comes from how many options it has room for, which does not
+      // depend on where the cursor is inside them.
+      const many = Array.from({ length: 4 }, (_, i) => ({ id: `o${i}`, title: `option ${i}` }));
+      const waiting = (asking: boolean) =>
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · one"),
+              run("r2", "Review · two", {
+                choice: asking ? { ...choice("r2", "Which one?"), items: many } : null,
+              }),
+            ],
+            recent: [run("r0", "Plan · three", { glyph: "✓", detail: "done" })],
+          }),
+        });
+      const titles = ["Implement · one", "Review · two", "Plan · three"];
+      const app = yield* mount(waiting(false));
+      const where = () => titles.map((title) => app.lineOf(title));
+      // The question belongs to the selected run, so the Selection goes there first.
+      yield* app.click(4, app.lineOf("Review · two"));
+      const before = where();
+
+      // The run starts asking: the region opens under the list, and no row moves.
+      yield* app.setState(waiting(true));
+      expect(app.frame()).toContain("Which one?");
+      expect(where()).toEqual(before);
+
+      // And walking the cursor down the menu moves nothing either: how tall the region
+      // is comes from how many options it has room for, not from where the cursor is.
+      for (const _ of Array.from({ length: 3 })) {
+        app.mockInput.pressArrow("down");
+        yield* app.flush;
+      }
+      expect(app.frame()).toContain("❯ option 3");
+      expect(where()).toEqual(before);
+      // And the list gave up none of its rows for it: a region that took them changed
+      // how much of the list there was to look at, which is how a row went out of view.
+      expect(app.frame()).toContain("Plan · three");
+    }),
+  ));
+
+test("a narrow pane keeps every region on screen while a question is up", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // At 60x20 a long menu used to draw through the list and push the footer off the
+      // bottom. It is drawn over the list now, so nothing else on the pane gives up a
+      // row for it — including the footer, which is how it is answered.
+      const many = Array.from({ length: 8 }, (_, i) => ({ id: `o${i}`, title: `option ${i}` }));
+      const app = yield* mount(
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · one", {
+                choice: { ...choice("r1", "Which one?"), items: many },
+              }),
+            ],
+          }),
+        }),
+        60,
+        20,
+      );
+
+      const lines = app.frame().split("\n");
+      // The run being asked about, the question, and the footer's own keys are all on
+      // screen, and the question's box is drawn whole.
+      expect(app.frame()).toContain("Implement · one");
+      expect(app.frame()).toContain("Which one?");
+      expect(app.frame()).toContain("Esc leave the run open");
+      // It covers the bottom of the list while it is up, and covers it opaquely: the
+      // regions behind used to bleed through an unpainted box.
+      expect(app.frame()).not.toContain("Detail");
+      // Nothing overlaps: a region squeezed under its own border used to draw its text
+      // through it, which shows up as box-drawing characters inside a line of text.
+      const listRow = lines.find((line) => line.includes("Implement · one"))!;
+      expect(listRow).not.toContain("─");
     }),
   ));
 
@@ -717,7 +937,9 @@ test("no glab, or a merge request glab cannot read, is one line and no more", ()
           detail: runDetail({ mr: { _tag: "Unavailable", reason: "glab is not installed" } }),
         }),
         100,
-        44,
+        // One row taller than the panel's content needs: the footer gives the
+        // Selection's buttons two rows, because five of them do not fit one.
+        45,
       );
 
       const said = app.said();
@@ -787,15 +1009,6 @@ test("the Workflows view shows a broken fork's error without running it", () =>
                 problems: ['workflow "broken" step "build": unknown persona "no-such-persona"'],
               }),
             ],
-            personas: [
-              definition({
-                name: "reviewer",
-                title: "Reviewer",
-                inputs: [],
-                steps: [],
-                decisions: [],
-              }),
-            ],
             errors: [],
           },
         }),
@@ -824,7 +1037,7 @@ test("a selected workflow's steps are part of what the panel shows", () =>
       const app = yield* mount(
         appState({
           view: "workflows",
-          definitions: { workflows: [definition()], personas: [], errors: [] },
+          definitions: { workflows: [definition()], errors: [] },
         }),
         100,
         44,
@@ -846,10 +1059,10 @@ test("Settings gives a default a new value and asks for it to be written", () =>
       expect(frame).toContain("linear.team");
       expect(frame).toContain("trusted");
 
-      // Clicking the button and pressing the key are the same thing: the button used
-      // to dispatch the command verbatim, and its "ask me first" placeholder was an
-      // empty value — so a click on `[Enter set]` wrote the empty string and unset the
-      // default it was labelled to set.
+      // Clicking the footer's button and pressing the key are the same thing: the
+      // button used to dispatch the command verbatim, and its "ask me first"
+      // placeholder was an empty value — so a click on `[Enter set]` wrote the empty
+      // string and unset the default it was labelled to set.
       yield* app.click(4, app.lineOf("model"));
       yield* app.click(app.columnOf("[Enter set]", "[Enter set]") + 2, app.lineOf("[Enter set]"));
       yield* app.flush;
@@ -863,6 +1076,26 @@ test("Settings gives a default a new value and asks for it to be written", () =>
       app.mockInput.pressEnter();
       yield* app.flush;
       expect(app.acted()).toEqual([{ _tag: "SetDefault", key: "model", value: "sonnet" }]);
+    }),
+  ));
+
+test("a filter that matches an agent keeps the run it works for above it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Filtering the nested rows one by one dropped the run and left its agent under
+      // nothing, and an agent row no longer names its own run.
+      const app = yield* mount(appState({ board: BOARD }));
+
+      app.mockInput.pressKey("/");
+      yield* Effect.promise(() => app.mockInput.typeText("Implementer"));
+      yield* app.flush;
+
+      expect(app.frame()).toContain("Implementer");
+      expect(app.frame()).toContain("Implement · add-a-picker");
+      // The run comes above its agent, not below it or somewhere else.
+      expect(app.lineOf("Implement · add-a-picker")).toBeLessThan(app.lineOf("Implementer"));
+      // And nothing else came with them.
+      expect(app.frame()).not.toContain("Review · worktree");
     }),
   ));
 
@@ -944,5 +1177,56 @@ test("the render-error screen can do the one thing it offers, and gives the mous
       // And `App`'s `onBlur` went with it, which left the mouse captured and took
       // copy-and-paste out of every other herdr pane.
       expect(t.renderer.useMouse).toBe(false);
+    }),
+  ));
+
+test("a paste reaches whichever field owns the keyboard, and never submits it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Every field the tab types into, in the order the keyboard handler gives them
+      // the keys: a paste that only worked in one of them would be the same bug again.
+      const filtering = yield* mount(appState({ board: BOARD }));
+      filtering.mockInput.pressKey("/");
+      yield* Effect.promise(() => filtering.mockInput.pasteBracketedText("worktree\n"));
+      yield* filtering.flush;
+      expect(filtering.frame()).toContain("/worktree");
+      expect(filtering.frame()).not.toContain("Implement · add-a-picker");
+
+      const settings = yield* mount(appState({ view: "settings", settings: SETTINGS }));
+      yield* settings.click(4, settings.lineOf("model"));
+      yield* settings.click(
+        settings.columnOf("[Enter set]", "[Enter set]") + 2,
+        settings.lineOf("[Enter set]"),
+      );
+      for (const _ of "opus") settings.mockInput.pressBackspace();
+      yield* Effect.promise(() => settings.mockInput.pasteBracketedText("sonnet\n"));
+      yield* settings.flush;
+      // The newline came with the paste and the value is still being edited: nothing
+      // has been written until Enter is pressed for it.
+      expect(settings.frame()).toContain("model = sonnet");
+      expect(settings.acted()).toEqual([]);
+      settings.mockInput.pressEnter();
+      yield* settings.flush;
+      expect(settings.acted()).toEqual([{ _tag: "SetDefault", key: "model", value: "sonnet" }]);
+
+      const asking = yield* mount(
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · one", {
+                choice: { ...choice("r1", "Which merge request?"), kind: "ask", items: [] },
+              }),
+            ],
+          }),
+        }),
+      );
+      const url = "https://gitlab.cego.dk/cego/collie/-/merge_requests/7";
+      yield* Effect.promise(() => asking.mockInput.pasteBracketedText(`${url}\n`));
+      yield* asking.flush;
+      expect(asking.frame()).toContain("merge_requests/7");
+      expect(asking.acted()).toEqual([]);
+      asking.mockInput.pressEnter();
+      yield* asking.flush;
+      expect(asking.acted()).toEqual([{ _tag: "Answer", runId: "r1", value: url }]);
     }),
   ));

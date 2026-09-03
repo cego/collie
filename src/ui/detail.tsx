@@ -21,16 +21,31 @@ export interface DetailProps {
   dispatch: (command: Command) => void;
 }
 
+/**
+ * How the panel sits when it is a full-width region under the list rather than a column
+ * beside it. It is what yields when a short pane cannot hold every region — the one thing
+ * on screen that is only ever read, and the row it describes is still in the list above
+ * it — down to its border and one line of that row, because a box squeezed below its own
+ * border draws its title through it.
+ */
+const AS_OVERLAY = {
+  flexDirection: "column",
+  height: 8,
+  minHeight: 3,
+  width: "100%",
+  flexShrink: 1,
+} as const;
+
+/** And beside the list: a share of the pane, so both columns follow a drag. */
+const AS_COLUMN = { flexDirection: "column", width: "42%" } as const;
+
 export function Detail(props: DetailProps) {
   return (
     <scrollbox
       title="Detail"
       border
       borderColor={DIM}
-      style={{
-        flexDirection: "column",
-        ...(props.overlay ? { height: 8, width: "100%" } : { width: "42%" }),
-      }}
+      style={props.overlay ? AS_OVERLAY : AS_COLUMN}
     >
       <Show when={props.row !== null} fallback={<text fg={DIM}>{props.cwd}</text>}>
         <text>{props.row!.title}</text>
