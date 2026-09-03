@@ -3,6 +3,7 @@
 // what it finds, so deleting the tab loses nothing and the next Run recreates it.
 
 import { Clock, Effect, FileSystem, Option, Path } from "effect";
+import { behindRemote } from "./doctor";
 import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
 import { COLLIE_TAB, displayName, GLYPH, targetLabel } from "./naming";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
@@ -69,6 +70,12 @@ export interface RunRow {
 export interface WorkspaceView {
   repo: string;
   cwd: string;
+  /**
+   * How many commits this installation is behind its remote, or null when there is
+   * nothing to say. Shown on the board and never notified: being a few commits
+   * behind is worth seeing, not worth interrupting for.
+   */
+  behind: number | null;
   /** When this view was built, so a row's `at` can be read as a relative time. */
   now: number;
   agents: AgentRow[];
@@ -220,6 +227,8 @@ export const buildView = Effect.fn("buildView")(function* (
     stateDir: string;
     alive: AgentInfo[];
     now?: number;
+    /** The installation, when the caller has one to compare against its remote. */
+    pluginRoot?: string;
     /** The Runs already read, so a caller drawing two Views scans the dir once. */
     runs?: ReadonlyArray<Run>;
   },
@@ -284,6 +293,7 @@ export const buildView = Effect.fn("buildView")(function* (
   return {
     repo: path.basename(opts.cwd),
     cwd: opts.cwd,
+    behind: opts.pluginRoot ? yield* behindRemote(opts.pluginRoot, undefined, now) : null,
     now,
     agents,
     extraAgents: rows.length - agents.length,
@@ -303,6 +313,15 @@ export const buildView = Effect.fn("buildView")(function* (
     })),
   };
 });
+
+/**
+ * "3 commits behind", in the one place that decides the plural: the app's nav says
+ * it and the text board says it, with room for different amounts of sentence around
+ * it — the nav row is a fixed width and the board's line has itself to spread into.
+ */
+export function commitsBehind(behind: number): string {
+  return `${behind} commit${behind === 1 ? "" : "s"} behind`;
+}
 
 function section(name: string, rows: string[], empty: string): string[] {
   return ["", name, ...(rows.length > 0 ? rows : [`  (${empty})`])];
@@ -350,6 +369,9 @@ export function renderWorkspace(
   asking: Asking = { index: 0, typed: "" },
 ): string {
   const lines = [`${COLLIE_TAB} — ${view.repo}`, view.cwd];
+  if (view.behind !== null && view.behind > 0) {
+    lines.push(`Collie is ${commitsBehind(view.behind)} its remote — \`collie upgrade\``);
+  }
 
   const agents = view.agents.map(
     (a) => `  ${a.key}  ${a.name.padEnd(22)}${a.status.padEnd(9)}${a.run}`,

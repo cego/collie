@@ -345,6 +345,8 @@ export class Rig {
       "FAKE_HERDR_FAIL",
       "FAKE_HERDR_AGENT_STATUS",
       "FAKE_HERDR_BLOCK_START",
+      "FAKE_HERDR_VERSION",
+      "FAKE_HERDR_PLUGINS",
     ]) {
       const value = env[key];
       if (value) Bun.env[key] = value;

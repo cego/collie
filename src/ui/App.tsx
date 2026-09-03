@@ -24,6 +24,7 @@ import {
   type Row,
   type ViewName,
 } from "./state";
+import { commitsBehind } from "../workspace";
 import { Detail } from "./detail";
 import { Flow } from "./Flow";
 import type { Pending } from "./prompts";
@@ -255,6 +256,7 @@ export function App(props: AppProps) {
         <Nav
           view={props.state().view}
           repo={props.state().board.repo}
+          behind={props.state().board.behind}
           onShow={(view) => props.dispatch({ _tag: "ShowView", view })}
           onNewRun={() => props.dispatch({ _tag: "OpenMode", mode: "pick" })}
         />
@@ -311,6 +313,8 @@ export function App(props: AppProps) {
 function Nav(props: {
   view: ViewName;
   repo: string;
+  /** How far behind its remote this installation is, where that is worth saying. */
+  behind: number | null;
   onShow: (view: ViewName) => void;
   onNewRun: () => void;
 }) {
@@ -331,6 +335,11 @@ function Nav(props: {
       <text fg={ACCENT} onMouseDown={() => props.onNewRun()}>
         {"  ＋ New run"}
       </text>
+      {/* Shown, never sent: being a few commits behind is worth seeing here and not
+          worth interrupting anyone for. */}
+      <Show when={(props.behind ?? 0) > 0}>
+        <text fg={DIM}>{`  ${commitsBehind(props.behind!)} · collie upgrade`}</text>
+      </Show>
     </box>
   );
 }

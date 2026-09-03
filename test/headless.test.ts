@@ -526,6 +526,7 @@ effectTest(
         ...scopeFor(env, env.cwd),
         stateDir: env.stateDir,
         paneId: "1-1",
+        pluginRoot: env.pluginRoot,
       },
       view,
     );
@@ -812,6 +813,7 @@ effectTest(
     const view: WorkspaceView = {
       repo: "r",
       cwd: env.cwd,
+      behind: null,
       now: 0,
       agents: [],
       extraAgents: 0,
@@ -825,6 +827,7 @@ effectTest(
         ...scopeFor(env, env.cwd),
         stateDir: env.stateDir,
         paneId: "1-1",
+        pluginRoot: env.pluginRoot,
       },
       view,
     );

@@ -20,6 +20,7 @@ function board(over: Partial<WorkspaceView> = {}): WorkspaceView {
   return {
     repo: "collie",
     cwd: "/w/collie",
+    behind: null,
     now: NOW,
     agents: [],
     extraAgents: 0,
@@ -144,6 +145,20 @@ const BOARD = board({
   active: [run("r1", "Implement · add-a-picker"), run("r2", "Review · worktree")],
   recent: [run("r0", "Plan · the picker", { glyph: "✓", detail: "done" })],
 });
+
+test("an installation behind its remote says so in the nav, and only when it is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Shown and never sent: being a few commits behind belongs where the human is
+      // already looking, not in a notification.
+      const behind = yield* mount(appState({ board: board({ behind: 3 }) }));
+      expect(behind.frame()).toContain("3 commits behind");
+      expect(behind.frame()).toContain("collie upgrade");
+
+      const level = yield* mount(appState({ board: board({ behind: 0 }) }));
+      expect(level.frame()).not.toContain("behind");
+    }),
+  ));
 
 test("the board's agents, running runs and finished runs all reach the screen", () =>
   runEffect(
