@@ -224,7 +224,8 @@ directory, atomically, and with a backup. What the user sees and how they config
 
 ## The registry and sessions
 
-A **session** is one herdr session, one workspace and one repo cwd, taken together.
+A **session** is one herdr session and one workspace, taken together; a Run's own worktree
+does not move it out of the workspace it was started from.
 `registry.ts` records which long-lived agents a session still has, per workspace and repo,
 so `handoff.ts` can give one run's result to another run's live agent rather than starting
 a second one. There is only ever one agent per role in a session, and a session never sees

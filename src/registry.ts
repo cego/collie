@@ -13,6 +13,7 @@ export interface AgentEntry {
 export interface RegistryScope {
   session: string | null;
   workspaceId: string | null;
+  /** Names the register only where there is no workspace to name it by. */
   cwd: string;
 }
 
@@ -39,10 +40,13 @@ export const registryPath = Effect.fn("registryPath")(function* (
   scope: RegistryScope,
 ) {
   const path = yield* Path.Path;
-  const key = Bun.hash(`${scope.session ?? ""} ${scope.workspaceId ?? ""} ${scope.cwd}`)
+  // The workspace is the Session, so a Run's own worktree and the board's directory
+  // read the same register; the directory only stands in where there is no workspace.
+  const where = scope.workspaceId ?? scope.cwd;
+  const key = Bun.hash(`${scope.session ?? ""} ${where}`)
     .toString(16)
     .slice(0, 12);
-  const name = path.basename(scope.cwd).replace(/[^A-Za-z0-9._-]+/g, "-") || "repo";
+  const name = path.basename(where).replace(/[^A-Za-z0-9._-]+/g, "-") || "repo";
   return path.join(stateDir, "agents", `${name}-${key}.json`);
 });
 

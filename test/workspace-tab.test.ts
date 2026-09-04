@@ -541,14 +541,16 @@ effectTest("the board lists this Session's agents and runs, and nobody else's", 
   ];
   yield* finished.save();
 
-  // Another repo in this workspace; the same repo in another workspace; the same
-  // workspace id in another herdr session; and the same id under another label.
+  // A run in its own worktree is still this workspace's: since runs stay in the
+  // workspace they were activated from, its cwd is never the board's.
   yield* seed({
     workflow: "plan",
-    primaryInput: "not-mine",
+    primaryInput: "in-a-worktree",
     stepIds: ["grill"],
-    cwd: "/elsewhere",
+    cwd: "/somewhere/.herdr/worktrees/project/in-a-worktree",
   });
+  // The same repo in another workspace; the same workspace id in another herdr
+  // session; and the same id under another label.
   yield* seed({ workflow: "plan", primaryInput: "not-mine", stepIds: ["grill"], workspace: "9" });
   yield* seed({
     workflow: "plan",
@@ -597,8 +599,12 @@ effectTest("the board lists this Session's agents and runs, and nobody else's", 
       now: "Simplify cego.collie plugin",
     },
   ]);
-  expect(view.active.map((r) => r.title)).toEqual(["Implement · add-a-picker"]);
-  expect(view.active[0]!.detail).toBe("build · iteration 1/5");
+  expect(view.active.map((r) => r.title)).toContain("Implement · add-a-picker");
+  expect(view.active.some((r) => r.title.includes("in-a-worktree"))).toBe(true);
+  expect(view.active).toHaveLength(2);
+  expect(view.active.find((r) => r.title === "Implement · add-a-picker")!.detail).toBe(
+    "build · iteration 1/5",
+  );
   expect(view.recent.map((r) => r.title)).toEqual(["Review · worktree"]);
   expect(view.recent[0]!.detail).toBe("blocked · 1 finding(s) open");
 

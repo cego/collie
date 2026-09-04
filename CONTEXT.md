@@ -24,7 +24,7 @@
 
 **Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents.
 
-**Session** — One herdr session, one workspace and one repo cwd, taken together. It is the
+**Session** — One herdr session and one workspace, taken together. It is the
 scope of a Control Plane tab and of the register of live agents, so only Runs in the same
 Session can hand work to each other. There is only ever one agent per role in a Session.
 One workspace, always: a mutating Run's checkout does not take it out of the Session it

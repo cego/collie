@@ -521,7 +521,8 @@ test("another workspace's implementer is not this Session's", () =>
         workspaceId: "9",
         cwd: env.cwd,
       });
-      const otherRepo = yield* registryPath(env.stateDir, {
+      // A Run's own worktree is a different directory in the same workspace: same Session.
+      const ownWorktree = yield* registryPath(env.stateDir, {
         ...scopeFor(env, env.cwd),
         cwd: "/elsewhere",
       });
@@ -530,7 +531,8 @@ test("another workspace's implementer is not this Session's", () =>
         session: "/other.sock",
       });
 
-      expect(new Set([file, elsewhere, otherRepo, otherSession]).size).toBe(4);
+      expect(ownWorktree).toBe(file);
+      expect(new Set([file, elsewhere, otherSession]).size).toBe(3);
 
       const entry = {
         role: "implementer",

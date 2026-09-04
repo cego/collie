@@ -504,6 +504,7 @@ function makePlanRun(
       workspace: null,
       workspace_label: null,
       workspace_worktree: null,
+      activated_cwd: null,
       created_at: created,
       finished_at: status === "done" ? created : null,
       status,

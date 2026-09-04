@@ -445,7 +445,7 @@ Esc at a Choice leaves the step unfinished on purpose, so `resume` finds the run
 
 ## Hand-offs between runs
 
-Runs in the same **session** — one herdr session, one workspace, one repo — know about
+Runs in the same **session** — one herdr session, one workspace — know about
 each other's long-lived agents, and hand work over rather than starting a second one. There
 is only ever one implementer and one planner per session.
 
