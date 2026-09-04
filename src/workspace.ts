@@ -9,6 +9,7 @@ import { COLLIE_TAB, displayName, GLYPH, targetLabel } from "./naming";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
 import { REVIEW_FILE } from "./output";
 import { RunStore, type Run, type RunRecord, type VariantRecord } from "./run";
+import { stepDuration, took } from "./time";
 import type { AgentInfo } from "./herdr";
 
 /** How many finished runs stay on the screen; the tab must not need scrolling. */
@@ -21,6 +22,11 @@ const MAX_AGENTS = 9;
  * being created and starting its first one.
  */
 const STALE_MS = 60_000;
+/**
+ * The fallback for the board's quiet threshold, for a caller with no defaults to hand —
+ * a test drawing one board. `board_quiet_ms` is what a human sets.
+ */
+const DEFAULT_QUIET_MS = 5 * 60_000;
 
 /** What identifies a Session: one herdr session, one workspace, one repo cwd. */
 export interface SessionKey {
@@ -40,6 +46,12 @@ export interface AgentRow {
   agent: string;
   status: string;
   run: string;
+  /**
+   * What the agent says it is doing, from the terminal title its harness publishes, or
+   * `null` where it publishes none. The board asks nothing extra for it: it comes back
+   * on the same `agent list` the statuses do.
+   */
+  now: string | null;
 }
 
 export interface RunRow {
@@ -65,6 +77,13 @@ export interface RunRow {
   fixable: boolean;
   /** The question this run is waiting on, rendered under its row. */
   choice: PendingChoice | null;
+  /**
+   * Whether this run has stopped and is waiting on the human: a pending question, or a
+   * gate it recorded itself as awaiting. The board lists these first, because a blocked
+   * run costs the whole run's wall-clock and used to be visible only if its row happened
+   * to be the Selection.
+   */
+  needsYou: boolean;
 }
 
 export interface WorkspaceView {
@@ -136,18 +155,71 @@ function agentTitle(variant: VariantRecord, registered: AgentEntry | undefined):
   return `${name} · ${displayName(variant.model.slice(variant.model.lastIndexOf("/") + 1))}`;
 }
 
-const activeDetail = Effect.fn("activeDetail")(function* (run: Run) {
+const activeDetail = Effect.fn("activeDetail")(function* (run: Run, now: number, quietMs: number) {
   const record = run.record;
+  // Before the reads below, and before the quiet scan: a run waiting on the human is
+  // meant to be quiet, so saying so would be noise on the one row that needs none.
   if (record.awaiting) return `${record.awaiting} — your turn`;
   const step = record.steps.find((s) => s.status === "running" || s.status === "blocked");
   const where = step ? step.id : "starting";
-  const at =
-    record.max_iterations > 1
-      ? `${where} · iteration ${record.iteration}/${record.max_iterations}`
-      : where;
+  const parts = [where];
+  // How long this step has been going: a stuck agent and a slow one look identical
+  // without it, and the step id alone said nothing about either.
+  const elapsed = step ? stepDuration(step, now) : null;
+  if (elapsed) parts.push(elapsed);
+  if (record.max_iterations > 1) {
+    parts.push(`iteration ${record.iteration}/${record.max_iterations}`);
+  }
   // What the driver last said, which is what the runner pane used to show.
   const said = yield* lastProgress(run.dir);
-  return said ? `${at} · ${said}` : at;
+  if (said) parts.push(said);
+  const quiet = yield* quietFor(run.dir, now, quietMs);
+  if (quiet) parts.push(quiet);
+  return parts.join(" · ");
+});
+
+/**
+ * When a file last changed, or `0` when nothing says — a file that is not there, or a
+ * filesystem that does not keep the time. One answer, because two spellings of it is
+ * how a row's clock and the quiet check would come to disagree.
+ */
+const mtimeOf = Effect.fn("mtimeOf")(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  return yield* fs.stat(file).pipe(
+    Effect.map((s) => (Option.isSome(s.mtime) ? s.mtime.value.getTime() : 0)),
+    Effect.catch(() => Effect.succeed(0)),
+  );
+});
+
+/**
+ * When anything in the run's own directory last changed. A shallow scan: the files a
+ * running run writes as it goes — `run.json`, `runner.log`, `progress.jsonl` — are all
+ * at the top of it, and walking the steps and their Outputs would be a directory tree
+ * per run per tick for the same answer.
+ *
+ * ponytail: shallow, deepen it only if a run turns up that writes only into `steps/`.
+ */
+const touchedDirAt = Effect.fn("touchedDirAt")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
+  let newest = 0;
+  for (const name of names) {
+    const at = yield* mtimeOf(path.join(dir, name));
+    if (at > newest) newest = at;
+  }
+  return newest;
+});
+
+/**
+ * "quiet for 9m", for a run whose directory has not changed for longer than the
+ * threshold. A run that is working writes — progress lines, its own record — so silence
+ * for minutes is the one signal available from outside that an agent has hung.
+ */
+const quietFor = Effect.fn("quietFor")(function* (dir: string, now: number, quietMs: number) {
+  const at = yield* touchedDirAt(dir);
+  if (at === 0 || now - at <= quietMs) return null;
+  return `quiet for ${took(now - at)}`;
 });
 
 function recentDetail(record: RunRecord, abandoned: boolean): string {
@@ -192,13 +264,8 @@ export const fixableRun = Effect.fn("fixableRun")(function* (run: Run) {
 
 /** When a run last changed: a run making progress rewrites run.json as it goes. */
 const touchedAt = Effect.fn("touchedAt")(function* (run: Run) {
-  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const file = path.join(run.dir, "run.json");
-  return yield* fs.stat(file).pipe(
-    Effect.map((s) => (Option.isSome(s.mtime) ? s.mtime.value.getTime() : 0)),
-    Effect.catch(() => Effect.succeed(0)),
-  );
+  return yield* mtimeOf(path.join(run.dir, "run.json"));
 });
 
 /**
@@ -235,16 +302,19 @@ export const buildView = Effect.fn("buildView")(function* (
     pluginRoot?: string;
     /** The Runs already read, so a caller drawing two Views scans the dir once. */
     runs?: ReadonlyArray<Run>;
+    /** How long a running run may write nothing before its row says so. */
+    quietMs?: number;
   },
 ) {
   const path = yield* Path.Path;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
+  const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
   // Only agents in this workspace count, whatever a run record claims.
   const here = opts.alive.filter(
     (a) => a.workspaceId === null || a.workspaceId === opts.workspaceId,
   );
   const hereNames = new Set(here.map((a) => a.name));
-  const status = new Map(here.map((a) => [a.name, a.status]));
+  const live = new Map(here.map((a) => [a.name, a]));
 
   const all = opts.runs ?? (yield* new RunStore(opts.stateDir).list());
   const runs = all.filter((r) => belongs(r.record, opts, hereNames));
@@ -257,12 +327,14 @@ export const buildView = Effect.fn("buildView")(function* (
   for (const run of runs) {
     for (const variant of agentsHere(run.record, hereNames)) {
       if (rows.some((r) => r.agent === variant.agent)) continue;
+      const alive = live.get(variant.agent);
       rows.push({
         key: "",
         name: agentTitle(variant, registered.get(variant.agent)),
         agent: variant.agent,
-        status: status.get(variant.agent) ?? "unknown",
+        status: alive?.status ?? "unknown",
         run: run.id,
+        now: alive?.title ?? null,
       });
     }
   }
@@ -279,18 +351,20 @@ export const buildView = Effect.fn("buildView")(function* (
 
   const active: RunRow[] = [];
   for (const r of runs.filter((r) => r.record.status === "running" && !abandoned.has(r.id))) {
+    const choice = yield* readChoice(r.dir);
     active.push({
       id: r.id,
       dir: r.dir,
       glyph: glyphFor(r.record, false),
       title: title(r.record),
-      detail: yield* activeDetail(r),
+      detail: yield* activeDetail(r, now, quietMs),
       at: yield* touchedAt(r),
       target: r.record.inputs.target ?? null,
       // The same set the finished rows read: this used to stat every active run's dir a
       // second time, on the 3s poll and on every watch event and command.
       fixable: fixable.has(r.id),
-      choice: yield* readChoice(r.dir),
+      choice,
+      needsYou: choice !== null || r.record.awaiting !== null,
     });
   }
 
@@ -315,6 +389,8 @@ export const buildView = Effect.fn("buildView")(function* (
       target: r.record.inputs.target ?? null,
       fixable: fixable.has(r.id),
       choice: null,
+      // A finished run is waiting on nobody, whatever it was awaiting when it stopped.
+      needsYou: false,
     })),
   };
 });
@@ -381,7 +457,7 @@ export function renderWorkspace(
   }
 
   const agents = view.agents.map(
-    (a) => `  ${a.key}  ${a.name.padEnd(22)}${a.status.padEnd(9)}${a.run}`,
+    (a) => `  ${a.key}  ${a.name.padEnd(22)}${a.status.padEnd(9)}${a.now ?? a.run}`,
   );
   if (view.extraAgents > 0) agents.push(`     … and ${view.extraAgents} more without a key`);
 

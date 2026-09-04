@@ -8,7 +8,14 @@ import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { installFakeSkills, writeDef } from "../support/defs";
 import { runEffect } from "../support/effect";
-import { buildHistory, buildRunDetail, buildSettings, buildWorkflows } from "../../src/views";
+import {
+  buildHistory,
+  buildRunDetail,
+  buildSettings,
+  buildWorkflows,
+  planTicket,
+  type PlanPanel,
+} from "../../src/views";
 import { REVIEW_FILE } from "../../src/output";
 import { RUNNER_LOG } from "../../src/driver";
 import { RunStore, type Run } from "../../src/run";
@@ -387,4 +394,120 @@ effectTest("a run that is not there has no detail rather than a failure", functi
   expect(
     yield* buildRunDetail({ stateDir: env.stateDir, runId: "no-such-run", mr: null }),
   ).toBeNull();
+});
+
+test("a ticket's title is its first heading, and it is done when every box is checked", () => {
+  const open = planTicket(
+    "01-agent-now-line.md",
+    "# 01: Each agent row says what it is doing\n\n- [x] boundary decodes it\n- [ ] rendered\n",
+  );
+  expect(open).toEqual({
+    file: "01-agent-now-line.md",
+    title: "01: Each agent row says what it is doing",
+    done: false,
+  });
+
+  const closed = planTicket("02.md", "Preamble\n\n## Needs you first\n\n- [X] one\n- [x] two\n");
+  expect(closed.title).toBe("Needs you first");
+  expect(closed.done).toBe(true);
+
+  // No boxes is not "all of them are checked": a ticket nobody has marked up is open,
+  // and a file with no heading is named by its file.
+  const bare = planTicket("03-no-heading.md", "just prose\n");
+  expect(bare).toEqual({ file: "03-no-heading.md", title: "03-no-heading.md", done: false });
+});
+
+effectTest(
+  "a run's plan is read from its own plan dir, or the one it was started from",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const env = rig.pluginEnv();
+
+    const planner = yield* seed({ workflow: "plan" });
+    const dir = path.join(planner.dir, "plan");
+    yield* fs.makeDirectory(path.join(dir, "issues"), { recursive: true });
+    yield* fs.writeFileString(path.join(dir, "SPEC.md"), "# Control Plane\n\nOne screen.\n");
+    yield* fs.writeFileString(path.join(dir, "issues", "02-second.md"), "# Second\n\n- [ ] a\n");
+    yield* fs.writeFileString(path.join(dir, "issues", "01-first.md"), "# First\n\n- [x] a\n");
+    yield* fs.writeFileString(path.join(dir, "issues", "notes.txt"), "not a ticket\n");
+
+    const own = yield* buildRunDetail({ stateDir: env.stateDir, runId: planner.id, mr: null });
+
+    expect(own!.plan!.spec).toEqual({
+      _tag: "Text",
+      text: "# Control Plane\n\nOne screen.\n",
+      truncated: false,
+    });
+    // Ordered by file, which is what the numbering is for, and only the markdown.
+    expect(own!.plan!.tickets).toEqual([
+      { file: "01-first.md", title: "First", done: true },
+      { file: "02-second.md", title: "Second", done: false },
+    ]);
+
+    // An implement run has no plan of its own; it reads the directory it was started from.
+    const builder = yield* seed({ workflow: "implement" });
+    builder.record.inputs.plan = dir;
+    builder.record.inputs.plan_kind = "plan-dir";
+    yield* builder.save();
+
+    const started = yield* buildRunDetail({ stateDir: env.stateDir, runId: builder.id, mr: null });
+    expect(started!.plan!.tickets.map((t) => t.title)).toEqual(["First", "Second"]);
+
+    // A run built from a review rather than a plan dir has no plan at all.
+    const fixer = yield* seed({ workflow: "implement" });
+    fixer.record.inputs.plan = dir;
+    fixer.record.inputs.plan_kind = "review";
+    yield* fixer.save();
+    const none = yield* buildRunDetail({ stateDir: env.stateDir, runId: fixer.id, mr: null });
+    expect(none!.plan).toBeNull();
+  },
+);
+
+effectTest("a step left running by a run that stopped is timed to where it stopped", function* () {
+  const env = rig.pluginEnv();
+  const run = yield* seed({ workflow: "implement" });
+  const step = run.record.steps[0]!;
+  // What a SIGTERM or a driver that died leaves behind: the run has an end, the step
+  // it was on does not.
+  step.status = "running";
+  step.started_at = "2026-09-02T12:00:00.000Z";
+  step.finished_at = null;
+  run.record.status = "failed";
+  run.record.finished_at = "2026-09-02T12:07:00.000Z";
+  yield* run.save();
+
+  const detail = yield* buildRunDetail({ stateDir: env.stateDir, runId: run.id, mr: null });
+
+  // Seven minutes, and seven minutes tomorrow too — not however long ago it died.
+  expect(detail!.steps[0]!.took).toBe("7m");
+});
+
+effectTest("a finished run's plan is read once; a running one's is read again", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const env = rig.pluginEnv();
+  const plans = new Map<string, PlanPanel | null>();
+
+  const write = (run: { dir: string }, spec: string) =>
+    Effect.gen(function* () {
+      yield* fs.makeDirectory(path.join(run.dir, "plan"), { recursive: true });
+      yield* fs.writeFileString(path.join(run.dir, "plan", "SPEC.md"), spec);
+    });
+
+  // Stopped: the plan it was built from cannot change, so the second read is the cache.
+  const done = yield* seed({ workflow: "implement" });
+  yield* write(done, "# first\n");
+  const readOnce = { stateDir: env.stateDir, runId: done.id, mr: null, plans };
+  expect((yield* buildRunDetail(readOnce))!.plan!.spec).toMatchObject({ text: "# first\n" });
+  yield* write(done, "# rewritten\n");
+  expect((yield* buildRunDetail(readOnce))!.plan!.spec).toMatchObject({ text: "# first\n" });
+
+  // Still running: it may be writing that plan as we read it, so it is never cached.
+  const going = yield* seed({ workflow: "implement", status: "running" });
+  yield* write(going, "# first\n");
+  const live = { stateDir: env.stateDir, runId: going.id, mr: null, plans };
+  expect((yield* buildRunDetail(live))!.plan!.spec).toMatchObject({ text: "# first\n" });
+  yield* write(going, "# rewritten\n");
+  expect((yield* buildRunDetail(live))!.plan!.spec).toMatchObject({ text: "# rewritten\n" });
 });

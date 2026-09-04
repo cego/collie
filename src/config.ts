@@ -18,6 +18,13 @@ export interface Defaults {
    * double, given up on at triple. `0` waits for as long as it takes.
    */
   quietMs: number;
+  /**
+   * How long a running run's directory may go unchanged before the board calls it quiet.
+   * Separate from `quietMs`, which is what the Driver holds one step's agent to: this is
+   * a whole run writing nothing, read from the outside, and the two are worth different
+   * numbers.
+   */
+  boardQuietMs: number;
   /** Extra models to accept per harness, for models the adapter table does not list. */
   models: Readonly<Record<string, ReadonlyArray<string>>>;
   /** What to do about a directory the harness has not been trusted with yet. */
@@ -38,6 +45,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   maxIterations: 5,
   handoffTimeoutMs: 2 * 60 * 60 * 1000,
   quietMs: 10 * 60 * 1000,
+  boardQuietMs: 5 * 60 * 1000,
   models: {},
   trust: "ask",
   permissions: "bypass",
@@ -118,6 +126,9 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDi
       ? raw.handoff_timeout_ms
       : FALLBACK_DEFAULTS.handoffTimeoutMs,
     quietMs: isNumber(raw.quiet_ms) ? raw.quiet_ms : FALLBACK_DEFAULTS.quietMs,
+    boardQuietMs: isNumber(raw.board_quiet_ms)
+      ? raw.board_quiet_ms
+      : FALLBACK_DEFAULTS.boardQuietMs,
     models: Option.getOrElse(Schema.decodeUnknownOption(Models)(raw.models), () => ({})),
     trust: raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
     // As written rather than coerced: `loadDefaults` is read by the Settings and

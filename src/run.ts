@@ -101,6 +101,18 @@ const StepRecordSchema = Schema.Struct({
   status: StepStatusSchema,
   iteration: Schema.Number,
   note: Schema.NullOr(Schema.String),
+  /**
+   * When this step started and stopped, ISO, or `null` where it has not yet. Both
+   * default to null so a Run recorded before they were kept still decodes — and a step
+   * that was skipped rather than run has no start at all, which is what makes its
+   * duration nothing rather than zero.
+   */
+  started_at: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
+  finished_at: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
   variants: optionalList(VariantRecordSchema),
 }).mapFields(Struct.map(Schema.mutableKey));
 export type VariantRecord = Schema.Schema.Type<typeof VariantRecordSchema>;
@@ -262,6 +274,30 @@ export class Run {
     return found;
   }
 
+  /**
+   * A step's status, with the clock. Every transition goes through here rather than
+   * assigning `status` directly, because the timings are the kind of fact that gets
+   * stamped at four sites and forgotten at the fifth — and a step with a start and no
+   * end reads on the board as one that has been running since it was skipped.
+   */
+  mark(id: string, status: StepStatus) {
+    const record = this.step(id);
+    return Effect.gen(function* () {
+      const at = yield* nowIso();
+      record.status = status;
+      if (status === "running") {
+        record.started_at = at;
+        record.finished_at = null;
+      } else if (status === "pending") {
+        // Back round the loop: this iteration has not started, so it has no timings.
+        record.started_at = null;
+        record.finished_at = null;
+      } else {
+        record.finished_at = at;
+      }
+    }).pipe(Effect.withSpan("Run.mark"));
+  }
+
   component(value: string): string {
     if (unsafePathComponent(value) !== null)
       throw new Error(
@@ -414,6 +450,8 @@ export class RunStore {
           status: "pending",
           iteration: 0,
           note: null,
+          started_at: null,
+          finished_at: null,
           variants: [],
         })),
         parent: opts.parent ?? null,

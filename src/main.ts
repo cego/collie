@@ -3,7 +3,15 @@ import { Config, Console, Effect, FileSystem, Path, type PlatformError } from "e
 import { program } from "./collie";
 import { currentEnv, type PluginEnv } from "./env";
 import { Herdr, herdrFailureReason } from "./herdr";
-import { driveFlow, forkFlow, openPicker, pickFlow, resumeFlow, workspaceFlow } from "./flows";
+import {
+  boardFlow,
+  driveFlow,
+  forkFlow,
+  openPicker,
+  pickFlow,
+  resumeFlow,
+  workspaceFlow,
+} from "./flows";
 
 /**
  * The two front doors share one entry point. `Bun.argv` rather than Stdio's `args`
@@ -30,6 +38,8 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
           return openPicker(client, env, command);
         case "picker":
           return popup(client, env, selected);
+        case "board":
+          return boardFlow(client, env);
         case "drive":
           return driveFlow(client, env);
         case "workspace":

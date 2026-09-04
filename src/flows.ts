@@ -15,7 +15,7 @@ import {
   type ResolvedStep,
   type ResolvedWorkflow,
 } from "./definitions";
-import { choiceHint, executeRun, unmetRequirementFor } from "./engine";
+import { choiceHint, ensureWorkspaceTab, executeRun, unmetRequirementFor } from "./engine";
 import type { PluginEnv } from "./env";
 import { Herdr, type AgentInfo } from "./herdr";
 import {
@@ -66,6 +66,7 @@ import {
   buildSettings,
   buildWorkflows,
   NUMERIC_DEFAULTS,
+  type PlanPanel,
 } from "./views";
 import { isPermissionMode, PERMISSION_MODES } from "./harness";
 import {
@@ -92,6 +93,8 @@ export interface ControlSession extends Omit<Session, "herdr"> {
   herdr: Herdr;
   /** This installation, so the board can say when it is behind its remote. */
   pluginRoot: string;
+  /** Where the defaults live, so the board can read its own quiet threshold. */
+  configDir: string;
   /**
    * What the last worktree sweep said, and whether one is out working right now. A
    * caller that keeps none — a test drawing one board, a view built to be rendered
@@ -128,6 +131,32 @@ export const openPicker = Effect.fn("Flows.openPicker")(function* (
     env: { COLLIE_MODE: mode, COLLIE_CWD: env.cwd },
     focus: true,
   });
+  return 0;
+});
+
+/**
+ * The workspace's Collie tab, from any pane: found or opened, moved to the front and
+ * focused. `prefix+1` already lands on it because every run keeps it first, but that is
+ * a position rather than a name — and a workspace whose runs all pre-date the tab, or
+ * whose tab was closed, has nothing at position one.
+ *
+ * The finding and opening is the engine's own, not a second copy: two of those is how
+ * one workspace ends up with two Collie tabs.
+ */
+export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, env: PluginEnv) {
+  const tabId = yield* ensureWorkspaceTab({
+    herdr,
+    workspaceId: env.workspaceId,
+    cwd: env.cwd,
+    log: (line) => Console.error(line),
+  });
+  if (tabId === null) {
+    yield* Console.error("No workspace here to open the Control Plane in.");
+    return 1;
+  }
+  // A tab that will not focus is still a tab the human can reach, so this is not
+  // what the exit status turns on.
+  yield* Effect.ignore(herdr.tabFocus(tabId));
   return 0;
 });
 
@@ -662,6 +691,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     stateDir: env.stateDir,
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
+    configDir: env.configDir,
     pruned: { at: 0, lines: [], running: false },
   };
   const why =
@@ -713,6 +743,13 @@ export function appState(
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
 ) {
   const mrCache = new Map<string, { at: number; panel: MrPanel }>();
+  /**
+   * A finished Run's plan, kept between reads for the same reason the merge request is:
+   * the panel is re-produced on every board tick, and a Run that has stopped cannot
+   * change the plan it was built from. Cleared whenever something asked for a fresh
+   * read, so `R` re-reads a plan the same way it re-reads the merge request.
+   */
+  const planCache = new Map<string, PlanPanel | null>();
 
   const merge = Effect.fn("Flows.mergeRequestFor")(function* (
     target: string | null,
@@ -757,6 +794,7 @@ export function appState(
     // badge is only ever filled from what is in the cache. When to read past that cache
     // is `rereads`' decision, not a second copy of it here.
     const mr = yield* merge(selected?.target ?? null, env.cwd, again.forceMr);
+    if (again.forceMr) planCache.clear();
     const state = {
       view: focus.view,
       board,
@@ -780,6 +818,7 @@ export function appState(
             mr,
             tail: focus.tail,
             pages: focus.reviewPages,
+            plans: planCache,
           })
         : null,
     } satisfies AppState;
@@ -1226,6 +1265,25 @@ const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession) {
   );
 });
 
+/**
+ * How long the board's own quiet threshold stands before `config.json` is read again.
+ * The board redraws every three seconds and on every filesystem event, and this value
+ * changes only when a human writes it in Settings — so re-parsing the file per redraw
+ * was thousands of reads an hour for one open pane. The same reasoning, and the same
+ * shape, as the `behindRemote` count in `src/doctor.ts`.
+ */
+const QUIET_FOR_MS = 30_000;
+const quietSeen = new Map<string, { at: number; quietMs: number }>();
+
+const boardQuietMs = Effect.fn("Flows.boardQuietMs")(function* (configDir: string) {
+  const now = yield* Clock.currentTimeMillis;
+  const seen = quietSeen.get(configDir);
+  if (seen && now - seen.at < QUIET_FOR_MS) return seen.quietMs;
+  const quietMs = (yield* loadDefaults(configDir)).boardQuietMs;
+  quietSeen.set(configDir, { at: now, quietMs });
+  return quietMs;
+});
+
 const boardOf = Effect.fn("Flows.boardOf")(function* (
   session: ControlSession,
   runs?: ReadonlyArray<Run>,
@@ -1251,6 +1309,7 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
     alive: live.alive,
     worktrees: session.pruned?.lines ?? [],
     pluginRoot: session.pluginRoot,
+    quietMs: yield* boardQuietMs(session.configDir),
     runs,
   });
 });

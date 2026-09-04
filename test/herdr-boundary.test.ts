@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
-import { decodeWorkspaceList, Herdr } from "../src/herdr";
+import { decodeAgentList, decodeWorkspaceList, Herdr } from "../src/herdr";
 import { workspaceCwdFromPanes } from "../src/operations";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
@@ -422,5 +422,45 @@ test("removing a worktree names its workspace and never forces", () =>
 
       const calls = yield* rig.calls();
       expect(calls.at(0)?.argv).toEqual(["worktree", "remove", "--workspace", "w1P"]);
+    }),
+  ));
+
+test("an agent's terminal title decodes, and an agent without one has none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const list = yield* decodeAgentList({
+        id: "cli:agent:list",
+        result: {
+          type: "agent_list",
+          agents: [
+            {
+              name: "impl-1",
+              pane_id: "1-2",
+              agent_status: "working",
+              terminal_title: "◐ Simplify cego.collie plugin",
+            },
+            { name: "rev-1", pane_id: "1-3", agent_status: "idle" },
+            {
+              name: "impl-2",
+              pane_id: "1-4",
+              agent_status: "working",
+              terminal_title: "◐ [Fix] the parser",
+            },
+            {
+              name: "impl-3",
+              pane_id: "1-5",
+              agent_status: "working",
+              terminal_title: "[Fix] the parser",
+            },
+          ],
+        },
+      });
+
+      // The glyph herdr prefixes is its own spinner, not part of what the agent said.
+      expect(list[0]!.title).toBe("Simplify cego.collie plugin");
+      expect(list[1]!.title).toBeNull();
+      // And only the spinner: a title that starts with punctuation of its own keeps it.
+      expect(list[2]!.title).toBe("[Fix] the parser");
+      expect(list[3]!.title).toBe("[Fix] the parser");
     }),
   ));

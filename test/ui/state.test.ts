@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test";
 import {
   actionsFor,
+  ALL_KEYS,
+  footerKeys,
+  keyIntent,
+  markdownLines,
+  needsYouStatus,
   runIdOf,
   answerFor,
   clampSelection,
@@ -11,10 +16,12 @@ import {
   rereads,
   retarget,
   rowsOf,
+  type KeyContext,
+  type Keypress,
   type Row,
 } from "../../src/ui/state";
 import { DateTime } from "effect";
-import { ago, agoShort } from "../../src/time";
+import { ago, agoShort, took } from "../../src/time";
 import type { PendingChoice } from "../../src/driver";
 import type { WorkspaceView } from "../../src/workspace";
 import { focus } from "../support/focus";
@@ -50,12 +57,13 @@ function run(id: string, over: Partial<WorkspaceView["active"][number]> = {}) {
     target: null,
     fixable: false,
     choice: null,
+    needsYou: false,
     ...over,
   };
 }
 
-function agent(key: string, name: string, run: string) {
-  return { key, name, agent: `${name.toLowerCase()}-1`, status: "working", run };
+function agent(key: string, name: string, run: string, now: string | null = null) {
+  return { key, name, agent: `${name.toLowerCase()}-1`, status: "working", run, now };
 }
 
 const MENU: PendingChoice = {
@@ -74,7 +82,9 @@ const MENU: PendingChoice = {
 test("every row carries the stable id its actions are aimed at", () => {
   const rows = rowsOf(
     board({
-      agents: [{ key: "1", name: "Implementer", agent: "impl-1", status: "working", run: "r1" }],
+      agents: [
+        { key: "1", name: "Implementer", agent: "impl-1", status: "working", run: "r1", now: null },
+      ],
       active: [run("r1")],
       recent: [run("r0", { glyph: "✓", detail: "done" })],
     }),
@@ -177,7 +187,9 @@ test("an empty board selects nothing, and a fresh board selects its first row", 
 test("a row's actions name the row, not the newest run", () => {
   const rows = rowsOf(
     board({
-      agents: [{ key: "3", name: "Reviewer", agent: "rev-1", status: "idle", run: "r1" }],
+      agents: [
+        { key: "3", name: "Reviewer", agent: "rev-1", status: "idle", run: "r1", now: null },
+      ],
       active: [run("r1")],
       recent: [run("r0")],
     }),
@@ -423,4 +435,423 @@ test("a row id says whether it is a Run, and which one", () => {
   expect(runIdOf(null)).toBeNull();
   // The row ids the board mints are the ones this reads back.
   expect(runIdOf(rowsOf(board({ recent: [run("r1")] }))[0]!.id)).toBe("r1");
+});
+
+test("an agent's row says what it is doing, and its run only where that is all it has", () => {
+  // Nested under its run, so which run it belongs to is the row above it: the detail is
+  // what the agent is actually on, from the terminal title its harness publishes.
+  const rows = rowsOf(
+    board({
+      agents: [agent("1", "Implementer", "r1", "Simplify cego.collie plugin")],
+      active: [run("r1")],
+    }),
+  );
+  expect(rows.map((r) => r.detail)).toEqual(["build", "working · Simplify cego.collie plugin"]);
+
+  // A harness that publishes no title leaves the status alone.
+  const quiet = rowsOf(board({ agents: [agent("1", "Reviewer", "r1")], active: [run("r1")] }));
+  expect(quiet[1]!.detail).toBe("working");
+
+  // An orphan has no run above it, so its own row says which one it names — and still
+  // says what it is doing.
+  const orphans = rowsOf(board({ agents: [agent("1", "Planner", "r9", "Write the spec")] }));
+  expect(orphans[1]!.detail).toBe("working · Write the spec · r9");
+});
+
+test("a run that needs you is listed first, under a header saying so", () => {
+  const rows = rowsOf(
+    board({
+      agents: [agent("1", "Implementer", "r2")],
+      active: [run("r1"), run("r2", { needsYou: true, choice: MENU }), run("r3")],
+    }),
+  );
+
+  // The waiting run first, its own agents still nested under it.
+  expect(rows.map((r) => [r.kind, r.id])).toEqual([
+    ["header", "header:Needs you"],
+    ["active", "run:r2"],
+    ["agent", "agent:implementer-1"],
+    ["active", "run:r1"],
+    ["active", "run:r3"],
+  ]);
+  expect(rows[0]!.title).toBe("Needs you");
+  // No header where nothing is waiting: an empty section is noise on every refresh.
+  expect(rowsOf(board({ active: [run("r1")] })).map((r) => r.kind)).toEqual(["active"]);
+});
+
+test("nothing acts on a header row", () => {
+  const rows = rowsOf(board({ active: [run("r1"), run("r2", { needsYou: true })] }));
+
+  // It is a name for the group under it: selectable like every row, and inert, so no
+  // key and no button is ever offered for one.
+  expect(rows[0]!.kind).toBe("header");
+  expect(actionsFor(rows[0]!)).toEqual([]);
+});
+
+test("the footer counts the runs waiting on you, and only while the Selection is elsewhere", () => {
+  const waiting = [run("r1", { needsYou: true }), run("r2", { needsYou: true }), run("r3")];
+
+  expect(needsYouStatus(rowsOf(board({ active: waiting })), "run:r3")).toBe("2 run(s) need you");
+  // Standing on one of them: the question itself is on screen, so the count would
+  // be telling the human about the row they are already answering.
+  expect(needsYouStatus(rowsOf(board({ active: waiting })), "run:r1")).toBeNull();
+  expect(needsYouStatus(rowsOf(board({ active: [run("r1")] })), "run:r1")).toBeNull();
+});
+
+test("how long something took reads in the coarsest unit that still says it", () => {
+  expect(took(45_000)).toBe("45s");
+  expect(took(12 * 60_000)).toBe("12m");
+  // An hour is two units, because "63m" is a number to divide in your head.
+  expect(took(63 * 60_000)).toBe("1h03m");
+  expect(took(24 * 3_600_000)).toBe("24h00m");
+  // Under a second, and a clock that went backwards: neither is a duration to show.
+  expect(took(400)).toBe("0s");
+  expect(took(-5_000)).toBe("0s");
+});
+
+test("the footer offers the panel's keys and three globals, and no more", () => {
+  const globals = "p run · ? keys · q close";
+  expect(footerKeys({ panel: [], on: { _tag: "Board" } })).toBe(globals);
+  expect(footerKeys({ panel: ["t log tail"], on: { _tag: "Board" } })).toBe(
+    `t log tail · ${globals}`,
+  );
+});
+
+test("a field that has taken the keys says what they do instead", () => {
+  // Every other key is inert while one of these has the keyboard, so offering the
+  // board's would be a lie — `k` typed a `k` while `[k stop]` stopped the run.
+  expect(footerKeys({ panel: [], on: { _tag: "Choice", choice: MENU } })).toBe(
+    "↑↓ move · Enter choose · Esc leave the run open",
+  );
+  expect(
+    footerKeys({ panel: [], on: { _tag: "Setting", setting: { key: "model", value: "opus" } } }),
+  ).toBe("type a value · Enter set it · Esc leave it");
+  expect(footerKeys({ panel: [], on: { _tag: "Filter" } })).toBe(
+    "type to narrow · Enter keep it · Esc drop it",
+  );
+});
+
+test("the help overlay lists every key the app handles, each with what it does", () => {
+  const keys = ALL_KEYS.map((k) => k.key);
+  // The ones the footer cannot always offer are exactly what the overlay is for.
+  for (const key of ["↑↓", "Tab", "/", "R", "m", "t", "c", "s", "u", "f", "?", "q"]) {
+    expect(keys).toContain(key);
+  }
+  expect(ALL_KEYS.every((k) => k.what !== "")).toBe(true);
+});
+
+test("markdown lines carry the one thing that makes a long review skimmable", () => {
+  const lines = markdownLines(
+    [
+      "# Review",
+      "",
+      "Summary of it.",
+      "- [strong] a real one",
+      "  * nested",
+      "```ts",
+      "# not a heading",
+      "```",
+      "after",
+    ].join("\n"),
+  );
+
+  expect(lines.map((l) => l.style)).toEqual([
+    "heading",
+    "plain",
+    "plain",
+    "list",
+    "list",
+    "code",
+    "code",
+    "code",
+    "plain",
+  ]);
+  // The text is untouched: this decides how a line is drawn, never what it says.
+  expect(lines.map((l) => l.text)).toEqual([
+    "# Review",
+    "",
+    "Summary of it.",
+    "- [strong] a real one",
+    "  * nested",
+    "```ts",
+    "# not a heading",
+    "```",
+    "after",
+  ]);
+
+  // Every heading level, and a fence left open to the end of the file.
+  expect(markdownLines("### Findings").map((l) => l.style)).toEqual(["heading"]);
+  expect(markdownLines("```\nstill code").map((l) => l.style)).toEqual(["code", "code"]);
+  // A hash with no space is a comment in whatever the agent pasted, not a heading.
+  expect(markdownLines("#!/bin/sh").map((l) => l.style)).toEqual(["plain"]);
+});
+
+/** The board as the keyboard sees it, with only what a test cares about set. */
+function keys(over: Partial<KeyContext> = {}): KeyContext {
+  return {
+    on: { _tag: "Board" },
+    helping: false,
+    asking: { index: 0, typed: "" },
+    filter: "",
+    scrollable: false,
+    row: null,
+    rows: [],
+    cutShort: false,
+    mrUrl: null,
+    ...over,
+  };
+}
+
+/** One keypress, as OpenTUI reports one. */
+function press(sequence: string, over: Omit<Keypress, "sequence"> = {}) {
+  return { sequence, ...over };
+}
+
+test("the help overlay owns the keyboard, then a flow, then the board", () => {
+  // A flow running inline has its own handler; a key that also moved the Selection
+  // underneath would act on a board nobody is looking at.
+  expect(keyIntent(keys({ on: { _tag: "Flow" } }), press("q", { name: "q" }))).toBeNull();
+  // `?` during a flow is the flow's, not the board's.
+  expect(keyIntent(keys({ on: { _tag: "Flow" } }), press("?"))).toBeNull();
+
+  // Any key closes the overlay and does nothing else — including a key the board would
+  // otherwise have acted on.
+  expect(keyIntent(keys({ helping: true }), press("k", { name: "k" }))).toEqual({
+    _tag: "Help",
+    open: false,
+  });
+  expect(keyIntent(keys(), press("?"))).toEqual({ _tag: "Help", open: true });
+
+  // The overlay beats a flow, because that is the order App draws them in: it hides the
+  // Flow behind the overlay, so a flow that became pending while help was open used to
+  // take the keyboard for a component nobody could see — and every key returned nothing,
+  // leaving a visible overlay that could not be closed.
+  expect(
+    keyIntent(keys({ on: { _tag: "Flow" }, helping: true }), press("k", { name: "k" })),
+  ).toEqual({
+    _tag: "Help",
+    open: false,
+  });
+});
+
+test("a literal question mark reaches the text it was typed into", () => {
+  // `?` opens the overlay only where the board owns the keyboard. Every printable
+  // character belongs to whatever is taking text: a free-text answer to a run's own
+  // question, the filter, and a Settings value are all things a `?` belongs in.
+  const asked: PendingChoice = { ...MENU, kind: "ask", items: [] };
+  expect(
+    keyIntent(
+      keys({ on: { _tag: "Choice", choice: asked }, asking: { index: 0, typed: "why" } }),
+      press("?"),
+    ),
+  ).toEqual({ _tag: "Answered", asking: { index: 0, typed: "why?" }, value: null });
+  expect(keyIntent(keys({ on: { _tag: "Filter" }, filter: "why" }), press("?"))).toEqual({
+    _tag: "Filtering",
+    filter: "why?",
+    typing: true,
+  });
+  expect(
+    keyIntent(
+      keys({ on: { _tag: "Setting", setting: { key: "model", value: "why" } } }),
+      press("?"),
+    ),
+  ).toEqual({
+    _tag: "Editing",
+    editing: { key: "model", value: "why?" },
+  });
+});
+
+test("the filter keeps the keyboard until Enter or Esc, and Enter keeps the text", () => {
+  const typing = keys({ on: { _tag: "Filter" }, filter: "revi" });
+
+  expect(keyIntent(typing, press("e"))).toEqual({
+    _tag: "Filtering",
+    filter: "revie",
+    typing: true,
+  });
+  // Enter stops typing and keeps the text: `/` narrows the list so a row can then be
+  // acted on, which is only possible once the keys mean the board again.
+  expect(keyIntent(typing, press("\r", { name: "return" }))).toEqual({
+    _tag: "Filtering",
+    filter: "revi",
+    typing: false,
+  });
+  // Only Esc drops it.
+  expect(keyIntent(typing, press("\x1b", { name: "escape" }))).toEqual({
+    _tag: "Filtering",
+    filter: "",
+    typing: false,
+  });
+  // And a key the board owns is text while the filter has the keyboard.
+  expect(keyIntent(typing, press("R"))).toEqual({
+    _tag: "Filtering",
+    filter: "reviR",
+    typing: true,
+  });
+});
+
+test("a Settings row being edited owns the keyboard until it is sent or abandoned", () => {
+  const editing = keys({ on: { _tag: "Setting", setting: { key: "model", value: "opu" } } });
+
+  expect(keyIntent(editing, press("s"))).toEqual({
+    _tag: "Editing",
+    editing: { key: "model", value: "opus" },
+  });
+  // Enter both sends the value and closes the editor: one key, two effects, the way
+  // `Answered` carries the new asking state and the answer together. Returning a bare
+  // command left the footer in editor mode with every later key still editing.
+  expect(keyIntent(editing, press("\r", { name: "return" }))).toEqual({
+    _tag: "Submitted",
+    command: { _tag: "SetDefault", key: "model", value: "opu" },
+  });
+  expect(keyIntent(editing, press("\x1b", { name: "escape" }))).toEqual({
+    _tag: "Editing",
+    editing: null,
+  });
+});
+
+test("the panel's scroll keys do not fight the list's arrows", () => {
+  const scrollable = keys({ scrollable: true });
+
+  expect(keyIntent(scrollable, press("\x1b[6~", { name: "pagedown" }))).toEqual({
+    _tag: "Scroll",
+    by: 1,
+    unit: "page",
+  });
+  expect(keyIntent(scrollable, press("\x1b[B", { name: "down", shift: true }))).toEqual({
+    _tag: "Scroll",
+    by: 1,
+    unit: "line",
+  });
+  // A bare arrow is still the Selection's, panel or no panel.
+  expect(keyIntent(scrollable, press("\x1b[B", { name: "down" }))).toEqual({ _tag: "Move", by: 1 });
+  // And with no panel on screen the scroll keys do nothing rather than moving the row.
+  expect(keyIntent(keys(), press("\x1b[6~", { name: "pagedown" }))).toBeNull();
+});
+
+test("a key with nothing to act on does nothing, rather than acting on something else", () => {
+  // `t` needs a Run, `m` needs something cut short, `c` needs a merge request.
+  expect(keyIntent(keys(), press("t"))).toBeNull();
+  expect(keyIntent(keys(), press("m"))).toBeNull();
+  expect(keyIntent(keys(), press("c"))).toBeNull();
+
+  // SAFETY: one active run went in, so one row comes out.
+  const [row] = rowsOf(board({ active: [run("r1")] })) as [Row];
+  expect(keyIntent(keys({ row }), press("t"))).toEqual({
+    _tag: "Do",
+    command: { _tag: "ToggleTail" },
+  });
+  expect(keyIntent(keys({ cutShort: true }), press("m"))).toEqual({
+    _tag: "Do",
+    command: { _tag: "MoreReview" },
+  });
+  expect(keyIntent(keys({ mrUrl: "https://host/g/p/-/merge_requests/42" }), press("c"))).toEqual({
+    _tag: "Copy",
+    text: "https://host/g/p/-/merge_requests/42",
+  });
+});
+
+test("a digit focuses that agent wherever the Selection is", () => {
+  const rows = rowsOf(
+    board({
+      agents: [
+        { key: "1", name: "Implementer", agent: "impl-1", status: "working", run: "r1", now: null },
+      ],
+      recent: [run("r0")],
+    }),
+  );
+  // The Selection is the finished run, and the digit still reaches the agent: those
+  // keys are the board's shortcut into a pane, not an action on a row.
+  expect(keyIntent(keys({ rows, row: rows[1]! }), press("1"))).toEqual({
+    _tag: "Do",
+    command: { _tag: "FocusAgent", agent: "impl-1" },
+  });
+  // A digit no agent answers to does nothing.
+  expect(keyIntent(keys({ rows, row: rows[1]! }), press("4"))).toBeNull();
+});
+
+test("the row's own actions are the last thing a key is tried against", () => {
+  // SAFETY: one active run went in, so one row comes out.
+  const [row] = rowsOf(board({ active: [run("r1")] })) as [Row];
+
+  expect(keyIntent(keys({ row }), press("k", { name: "k" }))).toEqual({
+    _tag: "Do",
+    command: { _tag: "StopRun", runId: "r1" },
+  });
+  // `s` hands off the Selection's review, and names it: an argument-less send meant the
+  // newest run in the Session.
+  expect(keyIntent(keys({ row }), press("s"))).toEqual({
+    _tag: "Do",
+    command: { _tag: "SendReview", runId: "r1" },
+  });
+  expect(keyIntent(keys(), press("s"))).toEqual({
+    _tag: "Do",
+    command: { _tag: "SendReview", runId: null },
+  });
+});
+
+test("every key the overlay advertises is one the keyboard actually acts on", () => {
+  // The overlay's list and the cascade that dispatches are two lists that have to
+  // agree, and nothing tied them together: a key dropped from the handler stayed
+  // advertised, and one added to the handler stayed invisible. Only the single-character
+  // keys, because the rest of the list is notation (`↑↓`, `PgUp/PgDn`, `1-9`) rather
+  // than a sequence — those have tests of their own above.
+  const single = ALL_KEYS.filter((entry) => entry.key.length === 1);
+  expect(single.length).toBeGreaterThan(10);
+
+  // SAFETY: one active run went in, so one row comes out.
+  const [active] = rowsOf(board({ active: [run("r1")] })) as [Row];
+  // SAFETY: one finished run went in, so one row comes out.
+  const [recent] = rowsOf(
+    board({ recent: [run("r0", { target: "mr:host/g/p!42", fixable: true })] }),
+  ) as [Row];
+  // Two boards, because the keys are split across them by design: `k` stops a running
+  // run and `x`/`o`/`w` only ever act on one that has stopped.
+  const boards = [
+    keys({ row: active, cutShort: true, mrUrl: "https://host/mr/42" }),
+    keys({ row: recent, cutShort: true, mrUrl: "https://host/mr/42" }),
+  ];
+
+  const unhandled = single.filter((entry) =>
+    boards.every((at) => keyIntent(at, press(entry.key, { name: entry.key })) === null),
+  );
+  expect(unhandled.map((entry) => entry.key)).toEqual([]);
+});
+
+test("a filter keeps a matching agent under a finished run too", () => {
+  // A finished run keeps its agents, so it opens a group exactly as an active one does:
+  // filtering by the agent alone left it hanging under nothing.
+  const rows = rowsOf(
+    board({
+      agents: [agent("1", "Reviewer", "r1")],
+      active: [],
+      recent: [run("r1")],
+    }),
+  );
+
+  expect(matching(rows, "Reviewer").map((r) => [r.kind, r.title])).toEqual([
+    ["recent", "Implement · r1"],
+    ["agent", "└ Reviewer"],
+  ]);
+});
+
+test('the "Needs you" header survives a filter its runs match', () => {
+  // The group under this header is runs, not agents, so a scan that stopped at the
+  // first non-agent row could never judge it a match.
+  const rows = rowsOf(
+    board({
+      agents: [],
+      active: [run("r1", { needsYou: true }), run("r2")],
+      recent: [],
+    }),
+  );
+
+  expect(matching(rows, "r1").map((r) => [r.kind, r.title])).toEqual([
+    ["header", "Needs you"],
+    ["active", "Implement · r1"],
+  ]);
+  // A run outside the group does not bring the header with it.
+  expect(matching(rows, "r2").map((r) => [r.kind, r.title])).toEqual([
+    ["active", "Implement · r2"],
+  ]);
 });

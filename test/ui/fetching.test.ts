@@ -62,6 +62,7 @@ function session(): ControlSession {
     herdr: new Herdr(env),
     ...scopeFor(env, env.cwd),
     stateDir: env.stateDir,
+    configDir: env.configDir,
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
   };

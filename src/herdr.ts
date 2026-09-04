@@ -102,6 +102,11 @@ const AgentReply = Schema.Struct({
   pane_id: Schema.String,
   workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   agent_status: Schema.String,
+  /**
+   * What the harness published as its pane's terminal title — Claude Code puts the task
+   * it is on there. herdr omits it for a pane that never set one.
+   */
+  terminal_title: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 const AgentListReply = Schema.Struct({
   result: Schema.Struct({ agents: Schema.Array(AgentReply) }),
@@ -354,7 +359,46 @@ export interface AgentInfo {
   /** Which workspace herdr says it is in; scoping never trusts a record over this. */
   workspaceId: string | null;
   status: AgentStatus;
+  /**
+   * What the agent says it is doing, from its pane's terminal title, or `null` where the
+   * harness publishes none. herdr's own spinner glyph is stripped: it animates, so a
+   * board that kept it would redraw a row that had not changed.
+   */
+  title: string | null;
 }
+
+/**
+ * herdr prefixes a live pane's title with a spinner frame and a space — `◐ `, `⠹ `.
+ * Only that is removed, and the space after it is what identifies it: dropping every
+ * leading non-alphanumeric instead took the title's own punctuation with it, so
+ * `◐ [Fix] the parser` arrived as `Fix] the parser`.
+ */
+const SPINNER = /^[^\p{L}\p{N}\s]+\s+/u;
+
+function agentTitle(raw: string | null | undefined): string | null {
+  const title = (raw ?? "").replace(SPINNER, "").trim();
+  return title === "" ? null : title;
+}
+
+/** `herdr agent list` as this plugin reads it: the agents it named, and what each is on. */
+export const decodeAgentList = (res: BoundaryValue) =>
+  decodeBoundary("herdr agent list", AgentListReply, res).pipe(
+    Effect.map(({ result }) =>
+      result.agents.flatMap((agent): AgentInfo[] =>
+        agent.name
+          ? [
+              {
+                name: agent.name,
+                paneId: agent.pane_id,
+                workspaceId: agent.workspace_id ?? null,
+                status: agentStatus(agent.agent_status),
+                title: agentTitle(agent.terminal_title),
+              },
+            ]
+          : [],
+      ),
+    ),
+  );
 
 /** `herdr workspace list` as this plugin reads it; a worktree-backed workspace's checkout is its directory. */
 export const decodeWorkspaceList = (res: BoundaryValue) =>
@@ -657,23 +701,7 @@ export class Herdr {
   }
 
   agentList(): HerdrEffect<AgentInfo[]> {
-    return this.cli(["agent", "list"]).pipe(
-      Effect.flatMap((res) => decodeBoundary("herdr agent list", AgentListReply, res)),
-      Effect.map(({ result }) => {
-        return result.agents.flatMap((agent) =>
-          agent.name
-            ? [
-                {
-                  name: agent.name,
-                  paneId: agent.pane_id,
-                  workspaceId: agent.workspace_id ?? null,
-                  status: agentStatus(agent.agent_status),
-                },
-              ]
-            : [],
-        );
-      }),
-    );
+    return this.cli(["agent", "list"]).pipe(Effect.flatMap(decodeAgentList));
   }
 
   agentFocus(target: string): HerdrEffect<void> {

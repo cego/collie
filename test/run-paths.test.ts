@@ -13,6 +13,7 @@ const JsonString = Schema.fromJsonString(Schema.Unknown);
 const SummaryJson = Schema.fromJsonString(Schema.Struct({ summary: Schema.String }));
 const encodeJson = Schema.encodeSync(JsonString);
 const decodeSummary = Schema.decodeUnknownSync(SummaryJson);
+const decodeJson = Schema.decodeUnknownSync(JsonString);
 
 beforeEach(() =>
   runEffect(
@@ -296,5 +297,31 @@ test("a claim that changed since it was inspected is never the one removed", () 
         "broke=true",
       );
       expect(yield* fs.exists(unchanged)).toBe(false);
+    }),
+  ));
+
+test("a Run recorded before step timings were kept still loads", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const file = path.join(run.dir, "run.json");
+      // SAFETY: RunStore wrote this file in `beforeEach`, so it is a record with steps.
+      const raw = decodeJson(yield* fs.readFileString(file)) as {
+        steps: Array<{ started_at?: string | null; finished_at?: string | null }>;
+      };
+      // The two keys gone, which is what a record written before they were kept has.
+      for (const step of raw.steps) {
+        delete step.started_at;
+        delete step.finished_at;
+      }
+      yield* fs.writeFileString(file, encodeJson(raw));
+
+      const loaded = yield* new RunStore(stateDir).load(run.id);
+
+      // Absent reads as "nothing recorded when", not as a decode failure: old is not
+      // corrupt, and a step with no start has no duration to show rather than a zero.
+      expect(loaded.record.steps[0]!.started_at).toBeNull();
+      expect(loaded.record.steps[0]!.finished_at).toBeNull();
     }),
   ));

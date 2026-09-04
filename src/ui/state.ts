@@ -104,6 +104,8 @@ export interface Row {
   target: string | null;
   /** Whether this Run can supply the work for a fix round. */
   fixable: boolean;
+  /** Whether this Run has stopped and is waiting on the human. */
+  needsYou: boolean;
   /** The Workflow or Persona this row names, for the Workflows view. */
   definition: DefinitionRow | null;
   /** The config key this row names, for the Settings view. */
@@ -243,6 +245,7 @@ const BLANK = {
   agent: null,
   target: null,
   fixable: false,
+  needsYou: false,
   definition: null,
   setting: null,
   choice: null,
@@ -261,10 +264,22 @@ function agentRow(a: AgentRow, connector: string): Row {
     // An agent's row is its live status, which herdr answers with no time attached.
     key: a.key === "" ? null : a.key,
     title: `${connector} ${a.name}`,
-    detail: a.status,
+    // What it is doing, where its harness publishes one: "working" alone said nothing a
+    // spinner does not. Which run it belongs to is the row above it, so this says what
+    // that run's agent is actually on.
+    detail: doingLine(a),
     runId: a.run,
     agent: a.agent,
   };
+}
+
+/**
+ * What an agent's row says it is doing: its live status, and the task its harness
+ * publishes as the pane's terminal title where there is one. Claude Code puts the task
+ * it is on there, and it comes back on the same `agent list` the statuses do.
+ */
+function doingLine(a: AgentRow, ...rest: string[]): string {
+  return [a.status, a.now ?? "", ...rest].filter((part) => part !== "").join(" · ");
 }
 
 /**
@@ -272,7 +287,7 @@ function agentRow(a: AgentRow, connector: string): Row {
  * place left to say which run it names.
  */
 function orphanRow(a: AgentRow, connector: string): Row {
-  return { ...agentRow(a, connector), detail: `${a.status} · ${a.run}` };
+  return { ...agentRow(a, connector), detail: doingLine(a, a.run) };
 }
 
 /**
@@ -311,6 +326,7 @@ function runRow(r: RunRow, now: number, kind: "active" | "recent" | "history"): 
     runId: r.id,
     target: r.target,
     fixable: r.fixable,
+    needsYou: r.needsYou,
     choice: r.choice,
   };
 }
@@ -366,7 +382,12 @@ export function rowsOf(board: WorkspaceView): Row[] {
   const rows: Row[] = [];
   const listed = new Set([...board.active, ...board.recent].map((r) => r.id));
   const under = (run: RunRow) => board.agents.filter((a) => a.run === run.id);
-  for (const run of board.active) {
+  // The runs that have stopped for the human first, under a header saying so: a
+  // blocked run costs the whole run's wall-clock and used to be visible only if its
+  // row happened to be the Selection. Each keeps the agents nested under it.
+  const waiting = board.active.filter((r) => r.needsYou);
+  if (waiting.length > 0) rows.push(headerRow(NEEDS_YOU));
+  for (const run of [...waiting, ...board.active.filter((r) => !r.needsYou)]) {
     rows.push(runRow(run, board.now, "active"), ...agentGroup(under(run), agentRow));
   }
   for (const run of board.recent) {
@@ -385,8 +406,32 @@ export function rowsOf(board: WorkspaceView): Row[] {
  * enough to fit the title column, which is a share of the pane: a header clipped
  * mid-word says less than no header at all.
  */
+/** The header over the runs that have stopped for the human. */
+const NEEDS_YOU = "Needs you";
+
 function headerRow(title: string): Row {
   return { ...BLANK, id: `header:${title}`, kind: "header", title };
+}
+
+/**
+ * "2 run(s) need you", while the Selection is not on one of them. On one of them the
+ * question itself is already on screen under the row, so the count would only be telling
+ * the human about what they are looking at.
+ */
+export function needsYouStatus(rows: readonly Row[], selected: string | null): string | null {
+  const waiting = rows.filter((row) => row.needsYou);
+  if (waiting.length === 0 || waiting.some((row) => row.id === selected)) return null;
+  return `${waiting.length} run(s) need you`;
+}
+
+/**
+ * The rows the Selection may land on. A header names the group under it and nothing acts
+ * on one, so the cursor steps over it: with a header first in the list, the board opened
+ * with an inert row selected and the detail panel titled after a heading. Rendering still
+ * draws every row — this is only about where the Selection can rest.
+ */
+export function selectableRows(rows: readonly Row[]): Row[] {
+  return rows.filter((row) => row.kind !== "header");
 }
 
 /**
@@ -597,6 +642,269 @@ export interface Windowed<T> {
   hidden: number;
 }
 
+/**
+ * Every key the app handles, with what it does. One list: the help overlay draws it,
+ * `docs/using.md` restates it, and a key added to the handler and not to this is a key
+ * nobody can find. The footer offers a subset — only what the Selection can be asked
+ * for — which is why the complete list needs a place of its own.
+ *
+ * Kept short on purpose: the overlay has to fit a 24-row pane, and `docs/using.md` is
+ * where the sentence-long version of each of these lives.
+ */
+export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
+  { key: "↑↓", what: "Move the Selection" },
+  { key: "Shift+↑↓", what: "Scroll the panel by a line" },
+  { key: "PgUp/PgDn", what: "Scroll the panel by a page" },
+  { key: "Tab", what: "Move between views" },
+  { key: "1-9", what: "Focus that agent's pane" },
+  { key: "p", what: "Run a workflow" },
+  { key: "u", what: "Resume an unfinished run" },
+  { key: "f", what: "Fork a workflow or persona" },
+  { key: "s", what: "Send the review to an implementer" },
+  { key: "l", what: "Open the run's log in a pane" },
+  { key: "t", what: "Tail that log in the panel" },
+  { key: "m", what: "Read more of a cut-short panel" },
+  { key: "x", what: "Fix what the review left open" },
+  { key: "a", what: "Review that target again" },
+  { key: "o", what: "Post the review to its MR" },
+  { key: "w", what: "Open that MR in a browser" },
+  { key: "c", what: "Copy that MR's URL" },
+  { key: "k", what: "Stop the selected run" },
+  { key: "Enter", what: "Run or set what is selected" },
+  { key: "/", what: "Filter the list" },
+  { key: "R", what: "Re-read what is on screen" },
+  { key: "?", what: "This list; any key closes it" },
+  { key: "q", what: "Close the tab" },
+];
+/**
+ * The three the line always ends in. At most three, because the footer's job is the
+ * Selection's own keys: the two-line wrap of every global was what made the important
+ * ones unreadable, and `?` is what the rest of them live behind now.
+ */
+const GLOBAL_KEYS = ["p run", "? keys", "q close"] as const;
+
+/**
+ * The footer's key line: what a field that has taken the keys says they do, and the
+ * board's own three where nothing has. Pure, so what the line says in each of those is a
+ * test rather than a screenshot — and so it cannot drift from what each mode accepts.
+ */
+export function footerKeys(opts: { panel: ReadonlyArray<string>; on: Keyboarding }): string {
+  if (opts.on._tag === "Choice") return "↑↓ move · Enter choose · Esc leave the run open";
+  if (opts.on._tag === "Setting") return "type a value · Enter set it · Esc leave it";
+  // The filter has the keys too, so the board's own are as much a lie here as the
+  // Selection's buttons were: `k` typed a `k` while `[k stop]` stopped the run.
+  if (opts.on._tag === "Filter") return "type to narrow · Enter keep it · Esc drop it";
+  return [...opts.panel, ...GLOBAL_KEYS].join(" · ");
+}
+
+/**
+ * One keypress, as much of it as anything here needs. Structurally typed rather than
+ * OpenTUI's `KeyEvent`, because this module must stay renderer-free — the same reason it
+ * stays Effect-free.
+ */
+export interface Keypress {
+  sequence: string;
+  name?: string;
+  shift?: boolean;
+  ctrl?: boolean;
+}
+
+/**
+ * What the board is, as far as the keyboard is concerned. Plain facts, which is what
+ * makes the whole cascade below a unit test instead of a rendered one: the precedence
+ * between six things that can own the keyboard used to be readable only as the order of
+ * early returns inside a `useKeyboard` callback.
+ */
+export interface KeyContext {
+  /**
+   * Where the keyboard is. `keyboardOn` above is the one answer to that, shared with the
+   * paste handler and the footer, so this does not restate the facts it is made of.
+   */
+  on: Keyboarding;
+  /**
+   * Whether the help overlay is up, in which case any key closes it. Not part of
+   * `Keyboarding`, because the overlay takes no typing — it is drawn over whatever does.
+   */
+  helping: boolean;
+  /** Where answering the pending question has got to. */
+  asking: Asking;
+  /** The filter text, while the keyboard is in it. */
+  filter: string;
+  /** Whether the detail panel is on screen and can be scrolled. */
+  scrollable: boolean;
+  /** The Selection, and every row, for the keys that act on one or find one. */
+  row: Row | null;
+  rows: readonly Row[];
+  /** Whether the panel cut something short, which is the only thing `m` can act on. */
+  cutShort: boolean;
+  /** The merge request URL `c` copies, where there is one. */
+  mrUrl: string | null;
+}
+
+/**
+ * What one keypress does. Everything the app can be asked to do by the keyboard, as
+ * plain data: the four at the top are the app's own state, `Scroll` and `Copy` are the
+ * two effects only a renderer can perform, and `Do` is every command that already has a
+ * name. `null` is a key this board does nothing with.
+ */
+export type KeyIntent =
+  | { _tag: "Help"; open: boolean }
+  /** Where one keystroke left a pending question: what to show, and what to send. */
+  | { _tag: "Answered"; asking: Asking; value: string | null }
+  | { _tag: "Filtering"; filter: string; typing: boolean }
+  | { _tag: "Editing"; editing: { key: string; value: string } | null }
+  /**
+   * The value being edited, sent: dispatch it and close the editor. One intent for one
+   * key doing both, the way `Answered` carries the new asking state and the answer —
+   * a bare `Do` left the footer in editor mode with every later key still editing.
+   */
+  | { _tag: "Submitted"; command: Command }
+  | { _tag: "Move"; by: -1 | 1 }
+  | { _tag: "ShowViewBy"; by: -1 | 1 }
+  | { _tag: "Scroll"; by: -1 | 1; unit: "line" | "page" }
+  | { _tag: "Copy"; text: string }
+  | { _tag: "Do"; command: Command };
+
+const PRINTABLE = /^[\x20-\x7e]$/;
+
+const doing = (command: Command): KeyIntent => ({ _tag: "Do", command });
+
+/**
+ * What one keypress means, given what is on screen. One ordered cascade, and the order
+ * is the whole design: whoever owns the keyboard is asked first, and only a board with
+ * nobody else asking gets to the list's own keys.
+ *
+ * Pure, so each of those rules is a test. It returns intents rather than performing
+ * anything because two of them — scrolling the panel, putting a URL on the clipboard —
+ * belong to the renderer, and a function that reached for those could not be tested at
+ * all. `Do` carries the commands unchanged, so a key and a click on the same row button
+ * still cannot mean different things.
+ */
+export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
+  // The overlay is the whole screen and every key behind it acts on something nobody
+  // can see, so any key closes it and does nothing else. First, because that is the
+  // order App draws them in: it hides the Flow behind the overlay, so giving a flow the
+  // keyboard here left a visible overlay that no key could close.
+  if (at.helping) return { _tag: "Help", open: false };
+  // A flow asking a question owns the keyboard: `Flow` has its own handler, and a key
+  // that also moved the Selection underneath would act on a board nobody is looking at.
+  if (at.on._tag === "Flow") return null;
+  if (at.on._tag === "Choice") {
+    const next = answerFor(at.on.choice, at.asking, key.sequence);
+    return { _tag: "Answered", asking: next.asking, value: next.value };
+  }
+  if (at.on._tag === "Filter") {
+    // Enter stops typing and keeps the text — `/` narrows the list so a row can then be
+    // acted on — and only Esc drops it.
+    if (key.name === "escape") return { _tag: "Filtering", filter: "", typing: false };
+    if (key.name === "return") return { _tag: "Filtering", filter: at.filter, typing: false };
+    if (key.name === "backspace") {
+      return { _tag: "Filtering", filter: at.filter.slice(0, -1), typing: true };
+    }
+    if (PRINTABLE.test(key.sequence)) {
+      return { _tag: "Filtering", filter: at.filter + key.sequence, typing: true };
+    }
+    return null;
+  }
+  // A Settings row being given a new value: every key belongs to that until it is sent
+  // or abandoned, the same rule a pending question follows.
+  if (at.on._tag === "Setting") {
+    const editing = at.on.setting;
+    if (key.name === "escape") return { _tag: "Editing", editing: null };
+    if (key.name === "return") {
+      const command: Command = { _tag: "SetDefault", key: editing.key, value: editing.value };
+      return { _tag: "Submitted", command };
+    }
+    if (key.name === "backspace") {
+      return { _tag: "Editing", editing: { ...editing, value: editing.value.slice(0, -1) } };
+    }
+    if (PRINTABLE.test(key.sequence)) {
+      return { _tag: "Editing", editing: { ...editing, value: editing.value + key.sequence } };
+    }
+    return null;
+  }
+  // After everything that takes text, never before: a printable character belongs to
+  // the answer, the filter or the value being typed, and a free-text answer that could
+  // not contain a question mark was the cost of checking this first.
+  if (key.sequence === "?") return { _tag: "Help", open: true };
+  // The panel's keys before the list's: the arrows move the Selection, so these are
+  // deliberately the arrows with a modifier plus the two keys that mean "page" on every
+  // other reader.
+  if (at.scrollable) {
+    if (key.name === "pageup") return { _tag: "Scroll", by: -1, unit: "page" };
+    if (key.name === "pagedown") return { _tag: "Scroll", by: 1, unit: "page" };
+    if (key.shift && key.name === "up") return { _tag: "Scroll", by: -1, unit: "line" };
+    if (key.shift && key.name === "down") return { _tag: "Scroll", by: 1, unit: "line" };
+  }
+  // Arrows, and not `hjkl`: `k` is the stop key the board has always had and the one the
+  // footer offers, and a destructive key that sometimes means "up" is worse than no vim
+  // binding.
+  if (key.name === "up") return { _tag: "Move", by: -1 };
+  if (key.name === "down") return { _tag: "Move", by: 1 };
+  if (key.name === "tab") return { _tag: "ShowViewBy", by: key.shift ? -1 : 1 };
+  if (key.sequence === "/") return { _tag: "Filtering", filter: at.filter, typing: true };
+  // Re-reading what is on screen, and the one merge request behind it: a cached read is
+  // what makes selecting cheap, so there has to be a way to say "ask again".
+  if (key.sequence === "R") return doing({ _tag: "Refresh" });
+  // The log, in the panel: `l` still opens it in a pane, because grepping and copying
+  // belong in one.
+  if (key.sequence === "t") return at.row?.runId ? doing({ _tag: "ToggleTail" }) : null;
+  // The rest of a review the panel cut short, a cap at a time.
+  if (key.sequence === "m") return at.cutShort ? doing({ _tag: "MoreReview" }) : null;
+  if (key.sequence === "c") return at.mrUrl ? { _tag: "Copy", text: at.mrUrl } : null;
+  if (key.name === "q" || (key.ctrl && key.name === "c")) return doing({ _tag: "Quit" });
+  // A digit focuses that agent wherever the Selection is: those keys are the board's
+  // shortcut into a pane, not an action on a row.
+  if (/^[1-9]$/.test(key.sequence)) {
+    const agent = at.rows.find((r) => r.kind === "agent" && r.key === key.sequence);
+    return agent?.agent ? doing({ _tag: "FocusAgent", agent: agent.agent }) : null;
+  }
+  if (key.sequence === "p") return doing({ _tag: "OpenMode", mode: "pick" });
+  if (key.sequence === "u") return doing({ _tag: "OpenMode", mode: "resume" });
+  if (key.sequence === "f") return doing({ _tag: "OpenMode", mode: "fork" });
+  // The Selection, like every other action: `s` on a row hands off that row's review.
+  if (key.sequence === "s") return doing({ _tag: "SendReview", runId: at.row?.runId ?? null });
+  const action = actionsFor(at.row).find(
+    (a) => a.key === (key.name === "return" ? "\r" : key.sequence),
+  );
+  return action ? doing(action.command) : null;
+}
+
+/** How one line of a panel's markdown is drawn. Four, because four is what helps. */
+export type LineStyle = "heading" | "list" | "code" | "plain";
+
+export interface StyledLine {
+  text: string;
+  style: LineStyle;
+}
+
+/**
+ * A review or a plan spec as styled lines. Four styles and no markdown dependency: the
+ * panel needs a long document to be skimmable — where the headings are, what is a list,
+ * what is code — and nothing beyond that. Inline emphasis is deliberately left alone,
+ * because rewriting the text is how a review stops saying what the agent wrote.
+ *
+ * ponytail: line-level only. A parser goes in the day something needs tables.
+ */
+/** A hash needs its space: `#!/bin/sh` in something the agent pasted is not a heading. */
+const HEADING = /^#{1,6}\s/;
+const LIST_ITEM = /^\s*([-*+]|\d+\.)\s/;
+const FENCE = "```";
+
+export function markdownLines(text: string): StyledLine[] {
+  let fenced = false;
+  return text.split("\n").map((line): StyledLine => {
+    if (line.trimStart().startsWith(FENCE)) {
+      fenced = !fenced;
+      return { text: line, style: "code" };
+    }
+    if (fenced) return { text: line, style: "code" };
+    if (HEADING.test(line)) return { text: line, style: "heading" };
+    if (LIST_ITEM.test(line)) return { text: line, style: "list" };
+    return { text: line, style: "plain" };
+  });
+}
+
 /** Where a pending question has got to: the highlighted option, or the text so far. */
 export interface Asking {
   index: number;
@@ -711,14 +1019,24 @@ export function matching(rows: readonly Row[], query: string): Row[] {
   );
 }
 
-/** The two rows that have a group under them, which is what `rowsOf` puts there. */
-const opensAGroup = (row: Row) => row.kind === "active" || row.kind === "header";
+/** The rows that have a group under them, which is what `rowsOf` puts there. A finished
+ * run keeps its agents, so it opens a group exactly as a running one does. */
+const opensAGroup = (row: Row) =>
+  row.kind === "active" || row.kind === "recent" || row.kind === "header";
 
-/** Whether an agent row under this one matched: the rows that follow it, until the next
- * row that opens a group of its own. */
+/**
+ * Whether anything in the group under this row matched: the rows that follow it, until
+ * one that is not nested under it. A run's group is the agent rows under it, so a later
+ * run matching is not this run's business. A header's group is what the header names —
+ * the runs that need you, or the agents with no run here — and the agents of those runs
+ * come along with them.
+ */
 function groupHasAMatch(rows: readonly Row[], at: number, hit: ReadonlySet<string>): boolean {
+  const opener = rows[at]!;
+  const nested = (under: Row) =>
+    under.kind === "agent" || (opener.kind === "header" && under.needsYou);
   for (const under of rows.slice(at + 1)) {
-    if (under.kind !== "agent") return false;
+    if (!nested(under)) return false;
     if (hit.has(under.id)) return true;
   }
   return false;

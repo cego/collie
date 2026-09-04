@@ -4,7 +4,7 @@
 // View is first shown, because loading every run's outputs at startup is what would make
 // the tab slow the day it became useful.
 
-import { Effect, FileSystem, Path, Stream } from "effect";
+import { Clock, Effect, FileSystem, Path, Stream } from "effect";
 import { loadDefaults, readConfig } from "./config";
 import {
   isStale,
@@ -25,6 +25,7 @@ import type { MrPanel } from "./mr";
 import { REVIEW_FILE } from "./output";
 import { RunStore, type Run, type RunRecord } from "./run";
 import { isString } from "./schema";
+import { stepDuration, took } from "./time";
 import { claudeTrust } from "./trust";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
 import { fixableRun, type RunRow } from "./workspace";
@@ -39,12 +40,14 @@ function title(record: RunRecord): string {
 }
 
 /** How long the run took, where both ends of it were recorded. */
-function took(record: RunRecord): string | null {
+function ranFor(record: RunRecord): string | null {
   if (!record.finished_at) return null;
   const ms = Date.parse(record.finished_at) - Date.parse(record.created_at);
   if (!Number.isFinite(ms) || ms <= 0) return null;
-  const minutes = Math.round(ms / 60_000);
-  return minutes < 1 ? "under a minute" : `${minutes}m`;
+  // The same formatting a step's duration gets: History and the detail panel's Steps
+  // list are on screen in one session, and one saying "12m" while the other says
+  // "12 minutes" is one clock, said twice.
+  return took(ms);
 }
 
 /**
@@ -69,7 +72,7 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
     const parts: string[] = [record.status];
     if (record.outstanding.length > 0) parts.push(`${record.outstanding.length} finding(s) open`);
     if (record.fixed > 0) parts.push(`${record.fixed} fixed`);
-    const duration = took(record);
+    const duration = ranFor(record);
     if (duration) parts.push(duration);
     if (record.mr_url) parts.push(record.mr_url);
     rows.push({
@@ -84,6 +87,7 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
       // decide from this whether to offer the action that starts a fix run.
       fixable: yield* fixableRun(run),
       choice: null,
+      needsYou: false,
     });
   }
   return rows;
@@ -202,6 +206,15 @@ export type Panel =
   | { _tag: "Text"; text: string; truncated: boolean };
 
 /**
+ * Whether a panel's text was cut short, which is the one thing a `Text` panel says
+ * beyond its text — and the only thing `m` can act on. Takes an absent panel too,
+ * because every caller is reading through a Selection that may not have one.
+ */
+export function truncated(panel: Panel | null | undefined): boolean {
+  return panel?._tag === "Text" && panel.truncated;
+}
+
+/**
  * How much of a file the panel will read. A run dir can hold a 40 MB log and a review
  * long enough to stall a redraw; the panel is for reading, and what does not fit is
  * said to be cut rather than quietly dropped.
@@ -248,6 +261,42 @@ const tailed = Effect.fn("Views.tailed")(function* (file: string, cap: number) {
     : { _tag: "Text" as const, text: text.slice(text.indexOf("\n") + 1), truncated: true };
 });
 
+/** One ticket of a run's plan, as the panel lists it. */
+export interface PlanTicket {
+  /** Its file name inside `plan/issues/`, which is what orders the list. */
+  file: string;
+  title: string;
+  /** Whether every checkbox in it is checked. No boxes at all is not done. */
+  done: boolean;
+}
+
+/** The plan a run is building from: its spec, and the tickets under it. */
+export interface PlanPanel {
+  spec: Panel;
+  tickets: PlanTicket[];
+}
+
+const CHECKBOX = /^\s*[-*]\s*\[( |x|X)\]/;
+
+/**
+ * One ticket as the panel lists it. Pure, and deliberately shallow: the first heading is
+ * the title because that is what every workflow's ticket template writes, and a file
+ * with none is named by its file rather than by a guess at its first sentence.
+ */
+export function planTicket(file: string, text: string): PlanTicket {
+  const lines = text.split("\n");
+  const heading = (lines.find((line) => line.startsWith("#")) ?? "").replace(/^#+\s*/, "").trim();
+  // The mark inside each checkbox, in one pass: a line that is not one contributes none.
+  const marks = lines.flatMap((line) => CHECKBOX.exec(line)?.[1] ?? []);
+  return {
+    file,
+    title: heading === "" ? file : heading,
+    // A ticket nobody has marked up is open, not finished: `every` over nothing is true,
+    // which would have called every prose-only ticket done.
+    done: marks.length > 0 && marks.every((mark) => mark !== " "),
+  };
+}
+
 /** One step's Output: what it was asked for, and what is actually there. */
 export interface OutputPanel {
   step: string;
@@ -258,6 +307,70 @@ export interface OutputPanel {
   text: string;
 }
 
+/** What a Run's own plan directory is called inside it (ADR-0002). */
+const PLAN_DIR = "plan";
+
+/** Which directory holds this run's plan, or `null` when it has none behind it. */
+const planDirOf = Effect.fn("Views.planDirOf")(function* (run: Run) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // Its own copy first: a run that wrote a plan is building from that one.
+  const own = path.join(run.dir, PLAN_DIR);
+  if (yield* fs.exists(own)) return own;
+  // Then the directory it was started from, which is how an `implement` run reaches the
+  // spec a `plan` run wrote for it.
+  if (run.record.inputs.plan_kind !== "plan-dir") return null;
+  const started = run.record.inputs.plan ?? "";
+  return started !== "" && (yield* fs.exists(started)) ? started : null;
+});
+
+/**
+ * The plan behind a run, and `null` for one that has none.
+ *
+ * The spec is capped and paged exactly like the review: an agent wrote it, so it can be
+ * any size at all, and `m` is how the rest of it is read.
+ */
+const buildPlan = Effect.fn("Views.buildPlan")(function* (run: Run, cap: number) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = yield* planDirOf(run);
+  if (dir === null) return null;
+
+  const spec =
+    (yield* capped(path.join(dir, "SPEC.md"), cap)) ??
+    ({ _tag: "None", reason: "this plan has no SPEC.md" } satisfies Panel);
+
+  const issues = path.join(dir, "issues");
+  const files = (yield* fs.readDirectory(issues).pipe(Effect.catch(() => Effect.succeed([]))))
+    .filter((name) => name.endsWith(".md"))
+    .sort();
+  const tickets: PlanTicket[] = [];
+  for (const file of files) {
+    // Capped like everything else the panel reads: a ticket is prose an agent wrote.
+    const text = yield* capped(path.join(issues, file), OUTPUT_CAP);
+    tickets.push(planTicket(file, text?.text ?? ""));
+  }
+  return { spec, tickets };
+});
+
+/**
+ * The plan behind a Run, from the caller's cache where it can be. Keyed by the cap as
+ * well as the Run, because `m` asking for another page has to read further into a spec
+ * that was cut short.
+ */
+const plannedFor = Effect.fn("Views.plannedFor")(function* (
+  run: Run,
+  cap: number,
+  plans: Map<string, PlanPanel | null> | undefined,
+) {
+  if (!plans || run.record.status === "running") return yield* buildPlan(run, cap);
+  const key = `${run.id}:${cap}`;
+  if (plans.has(key)) return plans.get(key) ?? null;
+  const plan = yield* buildPlan(run, cap);
+  plans.set(key, plan);
+  return plan;
+});
+
 /** Everything the detail panel shows for the selected Run. */
 export interface RunDetail {
   id: string;
@@ -265,11 +378,17 @@ export interface RunDetail {
   title: string;
   status: string;
   inputs: Array<{ name: string; value: string; source: string }>;
-  steps: Array<{ id: string; status: string; note: string; agents: string[] }>;
+  /** `took` is how long a finished step took, or how long a running one has been going. */
+  steps: Array<{ id: string; status: string; note: string; took: string | null; agents: string[] }>;
   /** One line each, as the record wrote them. */
   handoffs: string[];
   /** The rendered review — the thing the panel exists for. */
   review: Panel;
+  /**
+   * The plan this Run is building from, so the work can be judged against its intent
+   * without leaving the tab. `null` for a Run that has no plan behind it.
+   */
+  plan: PlanPanel | null;
   outputs: OutputPanel[];
   /** The end of the run's log while the panel's tail is toggled on; `null` while it is off. */
   tail: Panel | null;
@@ -295,17 +414,34 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
   tail?: boolean;
   /** How many caps of the review to read, for one the panel has been asked to page. */
   pages?: number;
+  /**
+   * Where a finished Run's plan is kept between reads, owned by the caller the way the
+   * merge request is. A Run's plan is fixed input once it has stopped, and the panel is
+   * re-produced on every board tick — so re-reading SPEC.md, the issues directory and
+   * every ticket every three seconds was work for an answer that cannot change. A Run
+   * still running is never cached: it may be writing that plan as we read it.
+   */
+  plans?: Map<string, PlanPanel | null>;
 }) {
   const path = yield* Path.Path;
+  const now = yield* Clock.currentTimeMillis;
   const run = yield* new RunStore(opts.stateDir)
     .load(opts.runId)
     .pipe(Effect.catch(() => Effect.succeed(null)));
   // Gone, half-written, or never there: the panel shows the row's own facts instead.
   if (!run) return null;
   const record = run.record;
+  /**
+   * Where an unfinished step's clock stops. A run killed by a SIGTERM, or one whose
+   * driver died, records its own end without ever finishing the step it was on — and a
+   * step with no end of its own is otherwise read as still running, so reopening a run
+   * that died last week showed its last step as having taken a week.
+   */
+  const stoppedAt = record.finished_at ? Date.parse(record.finished_at) : now;
 
+  const cap = REVIEW_CAP * Math.max(1, opts.pages ?? 1);
   const review =
-    (yield* capped(path.join(run.dir, REVIEW_FILE), REVIEW_CAP * Math.max(1, opts.pages ?? 1))) ??
+    (yield* capped(path.join(run.dir, REVIEW_FILE), cap)) ??
     ({ _tag: "None", reason: `this run wrote no ${REVIEW_FILE}` } satisfies Panel);
 
   const outputs: OutputPanel[] = [];
@@ -338,12 +474,14 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       id: step.id,
       status: step.status,
       note: step.note ?? "",
+      took: stepDuration(step, stoppedAt),
       agents: step.variants.map((v) => v.agent),
     })),
     handoffs: record.handoffs.map(
       (h) => `${h.direction} ${h.role} (${h.agent}) · run ${h.run}${h.note ? ` · ${h.note}` : ""}`,
     ),
     review,
+    plan: yield* plannedFor(run, cap, opts.plans),
     outputs,
     tail: opts.tail
       ? ((yield* tailed(path.join(run.dir, RUNNER_LOG), TAIL_CAP)) ??
@@ -401,6 +539,7 @@ const DEFAULT_KEYS = [
   "max_iterations",
   "handoff_timeout_ms",
   "quiet_ms",
+  "board_quiet_ms",
 ] as const;
 
 /** The three that `loadDefaults` reads with `isNumber`: a string there is ignored. */
@@ -408,6 +547,7 @@ export const NUMERIC_DEFAULTS: ReadonlyArray<string> = [
   "max_iterations",
   "handoff_timeout_ms",
   "quiet_ms",
+  "board_quiet_ms",
 ];
 
 export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: PluginEnv) {
@@ -431,6 +571,7 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
       { key: "max_iterations", value: String(defaults.maxIterations) },
       { key: "handoff_timeout_ms", value: String(defaults.handoffTimeoutMs) },
       { key: "quiet_ms", value: String(defaults.quietMs) },
+      { key: "board_quiet_ms", value: String(defaults.boardQuietMs) },
     ],
     // Everything else the file holds: remembered answers, per-harness model lists, the
     // notification kinds someone turned off. Shown as written rather than interpreted.
