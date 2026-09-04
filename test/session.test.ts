@@ -105,7 +105,7 @@ const liveImplementer = Effect.fn("sessionTest.liveImplementer")(function* (
     inputSources: { plan: "asked" },
     stepIds: ["build"],
     maxIterations: 5,
-    primaryInput: "add-a-picker",
+    namedAfter: "add-a-picker",
   });
   const file = yield* registryPath(env.stateDir, scopeFor(env, env.cwd));
   yield* registerAgent(file, {
@@ -470,7 +470,7 @@ test("the implementer is told where to take a decision the plan does not cover",
         inputSources: { goal: "asked" },
         stepIds: ["grill"],
         maxIterations: 1,
-        primaryInput: "add-a-picker",
+        namedAfter: "add-a-picker",
       });
       const file = yield* registryPath(env.stateDir, scopeFor(env, env.cwd));
       yield* registerAgent(file, {
@@ -587,7 +587,7 @@ test("a received Hand-off survives the receiving Driver's stale save, exactly on
           inputSources: {},
           stepIds: ["build"],
           maxIterations: 1,
-          primaryInput: workflow,
+          namedAfter: workflow,
         });
       const receiver = yield* mk("implement");
       const driverCopy = yield* store.load(receiver.id);
@@ -643,7 +643,7 @@ test("a receiver that cannot be updated leaves the sender's record intact", () =
         inputSources: {},
         stepIds: ["review"],
         maxIterations: 1,
-        primaryInput: "x",
+        namedAfter: "x",
       });
       const started = yield* Clock.currentTimeMillis;
       yield* record(
@@ -680,7 +680,7 @@ test("recording a Hand-off can neither roll back Driver state nor duplicate on a
         inputSources: {},
         stepIds: ["build"],
         maxIterations: 1,
-        primaryInput: "x",
+        namedAfter: "x",
       });
       receiver.step("build").status = "done";
       yield* receiver.save();
@@ -716,7 +716,7 @@ test("a Hand-off sent from a stale board snapshot cannot roll back the sender's 
           inputSources: {},
           stepIds,
           maxIterations: 1,
-          primaryInput: workflow,
+          namedAfter: workflow,
         });
       const sender = yield* mk("review", ["synthesize"]);
       const receiver = yield* mk("implement", ["build"]);
@@ -766,7 +766,7 @@ test("a sender whose record cannot be persisted still completes the exchange", (
           inputSources: {},
           stepIds: ["s"],
           maxIterations: 1,
-          primaryInput: workflow,
+          namedAfter: workflow,
         });
       const sender = yield* mk("review");
       const receiver = yield* mk("implement");
@@ -807,7 +807,7 @@ test("a Run handing off to its own agent keeps both sides of the exchange", () =
         inputSources: {},
         stepIds: ["build"],
         maxIterations: 1,
-        primaryInput: "x",
+        namedAfter: "x",
       });
 
       yield* record(

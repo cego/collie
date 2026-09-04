@@ -42,7 +42,7 @@ import { readRegistry, registryPath, type RegistryScope } from "./registry";
 import { currentPid, withLock } from "./lock";
 import { REVIEW_FILE } from "./output";
 import { Run, RunStore } from "./run";
-import { checkoutFor, pruneWorktrees } from "./worktree";
+import { branchListed, BRANCH_INPUT, checkoutFor, pruneWorktrees } from "./worktree";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
 const ErrorCode = Schema.Literals([
@@ -334,9 +334,16 @@ export const settleExplicit = Effect.fn("operations.settleExplicit")(function* (
     if (value === undefined) continue;
     const target =
       item.strategy === "diff-target" ? yield* classifyGivenTarget(value, { cwd: env.cwd }) : null;
-    const kind =
-      item.strategy === "work-source" ? (yield* classifyWorkSource(value)).kind : target?.kind;
-    settle(item, { value: target?.value ?? value, source: "explicit", kind });
+    // The label as well as the kind: a work-source's short name is what the Run is
+    // named after, and dropping it named a Run given a plan directory after the whole
+    // path to it — which is the same name for every plan under one `tasks/` directory.
+    const work = item.strategy === "work-source" ? yield* classifyWorkSource(value) : null;
+    settle(item, {
+      value: target?.value ?? value,
+      source: "explicit",
+      kind: work?.kind ?? target?.kind,
+      label: work?.label ?? target?.label,
+    });
   }
 });
 
@@ -385,7 +392,9 @@ export const settleGiven = Effect.fn("operations.settleGiven")(function* (
           candidates: item.candidates ?? [],
           question: item.question,
         })),
-        schema: workflow.inputs,
+        // `branch` among them: this is the refusal an agent hits whenever any Input is
+        // missing, so it is where it is most likely to learn that the Input exists.
+        schema: branchListed(workflow.name, workflow.inputs),
       }),
     );
   }
@@ -480,11 +489,26 @@ function short(result: { code: number; stdout: string }): string {
   return result.code === 0 ? result.stdout.trim() : "";
 }
 
-/** A path value would slug the whole path, so a strategy may offer a short name. */
-function primaryInput(resolutions: Resolution[]): string {
+/**
+ * What this Run is named after: its first settled Input, both ways round. `value` is
+ * what the caller gave, whole. `short` is the name to show — a path value would put the
+ * whole path on a tab, so a strategy may offer something shorter — and it is only ever
+ * that, because a label is cut to fit a menu and says so to nobody. A length cap is
+ * judged against `value`, which is what a chained Run's branch does with the parent's
+ * recorded name.
+ *
+ * Exported for the test harness, which starts Runs without going through `startRun`
+ * and had a second copy of this that quietly disagreed with it.
+ *
+ * Empty where no Input was settled at all: `architecture` declares none that name the
+ * work. A stand-in like "run" would slug cleanly and so pass the very guard that exists
+ * to stop two Runs keying one checkout — every such Run would be named the same thing.
+ * `slugify` still has its own fallback for the tab, which is a label and not an identity.
+ */
+export function primaryName(resolutions: Resolution[]) {
   const first = resolutions.find((r) => r.value !== "");
-  if (!first) return "run";
-  return first.label ?? first.value;
+  if (!first) return { value: "", short: "" };
+  return { value: first.value, short: first.label ?? first.value };
 }
 
 /**
@@ -507,6 +531,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   },
 ) {
   const { workflow, resolutions, workspace } = options;
+  const named = primaryName(resolutions);
   const herdr = new Herdr(env);
   // Collie has no daemon, so pruning happens where it already wakes up. Before the
   // checkout is resolved, so a settled worktree left on this Run's own branch is gone
@@ -523,20 +548,42 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   const checkout = yield* checkoutFor(herdr, {
     cwd: env.cwd,
     workflow: workflow.name,
-    name: primaryInput(resolutions),
+    name: named.short,
     inputs: inputValues(resolutions),
+    sources: inputSources(resolutions),
     workspaceId: workspace?.workspaceId ?? env.workspaceId,
     workspaceLabel: workspace?.label ?? null,
     explicit: options.branch,
   });
   // Nothing has been created yet, so a Run that must not share a checkout is simply
-  // not started, and the caller is told which branch could not be given one.
+  // not started, and the caller is told which branch could not be given one. A refusal
+  // the caller could settle — a branch nothing named — comes back in the same shape as
+  // any missing Input, so a retry with the same request id and `--input branch=` starts
+  // the Run rather than repeating the refusal.
   if (checkout.refused) {
+    const { why, ask } = checkout.refused;
+    if (!ask) {
+      return {
+        _tag: "Rejected" as const,
+        ask: null,
+        result: err("operation_failed", `${workflow.name} could not be given a checkout.`, {
+          cause: why,
+        }),
+      };
+    }
     return {
       _tag: "Rejected" as const,
-      result: err("operation_failed", `${workflow.name} could not be given a checkout.`, {
-        cause: checkout.refused,
-      }),
+      // The question beside the envelope that carries it: a front door with a human to
+      // hand puts it to them rather than digging it back out of the error details.
+      ask,
+      result: err(
+        "needs_input",
+        `${workflow.name} needs input.`,
+        Schema.decodeUnknownSync(YamlMapSchema)({
+          inputs: [{ name: BRANCH_INPUT, candidates: [], question: ask }],
+          schema: branchListed(workflow.name, workflow.inputs),
+        }),
+      ),
     };
   }
   const run = yield* new RunStore(env.stateDir).create({
@@ -553,7 +600,10 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     decisions: options.decisions,
     stepIds: workflow.steps.map((step) => step.id),
     maxIterations: workflow.maxIterations,
-    primaryInput: primaryInput(resolutions),
+    // The branch already resolves what this Run is about, and resolves it without
+    // clipping; the Run is named the same way so its slug and its checkout agree.
+    namedAfter: checkout.branch ?? named.value,
+    slugFrom: checkout.branch ?? named.short,
     parent: options.parent,
   });
   yield* run.log(`created from ${workflow.path} (${workflow.layer} layer)`);
@@ -562,8 +612,10 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   if (options.note) yield* run.log(options.note);
   const undriven = yield* handOver(env, run);
   return undriven
-    ? { _tag: "Rejected" as const, result: undriven.result }
-    : { _tag: "Started" as const, run };
+    ? { _tag: "Rejected" as const, ask: null, result: undriven.result }
+    : // The checkout as well as the Run: the branch is decided here, and the line that
+      // tells the operator what was started is the only place they see it.
+      { _tag: "Started" as const, run, checkout };
 });
 
 /**

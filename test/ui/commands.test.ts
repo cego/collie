@@ -140,7 +140,7 @@ const seed = Effect.fn("commands.seed")(function* (opts: { target: string; revie
     inputSources: {},
     stepIds: ["review"],
     maxIterations: 1,
-    primaryInput: opts.target,
+    namedAfter: opts.target,
   });
   run.record.status = "done";
   run.record.finished_at = run.record.created_at;

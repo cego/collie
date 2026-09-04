@@ -193,7 +193,7 @@ effectTest("the driver's progress is a file, and the board shows the last of it"
     inputSources: { target: "inferred" },
     stepIds: ["review"],
     maxIterations: 5,
-    primaryInput: "worktree",
+    namedAfter: "worktree",
   });
   run.record.target_label = "worktree";
   run.step("review").status = "running";
@@ -310,7 +310,7 @@ effectTest(
       inputSources: {},
       stepIds: ["grill", "next"],
       maxIterations: 1,
-      primaryInput: "add-a-picker",
+      namedAfter: "add-a-picker",
     });
     run.record.target_label = "add-a-picker";
     run.record.awaiting = "next";
@@ -355,7 +355,7 @@ effectTest("the board's keys answer the question, and Esc leaves the run open", 
     inputSources: {},
     stepIds: ["next"],
     maxIterations: 1,
-    primaryInput: "x",
+    namedAfter: "x",
   });
   // The board answers against the run dir's own choice, the way the CLI does.
   const menu = {
@@ -459,7 +459,7 @@ effectTest("a run nothing is driving is abandoned; one with a live driver is not
     inputSources: { target: "inferred" },
     stepIds: ["review"],
     maxIterations: 1,
-    primaryInput: "worktree",
+    namedAfter: "worktree",
   });
   run.record.target_label = "worktree";
   run.step("review").status = "running";
@@ -554,7 +554,7 @@ effectTest("a run can be stopped, because closing a pane no longer does it", fun
     inputSources: {},
     stepIds: ["review"],
     maxIterations: 1,
-    primaryInput: "worktree",
+    namedAfter: "worktree",
   });
   run.step("review").status = "running";
   yield* run.save();
@@ -609,7 +609,7 @@ effectTest(
       inputSources: {},
       stepIds: ["solo"],
       maxIterations: 1,
-      primaryInput: "x",
+      namedAfter: "x",
     });
     const root = new URL("../", import.meta.url).pathname;
     const claimAndHold = `import { BunServices } from "@effect/platform-bun";
@@ -676,7 +676,7 @@ effectTest(
       inputSources: { goal: "asked" },
       stepIds: ["solo"],
       maxIterations: 5,
-      primaryInput: "Add a picker",
+      namedAfter: "Add a picker",
     });
     yield* rig.queueOutputs([CLEAN]);
 
@@ -744,7 +744,7 @@ effectTest(
       inputSources: { goal: "asked" },
       stepIds: ["solo"],
       maxIterations: 5,
-      primaryInput: "Add a picker",
+      namedAfter: "Add a picker",
     });
     // No output ever arrives, so the driver sits inside the step waiting on its agent —
     // the state `collie run stop` finds a live run in.
@@ -952,7 +952,7 @@ effectTest(
       inputSources: {},
       stepIds: ["solo"],
       maxIterations: 1,
-      primaryInput: "x",
+      namedAfter: "x",
     });
     const claim = path.join(run.dir, RUNNER_PID);
     const lock = `${claim}.takeover`;
@@ -990,7 +990,7 @@ effectTest(
       inputSources: {},
       stepIds: ["solo"],
       maxIterations: 1,
-      primaryInput: "x",
+      namedAfter: "x",
     });
     const claim = path.join(run.dir, RUNNER_PID);
     // wx creation and the JSON write are not one operation; a contender arriving
@@ -1017,7 +1017,7 @@ effectTest("a fresh Driver ignores what the last one left in the run dir", funct
     inputSources: {},
     stepIds: ["next"],
     maxIterations: 1,
-    primaryInput: "x",
+    namedAfter: "x",
   });
 
   // What a stop against a mid-Step Run leaves: the command is written before the
@@ -1062,7 +1062,7 @@ effectTest("the Driver is spawned with a usable environment, not just herdr's ke
     inputSources: {},
     stepIds: ["next"],
     maxIterations: 1,
-    primaryInput: "x",
+    namedAfter: "x",
   });
   // Built the way production builds it: `currentEnv` reads only the keys env.ts lists,
   // and PATH is not one of them, so `env.raw` here has none — exactly as in a real
@@ -1099,7 +1099,7 @@ effectTest("a stop that lands before the Driver claims the Run is honoured", fun
     inputSources: {},
     stepIds: ["next"],
     maxIterations: 1,
-    primaryInput: "x",
+    namedAfter: "x",
   });
 
   // What `run stop` leaves when it finds no owner in the window between the spawn and
@@ -1128,7 +1128,7 @@ effectTest("a resume command is read by the Driver it starts, then cleared", fun
     inputSources: {},
     stepIds: ["next"],
     maxIterations: 1,
-    primaryInput: "x",
+    namedAfter: "x",
   });
   const inbox = path.join(run.dir, "inbox");
   yield* fs.makeDirectory(inbox, { recursive: true });

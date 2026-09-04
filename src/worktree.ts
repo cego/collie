@@ -20,10 +20,10 @@ import {
 } from "./herdr";
 import { defaultBase } from "./inputs";
 import { disambiguate, GLYPH, tabLabel } from "./naming";
-import { parseMrTarget, projectHere, repoArgs, shell, type Runner } from "./mr";
+import { branchTargetHead, parseMrTarget, projectHere, repoArgs, shell, type Runner } from "./mr";
 import { withLock } from "./lock";
 import { resumable, RunStore, type WorktreeRecord } from "./run";
-import { slugify } from "./template";
+import { slug } from "./template";
 
 /**
  * The workflows that change the repository, and so need a checkout of their own.
@@ -46,8 +46,38 @@ export interface BranchAsk {
   /** What this Run is called, which is what a new branch is named after. */
   name: string;
   inputs: Record<string, string>;
+  /**
+   * Where each Input's value came from, which for `target` is the whole question: a
+   * target Collie inferred names the branch the caller is *standing on*, and building
+   * that branch would hand the Run the checkout that branch already has — the
+   * operator's own tree. Only a target a human gave names a branch to build.
+   */
+  sources?: Record<string, string> | undefined;
   explicit?: string | null | undefined;
   run?: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+}
+
+/** Where a branch came from, for the line that tells the operator what was decided. */
+export type BranchSource =
+  | "explicit"
+  | "from target"
+  | "from the reviewed branch"
+  | "from plan"
+  | "from the work"
+  | "from the run name";
+
+/**
+ * Why a Run cannot be given a checkout. One value rather than a reason beside a
+ * question, so a caller cannot read one without the other, or read the wrong one
+ * first: a refusal is answerable or it is not, and the value says which.
+ */
+export interface Refusal {
+  why: string;
+  /**
+   * What to ask for, when the refusal is one the caller can settle — the answer goes
+   * back as `--input branch=`. Null when nothing the caller could say would help.
+   */
+  ask: string | null;
 }
 
 export interface BranchPlan {
@@ -55,45 +85,119 @@ export interface BranchPlan {
   /** What a branch that does not exist yet is based on. */
   base: string;
   /** Why this Run cannot be given a branch, and null when it can. */
-  refused: string | null;
+  refused: Refusal | null;
+  source: BranchSource | null;
 }
 
+/** The one Input no Workflow declares: which branch a mutating Run works on. */
+export const BRANCH_INPUT = "branch";
+
 /**
- * Which branch this Run builds. A Run given work in words, a plan or a Linear issue
- * gets a new branch named after itself; a Run fixing a review works on the branch the
- * reviewed target already lives on, because that is where the change is. An explicit
- * `--input branch=<name>` wins over both.
+ * A Workflow's Inputs as a caller has to supply them, which for a mutating Workflow
+ * includes the `branch` it does not declare. Listed everywhere the Inputs are, because
+ * an operator — or an agent driving Collie — cannot pass an Input nothing names.
  *
- * A review whose branch cannot be established is refused rather than given a new one:
- * a fix round exists to update what was reviewed, and putting those commits on a fresh
- * branch named after the run would leave the merge request untouched and the fixes
- * somewhere nobody is looking.
+ * `optional` and not a strategy of its own: every value in this map is one of the
+ * declared strategies (`docs/authoring.md`), and an agent reading a strategy no
+ * `InputStrategy` has would be reading something it cannot act on. `optional` is also
+ * true of it — inference never supplies it, and a Run without it still starts.
+ */
+export function branchListed(
+  workflow: string,
+  inputs: Record<string, string>,
+): Record<string, string> {
+  return mutates(workflow) ? { ...inputs, [BRANCH_INPUT]: "optional" } : inputs;
+}
+
+/** The question a Run with no derivable branch is refused with. */
+const BRANCH_QUESTION =
+  "Which branch should this run work on? Nothing it was given names one short enough to be a branch.";
+
+/**
+ * Which branch this Run builds, from what the operator said, in this order:
+ *
+ * 1. `--input branch=<name>`, which beats everything below.
+ * 2. The branch the reviewed work is already on, for a Run fixing a review.
+ * 3. The `<name>` of a `branch:<base>...<name>` target *a human gave*.
+ * 4. The plan directory's own name.
+ * 5. A slug of the work itself — the description, or the issue id.
+ *
+ * Two refusals rather than a guess. A review whose branch cannot be established gets no
+ * new one: a fix round exists to update what was reviewed, and putting those commits on
+ * a fresh branch named after the Run would leave the merge request untouched and the
+ * fixes somewhere nobody is looking. And a name that hit a length cap is refused with a
+ * question, because two names clipped to the same thing are one branch and so one
+ * checkout — the whole failure this resolver exists to prevent.
  */
 export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: BranchAsk) {
   const run = opts.run ?? shell;
   const asked = yield* branchName(opts, run);
   if (asked.refused !== undefined) {
-    return { branch: "", base: "", refused: asked.refused } satisfies BranchPlan;
+    return { branch: "", base: "", refused: asked.refused, source: null } satisfies BranchPlan;
   }
   const branch = asked.branch;
-  const base = yield* baseFor(branch, opts.cwd, run, { reviewed: asked.reviewed === true });
+  const base = yield* baseFor(branch, opts.cwd, run, { reviewed: asked.reviewed });
   if (base.refused !== undefined) {
-    return { branch: "", base: "", refused: base.refused } satisfies BranchPlan;
+    return { branch: "", base: "", refused: base.refused, source: null } satisfies BranchPlan;
   }
-  return { branch, base: base.base, refused: null } satisfies BranchPlan;
+  return { branch, base: base.base, refused: null, source: asked.source } satisfies BranchPlan;
 });
 
 const branchName = Effect.fn("worktree.branchName")(function* (
   opts: BranchAsk,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
+  const path = yield* Path.Path;
   const explicit = opts.explicit?.trim();
-  if (explicit) return { branch: explicit, reviewed: false };
-  // `reviewed` is what makes the difference below: a branch that already holds the work
+  if (explicit) return { branch: explicit, reviewed: false, source: "explicit" as const };
+  // `reviewed` is what `baseFor` needs from here: a branch that already holds the work
   // has to be cut from that work, and a name for work that does not exist yet cannot be.
-  if (opts.inputs.plan_kind === "review") return yield* reviewedBranch(opts.cwd, opts.inputs, run);
-  return { branch: slugify(opts.name), reviewed: false };
+  // A review-source Run reads the target itself, and refuses a head that is not a
+  // branch — so the target rule after this one is for Runs starting fresh work.
+  if (opts.inputs.plan_kind === "review") {
+    const reviewed = yield* reviewedBranch(opts.cwd, opts.inputs, run);
+    // Nothing the caller could say settles a review with no branch to fix: the work
+    // being fixed is on a branch or it is not.
+    return reviewed.refused === undefined
+      ? { ...reviewed, source: "from the reviewed branch" as const }
+      : { refused: { why: reviewed.refused, ask: null } };
+  }
+  const fromTarget = said(opts, "target") ? targetBranch(opts.inputs.target ?? "") : null;
+  if (fromTarget) return { branch: fromTarget, reviewed: false, source: "from target" as const };
+  const work = workSource(opts.inputs);
+  // The plan directory's own name, not the path to it: every plan under one `tasks/`
+  // directory slugs the same way. Only one the operator named, though — a plan
+  // directory Collie itself pointed at is `<run.dir>/plan`, from a chained Run or from
+  // the picker's offer of a finished plan, and every one of those is called `plan`.
+  if (work?.kind === "plan-dir" && said(opts, "plan")) {
+    return wholeName(path.basename(work.value), "from plan");
+  }
+  // The work itself where the operator described it — the whole of what they said, not
+  // the Run's name for it, because that name is a label `textLabel` already cut to 24
+  // characters, under the cap `wholeName` applies, and a truncated name must never
+  // become a branch. Otherwise the Run's name, which is whole: a chained Run is named
+  // after its parent, and a plan offered from an earlier Run after that Run.
+  // Two sources, because they are two answers: a description the operator typed is the
+  // work itself, and the confirm line saying "from the run name" for it would name the
+  // wrong thing as what decided.
+  const described = work !== null && said(opts, "plan");
+  return described
+    ? wholeName(work.value, "from the work")
+    : wholeName(opts.name, "from the run name");
 });
+
+/**
+ * A name as a branch, but only if it is the whole of what it stands for. Anything that
+ * hit the length cap is refused with a question instead: two plans, or two descriptions,
+ * whose names agree up to the cap would be one branch and so one checkout.
+ */
+function wholeName(from: string, source: BranchSource) {
+  const derived = slug(from);
+  if (derived.clipped) {
+    return { refused: { why: `no branch name comes out of ${from}`, ask: BRANCH_QUESTION } };
+  }
+  return { branch: derived.slug, reviewed: false, source };
+}
 
 /**
  * What a checkout of this branch is cut from. The branch's own tip on the remote where
@@ -121,12 +225,47 @@ const baseFor = Effect.fn("worktree.baseFor")(function* (
     // not this checkout has heard of it yet.
     yield* run("git", ["fetch", "origin", branch], cwd);
     if ((yield* exists(`origin/${branch}`)).code === 0) return { base: `origin/${branch}` };
-    return { refused: `${branch} is not on the remote, so there is no reviewed work to fix` };
+    const why = `${branch} is not on the remote, so there is no reviewed work to fix`;
+    return { refused: { why, ask: null } };
   }
   const head = (yield* defaultBase(run, cwd)) ?? "master";
   const tracked = (yield* exists(`origin/${head}`)).code === 0;
   return { base: tracked ? `origin/${head}` : head };
 });
+
+/**
+ * The provenances that mean a human said this value, rather than Collie working it out:
+ * `--input`, the picker's own "Type it…", and an answer to a question. Everything else
+ * — inference, a candidate offered from an earlier Run, a value a parent Run forwarded
+ * — is Collie describing the caller's surroundings, and never an instruction about what
+ * the work is called or where it should go.
+ */
+const SAID = new Set(["explicit", "typed", "asked"]);
+
+function said(opts: BranchAsk, name: string): boolean {
+  return SAID.has(opts.sources?.[name] ?? "");
+}
+
+/**
+ * The branch a `branch:<base>...<name>` target names, and null for a target that names
+ * no branch to build. A diff's head is a ref, not necessarily a branch — `HEAD` and a
+ * sha are both things a human may review — and only a name a branch could have is one.
+ */
+function targetBranch(target: string): string | null {
+  const head = branchTargetHead(target) ?? "";
+  if (head === "" || head === "HEAD" || /^[0-9a-f]{7,40}$/.test(head)) return null;
+  return head;
+}
+
+/**
+ * The work this Run was pointed at, and null for a Workflow that takes none. `plan` by
+ * name, as `branchName`'s review rule reads `plan_kind`: a work source under any other
+ * name is already invisible to both, and one of them quietly coping would only hide it.
+ */
+function workSource(inputs: Record<string, string>): { kind: string; value: string } | null {
+  const value = inputs.plan?.trim();
+  return value ? { kind: inputs.plan_kind ?? "", value } : null;
+}
 
 /**
  * The branch the reviewed target lives on. Anything this cannot establish is a
@@ -168,8 +307,8 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
       ? { branch: source, reviewed: true }
       : { refused: `!${mr.iid} names no source branch` };
   }
-  if (target.startsWith("branch:")) {
-    const head = target.slice("branch:".length).split("...").at(-1)?.trim() ?? "";
+  const head = branchTargetHead(target);
+  if (head !== null) {
     if (head === "") return { refused: `${target} names no branch to work on` };
     // A diff target's head is a ref, not necessarily a branch: `branch:main...HEAD` and
     // `branch:<sha>...<sha>` are both things a human may review. Neither is a branch to
@@ -347,7 +486,10 @@ export interface Checkout {
   /** One line for the Run's log, empty where there was nothing to say. */
   note: string;
   /** Why this Run must not start, and null when it may. */
-  refused: string | null;
+  refused: Refusal | null;
+  /** The branch this Run works on and where it came from, for the line that says so. */
+  branch: string | null;
+  branchSource: BranchSource | null;
 }
 
 /**
@@ -374,29 +516,37 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     workflow: string;
     name: string;
     inputs: Record<string, string>;
+    sources?: Record<string, string> | undefined;
     /** The workspace the Run was activated from, and stays in. */
     workspaceId?: string | null;
     workspaceLabel?: string | null;
     explicit?: string | null | undefined;
   },
 ) {
-  const here = {
+  const here: Checkout = {
     cwd: opts.cwd,
     workspaceId: opts.workspaceId ?? null,
     workspaceLabel: opts.workspaceLabel ?? null,
     worktree: null,
     note: "",
     refused: null,
-  } satisfies Checkout;
+    branch: null,
+    branchSource: null,
+  };
   if (!mutates(opts.workflow)) return here;
 
   const plan = yield* branchFor(opts);
   if (plan.refused) return { ...here, refused: plan.refused } satisfies Checkout;
+  here.branch = plan.branch;
+  here.branchSource = plan.source;
 
   // Whichever manager was asked, a Run with nowhere of its own to work says so the
   // same way, naming the branch it could not be given a checkout for.
   const refuse = (why: string) =>
-    ({ ...here, refused: `no worktree for ${plan.branch}: ${why}` }) satisfies Checkout;
+    ({
+      ...here,
+      refused: { why: `no worktree for ${plan.branch}: ${why}`, ask: null },
+    }) satisfies Checkout;
 
   // The Workflow's own `workspace` Input, so both front doors and a chained Run reach
   // it the same way: `startRun` settles it from `--input`, and the Choice that chains

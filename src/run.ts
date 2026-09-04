@@ -133,6 +133,17 @@ const RunSchema = Schema.Struct({
   id: Schema.String,
   seq: Schema.Number,
   slug: Schema.String,
+  /**
+   * The whole of what this Run is named after — the work source's own value, not the
+   * short label beside it. A chained Run is named after its parent, and a name that was
+   * already cut short cannot be caught by cutting it again, so the child's branch is
+   * judged against this rather than against `slug`. Empty where nothing named the Run —
+   * which a child must refuse rather than invent a shared name for — and null only for a
+   * Run recorded before this was kept, which falls back to the slug as it always did.
+   */
+  named_after: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
   workflow: Schema.String,
   cwd: Schema.String,
   session: Schema.NullOr(Schema.String),
@@ -376,7 +387,19 @@ export interface CreateRunOptions {
   decisions?: Record<string, string>;
   stepIds: string[];
   maxIterations: number;
-  primaryInput: string;
+  /**
+   * What this Run is called after, whole — its branch where it has one, so the name says
+   * the same thing the checkout does. Never a path: two plans under one `tasks/`
+   * directory slug to the same clipped name, and two identical rows on the board tell
+   * the human nothing.
+   */
+  namedAfter: string;
+  /**
+   * The short form to build the slug from, where an Input offered one — a merge
+   * request's `!42` rather than the target that spells out its project. Defaults to
+   * `namedAfter`, which is what a Run whose name has no shorter form uses.
+   */
+  slugFrom?: string;
   parent?: string;
   session?: string | null;
   workspace?: string | null;
@@ -411,7 +434,7 @@ export class RunStore {
             `workflow name "${opts.workflow}" ${badWorkflow}, so it cannot name a Run directory`,
           ),
         );
-      const slug = `${opts.workflow}-${slugify(opts.primaryInput)}`;
+      const slug = `${opts.workflow}-${slugify(opts.slugFrom ?? opts.namedAfter)}`;
       const stamp = (yield* nowIso()).replace(/[-:]/g, "").replace(/\..*/, "").replace("T", "-");
       yield* fs.makeDirectory(root, { recursive: true });
       // The mkdir is the claim, not a preceding existence check: two starts in the same
@@ -436,6 +459,7 @@ export class RunStore {
         id,
         seq: yield* nextSeq(),
         slug,
+        named_after: opts.namedAfter,
         workflow: opts.workflow,
         cwd: opts.cwd,
         session: opts.session ?? null,

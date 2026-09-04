@@ -96,6 +96,59 @@ steps:
 Build {{inputs.plan}} (post: {{inputs.post}})
 `;
 
+/** `architecture`'s shape: nothing that names the work, so nothing names a branch. */
+const NAMELESS_PARENT = `---
+name: nameless-parent
+inputs:
+  workspace: optional
+steps:
+  - id: draft
+    persona: planner
+    output: draft.json
+  - id: next
+    choices:
+      - title: Build it now
+        run: implement
+        inputs:
+          plan: "{{run.dir}}/plan"
+---
+## draft
+Draft into {{run.dir}}/plan/SPEC.md
+`;
+
+/** A mutating child, so the chain has to settle a branch before it can start one. */
+const MUTATING_PARENT = `---
+name: mutating-parent
+inputs:
+  goal: goal
+steps:
+  - id: draft
+    persona: planner
+    output: draft.json
+  - id: next
+    choices:
+      - title: Build it now
+        run: implement
+        inputs:
+          plan: "{{run.dir}}/plan"
+---
+## draft
+Draft into {{run.dir}}/plan/SPEC.md
+`;
+
+const IMPLEMENT = `---
+name: implement
+inputs:
+  plan: plan-dir
+steps:
+  - id: build
+    persona: implementer
+    output: build.json
+---
+## build
+Build {{inputs.plan}}
+`;
+
 const ASKER = `---
 name: asker
 inputs:
@@ -115,6 +168,50 @@ const CLEAN = { verdict: "clean", findings: [] };
 function runWorkflowEffect(...args: Parameters<typeof runWorkflow>) {
   return runWorkflow(...args).pipe(Effect.provide(driverLayer));
 }
+
+test('a parent with nothing to name it after does not hand its child the branch "run"', () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(rig.baselineDir, "workflows", "nameless-parent", NAMELESS_PARENT);
+      yield* writeDef(rig.baselineDir, "workflows", "implement", IMPLEMENT);
+      yield* rig.queueOutputs([CLEAN]);
+      // `architecture` declares only `workspace`, so there is no input to be named
+      // after and the name falls back to the literal "run" — which slugs cleanly and
+      // so slips past the guard. Two of these would build one branch and share one
+      // checkout, index and stash stack.
+      const prompts = scriptedPrompts(["Build it now"], ["tidy-the-exporter"]);
+
+      const { lines } = yield* runWorkflowEffect(rig, "nameless-parent", {}, { prompts });
+
+      expect(prompts.asked.some((q) => q.includes("Which branch"))).toBe(true);
+      expect(lines.join("\n")).not.toContain("no worktree for run");
+      expect(lines.join("\n")).toContain("no worktree for tidy-the-exporter");
+    }),
+  ));
+
+test("a chained run whose parent's own name was clipped asks for a branch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Written here rather than in the fixture set: this one overrides the baseline's
+      // own `implement`, and every other test in this file should see the real one.
+      yield* writeDef(rig.baselineDir, "workflows", "mutating-parent", MUTATING_PARENT);
+      yield* writeDef(rig.baselineDir, "workflows", "implement", IMPLEMENT);
+      yield* rig.queueOutputs([CLEAN]);
+      // Two parents whose goals agree for the first 40 characters slug to one name, and
+      // that name is what a chained run is called after — so both children would build
+      // one branch and share one checkout. A name that was already clipped cannot be
+      // caught by slugging it again, so the whole of it has to reach the guard.
+      const goal = "Make the exporter handle a missing column without failing";
+      const prompts = scriptedPrompts(["Build it now"], ["exporter-missing-column"]);
+
+      const { lines } = yield* runWorkflowEffect(rig, "mutating-parent", { goal }, { prompts });
+
+      expect(prompts.asked.some((q) => q.includes("Which branch"))).toBe(true);
+      // And the answer is what the child is then resolved for, not just collected: this
+      // fixture's git makes no checkouts, so the refusal that follows names the branch.
+      expect(lines.join("\n")).toContain("no worktree for exporter-missing-column");
+    }),
+  ));
 
 test("a run: choice starts a child run with the forwarded inputs and the parent finishes", () =>
   runEffect(

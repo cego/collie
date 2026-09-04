@@ -65,7 +65,7 @@ const seed = Effect.fn("viewsTest.seed")(function* (opts: {
     inputSources: {},
     stepIds: ["one"],
     maxIterations: 1,
-    primaryInput: opts.target ?? "goal",
+    namedAfter: opts.target ?? "goal",
   });
   run.record.status = opts.status ?? "done";
   run.record.finished_at = run.record.created_at;

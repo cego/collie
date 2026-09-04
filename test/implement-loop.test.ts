@@ -223,7 +223,7 @@ function runWorkflowEffect(
         inputSources: inputSources(inferred),
         stepIds: wf.steps.map((s) => s.id),
         maxIterations: wf.maxIterations,
-        primaryInput:
+        namedAfter:
           inferred.find((r) => merged[r.name] !== "")?.label ??
           Object.values(merged).find((v) => v !== "") ??
           "run",

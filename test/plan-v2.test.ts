@@ -136,7 +136,14 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* rig.queueOutputs([CLEAN, CLEAN, CLEAN]);
+        // The spec step writes the SPEC, which is what makes `<run.dir>/plan` a plan
+        // directory by the time the chain classifies it — and so what makes the chained
+        // implement's branch a real question rather than a fixture artefact.
+        yield* rig.queueOutputs([
+          CLEAN,
+          { __write: { "plan/SPEC.md": "# Add a version flag\n" }, output: CLEAN },
+          CLEAN,
+        ]);
         const prompts = scriptedPrompts(["Implement now"]);
 
         const { run, status } = yield* runWorkflowEffect(
@@ -175,6 +182,10 @@ test(
 
         const child = yield* new RunStore(rig.stateDir).load(run.record.children[0]!);
         expect(child.record.workflow).toBe("implement");
+        // A plan directory, so rule 4 would name the branch after its basename — which
+        // for every chained run is the literal `plan`. The parent's own name is what
+        // keeps two of these apart, on the board and in the checkout.
+        expect(child.record.inputs.plan_kind).toBe("plan-dir");
         expect(child.record.slug).toBe("implement-add-a-version-flag");
         expect(child.record.inputs.plan).toBe(`${run.dir}/plan`);
       }),

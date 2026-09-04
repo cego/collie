@@ -702,7 +702,12 @@ export function isKindCompanion(name: string, inputs: Record<string, string>): b
   return name.endsWith("_kind") && name.slice(0, -"_kind".length) in inputs;
 }
 
-export function confirmLine(workflow: string, resolutions: Resolution[]): string {
+export function confirmLine(
+  workflow: string,
+  resolutions: Resolution[],
+  /** The branch a mutating Run was given, and where it came from. */
+  branch?: { name: string | null; source: string | null } | null,
+): string {
   const parts = resolutions
     .filter((r) => r.value !== "" || r.strategy !== "ticket")
     .map((r) => {
@@ -710,6 +715,7 @@ export function confirmLine(workflow: string, resolutions: Resolution[]): string
       const where = r.kind && !r.value.startsWith(r.kind) ? `${r.kind} · ${r.source}` : r.source;
       return `${r.name}=${abbreviate(r.value) || "(empty)"} [${where}]`;
     });
+  if (branch?.name) parts.push(`branch=${branch.name} [${branch.source ?? "resolved"}]`);
   return `${workflow}: ${parts.join("  ")}`;
 }
 

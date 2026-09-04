@@ -94,7 +94,7 @@ function live(
 /** A run in this Session, with whatever the test needs on top. */
 function seed(opts: {
   workflow: string;
-  primaryInput: string;
+  namedAfter: string;
   stepIds: string[];
   cwd?: string;
   workspace?: string | null;
@@ -113,7 +113,7 @@ function seed(opts: {
     inputSources: {},
     stepIds: opts.stepIds,
     maxIterations: opts.maxIterations ?? 1,
-    primaryInput: opts.primaryInput,
+    namedAfter: opts.namedAfter,
   });
 }
 
@@ -493,7 +493,7 @@ effectTest("one agent per role: a second implementer replaces the first", functi
 effectTest("findings that were handed off are not presented as untouched", function* () {
   const finished = yield* seed({
     workflow: "review",
-    primaryInput: "worktree",
+    namedAfter: "worktree",
     stepIds: ["review"],
   });
   finished.record.target_label = "worktree";
@@ -520,7 +520,7 @@ effectTest("findings that were handed off are not presented as untouched", funct
 effectTest("the board lists this Session's agents and runs, and nobody else's", function* () {
   const running = yield* seed({
     workflow: "implement",
-    primaryInput: "add-a-picker",
+    namedAfter: "add-a-picker",
     stepIds: ["build", "review"],
     maxIterations: 5,
   });
@@ -531,7 +531,7 @@ effectTest("the board lists this Session's agents and runs, and nobody else's", 
 
   const finished = yield* seed({
     workflow: "review",
-    primaryInput: "worktree",
+    namedAfter: "worktree",
     stepIds: ["review"],
   });
   finished.record.target_label = "worktree";
@@ -545,22 +545,22 @@ effectTest("the board lists this Session's agents and runs, and nobody else's", 
   // workspace they were activated from, its cwd is never the board's.
   yield* seed({
     workflow: "plan",
-    primaryInput: "in-a-worktree",
+    namedAfter: "in-a-worktree",
     stepIds: ["grill"],
     cwd: "/somewhere/.herdr/worktrees/project/in-a-worktree",
   });
   // The same repo in another workspace; the same workspace id in another herdr
   // session; and the same id under another label.
-  yield* seed({ workflow: "plan", primaryInput: "not-mine", stepIds: ["grill"], workspace: "9" });
+  yield* seed({ workflow: "plan", namedAfter: "not-mine", stepIds: ["grill"], workspace: "9" });
   yield* seed({
     workflow: "plan",
-    primaryInput: "not-mine",
+    namedAfter: "not-mine",
     stepIds: ["grill"],
     session: "/other.sock",
   });
   yield* seed({
     workflow: "plan",
-    primaryInput: "not-mine",
+    namedAfter: "not-mine",
     stepIds: ["grill"],
     workspaceLabel: "recycled",
   });
@@ -625,7 +625,7 @@ effectTest("the board lists this Session's agents and runs, and nobody else's", 
 effectTest("every live agent of this Session's runs is listed, role or no role", function* () {
   const run = yield* seed({
     workflow: "review",
-    primaryInput: "worktree",
+    namedAfter: "worktree",
     stepIds: ["review", "synthesize"],
   });
   run
@@ -658,7 +658,7 @@ effectTest("every live agent of this Session's runs is listed, role or no role",
 });
 
 effectTest("a running run whose agents are all gone is abandoned, not active", function* () {
-  const run = yield* seed({ workflow: "review", primaryInput: "worktree", stepIds: ["review"] });
+  const run = yield* seed({ workflow: "review", namedAfter: "worktree", stepIds: ["review"] });
   run.record.target_label = "worktree";
   run.step("review").status = "running";
   run.step("review").variants.push(variant("rev-1", "1-4", "review-worktree/review"));
@@ -703,7 +703,7 @@ effectTest("the board says what pruning removed and what it is holding", functio
 effectTest("a run waiting on the human says so on the board", function* () {
   const run = yield* seed({
     workflow: "plan",
-    primaryInput: "add-a-picker",
+    namedAfter: "add-a-picker",
     stepIds: ["grill", "next"],
   });
   run.record.awaiting = "next";
@@ -752,7 +752,7 @@ test("an active row says how long its step has been going, and when the run went
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const run = yield* seed({ workflow: "implement", primaryInput: "x", stepIds: ["build"] });
+      const run = yield* seed({ workflow: "implement", namedAfter: "x", stepIds: ["build"] });
       const step = run.record.steps[0]!;
       step.status = "running";
       step.started_at = FIXED_ISO(NOW - 12 * 60_000);

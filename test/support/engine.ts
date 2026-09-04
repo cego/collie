@@ -13,9 +13,21 @@ import {
   inputValues,
   targetKind,
 } from "../../src/inputs";
+import { primaryName } from "../../src/operations";
 import { RunStore, type Run, type WorktreeRecord } from "../../src/run";
 import type { EnginePrompts } from "../../src/engine";
-import type { PickItem } from "../../src/inputs";
+import type { PickItem, Resolution } from "../../src/inputs";
+
+/**
+ * What a Run is named after, exactly as `startRun` works it out. The harness starts
+ * Runs without going through it, and a second copy of this here disagreed with the real
+ * one — which hid a bug where every nameless Run was named "run".
+ */
+function named(inferred: Resolution[], merged: Record<string, string>) {
+  const settled = inferred.map((r) => ({ ...r, value: merged[r.name] ?? "" }));
+  const name = primaryName(settled);
+  return { namedAfter: name.value, slugFrom: name.short };
+}
 
 export class EffectFakeHerdr extends Herdr {
   constructor(
@@ -92,7 +104,7 @@ export function plannedRun(rig: Rig, goal: string) {
       inputSources: { goal: "asked" },
       stepIds: ["grill"],
       maxIterations: 5,
-      primaryInput: goal,
+      namedAfter: goal,
     });
     run.step("grill").status = "done";
     run.record.status = "done";
@@ -176,10 +188,7 @@ export function runWorkflow(
       decisions: opts.decisions,
       stepIds: wf.steps.map((s) => s.id),
       maxIterations: wf.maxIterations,
-      primaryInput:
-        inferred.find((r) => merged[r.name] !== "")?.label ??
-        Object.values(merged).find((v) => v !== "") ??
-        "run",
+      ...named(inferred, merged),
     });
 
     const lines: string[] = [];

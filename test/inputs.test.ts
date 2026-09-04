@@ -206,6 +206,11 @@ test("the confirm line shows every input with where it came from", () =>
       expect(confirmLine("review", resolutions)).toBe(
         "review: target=worktree [working tree]  post=false [default]",
       );
+      // A mutating run's branch is decided the same way its Inputs are, and is the
+      // one thing the line did not say.
+      expect(
+        confirmLine("implement", resolutions, { name: "wide-scope", source: "from target" }),
+      ).toContain("branch=wide-scope [from target]");
     }),
   ));
 
@@ -492,6 +497,7 @@ function makePlanRun(
       id,
       seq: 1,
       slug: `plan-${slug}`,
+      named_after: slug,
       workflow: "plan",
       worktree: null,
       decisions: {},

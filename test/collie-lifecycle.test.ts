@@ -85,6 +85,25 @@ description: Helps.
 Help.
 `,
       );
+      // A mutating workflow, so the branch a run works on has to be settled before it
+      // starts. `implement` by name: that is what Collie knows changes the repository.
+      yield* fs.writeFileString(
+        path.join(plugin, "workflows", "implement.md"),
+        `---
+name: implement
+title: Implement
+description: Builds a plan.
+inputs:
+  plan: work-source
+steps:
+  - id: build
+    persona: helper
+    output: build.json
+---
+## build
+Build {{inputs.plan}}.
+`,
+      );
       const herdr = path.join(dir, "herdr");
       yield* fs.writeFileString(
         herdr,
@@ -328,6 +347,100 @@ effectTest(
   },
   10_000,
 );
+
+/** The workspace as a real git checkout, for the tests that make a worktree of it. */
+function checkout(at: string) {
+  const git = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: at });
+  git("init", "-b", "master");
+  git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "--allow-empty", "-m", "x");
+}
+
+effectTest(
+  "a run whose branch cannot be worked out asks for one and starts on the answer",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    // A real checkout, because the answer to the question makes a worktree of it.
+    checkout(path.join(dir, "workspace"));
+
+    // A plan directory whose own name is too long to slug: every such plan under one
+    // `tasks/` directory would otherwise clip to the same branch, and the branch is the
+    // key to the worktree.
+    const plan = path.join(
+      dir,
+      "tasks",
+      "a-plan-directory-whose-name-is-far-too-long-to-be-a-branch",
+    );
+    yield* fs.makeDirectory(plan, { recursive: true });
+    yield* fs.writeFileString(path.join(plan, "SPEC.md"), "# A plan\n");
+
+    const start = ["--workspace", "w1", "run", "start", "implement", "--input", `plan=${plan}`];
+    const refused = yield* cli([...start, "--request-id", "branch-1"]);
+
+    expect(refused.body.error.code).toBe("needs_input");
+    expect(refused.body.error.details.inputs).toMatchObject([{ name: "branch" }]);
+    // A declared strategy, so an agent reading the schema back can act on it.
+    expect(refused.body.error.details.schema).toMatchObject({ branch: "optional" });
+    // Nothing happened, so the same request id is free to be retried with the answer.
+    expect(yield* fs.exists(path.join(dir, "drivers"))).toBe(false);
+
+    const started = yield* cli([
+      ...start,
+      "--input",
+      "branch=global-board",
+      "--request-id",
+      "branch-1",
+    ]);
+    expect(Number(started.exit)).toBe(0);
+    const runId = Schema.decodeUnknownSync(Schema.String)(started.body.data.runId);
+    const record = parseJson(
+      yield* fs.readFileString(path.join(dir, "state", "runs", runId, "run.json")),
+    );
+    expect(record.worktree.branch).toBe("global-board");
+    expect(record.worktree.path).toBe(
+      path.join(dir, ".herdr", "worktrees", "workspace", "global-board"),
+    );
+  },
+);
+
+effectTest("two plans under one directory are two runs, named apart", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  checkout(path.join(dir, "workspace"));
+
+  // Two plans whose names agree for the first 24 characters. The run's slug names its
+  // agents, its tab and its row on the board, so two of these sharing one would put two
+  // identical rows in front of the human with no way to tell which run is which.
+  const plans = ["a-plan-directory-whose-name-is-one", "a-plan-directory-whose-name-is-two"];
+  const slugs: string[] = [];
+  for (const name of plans) {
+    const plan = path.join(dir, "tasks", name);
+    yield* fs.makeDirectory(plan, { recursive: true });
+    yield* fs.writeFileString(path.join(plan, "SPEC.md"), "# A plan\n");
+    const started = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "start",
+      "implement",
+      "--input",
+      `plan=${plan}`,
+    ]);
+    expect(Number(started.exit)).toBe(0);
+    const runId = Schema.decodeUnknownSync(Schema.String)(started.body.data.runId);
+    const record = parseJson(
+      yield* fs.readFileString(path.join(dir, "state", "runs", runId, "run.json")),
+    );
+    // The branch already names the work; the run is named the same way, so the two
+    // cannot say the same thing.
+    expect(record.worktree.branch).toBe(name);
+    slugs.push(Schema.decodeUnknownSync(Schema.String)(record.slug));
+  }
+
+  expect(slugs[0]).not.toBe(slugs[1]);
+  expect(slugs[0]).toBe(`implement-${plans[0]}`);
+  expect(slugs[1]).toBe(`implement-${plans[1]}`);
+});
 
 effectTest("a dead request lock is recovered instead of wedging the request id", function* () {
   const fs = yield* FileSystem.FileSystem;

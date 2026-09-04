@@ -56,6 +56,10 @@ work. What was resolved is recorded with its kind, and the build prompt reads bo
 `linear` and `text` the implementer writes the spec and a task list into the run's `plan/`
 before it builds, so every run leaves the same audit trail.
 
+**Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
+the reviewed branch, else the `<name>` of a `branch:<base>...<name>` target you gave, else
+the plan directory's own name ([the full order](cli.md#start-a-run)).
+
 **What happens:** one implementer agent builds (a commit per ticket), then improves the
 architecture it touched, then simplifies. It embeds `review` — two models in parallel, one
 synthesized review — and loops on the findings up to `max_iterations` (5 by default). Every
@@ -107,6 +111,9 @@ strong ones only, and writes a report into the run directory. Everything else is
 with a reason rather than half-applied.
 
 **Ends with a menu:** **Implement now** (chains `implement` on the report) or **Stop here**.
+**Implement now** asks which branch to build on: `architecture` takes no input that names
+the work, so there is nothing to name a branch after, and every architecture run in a repo
+would otherwise be handed the same one ([how the branch is chosen](cli.md#start-a-run)).
 
 Definition: [`workflows/architecture.md`](../workflows/architecture.md).
 

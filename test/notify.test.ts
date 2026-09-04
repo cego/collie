@@ -16,7 +16,7 @@ const makeRun = Effect.fn("notifyTest.makeRun")(function* (rig: Rig) {
     inputSources: { target: "inferred" },
     stepIds: ["review", "post"],
     maxIterations: 1,
-    primaryInput: "working tree",
+    namedAfter: "working tree",
   });
 });
 

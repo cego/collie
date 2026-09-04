@@ -68,11 +68,21 @@ function lookup(vars: YamlMap, path: string[]): YamlValue | undefined {
 const isText = Schema.is(Schema.String);
 
 export function slugify(text: string, max = 40): string {
-  const slug = text
+  return slug(text, max).slug;
+}
+
+/**
+ * A slug, and whether the length cap cut it short. A clipped slug is a label, never an
+ * identity: two long texts that share a prefix — every plan directory under one
+ * `tasks/` path — clip to the same slug, and anything keyed by it then collides.
+ */
+export function slug(text: string, max = 40) {
+  const full = text
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, max)
-    .replace(/-+$/g, "");
-  return slug || "run";
+    .replace(/^-+|-+$/g, "");
+  const cut = full.slice(0, max).replace(/-+$/g, "");
+  // The fallback name counts as clipped: it stands for the text rather than coming out
+  // of it, so two texts with nothing alphanumeric between them would share it.
+  return { slug: cut || "run", clipped: cut !== full || cut === "" };
 }

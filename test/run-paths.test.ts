@@ -27,7 +27,7 @@ beforeEach(() =>
         inputSources: {},
         stepIds: ["build"],
         maxIterations: 1,
-        primaryInput: "x",
+        namedAfter: "x",
       });
     }),
   ),
@@ -75,6 +75,30 @@ test("an unsafe component refuses to produce a path at all", () =>
     }),
   ));
 
+test("a Run records the whole of what it is named after, and slugs from the short form", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The two are not the same thing. A slug is an identity to read on a tab, so it
+      // takes the short name an Input offered; `named_after` is what a chained child's
+      // branch is judged against, and a name already cut short cannot be caught by
+      // cutting it again — so it keeps the whole of it.
+      const whole = "Make the exporter handle a missing column without failing";
+      const made = yield* new RunStore(stateDir).create({
+        workflow: "w",
+        cwd: "/repo",
+        inputs: {},
+        inputSources: {},
+        stepIds: ["build"],
+        maxIterations: 1,
+        namedAfter: whole,
+        slugFrom: "make-the-exporter",
+      });
+
+      expect(made.record.slug).toBe("w-make-the-exporter");
+      expect(made.record.named_after).toBe(whole);
+    }),
+  ));
+
 test("a workflow name cannot place the Run directory outside the runs root", () =>
   expect(
     runEffect(
@@ -85,7 +109,7 @@ test("a workflow name cannot place the Run directory outside the runs root", () 
         inputSources: {},
         stepIds: ["s"],
         maxIterations: 1,
-        primaryInput: "x",
+        namedAfter: "x",
       }),
     ),
   ).rejects.toThrow("Run directory"));

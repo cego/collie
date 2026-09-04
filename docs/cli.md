@@ -96,9 +96,31 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--decide s=t`  | Repeatable. Answers Choice step `s` with title `t` now, so the run does not stop there. |
 | `--request-id`  | Idempotency key — see [Retrying safely](#retrying-safely).                              |
 
-`--input branch=<name>` is the one input no workflow declares: it names the branch a
-mutating run works on, and so which worktree it gets, instead of letting Collie resolve
-one. It is ignored by a workflow that changes nothing.
+`--input branch=<name>` is the one input no workflow declares, and `workflow show` lists it
+for every mutating workflow. It names the branch the run works on, and so which worktree it
+gets. A branch nobody named is resolved in this order:
+
+1. `--input branch=<name>`, which wins over everything below.
+2. The branch the reviewed work is already on, for a run fixing a review.
+3. The `<name>` of a `branch:<base>...<name>` target **you gave** (`--input target=` takes a
+   bare ref too, and turns it into one) — so the checkout and the review target agree. A
+   target Collie inferred does not count: it names the branch you are standing on, and
+   building that would hand the run your own checkout.
+4. The plan directory's own name, for a run given a plan directory.
+5. Otherwise a slug of the work itself — the description, or the issue id.
+
+A name that would not survive being slugged is refused rather than fudged — one too long
+for the cap, and one with nothing in it to slug at all, which is what `architecture` has.
+Two plans under one directory would clip to the same branch, and two runs with no name of
+their own would share a stand-in; the branch is what keys the worktree, so either way that
+is one checkout for two pieces of work. The refusal is a `needs_input` naming `branch`, so
+the same request id retries with `--input branch=`.
+
+The resolved branch also names the run itself — its `slug`, and so its agents, its tab and
+its row on the board — so what `run show` calls the run and what the checkout is on always
+say the same thing.
+
+It is ignored by a workflow that changes nothing.
 
 `--input workspace=new` is a declared input of every mutating workflow, so it reaches the
 same place from any front door and a `plan` that chains into `implement` hands its answer
