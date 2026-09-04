@@ -11,6 +11,9 @@ steps:
   - id: grill
     persona: planner
     skill: grill-with-docs
+    # One planner agent for the whole run, so its model is named once, here.
+    model: fable
+    effort: medium
     output: grill.json
   - id: spec
     persona: planner

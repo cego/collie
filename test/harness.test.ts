@@ -32,6 +32,7 @@ test("a persona goes in as a file flag where the harness has one, else as a prom
 
 test("model checks accept the alias list, the harness pattern and user extras", () => {
   expect(knownModel(HARNESSES.claude!, "sonnet")).toBe(true);
+  expect(knownModel(HARNESSES.claude!, "fable")).toBe(true);
   expect(knownModel(HARNESSES.claude!, "claude-opus-5")).toBe(true);
   expect(knownModel(HARNESSES.claude!, "gpt-5")).toBe(false);
   expect(knownModel(HARNESSES.opencode!, "sonnet")).toBe(false);
