@@ -8,6 +8,7 @@ import { Herdr, type WorkspaceInfo } from "../herdr";
 import { reason, unsafePathComponent } from "../naming";
 import { err, resolveWorkspace, runStatus, type Failure } from "../operations";
 import { InvalidRunState, Run, RunStore } from "../run";
+import { branchListed } from "../worktree";
 import type { Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 
@@ -120,7 +121,7 @@ export function workflowData(wf: WorkflowDef) {
     name: wf.name,
     title: wf.title,
     description: wf.description,
-    inputs: wf.inputs,
+    inputs: branchListed(wf.name, wf.inputs),
     steps: wf.steps.map((step) => step.id),
     layer: wf.layer,
     path: wf.path,

@@ -3,7 +3,14 @@ import { Clock, Effect, FileSystem, Option } from "effect";
 import { runEffect } from "./support/effect";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
-import { branchFor, checkoutFor, mutates, pruneWorktrees, worktreeFor } from "../src/worktree";
+import {
+  branchFor,
+  checkoutFor,
+  mutates,
+  pruneWorktrees,
+  worktreeFor,
+  type BranchAsk,
+} from "../src/worktree";
 import { RunStore, type VariantRecord } from "../src/run";
 import { Herdr } from "../src/herdr";
 
@@ -133,8 +140,18 @@ const fakeGitWithCheckouts = (
     },
   );
 
-const plan = (inputs: Record<string, string>, explicit?: string) =>
-  branchFor({ cwd: rig.projectDir, name: "Add a picker", inputs, explicit });
+const plan = (inputs: Record<string, string>, explicit?: string, extra: Partial<BranchAsk> = {}) =>
+  branchFor({
+    cwd: rig.projectDir,
+    name: "Add a picker",
+    inputs,
+    // The resolver only names a branch after an Input a human gave, so the default
+    // here is what `--input` records — the cases about what Collie itself worked out
+    // override it.
+    sources: Object.fromEntries(Object.keys(inputs).map((key) => [key, "explicit"])),
+    explicit,
+    ...extra,
+  });
 
 test("only the workflows that change the repository get a checkout of their own", () => {
   expect(mutates("implement")).toBe(true);
@@ -151,6 +168,7 @@ test("a run described in words branches off the default branch, named from its s
         branch: "add-a-picker",
         base: "origin/master",
         refused: null,
+        source: "from the run name",
       });
     }),
   ));
@@ -197,6 +215,197 @@ test("a review of a branch diff takes its head, and a review of a tree the branc
       expect(
         yield* plan({ plan_kind: "review", target: "worktree", target_kind: "worktree" }),
       ).toMatchObject({ branch: "on-this-one" });
+    }),
+  ));
+
+test("a diff target names the branch the run works on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      // The target says which branch is being built, so the checkout and the review
+      // target agree without a second flag.
+      expect(
+        yield* plan({ plan_kind: "text", target: "branch:master...wide-scope" }),
+      ).toMatchObject({ branch: "wide-scope", source: "from target" });
+      // A bare `branch:<name>` has no base to strip, and names itself.
+      expect(yield* plan({ plan_kind: "text", target: "branch:wide-scope" })).toMatchObject({
+        branch: "wide-scope",
+        source: "from target",
+      });
+    }),
+  ));
+
+test("a target whose head is not a branch name leaves the branch to be worked out", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      // `branch:main...HEAD` is a diff anyone may review; HEAD is not a branch to build.
+      expect(yield* plan({ plan_kind: "text", target: "branch:main...HEAD" })).toMatchObject({
+        branch: "add-a-picker",
+        source: "from the run name",
+      });
+      expect(yield* plan({ plan_kind: "text", target: "worktree" })).toMatchObject({
+        branch: "add-a-picker",
+        source: "from the run name",
+      });
+    }),
+  ));
+
+test("a plan directory names the branch after itself, not after its path", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      expect(
+        yield* plan(
+          { plan_kind: "plan-dir", plan: "/home/mk/work/gitlab.example.com/tasks/global-board" },
+          undefined,
+          { name: "home-mk-work-gitlab-example-com-tasks-global-board" },
+        ),
+      ).toMatchObject({ branch: "global-board", source: "from plan" });
+    }),
+  ));
+
+test("the target beats the plan directory, and an explicit branch beats both", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      const inputs = {
+        plan_kind: "plan-dir",
+        plan: "/tmp/tasks/global-board",
+        target: "branch:master...wide-scope",
+      };
+      expect(yield* plan(inputs)).toMatchObject({ branch: "wide-scope", source: "from target" });
+      expect(yield* plan(inputs, "hand-picked")).toMatchObject({
+        branch: "hand-picked",
+        source: "explicit",
+      });
+    }),
+  ));
+
+test("a name too long to slug is a branch to ask for, never a clipped one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      // Every plan under `tasks/` used to slug to the same clipped branch, and the
+      // branch is the key to the worktree — so two of them shared a checkout.
+      const asked = yield* plan({ plan_kind: "text" }, undefined, {
+        name: "/home/mk/work/gitte2/gitlab.cego.dk/tasks/collie-global-board",
+      });
+      expect(asked.branch).toBe("");
+      // Answerable, so a caller can put the question and retry rather than give up.
+      expect(asked.refused?.ask).toContain("branch");
+      expect(asked.refused?.why).toBeTruthy();
+    }),
+  ));
+
+test("a target Collie guessed names no branch; only one a human gave does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      // Inference offers `branch:<default>...<current branch>` whenever the cwd is on a
+      // branch. Taking that as the branch to build would put the run in the checkout
+      // that branch is already in — the operator's own tree, index and stash stack.
+      const inputs = { plan_kind: "text", target: "branch:master...foo" };
+      expect(
+        yield* plan(inputs, undefined, { sources: { target: "current branch" } }),
+      ).toMatchObject({ branch: "add-a-picker", source: "from the run name" });
+      // The picker's "Type it…" and `run answer` are the human saying it, same as `--input`.
+      for (const said of ["explicit", "typed", "asked"]) {
+        expect(yield* plan(inputs, undefined, { sources: { target: said } })).toMatchObject({
+          branch: "foo",
+          source: "from target",
+        });
+      }
+    }),
+  ));
+
+test("two descriptions that start alike are two branches, or none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      // The run name is a label the picker truncated to 24 characters, so slugging it
+      // could never hit the 40-character cap the guard watches: two descriptions that
+      // agree for six words used to land on one branch, and so in one checkout.
+      const first = "Fix the parser so a diff of two refs with no branch works";
+      const second = "Fix the parser so a diff of two refs with a different outcome";
+      for (const text of [first, second]) {
+        // The name the picker and the CLI both arrive with: `textLabel` cut to 24.
+        const asked = yield* plan({ plan_kind: "text", plan: text }, undefined, {
+          name: "fix-the-parser-so-a-diff",
+        });
+        expect(asked.branch).toBe("");
+        expect(asked.refused?.ask).toContain("branch");
+      }
+      // A description short enough to be a branch still is one, and the line says the
+      // work is what named it rather than crediting the Run's own name.
+      expect(
+        yield* plan({ plan_kind: "text", plan: "Add a picker" }, undefined, {
+          name: "add-a-picker",
+        }),
+      ).toMatchObject({ branch: "add-a-picker", source: "from the work" });
+      // A Linear issue names itself.
+      expect(
+        yield* plan({ plan_kind: "linear", plan: "ENG-123" }, undefined, { name: "ENG-123" }),
+      ).toMatchObject({ branch: "eng-123" });
+      // A chained Run is named after its parent, and its work source is a path the
+      // parent wrote rather than anything a human said — that name is already whole,
+      // and slugging the path would refuse every chained run.
+      expect(
+        yield* plan(
+          { plan_kind: "text", plan: `${rig.root}/state/runs/architecture-x/plan` },
+          undefined,
+          {
+            sources: { plan: "chained from architecture-x" },
+          },
+        ),
+      ).toMatchObject({ branch: "add-a-picker" });
+    }),
+  ));
+
+test("a plan directory Collie itself pointed at names no branch; the run's own name does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      // `plan` and `architecture` chain into `implement` with `{{run.dir}}/plan`, and
+      // the picker offers a finished plan run's `<run.dir>/plan` the same way. Every
+      // one of those basenames is the literal `plan`, so taking it would put every
+      // chained run on one branch, in one checkout, under one row on the board.
+      const dir = `${rig.root}/state/runs/plan-add-a-version-flag-20260904/plan`;
+      for (const source of ["chained from plan-add-a-version-flag-20260904", "plan run pr-1"]) {
+        expect(
+          yield* plan({ plan_kind: "plan-dir", plan: dir }, undefined, {
+            name: "add-a-version-flag",
+            sources: { plan: source },
+          }),
+        ).toMatchObject({ branch: "add-a-version-flag", source: "from the run name" });
+      }
+
+      // A plan directory the operator named is still what the branch is named after.
+      expect(
+        yield* plan({ plan_kind: "plan-dir", plan: "/home/mk/tasks/global-board" }),
+      ).toMatchObject({ branch: "global-board", source: "from plan" });
+    }),
+  ));
+
+test("work that reduces to nothing nameable is a branch to ask for, not one called run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGit();
+
+      // `slug` substitutes the literal "run" when nothing alphanumeric survives. Two of
+      // those would be one branch and one checkout, which is what the guard exists to
+      // stop — reached through the fallback rather than the length cap.
+      const asked = yield* plan({ plan_kind: "text", plan: "???" }, undefined, { name: "???" });
+      expect(asked.branch).toBe("");
+      expect(asked.refused?.ask).toContain("branch");
     }),
   ));
 
@@ -302,7 +511,7 @@ const collieWorktree = (
       inputSources: {},
       stepIds: ["build"],
       maxIterations: 1,
-      primaryInput: branch,
+      namedAfter: branch,
       worktree: {
         path: worktreePath,
         branch,
@@ -704,7 +913,12 @@ test("a review of a merge request whose branch is only on the remote is cut from
           target: "mr:gitlab.example.com/acme/app!42",
           target_kind: "mr",
         }),
-      ).toEqual({ branch: "fix-the-parser", base: "origin/fix-the-parser", refused: null });
+      ).toEqual({
+        branch: "fix-the-parser",
+        base: "origin/fix-the-parser",
+        refused: null,
+        source: "from the reviewed branch",
+      });
     }),
   ));
 
@@ -889,7 +1103,7 @@ test("a checkout git will not add is a run that does not start", () =>
       });
 
       // Never the caller's own checkout: sharing one is the bug this exists to stop.
-      expect(checkout.refused).toBe(
+      expect(checkout.refused?.why).toBe(
         "no worktree for add-a-picker: fatal: could not create leading directories",
       );
       expect(checkout.worktree).toBe(null);
@@ -914,7 +1128,7 @@ test("a checkout Collie cannot be given is a run that does not start", () =>
       });
 
       // Never the caller's own checkout: sharing one is the bug this exists to stop.
-      expect(checkout.refused).toContain("no worktree for add-a-picker");
+      expect(checkout.refused?.why).toContain("no worktree for add-a-picker");
       expect(checkout.worktree).toBe(null);
       expect(checkout.cwd).toBe(rig.projectDir);
     }),
@@ -939,6 +1153,9 @@ test("a workflow that changes nothing works where it was started, and is not ref
         worktree: null,
         note: "",
         refused: null,
+        // A workflow that changes nothing has no branch of its own to name.
+        branch: null,
+        branchSource: null,
       });
       expect(yield* rig.cmds()).toEqual([]);
     }),
@@ -954,7 +1171,7 @@ test("a merge request Collie cannot read is a run that does not start", () =>
       // new branch named after the run would leave the merge request untouched.
       expect(
         yield* plan({ plan_kind: "review", target: "mr:42", target_kind: "mr" }),
-      ).toMatchObject({ refused: "glab could not read !42" });
+      ).toMatchObject({ refused: { why: "glab could not read !42" } });
     }),
   ));
 
@@ -975,8 +1192,9 @@ test("a merge request in another project cannot be fixed from this checkout", ()
           target_kind: "mr",
         }),
       ).toMatchObject({
-        refused:
-          "!7 is in gitlab.example.com/other/thing, and this is a checkout of gitlab.example.com/acme/app",
+        refused: {
+          why: "!7 is in gitlab.example.com/other/thing, and this is a checkout of gitlab.example.com/acme/app",
+        },
       });
     }),
   ));
@@ -1078,14 +1296,18 @@ test("a diff of two refs that are not branches has nothing to fix on", () =>
       // even a legal branch name — so there is nothing to commit fixes to.
       expect(
         yield* plan({ plan_kind: "review", target: "branch:main...HEAD", target_kind: "branch" }),
-      ).toMatchObject({ refused: "HEAD is not a branch, so there is nothing to fix on it" });
+      ).toMatchObject({
+        refused: { why: "HEAD is not a branch, so there is nothing to fix on it" },
+      });
       expect(
         yield* plan({
           plan_kind: "review",
           target: "branch:1a2b3c4...9f8e7d6",
           target_kind: "branch",
         }),
-      ).toMatchObject({ refused: "9f8e7d6 is not a branch, so there is nothing to fix on it" });
+      ).toMatchObject({
+        refused: { why: "9f8e7d6 is not a branch, so there is nothing to fix on it" },
+      });
     }),
   ));
 
@@ -1234,7 +1456,7 @@ test("a reviewed branch that is not on the remote at all is refused", () =>
           target_kind: "mr",
         }),
       ).toMatchObject({
-        refused: "long-gone is not on the remote, so there is no reviewed work to fix",
+        refused: { why: "long-gone is not on the remote, so there is no reviewed work to fix" },
       });
       // A checkout that has simply never fetched the branch is the common case, so it
       // is asked for before anything is refused.
@@ -1258,7 +1480,7 @@ test("a checkout with no GitLab remote cannot be shown to be the reviewed projec
           target_kind: "mr",
         }),
       ).toMatchObject({
-        refused: `${rig.projectDir} has no GitLab remote, so !42 may not be its own`,
+        refused: { why: `${rig.projectDir} has no GitLab remote, so !42 may not be its own` },
       });
     }),
   ));

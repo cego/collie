@@ -47,6 +47,10 @@ Inputs Collie can infer it will infer. What it cannot comes back as `needs_input
 `details.inputs` naming each missing input and its question — ask the user those questions,
 then retry with the same `--request-id`.
 
+`branch` is an input of every mutating workflow that no workflow declares: it names the
+branch the Run works on, is derived from the target or the plan directory when you leave it
+out, and comes back as `needs_input` when nothing names one.
+
 Add `--decide <step>=<title>` for a Choice step you already know the answer to, so the Run
 does not stop there. `workflow show` lists each Choice step's titles.
 

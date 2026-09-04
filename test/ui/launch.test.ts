@@ -141,6 +141,43 @@ Do {{inputs.goal}}.
   expect(runs[0]!.record.decisions).toEqual({ next: "Stop here too" });
 });
 
+effectTest(
+  "a branch the picker cannot work out is asked for, not reported as a failure",
+  function* () {
+    // `implement` by name: that is the workflow Collie knows changes the repository, and
+    // so the one that needs a branch before it can start.
+    yield* writeDef(
+      rig.baselineDir,
+      "workflows",
+      "implement",
+      `---
+name: implement
+title: implement — needs somewhere to work
+inputs:
+  goal: goal
+steps:
+  - id: build
+    persona: implementer
+    output: build.json
+---
+## build
+
+Do {{inputs.goal}}.
+`,
+    );
+
+    // Too long to slug, so nothing the run was given names a branch short enough to be one.
+    const goal = "Fix the parser so a diff of two refs with no branch on either side works";
+    const { asked } = yield* answering(["implement", goal, "fix-the-parser"], (prompts) =>
+      pickFlow(new Herdr(env()), env(), prompts),
+    );
+
+    // The question itself, not "implement needs input." with no way to answer it — every
+    // other missing input in this flow is asked for, and the CLI front door asks this one.
+    expect(asked.some((question) => question.includes("Which branch"))).toBe(true);
+  },
+);
+
 effectTest("a launch inline in the tab leaves the session's popup alone", function* () {
   yield* rig.startSocket();
   yield* writeDef(
@@ -264,7 +301,7 @@ effectTest("resume offers only runs with unfinished steps", function* () {
     inputSources: {},
     stepIds: ["review", "synthesize"],
     maxIterations: 1,
-    primaryInput: "unfinished",
+    namedAfter: "unfinished",
   });
   unfinished.record.status = "blocked";
   unfinished.record.steps[0]!.status = "done";
@@ -280,7 +317,7 @@ effectTest("resume offers only runs with unfinished steps", function* () {
     inputSources: {},
     stepIds: ["review"],
     maxIterations: 1,
-    primaryInput: "finished",
+    namedAfter: "finished",
   });
   finished.record.status = "done";
   finished.record.steps[0]!.status = "done";

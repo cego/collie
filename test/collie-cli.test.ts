@@ -50,6 +50,20 @@ const cli = Effect.fn("test.cli")(function* (
 
 const parseEnvelope = Schema.decodeUnknownEffect(CliEnvelope);
 
+/** `workflow list`, just far enough to read each workflow's inputs back. */
+const WorkflowRows = Schema.fromJsonString(
+  Schema.Struct({
+    data: Schema.Struct({
+      workflows: Schema.Array(
+        Schema.Struct({
+          name: Schema.String,
+          inputs: Schema.Record(Schema.String, Schema.String),
+        }),
+      ),
+    }),
+  }),
+);
+
 test("public JSON discovery has one typed envelope", () =>
   runEffect(
     Effect.gen(function* () {
@@ -371,6 +385,34 @@ test("workflow show prints what a run actually gets, not what was authored", () 
       expect(shown.stdout).toContain("review.synthesize");
       const steps = shown.stdout.split("Steps:")[1]!.split("Defined in:")[0]!.trim().split("\n");
       expect(steps).toHaveLength(7);
+    }),
+  ));
+
+test("a mutating workflow lists the branch input no workflow declares", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // An agent driving Collie cannot pass an Input nothing names, and `branch` is
+      // the one that decides which checkout the run gets.
+      const implement = yield* cli(["--json", "workflow", "show", "implement"]);
+      expect(implement.stdout).toContain('"branch"');
+      const human = yield* cli(["workflow", "show", "implement"]);
+      expect(human.stdout).toContain("branch:");
+      expect(human.stdout).toContain("--input branch=");
+
+      // A declared strategy, never one invented here: an agent reading this map acts on
+      // the strategy, and `branch` is optional in exactly that sense.
+      expect(implement.stdout).toContain('"branch":"optional"');
+
+      // Wherever the inputs are listed, not only in `show`.
+      const listed = yield* cli(["--json", "workflow", "list"]);
+      const workflows = Schema.decodeUnknownSync(WorkflowRows)(listed.stdout).data.workflows;
+      const named = (name: string) => workflows.find((w) => w.name === name)!;
+      expect(Object.keys(named("implement").inputs)).toContain("branch");
+
+      // A workflow that changes nothing has no branch of its own to work on.
+      const review = yield* cli(["--json", "workflow", "show", "review"]);
+      expect(review.stdout).not.toContain('"branch"');
+      expect(Object.keys(named("review").inputs)).not.toContain("branch");
     }),
   ));
 

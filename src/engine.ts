@@ -912,24 +912,39 @@ const chain = Effect.fn("Engine.chain")(function* (
     }
   }
 
-  // The parent already names the work, so the child inherits its name.
-  const tail = runName(run.record.workflow, run.record.slug);
+  // The parent already names the work, so the child inherits its name — the whole of
+  // what the parent was called after where that is recorded, not the slug it was cut
+  // to, because a name that was already clipped cannot be caught by slugging it again.
+  const tail = run.record.named_after ?? runName(run.record.workflow, run.record.slug);
   // A chained Workflow that changes the repository owns its checkout too — this is
   // where `plan` and `architecture` get one, by chaining into `implement`. The branch
   // is resolved from the child's own inputs, so a fix round lands in the checkout the
   // reviewed branch already has.
-  const checkout = yield* checkoutFor(o.herdr, {
+  const where = {
     cwd: run.record.cwd,
     workflow: child.name,
     name: tail,
     inputs,
+    sources,
     workspaceId: o.env.workspaceId,
     workspaceLabel: run.record.workspace_label,
-  });
+  };
+  let checkout = yield* checkoutFor(o.herdr, where);
+  // A branch nothing named is settled the way every other missing Input of this child
+  // was a few lines up — the human is right here at the menu that chained it, and the
+  // other two front doors both recover from this rather than stopping.
+  if (checkout.refused?.ask) {
+    const answer = yield* prompts.ask(checkout.refused.ask);
+    if (answer === null || answer.trim() === "") {
+      yield* out(`  ${child.name} needs a branch — nothing started`);
+      return null;
+    }
+    checkout = yield* checkoutFor(o.herdr, { ...where, explicit: answer.trim() });
+  }
   // A child that must not share a checkout is not started at all, and the menu comes
   // back: sharing one is what swapped two Runs' uncommitted work in the first place.
   if (checkout.refused) {
-    yield* out(`  ${child.name} has nowhere to work: ${checkout.refused} — nothing started`);
+    yield* out(`  ${child.name} has nowhere to work: ${checkout.refused.why} — nothing started`);
     return null;
   }
   const childRun = yield* new RunStore(o.env.stateDir).create({
@@ -945,7 +960,7 @@ const chain = Effect.fn("Engine.chain")(function* (
     inputSources: sources,
     stepIds: child.steps.map((s) => s.id),
     maxIterations: child.maxIterations,
-    primaryInput: tail,
+    namedAfter: checkout.branch ?? tail,
     parent: run.id,
   });
   yield* childRun.log(`chained from ${run.id}`);

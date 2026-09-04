@@ -84,7 +84,7 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
       inputSources: {},
       stepIds: ["review"],
       maxIterations: 1,
-      primaryInput: `mr-${n}`,
+      namedAfter: `mr-${n}`,
     });
     run.record.status = "done";
     run.record.finished_at = run.record.created_at;
@@ -161,7 +161,7 @@ effectTest("a run whose target is not a merge request has no panel and no call",
     inputSources: {},
     stepIds: ["review"],
     maxIterations: 1,
-    primaryInput: "worktree",
+    namedAfter: "worktree",
   });
   run.record.status = "done";
   run.record.finished_at = run.record.created_at;

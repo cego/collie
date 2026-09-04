@@ -67,7 +67,7 @@ function interruptedRun() {
       inputSources: { plan: "plan run", target: "working tree" },
       stepIds: wf.steps.map((s) => s.id),
       maxIterations: wf.maxIterations,
-      primaryInput: "add-picker",
+      namedAfter: "add-picker",
     });
     const build = run.step("build");
     build.status = "done";

@@ -29,6 +29,7 @@ import { stepDuration, took } from "./time";
 import { claudeTrust } from "./trust";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
 import { fixableRun, type RunRow } from "./workspace";
+import { branchListed } from "./worktree";
 
 /** Long enough to answer "what did I do here", short enough to stay one read. */
 const HISTORY = 200;
@@ -183,7 +184,7 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
       layer: resolved.layer,
       provenance: provenanceOf(def),
       path: resolved.path,
-      inputs: Object.keys(resolved.inputs),
+      inputs: Object.keys(branchListed(resolved.name, resolved.inputs)),
       steps: resolved.steps.map(stepLine),
       decisions: resolved.steps
         .filter((step) => (step.choices ?? []).length > 0)

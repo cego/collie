@@ -278,14 +278,23 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   // its decisions, and Esc at any of those already cancelled. The line is the note.
   const line = confirmLine(resolved.name, resolutions);
 
-  const started = yield* startRun(env, {
+  const start = {
     workflow: resolved,
     resolutions,
     decisions,
     workspace: yield* resolveWorkspace(herdr, env).pipe(Effect.catch(() => Effect.succeed(null))),
     note: line,
     parent: opts.parent?.id,
-  });
+  };
+  let started = yield* startRun(env, start);
+  // A branch nothing named is an Input like any other here, so it is asked for the way
+  // every other one was a few lines up rather than reported as a failure. Once: an
+  // answer that will not do says why, and the human starts again knowing that.
+  if (started._tag === "Rejected" && started.ask) {
+    const answer = yield* prompts.ask(started.ask);
+    if (answer === null || answer.trim() === "") return null;
+    started = yield* startRun(env, { ...start, branch: answer.trim() });
+  }
   if (started._tag === "Rejected") {
     yield* bail(prompts, started.result.error.message);
     return null;
@@ -297,7 +306,12 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   }
   // Only a popup can close itself; running the picker in a plain pane is fine..
   if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
-  return line;
+  // The branch is settled by starting, so the line the human is shown says it — a
+  // derived branch is a decision they did not make and would otherwise not see.
+  return confirmLine(resolved.name, resolutions, {
+    name: started.checkout.branch,
+    source: started.checkout.branchSource,
+  });
 });
 
 const ASK_ME_THEN = "\u0000ask-me-then";

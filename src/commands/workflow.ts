@@ -11,6 +11,7 @@ import {
 import { CHAIN_SUPPLIED, ENGINE_SUPPLIED } from "../engine";
 import { KINDED_STRATEGIES } from "../inputs";
 import { reason } from "../naming";
+import { branchListed, mutates } from "../worktree";
 import { renderTemplate } from "../template";
 import { err } from "../operations";
 import { attempt, mutation } from "../envelope";
@@ -106,6 +107,19 @@ function unresolvable(wf: ResolvedWorkflow): string[] {
   }
   return problems;
 }
+
+/**
+ * What `branch` is, wherever a mutating Workflow's Inputs are listed. Its resolution
+ * order rather than a definition, because the order is the whole of it: an operator
+ * reading this needs to know when their `--input branch=` is the one that decides.
+ */
+const BRANCH_HELP = [
+  "  branch: which branch this run works on, and so which checkout it gets.",
+  "    `--input branch=<name>` wins; else the reviewed branch, for a run fixing a review;",
+  "    else the `<name>` of a `branch:<base>...<name>` target you gave (never an inferred one);",
+  "    else the plan directory's own name, or a slug of the work itself.",
+  "    A name that will not slug — too long, or with nothing in it — is asked for instead.",
+].join("\n");
 
 /** One workflow as `check` reports it, and what it is wrong about, one per line. */
 type Checked = { name: string; layer: string; problems: string[] };
@@ -212,6 +226,7 @@ const workflowShow = Command.make(
           const defaults = yield* loadDefaults(resolved.env.configDir);
           const wf = resolveWorkflow(workflow, defs, defaults);
           const inherited = new Set(wf.embeddedInputs);
+          const inputs = branchListed(wf.name, wf.inputs);
           return {
             ok: true,
             data: {
@@ -219,7 +234,7 @@ const workflowShow = Command.make(
                 name: wf.name,
                 title: wf.title,
                 description: wf.description,
-                inputs: wf.inputs,
+                inputs,
                 inherited: wf.embeddedInputs,
                 steps: wf.steps.map((step) => step.id),
                 layer: wf.layer,
@@ -229,7 +244,8 @@ const workflowShow = Command.make(
             human: [
               wf.title,
               wf.description,
-              `Inputs: ${Schema.encodeSync(UnknownJson)(wf.inputs)}`,
+              `Inputs: ${Schema.encodeSync(UnknownJson)(inputs)}`,
+              ...(mutates(wf.name) ? [BRANCH_HELP] : []),
               ...(wf.embeddedInputs.length > 0
                 ? [`Inherited from an embedded workflow: ${[...inherited].join(", ")}`]
                 : []),

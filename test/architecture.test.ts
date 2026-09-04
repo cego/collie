@@ -162,14 +162,19 @@ test("Implement now chains implement with the plan the grill wrote", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([DEFERRED]);
-      const prompts = scriptedPrompts(["Implement now"]);
+      // `architecture` declares no Input that names the work, so nothing names a branch
+      // for the implement it chains — and a stand-in would be the same stand-in for
+      // every architecture run in the repo. It asks, like any other missing Input.
+      const prompts = scriptedPrompts(["Implement now"], ["tidy-the-exporter"]);
 
       const { run, status } = yield* runWorkflowEffect(rig, "architecture", {}, { prompts });
 
+      expect(prompts.asked.some((q) => q.includes("Which branch"))).toBe(true);
       expect(status).toBe("done");
       expect(run.record.children).toHaveLength(1);
       const child = yield* new RunStore(rig.stateDir).load(run.record.children[0]!);
       expect(child.record.workflow).toBe("implement");
       expect(child.record.inputs.plan).toBe(`${run.dir}/plan`);
+      expect(child.record.worktree?.branch).toBe("tidy-the-exporter");
     }),
   ));

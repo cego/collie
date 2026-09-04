@@ -41,6 +41,16 @@ afterEach(() =>
 
 const AskedInputs = Schema.Struct({ inputs: Schema.Array(Schema.Struct({ name: Schema.String })) });
 
+const AskedSchema = Schema.Struct({ schema: Schema.Record(Schema.String, Schema.String) });
+
+/** The Input strategies a `needs_input` refusal reports the workflow as taking. */
+function schemaOf(result: Failure): Record<string, string> {
+  return Schema.decodeUnknownOption(AskedSchema)(result.error.details).pipe(
+    Option.map((detail) => detail.schema),
+    Option.getOrElse((): Record<string, string> => ({})),
+  );
+}
+
 /** The Input names a `needs_input` refusal says are still missing. */
 function asked(result: Failure): string[] {
   return Schema.decodeUnknownOption(AskedInputs)(result.error.details).pipe(
@@ -113,7 +123,7 @@ test("a decision is checked against the Workflow's own steps and titles", () =>
         inputSources: { target: "inferred" },
         stepIds: ["review"],
         maxIterations: 1,
-        primaryInput: "working tree",
+        namedAfter: "working tree",
       });
       const reviewless = yield* settleGiven(env, yield* prepared("review"), {
         inputs: { target: "worktree", previous: empty.id },
@@ -167,6 +177,30 @@ test("the workspace opt-in settles from --input and is never asked for", () =>
     }),
   ));
 
+test("a given work source keeps the short name it classifies to", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = `${rig.root}/work/gitlab.example.com/tasks/global-board`;
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(`${dir}/SPEC.md`, "# A plan\n");
+      const ready = yield* prepared("implement");
+
+      const settled = yield* settleGiven(rig.pluginEnv(), ready, {
+        inputs: { plan: dir, target: "worktree" },
+        decide: [],
+      });
+
+      expect(settled.ok).toBe(true);
+      // The whole path is what the run would otherwise be named after, and every plan
+      // under one `tasks/` directory slugs the same way.
+      expect(ready.resolutions.find((r) => r.name === "plan")).toMatchObject({
+        kind: "plan-dir",
+        label: "global-board",
+      });
+    }),
+  ));
+
 test("an Input nobody can be asked for comes back as needs_input", () =>
   runEffect(
     Effect.gen(function* () {
@@ -176,6 +210,27 @@ test("an Input nobody can be asked for comes back as needs_input", () =>
       });
 
       expect(settled).toMatchObject({ ok: false, error: { code: "needs_input" } });
+    }),
+  ));
+
+test("the schema a missing Input comes back with names branch, for the workflows that take one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // This is the refusal an agent hits on most starts, so it is where it is most
+      // likely to find out `branch` exists at all.
+      const missing = yield* settleGiven(rig.pluginEnv(), yield* prepared("implement"), {
+        inputs: {},
+        decide: [],
+      });
+      if (missing.ok) throw new Error("expected implement to need its inputs");
+      expect(schemaOf(missing)).toHaveProperty("branch");
+
+      const plan = yield* settleGiven(rig.pluginEnv(), yield* prepared("plan"), {
+        inputs: {},
+        decide: [],
+      });
+      if (plan.ok) throw new Error("expected plan to need its inputs");
+      expect(schemaOf(plan)).not.toHaveProperty("branch");
     }),
   ));
 
@@ -328,7 +383,7 @@ const reviewed = Effect.fn("operationsTest.reviewed")(function* (
     inputSources: {},
     stepIds: ["review"],
     maxIterations: 1,
-    primaryInput: "target",
+    namedAfter: "target",
   });
   if (review !== null) {
     const fs = yield* FileSystem.FileSystem;

@@ -47,6 +47,18 @@ export function parseMrTarget(target: string): MrRef | null {
   return { project: project === "" ? null : project, iid };
 }
 
+/**
+ * What `branch:<base>...<head>` — or a bare `branch:<head>` — is pointed at. Null for a
+ * target of any other kind, and empty for one that names nothing: a caller that has
+ * somewhere else to look wants those told apart. A ref, not necessarily a branch —
+ * `branch:main...HEAD` and a diff of two shas are both things a human may review — so
+ * what a caller may do with it depends on what the caller wants it for.
+ */
+export function branchTargetHead(target: string): string | null {
+  if (!target.startsWith("branch:")) return null;
+  return target.slice("branch:".length).split("...").at(-1)?.trim() ?? "";
+}
+
 /** `https://host/group/project/-/merge_requests/7`, the way glab reports what it opened. */
 export function parseMrUrl(url: string): MrRef | null {
   const m = /^https?:\/\/([^/\s]+)\/(.+?)\/-\/merge_requests\/(\d+)/.exec(url.trim());
