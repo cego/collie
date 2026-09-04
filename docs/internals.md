@@ -202,9 +202,11 @@ falls all the way through to the current directory.
 when forking. The merge semantics are canonical there and in
 [Authoring](authoring.md#extends-merge-semantics) — change both together.
 
-Validation runs before a single tab opens: unknown harnesses, models and efforts, missing
-personas and skills, malformed choices, unknown `extends:` parents, cycles, and placeholders
-no declared input can fill. `collie workflow check` is the same validation without a run.
+Validation runs before a single tab opens: unknown harnesses, models, efforts and
+permissions modes, a permissions mode on a step that continues another step's agent (the
+mode is fixed when that agent starts), missing personas and skills, malformed choices,
+unknown `extends:` parents, cycles, and placeholders no declared input can fill.
+`collie workflow check` is the same validation without a run.
 
 ## Trust
 

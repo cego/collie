@@ -264,6 +264,7 @@ const recordedTab = (tabId: string): VariantRecord => ({
   harness: "claude",
   model: "default",
   effort: null,
+  permissions: null,
   agent: `impl-${tabId}`,
   label: "build",
   tabId,

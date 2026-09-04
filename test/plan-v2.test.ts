@@ -206,6 +206,8 @@ test(
             "xhigh",
             "--append-system-prompt-file",
             path.join(run.dir, "personas", "reviewer.claude.md"),
+            "--permission-mode",
+            "bypassPermissions",
           ],
           [
             "--model",
@@ -214,6 +216,8 @@ test(
             "xhigh",
             "--append-system-prompt-file",
             path.join(run.dir, "personas", "reviewer.claude.md"),
+            "--permission-mode",
+            "bypassPermissions",
           ],
         ]);
         const fs = yield* FileSystem.FileSystem;

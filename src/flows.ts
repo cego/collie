@@ -67,6 +67,7 @@ import {
   buildWorkflows,
   NUMERIC_DEFAULTS,
 } from "./views";
+import { isPermissionMode, PERMISSION_MODES } from "./harness";
 import {
   mrDetails,
   mrTarget,
@@ -917,6 +918,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       const numeric = NUMERIC_DEFAULTS.includes(command.key);
       if (typed !== "" && numeric && !/^\d+$/.test(typed)) {
         return `${command.key} has to be a whole number, not "${command.value}"`;
+      }
+      // The one key `loadDefaults` fails on rather than falling back: written wrong, it
+      // would break every later run — and the Settings view used to put it right.
+      if (typed !== "" && command.key === "permissions" && !isPermissionMode(typed)) {
+        return `permissions has to be one of ${PERMISSION_MODES.join(", ")}, not "${command.value}"`;
       }
       const value = typed === "" ? null : numeric ? Number(typed) : typed;
       return yield* writeConfigValue(env.configDir, command.key, value).pipe(

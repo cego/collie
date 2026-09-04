@@ -465,8 +465,12 @@ test(
 
         const reviewer = path.join(run.dir, "personas", "reviewer.claude.md");
         const starts = (yield* rig.calls()).filter((c) => c.cmd === "agent start");
-        // Every Claude start names its model; default resolves to the pinned Opus alias.
-        expect(starts.map((c) => c.argv!.slice(7))).toEqual([
+        // Every Claude start names its model; default resolves to the pinned Opus alias,
+        // and every one of them ends with the unattended switch.
+        expect(starts.map((c) => c.argv!.slice(-2))).toEqual(
+          starts.map(() => ["--permission-mode", "bypassPermissions"]),
+        );
+        expect(starts.map((c) => c.argv!.slice(7, -2))).toEqual([
           [
             "--",
             "--model",

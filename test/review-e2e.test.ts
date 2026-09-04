@@ -296,6 +296,8 @@ test("review runs standalone on the inferred target, and post is no longer an in
           "medium",
           "--append-system-prompt-file",
           path.join(run.dir, "personas", "reviewer.claude.md"),
+          "--permission-mode",
+          "bypassPermissions",
         ],
         [
           "--model",
@@ -304,12 +306,16 @@ test("review runs standalone on the inferred target, and post is no longer an in
           "xhigh",
           "--append-system-prompt-file",
           path.join(run.dir, "personas", "reviewer.claude.md"),
+          "--permission-mode",
+          "bypassPermissions",
         ],
         [
           "--model",
           "opus",
           "--append-system-prompt-file",
           path.join(run.dir, "personas", "reviewer.claude.md"),
+          "--permission-mode",
+          "bypassPermissions",
         ],
       ]);
       expect(yield* readText(path.join(run.dir, "personas", "reviewer.claude.md"))).toContain(

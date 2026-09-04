@@ -115,6 +115,7 @@ function variant(agent: string, paneId: string, label: string, model = "sonnet")
     harness: "claude",
     model,
     effort: null,
+    permissions: null,
     agent,
     label,
     tabId: "1:2",

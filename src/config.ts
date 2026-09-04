@@ -1,6 +1,7 @@
 // User defaults from the plugin config dir. Optional; the baseline is neutral.
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { permissionsAsWritten } from "./harness";
 import { isNumber, isString } from "./schema";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
 
@@ -21,6 +22,12 @@ export interface Defaults {
   models: Readonly<Record<string, ReadonlyArray<string>>>;
   /** What to do about a directory the harness has not been trusted with yet. */
   trust: "ask" | "auto" | "never";
+  /**
+   * Whether Collie decides an agent's tool calls up front, or the harness asks. As
+   * written, like `harness` and `model`: validation names an unknown one, and the engine
+   * refuses to start an agent it cannot resolve rather than falling back to `bypass`.
+   */
+  permissions: string;
   /** `notifications.<kind>: false` turns that kind of toast off; absent means on. */
   notifications: Readonly<Record<string, boolean>>;
 }
@@ -33,6 +40,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   quietMs: 10 * 60 * 1000,
   models: {},
   trust: "ask",
+  permissions: "bypass",
   notifications: {},
 };
 
@@ -112,6 +120,10 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDi
     quietMs: isNumber(raw.quiet_ms) ? raw.quiet_ms : FALLBACK_DEFAULTS.quietMs,
     models: Option.getOrElse(Schema.decodeUnknownOption(Models)(raw.models), () => ({})),
     trust: raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
+    // As written rather than coerced: `loadDefaults` is read by the Settings and
+    // Workflows views and by Doctor, so a file hand-edited into nonsense still has to
+    // return — and coercing it would fall back to `bypass`. Validation names it.
+    permissions: permissionsAsWritten(raw.permissions) ?? FALLBACK_DEFAULTS.permissions,
     notifications: Option.getOrElse(
       Schema.decodeUnknownOption(Notifications)(raw.notifications),
       () => ({}),

@@ -40,6 +40,21 @@ Interview me about this goal before you write anything. One question at a time.
 When we agree, write the plan to {{run.dir}}/plan/SPEC.md.
 `;
 
+/** SOLO's one step, but keeping the harness's own tool-call prompting. */
+const ASKS = `---
+name: asks
+title: asks — one step that answers its own prompts
+inputs:
+  goal: goal
+steps:
+  - id: solo
+    persona: planner
+    permissions: harness
+    output: solo.json
+---
+Interview me about {{inputs.goal}}, then write the plan.
+`;
+
 beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
@@ -56,6 +71,55 @@ afterEach(() => runEffect(rig.close()));
 function runWorkflowEffect(...args: Parameters<typeof runWorkflow>) {
   return runWorkflow(...args).pipe(Effect.orDie);
 }
+
+test("agents start unattended by default, and with the harness's prompts under `harness`", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const outputs = [{ verdict: "clean", findings: [], plan_file: "tasks/p/PLAN.md", slug: "p" }];
+
+      yield* rig.queueOutputs(outputs);
+      const bypassed = yield* runWorkflowEffect(rig, "solo", { goal: "Add a picker" });
+      const bypassStart = (yield* rig.calls()).find((c) => c.cmd === "agent start")!.argv!;
+      expect(bypassStart.slice(-2)).toEqual(["--permission-mode", "bypassPermissions"]);
+      expect(yield* fs.readFileString(path.join(bypassed.run.dir, "log.txt"))).toContain(
+        "permissions bypass",
+      );
+
+      // A step that says so keeps the harness's prompting while the default stays bypass.
+      yield* writeDef(rig.baselineDir, "workflows", "asks", ASKS);
+      yield* rig.queueOutputs(outputs);
+      const asked = yield* runWorkflowEffect(rig, "asks", { goal: "Add a picker" });
+      const askStart = (yield* rig.calls()).findLast((c) => c.cmd === "agent start")!.argv!;
+      expect(askStart).not.toContain("--permission-mode");
+      expect(yield* fs.readFileString(path.join(asked.run.dir, "log.txt"))).toContain(
+        "permissions harness",
+      );
+    }),
+  ));
+
+test("a mode the engine cannot resolve fails the step instead of starting it unattended", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A chained Run and a resumed Driver resolve a Workflow without validating it, so
+      // the engine is the last place that can refuse — and the fallback it would
+      // otherwise take is `bypass`.
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        { defaults: { permissions: "bypas" }, unvalidated: true },
+      );
+
+      expect(status).toBe("failed");
+      expect(run.step("solo").note).toContain('unknown permissions "bypas"');
+      // Before a tab opens, which is the contract — not after one is created, named and
+      // cd'd into and then abandoned.
+      for (const cmd of ["agent start", "tab create", "pane split"])
+        expect(yield* rig.cmds()).not.toContain(cmd);
+    }),
+  ));
 
 test("a Collie-created worktree's own shell tab becomes the first agent's", () =>
   runEffect(
@@ -784,8 +848,12 @@ test("an agent that goes quiet is nudged twice and then given up on", () =>
         {
           // Quiet is the signal: same status, same pane tail, every poll.
           env: { FAKE_HERDR_AGENT_STATUS: "working", FAKE_HERDR_PANE_TEXT: "stuck" },
-          defaults: { quietMs: 30 },
-          outputPollMs: 5,
+          // Real wall clock, so the budget has to survive a poll iteration that the
+          // machine delays: nudges are owed per whole quiet period, and one stalled
+          // iteration under a 30ms period skipped straight from no nudge to the
+          // give-up at three.
+          defaults: { quietMs: 300 },
+          outputPollMs: 10,
         },
       );
 
