@@ -526,32 +526,6 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
   herdr = new Herdr(env);
   const out = (line: string) => appendProgress(run.dir, line);
 
-  /**
-   * Installed before the ownership claim, not after it. A SIGTERM arriving between
-   * the claim becoming visible to `collie run stop` and this handler being installed
-   * landed on Node's default handler, which kills the process outright: no stopped
-   * marker, run.json still `running`, and a stop that had already reported success.
-   */
-  // Signals have no Effect v4 API — the runtime installs its own handlers but exposes
-  // none — so a Driver that has to notice SIGTERM before its ownership claim is
-  // visible registers for it natively.
-  let signalled = false;
-  const earlySigterm = () => {
-    signalled = true;
-  };
-  process.once("SIGTERM", earlySigterm);
-  const sigterm = Effect.callback<void>((resume) => {
-    // Hands over from the early handler here, and honours a signal it already caught.
-    process.off("SIGTERM", earlySigterm);
-    if (signalled) {
-      resume(Effect.void);
-      return Effect.void;
-    }
-    const stop = () => resume(Effect.void);
-    process.once("SIGTERM", stop);
-    return Effect.sync(() => process.off("SIGTERM", stop));
-  });
-
   const drive = Effect.gen(function* () {
     // Atomic: acquiring is the check. A separate liveness test then a write would
     // let two resumes race past each other and drive the same run twice.
@@ -576,7 +550,17 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
     const resumedBy = yield* clearPreviousDriver(run.dir);
     if (resumedBy) yield* out(`resumed by request ${resumedBy}`);
 
-    const markStopped = Effect.gen(function* () {
+    /**
+     * `collie run stop` sends SIGTERM, and the runtime's `runMain` answers it by
+     * interrupting this fibre. Racing a native SIGTERM handler against the run lost
+     * that race every time the marking had anything to await: the interruption tore
+     * the race down first, and only the finalisers ran — claim released, record still
+     * `running`, and the board calling a stopped run abandoned. So the marking is a
+     * finaliser too. A finished or failed run has already left `running` by the time
+     * it runs, so only an interruption reaches the write.
+     */
+    const markStoppedIfInterrupted = Effect.gen(function* () {
+      if (run.record.status !== "running") return;
       const stoppedAt = yield* nowIso();
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -584,42 +568,39 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
       run.record.status = "blocked";
       run.record.finished_at = stoppedAt;
       yield* run.save();
-      return 0;
-    });
+      yield* out("stopped");
+    }).pipe(Effect.ignore);
 
     // Effect.catch and Effect.ensuring, not try/catch/finally: a typed failure out of
     // executeRun unwinds past both without entering either, which left the Run marked
     // `running` with no Driver, nothing in the log, and `collie run wait` blocking to
     // its timeout — with the ownership claim never given back.
-    return yield* Effect.raceFirst(
-      Effect.gen(function* () {
-        const defs = yield* loadDefinitions(yield* layers({ ...env, cwd: run.record.cwd }));
-        const defaults = yield* loadDefaults(env.configDir);
-        const wf = resolveWorkflow(run.record.workflow, defs, defaults);
-        yield* out(`${wf.title}`);
-        const prompts = filePrompts({
-          dir: run.dir,
-          run: run.id,
-          step: () => run.record.steps.find((st) => st.status === "running")?.id ?? "",
-          timeoutMs: defaults.handoffTimeoutMs,
-        });
+    return yield* Effect.gen(function* () {
+      const defs = yield* loadDefinitions(yield* layers({ ...env, cwd: run.record.cwd }));
+      const defaults = yield* loadDefaults(env.configDir);
+      const wf = resolveWorkflow(run.record.workflow, defs, defaults);
+      yield* out(`${wf.title}`);
+      const prompts = filePrompts({
+        dir: run.dir,
+        run: run.id,
+        step: () => run.record.steps.find((st) => st.status === "running")?.id ?? "",
+        timeoutMs: defaults.handoffTimeoutMs,
+      });
 
-        const status = yield* executeRun({
-          herdr,
-          defs,
-          defaults,
-          wf,
-          run,
-          env,
-          out,
-          handoffTimeoutMs: defaults.handoffTimeoutMs,
-          // Every question this run asks goes through the run dir to the Control Plane.
-          prompts,
-        });
-        return status === "done" ? 0 : 1;
-      }),
-      sigterm.pipe(Effect.andThen(markStopped)),
-    ).pipe(
+      const status = yield* executeRun({
+        herdr,
+        defs,
+        defaults,
+        wf,
+        run,
+        env,
+        out,
+        handoffTimeoutMs: defaults.handoffTimeoutMs,
+        // Every question this run asks goes through the run dir to the Control Plane.
+        prompts,
+      });
+      return status === "done" ? 0 : 1;
+    }).pipe(
       Effect.catch((cause) =>
         Effect.gen(function* () {
           // Nobody is watching a pane for this, so the only useful place is the log.
@@ -640,13 +621,13 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
           return 1;
         }),
       ),
+      // Marker before claim: a reader must never find "no owner, no marker, running".
+      Effect.ensuring(markStoppedIfInterrupted),
       Effect.ensuring(releaseDriver(run.dir).pipe(Effect.ignore)),
     );
   });
 
-  return yield* drive.pipe(
-    Effect.ensuring(Effect.sync(() => process.off("SIGTERM", earlySigterm))),
-  );
+  return yield* drive;
 });
 
 /** How often the tab re-reads the files and asks herdr what is still alive. */

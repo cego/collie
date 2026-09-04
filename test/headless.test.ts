@@ -728,6 +728,80 @@ await runEffect(spawnDriver(env, Bun.env.RUN_ID ?? "", env.cwd));
 );
 
 effectTest(
+  "a driver signalled mid-step marks the run stopped before it lets go of the claim",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const store = new RunStore(rig.stateDir);
+    const run = yield* store.create({
+      workflow: "solo",
+      cwd: rig.projectDir,
+      session: rig.pluginEnv().socketPath,
+      workspace: "1",
+      workspaceLabel: "test",
+      inputs: { goal: "Add a picker" },
+      inputSources: { goal: "asked" },
+      stepIds: ["solo"],
+      maxIterations: 5,
+      primaryInput: "Add a picker",
+    });
+    // No output ever arrives, so the driver sits inside the step waiting on its agent —
+    // the state `collie run stop` finds a live run in.
+    yield* rig.queueOutputs([]);
+
+    const root = new URL("../", import.meta.url).pathname;
+    const parent = path.join(rig.root, "parent-stop.ts");
+    yield* fs.writeFileString(
+      parent,
+      `import { readEnv } from "${root}src/env";
+import { spawnDriver } from "${root}src/operations";
+import { runEffect } from "${root}test/support/effect";
+const env = readEnv(Bun.env);
+await runEffect(spawnDriver(env, Bun.env.RUN_ID ?? "", env.cwd));
+`,
+    );
+    expect(
+      Number(
+        yield* spawner.exitCode(
+          ChildProcess.make("bun", [parent], {
+            env: rig.env({
+              COLLIE_DRIVER: JSON.stringify(["bun", `${root}src/main.ts`]),
+              RUN_ID: run.id,
+            }),
+            extendEnv: true,
+            stdout: "ignore",
+            stderr: "ignore",
+          }),
+        ),
+      ),
+    ).toBe(0);
+
+    // Wait until the driver is inside the step, not merely claimed.
+    for (
+      let i = 0;
+      i < 200 && !(yield* readProgress(run.dir)).some((l) => l.text === "▶ solo — iteration 1");
+      i++
+    )
+      yield* Effect.sleep("100 millis");
+    expect(yield* driverAlive(run.dir)).toBe(true);
+
+    expect(yield* stopDriver(run.dir)).toBe(true);
+    for (let i = 0; i < 100 && (yield* driverAlive(run.dir)); i++)
+      yield* Effect.sleep("100 millis");
+    expect(yield* driverAlive(run.dir)).toBe(false);
+
+    // The signal was answered by recording the stop, not by dying quietly.
+    expect(yield* fs.exists(path.join(run.dir, STOPPED))).toBe(true);
+    const stopped = yield* store.load(run.id);
+    expect(stopped.record.status).toBe("blocked");
+    expect(stopped.record.finished_at).toBeString();
+    expect(yield* fs.exists(path.join(run.dir, RUNNER_PID))).toBe(false);
+  },
+  30_000,
+);
+
+effectTest(
   "the compiled driver path is one executable, and overrides are explicit arguments",
   function* () {
     const fs = yield* FileSystem.FileSystem;
