@@ -354,7 +354,7 @@ implement step "build": the skill "implement" is not installed — run `npx skil
 | `pi`       | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` | none — pi has no tool-approval prompt        |
 | `opencode` | `--model <provider/model>` | prompt prefix                                            | —                                                        | `--auto`                                     |
 
-`claude` accepts `opus`, `sonnet`, `haiku`, `opusplan` and any `claude-…` id. `codex`
+`claude` accepts `fable`, `opus`, `sonnet`, `haiku`, `opusplan` and any `claude-…` id. `codex`
 accepts `gpt-5-codex`, `gpt-5`, `gpt-5-mini` and any `gpt…`/`o…` id. `pi` and `opencode`
 take provider-qualified ids (`openai-codex/gpt-5.6-sol`). Add more with `models` in your
 `config.json`.

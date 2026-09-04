@@ -95,7 +95,7 @@ export const HARNESSES: Harnesses = {
     effortArgs: (effort) => ["--effort", effort],
     permissionArgs: () => ["--permission-mode", "bypassPermissions"],
     trust: claudeTrust,
-    models: ["opus", "sonnet", "haiku", "opusplan"],
+    models: ["fable", "opus", "sonnet", "haiku", "opusplan"],
     modelPattern: /^claude-[a-z0-9.-]+$/,
     efforts: ["low", "medium", "high", "xhigh", "max"],
   },
