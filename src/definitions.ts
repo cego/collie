@@ -5,7 +5,16 @@ import { skillsIn } from "./template";
 import { unsafePathComponent } from "./naming";
 import { isYamlMap, parseDocument, YamlError, type YamlMap, type YamlValue } from "./yaml";
 import { Crypto, Data, Effect, FileSystem, Path, Result, Schema, type PlatformError } from "effect";
-import { DEFAULT_MODEL, HARNESSES, harnessNames, knownModel, modelHint } from "./harness";
+import {
+  DEFAULT_MODEL,
+  HARNESSES,
+  harnessNames,
+  isPermissionMode,
+  knownModel,
+  modelHint,
+  PERMISSION_MODES,
+  permissionsAsWritten,
+} from "./harness";
 import type { Defaults } from "./config";
 import { isNumber, isString } from "./schema";
 
@@ -38,6 +47,12 @@ export interface Variant {
   harness: string;
   model: string;
   effort?: string;
+  /**
+   * Set only where a Step or Round asked for a mode of its own; absent means the Run's
+   * `permissions` default decides, the way an unset `effort` leaves it to the harness.
+   * As written, so validation can name an unknown one rather than dropping it.
+   */
+  permissions?: string;
 }
 
 /** What one agent round of a Choice runs; `prompt:` names the body section. */
@@ -51,6 +66,7 @@ export interface RoundDef {
   harness?: string;
   model?: string;
   effort?: string;
+  permissions?: string;
   fresh?: boolean;
   output?: string;
 }
@@ -85,6 +101,8 @@ export interface StepDef {
   harness?: string;
   model?: string;
   effort?: string;
+  /** Keep the harness's own tool-call prompting for this step; see `Defaults.permissions`. */
+  permissions?: string;
   fresh?: boolean;
   output?: string;
   /** Continue the agent started by this earlier step instead of starting a new one. */
@@ -217,6 +235,8 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
     if (isString(stepData.harness)) step.harness = stepData.harness;
     if (isString(stepData.model)) step.model = stepData.model;
     if (isString(stepData.effort)) step.effort = stepData.effort;
+    const stepPermissions = permissionsAsWritten(stepData.permissions);
+    if (stepPermissions !== undefined) step.permissions = stepPermissions;
     if (isBoolean(stepData.fresh)) step.fresh = stepData.fresh;
     if (isString(stepData.output)) step.output = stepData.output;
     if (isString(stepData.agent)) step.agent = stepData.agent;
@@ -230,6 +250,8 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
           model: str(variantData.model),
         };
         if (isString(variantData.effort)) variant.effort = variantData.effort;
+        const variantPermissions = permissionsAsWritten(variantData.permissions);
+        if (variantPermissions !== undefined) variant.permissions = variantPermissions;
         return variant;
       });
     }
@@ -278,6 +300,8 @@ function parseRound(raw: YamlMap): RoundDef | undefined {
     const value = raw[key];
     if (isString(value)) round[key] = value;
   }
+  const permissions = permissionsAsWritten(raw.permissions);
+  if (permissions !== undefined) round.permissions = permissions;
   if (isBoolean(raw.fresh)) round.fresh = raw.fresh;
   return round;
 }
@@ -759,6 +783,7 @@ function expand(
           harness: step.harness ?? child.harness,
           model: step.model ?? child.model,
           effort: step.effort ?? child.effort,
+          permissions: step.permissions ?? child.permissions,
           fresh: step.fresh ?? child.fresh,
           output: step.output ?? child.output,
           parallel: step.parallel ?? child.parallel,
@@ -855,6 +880,13 @@ export const validateWorkflow = Effect.fn("Definitions.validateWorkflow")(functi
   }
 
   if (wf.steps.length === 0) errors.push(`workflow "${wf.name}" has no steps`);
+  // The Run's own default, named once: every step that does not override it runs with
+  // this, so an unknown one is not a property of any single step.
+  if (!isPermissionMode(defaults.permissions)) {
+    errors.push(
+      `config.json: unknown permissions "${defaults.permissions}" (known: ${PERMISSION_MODES.join(", ")})`,
+    );
+  }
 
   const seen = new Set<string>();
   for (const step of wf.steps) {
@@ -900,9 +932,8 @@ export const validateWorkflow = Effect.fn("Definitions.validateWorkflow")(functi
       );
     }
 
-    for (const combo of stepVariants(step, defaults)) {
-      errors.push(...variantErrors(where(step.id), combo, defaults));
-    }
+    const combos = stepVariants(step, defaults);
+    for (const combo of combos) errors.push(...variantErrors(where(step.id), combo, defaults));
     if (isChoice) errors.push(...choiceErrors(wf, step, defs, defaults));
 
     if (step.fanIn && !earlier(wf, step, step.fanIn)) {
@@ -914,6 +945,12 @@ export const validateWorkflow = Effect.fn("Definitions.validateWorkflow")(functi
     }
     if (step.agent && !earlier(wf, step, step.agent)) {
       errors.push(`${where(step.id)}: agent "${step.agent}" is not an earlier step`);
+    }
+    // Every parallel entry of a continued step borrows the same prior agent, so every
+    // entry's mode has to reach it — deduplicated, because one message per distinct mode
+    // is all a reader needs.
+    for (const mode of new Set(combos.map((combo) => combo.permissions))) {
+      errors.push(...continuedPermissionErrors(where(step.id), wf, step.agent, mode, defaults));
     }
     if (step.repeat && !earlier(wf, step, step.repeat.from)) {
       errors.push(`${where(step.id)}: repeat.from "${step.repeat.from}" is not an earlier step`);
@@ -931,6 +968,85 @@ export const validateWorkflow = Effect.fn("Definitions.validateWorkflow")(functi
   return errors;
 });
 
+/**
+ * A step with `agent:` continues a process that is already running, so it never reaches
+ * the start that would apply a permissions mode — the mode was decided when that agent
+ * started. Saying the same mode again is harmless, and is what every step of an embedded
+ * workflow says when the embedding step names one, so only a mode that differs is an
+ * error. (`model`, `effort` and `harness` are ignored on a continued step for the same
+ * reason; they are left alone here because this branch did not introduce them and a
+ * workflow may already be relying on the silence.)
+ */
+function continuedPermissionErrors(
+  where: string,
+  wf: ResolvedWorkflow,
+  agent: string | undefined,
+  mode: string | undefined,
+  defaults: Defaults,
+): string[] {
+  if (agent === undefined || mode === undefined) return [];
+  const starts = startsOfAgent(wf, agent, defaults);
+  // `every` is true for no starts too, which is what an unresolvable agent should get:
+  // the reference itself is already an error.
+  if (starts.every((start) => start.mode === mode)) return [];
+  // Naming the step only where it is not the one named here, so a direct continuation
+  // does not read as "continues "build" … starts in step "build"".
+  const named = (start: AgentStart) =>
+    start.id === agent ? `"${start.mode}"` : `"${start.mode}" in step "${start.id}"`;
+  const opened = [...new Set(starts.map(named))].join(" or ");
+  const ids = [...new Set(starts.map((start) => start.id))];
+  // One place to put it is worth naming; several, and the author has to pick the one
+  // whose round they meant.
+  const remedy = ids.length === 1 ? `set it on "${ids[0]}"` : "set it where that agent starts";
+  return [
+    `${where}: permissions "${mode}" cannot apply to a step that continues agent ` +
+      `"${agent}", which starts with ${opened} — ${remedy}, or drop "agent" so this step ` +
+      `starts one of its own`,
+  ];
+}
+
+interface AgentStart {
+  /** The step whose definition decides the mode: the step itself, or the one holding the round. */
+  id: string;
+  mode: string;
+}
+
+/**
+ * Every mode the agent registered under `agent` could have been started with. A step in
+ * the middle of an `agent:` chain has no mode of its own — it resolves to the Run default,
+ * which is not what its process was started with — so the walk goes back to whatever
+ * opened the agent. A Choice step opens it in a round, and which round runs is the
+ * human's answer at the time, so every round that starts one counts.
+ */
+function startsOfAgent(
+  wf: ResolvedWorkflow,
+  agent: string,
+  defaults: Defaults,
+  seen: Set<string> = new Set(),
+): AgentStart[] {
+  if (seen.has(agent)) return [];
+  seen.add(agent);
+  const step = wf.steps.find((s) => s.id === agent);
+  if (!step) return [];
+  if (step.agent !== undefined) return startsOfAgent(wf, step.agent, defaults, seen);
+  const rounds = (step.choices ?? []).flatMap((choice) => [choice.round, choice.followUp]);
+  const starts: AgentStart[] = [];
+  for (const round of rounds) {
+    if (!round) continue;
+    if (round.agent !== undefined) starts.push(...startsOfAgent(wf, round.agent, defaults, seen));
+    else {
+      starts.push({
+        id: step.id,
+        mode: roundVariant(round, step, defaults).permissions ?? defaults.permissions,
+      });
+    }
+  }
+  if (starts.length > 0) return starts;
+  return [
+    { id: step.id, mode: stepVariants(step, defaults)[0]?.permissions ?? defaults.permissions },
+  ];
+}
+
 function variantErrors(where: string, combo: Variant, defaults: Defaults): string[] {
   const adapter = HARNESSES[combo.harness];
   if (!adapter) {
@@ -941,6 +1057,11 @@ function variantErrors(where: string, combo: Variant, defaults: Defaults): strin
   if (!knownModel(adapter, combo.model, extra)) {
     errors.push(
       `${where}: unknown model "${combo.model}" for harness "${combo.harness}" (known: ${modelHint(adapter, extra)})`,
+    );
+  }
+  if (combo.permissions !== undefined && !isPermissionMode(combo.permissions)) {
+    errors.push(
+      `${where}: unknown permissions "${combo.permissions}" (known: ${PERMISSION_MODES.join(", ")})`,
     );
   }
   if (combo.effort !== undefined) {
@@ -1031,7 +1152,19 @@ function choiceErrors(
         errors.push(`${where}: agent "${round.agent}" is not an earlier step`);
       }
       if (!round.output) errors.push(`${where}: needs an output, so the round can finish`);
-      errors.push(...variantErrors(where, roundVariant(round, step, defaults), defaults));
+      const variant = roundVariant(round, step, defaults);
+      errors.push(...variantErrors(where, variant, defaults));
+      // A round continues an agent the same way a step does, and cannot re-permission it
+      // either. `round.agent` falls back to the step's, so both spellings are covered.
+      errors.push(
+        ...continuedPermissionErrors(
+          where,
+          wf,
+          round.agent ?? step.agent,
+          variant.permissions,
+          defaults,
+        ),
+      );
     }
 
     if (choice.config && (!choice.config.key || !choice.config.question)) {
@@ -1065,15 +1198,14 @@ function chainErrors(
       ];
 }
 
-/** The harness/model/effort one Choice round runs with. */
+/** The harness/model/effort/permissions one Choice round runs with. */
 export function roundVariant(round: RoundDef, step: ResolvedStep, defaults: Defaults): Variant {
-  const effort = round.effort ?? step.effort ?? defaults.effort;
-  const harness = round.harness ?? step.harness ?? defaults.harness;
-  const variant: Variant = {
-    harness,
-    model: resolvedModel(harness, round.model ?? step.model ?? defaults.model),
-  };
-  return effort === undefined ? variant : { ...variant, effort };
+  return variantOf({
+    harness: round.harness ?? step.harness ?? defaults.harness,
+    model: round.model ?? step.model ?? defaults.model,
+    effort: round.effort ?? step.effort ?? defaults.effort,
+    permissions: round.permissions ?? step.permissions,
+  });
 }
 
 function earlier(wf: ResolvedWorkflow, step: ResolvedStep, id: string): boolean {
@@ -1081,40 +1213,55 @@ function earlier(wf: ResolvedWorkflow, step: ResolvedStep, id: string): boolean 
   return wf.steps.slice(0, at).some((s) => s.id === id);
 }
 
-/** Every harness/model/effort combination a step will run, one per parallel variant. */
+/**
+ * Every harness/model/effort/permissions combination a step will run, one per parallel
+ * variant. A parallel entry's own values win over the step's, which win over the Run's.
+ */
 export function stepVariants(step: StepDef, defaults: Defaults): Variant[] {
-  const effortOf = (own?: string) => own ?? step.effort ?? defaults.effort;
+  // A parallel entry parsed from YAML has `""` for a key it did not name, hence `||`
+  // there and `??` for the step's own keys.
   if (step.parallel && step.parallel.length > 0) {
     return step.parallel.map((v) =>
-      withEffort(
-        {
-          harness: v.harness || step.harness || defaults.harness,
-          model: resolvedModel(
-            v.harness || step.harness || defaults.harness,
-            v.model || step.model || defaults.model,
-          ),
-        },
-        effortOf(v.effort),
-      ),
+      variantOf({
+        harness: v.harness || step.harness || defaults.harness,
+        model: v.model || step.model || defaults.model,
+        effort: v.effort ?? step.effort ?? defaults.effort,
+        permissions: v.permissions ?? step.permissions,
+      }),
     );
   }
   return [
-    withEffort(
-      {
-        harness: step.harness ?? defaults.harness,
-        model: resolvedModel(step.harness ?? defaults.harness, step.model ?? defaults.model),
-      },
-      effortOf(undefined),
-    ),
+    variantOf({
+      harness: step.harness ?? defaults.harness,
+      model: step.model ?? defaults.model,
+      effort: step.effort ?? defaults.effort,
+      permissions: step.permissions,
+    }),
   ];
+}
+
+/**
+ * One Variant from what a Step, Round or parallel entry resolved to. The optional keys
+ * are omitted rather than set to `undefined`: a Variant is compared, recorded in the run
+ * and turned into an agent name, so "unset" has to mean absent everywhere.
+ */
+function variantOf(resolved: {
+  harness: string;
+  model: string;
+  effort: string | undefined;
+  permissions: string | undefined;
+}): Variant {
+  const variant: Variant = {
+    harness: resolved.harness,
+    model: resolvedModel(resolved.harness, resolved.model),
+  };
+  if (resolved.effort !== undefined) variant.effort = resolved.effort;
+  if (resolved.permissions !== undefined) variant.permissions = resolved.permissions;
+  return variant;
 }
 
 function resolvedModel(harness: string, model: string): string {
   return model === DEFAULT_MODEL ? (HARNESSES[harness]?.defaultModel ?? model) : model;
-}
-
-function withEffort(variant: Variant, effort: string | undefined): Variant {
-  return effort === undefined ? variant : { ...variant, effort };
 }
 
 /**

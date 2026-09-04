@@ -211,6 +211,8 @@ test("a fresh reviewer choice gets its own tab and its findings prompt the follo
         "xhigh",
         "--append-system-prompt-file",
         path.join(run.dir, "personas", "reviewer.claude.md"),
+        "--permission-mode",
+        "bypassPermissions",
       ]);
 
       const followUp = yield* fs.readFileString(

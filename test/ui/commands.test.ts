@@ -112,6 +112,20 @@ effectTest("clearing a default unsets it rather than configuring an empty one", 
   expect((yield* loadDefaults(rig.pluginEnv().configDir)).harness).toBe("claude");
 });
 
+effectTest(
+  "permissions is refused unless it is a mode a Run can start an agent with",
+  function* () {
+    // Written, it would fail every later `loadDefaults` — including the Settings view
+    // that would be used to put it right.
+    const note = yield* set("permissions", "yolo");
+
+    expect(note).toContain("bypass, harness");
+    expect(yield* readConfig(rig.pluginEnv().configDir)).not.toHaveProperty("permissions");
+    expect(yield* set("permissions", "harness")).toContain("harness");
+    expect((yield* loadDefaults(rig.pluginEnv().configDir)).permissions).toBe("harness");
+  },
+);
+
 /** A finished run of this session, with a review beside it only if one is asked for. */
 const seed = Effect.fn("commands.seed")(function* (opts: { target: string; review?: string }) {
   const env = rig.pluginEnv();

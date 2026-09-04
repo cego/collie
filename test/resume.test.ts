@@ -77,6 +77,7 @@ function interruptedRun() {
         harness: "claude",
         model: "sonnet",
         effort: null,
+        permissions: null,
         agent: "dead-build-agent",
         label: "implement-add-picker/build",
         tabId: null,
@@ -220,6 +221,41 @@ test(
           .map((c) => c.argv![2]);
         expect(starts.filter((a) => a === architect.agent)).toHaveLength(1);
         expect(starts).not.toContain("dead-build-agent");
+      }),
+    ),
+  20_000,
+);
+
+test(
+  "a restarted continuation keeps the mode its chain was opened in",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const run = yield* interruptedRun();
+        // `build` asked for the harness's own prompting and is gone; architecture,
+        // simplify and fix all continue it, so restarting them must not quietly reopen
+        // the chain on the Run default, which is `bypass`.
+        run.step("build").variants[0]!.permissions = "harness";
+        yield* run.save();
+
+        yield* resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+
+        const architect = run.step("architecture").variants[0]!;
+        expect(architect.permissions).toBe("harness");
+        const started = (yield* rig.calls())
+          .filter((c) => c.cmd === "agent start")
+          .find((c) => c.argv![2] === architect.agent)!.argv!;
+        expect(started).not.toContain("--permission-mode");
+
+        // A step that starts an agent of its own is untouched by the chain: `review` is
+        // fresh, so it opens on the Run default.
+        const reviewer = run.step("review").variants[0]!;
+        expect(reviewer.permissions).toBe("bypass");
+        expect(
+          (yield* rig.calls()).find(
+            (c) => c.cmd === "agent start" && c.argv![2] === reviewer.agent,
+          )!.argv!,
+        ).toContain("--permission-mode");
       }),
     ),
   20_000,

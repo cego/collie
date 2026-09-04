@@ -453,13 +453,15 @@ checkout there is no branch and no working tree to review, so the target menu is
   "quiet_ms": 600000,
   "notifications": { "run-done": false },
   "models": { "opencode": ["mycorp/local-model"] },
-  "trust": "ask"
+  "trust": "ask",
+  "permissions": "bypass"
 }
 ```
 
 `models` adds models the harness adapter table does not already accept. An unknown harness,
-model or effort fails validation before a single tab opens. See
-[Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts.
+model, effort or permissions mode fails validation before a single tab opens. See
+[Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts, and
+[Permissions](#permissions-unattended-by-default) for what `permissions` decides.
 
 `notifications` turns a kind of toast off. The kinds are `needs-you`, `decision-lost`,
 `run-done`, `run-stuck`, `run-failed`, `step-stuck`, `output-unusable` and `mr-opened`, all
@@ -503,6 +505,39 @@ every repo you run workflows in is already one you would answer yes for.
 If you do let claude ask, nothing breaks: `agent start` reports the agent blocked, which is
 not a failure, so the Driver says which pane wants you, toasts, and waits. It cannot answer
 for you — the dialog shuffles its options between runs, so there is no safe key to send.
+
+## Permissions: unattended by default
+
+Most harnesses ask before running a tool call they have no rule for, and they ask in the
+agent's own pane — the one place a Run nobody is watching cannot answer. So Collie decides
+instead: agents start with their harness's unattended switch, and `permissions` in
+`config.json` says so. (pi is the exception: it has no tool-approval prompt, so both values
+start it the same way.)
+
+| Value     | What a Run does                                                                        |
+| --------- | -------------------------------------------------------------------------------------- |
+| `bypass`  | Default. Each agent is started with its harness's unattended switch, where it has one. |
+| `harness` | No switch. A harness that prompts does so in its own pane, and the Run waits.          |
+
+Know what `bypass` buys: the agents run commands, edit files and install things without
+asking, inside the checkout the Run is working in. There is no sandbox. `implement` is the
+only workflow Collie gives a checkout of its own, so its agents work in a worktree, on a
+branch, and everything they do is reviewed before it becomes a merge request. Every other
+workflow — `plan`, `review`, a standalone `architecture` — runs its agents **in the
+checkout you started them from**, with your uncommitted work in it and neither of those
+fences in the way. That is the case to weigh before leaving the default on.
+
+Set `permissions: harness` in Settings if you would rather answer the prompts yourself, or
+`permissions: harness` on a single step (see
+[authoring](authoring.md#harnesses-models-and-effort)) for one that should ask.
+
+An unknown value is refused: Settings will not write it, a run reading one from
+`config.json` fails before a tab opens, and an agent is never started with a mode Collie
+cannot resolve — the fallback would be `bypass`, so it fails instead. A file hand-edited
+into nonsense still opens in Settings, which is where you would put it right.
+
+Trust is unaffected and still answered first: it decides whether the harness will work in
+the directory at all, and permissions only decide what it asks about once it does.
 
 ## Troubleshooting
 

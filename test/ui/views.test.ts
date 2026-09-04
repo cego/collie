@@ -190,6 +190,14 @@ effectTest("Settings offers every key loadDefaults reads, and repeats none of th
   // A key a Run reads and Settings does not offer is one nobody can inspect or edit.
   expect(settings.defaults.find((d) => d.key === "handoff_timeout_ms")!.value).toBe("60000");
   expect(settings.remembered.map((r) => r.key)).not.toContain("handoff_timeout_ms");
+  // Nothing about unattended agents is silent: the mode is a row like any other.
+  expect(settings.defaults.find((d) => d.key === "permissions")!.value).toBe("bypass");
+
+  // And a hand-edited nonsense value still renders, because Settings is where it is put
+  // right: a read that threw would take the repair tool down with the problem.
+  yield* fs.writeFileString(path.join(env.configDir, "config.json"), `{ "permissions": "yolo" }`);
+  const broken = yield* buildSettings(env);
+  expect(broken.defaults.find((d) => d.key === "permissions")!.value).toBe("yolo");
 });
 
 effectTest("a run's detail is its inputs, steps, hand-offs, review and Outputs", function* () {
@@ -208,6 +216,7 @@ effectTest("a run's detail is its inputs, steps, hand-offs, review and Outputs",
       harness: "claude",
       model: "opus",
       effort: null,
+      permissions: null,
       agent: "rev-1",
       label: "review/review/opus",
       tabId: null,
@@ -263,6 +272,7 @@ effectTest("a run with no review, and an Output nobody wrote, both say which", f
       harness: "claude",
       model: "opus",
       effort: null,
+      permissions: null,
       agent: "rev-1",
       label: "review/one/opus",
       tabId: null,

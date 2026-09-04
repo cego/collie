@@ -31,7 +31,7 @@ import {
 } from "./yaml";
 import type { AgentStatus, Herdr } from "./herdr";
 import { HerdrError, herdrFailureReason } from "./herdr";
-import { HARNESSES, personaPrefix, startArgs } from "./harness";
+import { HARNESSES, isPermissionMode, PERMISSION_MODES, personaPrefix, startArgs } from "./harness";
 import {
   findingKey,
   formatFindings,
@@ -455,6 +455,11 @@ const runStep = Effect.fn("Engine.runStep")(function* (
   const previous = ctx.ran.has(step.id) ? run.step(step.id).variants : [];
   const fanIn = fanInPane(step, ctx);
   const records: VariantRecord[] = [];
+  // Before any tab is created: the contract is that a mode Collie cannot resolve fails
+  // before one opens, and a chained Run and a resumed Driver get here unvalidated.
+  const modes = yield* Effect.forEach(variants, (variant) =>
+    permissionMode(step, variant, o.defaults),
+  );
 
   // Start (or reuse) every agent first, then prompt them all, so they work at once.
   for (const [i, variant] of variants.entries()) {
@@ -468,6 +473,10 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       harness: reuse ? prior!.harness : variant.harness,
       model: reuse ? prior!.model : variant.model,
       effort: (reuse ? prior!.effort : variant.effort) ?? null,
+      // A continuation whose agent is gone — a Driver resumed after the head died —
+      // starts a new process, and its own mode is unset, so it would otherwise open in
+      // the Run default. The mode its chain was opened in is on the record.
+      permissions: reuse ? prior!.permissions : (chainMode(o, step) ?? modes[i]!),
       agent: prior?.agent ?? agentName(run.record.slug, step.id, key, run.record.seq),
       label: prior?.label ?? label,
       tabId: prior?.tabId ?? null,
@@ -544,6 +553,10 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       if (record.paneId) yield* herdr.paneRun(record.paneId, `cd ${shellQuote(run.record.cwd)}`);
 
       const adapter = HARNESSES[variant.harness]!;
+      // The recorded mode wins where there is one — that is the chain's — and anything a
+      // record cannot vouch for falls back to the mode resolved for this step.
+      const recorded = record.permissions ?? undefined;
+      const permissions = isPermissionMode(recorded) ? recorded : modes[i]!;
       yield* startAgent(o, step, {
         name: record.agent,
         kind: adapter.kind,
@@ -553,8 +566,11 @@ const runStep = Effect.fn("Engine.runStep")(function* (
           variant.model,
           yield* personaFile(o, step, variant.harness, ctx.skills),
           variant.effort,
+          permissions,
         ),
       });
+      // Recorded so a transcript full of prompts — or free of them — can be explained.
+      yield* run.log(`${record.agent}: permissions ${permissions}`);
       if (record.paneId) {
         ctx.panes.push(record.paneId);
         yield* setView(o, ctx.viewSource, ctx.panes);
@@ -1300,6 +1316,42 @@ function paneNotReady(e: HerdrError): boolean {
  * it shuffles its options, so there is no safe key to send. The agent exists and is
  * blocked, so this waits for the human exactly as a Step waits for an Output.
  */
+/**
+ * The mode the agent this step continues was started with, from the run record. Absent
+ * when the chain's head never ran in this Run, or was recorded before the mode was.
+ */
+function chainMode(o: EngineOptions, step: ResolvedStep): string | null {
+  if (!step.agent) return null;
+  const seen = new Set<string>();
+  let id: string | undefined = step.agent;
+  while (id !== undefined && !seen.has(id)) {
+    seen.add(id);
+    const recorded = o.run.record.steps.find((s) => s.id === id)?.variants[0];
+    if (recorded?.permissions) return recorded.permissions;
+    id = o.wf.steps.find((s) => s.id === id)?.agent;
+  }
+  return null;
+}
+
+/**
+ * The mode this agent starts in: the Step's own, else the Run's default. An unknown one
+ * fails the step rather than falling back, because the fallback would be `bypass` and a
+ * typo would then start an agent unattended. Validation normally catches it before a tab
+ * opens, but a chained Run and a resumed Driver resolve a Workflow without validating it,
+ * so this is the last place that can still refuse.
+ */
+const permissionMode = Effect.fn("Engine.permissionMode")(function* (
+  step: ResolvedStep,
+  variant: Variant,
+  defaults: Defaults,
+) {
+  const named = variant.permissions ?? defaults.permissions;
+  if (isPermissionMode(named)) return named;
+  return yield* Effect.fail(
+    new Error(`${step.id}: unknown permissions "${named}" (known: ${PERMISSION_MODES.join(", ")})`),
+  );
+});
+
 const startAgent = Effect.fn("Engine.startAgent")(function* (
   o: EngineOptions,
   step: ResolvedStep,

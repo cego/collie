@@ -517,7 +517,37 @@ test("user defaults come from config.json in the config layer", () =>
         notifications: {},
         models: { opencode: ["local/foo"] },
         trust: "ask",
+        permissions: "bypass",
       });
+    }),
+  ));
+
+test("permissions defaults to bypass, takes `harness`, and names anything else", () =>
+  runEffect(
+    Effect.gen(function* () {
+      expect(FALLBACK_DEFAULTS.permissions).toBe("bypass");
+
+      yield* writeText(join(rig.configDir, "config.json"), `{ "permissions": "harness" }`);
+      expect((yield* loadDefaults(rig.configDir)).permissions).toBe("harness");
+
+      // Kept as written rather than coerced or thrown: coercing would fall back to
+      // `bypass` and start agents unattended, and throwing would take the Settings view
+      // that repairs the file down with it. Validation is what refuses it.
+      yield* writeText(join(rig.configDir, "config.json"), `{ "permissions": "yolo" }`);
+      const broken = yield* loadDefaults(rig.configDir);
+      expect(broken.permissions).toBe("yolo");
+
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "w",
+        "---\nname: w\nsteps:\n  - id: a\n    persona: reviewer\n    output: a.json\n---\n## a\na\n",
+      );
+      yield* writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+      const defs = yield* loadDefinitions(ls());
+      expect(yield* validateWorkflow(resolveWorkflow("w", defs, broken), defs, broken)).toEqual([
+        'config.json: unknown permissions "yolo" (known: bypass, harness)',
+      ]);
     }),
   ));
 
@@ -570,6 +600,285 @@ c
       ]);
       expect(stepVariants(wf.steps[2]!, defaults)).toEqual([{ harness: "claude", model: "opus" }]);
       expect(yield* validateWorkflow(wf, defs, withDefault)).toEqual([]);
+    }),
+  ));
+
+test("a step may keep the harness's own prompting, and only `bypass`/`harness` are legal", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "w",
+        `---
+name: w
+steps:
+  - id: a
+    persona: reviewer
+    permissions: harness
+  - id: b
+    persona: reviewer
+  - id: c
+    persona: reviewer
+    permissions: whatever
+  - id: d
+    persona: reviewer
+    permissions: false
+  - id: e
+    persona: reviewer
+    parallel:
+      - { harness: claude, model: opus, permissions: 3 }
+  - id: menu
+    persona: reviewer
+    choices:
+      - title: Refine
+        prompt: refine
+        permissions: nope
+        output: refine.json
+---
+## a
+a
+
+## b
+b
+
+## c
+c
+
+## d
+d
+
+## e
+e
+
+## refine
+refine
+`,
+      );
+      yield* writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+      const defs = yield* loadDefinitions(ls());
+      const wf = resolveWorkflow("w", defs, defaults);
+
+      expect(stepVariants(wf.steps[0]!, defaults)).toEqual([
+        { harness: "claude", model: "opus", permissions: "harness" },
+      ]);
+      // No override: the Run's default decides, so the variant says nothing.
+      expect(stepVariants(wf.steps[1]!, defaults)).toEqual([{ harness: "claude", model: "opus" }]);
+      // A value that is not a string is still a value someone meant: it is named, not
+      // dropped, because dropping it would start the step unattended after all.
+      expect(yield* validateWorkflow(wf, defs, defaults)).toEqual([
+        'workflow "w" step "c": unknown permissions "whatever" (known: bypass, harness)',
+        'workflow "w" step "d": unknown permissions "false" (known: bypass, harness)',
+        'workflow "w" step "e": unknown permissions "3" (known: bypass, harness)',
+        'workflow "w" step "menu" choice "Refine": unknown permissions "nope" (known: bypass, harness)',
+      ]);
+    }),
+  ));
+
+test("a permissions mode never re-permissions an agent someone else started", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "w",
+        `---
+name: w
+steps:
+  - id: build
+    persona: reviewer
+    output: build.json
+  - id: conflicts
+    persona: reviewer
+    agent: build
+    permissions: harness
+    output: conflicts.json
+  - id: agrees
+    persona: reviewer
+    agent: build
+    permissions: bypass
+    output: agrees.json
+---
+## build
+b
+
+## conflicts
+c
+
+## agrees
+a
+`,
+      );
+      yield* writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+      const defs = yield* loadDefinitions(ls());
+      const wf = resolveWorkflow("w", defs, defaults);
+
+      // The mode is fixed when the process starts, so a later step cannot change it —
+      // but a step whose mode already matches is saying nothing new.
+      expect(yield* validateWorkflow(wf, defs, defaults)).toEqual([
+        'workflow "w" step "conflicts": permissions "harness" cannot apply to a step that ' +
+          'continues agent "build", which starts with "bypass" — set it on "build", or drop ' +
+          '"agent" so this step starts one of its own',
+      ]);
+
+      // Which is what embedding does: `permissions` on a `use:` step reaches every step
+      // of the embedded workflow, continuation steps included, so they all agree.
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "outer",
+        `---
+name: outer
+steps:
+  - id: inner
+    use: w
+    permissions: harness
+---
+## inner
+never used, the embedded workflow supplies this
+`,
+      );
+      // A chain: `relay` continues `build` without a mode of its own, so it runs the
+      // process `build` started. A step continuing `relay` is really continuing `build`,
+      // and is compared against where that agent actually started — not against what
+      // `relay` would have resolved to had it started one.
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "chain",
+        `---
+name: chain
+steps:
+  - id: build
+    persona: reviewer
+    permissions: bypass
+    output: build.json
+  - id: relay
+    persona: reviewer
+    agent: build
+    output: relay.json
+  - id: sensitive
+    persona: reviewer
+    agent: relay
+    permissions: harness
+    output: sensitive.json
+---
+## build
+b
+
+## relay
+r
+
+## sensitive
+s
+`,
+      );
+      const withChain = yield* loadDefinitions(ls());
+      const asks = { ...defaults, permissions: "harness" };
+      expect(
+        yield* validateWorkflow(resolveWorkflow("chain", withChain, asks), withChain, asks),
+      ).toEqual([
+        'workflow "chain" step "sensitive": permissions "harness" cannot apply to a step ' +
+          'that continues agent "relay", which starts with "bypass" in step "build" — set ' +
+          'it on "build", or drop "agent" so this step starts one of its own',
+      ]);
+
+      // A Choice step opens its agent inside a round, so that round's mode is what a
+      // later continuation is really up against — not the step's, and not the default.
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "picked",
+        `---
+name: picked
+steps:
+  - id: menu
+    persona: reviewer
+    choices:
+      - title: Refine
+        prompt: refine
+        permissions: bypass
+        output: refine.json
+  - id: after
+    persona: reviewer
+    agent: menu
+    permissions: harness
+    output: after.json
+---
+## menu
+m
+
+## refine
+r
+
+## after
+a
+`,
+      );
+      const withPicked = yield* loadDefinitions(ls());
+      const asksToo = { ...defaults, permissions: "harness" };
+      expect(
+        yield* validateWorkflow(
+          resolveWorkflow("picked", withPicked, asksToo),
+          withPicked,
+          asksToo,
+        ),
+      ).toEqual([
+        'workflow "picked" step "after": permissions "harness" cannot apply to a step that ' +
+          'continues agent "menu", which starts with "bypass" — set it on "menu", or drop ' +
+          '"agent" so this step starts one of its own',
+      ]);
+
+      // A round continues an agent the same way its step does, and is refused the same
+      // way: the mode was settled when that agent started.
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "menu",
+        `---
+name: menu
+steps:
+  - id: build
+    persona: reviewer
+    output: build.json
+  - id: next
+    persona: reviewer
+    choices:
+      - title: Again
+        prompt: again
+        agent: build
+        permissions: harness
+        output: again.json
+---
+## build
+b
+
+## next
+n
+
+## again
+a
+`,
+      );
+      const withMenu = yield* loadDefinitions(ls());
+      expect(
+        yield* validateWorkflow(resolveWorkflow("menu", withMenu, defaults), withMenu, defaults),
+      ).toEqual([
+        'workflow "menu" step "next" choice "Again": permissions "harness" cannot apply to a ' +
+          'step that continues agent "build", which starts with "bypass" — set it on "build", ' +
+          'or drop "agent" so this step starts one of its own',
+      ]);
+
+      const withOuter = yield* loadDefinitions(ls());
+      const outer = resolveWorkflow("outer", withOuter, defaults);
+      expect(outer.steps.map((step) => step.permissions)).toEqual([
+        "harness",
+        "harness",
+        "harness",
+      ]);
+      expect(yield* validateWorkflow(outer, withOuter, defaults)).toEqual([]);
     }),
   ));
 

@@ -91,25 +91,26 @@ An input's strategy is how Collie tries to fill it before asking you.
 
 ## Step keys
 
-| Key          | Type           | What it does                                                                              |
-| ------------ | -------------- | ----------------------------------------------------------------------------------------- |
-| `id`         | string         | The step's name, and the `## <id>` body section it sends. Required in practice.           |
-| `persona`    | string         | The persona injected when its agent starts.                                               |
-| `harness`    | string         | Which agent CLI. Falls back to your `config.json`.                                        |
-| `model`      | string         | Which model. `default` uses the harness adapter's pinned default.                         |
-| `effort`     | string         | Reasoning effort, where the harness takes one.                                            |
-| `fresh`      | boolean        | Start a new agent each iteration instead of reusing the last one.                         |
-| `output`     | string         | The JSON file this step must write. The step is finished when the file exists.            |
-| `agent`      | string         | Continue the agent an earlier step started, keeping its context, instead of starting one. |
-| `skill`      | string         | Send the prompt as `/<skill> …` — see [Skills](#skills).                                  |
-| `use`        | string         | Embed another workflow's steps here by reference.                                         |
-| `parallel`   | list           | Run this step once per entry, side by side. Each entry is `{harness, model, effort}`.     |
-| `prompt`     | string         | Send a body section other than the step's own id.                                         |
-| `standalone` | boolean        | Run only when this workflow is the one being run, not when it is embedded.                |
-| `requires`   | string or list | What the environment must provide — see [Requirements](#requirements).                    |
-| `fan_in`     | string         | Reconcile that earlier step's parallel outputs into one — see [Fan-in](#fan-in).          |
-| `choices`    | list           | Ask instead of running an agent — see [Choice steps](#choice-steps).                      |
-| `repeat`     | map            | `{from, back_to, max}` — the fix loop; see [Loops](#loops).                               |
+| Key           | Type           | What it does                                                                                         |
+| ------------- | -------------- | ---------------------------------------------------------------------------------------------------- |
+| `id`          | string         | The step's name, and the `## <id>` body section it sends. Required in practice.                      |
+| `persona`     | string         | The persona injected when its agent starts.                                                          |
+| `harness`     | string         | Which agent CLI. Falls back to your `config.json`.                                                   |
+| `model`       | string         | Which model. `default` uses the harness adapter's pinned default.                                    |
+| `effort`      | string         | Reasoning effort, where the harness takes one.                                                       |
+| `permissions` | string         | `bypass` or `harness` — who answers this step's tool-call prompts. Falls back to your `config.json`. |
+| `fresh`       | boolean        | Start a new agent each iteration instead of reusing the last one.                                    |
+| `output`      | string         | The JSON file this step must write. The step is finished when the file exists.                       |
+| `agent`       | string         | Continue the agent an earlier step started, keeping its context, instead of starting one.            |
+| `skill`       | string         | Send the prompt as `/<skill> …` — see [Skills](#skills).                                             |
+| `use`         | string         | Embed another workflow's steps here by reference.                                                    |
+| `parallel`    | list           | Run this step once per entry, side by side. Each entry is `{harness, model, effort, permissions}`.   |
+| `prompt`      | string         | Send a body section other than the step's own id.                                                    |
+| `standalone`  | boolean        | Run only when this workflow is the one being run, not when it is embedded.                           |
+| `requires`    | string or list | What the environment must provide — see [Requirements](#requirements).                               |
+| `fan_in`      | string         | Reconcile that earlier step's parallel outputs into one — see [Fan-in](#fan-in).                     |
+| `choices`     | list           | Ask instead of running an agent — see [Choice steps](#choice-steps).                                 |
+| `repeat`      | map            | `{from, back_to, max}` — the fix loop; see [Loops](#loops).                                          |
 
 ### Requirements
 
@@ -201,8 +202,8 @@ Each choice needs a `title` and exactly one of `run`, `prompt`, `post`, `handoff
 | `follow_up` | map            | A second round, run only when the first reported findings. Same keys as a round.                   |
 
 A `prompt` choice is a **round**, and takes the round keys inline: `prompt` (the section),
-`agent`, `persona`, `harness`, `model`, `effort`, `fresh`, `skill` and `output`. `follow_up`
-takes the same set.
+`agent`, `persona`, `harness`, `model`, `effort`, `permissions`, `fresh`, `skill` and
+`output`. `follow_up` takes the same set.
 
 `run`, `post`, `stop` and `handoff` end the step; a `prompt` choice offers the menu again
 as soon as its round has written its output, so a **Refine** choice can be taken as often
@@ -346,12 +347,12 @@ implement step "build": the skill "implement" is not installed — run `npx skil
 
 ## Harnesses, models and effort
 
-| Harness    | Model flag                 | Persona                                                  | Effort                                                   |
-| ---------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| `claude`   | `--model`                  | `--append-system-prompt-file`                            | `--effort low\|medium\|high\|xhigh\|max`                 |
-| `codex`    | `-m`                       | prompt prefix                                            | —                                                        |
-| `pi`       | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` |
-| `opencode` | `--model <provider/model>` | prompt prefix                                            | —                                                        |
+| Harness    | Model flag                 | Persona                                                  | Effort                                                   | Unattended switch                            |
+| ---------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------- |
+| `claude`   | `--model`                  | `--append-system-prompt-file`                            | `--effort low\|medium\|high\|xhigh\|max`                 | `--permission-mode bypassPermissions`        |
+| `codex`    | `-m`                       | prompt prefix                                            | —                                                        | `--dangerously-bypass-approvals-and-sandbox` |
+| `pi`       | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` | none — pi has no tool-approval prompt        |
+| `opencode` | `--model <provider/model>` | prompt prefix                                            | —                                                        | `--auto`                                     |
 
 `claude` accepts `opus`, `sonnet`, `haiku`, `opusplan` and any `claude-…` id. `codex`
 accepts `gpt-5-codex`, `gpt-5`, `gpt-5-mini` and any `gpt…`/`o…` id. `pi` and `opencode`
@@ -363,7 +364,28 @@ pins that default to `opus`, so every base Claude agent receives `--model opus`;
 without a pinned default omit the model flag. Effort is optional — leave it out and each
 harness uses its own default.
 
-An unknown harness, model or effort fails validation before a single tab opens.
+The unattended switch is passed unless `permissions` says `harness`, in your `config.json`
+or on the step; see [Permissions](using.md#permissions-unattended-by-default) for what it
+means. pi's column says none because it does not ask before a tool call — its `--approve`
+only trusts project-local files — so `bypass` and `harness` start it identically.
+
+```yaml
+steps:
+  - id: deploy
+    persona: implementer
+    permissions: harness # this one should ask; the rest of the run does not
+```
+
+The mode is settled when an agent starts, so a step with `agent:` cannot change it: naming
+a mode that differs from the step whose agent it continues fails validation. Set it on the
+step that starts the agent, or drop `agent:` so the later step starts one of its own
+(`agent` and `fresh` are mutually exclusive, so `fresh` is not the way out). Repeating the
+same mode is
+allowed, which is what every step of an embedded workflow does when the `use:` step names
+one.
+
+An unknown harness, model, effort or permissions mode fails validation before a single tab
+opens.
 
 ## Worked example: two different reviewers
 

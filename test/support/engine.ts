@@ -129,6 +129,11 @@ export function runWorkflow(
     decisions?: Record<string, string>;
     /** The checkout the Run owns, as `startRun` would have recorded it. */
     worktree?: WorktreeRecord | null;
+    /**
+     * Run a Workflow the way a chained Run and a resumed Driver do: resolved, but never
+     * validated. Only for testing what the engine still refuses on its own.
+     */
+    unvalidated?: boolean;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -138,7 +143,7 @@ export function runWorkflow(
     const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
     const defaults = Object.assign(yield* loadDefaults(env.configDir), opts.defaults);
     const wf = resolveWorkflow(name, defs, defaults);
-    const errors = yield* validateWorkflow(wf, defs, defaults);
+    const errors = opts.unvalidated ? [] : yield* validateWorkflow(wf, defs, defaults);
     if (errors.length > 0) return yield* Effect.fail(new Error(errors.join("\n")));
 
     const inferred = yield* inferInputs(wf.inputs, { cwd: env.cwd, stateDir: env.stateDir });

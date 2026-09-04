@@ -19,18 +19,14 @@ test("the adapter table covers claude, codex and opencode with model flags", () 
 });
 
 test("a persona goes in as a file flag where the harness has one, else as a prompt prefix", () => {
-  expect(startArgs(HARNESSES.claude!, "sonnet", "/run/personas/reviewer.md")).toEqual([
-    "--model",
-    "sonnet",
-    "--append-system-prompt-file",
-    "/run/personas/reviewer.md",
-  ]);
+  expect(
+    startArgs(HARNESSES.claude!, "sonnet", "/run/personas/reviewer.md", undefined, "harness"),
+  ).toEqual(["--model", "sonnet", "--append-system-prompt-file", "/run/personas/reviewer.md"]);
   expect(personaPrefix(HARNESSES.claude!, "You review.")).toBe("");
 
-  expect(startArgs(HARNESSES.codex!, "gpt-5", "/run/personas/reviewer.md")).toEqual([
-    "-m",
-    "gpt-5",
-  ]);
+  expect(
+    startArgs(HARNESSES.codex!, "gpt-5", "/run/personas/reviewer.md", undefined, "harness"),
+  ).toEqual(["-m", "gpt-5"]);
   expect(personaPrefix(HARNESSES.codex!, "You review.")).toBe("You review.");
 });
 
@@ -44,7 +40,7 @@ test("model checks accept the alias list, the harness pattern and user extras", 
 });
 
 test("effort is a flag only where the harness has one", () => {
-  expect(startArgs(HARNESSES.claude!, "opus", "/p/reviewer.md", "xhigh")).toEqual([
+  expect(startArgs(HARNESSES.claude!, "opus", "/p/reviewer.md", "xhigh", "harness")).toEqual([
     "--model",
     "opus",
     "--effort",
@@ -56,7 +52,10 @@ test("effort is a flag only where the harness has one", () => {
 
   // codex and opencode have none, so asking for one is a validation error, not a flag.
   expect("effortArgs" in HARNESSES.codex!).toBe(false);
-  expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/reviewer.md", "xhigh")).toEqual(["-m", "gpt-5"]);
+  expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/reviewer.md", "xhigh", "harness")).toEqual([
+    "-m",
+    "gpt-5",
+  ]);
 });
 
 test("`default` pins Claude to Opus while other harnesses keep their native default", () => {
@@ -66,7 +65,9 @@ test("`default` pins Claude to Opus while other harnesses keep their native defa
   }
 
   expect(HARNESSES.claude!.defaultModel).toBe("opus");
-  expect(startArgs(HARNESSES.claude!, DEFAULT_MODEL, "/p/implementer.md", "medium")).toEqual([
+  expect(
+    startArgs(HARNESSES.claude!, DEFAULT_MODEL, "/p/implementer.md", "medium", "harness"),
+  ).toEqual([
     "--model",
     "opus",
     "--effort",
@@ -74,8 +75,12 @@ test("`default` pins Claude to Opus while other harnesses keep their native defa
     "--append-system-prompt-file",
     "/p/implementer.md",
   ]);
-  expect(startArgs(HARNESSES.codex!, DEFAULT_MODEL, "/p/implementer.md")).toEqual([]);
-  expect(startArgs(HARNESSES.opencode!, DEFAULT_MODEL, "/p/implementer.md")).toEqual([]);
+  expect(
+    startArgs(HARNESSES.codex!, DEFAULT_MODEL, "/p/implementer.md", undefined, "harness"),
+  ).toEqual([]);
+  expect(
+    startArgs(HARNESSES.opencode!, DEFAULT_MODEL, "/p/implementer.md", undefined, "harness"),
+  ).toEqual([]);
 });
 
 test("pi takes a provider-qualified model, a thinking level and the persona file directly", () => {
@@ -126,4 +131,40 @@ test("a body names a skill and every harness is pointed at the same file", () =>
   const plain = renderTemplate("{{skill:tdd}} and {{inputs.goal}}", { inputs: { goal: "g" } });
   expect(plain.missing).toEqual([]);
   expect(plain.text).toBe("{{skill:tdd}} and g");
+});
+
+test("every harness that prompts is started with its unattended switch, unless `harness`", () => {
+  expect(startArgs(HARNESSES.claude!, "opus", "/p/i.md")).toEqual([
+    "--model",
+    "opus",
+    "--append-system-prompt-file",
+    "/p/i.md",
+    "--permission-mode",
+    "bypassPermissions",
+  ]);
+  expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/i.md")).toEqual([
+    "-m",
+    "gpt-5",
+    "--dangerously-bypass-approvals-and-sandbox",
+  ]);
+  expect(startArgs(HARNESSES.opencode!, "anthropic/claude-sonnet-4", "/p/i.md")).toEqual([
+    "--model",
+    "anthropic/claude-sonnet-4",
+    "--auto",
+  ]);
+  // pi has no tool-approval prompt, so bypass is the same start as `harness`.
+  expect(startArgs(HARNESSES.pi!, "openai-codex/gpt-5.6-sol", "/p/i.md")).toEqual(
+    startArgs(HARNESSES.pi!, "openai-codex/gpt-5.6-sol", "/p/i.md", undefined, "harness"),
+  );
+
+  // Whichever harness a step names, `harness` passes none of the switches above.
+  for (const adapter of Object.values(HARNESSES)) {
+    const asked = startArgs(adapter, DEFAULT_MODEL, "/p/i.md", undefined, "harness");
+    for (const flag of [
+      "--permission-mode",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--auto",
+    ])
+      expect(asked).not.toContain(flag);
+  }
 });

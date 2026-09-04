@@ -19,6 +19,14 @@ const VariantRecordSchema = Schema.Struct({
   harness: Schema.String,
   model: Schema.String,
   effort: Schema.NullOr(Schema.String),
+  /**
+   * The mode this agent was started with, so a Run resumed after the agent is gone can
+   * restart a continuation in the mode its chain was opened in rather than the Run
+   * default. Records written before this key decode as null.
+   */
+  permissions: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
   agent: Schema.String,
   label: Schema.String,
   tabId: Schema.NullOr(Schema.String),
