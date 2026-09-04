@@ -20,6 +20,14 @@ title = "Resume a workflow run"
 contexts = ["global", "workspace"]
 command = ["bin/collie", "herdr", "resume"]
 
+# From any pane, `prefix+shift+c`: the workspace's board is a name to reach for rather
+# than a position to remember.
+[[actions]]
+id = "board"
+title = "Open the Control Plane"
+contexts = ["global", "workspace", "pane"]
+command = ["bin/collie", "herdr", "board"]
+
 [[actions]]
 id = "fork"
 title = "Fork a workflow or persona"

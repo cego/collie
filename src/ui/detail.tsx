@@ -3,11 +3,12 @@
 // props: the reads happened in an Effect fiber, and a component that read a file itself
 // is what would make the app stutter and untestable, in that order.
 
-import { For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
+import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { useRenderer } from "@opentui/solid";
 import { sinceReview, type MrDetails, type MrPanel } from "../mr";
-import type { Panel, RunDetail } from "../views";
-import type { Command, Row } from "./state";
+import { truncated, type Panel, type PlanPanel, type RunDetail } from "../views";
+import { markdownLines, type Command, type LineStyle, type Row } from "./state";
 
 const DIM = "#8a8a8a";
 const ACCENT = "#7aa2f7";
@@ -18,6 +19,12 @@ export interface DetailProps {
   detail: RunDetail | null;
   cwd: string;
   overlay: boolean;
+  /**
+   * The scrollbox itself, so the keys can scroll it. The mouse wheel needs nothing —
+   * a scrollbox handles the wheel over itself — but the keyboard belongs to the app,
+   * which is the only place that knows the Selection is not being moved instead.
+   */
+  ref?: (box: ScrollBoxRenderable) => void;
   dispatch: (command: Command) => void;
 }
 
@@ -42,6 +49,7 @@ const AS_COLUMN = { flexDirection: "column", width: "42%" } as const;
 export function Detail(props: DetailProps) {
   return (
     <scrollbox
+      ref={props.ref}
       title="Detail"
       border
       borderColor={DIM}
@@ -141,23 +149,58 @@ function panelLine(panel: Panel): string {
   return panel._tag === "Text" ? panel.text : panel.reason;
 }
 
+/**
+ * A read document, one styled line at a time: headings in accent and bold, list markers
+ * dim, fenced code dim, everything else plain. The whole point of the panel is reading
+ * something long, and one flat block of text is what makes a review unskimmable.
+ *
+ * ponytail: one renderable per line, and the scrollbox culls what is off screen. A cap's
+ * worth of review is around a thousand of them; measure before batching.
+ */
+/** What each line style is drawn in. Exhaustive, so a new style is a type error here. */
+const LINE_FG = {
+  heading: ACCENT,
+  list: DIM,
+  code: DIM,
+  plain: undefined,
+} satisfies Record<LineStyle, string | undefined>;
+
+function Markdown(props: { text: string }) {
+  /**
+   * Two memos, so the work stops at the text rather than at the render. The bridge
+   * replaces the whole state every three seconds and on every filesystem event, and
+   * `markdownLines` returns a fresh array each call — so `For` reconciled every line of
+   * a cap's worth of review on each of those, for a review that had not changed. A memo
+   * over the string is where the `===` comparison can actually stop: the array one only
+   * recomputes when it says the text is new.
+   */
+  const text = createMemo(() => props.text);
+  const lines = createMemo(() => markdownLines(text()));
+  return (
+    <For each={lines()}>
+      {(line) => (
+        <text
+          fg={LINE_FG[line.style]}
+          attributes={line.style === "heading" ? TextAttributes.BOLD : TextAttributes.NONE}
+        >
+          {line.text}
+        </text>
+      )}
+    </For>
+  );
+}
+
 function RunFacts(props: { detail: RunDetail }) {
   const review = () => props.detail.review;
   const tail = () => props.detail.tail;
-  // Narrowed here rather than at the call: a review that was cut short is the one thing
-  // the `Text` panel says beyond its text.
-  const cutShort = () => {
-    const panel = review();
-    return panel._tag === "Text" && panel.truncated;
-  };
   return (
     <box style={{ flexDirection: "column" }}>
       {/* First, because it is what the panel exists for: a finished review readable
           without splitting a pane and running `less`. */}
       <text fg={ACCENT}>{"Review"}</text>
       <Show when={review()._tag === "Text"} fallback={<text fg={DIM}>{panelLine(review())}</text>}>
-        <text>{panelLine(review())}</text>
-        <Show when={cutShort()}>
+        <Markdown text={panelLine(review())} />
+        <Show when={truncated(review())}>
           <text fg={DIM}>{"  … truncated; m reads more of it, t tails the run's log"}</text>
         </Show>
       </Show>
@@ -196,15 +239,44 @@ function RunFacts(props: { detail: RunDetail }) {
       <For each={props.detail.steps}>
         {(step) => (
           <text fg={step.status === "failed" ? BAD : DIM}>
-            {`  ${step.id} · ${step.status}${step.note ? ` · ${step.note}` : ""}`}
+            {`  ${[step.id, step.status, step.took, step.note].filter((part) => part).join(" · ")}`}
           </text>
         )}
       </For>
+
+      {/* After the review, because a review is what the panel is opened for; the plan
+          is what it is judged against. */}
+      <Show when={props.detail.plan !== null}>
+        <Plan plan={props.detail.plan!} />
+      </Show>
 
       <Show when={props.detail.handoffs.length > 0}>
         <text fg={ACCENT}>{"Hand-offs"}</text>
         <For each={props.detail.handoffs}>{(line) => <text fg={DIM}>{`  ${line}`}</text>}</For>
       </Show>
+    </box>
+  );
+}
+
+/**
+ * The plan a run is building from: the spec it was given, and each ticket with whether
+ * its boxes are all checked. Enough to judge the work against its intent without
+ * leaving the tab, which is the whole reason the review is in here too.
+ */
+function Plan(props: { plan: PlanPanel }) {
+  const spec = () => props.plan.spec;
+  return (
+    <box style={{ flexDirection: "column" }}>
+      <text fg={ACCENT}>{"Plan"}</text>
+      <Show when={spec()._tag === "Text"} fallback={<text fg={DIM}>{panelLine(spec())}</text>}>
+        <Markdown text={panelLine(spec())} />
+        <Show when={truncated(spec())}>
+          <text fg={DIM}>{"  … truncated; m reads more of it"}</text>
+        </Show>
+      </Show>
+      <For each={props.plan.tickets}>
+        {(ticket) => <text fg={DIM}>{`  ${ticket.done ? "✓" : "·"} ${ticket.title}`}</text>}
+      </For>
     </box>
   );
 }

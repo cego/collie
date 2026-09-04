@@ -137,6 +137,7 @@ same.
 | `prefix+f`       | `cego.collie.pick` — run a workflow                             |
 | `prefix+u`       | `cego.collie.resume` — resume a run with unfinished steps       |
 | `prefix+shift+f` | `cego.collie.fork` — copy a workflow or persona into your layer |
+| `prefix+shift+c` | `cego.collie.board` — open this workspace's Control Plane       |
 
 They show up in herdr's keybind help (`prefix+?`). Without a binding, any action still
 runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
@@ -238,6 +239,12 @@ of live agents and draws what it finds, so closing it loses nothing — the next
 again. It is the only pane Collie keeps open; the run itself is driven by a Driver with no
 pane at all.
 
+`prefix+shift+c` reaches it from any pane in the workspace, opening it first when the
+workspace has none yet — a name to press rather than a position to remember, for a
+workspace whose runs all pre-date the tab or whose tab was closed. It finds or opens the
+tab exactly as a run does, so pressing it can never leave a workspace with two.
+(`prefix+c` is herdr's own `new_tab` and is left alone.)
+
 It is an application (ADR-0005): a nav rail over Runs, History, Workflows and Settings,
 the list, a detail panel beside it — or as a full-width overlay when the pane is too narrow
 for two columns — and the keys along the bottom. Click a row to select it, and the row and
@@ -252,13 +259,13 @@ refresh, and a run finishing under the cursor leaves the row that took its place
 ```
 🐕 collie  [Runs] History Workflows Settings
 ┌─Runs─────────────────────────────────────────────┐┌─Detail──────────────┐
-│  1 Implementer  working · implement-add-a-picker ││Implement · a-picker │
-│❯ ⚙ Implement · add-a-picker  fix · iteration 3/5 ││fix · iteration 3/5  │
+│  1 Implementer  working · Simplify the picker    ││Implement · a-picker │
+│❯ ⚙ Implement · add-a-picker  fix · 12m · iter 3/5││fix · 12m            │
 │  ✓ Review · !2367            done  [l log]       ││implement-2026...    │
 │  ⚠ Review · worktree         abandoned           ││                     │
 └──────────────────────────────────────────────────┘└─────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────┐
-│l log · k stop · 1-9 focus an agent · p run a workflow · u resume · ...   │
+│l log · k stop · t log tail · p run · ? keys · q close                    │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -284,6 +291,12 @@ outlives the run it was started for. An agent whose run is not on the board at a
 under one dim `agents with no run here` header at the end. The ones a hand-off can name are called by
 their role; the rest are called by their step and model. A role is a label, not a filter.
 
+Each agent row says what that agent is doing right now, taken from the terminal title its
+harness publishes — Claude Code puts the task it is on there — so progress is visible
+without opening the pane. A harness that publishes no title leaves the row naming the run
+instead. It costs nothing extra: the title comes back on the same `agent list` the statuses
+do.
+
 Under the directory, a line appears when this installation is behind its remote, naming
 how far behind it is and the command that clears it:
 
@@ -302,13 +315,41 @@ fetches before it answers because you are waiting on it.
 nothing written for a minute — moves to **Finished** as `⚠ abandoned` rather than sitting
 there pretending to work.
 
+A run that has stopped for you — a pending question, or a gate it is awaiting — is listed
+first, under a dim **Needs you** header, and the footer says `N run(s) need you` whenever
+the Selection is somewhere else. A blocked run costs the whole run's wall-clock and used
+to be visible only if its row happened to be the Selection. The header is a label, not a
+row: the arrows step over it and nothing acts on it.
+
+An active row says which step is running and how long it has been going — `fix · 12m` —
+so a stuck agent stands out from a slow one, and a run whose directory has not changed for
+longer than `board_quiet_ms` adds `quiet for 9m`.
+
 ### The detail panel
 
 Fills with the Selection: a run's inputs, steps, hand-offs, each step's Output and — the
 point of it — the review it wrote, readable without splitting a pane. A run whose target is
 a merge request shows that above the review: state, pipeline, approvals, unresolved
-threads, and what has moved since this review finished. A workflow shows its steps, inputs,
-decisions and validation problems.
+threads, and what has moved since this review finished. The Steps list carries a duration
+per step: how long a finished one took, and how long the running one has been going. A
+workflow shows its steps, inputs, decisions and validation problems.
+
+Under the review is the **plan** the run is building from, where it has one: its own
+`plan/` if it wrote one, else the plan directory it was started from. The `SPEC.md` text
+is capped and paged with `m` exactly like the review, and each ticket is listed by its
+first heading with `✓` when every checkbox in it is checked. That is what lets the work be
+judged against its intent without leaving the tab.
+
+The panel scrolls: `PgUp`/`PgDn` by a page and `⇧↑`/`⇧↓` by a line, with a scrollbar
+whenever there is more in it than fits. The arrows stay the Selection's, because that is
+what they have always been. The mouse wheel goes to whichever region the pointer is over
+— the list or the panel — and a new Selection starts the panel at the top, because how
+far the last one had been scrolled says nothing about this one.
+
+The review and the plan spec are rendered a line at a time: headings in accent and bold,
+list markers dim, fenced code dim, everything else plain. Line-level and no markdown
+dependency — inline emphasis is left exactly as the agent wrote it, because rewriting the
+text is how a review stops saying what it said.
 
 ### Keys
 
@@ -321,27 +362,40 @@ drawn under a row: every row is one line whatever is selected, so the list does 
 under the cursor. Movement is the arrows and not `j`/`k`: `k` is the stop key, and a
 destructive key that sometimes means "up" is worse than no vim binding.
 
-| Key     | What it does                                                                    |
-| ------- | ------------------------------------------------------------------------------- |
-| `↑↓`    | Move the Selection                                                              |
-| `Tab`   | Move between views                                                              |
-| `1`–`9` | Focus that agent's pane                                                         |
-| `p`     | Run a workflow — the same launch flow as `prefix+f`, inline in this tab         |
-| `u`     | Resume a run with unfinished steps                                              |
-| `f`     | Fork a workflow or persona                                                      |
-| `s`     | Hand the **selected** run's review to a live implementer                        |
-| `l`     | Open the selected run's `runner.log` in a temporary pane                        |
-| `t`     | Tail that log inside the detail panel                                           |
-| `m`     | Read another page of a review the panel cut short                               |
-| `x`     | Start a fix run from what the selected review left open                         |
-| `a`     | Review the selected run's target again                                          |
-| `o`     | Post the selected review to its merge request                                   |
-| `w`     | Open the selected merge request in a browser                                    |
-| `c`     | Copy that merge request's URL                                                   |
-| `k`     | Stop the selected run — closing a pane no longer does that, because it has none |
-| `/`     | Filter the list, and say how much is left — a matching agent keeps its run      |
-| `R`     | Re-read what is on screen, and the one merge request behind it                  |
-| `q`     | Close the tab                                                                   |
+The footer holds the Selection's own actions as buttons, then one line of keys — whatever
+the detail panel offers, and `p run · ? keys · q close`. Two wrapped lines of every global
+was what made the important ones unreadable, so the rest of the table lives behind `?`: a
+full-pane list of every key with what it does, in two columns so it fits a 24-row pane,
+closed by any key. The meanings there are the short form; this table is the long one.
+
+While a field has the keys — a question, the filter, a Settings value — the line says what
+that field's keys do instead, and the Selection's own buttons go: `k` typed a `k` while
+`[k stop]` stopped the run.
+
+| Key           | What it does                                                                    |
+| ------------- | ------------------------------------------------------------------------------- |
+| `↑↓`          | Move the Selection                                                              |
+| `⇧↑↓`         | Scroll the detail panel by a line                                               |
+| `PgUp`/`PgDn` | Scroll the detail panel by a page                                               |
+| `Tab`         | Move between views                                                              |
+| `1`–`9`       | Focus that agent's pane                                                         |
+| `p`           | Run a workflow — the same launch flow as `prefix+f`, inline in this tab         |
+| `u`           | Resume a run with unfinished steps                                              |
+| `f`           | Fork a workflow or persona                                                      |
+| `s`           | Hand the **selected** run's review to a live implementer                        |
+| `l`           | Open the selected run's `runner.log` in a temporary pane                        |
+| `t`           | Tail that log inside the detail panel                                           |
+| `m`           | Read another page of a review or plan spec the panel cut short                  |
+| `x`           | Start a fix run from what the selected review left open                         |
+| `a`           | Review the selected run's target again                                          |
+| `o`           | Post the selected review to its merge request                                   |
+| `w`           | Open the selected merge request in a browser                                    |
+| `c`           | Copy that merge request's URL                                                   |
+| `k`           | Stop the selected run — closing a pane no longer does that, because it has none |
+| `/`           | Filter the list, and say how much is left — a matching agent keeps its run      |
+| `R`           | Re-read what is on screen, and the one merge request behind it                  |
+| `?`           | Every key with what it does, over the whole pane; any key closes it             |
+| `q`           | Close the tab                                                                   |
 
 `＋ New run` in the nav does what `p` does.
 
@@ -451,6 +505,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "max_iterations": 5,
   "handoff_timeout_ms": 7200000,
   "quiet_ms": 600000,
+  "board_quiet_ms": 300000,
   "notifications": { "run-done": false },
   "models": { "opencode": ["mycorp/local-model"] },
   "trust": "ask",
@@ -474,6 +529,12 @@ in its pane — before it is nudged to unstick itself; it is nudged once more at
 and given up on at triple, as blocked, with the pane left alone. Quiet is the signal, never
 duration: a step that is still printing is never nudged, however long it runs. `0` waits
 for as long as it takes.
+
+`board_quiet_ms` is the same signal from the outside, and a separate number because it is
+a different question: how long a running run's directory may go unchanged before the
+Control Plane's row says `quiet for 9m`. Five minutes by default. Nothing is nudged and
+nothing is given up on — it is shown, so a hung run is visible before you notice by
+accident.
 
 ## Trust: the first run in a repo
 

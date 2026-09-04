@@ -5,7 +5,7 @@ import { testRender } from "@opentui/solid";
 import { runEffect } from "../support/effect";
 import { App } from "../../src/ui/App";
 import { StoppedDrawing } from "../../src/ui/bridge";
-import type { AppState, Command } from "../../src/ui/state";
+import { ALL_KEYS, type AppState, type Command } from "../../src/ui/state";
 import type { MrDetails } from "../../src/mr";
 import type { DefinitionRow, RunDetail, SettingsView } from "../../src/views";
 import type { PendingChoice } from "../../src/driver";
@@ -42,6 +42,7 @@ function run(id: string, title: string, over: Partial<WorkspaceView["active"][nu
     target: null,
     fixable: false,
     choice: null,
+    needsYou: false,
     ...over,
   };
 }
@@ -113,6 +114,11 @@ const mount = Effect.fn("app.mount")(function* (initial: AppState, width = 100, 
         .replace(/[│┌┐└┘─]/g, " ")
         .replace(/\s+/g, " "),
     mockInput: t.mockInput,
+    scroll: (x: number, y: number, direction: "up" | "down") =>
+      Effect.andThen(
+        Effect.promise(() => t.mockMouse.scroll(x, y, direction)),
+        flush,
+      ),
     click: (x: number, y: number) =>
       Effect.andThen(
         Effect.promise(() => t.mockMouse.click(x, y)),
@@ -147,7 +153,9 @@ const mount = Effect.fn("app.mount")(function* (initial: AppState, width = 100, 
 });
 
 const BOARD = board({
-  agents: [{ key: "1", name: "Implementer", agent: "impl-1", status: "working", run: "r1" }],
+  agents: [
+    { key: "1", name: "Implementer", agent: "impl-1", status: "working", run: "r1", now: null },
+  ],
   active: [run("r1", "Implement · add-a-picker"), run("r2", "Review · worktree")],
   recent: [run("r0", "Plan · the picker", { glyph: "✓", detail: "done" })],
 });
@@ -655,13 +663,22 @@ function runDetail(over: Partial<RunDetail> = {}): RunDetail {
     title: "Review · !42",
     status: "done",
     inputs: [{ name: "target", value: "mr:gitlab.example.com/g/p!42", source: "the branch's MR" }],
-    steps: [{ id: "review", status: "done", note: "two reviewers agreed", agents: ["rev-1"] }],
+    steps: [
+      {
+        id: "review",
+        status: "done",
+        note: "two reviewers agreed",
+        took: "12m",
+        agents: ["rev-1"],
+      },
+    ],
     handoffs: [],
     review: {
       _tag: "Text",
       text: "# Review\n\nSummary.\n\n- [strong] a real one\n",
       truncated: false,
     },
+    plan: null,
     outputs: [],
     tail: null,
     finishedAt: NOW - 3_600_000,
@@ -709,6 +726,7 @@ test("the nav switches views, and each view lists its own rows", () =>
           target: "mr:gitlab.example.com/g/p!42",
           fixable: true,
           choice: null,
+          needsYou: false,
         },
       ];
       const app = yield* mount(appState({ board: BOARD, history }));
@@ -749,7 +767,8 @@ test("a selected run's review is readable without leaving the tab", () =>
 
       const said = app.said();
       expect(said).toContain("[strong] a real one");
-      expect(said).toContain("review · done · two reviewers agreed");
+      // How long the step took, so a slow one is visible without opening the log.
+      expect(said).toContain("review · done · 12m · two reviewers agreed");
       // The target and where it came from; the value itself hard-wraps in a column
       // this narrow, so the assertion is on the phrase rather than on the wrap.
       expect(said).toContain("target = mr:gitlab.");
@@ -851,7 +870,7 @@ test("the panel's own keys are offered only where they can act", () =>
       // about the selected Run's detail, so neither key is on the line or does anything.
       const settings = yield* mount(appState({ view: "settings", settings: SETTINGS }));
       expect(settings.frame()).not.toContain("t log tail");
-      expect(settings.frame()).not.toContain("m more review");
+      expect(settings.frame()).not.toContain("m read more");
       settings.mockInput.pressKey("t");
       yield* settings.flush;
       settings.mockInput.pressKey("m");
@@ -869,7 +888,7 @@ test("the panel's own keys are offered only where they can act", () =>
         60,
       );
       expect(whole.frame()).toContain("t log tail");
-      expect(whole.frame()).not.toContain("m more review");
+      expect(whole.frame()).not.toContain("m read more");
       whole.mockInput.pressKey("m");
       yield* whole.flush;
       expect(whole.acted()).toEqual([]);
@@ -896,7 +915,7 @@ test("a review the panel cut short says how to read the rest of it", () =>
       // Not "open the log": the log is the runner's, and the bytes left out of the
       // review are not in it.
       expect(app.said()).toContain("m reads more of it");
-      expect(app.frame()).toContain("m more review");
+      expect(app.frame()).toContain("m read more");
 
       app.mockInput.pressKey("m");
       yield* app.flush;
@@ -1076,6 +1095,13 @@ test("Settings gives a default a new value and asks for it to be written", () =>
       app.mockInput.pressEnter();
       yield* app.flush;
       expect(app.acted()).toEqual([{ _tag: "SetDefault", key: "model", value: "sonnet" }]);
+
+      // And the editor closes: the footer is the board's again, so the next key acts on
+      // the Selection rather than typing into a setting that has already been sent.
+      expect(app.frame()).not.toContain("type a value");
+      app.mockInput.pressKey("R");
+      yield* app.flush;
+      expect(app.acted()).toContainEqual({ _tag: "Refresh" });
     }),
   ));
 
@@ -1228,5 +1254,271 @@ test("a paste reaches whichever field owns the keyboard, and never submits it", 
       asking.mockInput.pressEnter();
       yield* asking.flush;
       expect(asking.acted()).toEqual([{ _tag: "Answer", runId: "r1", value: url }]);
+    }),
+  ));
+
+test("a run waiting on you is listed first and counted in the footer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · add-a-picker"),
+              // Awaiting a gate rather than a question, so the keyboard is still the
+              // board's: a run with a pending question owns it while it is selected.
+              run("r2", "Plan · the picker", { detail: "review — your turn", needsYou: true }),
+              run("r3", "Review · worktree"),
+            ],
+          }),
+        }),
+      );
+
+      // Above the run that was started before it, under a header naming why.
+      expect(app.lineOf("Needs you")).toBeLessThan(app.lineOf("Plan · the picker"));
+      expect(app.lineOf("Plan · the picker")).toBeLessThan(app.lineOf("Implement · add-a-picker"));
+
+      // The Selection landed on it, so the count is not shown: it is what the human is
+      // already looking at.
+      expect(app.frame()).not.toContain("1 run(s) need you");
+
+      app.mockInput.pressArrow("up");
+      yield* app.flush;
+      // The header is stepped over rather than stopped on: there is nowhere above the
+      // waiting run to go.
+      const marked = listLines(app.frame()).filter((line) => line.includes("❯"));
+      expect(marked).toHaveLength(1);
+      expect(marked[0]!).toContain("Plan · the picker");
+
+      // And the count appears the moment the Selection is somewhere else.
+      yield* app.click(4, app.lineOf("Review · worktree"));
+      expect(app.frame()).toContain("1 run(s) need you");
+    }),
+  ));
+
+/** A detail whose review overflows the panel, so scrolling it has somewhere to go. */
+const longDetail = () =>
+  runDetail({
+    review: {
+      _tag: "Text",
+      text: Array.from({ length: 80 }, (_, i) => `line ${i}`).join("\n"),
+      truncated: false,
+    },
+  });
+
+test("a refresh leaves the list where the wheel put it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const many = Array.from({ length: 40 }, (_, i) => run(`r${i}`, `Review · number ${i}`));
+      const state = appState({ board: board({ recent: many }) });
+      const app = yield* mount(state, 100, 20);
+
+      // Wheel down the list, away from the Selection on the first row.
+      for (const _ of Array.from({ length: 8 })) yield* app.scroll(10, 6, "down");
+      const scrolled = listLines(app.frame()).join("\n");
+      expect(scrolled).not.toContain("number 0");
+
+      // The bridge replaces the state every three seconds and on every filesystem
+      // event. Bringing the Selection back into view then is a list that scrolls itself
+      // out from under the human mid-read.
+      yield* app.setState(appState({ board: board({ recent: many }) }));
+      expect(listLines(app.frame()).join("\n")).not.toContain("number 0");
+
+      // Moving the Selection still scrolls the list to it, which is what the effect is
+      // for. Down, not up: the Selection is on the first row already, so `up` moves
+      // nothing and correctly scrolls nothing. Where exactly the region lands is
+      // opentui's business — that the arrows still reach the Selection is this test's.
+      app.mockInput.pressArrow("down");
+      yield* app.flush;
+      expect(app.said()).toContain("Review · number 1");
+      expect(listLines(app.frame()).join("\n")).not.toBe(scrolled);
+    }),
+  ));
+
+test("a run with a plan shows it in the panel, and one without shows no Plan section", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const detail = runDetail({
+        plan: {
+          spec: { _tag: "Text", text: "# Control Plane\n\nOne screen.\n", truncated: false },
+          tickets: [
+            { file: "01-first.md", title: "Agent now line", done: true },
+            { file: "02-second.md", title: "Needs you first", done: false },
+          ],
+        },
+      });
+      const app = yield* mount(appState({ board: BOARD, detail }), 120, 34);
+      yield* app.click(4, app.lineOf("Review · worktree"));
+
+      const said = app.said();
+      expect(said).toContain("Plan");
+      expect(said).toContain("One screen.");
+      // Each ticket by its title, marked with whether its boxes are all checked.
+      expect(said).toContain("✓ Agent now line");
+      expect(said).toContain("· Needs you first");
+
+      // A run with no plan behind it has no section at all rather than an empty one.
+      const bare = yield* mount(appState({ board: BOARD, detail: runDetail() }), 120, 34);
+      yield* bare.click(4, bare.lineOf("Review · worktree"));
+      expect(bare.said()).not.toContain("One screen.");
+    }),
+  ));
+
+test("? opens a list of every key, and any key closes it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ board: BOARD }), 100, 34);
+
+      app.mockInput.pressKey("?");
+      yield* app.flush;
+
+      const open = app.said();
+      // Every key the app handles, with what it does — including the ones the footer
+      // can never offer because they depend on what is in the panel.
+      for (const entry of ALL_KEYS) {
+        expect(open).toContain(entry.key);
+        expect(open).toContain(entry.what);
+      }
+      // Over the board, not beside it: the list is what is on screen.
+      expect(open).not.toContain("Implement · add-a-picker");
+
+      // Any key, and it is a key the board would otherwise have acted on.
+      app.mockInput.pressKey("k");
+      yield* app.flush;
+      expect(app.frame()).toContain("Implement · add-a-picker");
+      expect(app.acted()).toEqual([]);
+    }),
+  ));
+
+test("the footer is one line of keys plus the status line", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ board: BOARD }));
+      const lines = app.frame().split("\n");
+
+      // The keys the Selection can be asked for, then the three globals and no more.
+      const keys = lines.findIndex((l) => l.includes("? keys"));
+      expect(keys).toBeGreaterThan(0);
+      expect(lines[keys]!).toContain("q close");
+      // The line under it is the status, not more keys.
+      expect(lines[keys + 1]!).toContain(NOTE);
+      expect(lines[keys + 1]!).not.toContain("run");
+    }),
+  ));
+
+test("the detail panel scrolls by key, resets on a new Selection, and shows a scrollbar", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const detail = longDetail();
+      const app = yield* mount(appState({ board: BOARD, detail }), 120, 24);
+      yield* app.click(4, app.lineOf("Review · worktree"));
+      expect(app.said()).toContain("line 0");
+
+      // A page down goes to the panel, not to the list: the Selection stays put.
+      app.mockInput.pressKey("\x1b[6~");
+      yield* app.flush;
+      expect(app.said()).not.toContain("line 0");
+      const marked = listLines(app.frame()).filter((line) => line.includes("❯"));
+      expect(marked[0]!).toContain("Review · worktree");
+
+      // A line at a time, and back up a page.
+      const paged = app.said();
+      app.mockInput.pressArrow("up", { shift: true });
+      yield* app.flush;
+      expect(app.said()).not.toBe(paged);
+
+      app.mockInput.pressKey("\x1b[5~");
+      yield* app.flush;
+      expect(app.said()).toContain("line 0");
+
+      // Somewhere to scroll means a scrollbar, so the panel says it has more in it.
+      // Asserted against a board with nothing to scroll rather than on a glyph list:
+      // `│` is drawn by every bordered region, so matching it proved nothing at all.
+      const bar = (frame: string) => (frame.match(/[▲▼█▄▀▌▐]/g) ?? []).length;
+      const flat = yield* mount(appState({ board: BOARD, detail: runDetail() }), 120, 24);
+      yield* flat.click(4, flat.lineOf("Review · worktree"));
+      expect(bar(app.frame())).toBeGreaterThan(bar(flat.frame()));
+
+      // Another Selection starts at the top: how far the last one had been scrolled
+      // says nothing about this one.
+      app.mockInput.pressKey("\x1b[6~");
+      yield* app.flush;
+      expect(app.said()).not.toContain("line 0");
+      yield* app.click(4, app.lineOf("Implement · add-a-picker"));
+      yield* app.setState(appState({ board: BOARD, detail: { ...detail, id: "r1" } }));
+      expect(app.said()).toContain("line 0");
+    }),
+  ));
+
+test("the wheel scrolls whichever region is under the pointer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const many = Array.from({ length: 40 }, (_, i) => run(`r${i}`, `Review · number ${i}`));
+      const detail = longDetail();
+      const app = yield* mount(
+        appState({ board: board({ recent: many }), detail: { ...detail, id: "r0" } }),
+        120,
+        24,
+      );
+
+      // Over the list: the list scrolls and the panel does not.
+      expect(app.frame()).toContain("number 0");
+      for (const _ of Array.from({ length: 6 })) yield* app.scroll(10, 6, "down");
+      expect(listLines(app.frame()).join("\n")).not.toContain("number 0");
+      expect(app.said()).toContain("line 0");
+
+      // Over the panel: the panel scrolls.
+      for (const _ of Array.from({ length: 6 })) yield* app.scroll(100, 6, "down");
+      expect(app.said()).not.toContain("line 0");
+    }),
+  ));
+
+test("the panel scrolls in the overlay placement too", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const detail = longDetail();
+      const app = yield* mount(appState({ board: BOARD, detail }), 60, 32);
+      yield* app.click(4, app.lineOf("Review · worktree"));
+      // The overlay is `flexShrink` under a list that grows, so how many rows it gets is
+      // the layout's business: what this asserts is that the keys reach it there too.
+      const before = app.frame();
+      expect(before).toContain("Review");
+
+      app.mockInput.pressKey("\x1b[6~");
+      yield* app.flush;
+      expect(app.frame()).not.toBe(before);
+      expect(app.frame()).toContain("line ");
+    }),
+  ));
+
+test("the help overlay lists every key in a pane the size of a real one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // 24 rows is a standard terminal and the floor for a split; the list is longer
+      // than that, so a single column of one key per row could not show them all.
+      const app = yield* mount(appState({ board: BOARD }), 100, 24);
+      app.mockInput.pressKey("?");
+      yield* app.flush;
+
+      // On `frame()`, not `said()`, and by description rather than by key: `said()`
+      // strips the border characters, so a row drawn over the bottom border reads as a
+      // normal row — which is exactly how a clipped list looked compliant — and a
+      // single-character key like `p` matches anywhere in the frame anyway.
+      const frame = app.frame();
+      const missing = ALL_KEYS.filter((entry) => !frame.includes(entry.what));
+      expect(missing.map((entry) => entry.key)).toEqual([]);
+      // The hint is the last line of content, so it is the first thing an overflow eats.
+      expect(frame).toContain("any key closes");
+      // And nothing is drawn on top of the frame: the last row is border, all of it.
+      const rows = frame.split("\n").filter((line) => line !== "");
+      expect(rows.at(-1)!.replace(/[└┘─]/g, "")).toBe("");
+
+      // A pane split beside an editor is about sixty columns, and every key has to be
+      // on screen there too — the meanings clip, the keys do not.
+      const narrow = yield* mount(appState({ board: BOARD }), 60, 24);
+      narrow.mockInput.pressKey("?");
+      yield* narrow.flush;
+      const tight = narrow.frame();
+      for (const entry of ALL_KEYS) expect(tight).toContain(` ${entry.key} `);
     }),
   ));

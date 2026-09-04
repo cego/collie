@@ -362,6 +362,7 @@ effectTest("answering through the board and through the CLI leave the same trace
     target: null,
     fixable: false,
     choice: menu,
+    needsYou: false,
   };
   yield* answerKey(row, { index: 0, typed: "" }, "\r");
   expect((yield* cli(["run", "answer", command.id, "yes"])).exit).toBe(0);
@@ -404,6 +405,7 @@ effectTest("stopping through the board and through the CLI leave the same trace"
     ...scope,
     herdr: new Herdr(pluginEnv()),
     stateDir: pluginEnv().stateDir,
+    configDir: pluginEnv().configDir,
     pluginRoot: pluginEnv().pluginRoot,
   };
   // Only the fields the board's stop reads; the rest is rendering.
@@ -419,6 +421,7 @@ effectTest("stopping through the board and through the CLI leave the same trace"
         target: null,
         fixable: false,
         choice: null,
+        needsYou: false,
       },
     ],
   };

@@ -120,7 +120,13 @@ const liveImplementer = Effect.fn("sessionTest.liveImplementer")(function* (
   // The fake `agent list` answers from the agents it has been asked to start, so the
   // rig is told about this one the same way.
   yield* rig.addAgent(agent, paneId);
-  return { name: agent, paneId, workspaceId: env.workspaceId, status: "idle" } satisfies AgentInfo;
+  return {
+    name: agent,
+    paneId,
+    workspaceId: env.workspaceId,
+    status: "idle",
+    title: null,
+  } satisfies AgentInfo;
 });
 
 test("an agent whose run failed no longer takes hand-offs", () =>
@@ -539,7 +545,13 @@ test("another workspace's implementer is not this Session's", () =>
       expect(yield* readRegistry(file)).toEqual([]);
 
       yield* registerAgent(file, { ...entry, workspaceId: env.workspaceId });
-      const alive: AgentInfo = { name: "impl-1", paneId: "1-9", workspaceId: "9", status: "idle" };
+      const alive: AgentInfo = {
+        name: "impl-1",
+        paneId: "1-9",
+        workspaceId: "9",
+        status: "idle",
+        title: null,
+      };
       expect(liveEntries([...(yield* readRegistry(file))], [alive])).toEqual([]);
       expect(
         liveEntries([...(yield* readRegistry(file))], [{ ...alive, workspaceId: env.workspaceId }]),

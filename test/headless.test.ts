@@ -382,6 +382,7 @@ effectTest("the board's keys answer the question, and Esc leaves the run open", 
     target: null,
     fixable: false,
     choice: menu,
+    needsYou: false,
   };
   const start: Asking = { index: 0, typed: "" };
 
@@ -525,6 +526,7 @@ effectTest(
         herdr: new FakeHerdr(env),
         ...scopeFor(env, env.cwd),
         stateDir: env.stateDir,
+        configDir: env.configDir,
         paneId: "1-1",
         pluginRoot: env.pluginRoot,
       },
@@ -809,6 +811,7 @@ effectTest(
       target: null,
       fixable: false,
       choice: null,
+      needsYou: false,
     };
     const view: WorkspaceView = {
       repo: "r",
@@ -827,6 +830,7 @@ effectTest(
         herdr: new FakeHerdr(env),
         ...scopeFor(env, env.cwd),
         stateDir: env.stateDir,
+        configDir: env.configDir,
         paneId: "1-1",
         pluginRoot: env.pluginRoot,
       },

@@ -14,9 +14,12 @@ import {
   scopeFor,
 } from "../src/registry";
 import { buildView, renderWorkspace } from "../src/workspace";
+import { boardFlow } from "../src/flows";
+import { Herdr } from "../src/herdr";
 import { RunStore } from "../src/run";
 import type { AgentInfo } from "../src/herdr";
 import { runEffect } from "./support/effect";
+import { DateTime } from "effect";
 import { FakeBin } from "./support/bin";
 
 let rig: Rig;
@@ -79,8 +82,13 @@ function scope(env = rig.pluginEnv()) {
   return scopeFor(env, env.cwd);
 }
 
-function live(name: string, paneId: string, status: AgentInfo["status"] = "idle"): AgentInfo {
-  return { name, paneId, workspaceId: rig.pluginEnv().workspaceId, status };
+function live(
+  name: string,
+  paneId: string,
+  status: AgentInfo["status"] = "idle",
+  title: string | null = null,
+): AgentInfo {
+  return { name, paneId, workspaceId: rig.pluginEnv().workspaceId, status, title };
 }
 
 /** A run in this Session, with whatever the test needs on top. */
@@ -129,9 +137,16 @@ function variant(agent: string, paneId: string, label: string, model = "sonnet")
 }
 
 /** The board as the Control Plane pane would build it, for a given set of live agents. */
-function board(alive: AgentInfo[], now?: number) {
+function board(alive: AgentInfo[], now?: number, quietMs?: number) {
   const env = rig.pluginEnv();
-  return buildView({ ...scope(env), stateDir: env.stateDir, workspaceLabel: "test", alive, now });
+  return buildView({
+    ...scope(env),
+    stateDir: env.stateDir,
+    workspaceLabel: "test",
+    alive,
+    now,
+    quietMs,
+  });
 }
 
 /** The board as the pane builds it, with `git` answering for the installation. */
@@ -568,10 +583,19 @@ effectTest("the board lists this Session's agents and runs, and nobody else's", 
     at: "t",
   });
 
-  const view = yield* board([live("impl-1", "1-4", "working")]);
+  const view = yield* board([live("impl-1", "1-4", "working", "Simplify cego.collie plugin")]);
 
+  // What the agent is doing comes off the same `agent list` the statuses do; the board
+  // asks herdr nothing extra for it.
   expect(view.agents).toEqual([
-    { key: "1", name: "Implementer", agent: "impl-1", status: "working", run: running.id },
+    {
+      key: "1",
+      name: "Implementer",
+      agent: "impl-1",
+      status: "working",
+      run: running.id,
+      now: "Simplify cego.collie plugin",
+    },
   ]);
   expect(view.active.map((r) => r.title)).toEqual(["Implement · add-a-picker"]);
   expect(view.active[0]!.detail).toBe("build · iteration 1/5");
@@ -581,6 +605,7 @@ effectTest("the board lists this Session's agents and runs, and nobody else's", 
   const text = renderWorkspace(view, "sent the review");
   expect(text.split("\n")[0]).toBe(`${COLLIE_TAB} — ${rig.projectDir.split("/").at(-1)}`);
   expect(text).toContain("1  Implementer");
+  expect(text).toContain("Simplify cego.collie plugin");
   expect(text).toContain("⚙ Implement · add-a-picker");
   expect(text).toContain("⚠ Review · worktree");
   expect(text).not.toContain("not-mine");
@@ -711,4 +736,71 @@ effectTest("a register that will not decode reads as empty rather than failing",
     yield* fs.writeFileString(path, raw);
     expect(yield* readRegistry(path)).toEqual([]);
   }
+});
+
+/** A fixed clock: durations are the point, so they must not depend on the wall. */
+const NOW = Date.parse("2026-09-02T12:00:00.000Z");
+const FIXED_ISO = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
+
+test("an active row says how long its step has been going, and when the run went quiet", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* seed({ workflow: "implement", primaryInput: "x", stepIds: ["build"] });
+      const step = run.record.steps[0]!;
+      step.status = "running";
+      step.started_at = FIXED_ISO(NOW - 12 * 60_000);
+      // A live agent of its own, so the quiet directory does not make it abandoned:
+      // that is a different judgement, and this one is about a run still working.
+      step.variants.push(variant("impl-1", "1-4", "implement-x/build"));
+      yield* run.save();
+      // Everything in the run dir written twelve minutes ago, which is what the board
+      // reads as "nothing has happened here".
+      const quietSince = DateTime.toDateUtc(DateTime.makeUnsafe(NOW - 9 * 60_000));
+      for (const name of yield* fs.readDirectory(run.dir)) {
+        yield* fs.utimes(`${run.dir}/${name}`, quietSince, quietSince);
+      }
+
+      const alive = [live("impl-1", "1-4", "working")];
+      const loud = yield* board(alive, NOW, 30 * 60_000);
+      expect(loud.active[0]!.detail).toBe("build · 12m");
+
+      // Over the threshold: the row says so, and says how long.
+      const quiet = yield* board(alive, NOW, 5 * 60_000);
+      expect(quiet.active[0]!.detail).toBe("build · 12m · quiet for 9m");
+    }),
+  ));
+
+effectTest("the board key opens the Collie tab where the workspace has none", function* () {
+  const env = rig.pluginEnv();
+
+  expect(yield* boardFlow(new Herdr(env), env)).toBe(0);
+
+  expect(yield* opened("workspace")).toHaveLength(1);
+  const cmds = yield* rig.cmds();
+  expect(cmds).toContain("tab rename");
+  // Focused, and put first the way a run does: the board is what `prefix+1` means.
+  expect(cmds).toContain("tab.move");
+  expect(cmds).toContain("tab focus");
+});
+
+// The tab is seeded rather than opened by a first call: two rounds of this is a dozen
+// fake-herdr subprocesses in one test, which is what made it time out under load.
+effectTest("the board key focuses the tab that is already there", function* () {
+  const env = rig.pluginEnv();
+  yield* rig.addTab(COLLIE_TAB, COLLIE_TAB);
+
+  expect(yield* boardFlow(new Herdr(env), env)).toBe(0);
+
+  const cmds = yield* rig.cmds();
+  expect(cmds).toContain("tab focus");
+  // No second Collie tab: the label is the identity, so the one there is the one used.
+  expect(cmds).not.toContain("plugin pane");
+});
+
+effectTest("the board key says so where there is no workspace to open one in", function* () {
+  const env = { ...rig.pluginEnv(), workspaceId: null };
+
+  expect(yield* boardFlow(new Herdr(env), env)).toBe(1);
+  expect(yield* rig.cmds()).not.toContain("plugin pane");
 });

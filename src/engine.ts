@@ -222,7 +222,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
   yield* run.save();
 
   // Before anything opens: this is where the run's own pane and its menus live.
-  ctx.workspaceTabId = yield* ensureWorkspaceTab(o);
+  ctx.workspaceTabId = yield* ensureWorkspaceTab(tabFor(o));
   ctx.launchPane = yield* reusableLaunchPane(o).pipe(
     Effect.catch((e) => o.run.log(`launch pane: ${reason(e)}`).pipe(Effect.as(null))),
   );
@@ -260,7 +260,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     if ((step.requires?.length ?? 0) > 0) {
       const unmet = yield* unmetRequirement(o, step.requires!);
       if (unmet) {
-        record.status = "done";
+        yield* run.mark(step.id, "done");
         record.note = `skipped: ${unmet}`;
         yield* run.save();
         yield* out(`◦ ${step.id} — skipped: ${unmet}`);
@@ -281,7 +281,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     }
 
     if ((step.choices?.length ?? 0) > 0) {
-      record.status = "running";
+      yield* run.mark(step.id, "running");
       record.iteration = run.record.iteration;
       record.note = null;
       record.variants = [];
@@ -289,7 +289,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       yield* out(`▶ ${step.id} — over to you`);
       const choiceResult = yield* runChoiceStep(o, step, ctx).pipe(Effect.result);
       if (Result.isFailure(choiceResult)) {
-        record.status = "failed";
+        yield* run.mark(step.id, "failed");
         record.note = herdrFailureReason(choiceResult.failure);
         yield* run.save();
         yield* out(`✗ ${step.id} — ${record.note}`);
@@ -297,7 +297,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       }
       const result: ChoiceResult = choiceResult.success;
       ctx.ran.add(step.id);
-      record.status = result.status;
+      yield* run.mark(step.id, result.status);
       record.note = result.note;
       yield* run.save();
       if (result.status !== "done") {
@@ -318,7 +318,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
 
     const variants = stepVariants(step, o.defaults);
     const keys = variantKeys(variants);
-    record.status = "running";
+    yield* run.mark(step.id, "running");
     record.iteration = run.record.iteration;
     // A step that failed and is being tried again must not keep the old note.
     record.note = null;
@@ -329,7 +329,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
 
     const stepResult = yield* runStep(o, step, variants, keys, ctx, extras).pipe(Effect.result);
     if (Result.isFailure(stepResult)) {
-      record.status = "failed";
+      yield* run.mark(step.id, "failed");
       record.note = herdrFailureReason(stepResult.failure);
       yield* run.save();
       yield* out(`✗ ${step.id} — ${record.note}`);
@@ -342,7 +342,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     ctx.outputs.set(step.id, outcomes);
 
     const blocked = outcomes.filter((v) => v.record.status !== "done");
-    record.status = blocked.length > 0 ? "blocked" : "done";
+    yield* run.mark(step.id, blocked.length > 0 ? "blocked" : "done");
     yield* run.save();
 
     for (const v of outcomes) {
@@ -396,9 +396,8 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       if (verdict.clean) {
         yield* out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
         for (const s of wf.steps.slice(index + 1, gate.at + 1)) {
-          const rec = run.step(s.id);
-          rec.status = "done";
-          rec.note = "skipped: reviews clean";
+          yield* run.mark(s.id, "done");
+          run.step(s.id).note = "skipped: reviews clean";
         }
         yield* run.save();
         index = gate.at + 1;
@@ -412,9 +411,8 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       if (run.record.iteration < mine.max) {
         run.record.iteration += 1;
         for (const s of wf.steps.slice(mine.back, index + 1)) {
-          const rec = run.step(s.id);
-          rec.status = "pending";
-          rec.note = null;
+          yield* run.mark(s.id, "pending");
+          run.step(s.id).note = null;
         }
         yield* run.save();
         yield* out(
@@ -1155,12 +1153,40 @@ const placeTab = Effect.fn("Engine.placeTab")(function* (
 });
 
 /**
+ * What finding or opening the Session's tab needs. Deliberately not `EngineOptions`:
+ * the board's own key opens the same tab with no Run behind it, and a second copy of
+ * this logic is how the two would drift into opening two Collie tabs.
+ */
+export interface WorkspaceTab {
+  herdr: Herdr;
+  workspaceId: string | null;
+  /** The directory the view pane runs in. */
+  cwd: string;
+  /** Where a failure that must not stop the caller is written. */
+  log: (
+    line: string,
+  ) => Effect.Effect<void, Error | PlatformError, FileSystem.FileSystem | Path.Path>;
+}
+
+/** The tab facts a Run carries, for the engine's own calls. */
+function tabFor(o: EngineOptions): WorkspaceTab {
+  return {
+    herdr: o.herdr,
+    workspaceId: o.env.workspaceId,
+    cwd: o.run.record.cwd,
+    log: (line) => o.run.log(line),
+  };
+}
+
+/**
  * The Session's own tab, found by its label and created when it is not there, and
  * moved to the front of the workspace either way. It is the only pane this plugin
  * keeps open in a workspace: the driver has no pane, and every question it asks is
  * rendered there. Returns the tab id, or null when there is no workspace to own one.
  */
-const ensureWorkspaceTab = Effect.fn("Engine.ensureWorkspaceTab")(function* (o: EngineOptions) {
+export const ensureWorkspaceTab = Effect.fn("Engine.ensureWorkspaceTab")(function* (
+  o: WorkspaceTab,
+) {
   return yield* Effect.gen(function* () {
     const view = yield* findOrOpenView(o);
     if (!view) return null;
@@ -1168,16 +1194,16 @@ const ensureWorkspaceTab = Effect.fn("Engine.ensureWorkspaceTab")(function* (o: 
     // and a tab that drifts down the list is one the human stops looking at.
     yield* o.herdr
       .tabMove(view.tabId, 0)
-      .pipe(Effect.catch((e) => o.run.log(`workspace tab order: ${reason(e)}`)));
+      .pipe(Effect.catch((e) => o.log(`workspace tab order: ${reason(e)}`)));
     return view.tabId;
   }).pipe(
     // Without the tab the run still runs; it just has nowhere to ask.
-    Effect.catch((e) => o.run.log(`workspace tab: ${reason(e)}`).pipe(Effect.as(null))),
+    Effect.catch((e) => o.log(`workspace tab: ${reason(e)}`).pipe(Effect.as(null))),
   );
 });
 
-const findOrOpenView = Effect.fn("Engine.findOrOpenView")(function* (o: EngineOptions) {
-  if (!o.env.workspaceId) return null;
+const findOrOpenView = Effect.fn("Engine.findOrOpenView")(function* (o: WorkspaceTab) {
+  if (!o.workspaceId) return null;
   const open = Effect.fn("Engine.openWorkspaceView")(function* (
     placement: "tab" | "split",
     targetPaneId?: string,
@@ -1188,9 +1214,9 @@ const findOrOpenView = Effect.fn("Engine.findOrOpenView")(function* (o: EngineOp
       targetPaneId,
       direction: placement === "split" ? "down" : undefined,
       focus: false,
-      workspaceId: o.env.workspaceId,
-      cwd: o.run.record.cwd,
-      env: { COLLIE_CWD: o.run.record.cwd },
+      workspaceId: o.workspaceId,
+      cwd: o.cwd,
+      env: { COLLIE_CWD: o.cwd },
     });
     if (!opened.paneId) return null;
     yield* o.herdr.paneRename(opened.paneId, COLLIE_TAB);

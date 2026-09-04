@@ -258,6 +258,11 @@ test("plan runs one step in a tab of its own and records the run", () =>
       expect(record.input_sources.goal).toBe("asked");
       expect(record.steps).toHaveLength(1);
       expect(record.steps[0].status).toBe("done");
+      // Both ends of the step, so the board can say how long it took and the panel can
+      // say how long a running one has been going.
+      expect(Date.parse(record.steps[0].started_at)).toBeLessThanOrEqual(
+        Date.parse(record.steps[0].finished_at),
+      );
       expect(record.steps[0].variants[0]).toMatchObject({
         harness: "claude",
         model: "opus",

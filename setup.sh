@@ -63,6 +63,8 @@ mkdir -p "$(dirname "$CONFIG")"
 add_binding "prefix+f"       pick   "Run a workflow"
 add_binding "prefix+u"       resume "Resume a workflow run"
 add_binding "prefix+shift+f" fork   "Fork a workflow or persona"
+# `prefix+c` is herdr's own `new_tab`, so the board takes the shifted one.
+add_binding "prefix+shift+c" board  "Open the Control Plane"
 
 if herdr status server 2>/dev/null | grep -q "status: running"; then
   say "Reloading herdr config"
@@ -72,7 +74,8 @@ else
 fi
 
 say "Done."
-say "Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f forks."
+say "Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f forks,"
+say "and prefix+shift+c opens this workspace's Control Plane."
 say "Outside it, the collie skill lets an agent drive runs from the CLI."
 say "The first run in a workspace opens a '🐕 Collie' tab as its first tab (prefix+1):"
 say "live agents, running and finished runs, and every menu a workflow asks you to answer."

@@ -21,17 +21,19 @@ logged in to the host, the install borrows that login and you need nothing else;
 set `COLLIE_TOKEN`, or let a machine with bun build from source. See
 [Using Collie](docs/using.md#install) for the detail.
 
-## Three keys
+## Four keys
 
 | Key              | What it does                               |
 | ---------------- | ------------------------------------------ |
 | `prefix+f`       | Run a workflow                             |
 | `prefix+u`       | Resume a run with unfinished steps         |
 | `prefix+shift+f` | Fork a workflow or persona into your layer |
+| `prefix+shift+c` | Open this workspace's Control Plane        |
 
 `prefix` is `ctrl+b` by default. The first run in a workspace opens a **Control Plane** tab
 as that workspace's first tab (`prefix+1`): live agents, running and finished runs, and
-every question a run is waiting on.
+every question a run is waiting on. `prefix+shift+c` reaches it from any pane, and opens
+it when the workspace has none yet.
 
 ## The workflows
 

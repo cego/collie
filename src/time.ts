@@ -15,6 +15,42 @@ const UNITS = [
 ] as const;
 
 /**
+ * How long something took, in the coarsest unit that still says it: `45s`, `12m`,
+ * `1h03m`. Two units past an hour, because "63m" is a number to divide in your head.
+ * Milliseconds rather than two timestamps, so a caller with only one end of it — a step
+ * still running — asks the same question the same way.
+ *
+ * A negative span is `0s`: the two ends come from different clocks (a step's own stamp
+ * against this machine's now), and a duration counting backwards is worse than a zero.
+ */
+export function took(ms: number): string {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/**
+ * How long a step has been going, or took: its own two stamps against this clock.
+ * `null` for one that was skipped rather than run — it has no start — and for a Run
+ * recorded before the timings were kept.
+ *
+ * Structurally typed rather than importing `StepRecord`, so the one module that answers
+ * "how long" for every caller stays free of the record it happens to be asked about.
+ */
+export function stepDuration(
+  step: { started_at: string | null; finished_at: string | null },
+  nowMs: number,
+): string | null {
+  if (step.started_at === null) return null;
+  const from = Date.parse(step.started_at);
+  if (Number.isNaN(from)) return null;
+  const to = step.finished_at === null ? nowMs : Date.parse(step.finished_at);
+  return took((Number.isNaN(to) ? nowMs : to) - from);
+}
+
+/**
  * How long ago, in the coarsest unit that still says something. A menu line and a
  * prompt both want "2 days ago", not a timestamp to subtract in your head.
  */

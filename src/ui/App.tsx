@@ -8,13 +8,17 @@ import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { onBlur, onFocus, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
   actionsFor,
-  answerFor,
+  ALL_KEYS,
   clampSelection,
   detailFor,
   emptyStateOf,
+  footerKeys,
   keyboardOn,
+  keyIntent,
   matching,
+  needsYouStatus,
   optionWindow,
+  selectableRows,
   statusColour,
   viewRows,
   VIEWS,
@@ -27,6 +31,7 @@ import {
   type ViewName,
 } from "./state";
 import { commitsBehind } from "../workspace";
+import { truncated } from "../views";
 import { Detail } from "./detail";
 import { usePasteInto } from "./paste";
 import { Flow } from "./Flow";
@@ -48,8 +53,11 @@ const DETAIL_COLUMN_MIN = 72;
  */
 const ACTION_ROWS = 2;
 
-/** Rows the key list gets: it runs to two lines at the widths a Collie tab is opened at. */
-const KEY_ROWS = 2;
+/**
+ * Rows the key list gets. One: the line is the panel's own keys and three globals, and
+ * every other key lives behind `?` — which is what made the important ones readable.
+ */
+const KEY_ROWS = 1;
 
 /**
  * The footer's own rows — its border, its buttons, its keys and what the tab last said.
@@ -63,6 +71,9 @@ const QUESTION_CHROME = 4;
 
 const DIM = "#8a8a8a";
 const ACCENT = "#7aa2f7";
+/** An opaque ground for anything drawn over the list. Named colours and "default" are
+ * not colours opentui parses: it falls through to magenta. */
+const GROUND = "#1a1b26";
 
 export interface AppProps {
   state: () => AppState;
@@ -84,6 +95,8 @@ export function App(props: AppProps) {
   const [typing, setTyping] = createSignal(false);
   const [asking, setAsking] = createSignal<Asking>({ index: 0, typed: "" });
   const [editingKey, setEditing] = createSignal<{ key: string; value: string } | null>(null);
+  const [helping, setHelping] = createSignal(false);
+  const [panel, setPanel] = createSignal<ScrollBoxRenderable>();
 
   /**
    * Mouse reporting only while the pane has focus. herdr is a multiplexer: with mouse
@@ -101,12 +114,14 @@ export function App(props: AppProps) {
   // `matching`, not a plain filter: the rows are nested by the time they get here, so a
   // run whose agent matched has to come with it and the board's order has to survive.
   const rows = createMemo(() => matching(all(), filter()));
+  // What the cursor may rest on, which is every row but the group headers.
+  const selectable = createMemo(() => selectableRows(rows()));
 
   // Clamped against the list as it was, so a run finishing under the cursor leaves the
   // row that took its place selected rather than jumping to the top.
   let previous: Row[] = [];
   createEffect(() => {
-    const next = rows();
+    const next = selectable();
     setSelected(clampSelection(untrack(selected), previous, next));
     previous = next;
   });
@@ -122,13 +137,22 @@ export function App(props: AppProps) {
     props.dispatch({ _tag: "Select", id });
   });
 
-  const current = (): Row | null => rows().find((r) => r.id === selected()) ?? null;
+  const current = (): Row | null => selectable().find((r) => r.id === selected()) ?? null;
+
+  // From the top for a new Selection: how far the last one had been scrolled says
+  // nothing about this one, and a long review left the next row's panel opened halfway
+  // down somebody else's.
+  createEffect(() => {
+    selected();
+    panel()?.scrollTo(0);
+  });
   const detail = () => detailFor(props.state(), current());
-  /** Whether the review on screen was cut short, which is the only thing `m` can act on. */
-  const cutShort = () => {
-    const review = detail()?.review;
-    return review?._tag === "Text" && review.truncated;
-  };
+  /**
+   * Whether anything on screen was cut short, which is the only thing `m` can act on.
+   * The review and the plan's spec are read at the same cap and paged by the same key,
+   * so either being short is what makes the key worth offering.
+   */
+  const cutShort = () => [detail()?.review, detail()?.plan?.spec].some(truncated);
   /**
    * The detail panel's own keys. They act on the selected Run's detail, so they are
    * offered only where there is one and only where there is something in it to act on —
@@ -137,14 +161,19 @@ export function App(props: AppProps) {
    */
   const panelKeys = () => [
     ...(current()?.runId ? ["t log tail"] : []),
-    ...(cutShort() ? ["m more review"] : []),
+    ...(cutShort() ? ["m read more"] : []),
   ];
   // The question belongs to the selected run, so a second waiting run is answerable
   // by selecting it — the board used to answer only the first one asking.
   const question = () => current()?.choice ?? null;
+  /** The merge request URL on screen, which is the only thing `c` can copy. */
+  const mrUrl = () => {
+    const mr = detail()?.mr;
+    return mr?._tag === "Details" ? mr.url : null;
+  };
 
   const move = (by: number) => {
-    const list = rows();
+    const list = selectable();
     if (list.length === 0) return;
     const at = list.findIndex((r) => r.id === selected());
     setSelected(list[Math.min(list.length - 1, Math.max(0, at + by))]!.id);
@@ -205,103 +234,71 @@ export function App(props: AppProps) {
     if (at._tag === "Setting") setEditing({ ...at.setting, value: append(at.setting.value) });
   });
 
+  /**
+   * One keypress, as one decision made elsewhere. `keyboardOn` above says who has the
+   * keyboard; `keyIntent` says what this key means to them; this performs it. Which key
+   * does what is a unit test over there rather than the order of early returns in here,
+   * and the two intents that are genuinely a renderer's job — scrolling the panel,
+   * putting a URL on the clipboard — are the only reason it returns intents at all.
+   */
   useKeyboard((key) => {
-    const at = keyboard();
-    // A flow asking a question owns the keyboard: `Flow` has its own handler, and a key
-    // that also moved the Selection underneath would act on a board nobody is looking at.
-    if (at._tag === "Flow") return;
-    if (at._tag === "Choice") {
-      const next = answerFor(at.choice, asking(), key.sequence);
-      setAsking(next.asking);
-      if (next.value !== null) answer(next.value);
-      return;
-    }
-    if (at._tag === "Filter") {
-      if (key.name === "escape") {
-        setFilter("");
-        return setTyping(false);
-      }
-      if (key.name === "return") return setTyping(false);
-      if (key.name === "backspace") return setFilter(filter().slice(0, -1));
-      if (/^[\x20-\x7e]$/.test(key.sequence)) return setFilter(filter() + key.sequence);
-      return;
-    }
-    // A Settings row being given a new value: every key belongs to that until it is
-    // sent or abandoned, the same rule a pending question follows.
-    if (at._tag === "Setting") {
-      const editing = at.setting;
-      if (key.name === "escape") return setEditing(null);
-      if (key.name === "return") {
-        props.dispatch({ _tag: "SetDefault", key: editing.key, value: editing.value });
-        return setEditing(null);
-      }
-      if (key.name === "backspace") {
-        return setEditing({ ...editing, value: editing.value.slice(0, -1) });
-      }
-      if (/^[\x20-\x7e]$/.test(key.sequence)) {
-        return setEditing({ ...editing, value: editing.value + key.sequence });
-      }
-      return;
-    }
-    // Arrows, and not `hjkl`: `k` is the stop key the board has always had and the one
-    // the footer offers, and a destructive key that sometimes means "up" instead is
-    // worse than no vim binding.
-    if (key.name === "up") return move(-1);
-    if (key.name === "down") return move(1);
-    if (key.name === "tab") return showView(key.shift ? -1 : 1);
-    if (key.sequence === "/") return setTyping(true);
-    // Re-reading what is on screen, and the one merge request behind it: a cached read
-    // is what makes selecting cheap, so there has to be a way to say "ask again".
-    if (key.sequence === "R") return props.dispatch({ _tag: "Refresh" });
-    // The log, in the panel: `l` still opens it in a pane, because grepping and copying
-    // belong in one.
-    if (key.sequence === "t") {
-      if (current()?.runId) props.dispatch({ _tag: "ToggleTail" });
-      return;
-    }
-    // The rest of a review the panel cut short, a cap at a time: the log tail says
-    // nothing about review.md, so paging it is the only way to read it here.
-    if (key.sequence === "m") {
-      if (cutShort()) props.dispatch({ _tag: "MoreReview" });
-      return;
-    }
-    const mr = detail()?.mr;
-    if (key.sequence === "c" && mr?._tag === "Details") {
-      renderer.copyToClipboardOSC52(mr.url);
-      return;
-    }
-    if (key.name === "q" || (key.ctrl && key.name === "c")) {
-      return props.dispatch({ _tag: "Quit" });
-    }
-    // A digit focuses that agent wherever the Selection is: those keys are the board's
-    // shortcut into a pane, not an action on a row.
-    if (/^[1-9]$/.test(key.sequence)) {
-      const agent = all().find((r) => r.kind === "agent" && r.key === key.sequence);
-      if (agent?.agent) props.dispatch({ _tag: "FocusAgent", agent: agent.agent });
-      return;
-    }
-    if (key.sequence === "p") return props.dispatch({ _tag: "OpenMode", mode: "pick" });
-    if (key.sequence === "u") return props.dispatch({ _tag: "OpenMode", mode: "resume" });
-    if (key.sequence === "f") return props.dispatch({ _tag: "OpenMode", mode: "fork" });
-    // The Selection, like every other action: `s` on a row hands off that row's review.
-    if (key.sequence === "s") {
-      return props.dispatch({ _tag: "SendReview", runId: current()?.runId ?? null });
-    }
-    const action = actionsFor(current()).find(
-      (a) => a.key === (key.name === "return" ? "\r" : key.sequence),
+    const intent = keyIntent(
+      {
+        on: keyboard(),
+        helping: helping(),
+        asking: asking(),
+        filter: filter(),
+        scrollable: panel() !== undefined,
+        row: current(),
+        rows: all(),
+        cutShort: cutShort(),
+        mrUrl: mrUrl(),
+      },
+      key,
     );
-    if (action) act(action.command);
+    if (intent === null) return;
+    switch (intent._tag) {
+      case "Help":
+        return setHelping(intent.open);
+      case "Answered":
+        setAsking(intent.asking);
+        if (intent.value !== null) answer(intent.value);
+        return;
+      case "Filtering":
+        setFilter(intent.filter);
+        return setTyping(intent.typing);
+      case "Editing":
+        return setEditing(intent.editing);
+      case "Submitted":
+        act(intent.command);
+        return setEditing(null);
+      case "Move":
+        return move(intent.by);
+      case "ShowViewBy":
+        return showView(intent.by);
+      case "Scroll":
+        return panel()?.scrollBy(intent.by, intent.unit === "page" ? "viewport" : "absolute");
+      case "Copy":
+        return renderer.copyToClipboardOSC52(intent.text);
+      case "Do":
+        return act(intent.command);
+    }
   });
 
   const detailAsColumn = () => dimensions().width >= DETAIL_COLUMN_MIN;
 
   return (
     <box style={{ flexDirection: "column", width: "100%", height: "100%" }}>
+      {/* Every key, over everything: the footer offers the Selection's own and three
+          globals, and this is where the rest of them are findable. */}
+      <Show when={helping()}>
+        <Help />
+      </Show>
       {/* The launch flow, inline: the same component the popup pane draws. */}
-      <Show when={flow()}>
+      <Show when={flow() && !helping()}>
         <Flow pending={flow()!} />
       </Show>
-      <Show when={flow() === null}>
+      <Show when={flow() === null && !helping()}>
         <Nav
           view={props.state().view}
           repo={props.state().board.repo}
@@ -310,50 +307,110 @@ export function App(props: AppProps) {
           onNewRun={() => props.dispatch({ _tag: "OpenMode", mode: "pick" })}
         />
       </Show>
-      <box style={{ flexDirection: "row", flexGrow: 1 }}>
-        <List
-          title={VIEWS.find((v) => v.name === props.state().view)!.title}
-          rows={rows()}
-          empty={filter() === "" ? emptyStateOf(props.state().view) : "nothing matches"}
-          selected={selected()}
-          onSelect={setSelected}
-        />
-        <Show when={detailAsColumn()}>
+      <Show when={!helping()}>
+        <box style={{ flexDirection: "row", flexGrow: 1 }}>
+          <List
+            title={VIEWS.find((v) => v.name === props.state().view)!.title}
+            rows={rows()}
+            empty={filter() === "" ? emptyStateOf(props.state().view) : "nothing matches"}
+            selected={selected()}
+            onSelect={setSelected}
+          />
+          <Show when={detailAsColumn()}>
+            <Detail
+              ref={setPanel}
+              row={current()}
+              detail={detail()}
+              cwd={props.state().board.cwd}
+              overlay={false}
+              dispatch={props.dispatch}
+            />
+          </Show>
+        </box>
+        <Show when={!detailAsColumn()}>
           <Detail
+            ref={setPanel}
             row={current()}
             detail={detail()}
             cwd={props.state().board.cwd}
-            overlay={false}
+            overlay
             dispatch={props.dispatch}
           />
         </Show>
-      </box>
-      <Show when={!detailAsColumn()}>
-        <Detail
-          row={current()}
-          detail={detail()}
-          cwd={props.state().board.cwd}
-          overlay
-          dispatch={props.dispatch}
-        />
       </Show>
       {/* Over the bottom of the list, not among its rows and not beside them: a question
           spliced between rows moved every row below the one asking, and a region that
           took rows from the list changed how much of it there was to look at. Drawn on
           top, so the list's own share of the pane is the same whether or not a Run is
           asking anything. */}
-      <Show when={question()}>
+      <Show when={question() && !helping()}>
         <Question choice={question()!} asking={asking()} dispatch={props.dispatch} />
       </Show>
-      <Footer
-        row={current()}
-        dispatch={act}
-        on={keyboard()}
-        panel={panelKeys()}
-        note={props.state().note}
-        filter={filter()}
-        matched={filter() === "" ? null : rows().length}
-      />
+      <Show when={!helping()}>
+        <Footer
+          row={current()}
+          dispatch={act}
+          on={keyboard()}
+          panel={panelKeys()}
+          note={props.state().note}
+          needsYou={needsYouStatus(rows(), selected())}
+          filter={filter()}
+          matched={filter() === "" ? null : rows().length}
+        />
+      </Show>
+    </box>
+  );
+}
+
+/**
+ * Every key, over the whole pane. A full screen rather than a corner, because the point
+ * is to be readable: the footer can only ever offer what the Selection can be asked for,
+ * and this is where a key that is not on that line is findable.
+ */
+/**
+ * How wide the key column is: two spaces of indent, then `PgUp/PgDn` — the longest of
+ * them — and one space before the meaning, so no key ever runs into its own text.
+ */
+const KEY_WIDTH = 12;
+
+/**
+ * One column of the help overlay. The meaning is given an explicit width rather than
+ * left to flex: a `text` only clips at a width it was told, so relying on the column to
+ * shrink had the two of them overdrawing each other at a narrow pane.
+ */
+function HelpColumn(props: { keys: ReadonlyArray<{ key: string; what: string }>; width: number }) {
+  return (
+    <box style={{ flexDirection: "column", width: props.width }}>
+      <For each={props.keys}>
+        {(entry) => (
+          <box style={{ flexDirection: "row", height: 1 }}>
+            <text style={{ width: KEY_WIDTH }} fg={ACCENT}>
+              {`  ${entry.key}`}
+            </text>
+            <text style={{ width: Math.max(0, props.width - KEY_WIDTH), height: 1 }} fg={DIM}>
+              {entry.what}
+            </text>
+          </box>
+        )}
+      </For>
+    </box>
+  );
+}
+
+function Help() {
+  const dimensions = useTerminalDimensions();
+  const half = Math.ceil(ALL_KEYS.length / 2);
+  /** Inside the border, and halved: the two columns share whatever the pane gives. */
+  const column = () => Math.floor((dimensions().width - 2) / 2);
+  return (
+    <box border borderColor={ACCENT} title="Keys" style={{ flexDirection: "column", flexGrow: 1 }}>
+      {/* An explicit height, because the columns are the only thing that says how tall
+          this is, and the hint below has to sit under them rather than beside them. */}
+      <box style={{ flexDirection: "row", height: half }}>
+        <HelpColumn keys={ALL_KEYS.slice(0, half)} width={column()} />
+        <HelpColumn keys={ALL_KEYS.slice(half)} width={column()} />
+      </box>
+      <text fg={DIM}>{"  any key closes this"}</text>
     </box>
   );
 }
@@ -404,12 +461,26 @@ function List(props: {
   onSelect: (id: string) => void;
 }) {
   const [region, setRegion] = createSignal<ScrollBoxRenderable>();
-  // Arrows move the Selection, and a Selection the region has scrolled past is one the
-  // human cannot see acting on keys they can still press. Each row carries its id so
-  // the region can be asked to bring exactly that one back into view.
+  /**
+   * Arrows move the Selection, and a Selection the region has scrolled past is one the
+   * human cannot see acting on keys they can still press. Each row carries its id so
+   * the region can be asked to bring exactly that one back into view.
+   *
+   * Only when the Selection actually moved. The bridge replaces the state every three
+   * seconds and on every filesystem event, and this effect reads the rows too — so it
+   * used to re-scroll on each of those, taking the list back to the Selection while
+   * the human was reading somewhere else with the wheel. The id is recorded only once
+   * it has been scrolled to, so a Selection whose row has not been read yet is still
+   * brought into view when it arrives.
+   */
+  let shown: string | null = null;
   createEffect(() => {
     const id = props.selected;
-    if (id !== null && props.rows.some((r) => r.id === id)) region()?.scrollChildIntoView(id);
+    if (id === shown) return;
+    if (id !== null && props.rows.some((r) => r.id === id)) {
+      shown = id;
+      region()?.scrollChildIntoView(id);
+    }
   });
   return (
     <scrollbox
@@ -521,7 +592,7 @@ function Question(props: {
       border
       borderColor={ACCENT}
       // Opaque, because it is drawn over regions that would otherwise show through it.
-      backgroundColor="default"
+      backgroundColor={GROUND}
       // Out of the flow, over the bottom of the list and anchored above the footer, so
       // nothing else on the pane is a row shorter for it.
       style={{
@@ -566,6 +637,8 @@ function Footer(props: {
   /** The detail panel's keys, which depend on what is in the panel rather than the row. */
   panel: ReadonlyArray<string>;
   note: string | null;
+  /** "2 run(s) need you", where any are and the Selection is not on one. */
+  needsYou: string | null;
   filter: string;
   /** How many rows the filter left, so a narrowed list says how narrow it is. */
   matched: number | null;
@@ -593,21 +666,9 @@ function Footer(props: {
    */
   const own = () => (taken() ? [] : actionsFor(props.row));
   // The keys the footer offers are the ones the Selection can actually be asked for,
-  // plus the board's own; a key with nothing to act on is a lie.
-  const keys = () =>
-    taken() ??
-    [
-      ...props.panel,
-      "Tab view",
-      "1-9 agent",
-      "p run",
-      "u resume",
-      "f fork",
-      "s send review",
-      "/ filter",
-      "R re-read",
-      "q close",
-    ].join(" \u00b7 ");
+  // plus three globals; a key with nothing to act on is a lie, and the rest of them
+  // live behind `?`.
+  const keys = () => footerKeys({ panel: props.panel, on: props.on });
   const status = () => {
     const value = editing();
     if (value) return `${value.key} = ${value.value}\u258f`;
@@ -616,9 +677,11 @@ function Footer(props: {
       const count = props.matched === null ? "" : `  ${props.matched} row(s)`;
       return `/${props.filter}${filtering ? "\u258f" : ""}${count}`;
     }
-    return props.note ?? "";
+    // Before the note, not after it: a run stopped waiting on an answer is costing the
+    // whole run's wall-clock, and the note is whatever the last command happened to say.
+    return props.needsYou ?? props.note ?? "";
   };
-  // Two rows for the Selection's buttons, two for the keys and one for what the tab last
+  // Two rows for the Selection's buttons, one for the keys and one for what the tab last
   // said, each clipped to exactly that: an unbounded wrap here used to run over the line
   // under it and render both as mojibake. Fixed, whatever the Selection is — a footer
   // that grew and shrank moved the list it belongs to.
