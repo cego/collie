@@ -139,6 +139,10 @@ const RunSchema = Schema.Struct({
   workspace: Schema.NullOr(Schema.String),
   workspace_label: Schema.NullOr(Schema.String),
   workspace_worktree: Schema.NullOr(Schema.String),
+  /** Where the Run was started from, before it was given a checkout of its own. */
+  activated_cwd: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
   /** This Run's own checkout, for a workflow that changes the repository. */
   worktree: Schema.NullOr(WorktreeRecordSchema).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),
@@ -378,6 +382,7 @@ export interface CreateRunOptions {
   workspace?: string | null;
   workspaceLabel?: string | null;
   workspaceWorktree?: string | null;
+  activatedCwd?: string | null;
   worktree?: WorktreeRecord | null;
 }
 
@@ -437,6 +442,7 @@ export class RunStore {
         workspace: opts.workspace ?? null,
         workspace_label: opts.workspaceLabel ?? null,
         workspace_worktree: opts.workspaceWorktree ?? null,
+        activated_cwd: opts.activatedCwd ?? null,
         worktree: opts.worktree ?? null,
         created_at: yield* nowIso(),
         finished_at: null,

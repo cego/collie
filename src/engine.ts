@@ -1173,7 +1173,9 @@ function tabFor(o: EngineOptions): WorkspaceTab {
   return {
     herdr: o.herdr,
     workspaceId: o.env.workspaceId,
-    cwd: o.run.record.cwd,
+    // The workspace's directory, not this Run's worktree: the tab outlives the Run and
+    // roots the next `p` from wherever the human activated it.
+    cwd: o.run.record.activated_cwd ?? o.run.record.cwd,
     log: (line) => o.run.log(line),
   };
 }

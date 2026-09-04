@@ -28,13 +28,18 @@ const STALE_MS = 60_000;
  */
 const DEFAULT_QUIET_MS = 5 * 60_000;
 
-/** What identifies a Session: one herdr session, one workspace, one repo cwd. */
+/** What identifies a Session: one herdr session and one workspace. */
 export interface SessionKey {
   /** The herdr session, as its socket path — 0.8.2 exposes no session id. */
   session: string | null;
   workspaceId: string | null;
   /** The live workspace's label, which is how a recycled workspace id is caught. */
   workspaceLabel: string | null;
+  /**
+   * The directory the board runs in: what it shows as its root and where `p` roots a
+   * run. Not part of the identity — a Run's own checkout is a worktree elsewhere, and
+   * it still belongs to the workspace it was started from.
+   */
   cwd: string;
 }
 
@@ -118,10 +123,11 @@ function agentsHere(record: RunRecord, hereNames: Set<string>): VariantRecord[] 
 /**
  * A run recorded against another workspace never belongs here, even for the same
  * repo. One recorded before workspaces were noted belongs here only if one of its
- * agents is alive in this workspace, which is the only proof available for it.
+ * agents is alive in this workspace, which is the only proof available for it. The
+ * run's directory says nothing: a mutating Run's checkout is a worktree of its own,
+ * and comparing it with the board's directory hid every such run from its tab.
  */
 function belongs(record: RunRecord, key: SessionKey, hereNames: Set<string>): boolean {
-  if (record.cwd !== key.cwd) return false;
   if (record.session && key.session && record.session !== key.session) return false;
   if (record.workspace !== null) {
     if (record.workspace !== key.workspaceId) return false;

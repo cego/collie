@@ -546,6 +546,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     workspace: checkout.workspaceId,
     workspaceLabel: checkout.workspaceLabel,
     workspaceWorktree: checkout.worktree?.path ?? workspace?.worktree ?? null,
+    activatedCwd: env.cwd,
     worktree: checkout.worktree,
     inputs: inputValues(resolutions),
     inputSources: inputSources(resolutions),
