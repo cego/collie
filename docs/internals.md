@@ -30,6 +30,12 @@ run directory — acquired atomically and carrying the process's identity — sa
 Driver is still driving, so `resume` never starts a second one and a stop signal never
 reaches an unrelated process.
 
+`collie run stop` writes the request into the inbox and, when a Driver owns the run, sends it
+SIGTERM. The Effect runtime answers a signal by interrupting the Driver's fibre, so the stop
+is recorded in a finaliser: a run still `running` when its Driver is interrupted gets the
+`stopped` marker and its finish time written before the ownership claim is released. A
+Driver killed outright leaves neither, which is what the Control Plane reports as abandoned.
+
 Every run is recorded under the Collie state directory: `runs/<id>/run.json` with the
 inputs and where each came from, `steps/<step>[/<variant>]/` with the exact prompt sent and
 the output written, `personas/` with the persona as injected, `review.md` where the run
