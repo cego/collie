@@ -35,8 +35,9 @@ export interface DetailProps {
  * it — down to its border and one line of that row, because a box squeezed below its own
  * border draws its title through it.
  */
+// No flexDirection here: a scrollbox's root is a row of its content beside its vertical
+// scrollbar, and a column stacks the bar under the content, one row short.
 const AS_OVERLAY = {
-  flexDirection: "column",
   height: 8,
   minHeight: 3,
   width: "100%",
@@ -44,7 +45,7 @@ const AS_OVERLAY = {
 } as const;
 
 /** And beside the list: a share of the pane, so both columns follow a drag. */
-const AS_COLUMN = { flexDirection: "column", width: "42%" } as const;
+const AS_COLUMN = { width: "42%" } as const;
 
 export function Detail(props: DetailProps) {
   return (

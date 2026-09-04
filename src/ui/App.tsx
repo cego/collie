@@ -483,13 +483,7 @@ function List(props: {
     }
   });
   return (
-    <scrollbox
-      ref={setRegion}
-      title={props.title}
-      border
-      borderColor={DIM}
-      style={{ flexGrow: 1, flexDirection: "column" }}
-    >
+    <scrollbox ref={setRegion} title={props.title} border borderColor={DIM} style={{ flexGrow: 1 }}>
       {/* An empty View that says nothing is a dead end, so it says what to do. */}
       <Show when={props.rows.length > 0} fallback={<text fg={DIM}>{props.empty}</text>}>
         <For each={props.rows}>
