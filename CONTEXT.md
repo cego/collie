@@ -89,9 +89,13 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Decision** — An answer given at launch to a Choice step the Run has not reached yet, kept in the Run record by step id (the picker asks each one after the Inputs; `run start --decide <step>=<title>` on the command line). Taken only if that choice is still available when the step is reached; otherwise the Run asks, and says why. Titles name decisions, so two choices that can never both be offered — a hand-off and its stand-alone twin — may share one.
 
-**Chain** — Starting a Workflow from a Choice, with Inputs forwarded. The new Run is a child of the current one.
+**Chain** — Starting a Workflow from a Choice, with Inputs forwarded. The new Run is a child of the current one. A Choice may chain several Runs at once, one per repository a plan touches; see Repo run.
 
-**Plan directory** — The `plan/` folder inside a Run: SPEC.md and the ticket files. It is the hand-off from `plan` to `implement` and never lives in the repository.
+**Plan directory** — The `plan/` folder inside a Run: SPEC.md and the ticket files. It is the hand-off from `plan` to `implement` and never lives in the repository. Every ticket names the repository it changes with a `Repo:` line, relative to the Run's root (`.` for the root itself).
+
+**Repo run** — One `implement` Run of a chained fan-out, owning one repository's branch and merge request and building only the tickets whose `Repo:` names that repository. Every Repo run of one plan uses the same branch name.
+
+**Wave** — The Repo runs a fan-out starts together: those whose tickets are blocked by no ticket of a Repo run still going. Ticket order inside a repository is the Repo run's; cross-repository order is the wave's. A plan whose repositories block each other in a cycle has no wave order and is refused.
 
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
