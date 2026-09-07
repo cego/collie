@@ -58,6 +58,7 @@ const replies = {
  * compile — and `rpc` takes nothing that is not in that list.
  */
 const requests = {
+  "workspace.focus": { workspace_id: "w28" },
   "tab.move": { tab_id: "1:2", insert_index: 0 },
   "agent.view.set": {
     source: "cego.collie",

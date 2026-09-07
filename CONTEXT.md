@@ -134,10 +134,18 @@ request must be read past its cache.
 
 **Control Plane** — The tab a Session keeps as its control surface, one per workspace, and
 the only pane Collie keeps open. It is a view over the run dirs and the register, always the
-workspace's first tab, and holds no state of its own, so closing it loses nothing. What it
-shows and what its keys do: `docs/using.md`. Behind it the strip reads `plan`, `implement`,
+workspace's first tab, and holds no state of its own, so closing it loses nothing. Its Runs
+view is drawn at a **Scope**. What it shows and what its keys do: `docs/using.md`. Behind it the strip reads `plan`, `implement`,
 `review`, then anything else in start order: Collie places each tab by its Run's workflow
 when it creates it, and never moves a tab it does not own or one a human has since dragged.
+
+**Scope** — What a Control Plane's Runs view is a board of: `local`, this Session's own
+workspace, or `all`, every workspace of this herdr session that Collie has a Run, an agent
+or a history in — one grouped tree, with the session's other workspaces named on a closing
+line. `g` toggles it in the tab and nothing remembers which; the Scope a tab opens on is
+the `scope` default in `config.json`. The wider Scope changes what is shown and what a Run
+lookup searches, never what a Session is: hand-offs, the register and starting a Workflow
+stay this Session's.
 
 **Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
 

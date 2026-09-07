@@ -31,6 +31,7 @@ import {
   type ViewName,
 } from "./state";
 import { commitsBehind } from "../workspace";
+import type { Scope } from "../config";
 import { truncated } from "../views";
 import { Detail } from "./detail";
 import { usePasteInto } from "./paste";
@@ -69,8 +70,34 @@ const FOOTER_HEIGHT = 2 + ACTION_ROWS + KEY_ROWS + 1;
 /** A question's border, its header and its footer: what it costs before its options. */
 const QUESTION_CHROME = 4;
 
+/**
+ * A row's columns, as fixed widths rather than shares of the pane. A Collie tab on an
+ * ultrawide pane is 320 columns: a title at 45%, a flexing detail and a right-pinned age
+ * put a canyon of whitespace between the three things being compared, and the tree's
+ * indent left the glyphs in one column and the text in three.
+ *
+ * So: a gutter that carries the marker, the indent and the glyph, then three columns
+ * that start in the same place on every row whatever its depth. Their widths are what
+ * caps a row, so a wide pane gives the list air rather than a canyon.
+ */
+const GUTTER = 4;
+const TITLE = 48;
+const DOING = 62;
+const AGE = 8;
+/**
+ * What the title keeps on a pane too narrow for the fixed widths — a Collie tab beside
+ * the detail panel at 100 columns has 68 for the list, and the three columns want 122.
+ * The title shrinks to this, less its own indent, and the detail takes whatever is left,
+ * so the columns still line up with each other at every width and every depth.
+ */
+const TITLE_FLOOR = 30;
+/** Two columns of indent per level of the tree, drawn inside the gutter. */
+const INDENT = 2;
+
 const DIM = "#8a8a8a";
 const ACCENT = "#7aa2f7";
+/** The wide scope, in the nav: the board is showing more than this workspace. */
+const WIDE = "#e0af68";
 /** An opaque ground for anything drawn over the list. Named colours and "default" are
  * not colours opentui parses: it falls through to magenta. */
 const GROUND = "#1a1b26";
@@ -160,6 +187,9 @@ export function App(props: AppProps) {
    * re-read a review that was not cut short.
    */
   const panelKeys = () => [
+    // Enter is not one of the row's buttons: it is the same key on every row that
+    // points at anything, and a sixth button did not fit the two rows they get.
+    ...(current()?.jump ? ["Enter go to it"] : []),
     ...(current()?.runId ? ["t log tail"] : []),
     ...(cutShort() ? ["m read more"] : []),
   ];
@@ -245,6 +275,8 @@ export function App(props: AppProps) {
     const intent = keyIntent(
       {
         on: keyboard(),
+        view: props.state().view,
+        scope: props.state().scope,
         helping: helping(),
         asking: asking(),
         filter: filter(),
@@ -301,6 +333,8 @@ export function App(props: AppProps) {
       <Show when={flow() === null && !helping()}>
         <Nav
           view={props.state().view}
+          scope={props.state().scope}
+          groups={props.state().wide?.groups.length ?? 0}
           repo={props.state().board.repo}
           behind={props.state().board.behind}
           onShow={(view) => props.dispatch({ _tag: "ShowView", view })}
@@ -351,6 +385,7 @@ export function App(props: AppProps) {
           row={current()}
           dispatch={act}
           on={keyboard()}
+          scope={props.state().scope}
           panel={panelKeys()}
           note={props.state().note}
           needsYou={needsYouStatus(rows(), selected())}
@@ -421,12 +456,20 @@ function Help() {
  */
 function Nav(props: {
   view: ViewName;
+  /** Which scope the Runs view is showing, and how many groups are in a wide one. */
+  scope: Scope;
+  groups: number;
   repo: string;
   /** How far behind its remote this installation is, where that is worth saying. */
   behind: number | null;
   onShow: (view: ViewName) => void;
   onNewRun: () => void;
 }) {
+  /** Which scope, with the count of what is in it once that board has been read. */
+  const scope = () => {
+    if (props.scope !== "all") return "  local";
+    return props.groups > 0 ? `  all · ${props.groups} workspace(s)` : "  all";
+  };
   return (
     <box style={{ flexDirection: "row", height: 1 }}>
       <text fg={ACCENT}>{`\u{1F415} ${props.repo}  `}</text>
@@ -440,10 +483,17 @@ function Nav(props: {
           </text>
         )}
       </For>
-      {/* The launch flow, without a popup: `p` does the same thing from the keyboard. */}
-      <text fg={ACCENT} onMouseDown={() => props.onNewRun()}>
-        {"  ＋ New run"}
-      </text>
+      {/* The launch flow, without a popup: `p` does the same thing from the keyboard,
+          and like `p` it belongs to the board of this workspace — a run starts in this
+          checkout, which is not what a board of every workspace is about. */}
+      <Show when={props.scope === "local"}>
+        <text fg={ACCENT} onMouseDown={() => props.onNewRun()}>
+          {"  ＋ New run"}
+        </text>
+      </Show>
+      {/* The scope is the one thing about this board that is not obvious from what is
+          on it, so it says which one this is and which key changes it. */}
+      <text fg={props.scope === "all" ? WIDE : DIM}>{scope()}</text>
       {/* Shown, never sent: being a few commits behind is worth seeing here and not
           worth interrupting anyone for. */}
       <Show when={(props.behind ?? 0) > 0}>
@@ -506,31 +556,42 @@ function RowLine(props: { row: Row; selected: boolean; onSelect: (id: string) =>
   // Colour reinforces the glyph and never replaces it: not everyone can see it, and
   // the glyph is what the text fallback and herdr's own tab strip show.
   const marker = () => (props.selected ? "❯" : " ");
+  /** How far into the gutter this row's text starts: the tree's own depth. */
+  const indent = () => props.row.depth * INDENT;
+  // A header names the group under it and can be acted on in no way at all, so it is
+  // dim: the rows it introduces are the ones a human is aiming at. A workspace is the
+  // opposite — its own line is where the eye stops, so it is bold and never dim.
+  const quiet = () => props.row.kind === "header";
+  const heading = () => props.row.kind === "group";
   return (
     <box
       id={props.row.id}
       style={{ flexDirection: "row", height: 1 }}
       onMouseDown={() => props.onSelect(props.row.id)}
     >
-      <text style={{ width: 4 }} fg={statusColour(props.row.glyph)}>
-        {`${marker()} ${props.row.key ?? props.row.glyph} `}
+      {/* The gutter: the marker, the indent, and the glyph or the row's own digit. */}
+      <text style={{ width: GUTTER + indent(), flexShrink: 0 }} fg={statusColour(props.row.glyph)}>
+        {`${marker()} ${" ".repeat(indent())}${props.row.key ?? props.row.glyph}`}
       </text>
-      {/* A share of the row rather than a measured width, so the columns line up with
-          each other at whatever width the pane is dragged to. */}
       <text
-        style={{ width: "45%", height: 1 }}
-        // A header names the group under it and can be acted on in no way at all, so it
-        // is dim: the rows it introduces are the ones a human is aiming at.
-        fg={props.row.kind === "header" ? DIM : undefined}
-        attributes={props.selected ? TextAttributes.BOLD : TextAttributes.NONE}
+        style={{
+          width: TITLE - indent(),
+          // Less the indent, like the width: a floor that ignored it would put the
+          // detail column of a nested row two further along than its parent's.
+          minWidth: TITLE_FLOOR - indent(),
+          height: 1,
+          flexShrink: 1,
+        }}
+        fg={quiet() ? DIM : undefined}
+        attributes={props.selected || heading() ? TextAttributes.BOLD : TextAttributes.NONE}
       >
         {props.row.title}
       </text>
-      <text style={{ flexGrow: 1, height: 1 }} fg={DIM}>
+      <text style={{ width: DOING, height: 1, flexShrink: 1 }} fg={heading() ? undefined : DIM}>
         {props.row.detail}
       </text>
-      <text style={{ width: 9, height: 1 }} fg={DIM}>
-        {props.row.ago === "" ? "" : ` ${props.row.ago}`}
+      <text style={{ width: AGE, height: 1, flexShrink: 0 }} fg={DIM}>
+        {props.row.ago}
       </text>
     </box>
   );
@@ -636,6 +697,8 @@ function Footer(props: {
   filter: string;
   /** How many rows the filter left, so a narrowed list says how narrow it is. */
   matched: number | null;
+  /** Which scope is showing, so `g` can offer the other one by name. */
+  scope: Scope;
 }) {
   /** The value being edited, where a Settings row is the one taking the keys. */
   const editing = () => (props.on._tag === "Setting" ? props.on.setting : null);
@@ -658,11 +721,11 @@ function Footer(props: {
    * offered: they used to be drawn under the row itself, which made selecting a row
    * push every row below it down a line. Clicking one still does what the key does.
    */
-  const own = () => (taken() ? [] : actionsFor(props.row));
+  const own = () => (taken() ? [] : actionsFor(props.row, props.scope));
   // The keys the footer offers are the ones the Selection can actually be asked for,
-  // plus three globals; a key with nothing to act on is a lie, and the rest of them
+  // plus the globals; a key with nothing to act on is a lie, and the rest of them
   // live behind `?`.
-  const keys = () => footerKeys({ panel: props.panel, on: props.on });
+  const keys = () => footerKeys({ panel: props.panel, on: props.on, scope: props.scope });
   const status = () => {
     const value = editing();
     if (value) return `${value.key} = ${value.value}\u258f`;

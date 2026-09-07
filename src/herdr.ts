@@ -175,6 +175,7 @@ const PluginPaneReply = Schema.Struct({
  * going green on a method nobody checked.
  */
 export const SOCKET_METHODS = [
+  "workspace.focus",
   "tab.move",
   "agent.view.set",
   "agent.view.clear",
@@ -368,15 +369,18 @@ export interface AgentInfo {
 }
 
 /**
- * herdr prefixes a live pane's title with a spinner frame and a space — `◐ `, `⠹ `.
- * Only that is removed, and the space after it is what identifies it: dropping every
- * leading non-alphanumeric instead took the title's own punctuation with it, so
- * `◐ [Fix] the parser` arrived as `Fix] the parser`.
+ * The glyph herdr puts in front of a name, and the space after it: a spinner frame on a
+ * live pane's title — `◐ `, `⠹ ` — and a status glyph on a workspace's label, `⚙ `.
+ * Only that is removed, and the space is what identifies it: dropping every leading
+ * non-alphanumeric instead took the name's own punctuation with it, so
+ * `◐ [Fix] the parser` arrived as `Fix] the parser` and a workspace called `.dotfiles`
+ * as `dotfiles`. Exported because the Control Plane's group rows strip the same thing,
+ * and two spellings of it drift.
  */
-const SPINNER = /^[^\p{L}\p{N}\s]+\s+/u;
+export const LEADING_GLYPH = /^[^\p{L}\p{N}\s]+\s+/u;
 
 function agentTitle(raw: string | null | undefined): string | null {
-  const title = (raw ?? "").replace(SPINNER, "").trim();
+  const title = (raw ?? "").replace(LEADING_GLYPH, "").trim();
   return title === "" ? null : title;
 }
 
@@ -574,6 +578,15 @@ export class Herdr {
 
   tabFocus(tabId: string): HerdrEffect<void> {
     return this.cli(["tab", "focus", tabId]).pipe(Effect.asVoid);
+  }
+
+  /**
+   * Where a workspace group row goes: whatever tab that workspace was last on. One
+   * call, and it is the only thing the board asks herdr to focus that is not an agent
+   * or a tab of its own.
+   */
+  workspaceFocus(workspaceId: string): HerdrEffect<void> {
+    return this.rpc("workspace.focus", { workspace_id: workspaceId }).pipe(Effect.asVoid);
   }
 
   /** Reorders a tab within its workspace; 0 is first. No CLI for it in 0.8.2. */

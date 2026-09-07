@@ -179,8 +179,8 @@ test("plan runs one step in a tab of its own and records the run", () =>
       expect(status).toBe("done");
       // The workspace's board is found or opened and put first, and then the step opens
       // its own tab — after checking whether the launch pane is a reusable numbered
-      // shell, and once `tab list` says nothing else has that name. The run itself is
-      // driven headlessly.
+      // shell. Nothing asks what the other tabs are called: a run's tab is named after
+      // the run, so there is no collision to judge. The run itself is driven headlessly.
       expect(yield* rig.cmds()).toEqual([
         "tab list",
         "plugin pane",
@@ -189,12 +189,10 @@ test("plan runs one step in a tab of its own and records the run", () =>
         "tab.move",
         "tab list",
         "pane list",
-        "tab list",
         "tab create",
         // The new tab is placed by rank as soon as it exists, and never again.
         "tab list",
         "tab.move",
-        "tab rename",
         "pane run",
         "agent start",
         "agent.view.set",
@@ -202,6 +200,9 @@ test("plan runs one step in a tab of its own and records the run", () =>
         "agent wait",
         // The step is watched, not waited on: one status poll, and it is already idle.
         "agent get",
+        // Its step over, and then the run: the tab drops the step it was on, and
+        // then says the run is done.
+        "tab rename",
         "tab rename",
         "agent.view.clear",
         "notification show",
@@ -221,7 +222,7 @@ test("plan runs one step in a tab of its own and records the run", () =>
           .filter((c) => c.cmd === "tab rename")
           .at(-1)!
           .argv!.at(-1),
-      ).toBe("✓ Solo");
+      ).toBe("✓ Solo · add-a-picker");
 
       const start = (yield* rig.calls()).find((c) => c.cmd === "agent start")!.argv!;
       expect(start.slice(0, 8)).toEqual([

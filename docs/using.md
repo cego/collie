@@ -265,12 +265,31 @@ refresh, and a run finishing under the cursor leaves the row that took its place
 │  ⚠ Review · worktree         abandoned           ││                     │
 └──────────────────────────────────────────────────┘└─────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────┐
-│l log · k stop · t log tail · p run · ? keys · q close                    │
+│l log · k stop · Enter go to it · t log tail · g all · p run · ? keys     │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 
 A pane with no terminal, a dumb `TERM` or one too narrow to render in prints the
 one-screen text view instead, with one line saying why, and keeps the keys it always had.
+
+### What a run's tab says
+
+A run's tab is `⚙ Implement · control-plane-glass · fix 3/5`: the workflow, what it is
+pointed at, and the step it is on — with the round of the fix loop where that step has
+looped, and nothing where it has not. While the run is waiting on you it reads
+`⚠ … · asks you` instead of naming the step, and when the run is over it is just
+`✓ Implement · control-plane-glass`. herdr clips what does not fit its sidebar; the wide
+board carries the full text. Every tab of one run says the same thing, so the workspace's
+sidebar row says which step the run is on whichever tab it is showing.
+
+The glyph is the state of what is in that tab, not of the last step that ran: anything in
+it herdr calls `working` is ⚙, anything `blocked` is ⚠, and with nothing working it is the
+run's own state — ✓ once the run has finished, ⚙ while it has not, ✗ when it failed. It is
+kept true by whoever is watching: the Driver on the status poll it already makes, and any
+open Control Plane on the `agent list` it already reads, each writing only when the string
+changed. So a review handed back to a live implementer, or a finished run's agent you
+prompt yourself, goes back to ⚙ without anyone renaming anything. With no Driver and no
+Control Plane open, nothing reconciles — herdr's own agent-status column is the truth then.
 
 ### Views
 
@@ -315,15 +334,82 @@ fetches before it answers because you are waiting on it.
 nothing written for a minute — moves to **Finished** as `⚠ abandoned` rather than sitting
 there pretending to work.
 
-A run that has stopped for you — a pending question, or a gate it is awaiting — is listed
-first, under a dim **Needs you** header, and the footer says `N run(s) need you` whenever
-the Selection is somewhere else. A blocked run costs the whole run's wall-clock and used
-to be visible only if its row happened to be the Selection. The header is a label, not a
-row: the arrows step over it and nothing acts on it.
+A run with a question for you is listed first, under a dim **Needs you** header, and the
+footer says `N run(s) need you` whenever the Selection is somewhere else. A blocked run
+costs the whole run's wall-clock and used to be visible only if its row happened to be the
+Selection. The header is a label, not a row: the arrows step over it and nothing acts on
+it. A pending question and nothing else counts: a run holding at a gate, or one whose agent
+is answering a prompt in its own pane, says what it is waiting for in its detail column and
+counts as running — there is nothing on this board to answer for either, and `1 need you`
+used to send you to a row with no question under it.
 
 An active row says which step is running and how long it has been going — `fix · 12m` —
 so a stuck agent stands out from a slow one, and a run whose directory has not changed for
 longer than `board_quiet_ms` adds `quiet for 9m`.
+
+### Scope: this workspace, or the whole session
+
+`g` switches what the **Runs** view is a board of. `local` is this session's own workspace —
+one herdr session, one workspace, whatever checkouts its runs are working in — and another
+workspace's runs never appear on it, even for the same repository: a workspace id herdr has
+since given to a different workspace is caught by its label. `all` is every workspace of
+this herdr session that Collie has a run, an agent or a history in, as one tree. The nav
+says which scope is showing and the footer offers the other one by name.
+
+```
+🐕 collie  [Runs] History Workflows Settings  all · 3 workspace(s)
+┌─Runs────────────────────────────────────────────────────────────────────────┐
+│❯ ⚙ Implement · control-plane-glass   1 running · review · 2/5               │
+│    ⚙ Implement                       review · 2m · iteration 2/5      2m    │
+│      1 ├ Implementer                 blocked · Simplify the picker          │
+│      2 └ Review · Opus               working · Review cego.collie           │
+│                                                                             │
+│  ⚠ Collie                            1 running · 1 need you · next          │
+│    ⚠ Implement                       next — your turn                 4m    │
+│                                                                             │
+│  ⚙ Elsewhere · collie-mr-roles-wt    a workspace this session no longer has │
+│    ⚙ Implement · mr-roles            review · 3/5 · quiet for 49h     2d    │
+│                                                                             │
+│    2 more workspace(s)               nothing of Collie's in them · Env · …  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+One **group row** per workspace, in herdr's own order, bold and selectable: herdr's label
+with the status glyph stripped, then how many runs are going, how many need you, and the
+leading run's step and iteration — enough to triage without expanding anything. Its glyph
+is the worst of its runs (⚠ over ⚙ over whatever the newest finished one was).
+
+Under it the active runs, then at most two finished ones so a quiet workspace says why it
+is quiet, and under those that run's agents — all of them, because this board hides
+nothing. A run is named by its **workflow alone**, because the group row already says what
+the workspace is for; a run under **Elsewhere** keeps what it was pointed at, because that
+group row names several checkouts. An agent keeps its own name in full, since the model is
+what tells two variants of one step apart, and the `1`–`9` digits are numbered down the
+whole tree, so a digit always names the row it is drawn on — the tenth agent onwards keeps
+its row and loses its digit, as on the local board.
+
+The workspaces with nothing of Collie's in them are named on one dim closing line rather
+than given a row each: a herdr session is mostly those, so nothing is hidden and nothing is
+in the way. Active runs recorded against a workspace this session no longer has — a closed
+workspace, or another herdr session's — are grouped last under **Elsewhere**, named after
+the checkout they were working in, because a run still going somewhere this board cannot
+show is still news.
+
+No herdr id is ever on screen: a workspace is its label, a run is its workflow, an agent is
+its role. The ids stay inside the jump, which is the only thing that needs them. The tree's
+indent is in the gutter beside the glyph, so title, detail and age start in the same column
+at every depth, and no row changes height when the mouse crosses it — the only thing that
+grows a row is the question the selected run is waiting on.
+
+A board of the whole session costs a local one's herdr calls and no more: the same run scan
+and the same one read of `agent list` and `workspace list`, which both boards are built from.
+
+Starting a workflow, resuming, forking and hand-offs stay this session's, so `p`, `u`, `f`,
+`s`, `x` and `a` — and the nav's `＋ New run`, which is what `p` is for the mouse — are
+offered on a local board only: a run starts in _this_ workspace's checkout, and a fix round
+or a second review would too, whichever row you press it on. `g local` is how you get back
+to a board where they mean something. Answering a question, `k`, `l`, `w` and Enter work on
+any run in the tree, and `k` closes the panes of that run's own agents wherever they are.
 
 ### The detail panel
 
@@ -363,7 +449,8 @@ under the cursor. Movement is the arrows and not `j`/`k`: `k` is the stop key, a
 destructive key that sometimes means "up" is worse than no vim binding.
 
 The footer holds the Selection's own actions as buttons, then one line of keys — whatever
-the detail panel offers, and `p run · ? keys · q close`. Two wrapped lines of every global
+the row and the detail panel offer, and `g <the other scope> · p run · ? keys · q close`
+(`p run` on a local board only, like the key). Two wrapped lines of every global
 was what made the important ones unreadable, so the rest of the table lives behind `?`: a
 full-pane list of every key with what it does, in two columns so it fits a 24-row pane,
 closed by any key. The meanings there are the short form; this table is the long one.
@@ -379,6 +466,8 @@ that field's keys do instead, and the Selection's own buttons go: `k` typed a `k
 | `PgUp`/`PgDn` | Scroll the detail panel by a page                                               |
 | `Tab`         | Move between views                                                              |
 | `1`–`9`       | Focus that agent's pane                                                         |
+| `Enter`       | Go to what the row points at — a workspace, a run's agent tab, an agent's pane  |
+| `g`           | Scope, in the Runs view: this workspace ⇄ every workspace of this session       |
 | `p`           | Run a workflow — the same launch flow as `prefix+f`, inline in this tab         |
 | `u`           | Resume a run with unfinished steps                                              |
 | `f`           | Fork a workflow or persona                                                      |
@@ -393,6 +482,7 @@ that field's keys do instead, and the Selection's own buttons go: `k` typed a `k
 | `c`           | Copy that merge request's URL                                                   |
 | `k`           | Stop the selected run — closing a pane no longer does that, because it has none |
 | `/`           | Filter the list, and say how much is left — a matching agent keeps its run      |
+| `Esc`         | Clear the filter, from the list as well as from inside it                       |
 | `R`           | Re-read what is on screen, and the one merge request behind it                  |
 | `?`           | Every key with what it does, over the whole pane; any key closes it             |
 | `q`           | Close the tab                                                                   |
@@ -415,10 +505,6 @@ answered by selecting it rather than waiting its turn. The question lives in the
 directory, so closing this tab, reopening it, or resuming later shows you the same question
 again rather than losing it. The Driver toasts and brings the tab to the front before it
 asks, so a question is never left unseen in a tab you are not looking at.
-
-The board shows this session's work and nothing else: one herdr session, one workspace, one
-repo. Another workspace's runs never appear, even for the same repo, and a workspace id
-that herdr has since given to a different workspace is caught by its label.
 
 ## Actions
 
@@ -509,12 +595,18 @@ checkout there is no branch and no working tree to review, so the target menu is
   "notifications": { "run-done": false },
   "models": { "opencode": ["mycorp/local-model"] },
   "trust": "ask",
-  "permissions": "bypass"
+  "permissions": "bypass",
+  "scope": "local"
 }
 ```
 
+`scope` is which board a Control Plane opens on — `local`, this workspace, or `all`, every
+workspace of this herdr session Collie has work in ([Scope](#scope-this-workspace-or-the-whole-session)).
+`g` changes it for that tab and nothing remembers it, so this is the only place the answer
+to "the way I use it" lives.
+
 `models` adds models the harness adapter table does not already accept. An unknown harness,
-model, effort or permissions mode fails validation before a single tab opens. See
+model, effort, permissions mode or scope fails validation before a single tab opens. See
 [Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts, and
 [Permissions](#permissions-unattended-by-default) for what `permissions` decides.
 
@@ -621,6 +713,15 @@ prefix on purpose, because `alt` chords are not delivered reliably over SSH or t
 terminals. If you rebound one to a chord, that is the first thing to undo. Without any
 binding, `herdr plugin action invoke cego.collie.pick` still works from a shell inside
 herdr.
+
+**The glyph says ✓ but the agent is working.** Nothing was watching that tab: the glyph is
+reconciled by the run's Driver while it lives and by a Control Plane that can see the run,
+and a run whose Driver has finished — an agent you prompted yourself, or a review handed to
+an implementer whose own run is over — has neither. A board sees its own workspace's runs
+at the `local` scope and every workspace's at `all`, so open the Control Plane in that
+run's workspace (`prefix+shift+c`), or any board and press `g`, and it is corrected within
+a tick. Otherwise read herdr's own agent-status column in the sidebar, which is always the
+truth.
 
 **A run shows as `⚠ abandoned`.** Its Driver is gone: no agent of its own is left and
 nothing has been written for a minute. The run's audit trail is intact, so

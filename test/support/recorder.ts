@@ -225,6 +225,14 @@ export class Rig {
     });
   }
 
+  /**
+   * A workspace herdr has. None by default: `workspace list` answers with an empty
+   * session, so only a test about several workspaces has to say what is in one.
+   */
+  addWorkspace(workspaceId: string, label: string, cwd?: string) {
+    return this.appendState("workspaces", { workspace_id: workspaceId, label, cwd: cwd ?? null });
+  }
+
   /** An agent herdr already has, matching one an earlier run started. */
   addAgent(name: string, paneId: string) {
     return this.appendState("agents", { name, pane_id: paneId });

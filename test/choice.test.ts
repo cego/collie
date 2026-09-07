@@ -177,6 +177,20 @@ test("a prompt choice prompts the named agent and offers the menu again", () =>
       expect(round).toContain("The human wants changes");
       expect(round).toContain("Goal: Add a picker");
       expect(run.step("next").variants[0]!.output).toBe("steps/next/refine-1/refine.json");
+
+      // The drafter's tab says the run is asking, so herdr's sidebar row for the
+      // workspace does: the step it stopped in the middle of is not what tells a
+      // human to come and look. It stops saying it as soon as the menu is answered,
+      // and the run's end is the last word.
+      const labels = (yield* rig.calls())
+        .filter(
+          (c) => c.cmd === "tab rename" && c.argv![2] === run.step("draft").variants[0]!.tabId,
+        )
+        .map((c) => c.argv!.at(-1));
+      const asking = labels.lastIndexOf("⚠ Choose · add-a-picker · asks you");
+      expect(asking).toBeGreaterThanOrEqual(0);
+      expect(labels.slice(asking + 1)).not.toContain("⚠ Choose · add-a-picker · asks you");
+      expect(labels.at(-1)).toBe("✓ Choose · add-a-picker");
     }),
   ));
 
@@ -191,12 +205,12 @@ test("a fresh reviewer choice gets its own tab and its findings prompt the follo
       const { run, status } = yield* runWorkflowEffect(rig, "choose", { goal: "g" }, { prompts });
 
       expect(status).toBe("done");
-      // The run's own tab takes the workflow's name; the round's takes its step's.
-      // Neither says which choice started it, and neither says the target.
+      // Both tabs name the run and the step they were opened for. Neither says which
+      // choice started it, and neither says a model or a slug.
       const labels = (yield* rig.calls())
         .filter((c) => c.cmd === "tab create")
         .map((c) => c.argv!.at(-2));
-      expect(labels).toEqual(["⚙ Choose", "⚙ Next"]);
+      expect(labels).toEqual(["⚙ Choose · g · draft", "⚙ Choose · g · next"]);
 
       // A menu zooms nothing: the run has no pane, and the Control Plane renders the
       // question inline under the run it belongs to.

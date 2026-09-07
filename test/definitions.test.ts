@@ -519,6 +519,7 @@ test("user defaults come from config.json in the config layer", () =>
         models: { opencode: ["local/foo"] },
         trust: "ask",
         permissions: "bypass",
+        scope: "local",
       });
     }),
   ));

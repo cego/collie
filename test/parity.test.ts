@@ -34,7 +34,7 @@ import { Herdr } from "../src/herdr";
 import { prepareWorkflow, resumeRun, startRun } from "../src/operations";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
 import { RunStore } from "../src/run";
-import type { RunRow, WorkspaceView } from "../src/workspace";
+import type { RunRow } from "../src/workspace";
 import { layers, loadDefinitions } from "../src/definitions";
 import { forkResolvedDefinition } from "../src/fork";
 
@@ -408,24 +408,8 @@ effectTest("stopping through the board and through the CLI leave the same trace"
     configDir: pluginEnv().configDir,
     pluginRoot: pluginEnv().pluginRoot,
   };
-  // Only the fields the board's stop reads; the rest is rendering.
-  const view: Pick<WorkspaceView, "active"> = {
-    active: [
-      {
-        id: board.id,
-        dir: board.dir,
-        glyph: "▶",
-        title: "Demo",
-        detail: "",
-        at: 0,
-        target: null,
-        fixable: false,
-        choice: null,
-        needsYou: false,
-      },
-    ],
-  };
-  expect(yield* boardStop(session, view)).toContain("stopped");
+  // The run itself: the board's stop takes what it acts on, not the row it was drawn as.
+  expect(yield* boardStop(session, board)).toContain("stopped");
   expect((yield* cli(["run", "stop", command.id])).exit).toBe(0);
 
   const fromBoard = yield* observed(board.dir);
