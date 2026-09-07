@@ -41,7 +41,7 @@ import {
 import { readRegistry, registryPath, scopeOfRun } from "./registry";
 import { currentPid, withLock } from "./lock";
 import { REVIEW_FILE } from "./output";
-import { Run, RunStore } from "./run";
+import { fanoutRepos, fanoutUnfinished, Run, RunStore } from "./run";
 import { branchListed, BRANCH_INPUT, checkoutFor, pruneWorktrees } from "./worktree";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
@@ -213,6 +213,19 @@ export const runStatus = Effect.fn("operations.runStatus")(function* (run: Run) 
   if (run.record.status === "done") return "succeeded";
   return run.record.status === "running" ? "running" : "failed";
 });
+
+/**
+ * Whether that state is the end of the Run. `waiting` is not: a Run stopped at a
+ * question is still going, and a `run wait` that returned on it would be reporting a
+ * Run as over while its Driver holds the menu open.
+ *
+ * Here beside `runStatus` because it is the same fact: the CLI's wait, the engine's
+ * wait on a Repo run and a stop's look at a parent's children each used to spell the
+ * three names out again, which is three places to miss a fourth.
+ */
+export function runSettled(status: string): boolean {
+  return status === "succeeded" || status === "failed" || status === "stopped";
+}
 
 /** The live workspace for this environment, shared by both adapters. */
 export const resolveWorkspace = Effect.fn("operations.resolveWorkspace")(function* (
@@ -691,6 +704,37 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
 });
 
 /**
+ * Whether this Run is a parent whose fan-out is not over. Such a Run can record
+ * `succeeded` while a repository run of its own is still going, so the guard that
+ * refuses to stop or resume a succeeded Run does not apply to it — but only while that
+ * is true. Once every repository has ended, a built plan is a succeeded Run like any
+ * other, and stopping it would overwrite what it recorded with `stopped`.
+ */
+const stillFanningOut = (run: Run) =>
+  run.record.fanout !== null && fanoutUnfinished(run.record.fanout);
+
+/**
+ * The repository runs a parent fanned out that are still going, each with the
+ * repository it is building — which is what a caller reporting on one calls it.
+ * Loaded rather than trusted: a child's own record is what says whether it has ended.
+ */
+const fanoutChildren = Effect.fn("operations.fanoutChildren")(function* (
+  stateDir: string,
+  run: Run,
+) {
+  const store = new RunStore(stateDir);
+  const running: Array<{ repo: string; child: Run }> = [];
+  for (const entry of run.record.fanout ? fanoutRepos(run.record.fanout) : []) {
+    if (entry.run === null) continue;
+    const child = yield* store.load(entry.run).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (child === null) continue;
+    const status = yield* runStatus(child);
+    if (!runSettled(status)) running.push({ repo: entry.repo, child });
+  }
+  return running;
+});
+
+/**
  * Stops orchestration and closes only the panes this Run owns. Its agents keep
  * whatever they wrote; the repository is left exactly as it is.
  *
@@ -698,7 +742,7 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
  * spec asks for and is what a Driver waiting on a Choice consumes. The signal is what
  * reaches a Driver that is mid-Step, waiting on an agent and reading no files.
  */
-export const stopRun = Effect.fn("operations.stopRun")(function* (
+const stopOne = Effect.fn("operations.stopOne")(function* (
   stateDir: string,
   herdr: Herdr,
   run: Run,
@@ -706,7 +750,7 @@ export const stopRun = Effect.fn("operations.stopRun")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  if ((yield* runStatus(run)) === "succeeded")
+  if ((yield* runStatus(run)) === "succeeded" && !stillFanningOut(run))
     return err("invalid_state", `Run "${run.id}" has already succeeded.`);
   // The request is recorded in the Run's own directory before anything is signalled,
   // so it is there whether or not the Driver lives long enough to consume it.
@@ -738,6 +782,37 @@ export const stopRun = Effect.fn("operations.stopRun")(function* (
   const entries = (yield* readRegistry(register)).filter((entry) => entry.runId === run.id);
   yield* Effect.all(entries.map((entry) => herdr.paneClose(entry.paneId).pipe(Effect.result)));
   return ok({ runId: run.id, status: "stopped" }, `Stopped run ${run.id}.`);
+});
+
+/**
+ * Stops a Run, and every repository run it fanned out first: "stop this" on a plan run
+ * means the whole plan, and a child left building for a parent that is gone would keep
+ * committing to a branch nobody is waiting for.
+ *
+ * A repository run that will not stop is the whole answer, and the parent is left
+ * alone. Stopping the parent anyway and reporting `ok` would say the plan had stopped
+ * while one of its repository runs was still orchestrating agents — and the parent
+ * still waiting on that run is what makes a second `run stop` mean something.
+ */
+export const stopRun = Effect.fn("operations.stopRun")(function* (
+  stateDir: string,
+  herdr: Herdr,
+  run: Run,
+  requestId: string,
+) {
+  const alive: string[] = [];
+  for (const { repo, child } of yield* fanoutChildren(stateDir, run)) {
+    const stopped = yield* stopOne(stateDir, herdr, child, requestId);
+    if (!stopped.ok) alive.push(`${repo} (${child.id})`);
+  }
+  if (alive.length > 0) {
+    return err(
+      "operation_failed",
+      `Run "${run.id}" was left running: these repository runs could not be stopped: ${alive.join(", ")}.`,
+      { run: run.id, running: alive },
+    );
+  }
+  return yield* stopOne(stateDir, herdr, run, requestId);
 });
 
 /**
@@ -773,7 +848,7 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
     Effect.gen(function* () {
       if (yield* driverAlive(run.dir))
         return err("run_already_active", `Run "${run.id}" is already active.`);
-      if ((yield* runStatus(run)) === "succeeded")
+      if ((yield* runStatus(run)) === "succeeded" && !stillFanningOut(run))
         return err("invalid_state", `Run "${run.id}" has already succeeded.`);
       yield* fs.remove(path.join(run.dir, STOPPED), { force: true });
       for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";

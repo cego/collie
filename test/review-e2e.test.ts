@@ -5,8 +5,6 @@ import { FakeBin } from "./support/bin";
 import { installBaseline, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
-import { decidableSteps } from "../src/flows";
-import { FALLBACK_DEFAULTS } from "../src/config";
 import { REVIEW_FILE } from "../src/output";
 import { loadDefaults, type Defaults } from "../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
@@ -787,31 +785,6 @@ test("the working tree is never matched against an earlier review of it", () =>
 
       expect(second.run.record.previous_review).toBeNull();
       expect(yield* promptOf(second.run)).not.toContain("Earlier review of this target");
-    }),
-  ));
-
-test("a choice this environment cannot carry out is not offered at launch", () =>
-  runEffect(
-    Effect.gen(function* () {
-      // No GitLab and a working-tree target, so posting the review is not on the table
-      // — and deciding it at launch would send the unattended run back to the menu.
-      yield* bin.add("glab", `exit 1`);
-      yield* bin.add("git", `echo main`);
-      const env = rig.pluginEnv();
-      const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
-      const wf = resolveWorkflow("review", defs, FALLBACK_DEFAULTS);
-      const resolutions = yield* inferInputs(wf.inputs, { cwd: env.cwd, stateDir: env.stateDir });
-
-      const decidable = yield* decidableSteps(wf, env, resolutions);
-
-      const post = decidable.find((entry) => entry.step.id === "post")!;
-      const titles = post.items.map((item) => item.title);
-      expect(titles).toContain("Fix findings");
-      expect(titles).toContain("Don't post");
-      expect(titles).not.toContain("Post to MR");
-      // The hand-off and its twin are one decision, offered whoever is live right now:
-      // who is live at launch says nothing about who will be live an hour later.
-      expect(titles.filter((t) => t === "Fix findings")).toHaveLength(1);
     }),
   ));
 

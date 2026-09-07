@@ -912,6 +912,63 @@ test("an active row says how long its step has been going, and when the run went
     }),
   ));
 
+test("a plan run that fanned out says which wave it is on, and its children nest under it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const child = yield* seed({ workflow: "implement", namedAfter: "x", stepIds: ["build"] });
+      const parent = yield* seed({ workflow: "plan", namedAfter: "x", stepIds: ["grill", "next"] });
+      child.record.parent = parent.id;
+      yield* child.save();
+      parent.record.fanout = {
+        step: "next",
+        title: "Implement now",
+        waves: [["cego/api"], ["cego/web"]],
+        runs: { "cego/api": child.id },
+        mrs: {},
+        wave: 1,
+        blocked: null,
+      };
+      parent.record.steps[1]!.status = "running";
+      yield* parent.save();
+
+      const view = yield* board([], NOW);
+      const row = view.active.find((r) => r.id === parent.id)!;
+      // Not "next · 3m": which wave and which repository is the whole of its state.
+      expect(row.detail).toBe("wave 1/2 · waiting on cego/api");
+      // The parent's row names the repository run it fanned out, which is what nests it.
+      expect(view.active.find((r) => r.id === parent.id)!.children).toEqual([child.id]);
+
+      // Over, and the row says how many repositories it built.
+      parent.record.fanout = { ...parent.record.fanout, wave: 0 };
+      parent.record.status = "done";
+      yield* parent.save();
+      const done = yield* board([], NOW);
+      expect(done.recent.find((r) => r.id === parent.id)!.detail).toContain("2 repos · done");
+
+      // Or which one stopped it, and what became of that run: a repository the operator
+      // stopped is not one that failed, and the row used to say so anyway.
+      for (const status of ["failed", "stopped", "not started"]) {
+        parent.record.fanout = { ...parent.record.fanout, blocked: { repo: "cego/api", status } };
+        yield* parent.save();
+        const stuck = yield* board([], NOW);
+        expect(stuck.recent.find((r) => r.id === parent.id)!.detail).toContain(
+          `blocked · cego/api ${status}`,
+        );
+      }
+
+      // Stopped mid-wave, which is what an interrupted Driver leaves behind: nothing
+      // writes `wave: 0` on the way out, so the row would otherwise describe a wait
+      // that has ended as though it were still going.
+      parent.record.fanout = { ...parent.record.fanout, wave: 2, blocked: null };
+      parent.record.status = "blocked";
+      yield* parent.save();
+      const interrupted = yield* board([], NOW);
+      const stoppedRow = interrupted.recent.find((r) => r.id === parent.id)!;
+      expect(stoppedRow.detail.startsWith("blocked · in wave 2/2")).toBe(true);
+      expect(stoppedRow.detail).not.toContain("waiting on");
+    }),
+  ));
+
 effectTest("the board key opens the Collie tab where the workspace has none", function* () {
   const env = rig.pluginEnv();
 

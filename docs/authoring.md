@@ -89,6 +89,12 @@ An input's strategy is how Collie tries to fill it before asking you.
 | `flag`        | A boolean. Defaults to `false` and is never asked; something forwarding it sets it.                                                                                  |
 | `optional`    | Left empty unless something forwards it. Never asked.                                                                                                                |
 
+`implement`'s `repo` is an `optional` input the engine forwards itself: fanning a plan that
+spans repositories out gives each child run the repository it owns, and every other run
+leaves it empty. A workflow of your own that wants one repository's share of a plan
+declares it the same way and reads `{{inputs.repo}}`; see
+[Plans that span repositories](workflows.md#plans-that-span-repositories).
+
 ## Step keys
 
 | Key           | Type           | What it does                                                                                         |
@@ -213,6 +219,11 @@ so `resume` finds the run again.
 Titles name decisions, so two choices that can never both be offered — a `handoff` and its
 `unless:` twin — may share one title. A choice with one thing left to offer is taken rather
 than asked.
+
+Every Choice is asked when the run reaches it, with the work it decides about in front of
+you; launching a workflow asks its Inputs and nothing else.
+[`run start --decide <step>=<title>`](cli.md#start-a-run) is the one way to pre-answer one,
+for a run nobody will be there for.
 
 ## Body and template substitution
 

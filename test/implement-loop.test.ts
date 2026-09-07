@@ -297,6 +297,20 @@ test("implement is build, architecture, simplify, review, fix — and no commit 
     }),
   ));
 
+test("implement takes an optional repo, and the build prompt builds only its tickets", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const defs = yield* loadTestDefinitions();
+      const wf = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
+
+      expect(wf.inputs.repo).toBe("optional");
+      // The `Repo:` line the planner wrote is what the run reads to know its share of a
+      // plan that spans repositories; an empty one is the whole plan, as it always was.
+      expect(wf.steps[0]!.preamble).toContain("{{inputs.repo}}");
+      expect(wf.steps[0]!.prompt).toContain("**Repo:**");
+    }),
+  ));
+
 test(
   "findings loop fix → simplify → review, and architecture stays out of the loop",
   () =>

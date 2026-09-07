@@ -121,6 +121,73 @@ export type ChoiceRecord = Schema.Schema.Type<typeof ChoiceRecordSchema>;
 export type StepRecord = Schema.Schema.Type<typeof StepRecordSchema>;
 
 /**
+ * A Choice that started one Run per repository of a plan that spans several: the order
+ * the waves may start in, the Run each repository got, and where the fan-out has got to
+ * (CONTEXT.md, Wave). A repository with no entry in `runs` was never started.
+ */
+const FanoutSchema = Schema.Struct({
+  /**
+   * The Choice that started it, so a resumed Driver picks up the right one. Both halves:
+   * titles are deliberately not unique across steps (CONTEXT.md, Choice), and everything
+   * else that answers a Choice — `choices` entries, `decisions` — is keyed by step id.
+   * A record written before the step was kept has an empty one, which matches any step.
+   */
+  step: Schema.String.pipe(Schema.withDecodingDefaultKey(Effect.succeed(""))),
+  title: Schema.String,
+  waves: Schema.Array(Schema.Array(Schema.String).pipe(Schema.mutable)).pipe(Schema.mutable),
+  runs: Schema.Record(Schema.String, Schema.String.pipe(Schema.mutableKey)),
+  /** The merge request each repository's run opened, once it has ended. */
+  mrs: Schema.Record(Schema.String, Schema.String.pipe(Schema.mutableKey)),
+  /** Which wave is being waited on, 1-based; 0 once no wave is. */
+  wave: Schema.Number,
+  /**
+   * The repository that stopped the waves, and what became of its run: `failed`,
+   * `stopped`, or `not started` where nothing could be started for it at all. The
+   * status travels with the repository because a row that read "failed" for a run the
+   * operator had stopped contradicted the note the run wrote for itself.
+   */
+  blocked: Schema.NullOr(Schema.Struct({ repo: Schema.String, status: Schema.String })),
+});
+export type FanoutRecord = Schema.Schema.Type<typeof FanoutSchema>;
+
+/** One repository of a fan-out, and what became of the Repo run it was given. */
+export interface FanoutRepo {
+  repo: string;
+  /** Its Repo run, and null for a repository the fan-out never got to. */
+  run: string | null;
+  /** The merge request that run opened, where it got that far. */
+  mr: string | null;
+}
+
+/**
+ * Every repository the fan-out covers, in the order its waves may start, with what
+ * became of each. The one place the record's shape is picked apart: the board's row,
+ * the parent's summary, the CLI's child lines and the resume check are four readers of
+ * one answer, and each deriving it from `waves`, `runs` and `mrs` itself is how they
+ * come to disagree about what "not started" means.
+ */
+export function fanoutRepos(fanout: FanoutRecord): FanoutRepo[] {
+  return fanout.waves.flat().map((repo) => ({
+    repo,
+    run: fanout.runs[repo] ?? null,
+    mr: fanout.mrs[repo] ?? null,
+  }));
+}
+
+/**
+ * Whether a fan-out still has something to do: a wave in flight, a repository that
+ * stopped it, or one that was never started. A resumed parent re-enters it rather than
+ * asking its menu again.
+ */
+export function fanoutUnfinished(fanout: FanoutRecord): boolean {
+  return (
+    fanout.blocked !== null ||
+    fanout.wave !== 0 ||
+    fanoutRepos(fanout).some((entry) => entry.run === null)
+  );
+}
+
+/**
  * The persisted Run, and the only place `run.json` is given a shape. Every reader —
  * the CLI, the Control Plane, the Driver, the engine — loads Runs through RunStore,
  * so a malformed Run fails where it is read rather than being trusted by whoever
@@ -173,6 +240,8 @@ const RunSchema = Schema.Struct({
   decisions: Schema.Record(Schema.String, Schema.String.pipe(Schema.mutableKey)).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed({})),
   ),
+  /** The repository runs a Choice fanned out, for a parent that waits on them. */
+  fanout: Schema.NullOr(FanoutSchema).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   awaiting: Schema.NullOr(Schema.String),
   handoffs: optionalList(HandoffRecordSchema),
   disputed: optionalList(FindingSchema),
@@ -488,6 +557,7 @@ export class RunStore {
         children: [],
         choices: [],
         decisions: opts.decisions ?? {},
+        fanout: null,
         awaiting: null,
         handoffs: [],
         disputed: [],

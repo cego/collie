@@ -162,7 +162,11 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
    parallel variants (`opus`, `sonnet`), the step's name when it runs alone. A toast tells
    you when a run is done or needs you.
 6. `plan` and `architecture` end in a menu, which takes over the whole pane while it is
-   open and hands it back afterwards. `prefix+u` picks up any run with unfinished steps.
+   open and hands it back afterwards. Launching asks nothing about it: a menu is asked when
+   the run reaches it, so you decide with the work in front of you — `collie run start
+--decide` is the way to pre-answer one for a run you will not be there for. `plan`'s
+   menu also answers to the planner, so telling it "proceed" starts the implementation.
+   `prefix+u` picks up any run with unfinished steps.
 
 The same operations are available without opening UI, which is how an agent drives Collie:
 see [CLI](cli.md).
@@ -266,6 +270,20 @@ refresh, and a run finishing under the cursor leaves the row that took its place
 └──────────────────────────────────────────────────┘└─────────────────────┘
 ┌──────────────────────────────────────────────────────────────────────────┐
 │l log · k stop · Enter go to it · t log tail · g all · p run · ? keys     │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+A run that started runs of its own has them under it, the way a run has its agents — a
+[plan that spans repositories](workflows.md#plans-that-span-repositories) is one thing on
+the board rather than several rows beside each other. The parent's own line says which
+wave it is on and what it is waiting for, and Enter on a child goes to that child's run.
+
+```
+┌─Runs─────────────────────────────────────────────────────────────────────┐
+│❯ ⚙ Plan · add-a-version-flag       wave 2/2 · waiting on cego/web        │
+│    ✓ Implement · add-a-version-flag  done · …/g/api!12                   │
+│    ⚙ Implement · add-a-version-flag  fix · 4m · iteration 2/5            │
+│      1 Implementer  working · Fix the findings                           │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 

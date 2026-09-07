@@ -357,6 +357,7 @@ effectTest("answering through the board and through the CLI leave the same trace
     glyph: "⚠",
     title: "Demo",
     detail: "",
+    children: [],
     // Hand-built, so nothing says when it last changed; only the app reads this.
     at: 0,
     target: null,

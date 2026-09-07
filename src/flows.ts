@@ -12,21 +12,11 @@ import {
   resolveWorkflow,
   type Definitions,
   type Provenance,
-  type ResolvedStep,
-  type ResolvedWorkflow,
 } from "./definitions";
-import { choiceHint, ensureWorkspaceTab, executeRun, unmetRequirementFor } from "./engine";
+import { ensureWorkspaceTab, executeRun } from "./engine";
 import type { PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
-import {
-  confirmLine,
-  inputValues,
-  resolveCandidates,
-  settle,
-  type InputPrompts,
-  type PickItem,
-  type Resolution,
-} from "./inputs";
+import { confirmLine, resolveCandidates, settle, type InputPrompts, type PickItem } from "./inputs";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { notify } from "./notify";
@@ -262,33 +252,17 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     settle(r, { value, source: "asked" });
   }
 
-  // Every decision this run will reach, answered now: the point of walking away is
-  // that nothing after this needs the human. `Ask me then` keeps today's behaviour,
-  // one Enter each.
-  const decisions: Record<string, string> = {};
-  for (const { step, items } of yield* decidableSteps(resolved, env, resolutions)) {
-    const answer = yield* prompts.menu(
-      [
-        { id: ASK_ME_THEN, title: "Ask me then", subtitle: "stop and ask when you get there" },
-        ...items,
-      ],
-      {
-        header: `${resolved.name} — ${step.id}`,
-        footer: "↑↓ move · Enter choose · Esc cancel",
-      },
-    );
-    if (!answer) return null;
-    if (answer.id !== ASK_ME_THEN) decisions[step.id] = answer.id;
-  }
-
-  // No confirmation: the human picked the workflow, answered its Inputs and answered
-  // its decisions, and Esc at any of those already cancelled. The line is the note.
+  // No decision menu here: a Choice is asked when the run reaches it, with the work it
+  // decides about in front of the human. `run start --decide` is the one pre-answer,
+  // for a Run nobody is going to be there for.
+  //
+  // No confirmation either: the human picked the workflow and answered its Inputs, and
+  // Esc at any of those already cancelled. The line is the note.
   const line = confirmLine(resolved.name, resolutions);
 
   const start = {
     workflow: resolved,
     resolutions,
-    decisions,
     workspace: yield* resolveWorkspace(herdr, env).pipe(Effect.catch(() => Effect.succeed(null))),
     note: line,
     parent: opts.parent?.id,
@@ -319,56 +293,6 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     name: started.checkout.branch,
     source: started.checkout.branchSource,
   });
-});
-
-const ASK_ME_THEN = "\u0000ask-me-then";
-
-/**
- * The Choice steps this Run will actually reach, and what each may be decided as. A
- * step this environment cannot meet is skipped rather than asked about: a question
- * about a step that will not run is worse than silence. (A `standalone:` step needs no
- * check here — `resolveWorkflow` drops those when a workflow is embedded, and this
- * only ever sees the one being launched.)
- */
-export const decidableSteps = Effect.fn("Flows.decidableSteps")(function* (
-  wf: ResolvedWorkflow,
-  env: PluginEnv,
-  resolutions: Resolution[],
-) {
-  const where = { cwd: env.cwd, inputs: inputValues(resolutions) };
-  const steps: Array<{ step: ResolvedStep; items: PickItem[] }> = [];
-  for (const step of wf.steps) {
-    if (!step.choices || step.choices.length === 0) continue;
-    if (step.requires && (yield* unmetRequirementFor(where, step.requires))) continue;
-    const items = yield* decisionItems(step, where);
-    // Everything this step could have offered is out of reach here, so there is
-    // nothing to decide and nothing to ask about.
-    if (items.length > 0) steps.push({ step, items });
-  }
-  return steps;
-});
-
-/**
- * A step's choices as decisions: by distinct title, in declaration order, and only
- * the ones this environment could carry out. A choice whose own `requires` cannot be
- * met here — posting to a merge request with no GitLab, or for a target that is not
- * one — would be decided and then not offered, and the unattended run it was decided
- * for would stop to ask after all.
- *
- * Liveness is deliberately not filtered: who is live at launch says nothing about who
- * will be live an hour later, which is why a hand-off and its twin share one title.
- */
-const decisionItems = Effect.fn("Flows.decisionItems")(function* (
-  step: ResolvedStep,
-  where: { cwd: string; inputs: Record<string, string> },
-) {
-  const items: PickItem[] = [];
-  for (const choice of step.choices ?? []) {
-    if (items.some((item) => item.id === choice.title)) continue;
-    if (choice.requires && (yield* unmetRequirementFor(where, choice.requires))) continue;
-    items.push({ id: choice.title, title: choice.title, subtitle: choiceHint(choice) });
-  }
-  return items;
 });
 
 /**

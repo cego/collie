@@ -10,11 +10,12 @@ import {
   resumeRun,
   settleGiven,
   runStatus,
+  runSettled,
   startRun,
   stopRun,
   type Failure,
 } from "../operations";
-import { RunStore } from "../run";
+import { fanoutRepos, RunStore } from "../run";
 import type { Run } from "../run";
 import type { PluginEnv } from "../env";
 import {
@@ -165,7 +166,31 @@ const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
   const resolved = yield* context(global, false);
   if (resolved._tag === "ContextFailure")
     return { _tag: "RunFailure" as const, result: resolved.result };
-  return yield* readRun(resolved.env, runId, yield* selected(global));
+  const found = yield* readRun(resolved.env, runId, yield* selected(global));
+  // The environment travels with the Run: `show` reads the Run's children out of the
+  // same state directory, and resolving the context twice is two answers to one question.
+  return found._tag === "RunFailure" ? found : { ...found, env: resolved.env };
+});
+
+/**
+ * A parent's Runs, one line each: an agent driving Collie follows a fan-out from here,
+ * and a plan that spans repositories is several Runs whose relation is otherwise only
+ * in the `--json` payload. The repository comes from the parent's own record; a child
+ * chained for anything else has none to name.
+ */
+const childLines = Effect.fn("run.childLines")(function* (stateDir: string, run: Run) {
+  const store = new RunStore(stateDir);
+  const repoOf = new Map<string, string>();
+  for (const entry of run.record.fanout ? fanoutRepos(run.record.fanout) : []) {
+    if (entry.run !== null) repoOf.set(entry.run, entry.repo);
+  }
+  const lines: string[] = [];
+  for (const id of run.record.children) {
+    const child = yield* store.load(id).pipe(Effect.catch(() => Effect.succeed(null)));
+    const status = child === null ? "gone" : yield* runStatus(child);
+    lines.push(`  ${id}\t${repoOf.get(id) ?? ""}\t${status}`);
+  }
+  return lines;
 });
 
 const runShow = Command.make(
@@ -180,10 +205,12 @@ const runShow = Command.make(
         Effect.gen(function* () {
           const resolved = yield* resolveCommandRun(global, runId);
           if (resolved._tag === "RunFailure") return resolved.result;
+          const run = resolved.run;
+          const head = `${run.id}\t${yield* runStatus(run)}\t${run.record.workflow}`;
           return {
             ok: true,
-            data: { run: yield* runData(resolved.run) },
-            human: `${resolved.run.id}\t${yield* runStatus(resolved.run)}\t${resolved.run.record.workflow}`,
+            data: { run: yield* runData(run) },
+            human: [head, ...(yield* childLines(resolved.env.stateDir, run))].join("\n"),
           };
         }),
         global.json,
@@ -338,7 +365,7 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
     const current = fresh.run;
     const snapshot = yield* runData(current);
     const status = yield* runStatus(current);
-    const terminal = ["succeeded", "failed", "stopped"].includes(status);
+    const terminal = runSettled(status);
     if (follow) {
       // Once, not once per event: a Run with no progress yet leaves progressCount
       // at zero however many times its directory is touched.

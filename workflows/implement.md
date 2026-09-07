@@ -4,6 +4,9 @@ title: implement — build the plan, tidy it, review it, fix until clean
 description: Builds from a plan dir, a Linear issue or a description, improves the architecture it touched, simplifies, fans out to reviewers, loops on findings, then opens the merge request.
 inputs:
   plan: work-source
+  # One repository's share of a plan that spans several, as the tickets' `Repo:` line
+  # names it. Empty means the whole plan, which is every single-repository run.
+  repo: optional
   # `new` gives the Run a herdr worktree workspace of its own; anything else or absent
   # keeps it in the workspace it was started from. See docs/using.md.
   workspace: optional
@@ -47,6 +50,7 @@ steps:
 ---
 
 Work source ({{inputs.plan_kind}}): {{inputs.plan}}
+Repository (may be empty): {{inputs.repo}}
 Project root: {{cwd}}
 This run's directory: {{run.dir}}
 
@@ -56,7 +60,10 @@ The work source above is one of four kinds. Do the one that matches
 `{{inputs.plan_kind}}` and ignore the others.
 
 - **plan-dir** — a plan is already written. Read `{{inputs.plan}}/SPEC.md` and every
-  ticket in `{{inputs.plan}}/issues/`, and build those tickets.
+  ticket in `{{inputs.plan}}/issues/`, and build those tickets. Where the repository
+  above is not empty, this plan spans several and you own one of them: build only the
+  tickets whose `**Repo:**` line names it, in their order, and leave the rest to their
+  own run. An empty repository means the whole plan is yours.
 - **review** — a review of work that already exists. `{{inputs.plan}}/review.md` is the
   spec and `{{inputs.plan}}/steps/synthesize/synthesized.json` has the same findings as
   JSON; the tickets are those findings, worst severity first. You are fixing an existing

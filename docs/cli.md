@@ -184,6 +184,12 @@ comes back as the `timeout` error code. Abbreviations like `30s` are refused as
 > through it. To catch questions, give the wait a `--timeout` and check `run show` for
 > `awaiting` each time it expires, or poll `run show` on your own schedule.
 
+A plan run that [fanned out over several repositories](workflows.md#plans-that-span-repositories)
+stays `running` until the last of its repository runs ends, so `run wait` on it returns
+when the whole plan is built or blocked rather than when the first run started. `run show`
+on it lists the repository runs under its own line, so an agent can follow the fan-out
+from the parent alone.
+
 `--follow` streams instead of returning one envelope. It prints newline-delimited JSON
 events, not the `ok`/`data` shape the rest of this page describes:
 
@@ -207,7 +213,8 @@ defect — so a consumer reads each line as JSON and branches on whether `type` 
 | `steps[]`                             | Per step: `id`, `status`, `iteration`, `note`, and one `variants[]` entry per parallel agent with its `harness`, `model`, `effort`, `agent`, `paneId`, `status` and `output`. |
 | `awaiting`                            | The question the run is waiting on, or `null`.                                                                                                                                |
 | `choices`                             | The options that question offers.                                                                                                                                             |
-| `parent`, `children`                  | Chained runs.                                                                                                                                                                 |
+| `parent`, `children`                  | Chained runs. `run show`'s human output lists each child as `<id>  <repo>  <status>`.                                                                                         |
+| `fanout`                              | For a plan that spans repositories: the `waves`, the run each repository got, the merge requests they opened, the wave in flight, and the repository that stopped it.         |
 | `disputed`, `deferred`, `outstanding` | Findings the loop is no longer driving, and why.                                                                                                                              |
 | `mr_url`, `linear_issues`, `summary`  | What the run produced.                                                                                                                                                        |
 | `progress[]`                          | The Driver's own log of what it did, with timestamps.                                                                                                                         |

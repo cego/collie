@@ -84,6 +84,9 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
       detail: parts.join(" · "),
       at: record.finished_at ? Date.parse(record.finished_at) : 0,
       target: record.inputs.target ?? null,
+      // History never nests: a finished run's repository runs are finished too, and
+      // each is a row of its own in the record of everything before now.
+      children: [],
       // The board's own rule, not a second copy of it: History and the Runs view both
       // decide from this whether to offer the action that starts a fix run.
       fixable: yield* fixableRun(run),

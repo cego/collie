@@ -8,7 +8,14 @@ import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./dri
 import { COLLIE_TAB, displayName, GLYPH, runLabel, stepNow } from "./naming";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
 import { REVIEW_FILE } from "./output";
-import { RunStore, type Run, type RunRecord, type VariantRecord } from "./run";
+import {
+  fanoutRepos,
+  RunStore,
+  type FanoutRecord,
+  type Run,
+  type RunRecord,
+  type VariantRecord,
+} from "./run";
 import { stepDuration, took } from "./time";
 import { LEADING_GLYPH, type AgentInfo, type WorkspaceInfo } from "./herdr";
 
@@ -74,6 +81,16 @@ export interface RunRow {
   at: number;
   /** What this run reviewed, so its merge request can be looked up on selection. */
   target: string | null;
+  /**
+   * The repository runs this run fanned out, which nest under it: a plan that spans
+   * repositories is one thing on the board rather than several rows beside each other.
+   *
+   * The fan-out's own record, not every run that names this one as its parent. An
+   * ordinary chain's parent finishes the moment its child has a Driver, so keying on
+   * parentage drew a live `implement` run inside the finished region under a `plan` run
+   * that was over — and moved it back out again when that row aged off the board.
+   */
+  children: ReadonlyArray<string>;
   /**
    * Whether this run can supply the work for another: `implement` takes a run directory
    * as a work source only when there is a review in it, so "fix what is still open" is
@@ -252,6 +269,30 @@ function agentTitle(variant: VariantRecord, registered: AgentEntry | undefined):
   return `${name} · ${displayName(variant.model.slice(variant.model.lastIndexOf("/") + 1))}`;
 }
 
+/**
+ * What became of a fan-out, and `null` while it is still in flight: how many
+ * repositories it built, or the one that stopped it. A finished row says this and
+ * nothing else about the waves — what a run was doing is not what became of it.
+ */
+function fanoutOutcome(fan: FanoutRecord): string | null {
+  if (fan.blocked !== null) return `blocked · ${fan.blocked.repo} ${fan.blocked.status}`;
+  return fan.wave === 0 ? `${fanoutRepos(fan).length} repos · done` : null;
+}
+
+/**
+ * Which wave a fan-out is on and what it is waiting for, and `null` when no wave is in
+ * flight. A live row says this: it is the whole of a waiting parent's state, which is
+ * why it stands in for the step it is technically on.
+ */
+function fanoutWaiting(fan: FanoutRecord): string | null {
+  // A fan-out one repository stopped is not waiting on anything, whatever wave it had
+  // reached: what became of it outranks what it was doing, on a live row as much as a
+  // finished one.
+  if (fan.blocked !== null) return null;
+  const wave = fan.waves[fan.wave - 1];
+  return wave ? `wave ${fan.wave}/${fan.waves.length} · waiting on ${wave.join(", ")}` : null;
+}
+
 const activeDetail = Effect.fn("activeDetail")(function* (
   run: Run,
   now: number,
@@ -266,6 +307,11 @@ const activeDetail = Effect.fn("activeDetail")(function* (
   // gate the run is holding at and for an agent answering in its own pane, and neither
   // of those is a question this board can put under the row.
   if (record.awaiting) return choice ? `${record.awaiting} — your turn` : record.awaiting;
+  // A parent waiting on its repository runs is not doing a step of its own worth
+  // naming: which wave it is on and what it is waiting for is the whole of its state.
+  const fan = record.fanout;
+  const fanning = fan && (fanoutWaiting(fan) ?? fanoutOutcome(fan));
+  if (fanning) return fanning;
   const step = record.steps.find((s) => s.status === "running" || s.status === "blocked");
   const where = step ? step.id : "starting";
   const parts = [where];
@@ -328,8 +374,21 @@ const quietFor = Effect.fn("quietFor")(function* (dir: string, now: number, quie
   return `quiet for ${took(now - at)}`;
 });
 
+/** The runs a fan-out started, in wave order, and none for a run that never fanned out. */
+function repoRunsOf(record: RunRecord): string[] {
+  const fan = record.fanout;
+  return fan === null ? [] : fanoutRepos(fan).flatMap((entry) => entry.run ?? []);
+}
+
 function recentDetail(record: RunRecord, abandoned: boolean): string {
-  const parts: string[] = [abandoned ? "abandoned" : record.status];
+  const fan = record.fanout;
+  const outcome = fan && fanoutOutcome(fan);
+  const parts: string[] = [abandoned ? "abandoned" : (outcome ?? record.status)];
+  // No outcome on a finished row means the fan-out never got to record one: nothing
+  // writes `wave: 0` when the parent's Driver is stopped or killed mid-wave. So the
+  // run's own status has led, and the wave it was interrupted during follows it —
+  // `fanoutWaiting`'s sentence would describe a wait that has ended.
+  if (fan !== null && outcome === null) parts.push(`in wave ${fan.wave}/${fan.waves.length}`);
   if (record.outstanding.length > 0) {
     // Open findings that were handed to another Run's agent are being worked on
     // somewhere this record cannot see; say so instead of presenting them as untouched.
@@ -478,6 +537,7 @@ export const buildView = Effect.fn("buildView")(function* (
       detail: yield* activeDetail(r, now, quietMs, choice),
       at: yield* touchedAt(r),
       target: r.record.inputs.target ?? null,
+      children: repoRunsOf(r.record),
       // The same set the finished rows read: this used to stat every active run's dir a
       // second time, on the 3s poll and on every watch event and command.
       fixable: fixable.has(r.id),
@@ -507,6 +567,7 @@ export const buildView = Effect.fn("buildView")(function* (
       // only its file's mtime to go on.
       at: r.record.finished_at ? Date.parse(r.record.finished_at) : 0,
       target: r.record.inputs.target ?? null,
+      children: repoRunsOf(r.record),
       fixable: fixable.has(r.id),
       choice: null,
       // A finished run is waiting on nobody, whatever it was awaiting when it stopped.

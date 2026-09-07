@@ -94,8 +94,8 @@ const answering = Effect.fn("launch.answering")(function* (
 
 const env = () => rig.pluginEnv();
 
-effectTest("the launch flow asks for the workflow, its Inputs and its decisions", function* () {
-  // `choose` has one Choice step with two titles, so it asks a decision at launch too.
+effectTest("the launch flow asks for the workflow and its Inputs, and nothing else", function* () {
+  // A Choice step is not a launch question any more: it is asked when the run reaches it.
   yield* writeDef(
     rig.baselineDir,
     "workflows",
@@ -122,23 +122,20 @@ Do {{inputs.goal}}.
 `,
   );
 
-  const { code, asked, left } = yield* answering(
-    ["goalful", "Add a picker", "Stop here too"],
-    (prompts) => pickFlow(new Herdr(env()), env(), prompts),
+  const { code, asked, left } = yield* answering(["goalful", "Add a picker"], (prompts) =>
+    pickFlow(new Herdr(env()), env(), prompts),
   );
 
   expect(code).toBe(0);
   expect(left).toBe(0);
-  // Workflow, then the Input, then the decision — in that order and nothing else.
-  expect(asked[0]).toContain("Workflows —");
-  expect(asked[1]).toBe("What is the goal?");
-  expect(asked[2]).toBe("goalful — next");
+  // Workflow, then the Input — and the run starts, with the Choice left for the Driver.
+  expect(asked).toEqual(["Workflows — " + env().cwd, "What is the goal?"]);
 
   const runs = yield* new RunStore(env().stateDir).list();
   expect(runs).toHaveLength(1);
   expect(runs[0]!.record.workflow).toBe("goalful");
   expect(runs[0]!.record.inputs.goal).toBe("Add a picker");
-  expect(runs[0]!.record.decisions).toEqual({ next: "Stop here too" });
+  expect(runs[0]!.record.decisions).toEqual({});
 });
 
 effectTest(

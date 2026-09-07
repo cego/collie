@@ -377,6 +377,7 @@ effectTest("the board's keys answer the question, and Esc leaves the run open", 
     glyph: "⚠",
     title: "Plan · x",
     detail: "",
+    children: [],
     // Hand-built, so nothing says when it last changed; only the app reads this.
     at: 0,
     target: null,
