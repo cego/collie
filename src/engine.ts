@@ -46,18 +46,16 @@ import {
 } from "./output";
 import {
   agentName,
-  disambiguate,
-  displayName,
   evenRatio,
   GLYPH,
   insertIndexFor,
   paneLabel,
   rankOf,
   runName,
+  runTabLabel,
   shellQuote,
   stepLabel,
-  tabLabel,
-  tabNameOf,
+  tabLabelsFor,
   targetLabel,
   COLLIE_TAB,
   isCollieTab,
@@ -190,8 +188,13 @@ interface RunCtx {
   viewSource: string;
   /** The Control Plane tab this run asks its questions in, when there is one. */
   workspaceTabId: string | null;
-  /** Each of this run's tabs and the name it was given; the glyph is what moves. */
-  tabNames: Map<string, string>;
+  /**
+   * What this process last called each of the run's tabs, so a reconcile that learns
+   * nothing new sends no rename. herdr is not asked what a tab is called: the label is
+   * this run's own sentence, and the only other writer is a Control Plane computing
+   * the same one.
+   */
+  tabLabels: Map<string, string>;
   /** A lone default shell pane the workflow was launched from, consumed at most once. */
   launchPane: { paneId: string; tabId: string } | null;
   /** Whether the last pane read failed, so the next failure is not logged twice. */
@@ -210,7 +213,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     groups: new Map(),
     viewSource,
     workspaceTabId: null,
-    tabNames: new Map(),
+    tabLabels: new Map(),
     launchPane: null,
     paneReadFailed: false,
   };
@@ -293,7 +296,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
         record.note = herdrFailureReason(choiceResult.failure);
         yield* run.save();
         yield* out(`✗ ${step.id} — ${record.note}`);
-        return yield* finish(o, "failed", viewSource);
+        return yield* finish(o, ctx, "failed", viewSource);
       }
       const result: ChoiceResult = choiceResult.success;
       ctx.ran.add(step.id);
@@ -301,7 +304,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       record.note = result.note;
       yield* run.save();
       if (result.status !== "done") {
-        return yield* finish(o, "blocked", viewSource, `${step.id} needs you`);
+        return yield* finish(o, ctx, "blocked", viewSource, `${step.id} needs you`);
       }
       // A chained Run takes over from here, so the parent stops where it is.
       if (result.chained) {
@@ -310,7 +313,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
           if (rec.status === "pending") rec.note = `not run: ${result.note}`;
         }
         yield* run.save();
-        return yield* finish(o, "done", viewSource, result.note ?? undefined);
+        return yield* finish(o, ctx, "done", viewSource, result.note ?? undefined);
       }
       index += 1;
       continue;
@@ -333,7 +336,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       record.note = herdrFailureReason(stepResult.failure);
       yield* run.save();
       yield* out(`✗ ${step.id} — ${record.note}`);
-      return yield* finish(o, "failed", viewSource);
+      return yield* finish(o, ctx, "failed", viewSource);
     }
     const outcomes: VariantOutcome[] = stepResult.success;
     ctx.ran.add(step.id);
@@ -375,7 +378,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       const announced = kind
         ? yield* notify(o, kind, why, { step: step.id, subject: step.id })
         : false;
-      return yield* finish(o, "blocked", viewSource, why, announced);
+      return yield* finish(o, ctx, "blocked", viewSource, why, announced);
     }
 
     const gate = repeats.find((r) => r.from === index);
@@ -428,13 +431,13 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
         `stopped at max_iterations ${mine.max} with ${still.findings.length} finding(s)`;
       yield* run.save();
       yield* out(`  max_iterations (${mine.max}) reached with ${still.findings.length} finding(s)`);
-      return yield* finish(o, "blocked", viewSource, `max_iterations reached with findings`);
+      return yield* finish(o, ctx, "blocked", viewSource, `max_iterations reached with findings`);
     }
 
     index += 1;
   }
 
-  return yield* finish(o, "done", viewSource);
+  return yield* finish(o, ctx, "done", viewSource);
 });
 
 const runStep = Effect.fn("Engine.runStep")(function* (
@@ -492,8 +495,7 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       // An `agent:` step opens nothing, and renames nothing: the pane it inherited
       // is alone in its tab, and the tab already names the run.
       if (paneName && record.paneId) yield* herdr.paneRename(record.paneId, paneName);
-      if (record.tabId)
-        yield* herdr.tabRename(record.tabId, runTab(o, ctx, record.tabId, GLYPH.running));
+      if (record.tabId) yield* renameTab(o, ctx, record.tabId, runTab(o, GLYPH.running));
     } else {
       if (prior?.paneId) {
         // fresh: replace the pane so `agent start` sees a shell prompt again. The
@@ -527,24 +529,18 @@ const runStep = Effect.fn("Engine.runStep")(function* (
         });
         record.tabId = records[i - 1]!.tabId;
       } else if (ctx.launchPane) {
-        const name = yield* freeTabName(o, ctx, step);
         record.paneId = ctx.launchPane.paneId;
         record.tabId = ctx.launchPane.tabId;
-        ctx.tabNames.set(ctx.launchPane.tabId, name);
         ctx.launchPane = null;
       } else {
-        const name = yield* freeTabName(o, ctx, step);
-        const tab = yield* herdr.tabCreate({
-          label: tabLabel(GLYPH.running, name),
-          cwd: run.record.cwd,
-        });
+        const label = runTab(o, GLYPH.running);
+        const tab = yield* herdr.tabCreate({ label, cwd: run.record.cwd });
         record.tabId = tab.tabId;
         record.paneId = tab.paneId;
-        if (record.tabId) ctx.tabNames.set(record.tabId, name);
+        ctx.tabLabels.set(tab.tabId, label);
         yield* placeTab(o, ctx, tab.tabId);
       }
-      if (record.tabId)
-        yield* herdr.tabRename(record.tabId, runTab(o, ctx, record.tabId, GLYPH.running));
+      if (record.tabId) yield* renameTab(o, ctx, record.tabId, runTab(o, GLYPH.running));
       if (paneName && record.paneId) yield* herdr.paneRename(record.paneId, paneName);
 
       // herdr 0.7.5 ignores --cwd on tab create and pane split, so cd explicitly.
@@ -780,6 +776,9 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
           });
           run.record.awaiting = null;
           yield* run.save();
+          // Off `asks you` the moment it is answered: the next step's own rename can
+          // be a hand-off and a whole agent start away.
+          yield* reconcileTabs(o, ctx, nothingLive);
           return answer;
         });
     if (!picked) return choiceResult({ status: "blocked", note: "no choice taken" });
@@ -1275,6 +1274,9 @@ const callAttention = Effect.fn("Engine.callAttention")(function* (
 ) {
   o.run.record.awaiting = stepId;
   yield* o.run.save();
+  // The tab says what it is now waiting for, so the sidebar row reads `asks you`
+  // rather than the step it stopped in the middle of.
+  yield* reconcileTabs(o, ctx, nothingLive, true);
   yield* notify(o, "needs-you", detail, { step: stepId });
   if (!ctx.workspaceTabId) return;
   // A tab that will not focus is still a tab the human can reach.
@@ -1665,6 +1667,9 @@ const awaitAgent = Effect.fn("Engine.awaitAgent")(function* (
       continue;
     }
     silentSince = null;
+    // What this poll learned, on the tab: an agent herdr calls `blocked` is a human
+    // being waited on, and until this the tab still said ⚙ and the sidebar with it.
+    yield* reconcileTabs(o, ctx, (agent) => (agent === record.agent ? status : undefined));
     // `blocked` is herdr saying a human is needed; that path has its own wait and its
     // own toast, and a nudge there would answer a permission dialog with prose.
     if (over.includes(status)) return null;
@@ -1868,32 +1873,57 @@ const collect = Effect.fn("Engine.collect")(function* (
   return { record, output: parsed, review };
 });
 
-/** A tab keeps the name it was given; only the glyph moves. */
-function runTab(o: EngineOptions, ctx: RunCtx, tabId: string | null, glyph: string): string {
-  const name = (tabId && ctx.tabNames.get(tabId)) ?? o.run.record.workflow;
-  return tabLabel(glyph, name);
+/**
+ * Every tab of this run says the same thing: which run it is and which step it is on.
+ * The glyph is the caller's, because that is the one part that is about the tab rather
+ * than about the run — see `tabGlyph`.
+ */
+function runTab(o: EngineOptions, glyph: string): string {
+  return runTabLabel(glyph, o.run.record, false);
 }
 
 /**
- * What to call a new tab: the workflow for the run's own first tab, the step for
- * every tab after it. Where a live tab in this workspace already carries that
- * name — another run of the same workflow — the target is appended to tell them
- * apart, which is the only place a target appears on a tab.
+ * One tab renamed, and remembered. Nothing is sent for a label herdr already has: the
+ * reconcile below runs on every status poll, and a rename per poll per tab would be
+ * herdr redrawing its sidebar a few times a second for no news at all.
  */
-const freeTabName = Effect.fn("Engine.freeTabName")(function* (
+const renameTab = Effect.fn("Engine.renameTab")(function* (
   o: EngineOptions,
   ctx: RunCtx,
-  step: ResolvedStep,
+  tabId: string,
+  label: string,
 ) {
-  const plain = ctx.tabNames.size === 0 ? o.run.record.workflow : step.id;
-  // Without the list a plain name is the better guess than a decorated one.
-  const taken = yield* o.herdr.tabList().pipe(
-    Effect.map((tabs) => tabs.map((t) => tabNameOf(t.label))),
-    Effect.catch((e) => o.run.log(`tab names: ${reason(e)}`).pipe(Effect.as<string[]>([]))),
-  );
-  // Compared as a human reads them, so the capitalisation cannot hide a collision.
-  if (!taken.includes(displayName(plain))) return plain;
-  return disambiguate(plain, runTarget(o.wf, o.run.record));
+  if (ctx.tabLabels.get(tabId) === label) return;
+  // Remembered before the call, not after it: the variants of a parallel step poll at
+  // the same time, and two fibers that both read an empty memo before either wrote it
+  // sent the same rename twice. A rename that fails is not retried — a tab that will
+  // not take one has almost always been closed.
+  ctx.tabLabels.set(tabId, label);
+  yield* o.herdr.tabRename(tabId, label);
+});
+
+/**
+ * Nothing live is known about any agent, so the label comes off the record alone: what
+ * a step start, a Choice and the run's end each know about their own tabs.
+ */
+const nothingLive = () => undefined;
+
+/**
+ * The run's tabs, brought up to date. Called where the Driver already learns something
+ * about a pane — the status poll while it waits on an agent — so a tab that goes
+ * `blocked` says so without the engine renaming anything by hand. Only what changed:
+ * the poll is every couple of seconds and the label is the same string nearly always.
+ */
+const reconcileTabs = Effect.fn("Engine.reconcileTabs")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  live: (agent: string) => string | undefined,
+  asking = false,
+) {
+  // A tab that will not rename is not worth failing a live step over.
+  for (const [tabId, label] of tabLabelsFor(o.run.record, live, asking)) {
+    yield* Effect.ignore(renameTab(o, ctx, tabId, label));
+  }
 });
 
 /**
@@ -2248,24 +2278,23 @@ function verdictOf(outcomes: VariantOutcome[], disputed: Finding[]): Verdict {
 }
 
 /**
- * The step's tab wears the state of every pane in it: ✓ only once they are all
- * done, ✗ when one stopped, ⚠ when one is waiting for the human.
+ * A step that has just stopped, on the tabs of the run. One glyph rule, `tabGlyph`'s:
+ * a step's own tab used to go ✓ the moment its variants were done, and the next
+ * reconcile put it back to ⚙ because the run was still going — the flicker was the
+ * two writers disagreeing about what ✓ means. It means nothing is working.
  */
 const markTab = Effect.fn("Engine.markTab")(function* (
   o: EngineOptions,
   ctx: RunCtx,
   records: VariantRecord[],
 ) {
-  const glyph = records.every((r) => r.status === "done")
-    ? GLYPH.done
-    : records.some((r) => r.status === "failed")
-      ? GLYPH.failed
-      : records.some((r) => r.status === "blocked")
-        ? GLYPH.waiting
-        : GLYPH.running;
-  for (const tabId of new Set(records.map((r) => r.tabId).filter((t): t is string => !!t))) {
-    yield* o.herdr.tabRename(tabId, runTab(o, ctx, tabId, glyph));
-  }
+  yield* reconcileTabs(o, ctx, (agent) => {
+    const record = records.find((r) => r.agent === agent);
+    if (!record) return undefined;
+    // A variant's own word for itself, as herdr would have put it.
+    if (record.status === "running") return "working";
+    return record.status === "blocked" ? "blocked" : "idle";
+  });
 });
 
 const setView = Effect.fn("Engine.setView")(function* (
@@ -2281,6 +2310,7 @@ const setView = Effect.fn("Engine.setView")(function* (
 
 const finish = Effect.fn("Engine.finish")(function* (
   o: EngineOptions,
+  ctx: RunCtx,
   status: RunStatus,
   viewSource: string,
   detail?: string,
@@ -2293,6 +2323,9 @@ const finish = Effect.fn("Engine.finish")(function* (
   run.record.awaiting = null;
   run.record.summary = summarise(o, status);
   yield* run.save();
+  // Every tab of it, once, now that there is no step to name and nothing of this run's
+  // is going to work again: a tab left saying `⚙ … · review 2/5` outlives the run.
+  yield* reconcileTabs(o, ctx, nothingLive);
   yield* out("");
   yield* out(run.record.summary);
   // The sidebar filter is a nicety.

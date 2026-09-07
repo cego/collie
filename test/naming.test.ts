@@ -15,6 +15,10 @@ import {
   tabLabel,
   tabNameOf,
   targetLabel,
+  runTabLabel,
+  tabGlyph,
+  tabLabelsFor,
+  type LabelledRun,
 } from "../src/naming";
 
 test("a review's target is short and human, and never a sha", () => {
@@ -182,4 +186,126 @@ test("the Collie tab's label survives its own helpers", () => {
   expect(isCollieTab("Control Plane")).toBe(true);
   expect(isCollieTab(COLLIE_TAB)).toBe(true);
   expect(isCollieTab("Implement")).toBe(false);
+});
+
+/** A run record, as much of one as a tab label is made of. */
+function labelled(over: Partial<LabelledRun> = {}): LabelledRun {
+  return {
+    workflow: "implement",
+    slug: "implement-control-plane-glass",
+    inputs: { target: "branch:master...control-plane-glass" },
+    target_label: "control-plane-glass",
+    status: "running",
+    max_iterations: 5,
+    steps: [{ id: "fix", status: "running", iteration: 3, variants: [] }],
+    ...over,
+  };
+}
+
+test("a run's tab says which step it is on, and how far into its loop", () => {
+  expect(runTabLabel(GLYPH.running, labelled(), false)).toBe(
+    "⚙ Implement · control-plane-glass · fix 3/5",
+  );
+  // A step that has not looped has no round to report, only its own name — which is
+  // every step of a workflow with no fix loop in it, and every step before one.
+  expect(
+    runTabLabel(
+      GLYPH.running,
+      labelled({
+        workflow: "plan",
+        steps: [{ id: "draft", status: "running", iteration: 1, variants: [] }],
+      }),
+      false,
+    ),
+  ).toBe("⚙ Plan · control-plane-glass · draft");
+  // A question is the one thing worth saying instead of the step it is asked from.
+  expect(runTabLabel(GLYPH.waiting, labelled(), true)).toBe(
+    "⚠ Implement · control-plane-glass · asks you",
+  );
+  // A run that is over is what it was, and no step.
+  expect(runTabLabel(GLYPH.done, labelled({ status: "done" }), false)).toBe(
+    "✓ Implement · control-plane-glass",
+  );
+  expect(runTabLabel(GLYPH.failed, labelled({ status: "failed" }), false)).toBe(
+    "✗ Implement · control-plane-glass",
+  );
+  // Between steps there is no step to name, and the run is not over either.
+  expect(
+    runTabLabel(
+      GLYPH.running,
+      labelled({ steps: [{ id: "fix", status: "done", iteration: 3, variants: [] }] }),
+      false,
+    ),
+  ).toBe("⚙ Implement · control-plane-glass");
+  // A record written before targets were kept still names what it was pointed at.
+  expect(runTabLabel(GLYPH.running, labelled({ target_label: null }), false)).toBe(
+    "⚙ Implement · control-plane-glass · fix 3/5",
+  );
+});
+
+test("a tab's glyph is the state of what is in it, not of the last step that ran", () => {
+  const run = labelled();
+  // Anything working means work is happening in there, whatever the run last recorded.
+  expect(tabGlyph(["idle", "working"], run, false)).toBe(GLYPH.running);
+  expect(tabGlyph(["working"], labelled({ status: "done" }), false)).toBe(GLYPH.running);
+  // A human is needed: herdr's own word for it, and Collie's own question.
+  expect(tabGlyph(["blocked", "idle"], run, false)).toBe(GLYPH.waiting);
+  expect(tabGlyph(["idle"], run, true)).toBe(GLYPH.waiting);
+  // Nothing working: the run's own state, so a finished run's idle agent reads ✓ and
+  // an unfinished one's reads ⚙ — which is what a hand-off leaves behind.
+  expect(tabGlyph(["idle", "done"], labelled({ status: "done" }), false)).toBe(GLYPH.done);
+  expect(tabGlyph(["idle", "done"], run, false)).toBe(GLYPH.running);
+  expect(tabGlyph(["done"], labelled({ status: "failed" }), false)).toBe(GLYPH.failed);
+  expect(tabGlyph(["done"], labelled({ status: "blocked" }), false)).toBe(GLYPH.waiting);
+  // An agent herdr no longer has says nothing either way.
+  expect(tabGlyph([], labelled({ status: "done" }), false)).toBe(GLYPH.done);
+});
+
+test("every tab of a run wears the run's sentence and its own glyph", () => {
+  const run = labelled({
+    steps: [
+      { id: "build", status: "done", iteration: 1, variants: [{ agent: "build-r1", tabId: "t1" }] },
+      {
+        id: "fix",
+        status: "running",
+        iteration: 3,
+        variants: [
+          { agent: "fix-r1", tabId: "t2" },
+          { agent: "fix-r2", tabId: "t2" },
+        ],
+      },
+    ],
+  });
+  const statuses = new Map([
+    ["build-r1", "idle"],
+    ["fix-r1", "idle"],
+    ["fix-r2", "working"],
+  ]);
+  const live = (agent: string) => statuses.get(agent);
+  expect(tabLabelsFor(run, live, false)).toEqual(
+    new Map([
+      // Nothing working in the first tab, and the run is not over: still ⚙.
+      ["t1", "⚙ Implement · control-plane-glass · fix 3/5"],
+      ["t2", "⚙ Implement · control-plane-glass · fix 3/5"],
+    ]),
+  );
+  // The glyph is per tab: the one with the working agent keeps ⚙ once the run is done.
+  expect(tabLabelsFor({ ...run, status: "done" }, live, false)).toEqual(
+    new Map([
+      ["t1", "✓ Implement · control-plane-glass"],
+      ["t2", "⚙ Implement · control-plane-glass"],
+    ]),
+  );
+  // A variant that never opened a tab is not a tab.
+  expect(
+    tabLabelsFor(
+      labelled({
+        steps: [
+          { id: "fix", status: "running", iteration: 1, variants: [{ agent: "a", tabId: null }] },
+        ],
+      }),
+      () => "idle",
+      false,
+    ).size,
+  ).toBe(0);
 });

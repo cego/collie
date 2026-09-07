@@ -38,7 +38,7 @@ import {
   settle,
   type Resolution,
 } from "./inputs";
-import { readRegistry, registryPath, type RegistryScope } from "./registry";
+import { readRegistry, registryPath, scopeOfRun } from "./registry";
 import { currentPid, withLock } from "./lock";
 import { REVIEW_FILE } from "./output";
 import { Run, RunStore } from "./run";
@@ -702,7 +702,6 @@ export const stopRun = Effect.fn("operations.stopRun")(function* (
   stateDir: string,
   herdr: Herdr,
   run: Run,
-  scope: RegistryScope,
   requestId: string,
 ) {
   const fs = yield* FileSystem.FileSystem;
@@ -731,9 +730,12 @@ export const stopRun = Effect.fn("operations.stopRun")(function* (
     run.record.finished_at = stoppedAt;
     yield* run.save();
   }
-  const entries = (yield* readRegistry(yield* registryPath(stateDir, scope))).filter(
-    (entry) => entry.runId === run.id,
-  );
+  // The Run's own register, not the caller's: closing the panes its agents are in is
+  // the only thing that stops them, and both front doors used to hand this the scope
+  // they happened to be in — so a stop from another workspace signalled the Driver,
+  // said it had stopped the run, and left its agents working in their own checkout.
+  const register = yield* registryPath(stateDir, scopeOfRun(run.record));
+  const entries = (yield* readRegistry(register)).filter((entry) => entry.runId === run.id);
   yield* Effect.all(entries.map((entry) => herdr.paneClose(entry.paneId).pipe(Effect.result)));
   return ok({ runId: run.id, status: "stopped" }, `Stopped run ${run.id}.`);
 });

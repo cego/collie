@@ -49,7 +49,7 @@ import { answerKey, openLog } from "../src/flows";
 import { driverCommand, spawnDriver } from "../src/operations";
 import type { HerdrError } from "../src/herdr";
 import { processStartTime } from "../src/lock";
-import type { Asking, RunRow, WorkspaceView } from "../src/workspace";
+import type { Asking, RunRow } from "../src/workspace";
 import { askingRun, buildView, renderWorkspace } from "../src/workspace";
 import { scopeFor } from "../src/registry";
 import { RunStore } from "../src/run";
@@ -530,7 +530,7 @@ effectTest(
         paneId: "1-1",
         pluginRoot: env.pluginRoot,
       },
-      view,
+      run,
     );
     expect(note).toContain(row.title);
     const after = (yield* rig.calls()).slice(before);
@@ -872,32 +872,20 @@ effectTest(
     const path = yield* Path.Path;
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const env = rig.pluginEnv();
-    const dir = path.join(rig.root, "state's dir; touch pwned", "run dir");
-    yield* fs.makeDirectory(dir, { recursive: true });
+    // A real run, in a state dir whose name is shell syntax: that is where a log path
+    // with metacharacters actually comes from.
+    const nasty = path.join(rig.root, "state's dir; touch pwned");
+    const run = yield* new RunStore(nasty).create({
+      workflow: "review",
+      cwd: rig.projectDir,
+      inputs: {},
+      inputSources: {},
+      stepIds: ["review"],
+      maxIterations: 1,
+      namedAfter: "x",
+    });
+    const dir = run.dir;
     yield* fs.writeFileString(path.join(dir, RUNNER_LOG), "hello\n");
-    const row = {
-      id: "r",
-      dir,
-      glyph: "✓",
-      title: "Review · x",
-      detail: "",
-      at: 0,
-      target: null,
-      fixable: false,
-      choice: null,
-      needsYou: false,
-    };
-    const view: WorkspaceView = {
-      repo: "r",
-      cwd: env.cwd,
-      worktrees: [],
-      behind: null,
-      now: 0,
-      agents: [],
-      extraAgents: 0,
-      active: [],
-      recent: [row],
-    };
 
     const note = yield* openLog(
       {
@@ -908,7 +896,7 @@ effectTest(
         paneId: "1-1",
         pluginRoot: env.pluginRoot,
       },
-      view,
+      run,
     );
     expect(note).toContain("Review · x");
 

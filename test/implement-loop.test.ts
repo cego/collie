@@ -431,11 +431,13 @@ test(
 
         const { run } = yield* runWorkflowEffect("implement", {});
 
-        // Two tabs, each one word: the run's own takes the workflow, the review step's
-        // takes the step. No target, no slug, no model — and the review step keeps its
-        // tab across both iterations.
+        // Two tabs, both named after the run and the step it opened them for: no
+        // model and no slug — and the review step keeps its tab across both iterations.
         const created = (yield* rig.calls()).filter((c) => c.cmd === "tab create");
-        expect(created.map((c) => c.argv!.at(-2))).toEqual(["⚙ Implement", "⚙ Review"]);
+        expect(created.map((c) => c.argv!.at(-2))).toEqual([
+          "⚙ Implement · add-picker · build",
+          "⚙ Implement · add-picker · review",
+        ]);
         expect(new Set(run.step("review").variants.map((v) => v.tabId)).size).toBe(1);
 
         // The second variant sits beside the first, each taking half the tab. A restart
@@ -856,17 +858,24 @@ test(
         );
         expect(new Set(panes).size).toBe(1);
 
-        // It is never labelled: it is alone in its tab, and the tab says `implement`.
+        // It is never labelled: it is alone in its tab, and the tab names the run.
         // Nothing else opens for it either.
         const onThatPane = (yield* rig.calls())
           .filter((c) => c.cmd === "pane rename" && c.argv![2] === panes[0])
           .map((c) => c.argv!.at(-1));
         expect(onThatPane).toEqual([]);
+        // Every tab of the run follows the run: the implementer's tab says which step
+        // the run is on, whichever tab that step is working in, and says `2/5` once the
+        // loop has been round. It ends at what the run is, with no step left running.
         const itsTab = run.step("build").variants[0]!.tabId;
         const tabNames = (yield* rig.calls())
           .filter((c) => c.cmd === "tab rename" && c.argv![2] === itsTab)
           .map((c) => c.argv!.at(-1));
-        expect(new Set(tabNames)).toEqual(new Set(["⚙ Implement", "✓ Implement"]));
+        expect(tabNames).toContain("⚙ Implement · add-picker · fix");
+        expect(tabNames).toContain("⚙ Implement · add-picker · review 2/5");
+        expect(tabNames.at(-1)).toBe("✓ Implement · add-picker");
+        // Never twice in a row: the poll that renames it runs every couple of seconds.
+        expect(tabNames.filter((name, at) => name === tabNames[at - 1])).toEqual([]);
 
         // Two tabs for the whole run: the implementer's and the reviewers'.
         expect((yield* rig.cmds()).filter((c) => c === "tab create")).toHaveLength(2);

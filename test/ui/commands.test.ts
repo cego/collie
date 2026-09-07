@@ -10,8 +10,9 @@ import { installFakeSkills, writeDef } from "../support/defs";
 import { FakeBin, gitWorktreeCases } from "../support/bin";
 import { runEffect } from "../support/effect";
 import { runCommand, type ControlSession } from "../../src/flows";
+import type { Jump } from "../../src/ui/state";
 import { Herdr } from "../../src/herdr";
-import { scopeFor } from "../../src/registry";
+import { registerAgent, registryPath, scopeFor, scopeOfRun } from "../../src/registry";
 import { loadDefaults, readConfig } from "../../src/config";
 import { RunStore } from "../../src/run";
 import { REVIEW_FILE } from "../../src/output";
@@ -127,6 +128,17 @@ effectTest(
   },
 );
 
+effectTest("scope is refused unless it is a board the tab can open on", function* () {
+  // The board has to open on one of the two, and a tab that opened on nothing would
+  // be the first thing a human tried to fix in this very view.
+  const note = yield* set("scope", "everything");
+
+  expect(note).toContain("local, all");
+  expect(yield* readConfig(rig.pluginEnv().configDir)).not.toHaveProperty("scope");
+  expect(yield* set("scope", "all")).toContain("all");
+  expect((yield* loadDefaults(rig.pluginEnv().configDir)).scope).toBe("all");
+});
+
 /** A finished run of this session, with a review beside it only if one is asked for. */
 const seed = Effect.fn("commands.seed")(function* (opts: { target: string; review?: string }) {
   const env = rig.pluginEnv();
@@ -200,9 +212,9 @@ effectTest("send review with no run selected sends nothing at all", function* ()
 
 effectTest("the log opens for a History row the board no longer keeps", function* () {
   yield* rig.startSocket();
-  // The board keeps five finished runs; History keeps two hundred. Every History row
-  // offers `l`, so the sixth-oldest must not answer "has gone" while its run directory
-  // and its runner.log are both still there.
+  // The board keeps five finished runs; History keeps two hundred, and every History
+  // row offers `l`. The sixth-oldest must not answer "has gone" while its run directory
+  // and its runner.log are both still there — whichever list the row was drawn from.
   const oldest = yield* seed({ target: "mr:gitlab.example.com/g/p!1" });
   for (const n of [2, 3, 4, 5, 6, 7, 8]) {
     yield* seed({ target: `mr:gitlab.example.com/g/p!${n}` });
@@ -216,6 +228,149 @@ effectTest("the log opens for a History row the board no longer keeps", function
   );
 
   expect(note).not.toContain("has gone");
+});
+
+/** One run of another workspace, with an agent, a tab and whatever else a test needs. */
+const elsewhere = Effect.fn("commands.elsewhere")(function* (opts: {
+  workspaceId: string;
+  status?: "running" | "done";
+  /** What it was pointed at, and the checkout it was working in. */
+  target?: string;
+  cwd?: string;
+}) {
+  const env = rig.pluginEnv();
+  const run = yield* new RunStore(env.stateDir).create({
+    workflow: "implement",
+    cwd: opts.cwd ?? env.cwd,
+    session: env.socketPath,
+    workspace: opts.workspaceId,
+    workspaceLabel: null,
+    inputs: opts.target ? { target: opts.target } : {},
+    inputSources: {},
+    stepIds: ["build"],
+    maxIterations: 5,
+    namedAfter: "glass",
+  });
+  run.record.target_label = "glass";
+  run.record.status = opts.status ?? "running";
+  run.step("build").status = opts.status === "done" ? "done" : "running";
+  run.step("build").variants.push({
+    harness: "claude",
+    model: "opus",
+    effort: null,
+    permissions: null,
+    agent: "impl-9",
+    label: "implement-glass/build",
+    tabId: "w9:t2",
+    paneId: "w9:p1",
+    status: "running",
+    output: null,
+    error: null,
+    repairs: [],
+    nudges: 0,
+  });
+  yield* run.save();
+  return run;
+});
+
+const jump = (jump: Jump) =>
+  runCommand(session(), rig.pluginEnv(), { _tag: "Jump", jump }, prompts);
+
+effectTest("Enter goes where the row points, in one call, and says where it went", function* () {
+  yield* rig.startSocket();
+  const run = yield* elsewhere({ workspaceId: "w9" });
+
+  // A workspace row: whatever tab that workspace was last on, and nothing else.
+  expect(yield* jump({ kind: "workspace", workspaceId: "w9", label: "Implement · glass" })).toBe(
+    "went to Implement · glass",
+  );
+  expect(yield* rig.cmds()).toEqual(["workspace.focus"]);
+
+  // A run row: the tab of its newest agent, resolved from the run now rather than from
+  // an id the board cached when it drew the row.
+  expect(yield* jump({ kind: "run", runId: run.id, label: "Implement · glass" })).toBe(
+    "went to Implement · glass",
+  );
+  const focused = (yield* rig.calls()).filter((c) => c.cmd === "tab focus");
+  expect(focused.map((c) => c.argv!.at(-1))).toEqual(["w9:t2"]);
+
+  // An agent row: by name, which selects the workspace, the tab and the pane at once.
+  expect(yield* jump({ kind: "agent", agent: "impl-9", label: "Implementer" })).toBe(
+    "went to Implementer",
+  );
+  expect((yield* rig.calls()).filter((c) => c.cmd === "agent focus")).toHaveLength(1);
+});
+
+effectTest("Enter on an Elsewhere row says so and asks herdr nothing", function* () {
+  yield* rig.startSocket();
+
+  const note = yield* jump({ kind: "none", label: "Elsewhere · collie-mr-roles-wt" });
+
+  expect(note).toContain("nothing to jump to");
+  expect(yield* rig.cmds()).toEqual([]);
+});
+
+effectTest("a run in another workspace is stopped and logged from the wide board", function* () {
+  yield* rig.startSocket();
+  yield* rig.addWorkspace("w9", "Implement · glass", rig.projectDir);
+  const run = yield* elsewhere({ workspaceId: "w9" });
+  // The register its Driver wrote: keyed by the Run's own session, workspace and
+  // checkout, which is not the one this board is in.
+  const env = rig.pluginEnv();
+  yield* registerAgent(yield* registryPath(env.stateDir, scopeOfRun(run.record)), {
+    role: "implementer",
+    agent: "impl-9",
+    paneId: "w9:p1",
+    workspaceId: "w9",
+    runId: run.id,
+    workflow: "implement",
+    at: "t",
+  });
+
+  // The board of this workspace does not list it, so the lookup used to answer "has
+  // gone" for a run whose row the human was looking at.
+  const stopped = yield* runCommand(
+    session(),
+    rig.pluginEnv(),
+    { _tag: "StopRun", runId: run.id },
+    prompts,
+  );
+  expect(stopped).not.toContain("has gone");
+  // And its agents are stopped, not just its Driver: closing the panes they are in is
+  // the only thing that does that, and they are in another workspace's register.
+  expect(
+    (yield* rig.calls()).filter((c) => c.cmd === "pane close").map((c) => c.argv!.at(-1)),
+  ).toEqual(["w9:p1"]);
+  const logged = yield* runCommand(
+    session(),
+    rig.pluginEnv(),
+    { _tag: "OpenLog", runId: run.id },
+    prompts,
+  );
+  expect(logged).not.toContain("has gone");
+});
+
+effectTest("w on another workspace's run opens its merge request, not this repo's", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // An unqualified target, which is what every run recorded before merge requests
+  // carried their project: `glab` resolves the project from the directory it is run
+  // in, so the run's own checkout is the only cwd that names the right one.
+  const checkout = path.join(rig.root, "another-checkout");
+  yield* fs.makeDirectory(checkout, { recursive: true });
+  const run = yield* elsewhere({ workspaceId: "w9", target: "mr:42", cwd: checkout });
+  const marker = path.join(rig.root, "glab-cwd.txt");
+  yield* bin.add("glab", `pwd > ${JSON.stringify(marker)}`);
+
+  const note = yield* runCommand(
+    session(),
+    rig.pluginEnv(),
+    { _tag: "OpenMr", target: "mr:42", runId: run.id },
+    prompts,
+  );
+
+  expect(note).toContain("opened");
+  expect((yield* fs.readFileString(marker)).trim()).toBe(checkout);
 });
 
 /** A prompts that answers from a script and records every header it was shown. */

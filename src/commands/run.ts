@@ -17,7 +17,6 @@ import {
 import { RunStore } from "../run";
 import type { Run } from "../run";
 import type { PluginEnv } from "../env";
-import { scopeFor } from "../registry";
 import {
   attempt,
   guarded,
@@ -444,7 +443,7 @@ const mutationFlags = {
 
 const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
   runMutationCommand("run-stop", runId, requestId, (env, run, id) =>
-    stopRun(env.stateDir, new Herdr(env), run, scopeFor(env, run.record.cwd), id),
+    stopRun(env.stateDir, new Herdr(env), run, id),
   ),
 ).pipe(Command.withDescription("Stop a Run and close only the panes it owns"));
 

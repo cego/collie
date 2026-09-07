@@ -29,6 +29,8 @@ afterEach(() => runEffect(rig.close()));
 function stateFor(selected: string | null): AppState {
   return {
     view: "runs",
+    scope: "local",
+    wide: null,
     board: {
       repo: selected ?? "none",
       cwd: "/w/collie",
@@ -68,6 +70,7 @@ test("a newer focus interrupts the read in flight, and the newer one lands", () 
         const held = yield* Deferred.make<void>();
 
         const driven = yield* driveBridge({
+          scope: "local" as const,
           stateDir: rig.stateDir,
           load: (focus: Focus) =>
             Effect.gen(function* () {
@@ -106,6 +109,7 @@ test("a command that takes its time does not stall the next keypress", () =>
         const slow = yield* Deferred.make<void>();
 
         const driven = yield* driveBridge({
+          scope: "local" as const,
           stateDir: rig.stateDir,
           load: (focus: Focus) => Effect.succeed(stateFor(focus.selected)),
           act: (command) =>
@@ -117,7 +121,7 @@ test("a command that takes its time does not stall the next keypress", () =>
             }),
         });
 
-        driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1" });
+        driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1", runId: null });
         yield* until("the command to start", () => acted.length === 1);
 
         // The Selection moves while that is still going: it is a focus change, so it
@@ -138,6 +142,7 @@ test("a Refresh asked for twice is read twice, because a repeat is the whole poi
         const nonces: number[] = [];
 
         const driven = yield* driveBridge({
+          scope: "local" as const,
           stateDir: rig.stateDir,
           load: (focus: Focus) =>
             Effect.sync(() => {
@@ -165,12 +170,13 @@ test("a command that fails leaves its reason in the footer", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const driven = yield* driveBridge({
+          scope: "local" as const,
           stateDir: rig.stateDir,
           load: (focus: Focus) => Effect.succeed(stateFor(focus.selected)),
           act: () => Effect.fail(new Error("glab could not reach gitlab.example.com")),
         });
 
-        driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1" });
+        driven.dispatch({ _tag: "OpenMr", target: "mr:host/g/p!1", runId: null });
         yield* until("the failure to reach the footer", () => driven.state().note !== null);
 
         // The reason used to be written and then immediately overwritten with null, so a
@@ -181,6 +187,37 @@ test("a command that fails leaves its reason in the footer", () =>
         driven.dispatch({ _tag: "Refresh" });
         yield* Effect.sleep("30 millis");
         expect(driven.state().note).toContain("glab could not reach");
+      }),
+    ),
+  ));
+
+test("the board opens on the scope from config, and g is what changes it after", () =>
+  runEffect(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scopes: string[] = [];
+
+        const driven = yield* driveBridge({
+          // What `loadDefaults` answered: nothing else remembers the scope, so this is
+          // the whole of "the board opens the way I use it".
+          scope: "all" as const,
+          stateDir: rig.stateDir,
+          load: (focus: Focus) =>
+            Effect.sync(() => {
+              scopes.push(focus.scope);
+              return { ...stateFor(focus.selected), scope: focus.scope };
+            }),
+          act: () => Effect.succeed(null),
+        });
+
+        expect(scopes[0]).toBe("all");
+
+        // Waited on the state, not on the load having been called: `scopes.push`
+        // happens inside the load and the stream writes the state a moment later, so
+        // asserting on the first was a pass about one run in eight.
+        driven.dispatch({ _tag: "ToggleScope" });
+        yield* until("the narrowed board", () => driven.state().scope === "local");
+        expect(scopes).toContain("local");
       }),
     ),
   ));

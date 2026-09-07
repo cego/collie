@@ -234,3 +234,126 @@ export function insertIndexFor(tabs: ReadonlyArray<RankedTab>, rank: number): nu
   }
   return after + 1;
 }
+
+/**
+ * As much of a Run's record as its tabs' labels are made of. Structural, so `naming`
+ * stays the leaf it is: everything here is a string, and the one caller that has a
+ * whole `RunRecord` passes it unchanged.
+ */
+export interface LabelledRun {
+  workflow: string;
+  slug: string;
+  inputs: Record<string, string>;
+  /** What the Run recorded itself as pointed at; derived again for an older record. */
+  target_label: string | null;
+  status: "running" | "done" | "blocked" | "failed";
+  max_iterations: number;
+  steps: ReadonlyArray<{
+    id: string;
+    status: string;
+    /** Which round of the loop this step last ran in; 1 for a step that has not looped. */
+    iteration: number;
+    variants: ReadonlyArray<{ agent: string; tabId: string | null }>;
+  }>;
+}
+
+/** What a Run is called wherever a human reads it: the workflow, and what it is for. */
+export function runLabel(run: {
+  workflow: string;
+  slug: string;
+  inputs: Record<string, string>;
+  target_label: string | null;
+}): string {
+  return disambiguate(
+    displayName(run.workflow),
+    run.target_label ?? targetLabel(run.workflow, run.slug, run.inputs),
+  );
+}
+
+/**
+ * The step a Run is on and the round of the loop it is in, or `null` for a Run with no
+ * step running. One rule, because two places say it: the tab label and the Control
+ * Plane's group row, which must not drift. `round` is `null` until the step has looped —
+ * a workflow with no fix loop in it, and every step before one, is named by itself.
+ */
+export function stepNow(run: LabelledRun): { id: string; round: string | null } | null {
+  const step = run.steps.find((s) => s.status === "running" || s.status === "blocked");
+  if (!step) return null;
+  return {
+    id: step.id,
+    round: step.iteration > 1 ? `${step.iteration}/${run.max_iterations}` : null,
+  };
+}
+
+/**
+ * `⚙ Implement · control-plane-glass · fix 3/5`: the Run, and the step it is on. This
+ * is what herdr's sidebar row for the workspace shows, so it says the two things a
+ * human used to open the workspace to learn — which step, and how far into the loop.
+ *
+ * The step and iteration come off the record alone, so the Driver and the board compute
+ * the same string and neither has to know which of a workflow's steps the loop covers.
+ * A run that is over is what it was — the step it stopped on is the log's business.
+ */
+export function runTabLabel(glyph: string, run: LabelledRun, asking: boolean): string {
+  const parts = [runLabel(run)];
+  if (run.status === "running") {
+    const step = stepNow(run);
+    // A question is worth saying instead of the step it is asked from: it is the one
+    // state where the run is not going to move until someone reads the row.
+    if (asking) parts.push("asks you");
+    else if (step) parts.push([step.id, step.round].filter((part) => part !== null).join(" "));
+  }
+  return `${glyph} ${parts.join(" · ")}`;
+}
+
+/**
+ * What one tab's glyph means: the state of what is in it. Anything working in there is
+ * ⚙ whatever the run last recorded — which is what a review handed back to a live
+ * implementer, or a finished agent prompted again, used to leave stuck at ✓. With
+ * nothing working and nobody being asked, the run's own state is what is left to say.
+ *
+ * `statuses` is herdr's live word for each pane of the tab; an agent herdr no longer
+ * has contributes none, so it neither claims work nor denies it.
+ */
+export function tabGlyph(
+  statuses: ReadonlyArray<string>,
+  run: { status: LabelledRun["status"] },
+  asking: boolean,
+): string {
+  if (statuses.some((status) => status === "working")) return GLYPH.running;
+  if (statuses.some((status) => status === "blocked")) return GLYPH.waiting;
+  if (asking) return GLYPH.waiting;
+  if (run.status === "done") return GLYPH.done;
+  if (run.status === "failed") return GLYPH.failed;
+  if (run.status === "blocked") return GLYPH.waiting;
+  return GLYPH.running;
+}
+
+/**
+ * Every tab this Run has, and what herdr should be calling it: one label for the Run
+ * and a glyph per tab. Pure, and the whole of the reconcile — the Driver hands it what
+ * it knows about its own agents and the Control Plane hands it `agent list`, so
+ * whichever writes last writes the same thing.
+ */
+export function tabLabelsFor(
+  run: LabelledRun,
+  statusOf: (agent: string) => string | undefined,
+  asking: boolean,
+): Map<string, string> {
+  const panes = new Map<string, string[]>();
+  for (const step of run.steps) {
+    for (const variant of step.variants) {
+      if (variant.tabId === null) continue;
+      const statuses = panes.get(variant.tabId) ?? [];
+      const status = statusOf(variant.agent);
+      if (status !== undefined) statuses.push(status);
+      panes.set(variant.tabId, statuses);
+    }
+  }
+  return new Map(
+    [...panes].map(([tabId, statuses]) => [
+      tabId,
+      runTabLabel(tabGlyph(statuses, run, asking), run, asking),
+    ]),
+  );
+}

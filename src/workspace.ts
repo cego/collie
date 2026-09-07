@@ -5,17 +5,17 @@
 import { Clock, Effect, FileSystem, Option, Path } from "effect";
 import { behindRemote } from "./doctor";
 import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
-import { COLLIE_TAB, displayName, GLYPH, targetLabel } from "./naming";
+import { COLLIE_TAB, displayName, GLYPH, runLabel, stepNow } from "./naming";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
 import { REVIEW_FILE } from "./output";
 import { RunStore, type Run, type RunRecord, type VariantRecord } from "./run";
 import { stepDuration, took } from "./time";
-import type { AgentInfo } from "./herdr";
+import { LEADING_GLYPH, type AgentInfo, type WorkspaceInfo } from "./herdr";
 
 /** How many finished runs stay on the screen; the tab must not need scrolling. */
 const RECENT = 5;
 /** Keys 1–9 focus an agent, so that is how many the board can offer. */
-const MAX_AGENTS = 9;
+export const MAX_AGENTS = 9;
 /**
  * How long a `running` run with no live agent has to have been quiet before it is
  * called abandoned. A live run always has an agent, except in the seconds between
@@ -83,10 +83,10 @@ export interface RunRow {
   /** The question this run is waiting on, rendered under its row. */
   choice: PendingChoice | null;
   /**
-   * Whether this run has stopped and is waiting on the human: a pending question, or a
-   * gate it recorded itself as awaiting. The board lists these first, because a blocked
-   * run costs the whole run's wall-clock and used to be visible only if its row happened
-   * to be the Selection.
+   * Whether this run has a question for the human, i.e. whether `choice` is set. The
+   * board lists these first, because a blocked run costs the whole run's wall-clock and
+   * used to be visible only if its row happened to be the Selection. Nothing else counts
+   * as needing you: a gate the run recorded itself as awaiting has nothing to answer.
    */
   needsYou: boolean;
 }
@@ -111,6 +111,91 @@ export interface WorkspaceView {
   recent: RunRow[];
 }
 
+/**
+ * A workspace of this herdr session with something of Collie's in it, or the one
+ * trailing group for everything the session cannot reach.
+ */
+export interface WideGroup {
+  /**
+   * Which workspace this is, for the jump, and null for Elsewhere. Never drawn: `w28`
+   * is how herdr addresses a workspace, not what a human calls one.
+   */
+  workspaceId: string | null;
+  /** What the human calls it: herdr's own label, or the checkout's own name. */
+  label: string;
+  /** The worst of its runs: ⚠ over ⚙ over whatever the newest finished one was. */
+  glyph: string;
+  running: number;
+  needsYou: number;
+  /** `2 running · 1 need you · fix 3/5`: counts, and the leading run's step. */
+  summary: string;
+  /** What is in this workspace: its running runs, at most two finished, and its agents. */
+  active: RunRow[];
+  recent: RunRow[];
+  agents: AgentRow[];
+}
+
+export interface WideView {
+  groups: WideGroup[];
+  /**
+   * The session's other workspaces, by name: the ones with no run, no agent and no
+   * history of Collie's. A herdr session is mostly those, and a group row for each was
+   * most of what a wide board showed — named rather than dropped, because a board that
+   * hides a workspace is one you cannot trust to be the whole session.
+   */
+  quiet: string[];
+  now: number;
+}
+
+/** How many finished runs a group keeps: enough to say why a workspace is quiet. */
+const RECENT_PER_GROUP = 2;
+
+/**
+ * Which of a group's runs speaks for it: one with a question, else the newest active,
+ * else the newest finished. A group row with an empty detail says nothing about why a
+ * workspace is quiet.
+ */
+function leader(runs: Pick<WideGroup, "active" | "recent">): RunRow | null {
+  return runs.active.find((r) => r.needsYou) ?? runs.active[0] ?? runs.recent[0] ?? null;
+}
+
+/** Whether Collie has anything at all in a workspace: a run, an agent, or a history. */
+function collies(group: WideGroup): boolean {
+  return group.active.length > 0 || group.agents.length > 0 || group.recent.length > 0;
+}
+
+/**
+ * What the group's leading run is doing: the step it is on and the round of the loop
+ * where that step has looped, and what it settled on once nothing is running. Off the
+ * record, not out of the run row's detail — a detail carries the elapsed time and the
+ * last progress line too, and taking the first two of those words dropped exactly the
+ * iteration this is for. The rest of the detail belongs on the run's own row, which
+ * sits directly under this one.
+ */
+function summarise(record: RunRecord): string {
+  const step = stepNow(record);
+  if (!step) return record.awaiting ?? record.status;
+  return [step.id, step.round].filter((part) => part !== null).join(" · ");
+}
+
+function groupGlyph(runs: Pick<WideGroup, "active" | "recent">): string {
+  if (runs.active.some((r) => r.needsYou)) return GLYPH.waiting;
+  if (runs.active.length > 0) return GLYPH.running;
+  // Nothing running: the newest finished run's own glyph, so a workspace whose last
+  // run failed or stopped does not wear a tick.
+  return runs.recent[0]?.glyph ?? " ";
+}
+
+/** The last component of a path, which is the name a human uses for a checkout. */
+function checkoutName(cwd: string): string {
+  return (
+    cwd
+      .split("/")
+      .filter((part) => part !== "")
+      .at(-1) ?? "somewhere else"
+  );
+}
+
 function variantsOf(record: RunRecord): VariantRecord[] {
   return record.steps.flatMap((s) => s.variants);
 }
@@ -123,29 +208,35 @@ function agentsHere(record: RunRecord, hereNames: Set<string>): VariantRecord[] 
 /**
  * A run recorded against another workspace never belongs here, even for the same
  * repo. One recorded before workspaces were noted belongs here only if one of its
- * agents is alive in this workspace, which is the only proof available for it. The
- * run's directory says nothing: a mutating Run's checkout is a worktree of its own,
- * and comparing it with the board's directory hid every such run from its tab.
+ * agents is alive in this workspace, which is the only proof available for it — and
+ * that proof is a Session's own, so a group of the wide scope takes only the runs that
+ * name its workspace: an agent herdr reports no workspace for is not proof of any one
+ * of them. The run's directory says nothing either way: a mutating Run's checkout is a
+ * worktree of its own, and comparing it with the board's directory hid every such run
+ * from its tab.
  */
-function belongs(record: RunRecord, key: SessionKey, hereNames: Set<string>): boolean {
+function belongs(
+  record: RunRecord,
+  key: SessionKey,
+  hereNames: Set<string>,
+  grouped: boolean,
+): boolean {
   if (record.session && key.session && record.session !== key.session) return false;
-  if (record.workspace !== null) {
-    if (record.workspace !== key.workspaceId) return false;
-    // Workspace ids compact, so a label recorded and since changed means a
-    // different workspace is wearing the same id.
-    return (
-      !record.workspace_label ||
-      !key.workspaceLabel ||
-      record.workspace_label === key.workspaceLabel
-    );
-  }
-  return agentsHere(record, hereNames).length > 0;
+  if (record.workspace === null) return !grouped && agentsHere(record, hereNames).length > 0;
+  // The id and the label, because ids are reused.
+  return record.workspace === key.workspaceId && sameWorkspace(record, key);
 }
 
-function title(record: RunRecord): string {
-  const target = record.target_label ?? targetLabel(record.workflow, record.slug, record.inputs);
-  const name = displayName(record.workflow);
-  return target ? `${name} · ${target}` : name;
+/**
+ * Whether the workspace this run was recorded against is still the one wearing that id.
+ * Workspace ids compact, so a label recorded and since changed means a different
+ * workspace is wearing the same id — and yesterday's runs would otherwise be nested
+ * under today's workspace. Unanswerable either way is not a reason to hide a run.
+ */
+function sameWorkspace(record: RunRecord, key: SessionKey): boolean {
+  return (
+    !record.workspace_label || !key.workspaceLabel || record.workspace_label === key.workspaceLabel
+  );
 }
 
 /**
@@ -161,11 +252,20 @@ function agentTitle(variant: VariantRecord, registered: AgentEntry | undefined):
   return `${name} · ${displayName(variant.model.slice(variant.model.lastIndexOf("/") + 1))}`;
 }
 
-const activeDetail = Effect.fn("activeDetail")(function* (run: Run, now: number, quietMs: number) {
+const activeDetail = Effect.fn("activeDetail")(function* (
+  run: Run,
+  now: number,
+  quietMs: number,
+  /** The question this run has for the human, which is the only thing they can answer. */
+  choice: PendingChoice | null,
+) {
   const record = run.record;
   // Before the reads below, and before the quiet scan: a run waiting on the human is
   // meant to be quiet, so saying so would be noise on the one row that needs none.
-  if (record.awaiting) return `${record.awaiting} — your turn`;
+  // `your turn` only where there is something to answer: `awaiting` is also set for a
+  // gate the run is holding at and for an agent answering in its own pane, and neither
+  // of those is a question this board can put under the row.
+  if (record.awaiting) return choice ? `${record.awaiting} — your turn` : record.awaiting;
   const step = record.steps.find((s) => s.status === "running" || s.status === "blocked");
   const where = step ? step.id : "starting";
   const parts = [where];
@@ -310,6 +410,12 @@ export const buildView = Effect.fn("buildView")(function* (
     runs?: ReadonlyArray<Run>;
     /** How long a running run may write nothing before its row says so. */
     quietMs?: number;
+    /**
+     * Whether this view is one workspace of a wide board rather than the Session's
+     * own: a group takes only the runs that name its workspace, and its agents are
+     * given no digits, because a wide board numbers those down the whole tree.
+     */
+    grouped?: boolean;
   },
 ) {
   const path = yield* Path.Path;
@@ -323,7 +429,7 @@ export const buildView = Effect.fn("buildView")(function* (
   const live = new Map(here.map((a) => [a.name, a]));
 
   const all = opts.runs ?? (yield* new RunStore(opts.stateDir).list());
-  const runs = all.filter((r) => belongs(r.record, opts, hereNames));
+  const runs = all.filter((r) => belongs(r.record, opts, hereNames, opts.grouped ?? false));
   const regPath = yield* registryPath(opts.stateDir, opts);
   const registered = new Map(
     liveEntries(yield* readRegistry(regPath), here).map((e) => [e.agent, e]),
@@ -346,7 +452,13 @@ export const buildView = Effect.fn("buildView")(function* (
   }
   // The ones a hand-off can name come first; that is mostly what the keys are for.
   rows.sort((a, b) => Number(registered.has(b.agent)) - Number(registered.has(a.agent)));
-  const agents = rows.slice(0, MAX_AGENTS).map((r, i) => ({ ...r, key: String(i + 1) }));
+  // A group of the wide scope keeps every agent it has and gives none of them a digit:
+  // the digits there are numbered down the whole tree, and a group that had numbered
+  // its own nine would have hidden its tenth row rather than just its tenth digit — on
+  // a board whose whole claim is that it hides nothing.
+  const agents = opts.grouped
+    ? rows
+    : rows.slice(0, MAX_AGENTS).map((r, i) => ({ ...r, key: String(i + 1) }));
 
   const fixable = new Set<string>();
   for (const r of runs) if (yield* fixableRun(r)) fixable.add(r.id);
@@ -362,15 +474,17 @@ export const buildView = Effect.fn("buildView")(function* (
       id: r.id,
       dir: r.dir,
       glyph: glyphFor(r.record, false),
-      title: title(r.record),
-      detail: yield* activeDetail(r, now, quietMs),
+      title: runLabel(r.record),
+      detail: yield* activeDetail(r, now, quietMs, choice),
       at: yield* touchedAt(r),
       target: r.record.inputs.target ?? null,
       // The same set the finished rows read: this used to stat every active run's dir a
       // second time, on the 3s poll and on every watch event and command.
       fixable: fixable.has(r.id),
       choice,
-      needsYou: choice !== null || r.record.awaiting !== null,
+      // A pending Choice and nothing else: a count that sends a human to a row with
+      // nothing under it to answer is worse than no count.
+      needsYou: choice !== null,
     });
   }
 
@@ -387,7 +501,7 @@ export const buildView = Effect.fn("buildView")(function* (
       id: r.id,
       dir: r.dir,
       glyph: glyphFor(r.record, abandoned.has(r.id)),
-      title: title(r.record),
+      title: runLabel(r.record),
       detail: recentDetail(r.record, abandoned.has(r.id)),
       // The record's own word for when it ended; a run that never recorded one has
       // only its file's mtime to go on.
@@ -399,6 +513,151 @@ export const buildView = Effect.fn("buildView")(function* (
       needsYou: false,
     })),
   };
+});
+
+/**
+ * One workspace as a group: what is in it, and what its group row says about it. The
+ * runs are the ones recorded against that workspace id — grouping is by id alone,
+ * because a workspace with no worktree reports no cwd and would otherwise lose every
+ * run recorded against it.
+ */
+const groupOf = Effect.fn("groupOf")(function* (
+  opts: SessionKey & {
+    stateDir: string;
+    label: string;
+    alive: AgentInfo[];
+    runs: ReadonlyArray<Run>;
+    now: number;
+    quietMs?: number;
+  },
+) {
+  const view = yield* buildView({ ...opts, grouped: true });
+  // Two finished runs, not five: five per workspace is what makes a board of the
+  // whole session unreadable. Nothing else of the local board travels with a group —
+  // the repo, the worktrees and how far behind the installation is are the Session's,
+  // not one workspace's.
+  const kept = { active: view.active, recent: view.recent.slice(0, RECENT_PER_GROUP) };
+  const needsYou = kept.active.filter((r) => r.needsYou).length;
+  // The run that speaks for the group, as its record: its step and its round are what
+  // the group row says, and a row carries neither.
+  const lead = leader(kept);
+  const leading = lead ? (opts.runs.find((r) => r.id === lead.id)?.record ?? null) : null;
+  return {
+    workspaceId: opts.workspaceId,
+    label: opts.label,
+    glyph: groupGlyph(kept),
+    running: kept.active.length,
+    needsYou,
+    summary: [
+      kept.active.length > 0 ? `${kept.active.length} running` : "nothing running",
+      needsYou > 0 ? `${needsYou} need you` : "",
+      leading ? summarise(leading) : "",
+    ]
+      .filter((part) => part !== "")
+      .join(" · "),
+    ...kept,
+    agents: view.agents,
+  } satisfies WideGroup;
+});
+
+/**
+ * The whole herdr session as groups: the workspaces it reports, in its own order, then
+ * one `Elsewhere` for the active runs recorded against a workspace the session no longer
+ * has. Everything comes off one `workspace list`, one `agent list` and one scan of the
+ * run dirs — a wide scope is a scope, not a second data source — and the groups
+ * partition that scan rather than each rescanning it.
+ */
+export const buildWideView = Effect.fn("buildWideView")(function* (opts: {
+  session: string | null;
+  stateDir: string;
+  workspaces: ReadonlyArray<WorkspaceInfo>;
+  alive: AgentInfo[];
+  runs?: ReadonlyArray<Run>;
+  now?: number;
+  quietMs?: number;
+}) {
+  const now = opts.now ?? (yield* Clock.currentTimeMillis);
+  const runs = opts.runs ?? (yield* new RunStore(opts.stateDir).list());
+  const shared = {
+    session: opts.session,
+    stateDir: opts.stateDir,
+    alive: opts.alive,
+    runs,
+    now,
+    quietMs: opts.quietMs,
+  };
+
+  const all: WideGroup[] = [];
+  for (const workspace of opts.workspaces) {
+    all.push(
+      yield* groupOf({
+        ...shared,
+        workspaceId: workspace.workspaceId,
+        workspaceLabel: workspace.label,
+        // herdr's own answer, and nothing is derived from it: a group is a workspace,
+        // and the directory a workspace is sitting in decides nothing about which runs
+        // are in it.
+        cwd: workspace.cwd,
+        // herdr's own label, minus the status glyph it starts with — the gutter carries
+        // one already. Never an id: this is the workspace's name. The boundary's own
+        // regex, which is what keeps a workspace called `.dotfiles` called that.
+        label: workspace.label.replace(LEADING_GLYPH, ""),
+      }),
+    );
+  }
+
+  // Collie's workspaces are the board; the rest of the session is one line at the end.
+  const groups = all.filter(collies);
+  const quiet = all.filter((group) => !collies(group)).map((group) => group.label);
+
+  // Elsewhere: every workspace id an active run names that this session has no
+  // workspace for — one that was closed, or another herdr session's. Nothing is hidden;
+  // a run still going somewhere this board cannot show is still news.
+  const mine = new Set(opts.workspaces.map((w) => w.workspaceId));
+  const foreign = new Set(
+    runs
+      .filter((r) => r.record.status === "running" && r.record.workspace !== null)
+      .map((r) => r.record.workspace!)
+      .filter((id) => !mine.has(id)),
+  );
+  const away: WideGroup[] = [];
+  for (const workspaceId of foreign) {
+    const cwd = runs.find((r) => r.record.workspace === workspaceId)?.record.cwd ?? "";
+    away.push(
+      yield* groupOf({
+        ...shared,
+        // No session and no label to hold a run to: the workspace has gone, and a run
+        // recorded against an id this session does not have may be another herdr
+        // session's — which is what Elsewhere is for.
+        session: null,
+        workspaceId,
+        workspaceLabel: null,
+        cwd,
+        // The workspace has gone and its label with it; what is left to call it by is
+        // the checkout the run was working in.
+        label: checkoutName(cwd),
+      }),
+    );
+  }
+  // Only the ones that actually contributed a row: a foreign id whose runs all turned
+  // out to be abandoned is not something to name in a heading.
+  const named = away.filter((group) => group.active.length > 0);
+  if (named.length > 0) {
+    groups.push({
+      workspaceId: null,
+      label: `Elsewhere · ${named.map((g) => g.label).join(" · ")}`,
+      glyph: named.some((g) => g.needsYou > 0) ? GLYPH.waiting : GLYPH.running,
+      running: named.reduce((n, g) => n + g.running, 0),
+      needsYou: named.reduce((n, g) => n + g.needsYou, 0),
+      summary: "a workspace this session no longer has — nothing to jump to",
+      active: named.flatMap((g) => g.active),
+      // Nothing finished, and no agents: their panes are in a workspace this session
+      // cannot reach, so there is nothing here to focus or to give a digit to.
+      recent: [],
+      agents: [],
+    });
+  }
+  return { groups, quiet, now } satisfies WideView;
 });
 
 const indent = (line: string) => `  ${line}`;

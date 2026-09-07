@@ -24,6 +24,13 @@ interface FakeAgent {
   pane_id: string;
 }
 
+/** A workspace herdr has. Empty by default: a test that cares adds its own. */
+interface FakeWorkspace {
+  workspace_id: string;
+  label: string;
+  cwd?: string | null;
+}
+
 interface FakeWorktree {
   path: string;
   branch: string;
@@ -44,6 +51,7 @@ interface State {
   tabList: FakeTab[];
   paneList: FakePane[];
   agents: FakeAgent[];
+  workspaces: FakeWorkspace[];
   worktrees: FakeWorktree[];
   /** The repository's own checkout, which is what herdr answers `list` with. */
   worktreeSource: string | undefined;
@@ -73,6 +81,11 @@ const FakePaneSchema = Schema.Struct({
   foreground_cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
 const FakeAgentSchema = Schema.Struct({ name: Schema.String, pane_id: Schema.String });
+const FakeWorkspaceSchema = Schema.Struct({
+  workspace_id: Schema.String,
+  label: Schema.String,
+  cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
 const FakeWorktreeSchema = Schema.Struct({
   path: Schema.String,
   branch: Schema.String,
@@ -92,6 +105,7 @@ const StateJson = Schema.fromJsonString(
     tabList: Schema.optionalKey(Schema.Array(FakeTabSchema)),
     paneList: Schema.optionalKey(Schema.Array(FakePaneSchema)),
     agents: Schema.optionalKey(Schema.Array(FakeAgentSchema)),
+    workspaces: Schema.optionalKey(Schema.Array(FakeWorkspaceSchema)),
     worktrees: Schema.optionalKey(Schema.Array(FakeWorktreeSchema)),
     worktreeSource: Schema.optionalKey(Schema.String),
   }),
@@ -134,6 +148,7 @@ const emptyState = (): State => ({
   tabList: [],
   paneList: [],
   agents: [],
+  workspaces: [],
   worktrees: [],
   worktreeSource: undefined,
 });
@@ -160,6 +175,7 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
       foreground_cwd: pane.foreground_cwd ?? null,
     })),
     agents: (state.agents ?? []).map((agent) => ({ name: agent.name, pane_id: agent.pane_id })),
+    workspaces: (state.workspaces ?? []).map((workspace) => ({ ...workspace })),
     worktrees: (state.worktrees ?? []).map((worktree) => ({ ...worktree })),
     worktreeSource: state.worktreeSource,
   };
@@ -377,6 +393,9 @@ export function fakeHerdr(
         if (tab) tab.label = argv[3] ?? tab.label;
         break;
       }
+      case "workspace list":
+        result = { type: "workspace_list", workspaces: state.workspaces };
+        break;
       case "tab list":
         result = {
           type: "tab_list",

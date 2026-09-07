@@ -5,6 +5,18 @@ import { permissionsAsWritten } from "./harness";
 import { isNumber, isString } from "./schema";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
 
+/**
+ * What the Control Plane's Runs view is a board of: `local` is this Session's own
+ * workspace, the board as it has always been; `all` is every workspace of this herdr
+ * session that Collie has work in. Here rather than in the board, because it is a
+ * default a human sets and every other reader takes the type from `Defaults`.
+ */
+export type Scope = "local" | "all";
+export const SCOPES: ReadonlyArray<Scope> = ["local", "all"];
+export function isScope(value: string): value is Scope {
+  return SCOPES.some((scope) => scope === value);
+}
+
 export interface Defaults {
   harness: string;
   model: string;
@@ -35,6 +47,8 @@ export interface Defaults {
    * refuses to start an agent it cannot resolve rather than falling back to `bypass`.
    */
   permissions: string;
+  /** Which scope the Control Plane opens on. `g` changes it for that tab only. */
+  scope: Scope;
   /** `notifications.<kind>: false` turns that kind of toast off; absent means on. */
   notifications: Readonly<Record<string, boolean>>;
 }
@@ -49,6 +63,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   models: {},
   trust: "ask",
   permissions: "bypass",
+  scope: "local",
   notifications: {},
 };
 
@@ -135,6 +150,9 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDi
     // Workflows views and by Doctor, so a file hand-edited into nonsense still has to
     // return — and coercing it would fall back to `bypass`. Validation names it.
     permissions: permissionsAsWritten(raw.permissions) ?? FALLBACK_DEFAULTS.permissions,
+    // Coerced rather than kept as written: the board has to open on one of the two
+    // whatever the file says. A value that is neither is refused where it is written.
+    scope: isString(raw.scope) && isScope(raw.scope) ? raw.scope : FALLBACK_DEFAULTS.scope,
     notifications: Option.getOrElse(
       Schema.decodeUnknownOption(Notifications)(raw.notifications),
       () => ({}),

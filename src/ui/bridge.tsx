@@ -12,6 +12,8 @@ import type { InputPrompts } from "../inputs";
 import { App } from "./App";
 import { Flow } from "./Flow";
 import { signalPrompts, type Pending } from "./prompts";
+// `Scope` is Effect's here, so the board's own is named for what it is a scope of.
+import type { Scope as BoardScope } from "../config";
 import {
   changesFocusOnly,
   retarget,
@@ -43,6 +45,8 @@ export interface Bridge<E, R> {
   act: (command: Command, prompts: InputPrompts) => Effect.Effect<string | null, E, R>;
   /** Where a change to a Run shows up, which is what the watch is put on. */
   stateDir: string;
+  /** Which scope the board opens on: the `scope` default, read once at startup. */
+  scope: BoardScope;
 }
 
 /**
@@ -160,6 +164,8 @@ export function driveBridge<E, R>(
      */
     const focus = yield* SubscriptionRef.make<Focus>({
       view: "runs",
+      // The board opens on the scope the human set as their default; `g` widens it.
+      scope: bridge.scope,
       shown: ["runs"],
       selected: null,
       tail: false,

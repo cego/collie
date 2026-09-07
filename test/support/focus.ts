@@ -8,6 +8,7 @@ import type { Focus } from "../../src/ui/state";
 export function focus(over: Partial<Focus> = {}): Focus {
   return {
     view: "runs",
+    scope: "local",
     shown: ["runs"],
     selected: null,
     tail: false,

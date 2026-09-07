@@ -9,7 +9,7 @@ import { ALL_KEYS, type AppState, type Command } from "../../src/ui/state";
 import type { MrDetails } from "../../src/mr";
 import type { DefinitionRow, RunDetail, SettingsView } from "../../src/views";
 import type { PendingChoice } from "../../src/driver";
-import type { WorkspaceView } from "../../src/workspace";
+import type { WideView, WorkspaceView } from "../../src/workspace";
 
 /** A fixed clock, so a row's relative time does not depend on the wall. */
 const NOW = Date.parse("2026-09-02T12:00:00.000Z");
@@ -74,6 +74,8 @@ function listLines(frame: string): string[] {
 function appState(over: Partial<AppState> = {}): AppState {
   return {
     view: "runs",
+    scope: "local",
+    wide: null,
     board: board(),
     note: NOTE,
     history: null,
@@ -114,6 +116,17 @@ const mount = Effect.fn("app.mount")(function* (initial: AppState, width = 100, 
         .replace(/[│┌┐└┘─]/g, " ")
         .replace(/\s+/g, " "),
     mockInput: t.mockInput,
+    /**
+     * Esc, and the wait a terminal makes for it. A lone escape byte is the start of
+     * every escape sequence, so opentui holds it back until either more bytes arrive
+     * or its 20ms timeout says there are none — a `pressEscape` with no wait after it
+     * is a key the app never sees.
+     */
+    escape: Effect.gen(function* () {
+      t.mockInput.pressEscape();
+      yield* Effect.sleep("60 millis");
+      yield* Effect.promise(() => t.flush());
+    }),
     scroll: (x: number, y: number, direction: "up" | "down") =>
       Effect.andThen(
         Effect.promise(() => t.mockMouse.scroll(x, y, direction)),
@@ -482,7 +495,9 @@ test("every action the Selection offers is readable in a narrow pane", () =>
       }
       // And each is clickable where it is drawn, wrapped line included.
       yield* app.click(app.columnOf("[w open", "[w open") + 2, app.lineOf("[w open"));
-      expect(app.acted()).toEqual([{ _tag: "OpenMr", target: "mr:gitlab.example.com/g/p!42" }]);
+      expect(app.acted()).toEqual([
+        { _tag: "OpenMr", target: "mr:gitlab.example.com/g/p!42", runId: "r2" },
+      ]);
     }),
   ));
 
@@ -707,6 +722,7 @@ const SETTINGS: SettingsView = {
   defaults: [
     { key: "harness", value: "claude" },
     { key: "model", value: "opus" },
+    { key: "scope", value: "local" },
   ],
   remembered: [{ key: "linear.team", value: "CEG" }],
   trust: { cwd: "/w/collie", state: "trusted" },
@@ -1105,6 +1121,26 @@ test("Settings gives a default a new value and asks for it to be written", () =>
     }),
   ));
 
+test("the scope the board opens on is a default Settings shows and edits", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ view: "settings", settings: SETTINGS }));
+
+      expect(app.frame()).toContain("scope");
+
+      yield* app.click(4, app.lineOf("scope"));
+      app.mockInput.pressEnter();
+      yield* app.flush;
+      expect(app.frame()).toContain("scope = local");
+      for (const _ of "local") app.mockInput.pressBackspace();
+      yield* Effect.promise(() => app.mockInput.typeText("all"));
+      app.mockInput.pressEnter();
+      yield* app.flush;
+
+      expect(app.acted()).toEqual([{ _tag: "SetDefault", key: "scope", value: "all" }]);
+    }),
+  ));
+
 test("a filter that matches an agent keeps the run it works for above it", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1122,6 +1158,179 @@ test("a filter that matches an agent keeps the run it works for above it", () =>
       expect(app.lineOf("Implement · add-a-picker")).toBeLessThan(app.lineOf("Implementer"));
       // And nothing else came with them.
       expect(app.frame()).not.toContain("Review · worktree");
+    }),
+  ));
+
+/** What a Collie tab is actually dragged to when it is a board of the whole session. */
+const WIDE_PANE = 160;
+
+/** The whole session as the wide board draws it: two workspaces and a quiet one. */
+function wideView(over: Partial<WideView> = {}): WideView {
+  return {
+    groups: [
+      {
+        workspaceId: "w1",
+        label: "Implement · control-plane-glass",
+        glyph: "⚙",
+        running: 1,
+        needsYou: 0,
+        summary: "1 running · review · 2/5",
+        agents: [
+          {
+            key: "1",
+            name: "Implementer",
+            agent: "impl-1",
+            status: "working",
+            run: "r1",
+            now: null,
+          },
+        ],
+        active: [run("r1", "Implement · control-plane-glass")],
+        recent: [],
+      },
+      {
+        workspaceId: "w2",
+        label: "Collie",
+        glyph: "⚠",
+        running: 1,
+        needsYou: 1,
+        summary: "1 running · 1 need you · next",
+        active: [
+          run("r2", "Implement · agent-approvals", {
+            detail: "next — your turn",
+            choice: choice("r2", "What next?"),
+            needsYou: true,
+          }),
+        ],
+        recent: [],
+        agents: [],
+      },
+    ],
+    quiet: ["Env"],
+    now: NOW,
+    ...over,
+  };
+}
+
+test("g widens the board to the whole session, and the nav says which scope it is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ board: BOARD }));
+
+      expect(app.frame()).toContain("local");
+      // The key names where it goes, not where it is.
+      expect(app.frame()).toContain("g all");
+
+      app.mockInput.pressKey("g");
+      yield* app.flush;
+      expect(app.acted()).toEqual([{ _tag: "ToggleScope" }]);
+
+      // The bridge answers the toggle and the next read carries the wide board.
+      const wide = yield* mount(appState({ scope: "all", wide: wideView() }), WIDE_PANE);
+      const frame = wide.frame();
+      expect(frame).toContain("all · 2 workspace(s)");
+      expect(frame).toContain("g local");
+      // Starting a run is this Session's: the key is not offered from here and neither
+      // is the nav's button, which is the same action for the mouse.
+      expect(frame).not.toContain("p run");
+      expect(frame).not.toContain("New run");
+      // Every workspace with Collie in it, its runs under it, and the rest of the
+      // session named on one line at the end.
+      expect(frame).toContain("Implement · control-plane-glass");
+      expect(frame).toContain("Collie");
+      expect(frame).toContain("1 more workspace(s)");
+      expect(wide.said()).toContain("nothing of Collie's in them · Env");
+    }),
+  ));
+
+test("a run in another workspace is answered from the wide board", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ scope: "all", wide: wideView() }), WIDE_PANE);
+
+      // The group row is where the Selection lands, and Enter on it is a jump to that
+      // workspace — one command, and the footer says the key is there.
+      yield* app.click(4, app.lineOf("Implement · control-plane-glass"));
+      expect(app.acted()).toEqual([]);
+      expect(app.frame()).toContain("Enter go to it");
+      app.mockInput.pressEnter();
+      yield* app.flush;
+      expect(app.acted()).toEqual([
+        {
+          _tag: "Jump",
+          jump: { kind: "workspace", workspaceId: "w1", label: "Implement · control-plane-glass" },
+        },
+      ]);
+
+      // Selecting the waiting run in the other workspace opens its question under it,
+      // rendered exactly as the local board renders one. A run inside a group is named
+      // by its workflow alone, so what tells two of them apart is what they are doing.
+      yield* app.click(4, app.lineOf("next — your turn"));
+      expect(app.frame()).toContain("What next?");
+      app.mockInput.pressEnter();
+      yield* app.flush;
+      expect(app.acted().at(-1)).toEqual({ _tag: "Answer", runId: "r2", value: "Implement now" });
+    }),
+  ));
+
+test("the tree's columns line up at every depth, and on a pane too narrow for them", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The whole point of the gutter: the indent is in it, so the three columns start
+      // in the same place whatever a row's depth — which is what makes a tree of four
+      // levels comparable down a column instead of a staircase.
+      for (const width of [WIDE_PANE, 100]) {
+        const app = yield* mount(appState({ scope: "all", wide: wideView() }), width);
+        // Each row's detail column, by the one word only that row's detail carries:
+        // the workspace, the run under it, and the agent under that.
+        const column = (detail: string) => app.columnOf(detail, detail);
+
+        expect(column("1 running")).toBe(column("build"));
+        expect(column("build")).toBe(column("working"));
+      }
+    }),
+  ));
+
+test("no row changes height when the mouse crosses it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A row used to grow a line of buttons when it was selected or hovered, so moving
+      // the mouse across the list reflowed everything under the pointer. Unreadable on
+      // a board of the whole session, where every row is one line of a tree.
+      const app = yield* mount(appState({ scope: "all", wide: wideView() }), WIDE_PANE);
+      const before = app.lineOf("Collie");
+
+      yield* app.hover(4, app.lineOf("Implement · control-plane-glass"));
+      expect(app.lineOf("Collie")).toBe(before);
+      yield* app.click(4, app.lineOf("Implement · control-plane-glass"));
+      expect(app.lineOf("Collie")).toBe(before);
+    }),
+  ));
+
+test("Esc clears the filter from the board, not only while typing in it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A filter kept so a row can be acted on is a filter that outlives the keyboard
+      // being in it, and Esc used to reach it only from inside: from the board you had
+      // to press `/` again first. Harmless here; on a wide board a forgotten filter
+      // hides whole workspaces.
+      const app = yield* mount(appState({ board: BOARD }));
+
+      app.mockInput.pressKey("/");
+      yield* Effect.promise(() => app.mockInput.typeText("worktree"));
+      app.mockInput.pressEnter();
+      yield* app.flush;
+      expect(app.frame()).toContain("/worktree");
+      expect(app.frame()).not.toContain("Implement · add-a-picker");
+
+      yield* app.escape;
+      expect(app.frame()).toContain("Implement · add-a-picker");
+      expect(app.frame()).not.toContain("/worktree");
+
+      // And with nothing to clear it does what it did before, which is nothing.
+      yield* app.escape;
+      expect(app.acted()).toEqual([]);
+      expect(app.frame()).toContain("Implement · add-a-picker");
     }),
   ));
 
