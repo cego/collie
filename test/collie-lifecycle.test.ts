@@ -145,10 +145,17 @@ afterEach(() =>
 );
 
 const cli = Effect.fn("test.cli")(function* (args: string[]) {
+  return yield* run(["--json", ...args]).pipe(
+    Effect.map(({ stdout, stderr, exit }) => ({ body: parseJson(stdout), stderr, exit })),
+  );
+});
+
+/** The CLI as a human runs it: what it printed, unenveloped. */
+const run = Effect.fn("test.run")(function* (args: string[]) {
   const path = yield* Path.Path;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const process = yield* spawner.spawn(
-    ChildProcess.make("bun", [path.join(root, "src/main.ts"), "--json", ...args], {
+    ChildProcess.make("bun", [path.join(root, "src/main.ts"), ...args], {
       cwd: root,
       env,
       extendEnv: true,
@@ -178,7 +185,7 @@ const cli = Effect.fn("test.cli")(function* (args: string[]) {
   ).pipe(Effect.scoped);
   if (stdout.trim() === "")
     return yield* Effect.fail(new Error(`empty stdout (exit ${Number(exit)}): ${stderr}`));
-  return { body: parseJson(stdout), stderr, exit };
+  return { stdout, stderr, exit };
 });
 
 effectTest(
@@ -402,6 +409,58 @@ effectTest(
     );
   },
 );
+
+effectTest("run show lists a parent's repository runs, with their status", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const parent = yield* cli([
+    "--workspace",
+    "w1",
+    "run",
+    "start",
+    "demo",
+    "--input",
+    "goal=ship",
+    "--request-id",
+    "parent-1",
+  ]);
+  const child = yield* cli([
+    "--workspace",
+    "w1",
+    "run",
+    "start",
+    "demo",
+    "--input",
+    "goal=ship the api",
+    "--request-id",
+    "child-1",
+  ]);
+  const parentId = Schema.decodeUnknownSync(Schema.String)(parent.body.data.runId);
+  const childId = Schema.decodeUnknownSync(Schema.String)(child.body.data.runId);
+  // The fan-out as it stands after the first wave started, written the way the parent's
+  // Driver writes it.
+  const file = path.join(dir, "state", "runs", parentId, "run.json");
+  const snapshot = parseJson(yield* fs.readFileString(file));
+  snapshot.children = [childId];
+  snapshot.fanout = {
+    title: "Implement now",
+    waves: [["cego/api"], ["cego/web"]],
+    runs: { "cego/api": childId },
+    mrs: {},
+    wave: 1,
+    blocked: null,
+  };
+  yield* fs.writeFileString(file, JSON.stringify(snapshot));
+
+  const shown = yield* run(["--workspace", "w1", "run", "show", parentId]);
+
+  // An agent driving Collie follows a fan-out from here: the child, which repository it
+  // is building, and where it has got to.
+  expect(shown.stdout).toContain(`${childId}\tcego/api\trunning`);
+  // And the relation is in the payload as well, for a caller that parses it.
+  const json = yield* cli(["--workspace", "w1", "run", "show", parentId]);
+  expect(json.body.data.run.children).toEqual([childId]);
+});
 
 effectTest("two plans under one directory are two runs, named apart", function* () {
   const fs = yield* FileSystem.FileSystem;

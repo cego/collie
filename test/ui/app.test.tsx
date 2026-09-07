@@ -40,6 +40,7 @@ function run(id: string, title: string, over: Partial<WorkspaceView["active"][nu
     detail: "build",
     at: NOW - 120_000,
     target: null,
+    children: [],
     fixable: false,
     choice: null,
     needsYou: false,
@@ -740,6 +741,7 @@ test("the nav switches views, and each view lists its own rows", () =>
           detail: "done · 2 finding(s) open",
           at: NOW - 86_400_000,
           target: "mr:gitlab.example.com/g/p!42",
+          children: [],
           fixable: true,
           choice: null,
           needsYou: false,
@@ -1288,6 +1290,39 @@ test("the tree's columns line up at every depth, and on a pane too narrow for th
         expect(column("1 running")).toBe(column("build"));
         expect(column("build")).toBe(column("working"));
       }
+    }),
+  ));
+
+test("a plan run's repository runs are drawn under it, and Enter goes to one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const view = board({
+        active: [
+          run("plan-1", "Plan · add-a-version-flag", {
+            detail: "wave 1/2 · waiting on cego/api",
+            children: ["child-api"],
+          }),
+          run("child-api", "Implement · add-a-version-flag", { detail: "build" }),
+        ],
+      });
+      const app = yield* mount(appState({ board: view }), WIDE_PANE);
+
+      // The wave the plan is on, on the plan's own row.
+      expect(app.frame()).toContain("wave 1/2 · waiting on cego/api");
+      // The child is indented under it: the gutter carries the depth, so its glyph
+      // starts further in than its parent's.
+      const parentAt = app.columnOf("wave 1/2", "Plan");
+      const childAt = app.columnOf("build", "Implement");
+      expect(childAt).toBeGreaterThan(parentAt);
+
+      // Enter on the child goes to the child's own run, not to the plan's.
+      app.mockInput.pressArrow("down");
+      app.mockInput.pressEnter();
+      yield* app.flush;
+      expect(app.acted()).toContainEqual({
+        _tag: "Jump",
+        jump: { kind: "run", runId: "child-api", label: "Implement · add-a-version-flag" },
+      });
     }),
   ));
 

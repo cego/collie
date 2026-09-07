@@ -54,6 +54,53 @@ and architecture reports go into the run's `plan/` directory and never into the 
 made while planning _are_ written into the repository — those are domain knowledge, not
 plans.
 
+## A parent run that fans out
+
+A Choice that chains is normally fire-and-forget: the child gets its own Driver and the
+parent finishes. One case is not. When the plan a Choice hands on names several
+repositories in its tickets' `Repo:` lines, "Implement now" starts one `implement` run per
+repository and the parent stays `running` until the last of them ends
+([Plans that span repositories](workflows.md#plans-that-span-repositories) is what that
+means for the operator; `Repo run` and `Wave` in [`CONTEXT.md`](../CONTEXT.md) are the
+terms).
+
+Three mechanics carry it, and all three are the run directory again rather than anything
+new between processes — so this is
+[ADR-0004](adr/0004-coordinate-runs-through-the-filesystem.md) applied to a second run
+rather than a decision of its own:
+
+- **The record.** `run.json` gains `fanout`: the Choice title that started it, the waves as
+  lists of repository paths, the run each repository got, the merge request each of those
+  opened, which wave is in flight and which repository stopped it. `src/run.ts` owns the
+  shape and the readers of it — `fanoutRepos` is what the board's row, the parent's
+  summary, `run show`'s child lines and the resume check all read, so none of them derives
+  "this repository was never started" for itself.
+- **Waiting.** The engine gets a wait-on-run: watch the child's run directory, re-read its
+  record, stop on a terminal status — the same watch-plus-tick shape the Driver's own
+  Choice wait uses, for the same reason (an event that never arrives should cost latency,
+  not the answer). It has no timeout: a repository run takes as long as its work does, and
+  a child whose Driver was killed outright leaves the record `running`, so the parent waits
+  until someone stops it. The parent's row says which repository it is waiting on.
+- **Stop and resume across two runs.** `run stop` on a parent stops its repository runs
+  before itself, and a repository run that will not stop is the whole answer: the parent is
+  left alone and the failure names it, because stopping the parent and reporting success
+  would say the plan had stopped while one of its runs was still orchestrating agents.
+  `run resume` re-enters the fan-out instead of asking the menu again — repositories that
+  succeeded are skipped, ones that failed or were stopped are resumed as themselves, and
+  the rest start when their blockers are done, so a second attempt opens no second merge
+  requests. The guard that refuses to stop or resume a run that has succeeded is lifted for
+  a parent only while its fan-out is unfinished; once every repository has ended, a built
+  plan is a succeeded run like any other.
+
+A plan the fan-out cannot honestly run is refused when the Choice is picked, before
+anything starts: a repository-level cycle, a ticket with no `Repo:` line where its siblings
+have one, a `Repo:` that is not a path under the plan's root, one with no checkout there,
+two tickets sharing one number, or a "Blocked by" line naming something that is not a
+ticket of the plan. That reading is a
+pure function in `src/plan.ts` for exactly that reason — the refusals have to be decidable
+before a single run exists — and `isSingleRepo` is the same function's answer to "is this a
+plan to chain as one run", which is `.` and nothing else.
+
 ## Worktrees and the settled rule
 
 `worktree.ts` owns the checkout a mutating run works in. The unit is the **branch**: git

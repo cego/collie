@@ -437,11 +437,10 @@ Do {{inputs.goal}}.
   expect(runs[0]!.record.inputs.goal).toBe("Add a picker");
 });
 
-effectTest("a workflow run from a row is asked its decisions before it starts", function* () {
-  // `architecture` needs no Input and has one Choice step, which is the case that used to
-  // start a Run with no decisions at all and then stop at that Choice hours later — the
-  // opposite of deciding upfront, and the whole point of answering at launch.
-  const { asked, prompts: scriptedPrompts } = scripted(["Stop here"]);
+effectTest("a workflow run from a row with nothing to ask starts straight away", function* () {
+  // `architecture` needs no Input and its one Choice is asked when the Run reaches it,
+  // so there is nothing between the click and the Run.
+  const { asked, prompts: scriptedPrompts } = scripted([]);
 
   yield* withDriver(
     runCommand(
@@ -452,10 +451,10 @@ effectTest("a workflow run from a row is asked its decisions before it starts", 
     ),
   );
 
-  expect(asked).toEqual(["architecture — next"]);
+  expect(asked).toEqual([]);
   const runs = yield* new RunStore(rig.pluginEnv().stateDir).list();
   expect(runs.map((r) => r.record.workflow)).toEqual(["architecture"]);
-  expect(runs[0]!.record.decisions).toEqual({ next: "Stop here" });
+  expect(runs[0]!.record.decisions).toEqual({});
 });
 
 effectTest("a fix round is not asked again for the plan the row settled", function* () {
@@ -487,27 +486,24 @@ effectTest("a fix round is not asked again for the plan the row settled", functi
   expect(parent.record.children).toContain(started.id);
 });
 
-effectTest(
-  "reviewing a target again names it, classified, and asks only the decision",
-  function* () {
-    const { asked, prompts: scriptedPrompts } = scripted(["Fix findings"]);
+effectTest("reviewing a target again names it, classified, and asks nothing", function* () {
+  const { asked, prompts: scriptedPrompts } = scripted([]);
 
-    yield* withDriver(
-      runCommand(
-        session(),
-        rig.pluginEnv(),
-        { _tag: "ReviewAgain", target: "mr:gitlab.example.com/g/p!12" },
-        scriptedPrompts,
-      ),
-    );
+  yield* withDriver(
+    runCommand(
+      session(),
+      rig.pluginEnv(),
+      { _tag: "ReviewAgain", target: "mr:gitlab.example.com/g/p!12" },
+      scriptedPrompts,
+    ),
+  );
 
-    // Nothing to paste: the row carried the target. The one question is `review`'s own
-    // Choice, which is answered before the Run exists rather than hours into it.
-    expect(asked).toEqual(["review — post"]);
-    const runs = yield* new RunStore(rig.pluginEnv().stateDir).list();
-    const started = runs.find((r) => r.record.workflow === "review");
-    expect(started?.record.inputs.target).toBe("mr:gitlab.example.com/g/p!12");
-    expect(started?.record.inputs.target_kind).toBe("mr");
-    expect(started?.record.decisions).toEqual({ post: "Fix findings" });
-  },
-);
+  // Nothing to paste: the row carried the target, and `review`'s own Choice is asked
+  // when the Run reaches it rather than before it exists.
+  expect(asked).toEqual([]);
+  const runs = yield* new RunStore(rig.pluginEnv().stateDir).list();
+  const started = runs.find((r) => r.record.workflow === "review");
+  expect(started?.record.inputs.target).toBe("mr:gitlab.example.com/g/p!12");
+  expect(started?.record.inputs.target_kind).toBe("mr");
+  expect(started?.record.decisions).toEqual({});
+});

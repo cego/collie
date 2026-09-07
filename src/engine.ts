@@ -1,7 +1,7 @@
 // Executes a Run: one tab per Step, agents started with the right Harness,
 // Model and Persona, gates and loops driven by Output files.
 
-import { Clock, Crypto, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
+import { Clock, Crypto, Effect, FileSystem, Option, Path, Result, Schema, Stream } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { ago, nowIso } from "./time";
@@ -70,8 +70,9 @@ import {
   targetKind,
   type InputPrompts,
 } from "./inputs";
-import { RunStore } from "./run";
-import { handOver, postReview } from "./operations";
+import { fanoutRepos, fanoutUnfinished, RunStore, type FanoutRecord } from "./run";
+import { handOver, postReview, resumeRun, runSettled, runStatus } from "./operations";
+import { isSingleRepo, planReposOf, type PlanRepos } from "./plan";
 import { notify as notifyRun, type NotificationKind } from "./notify";
 import {
   gitlabForProject,
@@ -304,7 +305,10 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       record.note = result.note;
       yield* run.save();
       if (result.status !== "done") {
-        return yield* finish(o, ctx, "blocked", viewSource, `${step.id} needs you`);
+        // The note where the step wrote one: a fan-out that stopped because a repository
+        // failed knows which, and a toast reading "next needs you" for a plan nobody has
+        // to answer sends the operator looking for a question that is not there.
+        return yield* finish(o, ctx, "blocked", viewSource, result.note ?? `${step.id} needs you`);
       }
       // A chained Run takes over from here, so the parent stops where it is.
       if (result.chained) {
@@ -704,6 +708,29 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
   // Said once, however many times the menu comes back around.
   const decidedSaid = new Set<string>();
 
+  // A parent resumed mid-fan-out picks its waves back up rather than asking again: the
+  // repositories it already started are the answer to this menu, and asking it a second
+  // time would open a second set of merge requests.
+  const unfinished = run.record.fanout;
+  if (
+    unfinished &&
+    fanoutUnfinished(unfinished) &&
+    (unfinished.step === "" || unfinished.step === step.id)
+  ) {
+    const choice = choices.find((c) => c.title === unfinished.title && c.run);
+    if (choice) {
+      const result = yield* fanOut(o, step, choice, prompts, {
+        repos: [],
+        waves: unfinished.waves,
+        refusal: null,
+      });
+      return choiceResult({
+        status: result.status,
+        note: `resumed "${choice.title}" — ${result.note}`,
+      });
+    }
+  }
+
   for (;;) {
     const taken = (title: string) =>
       run.record.choices.filter((c) => c.step === step.id && c.title === title).length;
@@ -810,6 +837,22 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
     }
 
     if (choice.run) {
+      // A plan that spans repositories is one run per repository rather than one run,
+      // and a plan the fan-out cannot honestly run is refused here: the message is
+      // shown, nothing is started, and the menu comes back for the human to pick again.
+      const plan = yield* fanOutOf(o, choice);
+      if (plan?.refusal) {
+        yield* out(`  ${choice.title} cannot run here: ${plan.refusal.message}`);
+        yield* run.log(`${step.id}: "${choice.title}" refused — ${plan.refusal.message}`);
+        continue;
+      }
+      if (plan) {
+        const result = yield* fanOut(o, step, choice, prompts, plan);
+        return choiceResult({
+          status: result.status,
+          note: `chose "${choice.title}" — ${result.note}`,
+        });
+      }
       const child = yield* chain(o, choice, prompts);
       if (!child) continue;
       return choiceResult({
@@ -850,6 +893,20 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
 });
 
 /**
+ * What a forwarded Choice input renders against; `CHAIN_SUPPLIED` names its families.
+ * One answer, because the fan-out reads the plan a choice names and `chain` forwards
+ * that same value to the child — and rendering it two ways is a fan-out that reads one
+ * plan directory while its children build another.
+ */
+function chainVars(run: Run) {
+  return {
+    run: { dir: run.dir, id: run.id, slug: run.record.slug },
+    inputs: run.record.inputs,
+    cwd: run.record.cwd,
+  };
+}
+
+/**
  * Starts the chosen Workflow as a child Run in this workspace and links it to this
  * one. Returns null when the human abandoned it at a question, so the menu comes back.
  */
@@ -857,23 +914,26 @@ const chain = Effect.fn("Engine.chain")(function* (
   o: EngineOptions,
   choice: ChoiceDef,
   prompts: EnginePrompts,
+  /**
+   * What the fan-out knows and the choice cannot say: which repository of the plan this
+   * child owns, and the checkout to root it at. Absent for every ordinary chain.
+   */
+  override?: { inputs: Record<string, string>; cwd: string },
 ) {
   const { run, out } = o;
   const child = resolveWorkflow(choice.run!, o.defs, o.defaults);
-  const vars = {
-    run: { dir: run.dir, id: run.id, slug: run.record.slug },
-    inputs: run.record.inputs,
-    cwd: run.record.cwd,
-  };
+  const vars = chainVars(run);
   const forwarded: Record<string, string> = {};
   for (const [key, value] of Object.entries(choice.inputs ?? {})) {
     forwarded[key] = renderTemplate(value, vars).text;
   }
+  Object.assign(forwarded, override?.inputs ?? {});
+  const cwd = override?.cwd ?? run.record.cwd;
 
   const inputs: Record<string, string> = {};
   const sources: Record<string, string> = {};
   for (const r of yield* inferInputs(child.inputs, {
-    cwd: run.record.cwd,
+    cwd,
     stateDir: o.env.stateDir,
   })) {
     if (forwarded[r.name] !== undefined) {
@@ -920,7 +980,7 @@ const chain = Effect.fn("Engine.chain")(function* (
   // is resolved from the child's own inputs, so a fix round lands in the checkout the
   // reviewed branch already has.
   const where = {
-    cwd: run.record.cwd,
+    cwd,
     workflow: child.name,
     name: tail,
     inputs,
@@ -975,6 +1035,233 @@ const chain = Effect.fn("Engine.chain")(function* (
   const undriven = yield* handOver({ ...o.env, cwd: childRun.record.cwd }, childRun);
   if (undriven) yield* out(`  ${child.name} was created but no driver started: ${undriven.why}`);
   return childRun.id;
+});
+
+/**
+ * Waits for another Run to reach a terminal status, and says which one it reached.
+ *
+ * The Driver's own Choice wait is the shape: events on the run directory invalidate a
+ * re-read, and a tick rides alongside them so a watch the platform drops costs latency
+ * rather than the answer.
+ *
+ * No timeout: a repository run takes as long as its work does. A child whose Driver was
+ * killed outright leaves the record `running` and so is waited on for ever — the
+ * parent's row says which repository it is waiting on, and `run stop` ends it.
+ */
+/**
+ * The safety net, not the mechanism: the watch below is what makes this wait prompt, and
+ * the tick only covers an event the platform dropped. Seconds rather than the Driver's
+ * Choice wait's half-second, because that one is open while a human decides and this one
+ * is open for the whole life of a repository run — every tick is a read and a schema
+ * decode of the child's record.
+ */
+const WAIT_TICK_MS = 5000;
+
+const waitOnRun = Effect.fn("Engine.waitOnRun")(function* (stateDir: string, id: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const store = new RunStore(stateDir);
+  const check = Effect.gen(function* () {
+    const child = yield* store.load(id);
+    return { dir: child.dir, status: yield* runStatus(child) };
+  }).pipe(
+    // A child whose record will not read is not something to wait on for ever.
+    Effect.catch(() => Effect.succeed({ dir: null, status: "failed" })),
+  );
+
+  const first = yield* check;
+  if (first.dir === null || runSettled(first.status)) return first.status;
+  const events = Stream.merge(
+    fs.watch(first.dir).pipe(Stream.catchCause(() => Stream.empty)),
+    Stream.tick(`${WAIT_TICK_MS} millis`),
+  );
+  const seen = yield* events.pipe(
+    Stream.mapEffect(() => check),
+    Stream.filter((event) => runSettled(event.status)),
+    Stream.runHead,
+  );
+  return Option.match(seen, { onNone: () => "failed", onSome: (event) => event.status });
+});
+
+/**
+ * The repositories a `run:` choice would fan out over, and `null` when it would chain
+ * one run exactly as it always has: a plan whose tickets name one repository, and any
+ * work source that is not a plan directory at all.
+ *
+ * Read here rather than trusted from the plan: the refusals are what stop a fan-out
+ * that cannot be honest, so they have to be known before anything is started.
+ */
+const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (o: EngineOptions, choice: ChoiceDef) {
+  const template = choice.inputs?.plan;
+  if (template === undefined) return null;
+  // The same rendering `chain` will do with it, so the plan read here is the plan the
+  // children are given.
+  const planDir = renderTemplate(template, chainVars(o.run)).text;
+  const plan = yield* planReposOf(planDir, o.run.record.cwd);
+  return isSingleRepo(plan) ? null : plan;
+});
+
+/**
+ * One `implement` run per repository the plan names, in waves: a repository starts when
+ * every repository its tickets are blocked by has succeeded. The parent stays `running`
+ * throughout, which is what makes it the one row that says whether the whole plan is
+ * built.
+ *
+ * A child that fails or is stopped starts no further wave. The children already running
+ * are left to finish — they are building their own repository and their work is worth
+ * having — and the parent ends `blocked` naming the repository that stopped it.
+ */
+const fanOut = Effect.fn("Engine.fanOut")(function* (
+  o: EngineOptions,
+  step: ResolvedStep,
+  choice: ChoiceDef,
+  prompts: EnginePrompts,
+  plan: PlanRepos,
+) {
+  const { run, out } = o;
+  const pathService = yield* Path.Path;
+  const store = new RunStore(o.env.stateDir);
+  const waves = plan.waves.map((wave) => [...wave]);
+  run.record.fanout = {
+    step: step.id,
+    title: choice.title,
+    waves,
+    // A resumed fan-out keeps what it already started, and what those runs opened.
+    runs: run.record.fanout?.runs ?? {},
+    mrs: run.record.fanout?.mrs ?? {},
+    wave: 0,
+    blocked: null,
+  };
+  yield* run.save();
+
+  /** The record as it stands, which is set from here down; `mark` is the only writer. */
+  const fan = () => run.record.fanout!;
+  const mark = (patch: Partial<FanoutRecord>) =>
+    Effect.gen(function* () {
+      run.record.fanout = { ...fan(), ...patch };
+      yield* run.save();
+    });
+
+  // A child is created, given a Driver and pushed onto `children` before this record
+  // learns which repository it is for, and an interrupt in that gap — a stop is a signal
+  // that can land anywhere — would leave a repository run nothing here can see: not
+  // stopped with the plan, not on the parent's row, and started a second time by a
+  // resume, on the same branch. The child records its own `repo`, so a resumed parent
+  // adopts what it already has before deciding what to start.
+  const known = new Set(Object.values(fan().runs));
+  for (const id of run.record.children) {
+    if (known.has(id)) continue;
+    const child = yield* store.load(id).pipe(Effect.catch(() => Effect.succeed(null)));
+    const repo = child?.record.inputs.repo ?? "";
+    if (repo !== "" && waves.flat().includes(repo) && fan().runs[repo] === undefined) {
+      yield* out(`  ${repo} was already started as ${id}`);
+      yield* mark({ runs: { ...fan().runs, [repo]: id } });
+    }
+  }
+
+  /**
+   * The merge request a repository's run opened, kept on the parent. Called wherever a
+   * child's end is observed and not only where the fan-out carries on, because the
+   * parent is the one place the sibling merge requests are findable from: a repository
+   * that was built has its merge request listed whatever became of its wave.
+   */
+  const recordMr = Effect.fn("Engine.fanOut.recordMr")(function* (repo: string, id: string) {
+    const url = yield* store.load(id).pipe(
+      Effect.map((child) => child.record.mr_url),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    if (url) yield* mark({ mrs: { ...fan().mrs, [repo]: url } });
+  });
+
+  for (const [index, wave] of waves.entries()) {
+    yield* mark({ wave: index + 1 });
+    const ids: Array<{ repo: string; id: string }> = [];
+    /**
+     * The repository this wave got no further than, and why. The loop below breaks
+     * rather than returning: the siblings it has already started are building whether
+     * or not this one could, so they are waited on and their merge requests recorded
+     * before the fan-out says what stopped it. Returning here left a child orchestrating
+     * agents with nobody waiting on it and its merge request listed nowhere.
+     */
+    let unstartable: { repo: string; status: string } | null = null;
+    for (const repo of wave) {
+      // A resumed parent does not start a repository twice. What it does with the child
+      // it already has depends on how that child ended: one that succeeded is done with,
+      // one that failed or was stopped is resumed as itself, and one still going is
+      // waited on. This is what keeps a second attempt from opening second merge
+      // requests.
+      const already = fan().runs[repo];
+      if (already !== undefined) {
+        const child = yield* store.load(already).pipe(Effect.catch(() => Effect.succeed(null)));
+        const status = child === null ? "failed" : yield* runStatus(child);
+        if (status === "succeeded") {
+          yield* out(`  ${repo} already succeeded`);
+          // Including the one a previous attempt built while the fan-out was stopping:
+          // this is the only pass that will look at it.
+          yield* recordMr(repo, already);
+          continue;
+        }
+        if (child !== null && (status === "failed" || status === "stopped")) {
+          const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+          const resumed = yield* resumeRun({ ...o.env, cwd: child.record.cwd }, child, requestId);
+          yield* out(
+            `  ${repo} ${resumed.ok ? "resumed" : `not resumed: ${resumed.error.message}`}`,
+          );
+          if (!resumed.ok) {
+            unstartable = { repo, status: "not resumed" };
+            break;
+          }
+        }
+        ids.push({ repo, id: already });
+        continue;
+      }
+      // No branch is named here on purpose: `branchFor` names a chained run after the
+      // work its parent was named for, so every Repo run of one plan is handed the same
+      // branch in its own repository — which is what makes the sibling merge requests
+      // findable by name. Naming one here would be that decision made twice.
+      const child = yield* chain(o, choice, prompts, {
+        inputs: { repo },
+        cwd: pathService.join(run.record.cwd, repo),
+      });
+      if (child === null) {
+        unstartable = { repo, status: "not started" };
+        break;
+      }
+      yield* mark({ runs: { ...fan().runs, [repo]: child } });
+      ids.push({ repo, id: child });
+    }
+
+    yield* out(`  wave ${index + 1}/${waves.length}: ${wave.join(", ")}`);
+    // Every repository of the wave, not up to the first failure: they are all already
+    // started, they are all left to finish, and one that was built has a merge request
+    // the parent has to list. Returning early skipped a sibling's for good.
+    const ended: Array<{ repo: string; status: string }> = [];
+    for (const { repo, id } of ids) {
+      const status = yield* waitOnRun(o.env.stateDir, id);
+      yield* out(`  ${repo} ${status}`);
+      yield* run.log(`${repo}: run ${id} ${status}`);
+      yield* recordMr(repo, id);
+      ended.push({ repo, status });
+    }
+    // In wave order: what each repository that started ended as, and last the one that
+    // never started, which the loop above broke on.
+    if (unstartable !== null) ended.push(unstartable);
+    // The first that did not succeed, which is the one the parent is blocked on and the
+    // reason the waves after it are not run.
+    const stopped = ended.find((entry) => entry.status !== "succeeded");
+    if (stopped !== undefined) {
+      yield* mark({ wave: 0, blocked: stopped });
+      return {
+        status: "blocked" as const,
+        note: `${stopped.repo} ${stopped.status}; the repositories after it were not run`,
+      };
+    }
+  }
+
+  yield* mark({ wave: 0 });
+  return {
+    status: "done" as const,
+    note: `${waves.flat().length} repo(s) built in ${waves.length} wave(s)`,
+  };
 });
 
 /** One agent round inside a Choice: a Step in every way except its own id. */
@@ -2393,7 +2680,18 @@ export function summarise(o: EngineOptions, status: RunStatus): string {
   if (run.record.choices.length > 0) {
     lines.push("", "Choices:", ...run.record.choices.map((c) => `  ${c.step}: ${c.title}`));
   }
-  if (run.record.children.length > 0) {
+  if (run.record.fanout) {
+    const blocked = run.record.fanout.blocked?.repo ?? "an earlier repo";
+    lines.push(
+      "",
+      "Repository runs:",
+      ...fanoutRepos(run.record.fanout).map((entry) =>
+        entry.run === null
+          ? `  ${entry.repo}: not run: waiting on ${blocked}`
+          : `  ${entry.repo}: ${entry.run}${entry.mr ? ` — ${entry.mr}` : ""}`,
+      ),
+    );
+  } else if (run.record.children.length > 0) {
     lines.push("", `Chained: ${run.record.children.join(", ")}`);
   }
   if (run.record.unpushed) {

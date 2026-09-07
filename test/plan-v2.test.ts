@@ -103,6 +103,51 @@ test("plan is one agent through grill, spec and tickets, then a menu", () =>
     }),
   ));
 
+test("the tickets prompt makes every ticket name its repository", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { wf } = yield* plan();
+      const tickets = wf.steps.find((step) => step.id === "tickets")!.prompt;
+
+      // The line itself, where it goes, and what the path is relative to: the fan-out
+      // reads it, so a planner that writes it differently breaks the hand-off.
+      expect(tickets).toContain("**Repo:**");
+      expect(tickets).toContain("Blocked by");
+      expect(tickets).toContain("`.`");
+      // The rule the fan-out cannot recover from: repos that block each other.
+      expect(tickets).toMatch(/interleav|cycle|never be blocked by/i);
+    }),
+  ));
+
+test("every plan prompt tells the planner how to answer the end menu itself", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN, CLEAN, CLEAN]);
+      const prompts = scriptedPrompts(["Refine"]);
+
+      const { run } = yield* runWorkflowEffect(
+        rig,
+        "plan",
+        { goal: "Add a version flag" },
+        { prompts },
+      );
+
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // The preamble, so the planner knows it before the menu exists as well as after:
+      // "proceed" arrives in the middle of a step as often as at the end of one.
+      for (const step of ["grill", "spec", "tickets"]) {
+        const prompt = yield* fs.readFileString(path.join(run.dir, "steps", step, "prompt-1.md"));
+        expect(prompt).toContain(`collie run answer ${run.id} "Implement now"`);
+        expect(prompt).toContain("proceed");
+      }
+      // Answering the menu is the whole instruction: no prompt tells the planner to
+      // start a run itself, which is what the superseded refine-prompt change did.
+      const source = yield* fs.readFileString(path.join(rig.baselineDir, "workflows", "plan.md"));
+      expect(source).not.toContain("collie run start");
+    }),
+  ));
+
 test("a plan started with workspace=new chains an implement that gets one too", () =>
   runEffect(
     Effect.gen(function* () {

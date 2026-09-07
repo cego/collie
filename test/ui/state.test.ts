@@ -16,6 +16,7 @@ import {
   rereads,
   retarget,
   rowsOf,
+  NEEDS_YOU,
   selectableRows,
   viewRows,
   wideRows,
@@ -58,6 +59,7 @@ function run(id: string, over: Partial<WorkspaceView["active"][number]> = {}) {
     detail: "build",
     at: NOW - 120_000,
     target: null,
+    children: [],
     fixable: false,
     choice: null,
     needsYou: false,
@@ -133,6 +135,66 @@ test("an agent is listed under the run it works for", () => {
   expect(rows[1]!.agent).toBe("implementer-1");
   expect(rows[1]!.key).toBe("1");
   expect(actionsFor(rows[1]!, "local").map((a) => a.key)).toEqual(["1"]);
+});
+
+test("a run's children are listed under it, and its agents under those", () => {
+  // A plan run that fanned out is one thing with several runs inside it, so its
+  // repository runs hang off it the way its agents do rather than floating beside it.
+  const rows = rowsOf(
+    board({
+      agents: [agent("1", "Implementer", "child-api")],
+      active: [
+        run("plan-1", { detail: "wave 1/2 · waiting on cego/api", children: ["child-api"] }),
+        run("child-api"),
+      ],
+    }),
+  );
+
+  expect(rows.map((r) => [r.kind, r.title, r.depth])).toEqual([
+    ["active", "Implement · plan-1", 0],
+    ["active", "Implement · child-api", 1],
+    ["agent", "└ Implementer", 1],
+  ]);
+  // Enter on a child still goes to that child's own run.
+  expect(rows[1]!.jump).toMatchObject({ kind: "run", runId: "child-api" });
+});
+
+test("an ordinary chain's child is a row of its own, not nested under a finished parent", () => {
+  // A `plan` run that chained finishes the moment its child has a Driver, so the child
+  // is a live run and the parent is a finished one. Nesting on parentage drew that live
+  // run inside the finished region — and moved it back out when the parent aged off.
+  const rows = rowsOf(
+    board({
+      active: [run("implement-1")],
+      recent: [run("plan-1", { glyph: "✓", detail: "done" })],
+    }),
+  );
+
+  expect(rows.map((r) => [r.kind, r.title, r.depth])).toEqual([
+    ["active", "Implement · implement-1", 0],
+    ["recent", "Implement · plan-1", 0],
+  ]);
+});
+
+test("a run that needs you is under the header, and the header only when one is", () => {
+  // The header is drawn from the rows that will be, not from the list before nesting
+  // took some of them away: it used to sit over nothing when the only run needing an
+  // answer was a repository run of a fan-out.
+  const nestedOnly = rowsOf(
+    board({
+      active: [
+        run("plan-1", { children: ["child-api"] }),
+        run("child-api", { needsYou: true, choice: MENU }),
+      ],
+    }),
+  );
+
+  expect(nestedOnly.map((r) => r.kind)).toEqual(["active", "active"]);
+  expect(nestedOnly.map((r) => r.title)).not.toContain(NEEDS_YOU);
+
+  // And a top-level run that needs you still gets it.
+  const asking = rowsOf(board({ active: [run("r1", { needsYou: true, choice: MENU })] }));
+  expect(asking[0]!.title).toBe(NEEDS_YOU);
 });
 
 test("an agent whose run is not on the board goes in a group of its own", () => {

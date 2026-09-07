@@ -443,20 +443,42 @@ function settingRow(id: string, key: string, value: string, writable: boolean): 
  */
 export function rowsOf(board: WorkspaceView): Row[] {
   const rows: Row[] = [];
-  const listed = new Set([...board.active, ...board.recent].map((r) => r.id));
-  const under = (run: RunRow) => board.agents.filter((a) => a.run === run.id);
+  const onBoard = [...board.active, ...board.recent];
+  /** The rows this board has, by id: what a child id and an agent's run resolve against. */
+  const byId = new Map(onBoard.map((r) => [r.id, r]));
+  const agentsOf = (run: RunRow) => board.agents.filter((a) => a.run === run.id);
+  const childrenOf = (run: RunRow) => run.children.flatMap((id) => byId.get(id) ?? []);
+  /**
+   * One run, its children, and each of their agents — a run that fanned out into one
+   * run per repository is one thing on the board, not several beside each other.
+   */
+  const under = (run: RunRow, kind: "active" | "recent", depth = 0): Row[] => [
+    nested(runRow(run, board.now, kind), depth),
+    // An agent sits at its run's own depth: the connector is what joins it, and the
+    // gutter is what says which run is inside which.
+    ...agentGroup(agentsOf(run), agentRow).map((a) => nested(a, depth)),
+    ...childrenOf(run).flatMap((child) =>
+      under(child, board.active.includes(child) ? "active" : "recent", depth + 1),
+    ),
+  ];
+  // A child is drawn under its parent, so it is not also drawn beside it. Filtered once
+  // here, because a header counted over one list and drawn over another is how the
+  // "Needs you" header came to stand over no rows at all.
+  const nestedIds = new Set(onBoard.flatMap((r) => r.children));
+  const top = (runs: ReadonlyArray<RunRow>) => runs.filter((run) => !nestedIds.has(run.id));
+  const active = top(board.active);
   // The runs that have stopped for the human first, under a header saying so: a
   // blocked run costs the whole run's wall-clock and used to be visible only if its
   // row happened to be the Selection. Each keeps the agents nested under it.
-  const waiting = board.active.filter((r) => r.needsYou);
+  const waiting = active.filter((r) => r.needsYou);
   if (waiting.length > 0) rows.push(headerRow(NEEDS_YOU));
-  for (const run of [...waiting, ...board.active.filter((r) => !r.needsYou)]) {
-    rows.push(runRow(run, board.now, "active"), ...agentGroup(under(run), agentRow));
+  for (const run of [...waiting, ...active.filter((r) => !r.needsYou)]) {
+    rows.push(...under(run, "active"));
   }
-  for (const run of board.recent) {
-    rows.push(runRow(run, board.now, "recent"), ...agentGroup(under(run), agentRow));
+  for (const run of top(board.recent)) {
+    rows.push(...under(run, "recent"));
   }
-  const orphans = board.agents.filter((a) => !listed.has(a.run));
+  const orphans = board.agents.filter((a) => !byId.has(a.run));
   if (orphans.length > 0) {
     rows.push(headerRow("agents with no run here"));
     rows.push(...agentGroup(orphans, orphanRow));
@@ -487,29 +509,37 @@ export function wideRows(wide: WideView): Row[] {
      * because that is what the footer says it went to. An agent keeps its own name in
      * full: the model is what tells two variants of one step apart.
      */
-    const under = (run: RunRow, kind: "active" | "recent") => {
+    const inGroup = [...group.active, ...group.recent];
+    const byId = new Map(inGroup.map((r) => [r.id, r]));
+    const under = (run: RunRow, kind: "active" | "recent", depth = 1): Row[] => {
       const row = runRow(run, wide.now, kind);
       return [
-        nested(away ? row : unqualified(row), 1),
+        nested(away ? row : unqualified(row), depth),
         ...agentGroup(
           group.agents.filter((a) => a.run === run.id),
           agentRow,
-        ).map((agent) => nested(agent, 2)),
+        ).map((agent) => nested(agent, depth + 1)),
+        // A repository run of a plan that fanned out, under the plan run that started it.
+        ...run.children
+          .flatMap((id) => byId.get(id) ?? [])
+          .flatMap((child) =>
+            under(child, group.active.includes(child) ? "active" : "recent", depth + 1),
+          ),
       ];
     };
+    // A child is drawn under its parent, so it is not also drawn beside it.
+    const nestedIds = new Set(inGroup.flatMap((r) => r.children));
+    const top = (runs: ReadonlyArray<RunRow>) => runs.filter((run) => !nestedIds.has(run.id));
+    const atTop = top(group.active);
     // The runs with a question first, the way the local board lists them: a run that
     // has stopped for you is costing its whole wall-clock while it waits.
-    const active = [
-      ...group.active.filter((r) => r.needsYou),
-      ...group.active.filter((r) => !r.needsYou),
-    ];
-    const listed = new Set([...group.active, ...group.recent].map((r) => r.id));
+    const active = [...atTop.filter((r) => r.needsYou), ...atTop.filter((r) => !r.needsYou)];
     const inside = [
       groupRow(group),
       ...active.flatMap((r) => under(r, "active")),
-      ...group.recent.flatMap((r) => under(r, "recent")),
+      ...top(group.recent).flatMap((r) => under(r, "recent")),
       ...agentGroup(
-        group.agents.filter((a) => !listed.has(a.run)),
+        group.agents.filter((a) => !byId.has(a.run)),
         orphanRow,
       ).map((row) => nested(row, 1)),
     ];
@@ -606,7 +636,7 @@ function quietRow(wide: WideView): Row[] {
  * mid-word says less than no header at all.
  */
 /** The header over the runs that have stopped for the human. */
-const NEEDS_YOU = "Needs you";
+export const NEEDS_YOU = "Needs you";
 
 function headerRow(title: string): Row {
   return { ...BLANK, id: `header:${title}`, kind: "header", title };

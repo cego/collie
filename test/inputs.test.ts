@@ -523,6 +523,7 @@ function makePlanRun(
       children: [],
       choices: [],
       awaiting: null,
+      fanout: null,
       handoffs: [],
       disputed: [],
       deferred: [],

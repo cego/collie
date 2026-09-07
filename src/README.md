@@ -25,6 +25,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `handoff.ts`     | Giving one Run's result to another Run's live agent                                      |
 | `output.ts`      | The Output and Synthesis schemas, `review.md`, and which findings the loop still owns    |
 | `run.ts`         | The run directory: audit trail and resume state                                          |
+| `plan.ts`        | A plan directory as repositories and waves, and the refusals that stop a fan-out         |
 | `lock.ts`        | The pid-lock discipline shared by the run persistence lock and the Driver takeover lock  |
 | `naming.ts`      | herdr-legal agent names vs readable tab and pane labels                                  |
 | `keys.ts`        | Raw keypresses, for the text board a pane falls back to when the renderer will not start |
