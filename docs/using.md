@@ -610,6 +610,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "handoff_timeout_ms": 7200000,
   "quiet_ms": 600000,
   "board_quiet_ms": 300000,
+  "compact_at_tokens": 372000,
   "notifications": { "run-done": false },
   "models": { "opencode": ["mycorp/local-model"] },
   "trust": "ask",
@@ -645,6 +646,117 @@ a different question: how long a running run's directory may go unchanged before
 Control Plane's row says `quiet for 9m`. Five minutes by default. Nothing is nudged and
 nothing is given up on — it is shown, so a hung run is visible before you notice by
 accident.
+
+`compact_at_tokens` is where compaction between pieces of work kicks in — see
+[Compaction between pieces of work](#compaction-between-pieces-of-work).
+
+## Compaction between pieces of work
+
+Collie reuses an agent across a Workflow's steps, a fix round's iterations and a hand-off
+from another Run, so its context grows all day. Before it gives a reused agent the next
+piece of work, Collie reads that harness's own current-context measure and, at or above
+`compact_at_tokens`, asks it to compact natively and waits for the outcome before sending
+anything.
+
+One absolute number rather than a percentage: the four harnesses measure different
+windows, and one number is what you can reason about. **372,000 tokens** by default.
+`"compact_at_tokens": 0` turns the feature off; anything else has to be a whole number of
+tokens above zero, and a value that is not is refused where it is written and fails a step
+that would launch an agent rather than falling back to the default. There are no workflow,
+step or per-harness overrides, and the five-minute wait below is fixed.
+
+This is the harnesses' own compaction, asked for through their own official interfaces,
+and their automatic compaction is left switched on. A harness that compacts before
+Collie's threshold has already done the job; Collie's threshold is an extra floor, not a
+replacement.
+
+What a launch installs, per harness, into that agent's own control directory — never
+into your `~/.pi` or `~/.claude`:
+
+| Harness     | Verified against | What it installs, and what reads the context                                                                                                                                                                                                                                                                                                       |
+| ----------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pi          | 0.85.1           | An extension passed with `-e`. `ctx.getContextUsage()` is the estimate Pi's own compaction and footer use, and `ctx.compact`'s per-request callbacks are the outcome.                                                                                                                                                                              |
+| Claude Code | 2.1.263          | A settings file passed with `--settings`, which is _additional_ settings. Its status line reports `context_window` — input plus output, cache folded into the input total exactly once — and its `PreCompact`/`PostCompact` hooks are the lifecycle — the request's token reaches `PreCompact` only, so the completion is the one that follows it. |
+| Codex       | 0.153.4          | An App Server of its own on a loopback port, with the ordinary TUI pointed at it by `--remote`. `thread/tokenUsage/updated`'s `last.totalTokens` is the context its own indicator shows, `thread/compact/start` is the request, and the compaction's own turn is the outcome.                                                                      |
+| OpenCode    | 1.18.9+          | The ordinary TUI hosting its own loopback server, on a session Collie created for it. The latest assistant message's tokens are the accounting OpenCode's own overflow predicate reads, `POST /session/{id}/summarize` is the request, and the compaction's own message is the outcome.                                                            |
+
+Two things to know about the Claude one. It borrows your status line, so it prints the
+context percentage there and Claude stops showing most of its own footer hints; if that
+is not a trade you want, `"compact_at_tokens": 0`. And Claude has no documented
+compact-failed hook, so a compaction of its that fails is an unresolved outcome — the
+last row of the table above — rather than a confirmed failure. Collie will not call a
+missing `PostCompact` a failure it did not see.
+
+Claude's compaction also has no request id of its own, so Collie puts a token in
+`/compact`'s instructions and reads it back out of `PreCompact`, which is the only hook
+that carries them — a `PostCompact` payload is its trigger and the summary it produced.
+So a compaction of Collie's own is known by its start, and what completes it is the first
+manual completion that follows on the same session, the way Codex's and OpenCode's are
+told by what was not there before. An automatic compaction of Claude's is a different
+trigger, and your own `/compact` in the pane starts with a `PreCompact` of yours, which
+leaves Collie's attempt unresolved rather than letting it take your completion.
+
+Codex is one server per agent, and that is load-bearing rather than tidy. On a shared
+server `thread/loaded/list` answers with every agent's thread and nothing in the protocol
+says which is whose, so an endpoint that has two threads on it is refused rather than
+guessed at. `thread/compact/start` carries no request id either, so Collie records which
+compactions the thread already had before it asked, and only one that was not there
+before can be its own. That compaction runs as a turn, so the turn's status —
+`completed`, or `failed`/`interrupted` — is Codex's own answer rather than an inference
+from an idle pane.
+
+Each Codex agent's server is detached, so it outlives the Run that launched the agent and
+is still there for a hand-off. The next launch puts down the endpoint of any agent herdr
+no longer has, which is also what stops the control directories accumulating.
+
+OpenCode needed the opposite trick. Its servers do not isolate sessions at all — every
+one answers with every session in the project, and its "which sessions are active"
+endpoints are empty unless a session is mid-turn — so nothing in the API could tell two
+agents in one directory apart. So Collie creates the session itself at launch, on a
+server that lives just long enough to make it, and hands it to the agent with
+`--session`. Identity is then Collie's own rather than something to infer. A 200 from
+summarize is the handler's own `true` after its loop and says nothing about what the loop
+did, so success is the compaction's own message appearing; that message's error state —
+including a context too large to compact — is the confirmed failure. And a sample taken
+before a compaction is dropped rather than reused: the agent's last real message then
+describes a context that no longer exists.
+
+What happens at a boundary:
+
+| What Collie finds                                                                | What it does                                                        |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `compact_at_tokens` is `0`                                                       | Sends the work.                                                     |
+| A freshly launched agent's first work                                            | Sends it. There is nothing behind it to compact.                    |
+| A usable sample under the threshold                                              | Sends the work.                                                     |
+| A usable sample at or above it                                                   | Asks the harness to compact, then sends the work once it completes. |
+| No usable sample — the harness has not measured this context, or the read failed | Warns, sends the work, and asks for no compaction from a guess.     |
+| The harness confirms the compaction failed                                       | Warns and sends the work anyway.                                    |
+| Five minutes with neither a completion nor a failure                             | Stops the Run without sending the work.                             |
+
+The last row is the one to know about. An acknowledgement, an idle pane, an unrelated
+compaction and a dropped connection all establish nothing, so Collie will not call the
+attempt over — and a timeout is not proof that the agent stopped compacting either.
+So it does not retry, does not touch the agent, and does not replay the work: the step
+stops `blocked` with the reason, you get a `needs-you` toast, and the row on the board
+says it needs you. Nothing will send that agent work while the attempt is still in the
+air, `collie run resume` included — a resume finds the attempt's five minutes long spent
+and stops again on the spot.
+
+So look at the pane, and decide. If the compaction did finish and the harness simply
+never said so — Claude has no compact-failed hook, so a `PostCompact` that never arrives
+is unresolved for ever — the attempt is released by deleting that agent's control
+directory, `<state>/compaction/<agent>/`, where `<state>` is
+`$(herdr plugin state-dir cego.collie)`. Collie reads a missing record as an agent it
+does not manage, so the next boundary measures the agent again from scratch. Killing the
+agent works too: whatever replaces it is a new agent with controls of its own.
+
+Only newly launched agents are managed. An agent that was already running before you
+turned this on keeps working exactly as it did — there is no migration, retrofit or
+restart flow, and there is not going to be one.
+
+Why each harness is wired the way it is, and which of the plan's assumptions the
+installed releases turned out not to support:
+[ADR-0007](adr/0007-compact-a-reused-agent-at-a-work-boundary.md).
 
 ## Trust: the first run in a repo
 

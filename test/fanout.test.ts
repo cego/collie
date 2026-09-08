@@ -8,8 +8,8 @@ import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { runEffect } from "./support/effect";
 import { EffectFakeHerdr, installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
+import { testDefaults } from "./support/compaction";
 import { layers, loadDefinitions, resolveWorkflow } from "../src/definitions";
-import { loadDefaults } from "../src/config";
 import { executeRun, type EnginePrompts } from "../src/engine";
 import { stopRun } from "../src/operations";
 import { Herdr } from "../src/herdr";
@@ -164,7 +164,7 @@ const reExecute = Effect.fn("fanout.reExecute")(function* (run: Run, prompts: En
   const env = rig.pluginEnv();
   const configEnv = rig.env();
   const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
-  const defaults = yield* loadDefaults(env.configDir);
+  const defaults = yield* testDefaults(env.configDir);
   const lines: string[] = [];
   for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
   run.record.status = "running";

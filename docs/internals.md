@@ -269,6 +269,23 @@ read-modify-write of `~/.claude.json`, a file claude owns — which is why it is
 directory, atomically, and with a backup. What the user sees and how they configure it:
 [Using Collie](using.md#trust-the-first-run-in-a-repo).
 
+## Compaction at a work boundary
+
+`compaction.ts` owns one policy and `compactors.ts` the four harness adapters behind it
+([ADR-0007](adr/0007-compact-a-reused-agent-at-a-work-boundary.md)). Two places call it,
+and they are the only two places a reused agent is given new work: `engine.ts`'s prompt
+loop, for a step that keeps an earlier agent, and `handoff.ts`, for a Run handing its
+result to another Run's live agent. A liveness nudge and a mid-step recovery message go
+through neither, which is why neither is a boundary.
+
+An agent's controls live in `<state>/compaction/<agent>/` rather than in its Run's
+directory, because the agent outlives the Run that launched it — the same fact the
+registry exists for. That directory holds the control record, the helper the launch
+generated, and the telemetry the harness's own interface appends; an unresolved
+compaction attempt is on the record, so whichever process reaches that agent next
+refuses to dispatch past it. Every launch puts down the controls, and any endpoint, of
+an agent `agent list` no longer has.
+
 ## The registry and sessions
 
 A **session** is one herdr session and one workspace, taken together; a Run's own worktree

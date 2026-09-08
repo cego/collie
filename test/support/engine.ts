@@ -1,5 +1,5 @@
 import { Effect, FileSystem, Path } from "effect";
-import { loadDefaults, type Defaults } from "../../src/config";
+import { FALLBACK_DEFAULTS, type Defaults } from "../../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../../src/definitions";
 import { executeRun } from "../../src/engine";
 import { Herdr } from "../../src/herdr";
@@ -16,6 +16,8 @@ import {
 import { primaryName } from "../../src/operations";
 import { RunStore, type Run, type WorktreeRecord } from "../../src/run";
 import type { EnginePrompts } from "../../src/engine";
+import type { CompactionPorts } from "../../src/compaction";
+import { testDefaults } from "./compaction";
 import type { PickItem, Resolution } from "../../src/inputs";
 
 /**
@@ -133,6 +135,9 @@ export function runWorkflow(
     handoffTimeoutMs?: number;
     outputPollMs?: number;
     prompts?: EnginePrompts;
+    /** One harness's compaction interface, scripted, in place of the real four. */
+    compaction?: CompactionPorts;
+    compactionWaitMs?: number;
     /** For prompts that need the run dir, which only exists once the run does. */
     promptsFor?: (run: Run) => EnginePrompts;
     env?: Record<string, string>;
@@ -153,7 +158,13 @@ export function runWorkflow(
     const env = rig.pluginEnv(opts.env);
     const herdr = new EffectFakeHerdr(env, configEnv);
     const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
-    const defaults = Object.assign(yield* loadDefaults(env.configDir), opts.defaults);
+    const defaults = Object.assign(
+      yield* testDefaults(env.configDir),
+      // A test that scripts a harness interface is asking for compaction, and gets
+      // the shipped default threshold unless it says otherwise.
+      opts.compaction ? { compactAtTokens: FALLBACK_DEFAULTS.compactAtTokens } : {},
+      opts.defaults,
+    );
     const wf = resolveWorkflow(name, defs, defaults);
     const errors = opts.unvalidated ? [] : yield* validateWorkflow(wf, defs, defaults);
     if (errors.length > 0) return yield* Effect.fail(new Error(errors.join("\n")));
@@ -204,6 +215,8 @@ export function runWorkflow(
         }),
       handoffTimeoutMs: opts.handoffTimeoutMs,
       outputPollMs: opts.outputPollMs,
+      compaction: opts.compaction,
+      compactionWaitMs: opts.compactionWaitMs,
       prompts: opts.promptsFor ? opts.promptsFor(run) : opts.prompts,
       env,
     }).pipe(Effect.catch(() => Effect.succeed("failed")));

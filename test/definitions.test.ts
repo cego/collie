@@ -515,6 +515,7 @@ test("user defaults come from config.json in the config layer", () =>
         handoffTimeoutMs: 60_000,
         quietMs: FALLBACK_DEFAULTS.quietMs,
         boardQuietMs: FALLBACK_DEFAULTS.boardQuietMs,
+        compactAtTokens: FALLBACK_DEFAULTS.compactAtTokens,
         notifications: {},
         models: { opencode: ["local/foo"] },
         trust: "ask",

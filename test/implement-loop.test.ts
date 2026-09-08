@@ -4,9 +4,10 @@ import { Rig } from "./support/recorder";
 import { COLLIE_TAB } from "../src/naming";
 import { FakeBin } from "./support/bin";
 import { installBaseline, plannedRun, scriptedPrompts } from "./support/engine";
+import { testDefaults } from "./support/compaction";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
-import { FALLBACK_DEFAULTS, loadDefaults, type Defaults } from "../src/config";
+import { FALLBACK_DEFAULTS, type Defaults } from "../src/config";
 import { skillsIn } from "../src/template";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
 import { executeRun, type EnginePrompts } from "../src/engine";
@@ -194,7 +195,7 @@ function runWorkflowEffect(
       const herdr = new TestHerdr(env, fakeEnv);
       const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
       const defaults = Object.assign(
-        yield* loadDefaults(env.configDir),
+        yield* testDefaults(env.configDir),
         { trust: "never" },
         opts.defaults,
       );

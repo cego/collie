@@ -35,3 +35,6 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `mr.ts`          | Whether GitLab is reachable, who to assign, and which Linear tickets a branch answers    |
 | `template.ts`    | `{{a.b}}` prompt substitution                                                            |
 | `config.ts`      | User defaults and remembered values in `config.json`                                     |
+| `compaction.ts`  | One threshold, one work-boundary policy, and each agent's controls for its lifetime      |
+| `compactors.ts`  | Each harness's official compaction interface, generated per agent and bundled in Collie  |
+| `codex.ts`       | Codex's App Server as a client: thread identity, its context, and its compactions        |

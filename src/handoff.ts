@@ -4,6 +4,8 @@
 
 import { Crypto, Effect, FileSystem, Path } from "effect";
 import { nowIso } from "./time";
+import { atBoundary, type CompactionSettings } from "./compaction";
+import { compactionFor } from "./compactors";
 import type { Herdr } from "./herdr";
 import { STOPPED } from "./driver";
 import { REVIEW_FILE } from "./output";
@@ -15,15 +17,66 @@ export interface Session extends RegistryScope {
   stateDir: string;
   /** The Control Plane's own pane, which is what a temporary pane splits off. */
   paneId?: string | null;
+  /**
+   * Where the user-wide compaction threshold is read from. A hand-off is a work
+   * boundary — the receiving agent has finished its previous work and is being given
+   * the next piece — so it goes through the same policy a Workflow's next step does.
+   * Absent for a caller that only reads the register, which sends nothing.
+   */
+  configDir?: string;
+  /**
+   * What this caller already knows about compaction: the Run's own threshold where it
+   * has one, and the test seam. Absent falls back to the config file.
+   */
+  compaction?: CompactionSettings;
 }
+
+/**
+ * The compaction policy at a hand-off, or `null` where the caller supplied no config
+ * directory to read the threshold from. The sending Run's audit trail takes the
+ * warnings: a hand-off has no progress channel of its own, and its result message is
+ * what both front doors show.
+ */
+const boundary = Effect.fn("Handoff.boundary")(function* (
+  session: Session,
+  from: Run,
+  target: AgentEntry,
+) {
+  if (!session.configDir) return null;
+  const deps = yield* compactionFor({
+    herdr: session.herdr,
+    stateDir: session.stateDir,
+    configDir: session.configDir,
+    log: (line: string) => from.log(line),
+    known: session.compaction,
+  });
+  const decided = yield* atBoundary(deps, {
+    agent: target.agent,
+    run: from.id,
+    step: `hand-off to the ${target.role}`,
+  });
+  return decided.dispatch ? null : held(decided.reason);
+});
 
 export interface HandoffResult {
   ok: boolean;
   message: string;
+  /**
+   * True where the hand-off did not happen because the receiving agent's own
+   * compaction is unresolved. Not the same as having nobody to hand to, which is
+   * ordinary and quiet: this one has to reach the human, because the spec asks both
+   * front doors to say why work is being held.
+   */
+  held?: true;
 }
 
 function failed(message: string): HandoffResult {
   return { ok: false, message };
+}
+
+/** A hand-off that is being held by a compaction, which is a thing to say out loud. */
+function held(message: string): HandoffResult {
+  return { ok: false, message, held: true };
 }
 
 /**
@@ -158,6 +211,8 @@ export const sendReview = Effect.fn("Handoff.sendReview")(function* (session: Se
   }
   const target = yield* liveRole(session, "implementer");
   if (!target) return { ok: false, message: "no implementer is live in this workspace" };
+  const held = yield* boundary(session, run, target);
+  if (held) return held;
 
   const prompt = yield* reviewPrompt(run);
   const promptFailure = yield* session.herdr.agentPrompt(target.agent, prompt).pipe(
@@ -204,6 +259,8 @@ export const sendPlanChange = Effect.fn("Handoff.sendPlanChange")(function* (
 ) {
   const target = yield* implementerOfPlan(session, opts.planDir);
   if (!target) return { ok: false, message: "no implementer is building from this plan" };
+  const held = yield* boundary(session, run, target);
+  if (held) return held;
 
   const text = [
     `The plan you are building from has changed.${opts.changelog ? ` ${opts.changelog}` : ""}`,

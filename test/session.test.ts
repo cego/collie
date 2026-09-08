@@ -10,6 +10,8 @@ import type { AgentInfo } from "../src/herdr";
 import { FakeBin } from "./support/bin";
 import { runEffect } from "./support/effect";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
+import { scriptedPort } from "./support/compaction";
+import { installControls } from "../src/compaction";
 import { FakeHerdr, Rig } from "./support/recorder";
 
 let rig: Rig;
@@ -828,5 +830,86 @@ test("a Run handing off to its own agent keeps both sides of the exchange", () =
       const after = yield* store.load(run.id);
       expect(after.record.handoffs.map((h) => h.direction).sort()).toEqual(["received", "sent"]);
       expect(new Set(after.record.handoffs.map((h) => h.id)).size).toBe(1);
+    }),
+  ));
+
+/**
+ * The controls a live implementer was launched with, as its own Run left them: a
+ * hand-off reaches the agent from a different process, and has to find them.
+ */
+const installedControls = Effect.fn("sessionTest.installedControls")(function* (
+  agent: string,
+  scripted: ReturnType<typeof scriptedPort>,
+) {
+  const env = rig.pluginEnv();
+  yield* installControls(
+    {
+      ports: scripted.ports,
+      stateDir: env.stateDir,
+      configured: 372_000,
+      herdr: new FakeHerdr(env),
+      log: () => Effect.void,
+    },
+    { agent, harness: "claude", cwd: env.cwd },
+  );
+});
+
+test("a hand-off is a work boundary: the implementer compacts before it takes the review", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const implementer = yield* liveImplementer();
+      const port = scriptedPort({ usage: [400_000], poll: [{ kind: "success" }] });
+      yield* installedControls(implementer.name, port);
+      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+      const prompts = scriptedPrompts(["Fix findings"]);
+
+      const { run, status } = yield* runWorkflow(
+        rig,
+        "review",
+        {},
+        { prompts, compaction: port.ports },
+      );
+
+      expect(status).toBe("done");
+      expect(port.requests).toHaveLength(1);
+      // The review still reached it, once, after the compaction completed.
+      const sent = (yield* rig.calls()).filter(
+        (c) => c.cmd === "agent prompt" && c.argv?.[2] === implementer.name,
+      );
+      expect(sent).toHaveLength(1);
+      expect(run.record.handoffs).toHaveLength(1);
+    }),
+  ));
+
+test("a hand-off into an unresolved compaction is refused, and nothing is recorded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const implementer = yield* liveImplementer();
+      // Acknowledged and then silent: the outcome nobody has established.
+      const port = scriptedPort({ usage: [400_000] });
+      yield* installedControls(implementer.name, port);
+      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+      // The hand-off does not land, so the menu comes back; the human leaves the Run
+      // open rather than being handed a fix round nothing sent.
+      const prompts = scriptedPrompts(["Fix findings", null]);
+
+      const { run, status } = yield* runWorkflow(
+        rig,
+        "review",
+        {},
+        { prompts, compaction: port.ports, compactionWaitMs: 120 },
+      );
+
+      expect(status).toBe("blocked");
+      // The reason is on the Run, which is what both front doors show.
+      expect(run.record.summary).toContain("no choice taken");
+      const log = yield* readText(path.join(run.dir, "log.txt"));
+      expect(log).toContain("neither completed nor failed");
+      const sent = (yield* rig.calls()).filter(
+        (c) => c.cmd === "agent prompt" && c.argv?.[2] === implementer.name,
+      );
+      expect(sent).toEqual([]);
+      expect(run.record.handoffs).toEqual([]);
     }),
   ));
