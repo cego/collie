@@ -33,6 +33,14 @@ Rules:
   tree — yours and theirs.
 - Finding nothing is a real answer: an empty findings list with a `clean` verdict.
 
+## Code comment hygiene
+
+Code should explain itself. For each comment added or changed, check that it is absolutely
+necessary and uses the fewest words possible, normally one short sentence. Prefer clearer
+code to an explanation. Preserve essential correctness information and required documentation.
+Group unnecessary or verbose comments into one actionable `minor` finding with examples;
+leave untouched comments alone.
+
 ## Output
 
 Write to `OUTPUT_PATH`, and nothing else in that file:

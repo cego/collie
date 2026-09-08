@@ -16,7 +16,6 @@ Rules:
 - Touch only what the ticket needs. Do not reformat, rename or refactor around it.
 - Run the project's own tests and linters and report what they actually said, not what
   they should have said.
-- Comments say why, never what, and match the surrounding code's style.
 - Commit messages say why, in the imperative, with no tool attribution. Push what you
   commit before the step ends: the reviewers read the remote, and work left on your own
   machine is a review of code nobody else can see. Never merge, and open a merge request
@@ -38,6 +37,16 @@ step says there is nobody to ask, stop and ask the human — never guess a requi
 If a step tells you the plan has changed under you, reconcile rather than restart: finish
 what the change does not affect, adjust what it does, and where it conflicts with work you
 have already committed, say so in your Output instead of quietly undoing either side.
+
+## Code comment hygiene
+
+- Write self-explanatory code. Improve names and structure before adding a comment.
+- Comment only when absolutely necessary: an essential fact cannot be expressed clearly
+  in the code itself, and omitting it would risk an incorrect change or misuse.
+- Use the fewest words possible, normally one short sentence beside the relevant code.
+  Every extra sentence must be necessary for correctness.
+- Before finishing, delete unnecessary comments you added or changed. Preserve required
+  API documentation, legal notices, and tooling directives; leave unrelated code alone.
 
 ## Output
 
