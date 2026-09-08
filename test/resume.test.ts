@@ -4,7 +4,7 @@ import { FakeHerdr, Rig } from "./support/recorder";
 import { fakeHerdr } from "./support/fake-herdr-core";
 import { FakeBin } from "./support/bin";
 import { installBaseline, plannedRun } from "./support/engine";
-import { loadDefaults } from "../src/config";
+import { testDefaults } from "./support/compaction";
 import { layers, loadDefinitions, resolveWorkflow } from "../src/definitions";
 import { RunStore, type Run } from "../src/run";
 import { runEffect } from "./support/effect";
@@ -58,7 +58,7 @@ function interruptedRun() {
   return Effect.gen(function* () {
     const env = rig.pluginEnv();
     const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
-    const wf = resolveWorkflow("implement", defs, yield* loadDefaults(env.configDir));
+    const wf = resolveWorkflow("implement", defs, yield* testDefaults(env.configDir));
     const store = new RunStore(env.stateDir);
     const run = yield* store.create({
       workflow: "implement",
@@ -105,7 +105,7 @@ function resume(run: Run, queue: Schema.Json[]) {
     yield* rig.queueOutputs(queue);
     const env = rig.pluginEnv();
     const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
-    const defaults = yield* loadDefaults(env.configDir);
+    const defaults = yield* testDefaults(env.configDir);
     const wf = resolveWorkflow(run.record.workflow, defs, defaults);
     const lines: string[] = [];
     const status = yield* Effect.promise(() =>

@@ -148,6 +148,16 @@ the `scope` default in `config.json`. The wider Scope changes what is shown and 
 lookup searches, never what a Session is: hand-offs, the register and starting a Workflow
 stay this Session's.
 
+**Work boundary** — The moment immediately before a reused agent that has finished its
+previous work is given the next piece: a Workflow's next step on the same agent, a fix
+round's next iteration, a hand-off from another Run. It is where Collie reads that
+harness's current-context measure and, at or above the user-wide `compact_at_tokens`,
+asks it to compact natively before sending anything. Not a liveness nudge, not a
+mid-step recovery message, and not a human typing in the pane — none of those are work.
+A freshly launched agent has no boundary before its first piece of work. What Collie
+does with each outcome, and what a five-minute unresolved attempt stops:
+`docs/using.md`.
+
 **Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
 
 **Driver** — The process that executes a Run. It has no pane: it is detached from whatever

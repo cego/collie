@@ -1,6 +1,7 @@
 import { BunRuntime, BunServices } from "@effect/platform-bun";
 import { Config, Console, Effect, FileSystem, Path, type PlatformError } from "effect";
 import { program } from "./collie";
+import { recordClaudeEvent } from "./compactors";
 import { currentEnv, type PluginEnv } from "./env";
 import { Herdr, herdrFailureReason } from "./herdr";
 import {
@@ -73,6 +74,19 @@ const popup = Effect.fn("main.popup")(function* (
   );
 });
 
+/**
+ * The helper a harness's own status line or hook is pointed at: the payload arrives on
+ * stdin and one agent's telemetry comes out. Handled before `herdr` above because it
+ * runs inside a harness rather than inside herdr — there is no session to resolve, and
+ * failing to find one must not break the human's status line.
+ */
+const compactionProgram = Effect.gen(function* () {
+  const dir = args[2] ?? "";
+  const stdin = yield* Effect.promise(() => Bun.stdin.text());
+  const line = yield* recordClaudeEvent(dir, stdin).pipe(Effect.catch(() => Effect.succeed("")));
+  if (line !== "") yield* Console.log(line);
+}).pipe(Effect.provide(BunServices.layer));
+
 const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
   Effect.catch((cause) =>
     Effect.gen(function* () {
@@ -87,6 +101,7 @@ const herdrProgram = herdr(args[1] ?? "", args[2]).pipe(
 // JSON envelope and exit 2, and running `app` bare bypassed it entirely.
 const cliProgram = program.pipe(Effect.provide(BunServices.layer));
 
-BunRuntime.runMain(args[0] === "herdr" ? herdrProgram : cliProgram, {
-  disableErrorReporting: true,
-});
+BunRuntime.runMain(
+  args[0] === "herdr" ? (args[1] === "compaction" ? compactionProgram : herdrProgram) : cliProgram,
+  { disableErrorReporting: true },
+);

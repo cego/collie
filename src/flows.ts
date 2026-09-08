@@ -5,6 +5,7 @@
 import { Cause, Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { nowIso } from "./time";
 import { isScope, loadDefaults, SCOPES, writeConfigValue } from "./config";
+import { COMPACTION_OFF, validThreshold } from "./compaction";
 import {
   isStale,
   layers,
@@ -618,6 +619,11 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
     configDir: env.configDir,
+    // The Control Plane runs its actions on one fiber, one at a time, so a hand-off to
+    // an agent over the threshold must not hold that queue while a compaction runs. It
+    // asks, and reports that the compaction is in the air; the human presses the key
+    // again when the pane says it has finished. No work is sent either way.
+    compaction: { waitMs: 0 },
     pruned: { at: 0, lines: [], running: false },
   };
   const why =
@@ -926,6 +932,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       // than silently opening local for ever after.
       if (typed !== "" && command.key === "scope" && !isScope(typed)) {
         return `scope has to be one of ${SCOPES.join(", ")}, not "${command.value}"`;
+      }
+      // A threshold no Run can use fails every step that would launch an agent, so
+      // it is refused where it is written rather than at the next launch.
+      if (typed !== "" && command.key === "compact_at_tokens" && !validThreshold(Number(typed))) {
+        return `compact_at_tokens has to be a whole number of tokens above zero, or ${COMPACTION_OFF} to turn compaction off, not "${command.value}"`;
       }
       const value = typed === "" ? null : numeric ? Number(typed) : typed;
       return yield* writeConfigValue(env.configDir, command.key, value).pipe(

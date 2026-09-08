@@ -1,6 +1,7 @@
 // User defaults from the plugin config dir. Optional; the baseline is neutral.
 
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
+import { COMPACT_AT_TOKENS } from "./compaction";
 import { permissionsAsWritten } from "./harness";
 import { isNumber, isString } from "./schema";
 import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
@@ -37,6 +38,13 @@ export interface Defaults {
    * numbers.
    */
   boardQuietMs: number;
+  /**
+   * Current-context tokens at or above which a reused agent is asked to compact before
+   * it is given its next piece of work. `0` turns the feature off. As written rather
+   * than coerced: the fallback would be the default, so a value someone meant as a
+   * lower limit would silently compact an agent they had tried to leave alone.
+   */
+  compactAtTokens: number;
   /** Extra models to accept per harness, for models the adapter table does not list. */
   models: Readonly<Record<string, ReadonlyArray<string>>>;
   /** What to do about a directory the harness has not been trusted with yet. */
@@ -60,6 +68,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   handoffTimeoutMs: 2 * 60 * 60 * 1000,
   quietMs: 10 * 60 * 1000,
   boardQuietMs: 5 * 60 * 1000,
+  compactAtTokens: COMPACT_AT_TOKENS,
   models: {},
   trust: "ask",
   permissions: "bypass",
@@ -144,6 +153,9 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDi
     boardQuietMs: isNumber(raw.board_quiet_ms)
       ? raw.board_quiet_ms
       : FALLBACK_DEFAULTS.boardQuietMs,
+    compactAtTokens: isNumber(raw.compact_at_tokens)
+      ? raw.compact_at_tokens
+      : FALLBACK_DEFAULTS.compactAtTokens,
     models: Option.getOrElse(Schema.decodeUnknownOption(Models)(raw.models), () => ({})),
     trust: raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
     // As written rather than coerced: `loadDefaults` is read by the Settings and

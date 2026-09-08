@@ -66,6 +66,22 @@ export function ownRoot(
   return at > 0 ? execPath.slice(0, at) : null;
 }
 
+/**
+ * How this runner re-invokes itself, as argv. Same discriminator as `ownRoot`: only a
+ * `/$bunfs/` module path means the single-file build is running, and `execPath` is then
+ * the runner itself rather than the `bun` that is executing its sources.
+ *
+ * This is what a harness's own hook or status-line command is pointed at, so the
+ * helpers a launch installs are the ones compiled into the binary that installed them.
+ */
+export function selfCommand(
+  modulePath: string = import.meta.path,
+  execPath: string = process.execPath,
+  script: string = Bun.argv[1] ?? "",
+): string[] {
+  return modulePath.startsWith("/$bunfs/") ? [execPath] : [execPath, script];
+}
+
 export function readEnv(
   env: Readonly<Record<string, string | undefined>>,
   installRoot: string | null = ownRoot(),

@@ -3,10 +3,11 @@ import { ConfigProvider, Effect, FileSystem, Path, PlatformError, Schema } from 
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { installBaseline, scriptedPrompts } from "./support/engine";
+import { testDefaults } from "./support/compaction";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
 import { REVIEW_FILE } from "../src/output";
-import { loadDefaults, type Defaults } from "../src/config";
+import type { Defaults } from "../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
 import { executeRun, outcomeLine, type EnginePrompts } from "../src/engine";
 import { Herdr } from "../src/herdr";
@@ -161,7 +162,7 @@ function runWorkflowEffect(
       const herdr = new TestHerdr(env, fakeEnv);
       const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
       const defaults = Object.assign(
-        yield* loadDefaults(env.configDir),
+        yield* testDefaults(env.configDir),
         { trust: "never" },
         opts.defaults,
       );

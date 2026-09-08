@@ -41,4 +41,17 @@ envelope "workflow list" 0 '^{"ok":true' workflow list
 envelope "a missing run" 1 '"code":"run_not_found"' run show no-such-run
 envelope "invalid input" 2 '^{"ok":false' workflow show
 
-echo "smoke: $BIN answered --help, one JSON success and two typed failures"
+# The compaction controls a launch installs into an agent's own directory are generated
+# from Collie's own source, and a harness's status line and hooks are pointed back at
+# this binary. A release that lost either would only fail at the next agent launch, in
+# someone else's session — so the binary is asked to be that helper here.
+grep -q "collie-compact" "$BIN" || fail "the binary does not carry its bundled compaction controls"
+CONTROLS="$STATE/controls"
+mkdir -p "$CONTROLS"
+line=$(echo '{"session_id":"smoke","context_window":{"total_input_tokens":9,"total_output_tokens":1,"used_percentage":3,"current_usage":{"input_tokens":9}}}' \
+  | "$BIN" herdr compaction "$CONTROLS" 2>/dev/null) || fail "the compaction helper exited nonzero"
+[ "$line" = "context: 3%" ] || fail "the compaction helper printed \"$line\", not the status line"
+grep -q '"kind":"usage","tokens":10' "$CONTROLS/events.jsonl" ||
+  fail "the compaction helper did not record the sample it was given"
+
+echo "smoke: $BIN answered --help, one JSON success and two typed failures, and served its own compaction helper"

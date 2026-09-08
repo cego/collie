@@ -33,6 +33,14 @@ import type { AgentStatus, Herdr } from "./herdr";
 import { HerdrError, herdrFailureReason } from "./herdr";
 import { HARNESSES, isPermissionMode, PERMISSION_MODES, personaPrefix, startArgs } from "./harness";
 import {
+  atBoundary,
+  gateHarnesses,
+  installControls,
+  type CompactionPorts,
+  type CompactionSettings,
+} from "./compaction";
+import { compactionFor } from "./compactors";
+import {
   findingKey,
   formatFindings,
   parseFindings,
@@ -88,7 +96,14 @@ import {
   type MrFacts,
   type Runner,
 } from "./mr";
-import { askRoute, liveRole, sendPlanChange, sendReview, type Session } from "./handoff";
+import {
+  askRoute,
+  liveRole,
+  sendPlanChange,
+  sendReview,
+  type HandoffResult,
+  type Session,
+} from "./handoff";
 import { renderTemplate, skillMention } from "./template";
 import { resolveWorkflow, skillDirs, skillMentions } from "./definitions";
 import type { Run, RunRecord, RunStatus, StepStatus, VariantRecord } from "./run";
@@ -145,6 +160,43 @@ export interface EngineOptions {
   outputPollMs?: number;
   /** Required by any Workflow with a Choice step. */
   prompts?: EnginePrompts;
+  /**
+   * The harness compaction interfaces, so a test can script one boundary's answers
+   * without an installed harness. Absent means the real four.
+   */
+  compaction?: CompactionPorts;
+  /** The fixed five-minute compaction budget, shortened only by a test. */
+  compactionWaitMs?: number;
+}
+
+/**
+ * What this Run knows about compaction that the config file does not: the threshold it
+ * was launched with, and the ports and budget a test scripts. Shared with the Session a
+ * hand-off carries, so both boundaries answer to the same numbers.
+ */
+function compactionSettings(o: EngineOptions): CompactionSettings {
+  return {
+    configured: o.defaults.compactAtTokens,
+    ports: o.compaction,
+    waitMs: o.compactionWaitMs,
+  };
+}
+
+/**
+ * The shared compaction policy's dependencies, as this Run supplies them. A warning
+ * goes to both front doors — the Run's own channel, which the CLI and the board read,
+ * and its audit trail — because a compaction nobody can see is one nobody can explain.
+ */
+function compactionDeps(o: EngineOptions) {
+  return compactionFor({
+    herdr: o.herdr,
+    stateDir: o.env.stateDir,
+    configDir: o.env.configDir,
+    log: (line) => o.run.log(line),
+    warn: (line) => o.out(line).pipe(Effect.andThen(o.run.log(line.trim()))),
+    pollMs: o.outputPollMs,
+    known: compactionSettings(o),
+  });
 }
 
 interface VariantOutcome {
@@ -158,10 +210,8 @@ interface VariantOutcome {
 }
 
 const choiceResult = (result: ChoiceResult): ChoiceResult => result;
-const handoffResult = (
-  result: false | { ok: boolean; message: string },
-  fallback: string,
-): { ok: boolean; message: string } => result || { ok: false, message: fallback };
+const handoffResult = (result: false | HandoffResult, fallback: string): HandoffResult =>
+  result || { ok: false, message: fallback };
 
 const runShell: Runner<ChildProcessSpawner.ChildProcessSpawner> = shellRun;
 
@@ -465,13 +515,23 @@ const runStep = Effect.fn("Engine.runStep")(function* (
   const modes = yield* Effect.forEach(variants, (variant) =>
     permissionMode(step, variant, o.defaults),
   );
+  // Which agents this step keeps and which it starts, before it starts any of them:
+  // the compaction gate is about the launches, and a harness Collie cannot manage has
+  // to stop the step here rather than leave an empty tab behind.
+  const priors = variants.map((_, i) => previous[i] ?? borrowedAgent(o, step, ctx));
+  const reuses = priors.map((prior) => prior !== null && !step.fresh);
+  yield* gateCompaction(
+    o,
+    step,
+    variants.flatMap((variant, i) => (reuses[i] ? [] : [variant.harness])),
+  );
 
   // Start (or reuse) every agent first, then prompt them all, so they work at once.
   for (const [i, variant] of variants.entries()) {
     const key = keys[i]!;
     const label = stepLabel(run.record.slug, step.id, key);
-    const prior = previous[i] ?? borrowedAgent(o, step, ctx);
-    const reuse = prior !== null && !step.fresh;
+    const prior = priors[i]!;
+    const reuse = reuses[i]!;
     const record: VariantRecord = {
       // A step that keeps an earlier agent runs on that agent's model, whatever its
       // own says: recording its own would name a model this step never ran on.
@@ -501,6 +561,15 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       if (paneName && record.paneId) yield* herdr.paneRename(record.paneId, paneName);
       if (record.tabId) yield* renameTab(o, ctx, record.tabId, runTab(o, GLYPH.running));
     } else {
+      // Before any pane exists, because a harness Collie manages but cannot talk to
+      // fails the step rather than leaving an agent unmanaged — and an endpoint that
+      // never came up would otherwise fail it with an empty tab already open in the
+      // human's session, which is the thing the gate exists to avoid.
+      const controls = yield* installControls(yield* compactionDeps(o), {
+        agent: record.agent,
+        harness: variant.harness,
+        cwd: run.record.cwd,
+      });
       if (prior?.paneId) {
         // fresh: replace the pane so `agent start` sees a shell prompt again. The
         // replacement inherits the slot, so the step keeps its tab across iterations.
@@ -555,17 +624,22 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       // record cannot vouch for falls back to the mode resolved for this step.
       const recorded = record.permissions ?? undefined;
       const permissions = isPermissionMode(recorded) ? recorded : modes[i]!;
+      // The controls are extra arguments to the same launch, so the agent keeps the
+      // ordinary interactive interface in its pane.
       yield* startAgent(o, step, {
         name: record.agent,
         kind: adapter.kind,
         paneId: record.paneId!,
-        args: startArgs(
-          adapter,
-          variant.model,
-          yield* personaFile(o, step, variant.harness, ctx.skills),
-          variant.effort,
-          permissions,
-        ),
+        args: [
+          ...startArgs(
+            adapter,
+            variant.model,
+            yield* personaFile(o, step, variant.harness, ctx.skills),
+            variant.effort,
+            permissions,
+          ),
+          ...controls,
+        ],
       });
       // Recorded so a transcript full of prompts — or free of them — can be explained.
       yield* run.log(`${record.agent}: permissions ${permissions}`);
@@ -595,6 +669,26 @@ const runStep = Effect.fn("Engine.runStep")(function* (
     ? { ...extraVars, session: { ask: yield* askRoute(sessionOf(o)) } }
     : extraVars;
 
+  // The work boundary for every agent this step reuses, resolved together and before
+  // the prompts go out. Together, because each one can wait out a whole compaction and
+  // a fan-out step's variants would otherwise compact one after another — the same
+  // argument the watch loop below makes for its own phase. A freshly started agent has
+  // no previous work behind it, so its first work is never held up by a threshold check.
+  //
+  // Set where a reused agent's compaction is still unresolved: no prompt goes out for
+  // it, and the step ends blocked with that reason — the Run's existing way of
+  // stopping for the human, in both front doors, rather than a second control plane.
+  const boundaryDeps = yield* compactionDeps(o);
+  const paused = yield* Effect.forEach(
+    records,
+    (record, i) =>
+      reuses[i]
+        ? atBoundary(boundaryDeps, { agent: record.agent, run: run.id, step: step.id }).pipe(
+            Effect.map((boundary) => (boundary.dispatch ? null : boundary.reason)),
+          )
+        : Effect.succeed(null),
+    { concurrency: "unbounded" },
+  );
   for (const [i, record] of records.entries()) {
     const variant = variants[i]!;
     const key = keys[i]!;
@@ -608,6 +702,17 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       path,
       `${yield* buildPrompt(o, step, variant, key, ctx.outputs, ctx.skills, ctx.previous, vars)}\n`,
     );
+    // Held by a compaction of its own that is still in the air: the prompt file is
+    // written, because the step is resumable, but nothing is sent. The variant's own
+    // error is how a blocked step already reaches a human — the board draws the
+    // waiting glyph, the ending raises `needs-you` with this reason, and `run resume`
+    // picks the Run back up. Not `awaiting`: that says a Run is still going.
+    const held = paused[i];
+    if (held) {
+      yield* o.out(`  ⏸ ${held}`);
+      yield* run.log(held);
+      continue;
+    }
     yield* run.log(`prompt ${record.agent} -> ${pathService.relative(run.dir, path)}`);
     // A skill marked `disable-model-invocation` refuses an agent that invokes it
     // itself; `agent prompt` is the human's channel, so a slash command here runs.
@@ -626,20 +731,30 @@ const runStep = Effect.fn("Engine.runStep")(function* (
   // part writes to the Run.
   const stuckReasons = yield* Effect.forEach(
     records,
-    (record) =>
-      Effect.gen(function* () {
-        // The agent may settle before herdr reports `working`; that is not an error.
-        yield* Effect.ignore(
-          o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 }),
-        );
-        return yield* awaitAgent(o, ctx, record);
-      }),
+    (record, i) =>
+      // An agent that was never prompted has nothing to go quiet about.
+      paused[i]
+        ? Effect.succeed(null)
+        : Effect.gen(function* () {
+            // The agent may settle before herdr reports `working`; that is not an error.
+            yield* Effect.ignore(
+              o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 }),
+            );
+            return yield* awaitAgent(o, ctx, record);
+          }),
     { concurrency: "unbounded" },
   );
 
   const outcomes: VariantOutcome[] = [];
   for (const [i, record] of records.entries()) {
     const key = keys[i]!;
+    const pause = paused[i];
+    if (pause) {
+      record.status = "blocked";
+      record.error = pause;
+      outcomes.push({ record, output: null, review: null });
+      continue;
+    }
     const outcome = yield* collectWatched(o, step, record, key, stuckReasons[i] ?? null);
     // An agent that was given up on is not going to answer a prompt, so the repair
     // round is not offered to one.
@@ -1356,6 +1471,10 @@ const reportPlanChange = Effect.fn("Engine.reportPlanChange")(function* (
   );
   yield* o.run.log(`plan changed: ${result.message}`);
   if (result.ok) yield* o.out(`  ▸ ${result.message}`);
+  // A hand-off held by the receiver's own compaction is not the quiet "nobody to hand
+  // to": no work went anywhere and the human is the one who decides what happens next,
+  // so it says so here as well as in the audit trail.
+  else if (result.held) yield* o.out(`  ⏸ ${result.message}`);
 });
 
 /** This Run's Session, as the register and the hand-offs key it. */
@@ -1363,6 +1482,10 @@ function sessionOf(o: EngineOptions): Session {
   return {
     herdr: o.herdr,
     stateDir: o.env.stateDir,
+    // A hand-off is a work boundary too, so the Session carries what the shared
+    // policy needs to read this Run's threshold and warn in its audit trail.
+    configDir: o.env.configDir,
+    compaction: compactionSettings(o),
     ...scopeFor(o.env, o.run.record.cwd),
   };
 }
@@ -1681,6 +1804,22 @@ const permissionMode = Effect.fn("Engine.permissionMode")(function* (
   if (isPermissionMode(named)) return named;
   return yield* Effect.fail(
     new Error(`${step.id}: unknown permissions "${named}" (known: ${PERMISSION_MODES.join(", ")})`),
+  );
+});
+
+/**
+ * Refuses the step before a tab opens where compaction is on and one of the harnesses
+ * about to be launched cannot be managed through the interface Collie verified. Warning
+ * and starting the agent anyway is how a partial-harness feature ships: the whole point
+ * of the gate is that an unmanaged agent is not a quiet telemetry problem.
+ */
+const gateCompaction = Effect.fn("Engine.gateCompaction")(function* (
+  o: EngineOptions,
+  step: ResolvedStep,
+  harnesses: ReadonlyArray<string>,
+) {
+  yield* gateHarnesses(yield* compactionDeps(o), harnesses).pipe(
+    Effect.mapError((cause) => new Error(`${step.id}: ${reason(cause)}`)),
   );
 });
 

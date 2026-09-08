@@ -545,14 +545,16 @@ const DEFAULT_KEYS = [
   "handoff_timeout_ms",
   "quiet_ms",
   "board_quiet_ms",
+  "compact_at_tokens",
 ] as const;
 
-/** The three that `loadDefaults` reads with `isNumber`: a string there is ignored. */
+/** The ones `loadDefaults` reads with `isNumber`: a string there is ignored. */
 export const NUMERIC_DEFAULTS: ReadonlyArray<string> = [
   "max_iterations",
   "handoff_timeout_ms",
   "quiet_ms",
   "board_quiet_ms",
+  "compact_at_tokens",
 ];
 
 export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: PluginEnv) {
@@ -578,6 +580,7 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
       { key: "handoff_timeout_ms", value: String(defaults.handoffTimeoutMs) },
       { key: "quiet_ms", value: String(defaults.quietMs) },
       { key: "board_quiet_ms", value: String(defaults.boardQuietMs) },
+      { key: "compact_at_tokens", value: String(defaults.compactAtTokens) },
     ],
     // Everything else the file holds: remembered answers, per-harness model lists, the
     // notification kinds someone turned off. Shown as written rather than interpreted.

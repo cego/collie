@@ -16,6 +16,12 @@ actions, and the `collie` CLI.
 - **Adding a herdr call, or a red `contract:stable` pipeline** →
   [`docs/internals.md`](docs/internals.md#checking-the-boundary-against-herdr), alongside
   `herdr-pin.json` and `test/herdr-contract.test.ts`.
+- **Changing the compaction threshold, the work-boundary policy, or a harness's
+  compaction controls** → [`docs/using.md`](docs/using.md#compaction-between-pieces-of-work),
+  alongside `src/compaction.ts` (the policy) and `src/compactors.ts` (the four adapters).
+  Where it is called from: [`docs/internals.md`](docs/internals.md#compaction-at-a-work-boundary).
+  What each installed harness actually supports, and what the release gate still needs:
+  [ADR-0007](docs/adr/0007-compact-a-reused-agent-at-a-work-boundary.md).
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →
