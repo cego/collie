@@ -115,6 +115,10 @@ Run {{skill:code-simplification}} over what this branch changed. Behaviour stays
 the tests you ran in `build` still pass, and you say what you ran. Do not touch code
 this branch did not.
 
+Apply your persona's **Code comment hygiene** rules to comments this branch added or
+changed: make the code self-explanatory, delete unnecessary comments, and reduce each
+essential comment to the fewest words that preserve its meaning.
+
 If you committed anything, push it the same way `build` did — `git push -u origin HEAD
 -o ci.skip` — so the reviewers read what you simplified rather than what you replaced. A
 push that fails is reported, not fatal.
