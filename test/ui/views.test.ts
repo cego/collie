@@ -18,6 +18,7 @@ import {
 } from "../../src/views";
 import { REVIEW_FILE } from "../../src/output";
 import { RUNNER_LOG } from "../../src/driver";
+import { Herdr } from "../../src/herdr";
 import { RunStore, type Run } from "../../src/run";
 
 let rig: Rig;
@@ -245,7 +246,12 @@ effectTest("a run's detail is its inputs, steps, hand-offs, review and Outputs",
     '{"verdict":"clean"}\n',
   );
 
-  const detail = yield* buildRunDetail({ stateDir: env.stateDir, runId: run.id, mr: null });
+  const detail = yield* buildRunDetail({
+    stateDir: env.stateDir,
+    agents: new Herdr(env),
+    runId: run.id,
+    mr: null,
+  });
 
   expect(detail).not.toBeNull();
   if (!detail) return;
@@ -293,7 +299,12 @@ effectTest("a run with no review, and an Output nobody wrote, both say which", f
   ];
   yield* run.save();
 
-  const detail = yield* buildRunDetail({ stateDir: env.stateDir, runId: run.id, mr: null });
+  const detail = yield* buildRunDetail({
+    stateDir: env.stateDir,
+    agents: new Herdr(env),
+    runId: run.id,
+    mr: null,
+  });
 
   if (!detail) throw new Error("expected a detail");
   // Stated, not thrown: a run that wrote no review is the common case, not an error.
@@ -308,7 +319,12 @@ effectTest("a review too big to read is capped and says so", function* () {
   // an artifact this size, and the panel must neither show it all nor read it all.
   const run = yield* seed({ workflow: "review", review: "x".repeat(4_000_000) });
 
-  const detail = yield* buildRunDetail({ stateDir: env.stateDir, runId: run.id, mr: null });
+  const detail = yield* buildRunDetail({
+    stateDir: env.stateDir,
+    agents: new Herdr(env),
+    runId: run.id,
+    mr: null,
+  });
 
   if (!detail || detail.review._tag !== "Text") throw new Error("expected review text");
   expect(detail.review.truncated).toBe(true);
@@ -321,9 +337,15 @@ effectTest("a paged review reads another cap for each page asked for", function*
   const env = rig.pluginEnv();
   const run = yield* seed({ workflow: "review", review: "x".repeat(4_000_000) });
 
-  const first = yield* buildRunDetail({ stateDir: env.stateDir, runId: run.id, mr: null });
+  const first = yield* buildRunDetail({
+    stateDir: env.stateDir,
+    agents: new Herdr(env),
+    runId: run.id,
+    mr: null,
+  });
   const third = yield* buildRunDetail({
     stateDir: env.stateDir,
+    agents: new Herdr(env),
     runId: run.id,
     mr: null,
     pages: 3,
@@ -343,7 +365,12 @@ effectTest("an empty review reads as empty rather than as no review at all", fun
   const env = rig.pluginEnv();
   const run = yield* seed({ workflow: "review", review: "" });
 
-  const detail = yield* buildRunDetail({ stateDir: env.stateDir, runId: run.id, mr: null });
+  const detail = yield* buildRunDetail({
+    stateDir: env.stateDir,
+    agents: new Herdr(env),
+    runId: run.id,
+    mr: null,
+  });
 
   // A file that is there and says nothing is not the same as a run that wrote none.
   expect(detail?.review).toEqual({ _tag: "Text", text: "", truncated: false });
@@ -357,11 +384,17 @@ effectTest("the log tail is the end of a long log, and only when it is asked for
   const lines = Array.from({ length: 20_000 }, (_, i) => `line ${i}`);
   yield* fs.writeFileString(path.join(run.dir, RUNNER_LOG), `${lines.join("\n")}\n`);
 
-  const off = yield* buildRunDetail({ stateDir: env.stateDir, runId: run.id, mr: null });
+  const off = yield* buildRunDetail({
+    stateDir: env.stateDir,
+    agents: new Herdr(env),
+    runId: run.id,
+    mr: null,
+  });
   expect(off?.tail).toBeNull();
 
   const on = yield* buildRunDetail({
     stateDir: env.stateDir,
+    agents: new Herdr(env),
     runId: run.id,
     mr: null,
     tail: true,
@@ -381,6 +414,7 @@ effectTest("a run with no log says so where the tail would be", function* () {
 
   const detail = yield* buildRunDetail({
     stateDir: env.stateDir,
+    agents: new Herdr(env),
     runId: run.id,
     mr: null,
     tail: true,
@@ -392,7 +426,12 @@ effectTest("a run with no log says so where the tail would be", function* () {
 effectTest("a run that is not there has no detail rather than a failure", function* () {
   const env = rig.pluginEnv();
   expect(
-    yield* buildRunDetail({ stateDir: env.stateDir, runId: "no-such-run", mr: null }),
+    yield* buildRunDetail({
+      stateDir: env.stateDir,
+      agents: new Herdr(env),
+      runId: "no-such-run",
+      mr: null,
+    }),
   ).toBeNull();
 });
 
@@ -432,7 +471,12 @@ effectTest(
     yield* fs.writeFileString(path.join(dir, "issues", "01-first.md"), "# First\n\n- [x] a\n");
     yield* fs.writeFileString(path.join(dir, "issues", "notes.txt"), "not a ticket\n");
 
-    const own = yield* buildRunDetail({ stateDir: env.stateDir, runId: planner.id, mr: null });
+    const own = yield* buildRunDetail({
+      stateDir: env.stateDir,
+      agents: new Herdr(env),
+      runId: planner.id,
+      mr: null,
+    });
 
     expect(own!.plan!.spec).toEqual({
       _tag: "Text",
@@ -451,7 +495,12 @@ effectTest(
     builder.record.inputs.plan_kind = "plan-dir";
     yield* builder.save();
 
-    const started = yield* buildRunDetail({ stateDir: env.stateDir, runId: builder.id, mr: null });
+    const started = yield* buildRunDetail({
+      stateDir: env.stateDir,
+      agents: new Herdr(env),
+      runId: builder.id,
+      mr: null,
+    });
     expect(started!.plan!.tickets.map((t) => t.title)).toEqual(["First", "Second"]);
 
     // A run built from a review rather than a plan dir has no plan at all.
@@ -459,7 +508,12 @@ effectTest(
     fixer.record.inputs.plan = dir;
     fixer.record.inputs.plan_kind = "review";
     yield* fixer.save();
-    const none = yield* buildRunDetail({ stateDir: env.stateDir, runId: fixer.id, mr: null });
+    const none = yield* buildRunDetail({
+      stateDir: env.stateDir,
+      agents: new Herdr(env),
+      runId: fixer.id,
+      mr: null,
+    });
     expect(none!.plan).toBeNull();
   },
 );
@@ -477,7 +531,12 @@ effectTest("a step left running by a run that stopped is timed to where it stopp
   run.record.finished_at = "2026-09-02T12:07:00.000Z";
   yield* run.save();
 
-  const detail = yield* buildRunDetail({ stateDir: env.stateDir, runId: run.id, mr: null });
+  const detail = yield* buildRunDetail({
+    stateDir: env.stateDir,
+    agents: new Herdr(env),
+    runId: run.id,
+    mr: null,
+  });
 
   // Seven minutes, and seven minutes tomorrow too — not however long ago it died.
   expect(detail!.steps[0]!.took).toBe("7m");
@@ -498,7 +557,13 @@ effectTest("a finished run's plan is read once; a running one's is read again", 
   // Stopped: the plan it was built from cannot change, so the second read is the cache.
   const done = yield* seed({ workflow: "implement" });
   yield* write(done, "# first\n");
-  const readOnce = { stateDir: env.stateDir, runId: done.id, mr: null, plans };
+  const readOnce = {
+    stateDir: env.stateDir,
+    agents: new Herdr(env),
+    runId: done.id,
+    mr: null,
+    plans,
+  };
   expect((yield* buildRunDetail(readOnce))!.plan!.spec).toMatchObject({ text: "# first\n" });
   yield* write(done, "# rewritten\n");
   expect((yield* buildRunDetail(readOnce))!.plan!.spec).toMatchObject({ text: "# first\n" });
@@ -506,8 +571,50 @@ effectTest("a finished run's plan is read once; a running one's is read again", 
   // Still running: it may be writing that plan as we read it, so it is never cached.
   const going = yield* seed({ workflow: "implement", status: "running" });
   yield* write(going, "# first\n");
-  const live = { stateDir: env.stateDir, runId: going.id, mr: null, plans };
+  const live = { stateDir: env.stateDir, agents: new Herdr(env), runId: going.id, mr: null, plans };
   expect((yield* buildRunDetail(live))!.plan!.spec).toMatchObject({ text: "# first\n" });
   yield* write(going, "# rewritten\n");
   expect((yield* buildRunDetail(live))!.plan!.spec).toMatchObject({ text: "# rewritten\n" });
+});
+
+effectTest(
+  "Settings offers how a question is presented, defaulting to automatic focus",
+  function* () {
+    const env = rig.pluginEnv();
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+
+    expect((yield* buildSettings(env)).defaults.find((d) => d.key === "questions")!.value).toBe(
+      "focus",
+    );
+
+    yield* fs.makeDirectory(env.configDir, { recursive: true });
+    yield* fs.writeFileString(path.join(env.configDir, "config.json"), `{ "questions": "notify" }`);
+
+    const set = yield* buildSettings(env);
+    expect(set.defaults.find((d) => d.key === "questions")!.value).toBe("notify");
+    // Offered as a default, not left in the remembered values nobody can edit.
+    expect(set.remembered.map((r) => r.key)).not.toContain("questions");
+  },
+);
+
+effectTest("a Run's detail carries the same interruption facts the CLI reports", function* () {
+  const env = rig.pluginEnv();
+  const run = yield* seed({ workflow: "review", status: "blocked", outstanding: 2 });
+  run.record.iteration = run.record.max_iterations;
+  yield* run.save();
+
+  const detail = yield* buildRunDetail({
+    stateDir: env.stateDir,
+    agents: new Herdr(env),
+    runId: run.id,
+    mr: null,
+  });
+
+  // The same shape `run show` and `run wait --until attention` return, built by the
+  // same function: the board and the CLI cannot disagree about why a Run stopped.
+  expect(detail!.attention.category).toBe("interrupted");
+  expect(detail!.attention.reason).toBe("review_exhausted");
+  expect(detail!.attention.driver).toBe("none");
+  expect(detail!.attention.actions).toContain("resume");
 });

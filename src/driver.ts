@@ -1,4 +1,15 @@
-import { Crypto, Effect, Fiber, FileSystem, Path, Schema, Option, Queue, Stream } from "effect";
+import {
+  Clock,
+  Crypto,
+  Effect,
+  Fiber,
+  FileSystem,
+  Path,
+  Schema,
+  Option,
+  Queue,
+  Stream,
+} from "effect";
 import { nowIso } from "./time";
 import {
   currentPid,
@@ -264,14 +275,98 @@ const readOwner = Effect.fn("readOwner")(function* (dir: string) {
   return raw && raw.pid > 0 ? raw : null;
 });
 
+/**
+ * The claim, where it is this Run's live Driver. One question — "may I take over" — and
+ * `unknown` is a no to it: a claim whose identity cannot be read is not one to step on.
+ * Decided by `ownershipOf` below rather than by a probe of its own, so the answer here
+ * and the three-way answer recovery reads cannot drift apart.
+ */
 const liveOwner = Effect.fn("liveOwner")(function* (dir: string) {
   const owner = yield* readOwner(dir);
-  if (!owner || !(yield* signalProcess(owner.pid))) return null;
-  if (owner.start !== null) {
-    const start = yield* processStartTime(owner.pid);
-    if (start === null || start !== owner.start) return null;
+  if (!owner) return null;
+  return (yield* ownershipOf(owner)) === "live" ? owner : null;
+});
+
+/**
+ * Whether a Driver owns this Run: `live`, conclusively `none`, or `unknown`. The third
+ * is what `liveOwner` cannot say on its own — it answers one question, "may I take
+ * over", and a claim whose identity cannot be read has to be a no there. Recovery needs
+ * the difference: "nobody is driving this" permits a resume and "I could not tell"
+ * must not.
+ */
+export type Ownership = "live" | "none" | "unknown";
+
+/** The same three-way answer as a pure decision, so each branch is a test. */
+export function ownershipFrom(
+  claim: OwnerRecord | null,
+  signalled: boolean,
+  start: string | null,
+): Ownership {
+  if (!claim) return "none";
+  if (!signalled) return "none";
+  // A claim written without a start time is all the identity there is; `liveOwner`
+  // reads it as alive, and so does this.
+  if (claim.start === null) return "live";
+  // The pid answers but its identity cannot be read: it may be that Driver or it may
+  // be whatever reused the number. Neither is something to act on.
+  if (start === null) return "unknown";
+  return start === claim.start ? "live" : "none";
+}
+
+export const driverOwnership = Effect.fn("driverOwnership")(function* (dir: string) {
+  const claim = yield* readOwner(dir);
+  // `readOwner` cannot tell a missing claim from an unreadable one — both decode to
+  // null — and only the missing one is conclusive. A claim file that is there but
+  // truncated, corrupt or unreadable was written by a Driver that may still own the
+  // Run, so it is `unknown` and no resume is offered for it.
+  if (!claim) {
+    const answer: Ownership = (yield* claimExists(dir)) ? "unknown" : "none";
+    return answer;
   }
-  return owner;
+  return yield* ownershipOf(claim);
+});
+
+/**
+ * The one probe of a claim: does that pid answer, and is it still the process that
+ * wrote it. The start time is read only where the claim carries one to compare against,
+ * because on a system with no `/proc` reading it means spawning `ps`.
+ */
+const ownershipOf = Effect.fn("ownershipOf")(function* (claim: OwnerRecord) {
+  const signalled = yield* signalProcess(claim.pid);
+  const start = signalled && claim.start !== null ? yield* processStartTime(claim.pid) : null;
+  return ownershipFrom(claim, signalled, start);
+});
+
+/**
+ * When a `resume` command was written to this Run's inbox and nothing has consumed it
+ * yet, in epoch millis; `null` when there is none. A Driver clears the inbox as it
+ * starts, so one still sitting there means a Driver has been asked for and has not
+ * arrived — which is the difference between a Run nobody is driving and one whose
+ * Driver is still on its way.
+ */
+export const pendingResumeAt = Effect.fn("pendingResumeAt")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  for (const file of yield* inboxFiles(dir)) {
+    const command = yield* read(InboxCommandJson, file);
+    if (command?.type !== "resume") continue;
+    const stat = yield* fs.stat(file).pipe(Effect.catch(() => Effect.succeed(null)));
+    // A filesystem that does not keep the time is read as "just now": the cost of
+    // waiting a little longer on a Run is smaller than the cost of offering a resume
+    // while a Driver is still starting.
+    if (stat && Option.isSome(stat.mtime)) return stat.mtime.value.getTime();
+    return yield* Clock.currentTimeMillis;
+  }
+  return null;
+});
+
+/** Whether this Run has a claim file at all, readable or not. */
+export const claimExists = Effect.fn("claimExists")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // An unreadable directory is not evidence of an unclaimed Run either.
+  return yield* fs
+    .exists(path.join(dir, RUNNER_PID))
+    .pipe(Effect.catch(() => Effect.succeed(true)));
 });
 
 export const acquireDriver = Effect.fn("acquireDriver")(function* (dir: string) {

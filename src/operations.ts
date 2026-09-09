@@ -21,6 +21,7 @@ import {
 import {
   CHOICE,
   driverAlive,
+  driverOwnership,
   inboxFiles,
   STOPPED,
   InboxCommandJson,
@@ -41,7 +42,7 @@ import {
 import { readRegistry, registryPath, scopeOfRun } from "./registry";
 import { currentPid, withLock } from "./lock";
 import { REVIEW_FILE } from "./output";
-import { fanoutRepos, fanoutUnfinished, Run, RunStore } from "./run";
+import { fanoutRepos, fanoutUnfinished, runningAgents, Run, RunStore } from "./run";
 import { branchListed, BRANCH_INPUT, checkoutFor, pruneWorktrees } from "./worktree";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
@@ -55,6 +56,7 @@ const ErrorCode = Schema.Literals([
   "run_not_waiting",
   "invalid_answer",
   "choice_already_answered",
+  "choice_mismatch",
   "target_exists",
   "needs_input",
   "timeout",
@@ -119,6 +121,9 @@ export const writeInbox = Effect.fn("operations.writeInbox")(function* (
     flag: "wx",
   });
   yield* fs.rename(tmp, target);
+  // The file it landed in, so a caller can tell an entry the Driver has taken from one
+  // still sitting there unread.
+  return target;
 });
 
 /**
@@ -688,9 +693,19 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
   run: { readonly id: string; readonly dir: string },
   answer: string,
   requestId: string,
+  /** The Choice this answer was written for, when the caller knows it. */
+  expected: string | null = null,
 ) {
+  const fs = yield* FileSystem.FileSystem;
   const choice = yield* readChoice(run.dir);
   if (!choice) return err("run_not_waiting", `Run "${run.id}" is not waiting for a Choice.`);
+  // Checked here rather than in the caller: this is the boundary the Driver reads
+  // through, so a question replaced between reading it and answering it is caught
+  // however the answer arrived, and the Choice now open is left untouched.
+  if (expected !== null && expected !== choice.id)
+    return err("choice_mismatch", `Run "${run.id}" is no longer asking Choice "${expected}".`, {
+      choiceId: choice.id,
+    });
   if ((yield* answeredChoices(run.dir)).has(choice.id))
     return err("choice_already_answered", `Choice "${choice.id}" already has an answer.`);
   // An empty answer is how a menu is dismissed; it leaves the Run open for a resume.
@@ -699,7 +714,22 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
       answers: choice.items.map((item) => item.id),
     });
   }
-  yield* writeInbox(run.dir, { type: "answer", requestId, choiceId: choice.id, answer });
+  const entry = yield* writeInbox(run.dir, {
+    type: "answer",
+    requestId,
+    choiceId: choice.id,
+    answer,
+  });
+  // The check above and the write cannot be one act, so the Driver may have replaced
+  // the Choice in between — and `consumeInboxAnswer` passes over an entry about a
+  // question no longer open. Whether that happened, the inbox says: an entry the Driver
+  // has taken is gone from disk, so a moved-on Choice with our file consumed means the
+  // answer landed, and one with our file still there means nothing will ever read it.
+  const asking = (yield* readChoice(run.dir))?.id;
+  if (asking !== choice.id && (yield* fs.exists(entry))) {
+    yield* fs.remove(entry, { force: true });
+    return err("choice_mismatch", `Run "${run.id}" stopped asking Choice "${choice.id}".`);
+  }
   return ok({ runId: run.id, answer }, `Answered ${run.id}: ${answer}.`);
 });
 
@@ -837,7 +867,7 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  // driverAlive is a look, not a claim. Two resumes could both find no owner, both
+  // The ownership check is a look, not a claim. Two resumes could both find no owner, both
   // reset the Steps and save `running`, and the loser's snapshot could then land on
   // top of a Run the winner had already begun advancing. This lock is what makes the
   // look and the reset one decision.
@@ -846,8 +876,31 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
     lock,
     Effect.fail(new Error(`another resume of run "${run.id}" is in progress`)),
     Effect.gen(function* () {
-      if (yield* driverAlive(run.dir))
-        return err("run_already_active", `Run "${run.id}" is already active.`);
+      // Ownership, not just liveness: a claim whose identity could not be read is not
+      // permission to start a second Driver. Re-checked here rather than trusted from
+      // whatever the caller was shown, which may be minutes old.
+      const owner = yield* driverOwnership(run.dir);
+      if (owner === "live") return err("run_already_active", `Run "${run.id}" is already active.`);
+      if (owner === "unknown")
+        return err(
+          "run_already_active",
+          `Whether a Driver still owns run "${run.id}" could not be determined; stop it explicitly before resuming.`,
+        );
+      // The Driver is not the only thing that can still be working in this worktree.
+      // Resuming resets every unfinished Step, so an agent one of them started and
+      // herdr still has running would find its Step restarted underneath it — and an
+      // agent herdr could not be asked about is not evidence that nothing is there.
+      const agents = yield* new Herdr(env).agentsAlive(runningAgents(run.record));
+      if (agents === "live")
+        return err(
+          "run_already_active",
+          `Run "${run.id}" still has a live agent; stop it before resuming.`,
+        );
+      if (agents === "unverified")
+        return err(
+          "run_already_active",
+          `Whether run "${run.id}" still has a live agent cannot be verified; retry when herdr is reachable.`,
+        );
       if ((yield* runStatus(run)) === "succeeded" && !stillFanningOut(run))
         return err("invalid_state", `Run "${run.id}" has already succeeded.`);
       yield* fs.remove(path.join(run.dir, STOPPED), { force: true });

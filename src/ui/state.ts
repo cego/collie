@@ -156,7 +156,12 @@ export type Command =
   | { _tag: "FocusAgent"; agent: string }
   | { _tag: "StopRun"; runId: string }
   | { _tag: "OpenLog"; runId: string }
-  | { _tag: "Answer"; runId: string; value: string }
+  /**
+   * Answer the Choice the board drew, named by its id. The id is what makes it that
+   * Choice: a question replaced between the refresh that drew it and the key that
+   * answered it is a different question, and the answer belongs to the one on screen.
+   */
+  | { _tag: "Answer"; runId: string; choiceId: string; value: string }
   /**
    * Hand the named Run's review to the live implementer. It names one, because every
    * other action on the board acts on the Selection: an argument-less "send the review"
@@ -183,6 +188,12 @@ export type Command =
    * default it was labelled to set.
    */
   | { _tag: "EditSetting"; key: string }
+  /**
+   * Go to the next unanswered question. The app answers this itself, like
+   * `EditSetting`: it moves the Selection and clears a filter hiding the row, neither
+   * of which is anything the bridge owns.
+   */
+  | { _tag: "NextQuestion" }
   | { _tag: "SetDefault"; key: string; value: string }
   | { _tag: "OpenMode"; mode: Mode }
   | { _tag: "ShowView"; view: ViewName }
@@ -667,12 +678,23 @@ export function selectableRows(rows: readonly Row[]): Row[] {
  * The rows of whichever View is showing. One list region, one Selection, one filter, one
  * set of scroll keys — a second implementation per View is how they would drift apart.
  */
+/**
+ * The Runs view's rows, whichever View is showing. The same View at whichever scope is
+ * showing, and the local board until the wide one has been read: a scope toggle is
+ * answered before its board arrives.
+ *
+ * Read from outside the Runs view too, because a question is a question wherever the
+ * human happens to be looking — `n` reaches one from Settings, and the button offering
+ * it is drawn there for the same reason.
+ */
+export function runsRows(state: AppState): Row[] {
+  return state.scope === "all" && state.wide ? wideRows(state.wide) : rowsOf(state.board);
+}
+
 export function viewRows(state: AppState): Row[] {
   switch (state.view) {
     case "runs":
-      // The same View at whichever scope is showing, and the local board until the wide
-      // one has been read: a scope toggle is answered before its board arrives.
-      return state.scope === "all" && state.wide ? wideRows(state.wide) : rowsOf(state.board);
+      return runsRows(state);
     case "history":
       return (state.history ?? []).map((r) => runRow(r, state.board.now, "history"));
     case "workflows":
@@ -884,6 +906,42 @@ export interface Windowed<T> {
 }
 
 /**
+ * The footer's buttons: the Selection's own, and the one board-wide action there is.
+ * Each is offered only where there is something to act on and the key beside it does
+ * what the label says — a button whose key would type a character is a lie, and both
+ * kinds of lie are read off the one fact about who has the keyboard.
+ *
+ * The Selection's own drop out for any field, because Enter and every letter belong to
+ * it. The next-question button drops out only for a field taking text: a menu takes
+ * none, and a board of several asking Runs is exactly when `n` is wanted.
+ */
+export function footerActions(opts: {
+  row: Row | null;
+  scope: Scope;
+  /** Whether anything on this board is asking, which is what `n` can act on. */
+  questions: boolean;
+  on: Keyboarding;
+}): Action[] {
+  return [
+    ...(fieldHasKeys(opts.on) ? [] : actionsFor(opts.row, opts.scope)),
+    ...(opts.questions && !takesText(opts.on)
+      ? [
+          {
+            key: NEXT_QUESTION,
+            label: "next question",
+            command: { _tag: "NextQuestion" } as const,
+          },
+        ]
+      : []),
+  ];
+}
+
+/** Whether anything but the board has the keys: a question, the filter, a value. */
+function fieldHasKeys(on: Keyboarding): boolean {
+  return on._tag === "Choice" || on._tag === "Filter" || on._tag === "Setting";
+}
+
+/**
  * Every key the app handles, with what it does. One list: the help overlay draws it,
  * `docs/using.md` restates it, and a key added to the handler and not to this is a key
  * nobody can find. The footer offers a subset — only what the Selection can be asked
@@ -911,6 +969,7 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "w", what: "Open that MR in a browser" },
   { key: "c", what: "Copy that MR's URL" },
   { key: "k", what: "Stop the selected run" },
+  { key: "n", what: "Go to the next unanswered question" },
   { key: "Enter", what: "Go to it, or run what is selected" },
   { key: "/", what: "Filter the list" },
   { key: "Esc", what: "Clear the filter" },
@@ -1023,6 +1082,8 @@ export type KeyIntent =
    * a bare `Do` left the footer in editor mode with every later key still editing.
    */
   | { _tag: "Submitted"; command: Command }
+  /** Select the next pending Choice; the app knows the rows and the filter. */
+  | { _tag: "NextQuestion" }
   | { _tag: "Move"; by: -1 | 1 }
   | { _tag: "ShowViewBy"; by: -1 | 1 }
   | { _tag: "Scroll"; by: -1 | 1; unit: "line" | "page" }
@@ -1030,6 +1091,42 @@ export type KeyIntent =
   | { _tag: "Do"; command: Command };
 
 const PRINTABLE = /^[\x20-\x7e]$/;
+
+/**
+ * The key that goes to the next unanswered question. Unused by the rest of the map,
+ * and deliberately reachable while a menu is up: a board of several asking Runs is
+ * exactly when it is needed, and a menu takes no text for it to steal.
+ */
+const NEXT_QUESTION = "n";
+
+/**
+ * Whether what has the keyboard is a field being typed into. A global shortcut must
+ * never be read out of one — the character belongs to the answer, the filter or the
+ * value — which is what keeps `n` from jumping while a free-text question is open.
+ */
+function takesText(on: Keyboarding): boolean {
+  if (on._tag === "Filter" || on._tag === "Setting") return true;
+  return on._tag === "Choice" && on.choice.kind === "ask";
+}
+
+/**
+ * The next Run with a pending Choice after the Selection, wrapping once. Over every row
+ * of the current Scope rather than what a filter left, because a question hidden behind
+ * a filter is still unanswered — the app clears the filter to show the one this picks.
+ *
+ * A Selection that is not on this board starts the search at the top, so the first
+ * question is not skipped. `null` means there is no question anywhere.
+ */
+export function nextQuestionId(rows: readonly Row[], selected: string | null): string | null {
+  const list = selectableRows(rows);
+  const at = list.findIndex((row) => row.id === selected);
+  const from = at < 0 ? -1 : at;
+  for (let step = 1; step <= list.length; step++) {
+    const row = list[(from + step + list.length) % list.length]!;
+    if (row.choice) return row.id;
+  }
+  return null;
+}
 
 /** The keys that start something in this Session, and what each opens. */
 const SESSION_MODES = new Map<string, Mode>([
@@ -1060,6 +1157,9 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   // A flow asking a question owns the keyboard: `Flow` has its own handler, and a key
   // that also moved the Selection underneath would act on a board nobody is looking at.
   if (at.on._tag === "Flow") return null;
+  // Before whoever has the keyboard, but only where that is not a field taking text:
+  // this is the one way to a question on a board where a question already has the keys.
+  if (key.sequence === NEXT_QUESTION && !takesText(at.on)) return { _tag: "NextQuestion" };
   if (at.on._tag === "Choice") {
     const next = answerFor(at.on.choice, at.asking, key.sequence);
     return { _tag: "Answered", asking: next.asking, value: next.value };

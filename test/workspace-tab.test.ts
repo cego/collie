@@ -830,6 +830,39 @@ effectTest("a run with a question to answer says so, and is counted as needing y
   expect(renderWorkspace(view)).toContain("(none live here)");
 });
 
+effectTest("a question left behind by a Driver that is gone is not offered as one", function* () {
+  // Recovery classifies it as stale, so the board must not take an answer for it: the
+  // next Driver discards the inbox entry, and the human was told it had been sent.
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const run = yield* seed({
+    workflow: "plan",
+    namedAfter: "add-a-picker",
+    stepIds: ["grill", "next"],
+  });
+  run.record.awaiting = "next";
+  yield* run.save();
+  yield* writeChoice(run.dir, {
+    id: "c1",
+    kind: "menu",
+    run: run.id,
+    step: "next",
+    header: "What next?",
+    footer: "↑↓ move",
+    items: [{ id: "Stop here", title: "Stop here" }],
+  });
+  // A claim that is there and dead is conclusive at once, so no start grace applies.
+  yield* fs.writeFileString(
+    path.join(run.dir, "runner.pid"),
+    `{"pid":2147483646,"start":null,"at":"2026-09-08T09:00:00.000Z"}\n`,
+  );
+
+  const view = yield* board([]);
+
+  expect(view.active[0]!.choice).toBeNull();
+  expect(view.active[0]!.needsYou).toBe(false);
+});
+
 effectTest("a run awaiting a step with nothing to answer is not one that needs you", function* () {
   // `awaiting` is set for a gate the run is holding at, and for an agent answering a
   // prompt in its own pane: there is nothing on the board to answer for either, so

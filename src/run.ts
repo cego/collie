@@ -725,3 +725,11 @@ export class RunStore {
     }).pipe(Effect.withSpan("RunStore.nextSeq"));
   }
 }
+
+/** The agents a Run's record still has running, by name. */
+export function runningAgents(record: RunRecord): ReadonlyArray<string> {
+  return record.steps
+    .flatMap((step) => step.variants)
+    .filter((variant) => variant.status === "running" && variant.agent !== "")
+    .map((variant) => variant.agent);
+}

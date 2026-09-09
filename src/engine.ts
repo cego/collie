@@ -1675,6 +1675,10 @@ const findOrOpenView = Effect.fn("Engine.findOrOpenView")(function* (o: Workspac
 /**
  * A question nobody sees is a run that has silently stopped, so it is said
  * twice: a toast, and the Session's tab brought to the front.
+ *
+ * The tab is the half a human can opt out of with `questions: notify`. The toast, the
+ * recorded `awaiting` and the tab's `asks you` are not optional: suppressing the jump
+ * must not make the question itself any quieter, or a Run stops in real silence.
  */
 const callAttention = Effect.fn("Engine.callAttention")(function* (
   o: EngineOptions,
@@ -1688,7 +1692,7 @@ const callAttention = Effect.fn("Engine.callAttention")(function* (
   // rather than the step it stopped in the middle of.
   yield* reconcileTabs(o, ctx, nothingLive, true);
   yield* notify(o, "needs-you", detail, { step: stepId });
-  if (!ctx.workspaceTabId) return;
+  if (o.defaults.questions === "notify" || !ctx.workspaceTabId) return;
   // A tab that will not focus is still a tab the human can reach.
   yield* Effect.ignore(o.herdr.tabFocus(ctx.workspaceTabId));
 });

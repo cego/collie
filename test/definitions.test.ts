@@ -521,6 +521,7 @@ test("user defaults come from config.json in the config layer", () =>
         trust: "ask",
         permissions: "bypass",
         scope: "local",
+        questions: "focus",
       });
     }),
   ));

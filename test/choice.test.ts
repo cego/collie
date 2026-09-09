@@ -566,3 +566,46 @@ Goal: {{inputs.goal}}
       expect(titles.filter((title) => title.includes("asking after all"))).toEqual([]);
     }),
   ));
+
+test("a question brings the Session's tab to the front, unless questions are notify-only", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
+
+      yield* runWorkflowEffect(
+        rig,
+        "choose",
+        { goal: "focus" },
+        { prompts: scriptedPrompts(["Stop here"]) },
+      );
+
+      // The default is unchanged: a question nobody sees is a Run that stopped in
+      // silence, so the board's tab is brought forward.
+      expect(yield* rig.cmds()).toContain("tab focus");
+    }),
+  ));
+
+test("notify-only questions still toast and still say `asks you`, without taking focus", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "choose",
+        { goal: "quiet" },
+        { prompts: scriptedPrompts(["Stop here"]), defaults: { questions: "notify" } },
+      );
+
+      expect(status).toBe("done");
+      expect(yield* rig.cmds()).not.toContain("tab focus");
+      // Suppressing the jump suppresses nothing else: the toast is raised, the tab
+      // still says the Run is asking, and the Choice was answerable throughout.
+      expect(yield* rig.cmds()).toContain("notification show");
+      const labels = (yield* rig.calls())
+        .filter((c) => c.cmd === "tab rename")
+        .map((c) => c.argv!.at(-1));
+      expect(labels).toContain("⚠ Choose · quiet · asks you");
+      expect(run.record.choices.map((c) => c.title)).toEqual(["Stop here"]);
+    }),
+  ));

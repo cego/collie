@@ -21,6 +21,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `ui/`            | The Collie tab: plain state and commands, the Solid components, and the Effect bridge    |
 | `views.ts`       | History, Workflows, Settings and a Run's detail, as state the app renders                |
 | `driver.ts`      | The run dir as the channel to a detached driver: progress, pid and questions             |
+| `attention.ts`   | Why a run wants a human, what a resume would keep, and which actions are safe            |
 | `registry.ts`    | Which long-lived agents this Session still has, per workspace + repo                     |
 | `handoff.ts`     | Giving one Run's result to another Run's live agent                                      |
 | `output.ts`      | The Output and Synthesis schemas, `review.md`, and which findings the loop still owns    |

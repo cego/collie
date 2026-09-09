@@ -18,6 +18,18 @@ export function isScope(value: string): value is Scope {
   return SCOPES.some((scope) => scope === value);
 }
 
+/**
+ * How a Run's question reaches the human. `focus` brings the Session's Collie tab to
+ * the front the moment a Choice opens — the behavior every install has had. `notify`
+ * leaves the toast and the board's own `asks you` alone but takes no focus, so a
+ * question arriving mid-thought does not move the human off what they are doing.
+ */
+export type Questions = "focus" | "notify";
+export const QUESTION_MODES: ReadonlyArray<Questions> = ["focus", "notify"];
+export function isQuestionMode(value: string): value is Questions {
+  return QUESTION_MODES.some((mode) => mode === value);
+}
+
 export interface Defaults {
   harness: string;
   model: string;
@@ -59,6 +71,8 @@ export interface Defaults {
   scope: Scope;
   /** `notifications.<kind>: false` turns that kind of toast off; absent means on. */
   notifications: Readonly<Record<string, boolean>>;
+  /** Whether a new question takes the human's focus, or only says so. */
+  questions: Questions;
 }
 
 export const FALLBACK_DEFAULTS: Defaults = {
@@ -74,6 +88,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   permissions: "bypass",
   scope: "local",
   notifications: {},
+  questions: "focus",
 };
 
 const ConfigJson = Schema.fromJsonString(YamlMapSchema);
@@ -169,6 +184,13 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDi
       Schema.decodeUnknownOption(Notifications)(raw.notifications),
       () => ({}),
     ),
+    // Coerced like `scope`: a Driver has to do one of the two whatever the file says,
+    // and the backward-compatible one is the focus every install already had. A value
+    // that is neither is refused where it is written.
+    questions:
+      isString(raw.questions) && isQuestionMode(raw.questions)
+        ? raw.questions
+        : FALLBACK_DEFAULTS.questions,
   };
   if (isString(raw.effort)) defaults.effort = raw.effort;
   return defaults;

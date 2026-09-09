@@ -6,6 +6,7 @@ import {
   keyIntent,
   markdownLines,
   needsYouStatus,
+  nextQuestionId,
   runIdOf,
   answerFor,
   clampSelection,
@@ -1304,4 +1305,64 @@ test('the "Needs you" header survives a filter its runs match', () => {
   expect(matching(rows, "r2").map((r) => [r.kind, r.title])).toEqual([
     ["active", "Implement · r2"],
   ]);
+});
+
+test("the next unanswered question is the one after the Selection, wrapping once", () => {
+  const rows = rowsOf(
+    board({
+      active: [
+        run("r1", { choice: { ...MENU, id: "c1", run: "r1" }, needsYou: true }),
+        run("r2"),
+        run("r3", { choice: { ...MENU, id: "c3", run: "r3" }, needsYou: true }),
+      ],
+    }),
+  );
+  const ids = selectableRows(rows).map((r) => r.id);
+  const [first, middle, last] = [ids[0]!, ids[1]!, ids[2]!];
+
+  // Runs that need you sort to the top, so the two asking rows bracket the third.
+  expect(nextQuestionId(rows, first)).toBe(middle === last ? last : ids[1]!);
+  // From the last question it wraps back to the first rather than stopping.
+  expect(nextQuestionId(rows, last)).toBe(first);
+  // With nothing selected, or a Selection that is not on this board, it starts at the
+  // top rather than skipping the first question.
+  expect(nextQuestionId(rows, null)).toBe(first);
+  expect(nextQuestionId(rows, "run:gone")).toBe(first);
+});
+
+test("with no question anywhere there is nowhere to go, and the Selection stays", () => {
+  const rows = rowsOf(board({ active: [run("r1"), run("r2")] }));
+
+  expect(nextQuestionId(rows, selectableRows(rows)[0]!.id)).toBe(null);
+  expect(nextQuestionId([], null)).toBe(null);
+});
+
+test("the next-question key is the board's, unless a field is taking text", () => {
+  const asking = keys({ row: null });
+
+  expect(keyIntent(asking, press("n", { name: "n" }))).toEqual({ _tag: "NextQuestion" });
+  // A menu is not a text field: `n` is not one of its options, so it still navigates.
+  expect(
+    keyIntent(keys({ on: { _tag: "Choice", choice: MENU } }), press("n", { name: "n" })),
+  ).toEqual({ _tag: "NextQuestion" });
+
+  // Everything that takes text keeps the character. A free-text question, the filter
+  // and a Settings value each own `n` while the cursor is in them.
+  expect(
+    keyIntent(
+      keys({ on: { _tag: "Choice", choice: { ...MENU, kind: "ask", items: [] } } }),
+      press("n", { name: "n" }),
+    ),
+  ).toEqual({ _tag: "Answered", asking: { index: 0, typed: "n" }, value: null });
+  expect(keyIntent(keys({ on: { _tag: "Filter" } }), press("n", { name: "n" }))).toEqual({
+    _tag: "Filtering",
+    filter: "n",
+    typing: true,
+  });
+  expect(
+    keyIntent(
+      keys({ on: { _tag: "Setting", setting: { key: "model", value: "opu" } } }),
+      press("n", { name: "n" }),
+    ),
+  ).toEqual({ _tag: "Editing", editing: { key: "model", value: "opun" } });
 });
