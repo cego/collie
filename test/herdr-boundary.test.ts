@@ -174,11 +174,54 @@ test("a method with no socket to reach fails as a typed HerdrError", () =>
     Effect.gen(function* () {
       // The socket client is Effect's Unix client now; its failures still have to
       // arrive as this module's own error rather than escaping as a defect.
-      const herdr = new Herdr({ ...rig.pluginEnv(), socketPath: null });
+      const herdr = new Herdr({
+        ...rig.pluginEnv({ FAKE_HERDR_STATUS: "stopped" }),
+        socketPath: null,
+      });
       const failure = yield* Effect.result(herdr.agentViewClear("run-1"));
 
       expect(failure._tag).toBe("Failure");
       if (failure._tag === "Failure") expect(failure.failure._tag).toBe("HerdrError");
+      // Nothing was connected: a server that says it is not running is not one this
+      // module should try to reach anyway.
+      expect(yield* rig.cmds()).toEqual(["status server"]);
+    }),
+  ));
+
+test("no explicit socket: a socket call asks herdr's own status for one first", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr({ ...rig.pluginEnv(), socketPath: null });
+
+      yield* herdr.tabMove("1:1", 0);
+
+      expect(yield* rig.cmds()).toEqual(["status server", "tab.move"]);
+    }),
+  ));
+
+test("an explicit socket is used as-is: no status lookup first", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(rig.pluginEnv());
+
+      yield* herdr.tabMove("1:1", 0);
+
+      expect(yield* rig.cmds()).toEqual(["tab.move"]);
+    }),
+  ));
+
+test("a malformed status reply fails cleanly, without guessing a socket", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr({
+        ...rig.pluginEnv({ FAKE_HERDR_STATUS: "malformed" }),
+        socketPath: null,
+      });
+      const failure = yield* Effect.result(herdr.tabMove("1:1", 0));
+
+      expect(failure._tag).toBe("Failure");
+      if (failure._tag === "Failure") expect(failure.failure._tag).toBe("HerdrError");
+      expect(yield* rig.cmds()).toEqual(["status server"]);
     }),
   ));
 
