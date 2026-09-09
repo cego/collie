@@ -20,6 +20,7 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { waitFor } from "../src/commands/run";
+import { processStartTime } from "../src/lock";
 import { runEffect } from "./support/effect";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -47,6 +48,7 @@ const effectTest = (
 ) => test(name, () => runEffect(Effect.gen(body).pipe(Effect.scoped)), timeout);
 
 const parseJson = (text: string) => JSON.parse(text);
+const stringifyJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 beforeEach(() =>
   runEffect(
@@ -843,4 +845,474 @@ effectTest("interrupting wait stops the waiter and leaves the Run alone", functi
   // it was: no stop marker, and still the status its own Driver last recorded.
   expect(yield* fs.exists(path.join(runDir, "stopped"))).toBe(false);
   expect(parseJson(yield* fs.readFileString(path.join(runDir, "run.json"))).status).toBe("running");
+});
+
+/** A Driver's pending question, written straight into the run directory. */
+const askQuestion = Effect.fn("test.askQuestion")(function* (
+  runDir: string,
+  choice: {
+    id: string;
+    step?: string;
+    header?: string;
+    items?: Array<{ id: string; title: string }>;
+  },
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.writeFileString(
+    path.join(runDir, "choice.json"),
+    stringifyJson({
+      id: choice.id,
+      kind: "menu",
+      run: "r",
+      step: choice.step ?? "work",
+      header: choice.header ?? "Which way?",
+      footer: "",
+      items: choice.items ?? [{ id: "now", title: "Implement now" }],
+    }),
+  );
+});
+
+const startDemo = Effect.fn("test.startDemo")(function* (goal: string) {
+  const path = yield* Path.Path;
+  const started = yield* cli([
+    "--workspace",
+    "w1",
+    "run",
+    "start",
+    "demo",
+    "--input",
+    `goal=${goal}`,
+  ]);
+  const runId: string = started.body.data.runId;
+  return { runId, runDir: path.join(dir, "state", "runs", runId) };
+});
+
+const finishRun = Effect.fn("test.finishRun")(function* (runDir: string, status: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = path.join(runDir, "run.json");
+  const snapshot = parseJson(yield* fs.readFileString(file));
+  snapshot.status = status;
+  snapshot.finished_at = yield* nowIso();
+  snapshot.steps[0].status = status === "done" ? "done" : "failed";
+  yield* fs.writeFileString(file, stringifyJson(snapshot));
+});
+
+/** The attention wait, as every test below asks for it. */
+const waitAttention = (runId: string, timeout: string) =>
+  cli(["--workspace", "w1", "run", "wait", runId, "--until", "attention", "--timeout", timeout]);
+
+effectTest("wait --until attention returns a question that is already pending", function* () {
+  const { runId, runDir } = yield* startDemo("attention-early");
+  yield* askQuestion(runDir, { id: "c-1", header: "Implement or plan?" });
+  const waited = yield* waitAttention(runId, "30 seconds");
+  expect(Number(waited.exit)).toBe(0);
+  expect(waited.body.data.run.status).toBe("waiting");
+  const attention = waited.body.data.attention;
+  expect(attention.category).toBe("question");
+  expect(attention.reason).toBe("choice_pending");
+  expect(attention.step).toBe("work");
+  expect(attention.actions).toContain("answer");
+  expect(attention.choice.id).toBe("c-1");
+  expect(attention.choice.kind).toBe("menu");
+  expect(attention.choice.header).toBe("Implement or plan?");
+  expect(attention.choice.items.map((item: { id: string }) => item.id)).toEqual(["now"]);
+});
+
+effectTest(
+  "wait --until attention reports a terminal outcome without inventing a Choice",
+  function* () {
+    const { runId, runDir } = yield* startDemo("attention-done");
+    yield* finishRun(runDir, "done");
+    const waited = yield* waitAttention(runId, "30 seconds");
+    expect(Number(waited.exit)).toBe(0);
+    expect(waited.body.data.run.status).toBe("succeeded");
+    expect(waited.body.data.attention.category).toBe("completed");
+    expect(waited.body.data.attention.reason).toBe("succeeded");
+    expect(waited.body.data.attention.choice).toBe(null);
+  },
+);
+
+effectTest("wait --until takes only terminal and attention", function* () {
+  const { runId } = yield* startDemo("attention-bogus");
+  const bad = yield* cli(["--workspace", "w1", "run", "wait", runId, "--until", "whenever"]);
+  expect(bad.body.error.code).toBe("invalid_input");
+  expect(Number(bad.exit)).toBe(2);
+});
+
+effectTest("awaiting text with no pending Choice is not something to answer", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { runId, runDir } = yield* startDemo("attention-awaiting");
+  // A Driver owns it, so the only thing that could end the wait is a question.
+  yield* claimLive(runDir);
+  const file = path.join(runDir, "run.json");
+  const snapshot = parseJson(yield* fs.readFileString(file));
+  snapshot.awaiting = "waiting for the agent to finish";
+  yield* fs.writeFileString(file, stringifyJson(snapshot));
+  const waited = yield* waitAttention(runId, "2 seconds");
+  expect(waited.body.error.code).toBe("timeout");
+});
+
+effectTest("wait --until terminal waits through a question, as the default does", function* () {
+  const { runId, runDir } = yield* startDemo("attention-terminal");
+  yield* askQuestion(runDir, { id: "c-2" });
+  const waited = yield* cli([
+    "--workspace",
+    "w1",
+    "run",
+    "wait",
+    runId,
+    "--until",
+    "terminal",
+    "--timeout",
+    "2 seconds",
+  ]);
+  expect(waited.body.error.code).toBe("timeout");
+});
+
+effectTest("wait --until attention --follow ends on an attention event", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const { runId, runDir } = yield* startDemo("attention-follow");
+  // A Driver owns it, so nothing but the question below can end this wait.
+  yield* claimLive(runDir);
+  const process = yield* spawner.spawn(
+    ChildProcess.make(
+      "bun",
+      [
+        path.join(root, "src/main.ts"),
+        "--json",
+        "--workspace",
+        "w1",
+        "run",
+        "wait",
+        runId,
+        "--until",
+        "attention",
+        "--follow",
+      ],
+      { cwd: root, env, extendEnv: true, stdout: "pipe", stderr: "pipe" },
+    ),
+  );
+  const ready = yield* Deferred.make<void>();
+  const reader = yield* Effect.forkScoped(
+    process.stdout.pipe(
+      Stream.decodeText(),
+      Stream.tap(() => Deferred.succeed(ready, undefined)),
+      Stream.runFold(
+        (): string => "",
+        (out, chunk) => out + chunk,
+      ),
+    ),
+  );
+  // The snapshot proves the watch is subscribed, so the question below can only
+  // arrive through a filesystem event.
+  yield* Deferred.await(ready);
+  yield* askQuestion(runDir, { id: "c-3" });
+  const output = yield* Fiber.join(reader);
+  expect(Number(yield* process.exitCode)).toBe(0);
+  const events = output
+    .trim()
+    .split("\n")
+    .map((line: string) => parseJson(line));
+  expect(events[0].type).toBe("snapshot");
+  expect(events.at(-1).type).toBe("attention");
+  expect(events.at(-1).attention.choice.id).toBe("c-3");
+  expect(events.filter((event: { type: string }) => event.type === "terminal")).toHaveLength(0);
+  expect(yield* fs.exists(path.join(runDir, "inbox"))).toBe(false);
+});
+
+effectTest(
+  "an answer for a replaced Choice is refused and leaves the current one alone",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const { runId, runDir } = yield* startDemo("attention-stale");
+    yield* askQuestion(runDir, { id: "c-new" });
+    const stale = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "answer",
+      runId,
+      "now",
+      "--expect-choice",
+      "c-old",
+    ]);
+    expect(stale.body.error.code).toBe("choice_mismatch");
+    expect(stale.body.error.details.choiceId).toBe("c-new");
+    expect(yield* fs.exists(path.join(runDir, "inbox"))).toBe(false);
+
+    const fresh = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "answer",
+      runId,
+      "now",
+      "--expect-choice",
+      "c-new",
+    ]);
+    expect(fresh.body.ok).toBe(true);
+    expect(yield* fs.readDirectory(path.join(runDir, "inbox"))).toHaveLength(1);
+  },
+);
+
+/** A Driver claim in the run directory, for a pid that may or may not still be there. */
+const claimDriver = Effect.fn("test.claimDriver")(function* (
+  runDir: string,
+  pid: number,
+  start: string | null,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.writeFileString(
+    path.join(runDir, "runner.pid"),
+    `${stringifyJson({ pid, start, at: yield* nowIso() })}\n`,
+  );
+});
+
+/** A pid that has certainly gone: claimed by a process spawned only to exit. */
+const claimDead = Effect.fn("test.claimDead")(function* (runDir: string) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const gone = yield* spawner.spawn(ChildProcess.make("true", [], { stdout: "ignore" }));
+  yield* gone.exitCode;
+  yield* claimDriver(runDir, Number(gone.pid), null);
+});
+
+/** This test process as the Run's Driver: a claim that is unambiguously live. */
+const claimLive = Effect.fn("test.claimLive")(function* (runDir: string) {
+  const pid = globalThis.process.pid;
+  yield* claimDriver(runDir, pid, yield* processStartTime(pid));
+});
+
+effectTest("a stopped Run says why it stopped, what is kept, and what is safe", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { runId, runDir } = yield* startDemo("recover-stopped");
+  const file = path.join(runDir, "run.json");
+  const snapshot = parseJson(yield* fs.readFileString(file));
+  snapshot.steps[0].status = "done";
+  yield* fs.writeFileString(file, stringifyJson(snapshot));
+  yield* fs.writeFileString(path.join(runDir, "stopped"), "");
+
+  const waited = yield* waitAttention(runId, "30 seconds");
+  const attention = waited.body.data.attention;
+  expect(waited.body.data.run.status).toBe("stopped");
+  expect(attention.category).toBe("interrupted");
+  expect(attention.reason).toBe("stopped");
+  expect(attention.driver).toBe("none");
+  // Nothing is thrown away by resuming, and the explanation says which Steps those are.
+  expect(attention.preserved).toEqual(["work"]);
+  expect(attention.actions).toContain("resume");
+
+  // `run show` says the same thing from the same facts, and reading it changed nothing.
+  const shown = yield* cli(["--workspace", "w1", "run", "show", runId]);
+  expect(shown.body.data.attention).toEqual(attention);
+  expect(yield* fs.exists(path.join(runDir, "stopped"))).toBe(true);
+  expect(parseJson(yield* fs.readFileString(file)).status).toBe("running");
+});
+
+effectTest("an exhausted review loop is named as one rather than a bare failure", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { runId, runDir } = yield* startDemo("recover-exhausted");
+  const file = path.join(runDir, "run.json");
+  const snapshot = parseJson(yield* fs.readFileString(file));
+  snapshot.status = "blocked";
+  snapshot.iteration = snapshot.max_iterations;
+  snapshot.outstanding = [{ severity: "major", title: "no story for the CLI", note: "" }];
+  yield* fs.writeFileString(file, stringifyJson(snapshot));
+
+  const waited = yield* waitAttention(runId, "30 seconds");
+  // The lifecycle status is untouched: `blocked` is still reported as `failed`.
+  expect(waited.body.data.run.status).toBe("failed");
+  expect(waited.body.data.attention.category).toBe("interrupted");
+  expect(waited.body.data.attention.reason).toBe("review_exhausted");
+  expect(waited.body.data.attention.explanation).toContain("1 finding");
+});
+
+effectTest(
+  "a Step that stopped for the human is named, and a bare failure is not guessed at",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const { runId, runDir } = yield* startDemo("recover-blocked");
+    const file = path.join(runDir, "run.json");
+    const blocked = parseJson(yield* fs.readFileString(file));
+    blocked.status = "blocked";
+    blocked.steps[0].status = "blocked";
+    blocked.steps[0].note = "the agent needs a decision";
+    yield* fs.writeFileString(file, stringifyJson(blocked));
+
+    const named = yield* waitAttention(runId, "30 seconds");
+    expect(named.body.data.attention.reason).toBe("step_blocked");
+    expect(named.body.data.attention.step).toBe("work");
+    expect(named.body.data.attention.explanation).toContain("the agent needs a decision");
+
+    // Nothing recorded says why, so nothing is invented.
+    const bare = parseJson(yield* fs.readFileString(file));
+    bare.steps[0].status = "failed";
+    bare.steps[0].note = null;
+    bare.status = "failed";
+    yield* fs.writeFileString(file, stringifyJson(bare));
+    const guessed = yield* waitAttention(runId, "30 seconds");
+    expect(guessed.body.data.attention.reason).toBe("failed");
+    expect(guessed.body.data.attention.category).toBe("interrupted");
+  },
+);
+
+effectTest(
+  "a Driver that dies without writing anything still ends an attention wait",
+  function* () {
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const { runId, runDir } = yield* startDemo("recover-lost");
+
+    // A real, live process claims the Run, so the wait starts with a Driver in place and
+    // nothing to report. Killing it writes nothing into the run directory: the watch
+    // alone would wait for ever, which is the whole reason for the bounded health check.
+    const driver = yield* spawner.spawn(
+      ChildProcess.make("sleep", ["120"], { stdout: "ignore", stderr: "ignore" }),
+    );
+    const pid = Number(driver.pid);
+    yield* claimDriver(runDir, pid, yield* processStartTime(pid));
+
+    const waiting = yield* spawner.spawn(
+      ChildProcess.make(
+        "bun",
+        [
+          path.join(root, "src/main.ts"),
+          "--json",
+          "--workspace",
+          "w1",
+          "run",
+          "wait",
+          runId,
+          "--until",
+          "attention",
+          "--timeout",
+          "60 seconds",
+        ],
+        { cwd: root, env, extendEnv: true, stdout: "pipe", stderr: "pipe" },
+      ),
+    );
+    yield* Effect.sleep("1500 millis");
+    yield* driver.kill({ killSignal: "SIGKILL" });
+    yield* Effect.ignore(driver.exitCode);
+
+    const output = yield* waiting.stdout.pipe(
+      Stream.decodeText(),
+      Stream.runFold(
+        (): string => "",
+        (out, chunk) => out + chunk,
+      ),
+    );
+    expect(Number(yield* waiting.exitCode)).toBe(0);
+    const body = parseJson(output.trim());
+    expect(body.data.attention.category).toBe("interrupted");
+    expect(body.data.attention.reason).toBe("driver_lost");
+    expect(body.data.attention.driver).toBe("none");
+    expect(body.data.attention.actions).toContain("resume");
+  },
+  90_000,
+);
+
+effectTest("a Run a live Driver still owns is not offered a resume", function* () {
+  const { runId, runDir } = yield* startDemo("recover-live");
+  yield* claimLive(runDir);
+
+  const shown = yield* cli(["--workspace", "w1", "run", "show", runId]);
+  expect(shown.body.data.attention.driver).toBe("live");
+  expect(shown.body.data.attention.actions).not.toContain("resume");
+  expect(shown.body.data.attention.actions).toContain("stop");
+
+  // And the mutation refuses too, so advice that has gone stale cannot start a second
+  // Driver for the same Run.
+  const resumed = yield* cli(["--workspace", "w1", "run", "resume", runId]);
+  expect(resumed.body.error.code).toBe("run_already_active");
+});
+
+effectTest("a Run whose Driver has not claimed it yet is not reported as lost", function* () {
+  // `run start` returns as soon as it has spawned a Driver; the claim lands a process
+  // start later. Calling that gap a lost Driver would make the ordinary
+  // start-then-wait sequence report every new Run as broken.
+  const { runId } = yield* startDemo("attention-unclaimed");
+  const waited = yield* waitAttention(runId, "3 seconds");
+  expect(waited.body.error.code).toBe("timeout");
+});
+
+effectTest(
+  "a question left behind by a dead Driver is recovery, not something to answer",
+  function* () {
+    // The Driver clears a stale `choice.json` as it starts, for the same reason: the
+    // question belonged to a process that is gone, and an answer to it has nobody to
+    // consume it. Offering `answer` here is how a Run stays stuck.
+    const { runId, runDir } = yield* startDemo("attention-stale-choice");
+    yield* claimDead(runDir);
+    yield* askQuestion(runDir, { id: "c-stale" });
+
+    const waited = yield* waitAttention(runId, "30 seconds");
+    expect(waited.body.data.attention.category).toBe("interrupted");
+    expect(waited.body.data.attention.reason).toBe("driver_lost");
+    expect(waited.body.data.attention.choice).toBe(null);
+    expect(waited.body.data.attention.actions).toContain("resume");
+    expect(waited.body.data.attention.actions).not.toContain("answer");
+  },
+);
+
+effectTest(
+  "a Run whose Driver is still starting after a resume is not reported as lost",
+  function* () {
+    // `run resume` returns as soon as it has spawned a Driver, and the previous Driver's
+    // dead claim is still on disk until the new one takes it. Reading that gap as a lost
+    // Driver would offer a second resume while the first is still starting.
+    const { runId, runDir } = yield* startDemo("attention-resuming");
+    yield* claimDead(runDir);
+
+    const lost = yield* waitAttention(runId, "30 seconds");
+    expect(lost.body.data.attention.reason).toBe("driver_lost");
+
+    yield* writeResumeCommand(runDir);
+    const starting = yield* waitAttention(runId, "2 seconds");
+    expect(starting.body.error.code).toBe("timeout");
+  },
+);
+
+/** The inbox record `run resume` leaves for the Driver it has just spawned. */
+const writeResumeCommand = Effect.fn("test.writeResumeCommand")(function* (runDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const inbox = path.join(runDir, "inbox");
+  yield* fs.makeDirectory(inbox, { recursive: true });
+  yield* fs.writeFileString(
+    path.join(inbox, "req-resume.json"),
+    `${stringifyJson({ type: "resume", requestId: "req-resume" })}\n`,
+  );
+});
+
+effectTest("stopping a Run does not turn its orphaned question back into one", function* () {
+  // `run stop` writes the marker and leaves `choice.json` alone, so a settled Run can
+  // still have a question on disk. Nothing can consume an answer to it either way.
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const { runId, runDir } = yield* startDemo("attention-stopped-choice");
+  yield* claimDead(runDir);
+  yield* askQuestion(runDir, { id: "c-orphan" });
+  yield* fs.writeFileString(path.join(runDir, "stopped"), "");
+
+  const waited = yield* waitAttention(runId, "30 seconds");
+  expect(waited.body.data.attention.category).toBe("interrupted");
+  expect(waited.body.data.attention.reason).toBe("stopped");
+  expect(waited.body.data.attention.choice).toBe(null);
+  expect(waited.body.data.attention.actions).not.toContain("answer");
+  // And the envelope says it once: `run.choice` carrying the question while
+  // `attention.choice` is null would tell an agent both that there is one and that
+  // there is not.
+  expect(waited.body.data.run.choice).toBe(null);
+  const shown = yield* cli(["--workspace", "w1", "run", "show", runId]);
+  expect(shown.body.data.run.choice).toBe(null);
 });

@@ -7,9 +7,11 @@ import { createMemo, createSignal, createEffect, untrack, For, Show } from "soli
 import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
 import { onBlur, onFocus, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
-  actionsFor,
+  footerActions,
   ALL_KEYS,
   clampSelection,
+  nextQuestionId,
+  runsRows,
   detailFor,
   emptyStateOf,
   footerKeys,
@@ -120,9 +122,27 @@ export function App(props: AppProps) {
   // then be acted on, so Enter stops typing and keeps the text; only Esc drops it.
   const [filter, setFilter] = createSignal("");
   const [typing, setTyping] = createSignal(false);
-  const [asking, setAsking] = createSignal<Asking>({ index: 0, typed: "" });
+  /**
+   * Unsent answers, per Run and Choice. One shared `asking` used to follow the cursor:
+   * moving to a second waiting Run showed the text typed at the first, and answering
+   * either sent whatever was on screen. Keyed by the Choice's own id, so a question
+   * replaced under the human gets a blank field rather than the old question's draft.
+   * For this board's lifetime only — an unsent answer is not a Run's business.
+   */
+  const [drafts, setDrafts] = createSignal<Record<string, Asking>>({});
   const [editingKey, setEditing] = createSignal<{ key: string; value: string } | null>(null);
   const [helping, setHelping] = createSignal(false);
+  /** What this board itself has to say, over whatever the last command said. */
+  const [ownNote, setOwnNote] = createSignal<string | null>(null);
+  /**
+   * Everything this board sends out goes through here, so that what the board itself
+   * last said cannot outlive it: "no unanswered question" must not sit over the result
+   * of the next refresh, answer, view change or Selection.
+   */
+  const tell = (command: Command) => {
+    setOwnNote(null);
+    props.dispatch(command);
+  };
   const [panel, setPanel] = createSignal<ScrollBoxRenderable>();
 
   /**
@@ -138,6 +158,8 @@ export function App(props: AppProps) {
   });
 
   const all = createMemo(() => viewRows(props.state()));
+  /** The board's rows, whatever View is showing: what `n` reaches a question through. */
+  const board = createMemo(() => runsRows(props.state()));
   // `matching`, not a plain filter: the rows are nested by the time they get here, so a
   // run whose agent matched has to come with it and the board's order has to survive.
   const rows = createMemo(() => matching(all(), filter()));
@@ -161,7 +183,7 @@ export function App(props: AppProps) {
     const id = selected();
     if (id === told) return;
     told = id;
-    props.dispatch({ _tag: "Select", id });
+    tell({ _tag: "Select", id });
   });
 
   const current = (): Row | null => selectable().find((r) => r.id === selected()) ?? null;
@@ -196,6 +218,19 @@ export function App(props: AppProps) {
   // The question belongs to the selected run, so a second waiting run is answerable
   // by selecting it — the board used to answer only the first one asking.
   const question = () => current()?.choice ?? null;
+  const draftKey = () => {
+    const asked = question();
+    const runId = current()?.runId;
+    return asked && runId ? `${runId}\u0000${asked.id}` : null;
+  };
+  const asking = (): Asking => {
+    const key = draftKey();
+    return (key === null ? null : drafts()[key]) ?? { index: 0, typed: "" };
+  };
+  const setAsking = (next: Asking) => {
+    const key = draftKey();
+    if (key !== null) setDrafts((was) => ({ ...was, [key]: next }));
+  };
   /** The merge request URL on screen, which is the only thing `c` can copy. */
   const mrUrl = () => {
     const mr = detail()?.mr;
@@ -210,17 +245,48 @@ export function App(props: AppProps) {
   };
 
   const answer = (value: string) => {
-    const row = current();
-    if (row?.runId) props.dispatch({ _tag: "Answer", runId: row.runId, value });
-    setAsking({ index: 0, typed: "" });
+    const key = draftKey();
+    const asked = question();
+    const runId = current()?.runId;
+    // The same three facts the draft key is made of, so there is one condition rather
+    // than two spellings of it.
+    if (key === null || !asked || !runId) return;
+    tell({ _tag: "Answer", runId, choiceId: asked.id, value });
+    // The draft dies with the Choice it was for, and only that one: a Run answered
+    // here must not clear what is half-typed against another Run's question.
+    setDrafts((was) => {
+      const { [key]: _sent, ...rest } = was;
+      return rest;
+    });
+  };
+
+  /**
+   * The next unanswered question, selected where it is. Over every row of this Scope
+   * rather than what the filter left — a hidden question is still unanswered — so the
+   * filter is dropped when it is what stands between the human and the row.
+   *
+   * Over the board's rows rather than the showing View's, and it switches to the Runs
+   * View to get there: "no unanswered question" from Settings while a Run is asking is
+   * false, and a key that answers by naming the View the human should have been on
+   * instead is a key that could have taken them there. The Selection is set after the
+   * View is asked for, which is the order the clamp allows — it only re-decides when the
+   * rows change, and by then the row this names is among them.
+   */
+  const goToQuestion = () => {
+    const target = nextQuestionId(board(), selected());
+    if (target === null) return setOwnNote("no unanswered question");
+    setOwnNote(null);
+    if (props.state().view !== "runs") tell({ _tag: "ShowView", view: "runs" });
+    if (!selectable().some((row) => row.id === target)) {
+      setFilter("");
+      setTyping(false);
+    }
+    setSelected(target);
   };
 
   const showView = (by: number) => {
     const at = VIEWS.findIndex((v) => v.name === props.state().view);
-    props.dispatch({
-      _tag: "ShowView",
-      view: VIEWS[(at + by + VIEWS.length) % VIEWS.length]!.name,
-    });
+    tell({ _tag: "ShowView", view: VIEWS[(at + by + VIEWS.length) % VIEWS.length]!.name });
   };
 
   const flow = () => props.pending?.() ?? null;
@@ -232,12 +298,13 @@ export function App(props: AppProps) {
    * things: they used to, and the click unset the default it offered to set.
    */
   const act = (command: Command) => {
+    if (command._tag === "NextQuestion") return goToQuestion();
     if (command._tag === "EditSetting") {
       const row = rows().find((r) => r.setting?.key === command.key);
       if (row?.setting) setEditing({ key: row.setting.key, value: row.setting.value });
       return;
     }
-    props.dispatch(command);
+    tell(command);
   };
 
   /**
@@ -258,7 +325,8 @@ export function App(props: AppProps) {
   usePasteInto((append) => {
     const at = keyboard();
     if (at._tag === "Choice" && at.choice.kind === "ask") {
-      return setAsking((was) => ({ ...was, typed: append(was.typed) }));
+      const was = asking();
+      return setAsking({ ...was, typed: append(was.typed) });
     }
     if (at._tag === "Filter") return setFilter(append);
     if (at._tag === "Setting") setEditing({ ...at.setting, value: append(at.setting.value) });
@@ -304,6 +372,8 @@ export function App(props: AppProps) {
       case "Submitted":
         act(intent.command);
         return setEditing(null);
+      case "NextQuestion":
+        return goToQuestion();
       case "Move":
         return move(intent.by);
       case "ShowViewBy":
@@ -387,8 +457,9 @@ export function App(props: AppProps) {
           on={keyboard()}
           scope={props.state().scope}
           panel={panelKeys()}
-          note={props.state().note}
+          note={ownNote() ?? props.state().note}
           needsYou={needsYouStatus(rows(), selected())}
+          questions={board().some((row) => row.choice)}
           filter={filter()}
           matched={filter() === "" ? null : rows().length}
         />
@@ -622,7 +693,7 @@ function Question(props: {
 }) {
   const dimensions = useTerminalDimensions();
   const send = (value: string) =>
-    props.dispatch({ _tag: "Answer", runId: props.choice.run, value });
+    props.dispatch({ _tag: "Answer", runId: props.choice.run, choiceId: props.choice.id, value });
   const options = () => (props.choice.kind === "menu" ? props.choice.items : []);
   /**
    * The lines it has for options. It covers the bottom of the list rather than taking
@@ -699,29 +770,23 @@ function Footer(props: {
   matched: number | null;
   /** Which scope is showing, so `g` can offer the other one by name. */
   scope: Scope;
+  /** Whether anything on this board is asking, which is what `n` can act on. */
+  questions: boolean;
 }) {
   /** The value being edited, where a Settings row is the one taking the keys. */
   const editing = () => (props.on._tag === "Setting" ? props.on.setting : null);
-  /**
-   * What a field that has taken the keys says they do, and null while the board still
-   * has them. It answers both questions this footer asks — which keys to print, and
-   * whether the Selection's own are among them — because they have one answer.
-   */
-  const taken = () => {
-    if (props.on._tag === "Choice")
-      return "\u2191\u2193 move \u00b7 Enter choose \u00b7 Esc leave the run open";
-    if (props.on._tag === "Setting") return "type a value \u00b7 Enter set it \u00b7 Esc leave it";
-    // The filter has the keys too, so the board's own are as much a lie here as the
-    // Selection's buttons were: `k` typed a `k` while `[k stop]` stopped the run.
-    if (props.on._tag === "Filter") return "type to narrow \u00b7 Enter keep it \u00b7 Esc drop it";
-    return null;
-  };
   /**
    * The Selection's own keys, as buttons. This is the one place a row's actions are
    * offered: they used to be drawn under the row itself, which made selecting a row
    * push every row below it down a line. Clicking one still does what the key does.
    */
-  const own = () => (taken() ? [] : actionsFor(props.row, props.scope));
+  const own = () =>
+    footerActions({
+      row: props.row,
+      scope: props.scope,
+      questions: props.questions,
+      on: props.on,
+    });
   // The keys the footer offers are the ones the Selection can actually be asked for,
   // plus the globals; a key with nothing to act on is a lie, and the rest of them
   // live behind `?`.

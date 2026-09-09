@@ -5,6 +5,8 @@
 // the tab slow the day it became useful.
 
 import { Clock, Effect, FileSystem, Path, Stream } from "effect";
+import { attentionFor, type Attention } from "./attention";
+import type { AsksAgents } from "./herdr";
 import { loadDefaults, readConfig } from "./config";
 import {
   isStale,
@@ -396,6 +398,12 @@ export interface RunDetail {
   outputs: OutputPanel[];
   /** The end of the run's log while the panel's tail is toggled on; `null` while it is off. */
   tail: Panel | null;
+  /**
+   * Why the Run is where it is, and what is safe to do about it — the same value the
+   * CLI's `run show` and attention wait return. One classification, so the board and an
+   * agent driving the CLI cannot tell a human two different stories about one Run.
+   */
+  attention: Attention;
   /** When this Run finished, so the merge-request panel can say what moved since. */
   finishedAt: number;
   /** Filled by the bridge for a Run whose target is a merge request; never here. */
@@ -413,6 +421,8 @@ export interface RunDetail {
 export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts: {
   stateDir: string;
   runId: string;
+  /** Asked whether the agents a stopped Run still records are actually there. */
+  agents: AsksAgents;
   mr: MrPanel | null;
   /** Whether the panel's log tail is showing; the log is only read while it is. */
   tail?: boolean;
@@ -487,6 +497,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     review,
     plan: yield* plannedFor(run, cap, opts.plans),
     outputs,
+    attention: yield* attentionFor(run, opts.agents),
     tail: opts.tail
       ? ((yield* tailed(path.join(run.dir, RUNNER_LOG), TAIL_CAP)) ??
         ({ _tag: "None", reason: `this run wrote no ${RUNNER_LOG}` } satisfies Panel))
@@ -541,6 +552,7 @@ const DEFAULT_KEYS = [
   "trust",
   "permissions",
   "scope",
+  "questions",
   "max_iterations",
   "handoff_timeout_ms",
   "quiet_ms",
@@ -576,6 +588,7 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
       { key: "trust", value: defaults.trust },
       { key: "permissions", value: defaults.permissions },
       { key: "scope", value: defaults.scope },
+      { key: "questions", value: defaults.questions },
       { key: "max_iterations", value: String(defaults.maxIterations) },
       { key: "handoff_timeout_ms", value: String(defaults.handoffTimeoutMs) },
       { key: "quiet_ms", value: String(defaults.quietMs) },

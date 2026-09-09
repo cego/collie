@@ -3,6 +3,7 @@
 // what it finds, so deleting the tab loses nothing and the next Run recreates it.
 
 import { Clock, Effect, FileSystem, Option, Path } from "effect";
+import { choiceAnswerable } from "./attention";
 import { behindRemote } from "./doctor";
 import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
 import { COLLIE_TAB, displayName, GLYPH, runLabel, stepNow } from "./naming";
@@ -528,7 +529,12 @@ export const buildView = Effect.fn("buildView")(function* (
 
   const active: RunRow[] = [];
   for (const r of runs.filter((r) => r.record.status === "running" && !abandoned.has(r.id))) {
-    const choice = yield* readChoice(r.dir);
+    // A Choice whose Driver has gone is not shown as answerable: recovery already
+    // classifies it as stale, and a board that still offered it would take an answer,
+    // report it sent, and have the next Driver discard it. Only asked where there is
+    // a Choice at all, so an ordinary refresh costs no ownership probe.
+    const pending = yield* readChoice(r.dir);
+    const choice = pending && (yield* choiceAnswerable(r)) ? pending : null;
     active.push({
       id: r.id,
       dir: r.dir,

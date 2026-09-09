@@ -419,7 +419,9 @@ test("a second waiting run is selectable and answerable", () =>
 
       // Clicking an option answers that run with that option.
       yield* app.click(6, app.lineOf("Stop here"));
-      expect(app.acted()).toEqual([{ _tag: "Answer", runId: "r2", value: "Stop here" }]);
+      expect(app.acted()).toEqual([
+        { _tag: "Answer", runId: "r2", choiceId: "c-r2", value: "Stop here" },
+      ]);
     }),
   ));
 
@@ -602,7 +604,9 @@ test("a question is answered from the keyboard too", () =>
       app.mockInput.pressEnter();
       yield* app.flush;
 
-      expect(app.acted()).toEqual([{ _tag: "Answer", runId: "r1", value: "Stop here" }]);
+      expect(app.acted()).toEqual([
+        { _tag: "Answer", runId: "r1", choiceId: "c-r1", value: "Stop here" },
+      ]);
     }),
   ));
 
@@ -697,6 +701,18 @@ function runDetail(over: Partial<RunDetail> = {}): RunDetail {
     plan: null,
     outputs: [],
     tail: null,
+    attention: {
+      category: "completed",
+      reason: "succeeded",
+      explanation: "r2 succeeded.",
+      step: "review",
+      actions: ["show", "output"],
+      choice: null,
+      driver: "none",
+      preserved: ["review"],
+      agents: [],
+      agentsAlive: "absent" as const,
+    },
     finishedAt: NOW - 3_600_000,
     mr: null,
     ...over,
@@ -1271,7 +1287,12 @@ test("a run in another workspace is answered from the wide board", () =>
       expect(app.frame()).toContain("What next?");
       app.mockInput.pressEnter();
       yield* app.flush;
-      expect(app.acted().at(-1)).toEqual({ _tag: "Answer", runId: "r2", value: "Implement now" });
+      expect(app.acted().at(-1)).toEqual({
+        _tag: "Answer",
+        runId: "r2",
+        choiceId: "c-r2",
+        value: "Implement now",
+      });
     }),
   ));
 
@@ -1497,7 +1518,9 @@ test("a paste reaches whichever field owns the keyboard, and never submits it", 
       expect(asking.acted()).toEqual([]);
       asking.mockInput.pressEnter();
       yield* asking.flush;
-      expect(asking.acted()).toEqual([{ _tag: "Answer", runId: "r1", value: url }]);
+      expect(asking.acted()).toEqual([
+        { _tag: "Answer", runId: "r1", choiceId: "c-r1", value: url },
+      ]);
     }),
   ));
 
@@ -1764,5 +1787,259 @@ test("the help overlay lists every key in a pane the size of a real one", () =>
       yield* narrow.flush;
       const tight = narrow.frame();
       for (const entry of ALL_KEYS) expect(tight).toContain(` ${entry.key} `);
+    }),
+  ));
+
+test("n selects the next unanswered question, wrapping, and says when there are none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · one", { choice: choice("r1", "Fix or stop?") }),
+              run("r2", "Review · two"),
+              run("r3", "Plan · three", { choice: choice("r3", "Post it?") }),
+            ],
+          }),
+        }),
+      );
+
+      // The first question is already selected, so `n` goes to the other one.
+      expect(app.frame()).toContain("Fix or stop?");
+      app.mockInput.pressKey("n");
+      yield* app.flush;
+      expect(app.frame()).toContain("Post it?");
+      expect(app.frame()).not.toContain("Fix or stop?");
+
+      // And wraps back rather than stopping at the last one.
+      app.mockInput.pressKey("n");
+      yield* app.flush;
+      expect(app.frame()).toContain("Fix or stop?");
+
+      // With nothing to go to, the Selection stays where it is and the footer says so
+      // rather than leaving the human wondering whether the key did anything.
+      const quiet = yield* mount(
+        appState({ board: board({ active: [run("r1", "Implement · one")] }) }),
+      );
+      quiet.mockInput.pressKey("n");
+      yield* quiet.flush;
+      expect(quiet.said()).toContain("no unanswered question");
+
+      // And it is the board's own note, not a permanent one: the next command's result
+      // has to be readable rather than sitting behind what `n` last said.
+      quiet.mockInput.pressKey("l");
+      yield* quiet.flush;
+      expect(quiet.said()).not.toContain("no unanswered question");
+    }),
+  ));
+
+test("n reaches a question from a view that is not the board", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // "no unanswered question" from Settings, while a Run is asking, is false. A key
+      // that knows where the question is can go there rather than deny it exists.
+      const asking = board({
+        active: [run("r2", "Review · two", { choice: choice("r2", "Post it?") })],
+      });
+      const app = yield* mount(appState({ view: "settings", board: asking, settings: SETTINGS }));
+
+      app.mockInput.pressKey("n");
+      yield* app.flush;
+      expect(app.acted()).toContainEqual({ _tag: "ShowView", view: "runs" });
+      expect(app.said()).not.toContain("no unanswered question");
+
+      // And once the View it asked for arrives, the question is the Selection.
+      yield* app.setState(appState({ view: "runs", board: asking, settings: SETTINGS }));
+      expect(app.frame()).toContain("Post it?");
+    }),
+  ));
+
+test("n reaches a question the filter is hiding, and clears the filter to show it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · one"),
+              run("r2", "Review · two", { choice: choice("r2", "Post it?") }),
+            ],
+          }),
+        }),
+      );
+
+      // The button is there while the board's keys are the board's.
+      yield* app.flush;
+      expect(app.frame()).toContain("next question");
+
+      app.mockInput.pressKey("/");
+      yield* app.flush;
+      // And gone while the filter is taking characters: `n` types one there, so a
+      // button labelled with `n` would be telling the human the wrong thing.
+      expect(app.frame()).not.toContain("next question");
+
+      for (const character of "Implement") app.mockInput.pressKey(character);
+      app.mockInput.pressEnter();
+      yield* app.flush;
+      expect(app.frame()).not.toContain("Review · two");
+
+      app.mockInput.pressKey("n");
+      yield* app.flush;
+
+      // Visibly cleared: the row is back on the list, its question is on screen, and
+      // the footer no longer says a filter is narrowing anything.
+      expect(app.frame()).toContain("Review · two");
+      expect(app.frame()).toContain("Post it?");
+      expect(app.said()).not.toContain("/Implement");
+    }),
+  ));
+
+test("n on a wide board selects another workspace's question where it is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ scope: "all", wide: wideView() }), WIDE_PANE);
+
+      app.mockInput.pressKey("n");
+      yield* app.flush;
+
+      // Selected on the board itself: no agent pane is focused to get to it.
+      expect(app.frame()).toContain("What next?");
+      expect(app.acted().filter((c) => c._tag === "FocusAgent")).toEqual([]);
+    }),
+  ));
+
+test("the next-question button does what the key does, and help names it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · one", { choice: choice("r1", "Fix or stop?") }),
+              run("r2", "Review · two", { choice: choice("r2", "Post it?") }),
+            ],
+          }),
+        }),
+      );
+
+      const line = app
+        .frame()
+        .split("\n")
+        .findIndex((l) => l.includes("next question"));
+      expect(line).toBeGreaterThan(0);
+      const column = app.frame().split("\n")[line]!.indexOf("next question");
+      yield* app.click(column, line);
+
+      expect(app.frame()).toContain("Post it?");
+      expect(ALL_KEYS.map((entry) => entry.key)).toContain("n");
+    }),
+  ));
+
+test("a half-typed answer follows its own question, and dies with it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const ask = (runId: string, id: string) => ({
+        ...choice(runId, "Which merge request?"),
+        id,
+        kind: "ask" as const,
+        items: [],
+      });
+      const asking = (first: string) =>
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · one", { choice: ask("r1", first) }),
+              run("r2", "Review · two", { choice: ask("r2", "c-r2") }),
+            ],
+          }),
+        });
+      const app = yield* mount(asking("c-r1"));
+
+      for (const character of "abc") app.mockInput.pressKey(character);
+      yield* app.flush;
+      expect(app.frame()).toContain("> abc");
+
+      // Move to the other question, type there, and each keeps its own text.
+      app.mockInput.pressKey("\t");
+      yield* app.flush;
+      yield* app.click(4, app.lineOf("Review · two"));
+      for (const character of "xy") app.mockInput.pressKey(character);
+      yield* app.flush;
+      expect(app.frame()).toContain("> xy");
+      yield* app.click(4, app.lineOf("Implement · one"));
+      expect(app.frame()).toContain("> abc");
+
+      // A replaced question is a different question: the draft written for the old one
+      // never reaches it.
+      yield* app.setState(asking("c-r1-again"));
+      expect(app.frame()).not.toContain("> abc");
+    }),
+  ));
+
+test("a question arriving elsewhere leaves the Selection and the draft alone", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const asking = (extra: boolean) =>
+        appState({
+          board: board({
+            active: [
+              run("r1", "Implement · one", {
+                choice: { ...choice("r1", "Which merge request?"), kind: "ask", items: [] },
+              }),
+              ...(extra ? [run("r9", "Plan · late", { choice: choice("r9", "Late one?") })] : []),
+            ],
+          }),
+        });
+      const app = yield* mount(asking(false));
+
+      for (const character of "half") app.mockInput.pressKey(character);
+      yield* app.flush;
+
+      yield* app.setState(asking(true));
+
+      // Still on the run being answered, with what was typed into it.
+      expect(app.frame()).toContain("Which merge request?");
+      expect(app.frame()).toContain("> half");
+    }),
+  ));
+
+test("the detail panel says why a Run stopped and which actions are safe", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(
+        appState({
+          board: board({
+            recent: [run("r0", "Implement · one", { glyph: "✗", detail: "failed" })],
+          }),
+          detail: runDetail({
+            id: "r0",
+            title: "Implement · one",
+            status: "blocked",
+            attention: {
+              category: "interrupted",
+              reason: "review_exhausted",
+              explanation: "r0 used all 5 review iterations with 2 finding(s) still open.",
+              step: "review",
+              actions: ["show", "logs", "resume"],
+              choice: null,
+              driver: "none",
+              preserved: ["plan"],
+              agents: [],
+              agentsAlive: "absent" as const,
+            },
+          }),
+        }),
+        100,
+        30,
+      );
+
+      // The panel is a narrow column, so the sentence wraps; what matters is that it
+      // says why, what a resume keeps, and what is safe — in the CLI's own words.
+      const said = app.said();
+      expect(said).toContain("Stopped");
+      expect(said).toContain("used all 5 review");
+      expect(said).toContain("kept: plan");
+      expect(said).toContain("safe now: show, logs,");
     }),
   ));

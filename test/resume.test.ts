@@ -6,6 +6,10 @@ import { FakeBin } from "./support/bin";
 import { installBaseline, plannedRun } from "./support/engine";
 import { testDefaults } from "./support/compaction";
 import { layers, loadDefinitions, resolveWorkflow } from "../src/definitions";
+import { attentionFor } from "../src/attention";
+import { driverOwnership, ownershipFrom, RUNNER_PID } from "../src/driver";
+import { Herdr } from "../src/herdr";
+import { resumeRun } from "../src/operations";
 import { RunStore, type Run } from "../src/run";
 import { runEffect } from "./support/effect";
 
@@ -325,3 +329,76 @@ test(
     ),
   20_000,
 );
+
+test("ownership is live, conclusively absent, or honestly unknown", () => {
+  const claim = { pid: 42, start: "900", at: "2026-09-08T09:00:00.000Z" };
+
+  // Nothing claims it, or the pid is gone: nobody is driving, and a resume is safe.
+  expect(ownershipFrom(null, false, null)).toBe("none");
+  expect(ownershipFrom(claim, false, null)).toBe("none");
+  // The pid answers and its identity matches, or there is no identity to check.
+  expect(ownershipFrom(claim, true, "900")).toBe("live");
+  expect(ownershipFrom({ ...claim, start: null }, true, null)).toBe("live");
+  // The number was reused by something else: that is not this Driver.
+  expect(ownershipFrom(claim, true, "1200")).toBe("none");
+  // The pid answers but its identity cannot be read. Saying "gone" here is how a
+  // second Driver gets started for a Run that already has one.
+  expect(ownershipFrom(claim, true, null)).toBe("unknown");
+});
+
+test("a claim file that cannot be read is unknown, never an unclaimed Run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* fs.makeTempDirectory({ prefix: "collie-own-" });
+
+      // No claim at all is the only conclusive absence.
+      expect(yield* driverOwnership(dir)).toBe("none");
+
+      // A truncated or corrupt claim decodes to nothing, which is not the same fact:
+      // the Driver that wrote it may still own the Run, so no resume is offered.
+      yield* fs.writeFileString(path.join(dir, RUNNER_PID), '{"pid":');
+      expect(yield* driverOwnership(dir)).toBe("unknown");
+    }),
+  ));
+
+test("a resume is not offered while an agent the Run recorded is still there", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const run = yield* interruptedRun();
+      // The record still calls this one running, which on its own says nothing: only
+      // herdr knows whether it is there.
+      run.step("build").variants[0]!.status = "running";
+      run.record.status = "running";
+      yield* run.save();
+      // A claim that is there and dead: the Driver is conclusively gone, which is the
+      // only case where a resume would be offered at all.
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fs.writeFileString(
+        path.join(run.dir, RUNNER_PID),
+        `{"pid":2147483646,"start":null,"at":"2026-09-08T09:00:00.000Z"}\n`,
+      );
+      yield* rig.addAgent("dead-build-agent", "9-9");
+      Bun.env.FAKE_HERDR_AGENT_STATUS = "working";
+
+      const working = yield* attentionFor(run, new Herdr(env));
+      expect(working.agentsAlive).toBe("live");
+      expect(working.actions).not.toContain("resume");
+      // What the explanation tells the operator to do has to be in the list they read.
+      expect(working.explanation).toContain("stop that before resuming");
+      expect(working.actions).toContain("stop");
+      // And the mutation refuses too, so advice that has gone stale cannot restart a
+      // Step under an agent that is writing in the same worktree.
+      const refused = yield* resumeRun(env, run, "req-live");
+      expect(refused.ok).toBe(false);
+
+      // Once herdr no longer has it, nothing is competing and a resume is safe again.
+      rig.dropAgent("dead-build-agent");
+      const gone = yield* attentionFor(run, new Herdr(env));
+      expect(gone.agentsAlive).toBe("absent");
+      expect(gone.actions).toContain("resume");
+    }),
+  ));

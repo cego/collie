@@ -194,8 +194,22 @@ function Markdown(props: { text: string }) {
 function RunFacts(props: { detail: RunDetail }) {
   const review = () => props.detail.review;
   const tail = () => props.detail.tail;
+  const stopped = () =>
+    props.detail.attention.category === "interrupted" ? props.detail.attention : null;
   return (
     <box style={{ flexDirection: "column" }}>
+      {/* Above the review, because a Run that stopped is a question about what to do
+          next and the review is what you read once you have decided. The same facts
+          `collie run show` prints, so the two cannot tell different stories. */}
+      <Show when={stopped() !== null}>
+        <text fg={BAD}>{"Stopped"}</text>
+        <text fg={DIM}>{`  ${stopped()!.explanation}`}</text>
+        <Show when={stopped()!.preserved.length > 0}>
+          <text fg={DIM}>{`  kept: ${stopped()!.preserved.join(", ")}`}</text>
+        </Show>
+        <text fg={DIM}>{`  safe now: ${stopped()!.actions.join(", ")}`}</text>
+      </Show>
+
       {/* First, because it is what the panel exists for: a finished review readable
           without splitting a pane and running `less`. */}
       <text fg={ACCENT}>{"Review"}</text>

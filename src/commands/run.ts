@@ -1,6 +1,18 @@
-import { Cause, Duration, Effect, FileSystem, Option, Path, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
+import { attentionFor, type Attention } from "../attention";
 import { RUNNER_LOG, readProgress } from "../driver";
 import { Herdr } from "../herdr";
 import {
@@ -206,11 +218,21 @@ const runShow = Command.make(
           const resolved = yield* resolveCommandRun(global, runId);
           if (resolved._tag === "RunFailure") return resolved.result;
           const run = resolved.run;
-          const head = `${run.id}\t${yield* runStatus(run)}\t${run.record.workflow}`;
+          // The snapshot carries the status, so it is not worked out a second time here.
+          const snapshot = yield* runData(run);
+          const head = `${run.id}\t${snapshot.status}\t${run.record.workflow}`;
+          // The same facts the attention wait returns, from the same place: a Run that
+          // stopped explains itself identically whichever command asked. Reading it
+          // changes nothing — no recovery happens here, only the account of it.
+          const attention = yield* attentionFor(run, new Herdr(resolved.env));
           return {
             ok: true,
-            data: { run: yield* runData(run) },
-            human: [head, ...(yield* childLines(resolved.env.stateDir, run))].join("\n"),
+            data: { run: snapshot, attention },
+            human: [
+              head,
+              attention.explanation,
+              ...(yield* childLines(resolved.env.stateDir, run)),
+            ].join("\n"),
           };
         }),
         global.json,
@@ -295,6 +317,42 @@ const runOutput = Command.make(
     }),
 ).pipe(Command.withDescription("Print every Output the Run's Steps have written"));
 
+/**
+ * How often an attention wait re-reads a Run whose Driver may have died silently, and
+ * the ceiling it backs off to. The check costs a process probe — a `ps` on a system with
+ * no `/proc` — and a Run that takes two hours does not need one every two seconds for
+ * all of it. Quick at first, because a Driver that dies is most likely to die early and a
+ * caller who has just started waiting is the one still watching; then rarer, because a
+ * wait that has gone on for an hour is a wait on something that is working. The ceiling
+ * is what keeps it bounded: a lost Driver is always noticed, within half a minute.
+ */
+const HEALTH_CHECK_MS = 2_000;
+const HEALTH_CHECK_CEILING_MS = 30_000;
+
+/**
+ * How often filesystem events are acted on: at most one look per window, with the
+ * first of each window passing straight through. Short enough that nobody notices,
+ * long enough that a Run writing a burst of log lines is one look rather than twenty.
+ */
+const EVENT_WINDOW = {
+  cost: () => 1,
+  units: 1,
+  duration: "100 millis",
+  strategy: "enforce",
+} as const;
+
+/** The bounded re-read itself: it ends the moment the Run has something to say. */
+const healthCheck = Effect.fn("collie.runWait.healthCheck")(function* (
+  emit: () => Effect.Effect<boolean, CollieError, BunServices>,
+) {
+  let wait = HEALTH_CHECK_MS;
+  for (;;) {
+    yield* Effect.sleep(wait);
+    if (yield* emit()) return;
+    wait = Math.min(wait * 2, HEALTH_CHECK_CEILING_MS);
+  }
+});
+
 type ParsedTimeout = { ok: true; ms: number | null } | { ok: false; error: Result };
 
 /** A duration in Effect's canonical `DurationFromString` grammar. */
@@ -304,6 +362,20 @@ function parseTimeout(value: Option.Option<string>): ParsedTimeout {
   return Option.isSome(duration)
     ? { ok: true, ms: Duration.toMillis(duration.value) }
     : { ok: false, error: err("invalid_input", `Invalid timeout "${value.value}".`) };
+}
+
+type Until = "terminal" | "attention";
+type ParsedUntil = { ok: true; until: Until } | { ok: false; error: Result };
+
+/** What ends the wait. Omitted keeps the terminal-only wait every caller already has. */
+function parseUntil(value: Option.Option<string>): ParsedUntil {
+  if (Option.isNone(value)) return { ok: true, until: "terminal" };
+  if (value.value === "terminal" || value.value === "attention")
+    return { ok: true, until: value.value };
+  return {
+    ok: false,
+    error: err("invalid_input", `Invalid --until "${value.value}"; use terminal or attention.`),
+  };
 }
 
 const runWait = Command.make(
@@ -318,22 +390,31 @@ const runWait = Command.make(
       Flag.withDescription("Give up after this long, e.g. `30 seconds`, `10 minutes`"),
       Flag.optional,
     ),
+    until: Flag.string("until").pipe(
+      Flag.withDescription(
+        "`terminal` (the default) waits for the Run to end; `attention` also returns on a question",
+      ),
+      Flag.optional,
+    ),
   },
-  ({ runId, follow, timeout }) =>
+  ({ runId, follow, timeout, until }) =>
     Effect.gen(function* () {
       const global = yield* root;
       // `guarded`, not `attempt`: this command streams its own lines rather than
       // returning one result, but a defect must still end as one envelope like
       // everywhere else.
-      yield* guarded(waitFor(global, runId, follow, timeout), global.json);
+      yield* guarded(waitFor(global, runId, follow, timeout, until), global.json);
     }),
-).pipe(Command.withDescription("Wait for a Run to finish, optionally following its progress"));
+).pipe(
+  Command.withDescription("Wait for a Run to finish, or to need attention, optionally following"),
+);
 
 export const waitFor = Effect.fn("collie.waitFor")(function* (
   global: Global,
   runId: string,
   follow: boolean,
   timeout: Option.Option<string>,
+  until: Option.Option<string> = Option.none(),
 ) {
   const resolved = yield* context(global, false);
   if (resolved._tag === "ContextFailure") return yield* printResult(resolved.result, global.json);
@@ -344,11 +425,25 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
   const timeoutResult = parseTimeout(timeout);
   if (!timeoutResult.ok) return yield* printResult(timeoutResult.error, global.json);
   const { ms } = timeoutResult;
+  const herdr = new Herdr(resolved.env);
+  const untilResult = parseUntil(until);
+  if (!untilResult.ok) return yield* printResult(untilResult.error, global.json);
+  const wantsAttention = untilResult.until === "attention";
 
   const progressCount = yield* Ref.make(0);
   const sentSnapshot = yield* Ref.make(false);
   /** Why the Run stopped being readable, if it did. Waiting ends; success does not. */
   const lost = yield* Ref.make<Failure | null>(null);
+  /**
+   * The observation that ended an attention wait. Kept rather than looked up again:
+   * between waking and replying, a Choice can be answered or replaced by someone else,
+   * and a fresh read would report `none` or a different question — an answer to a
+   * question the caller was never woken for.
+   */
+  const observed = yield* Ref.make<{
+    run: Effect.Success<ReturnType<typeof runData>>;
+    attention: Attention;
+  } | null>(null);
   /** One event, as the typed line a program reads or the line a human reads. */
   const sayEvent = <A>(event: A, human: string) =>
     say(global.json ? Schema.encodeSync(UnknownJson)(event) : human);
@@ -366,6 +461,8 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
     const snapshot = yield* runData(current);
     const status = yield* runStatus(current);
     const terminal = runSettled(status);
+    const attention = wantsAttention ? yield* attentionFor(current, herdr) : null;
+    const done = attention ? attention.category !== "none" : terminal;
     if (follow) {
       // Once, not once per event: a Run with no progress yet leaves progressCount
       // at zero however many times its directory is touched.
@@ -378,11 +475,20 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
         yield* sayEvent({ type: "progress", runId, ...event }, event.text);
       if (terminal)
         yield* sayEvent({ type: "terminal", run: snapshot }, `${current.id}: ${status}`);
+      // Attention that is not the Run ending gets its own event: a caller streaming a
+      // Run has to tell "come and answer this" from "it is over".
+      else if (done && attention)
+        yield* sayEvent({ type: "attention", run: snapshot, attention }, attention.explanation);
     }
-    return terminal;
+    if (done && attention) yield* Ref.set(observed, { run: snapshot, attention });
+    return done;
   });
 
   const fs = yield* FileSystem.FileSystem;
+  // One `emit` at a time. The health check below runs beside the watch, and both read
+  // the same progress cursor: interleaved, one event would be printed twice.
+  const gate = yield* Semaphore.make(1);
+  const once = () => gate.withPermits(1)(emit());
   /**
    * The watch is subscribed before the first read, not after it. Reading first
    * left a gap: a Run reaching a terminal state in it wrote the only event that
@@ -390,10 +496,21 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
    */
   const watched = Effect.gen(function* () {
     const events = yield* Stream.toQueue(fs.watch(watchedRun.dir), { capacity: "unbounded" });
-    if (yield* emit()) return;
-    yield* Stream.fromQueue(events).pipe(
-      Stream.runForEachWhile(() => emit().pipe(Effect.map((done) => !done))),
-    );
+    if (yield* once()) return;
+    const changes = Stream.fromQueue(events);
+    // Under an attention wait every event costs an ownership probe, which on a system
+    // with no /proc means spawning `ps`. A Run writing its log line by line would pay
+    // that per line, so bursts are capped: an event only ever means "look again", and
+    // anything a window drops the health check below picks up within its own interval.
+    const fromEvents = (
+      wantsAttention ? changes.pipe(Stream.throttle(EVENT_WINDOW)) : changes
+    ).pipe(Stream.runForEachWhile(() => once().pipe(Effect.map((done) => !done))));
+    if (!wantsAttention) return yield* fromEvents;
+    // A Driver that is killed writes nothing on its way out, so the watch alone would
+    // wait for ever on a Run nobody is driving. This is that gap and nothing else: a
+    // bounded re-read of the Run's own state, only while an attention wait is open,
+    // ending with it. No daemon, and nothing looks at a terminal.
+    yield* Effect.race(fromEvents, healthCheck(once));
   }).pipe(Effect.scoped);
   const bounded = ms === null ? watched : watched.pipe(Effect.timeout(ms));
   const failed = yield* bounded.pipe(
@@ -410,14 +527,24 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
   const lostRun = yield* Ref.get(lost);
   if (lostRun) return yield* printResult(lostRun, global.json);
   if (follow || failed) return;
+  const seen = yield* Ref.get(observed);
+  if (seen)
+    return yield* printResult(
+      { ok: true, data: seen, human: seen.attention.explanation },
+      global.json,
+    );
   const terminal = yield* readRun(resolved.env, runId, workspace);
   if (terminal._tag === "RunFailure") return yield* printResult(terminal.result, global.json);
+  // The snapshot carries the status, so it is not worked out a second time here.
+  const snapshot = yield* runData(terminal.run);
+  if (!wantsAttention)
+    return yield* printResult(
+      { ok: true, data: { run: snapshot }, human: `${terminal.run.id}: ${snapshot.status}` },
+      global.json,
+    );
+  const attention = yield* attentionFor(terminal.run, herdr);
   yield* printResult(
-    {
-      ok: true,
-      data: { run: yield* runData(terminal.run) },
-      human: `${terminal.run.id}: ${yield* runStatus(terminal.run)}`,
-    },
+    { ok: true, data: { run: snapshot, attention }, human: attention.explanation },
     global.json,
   );
 });
@@ -455,11 +582,17 @@ const runAnswer = Command.make(
     answer: Argument.string("answer").pipe(
       Argument.withDescription("The Choice to take, as `run show` titles it"),
     ),
+    expectChoice: Flag.string("expect-choice").pipe(
+      Flag.withDescription(
+        "Only answer while this is still the pending Choice, as `run wait --until attention` returns its id",
+      ),
+      Flag.optional,
+    ),
     requestId: requestIdFlag,
   },
-  ({ runId, answer, requestId }) =>
+  ({ runId, answer, expectChoice, requestId }) =>
     runMutationCommand("run-answer", runId, requestId, (_env, run, id) =>
-      answerRun(run, answer, id),
+      answerRun(run, answer, id, Option.getOrNull(expectChoice)),
     ),
 ).pipe(Command.withDescription("Answer the Choice a waiting Run is asking"));
 

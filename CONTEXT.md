@@ -165,3 +165,22 @@ started it, writes its progress and any failure into the Run directory, and asks
 questions through files there. An ownership claim in the Run directory — acquired
 atomically and carrying the process's identity — says whether one is still driving, so
 `resume` never starts a second and a stop signal never reaches an unrelated process.
+
+**Ownership** — What the Driver's claim in the Run directory says, in three answers rather
+than two: `live` (a process is driving), `none` (conclusively nobody — no claim, or a claim
+whose process is gone or whose identity does not match), and `unknown` (a claim whose
+process answers but whose identity could not be read). The third is the point of having
+three: "I could not tell" is not permission to start a second Driver, so only `none` allows
+a resume. Canonical in `src/driver.ts`.
+
+**Attention** — What a Run wants from whoever is watching it, as one classification both
+front doors render: a pending Choice, a completed Run, an interruption, or nothing yet.
+Additive to the lifecycle status rather than a redefinition of it — `waiting` still means
+"has not settled" for every existing wait and fan-out — and derived from what the Run
+already recorded: its Step results, the findings the loop still owns, the stop marker and
+the Driver's Ownership. It carries a stable reason code, the sentence a human reads, the
+Steps a resume would keep, the agents that may still be live, and the actions that are
+valid now. What none of the recorded facts settle is said to be unsettled, never guessed.
+`collie run wait --until attention`, `run show` and the Control Plane's detail panel are
+three readings of this one value; canonical in `src/attention.ts`, with the reason codes in
+`docs/cli.md`.

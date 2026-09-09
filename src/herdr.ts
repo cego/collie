@@ -424,6 +424,24 @@ export const decodeWorkspaceList = (res: BoundaryValue) =>
     ),
   );
 
+/**
+ * What became of the agents a Run's record still calls running. The record alone is
+ * stale-capable metadata — a variant stays `running` in it whether its agent finished,
+ * died or is still writing — so it is turned into an answer by asking herdr, which is
+ * the authority on what it still has. `unasked` is the honest value everywhere the
+ * question could not change what is safe, and nothing was probed.
+ */
+export type AgentsAlive = "unasked" | "absent" | "live" | "unverified";
+
+/**
+ * The one question anything classifying a Run asks about agents. Named on its own so a
+ * caller that redraws can hand over something that remembers the last answer instead of
+ * a live `Herdr`, and so that what is asked is visible in the signature.
+ */
+export interface AsksAgents {
+  agentsAlive(names: ReadonlyArray<string>): Effect.Effect<AgentsAlive, never, BunServices>;
+}
+
 export class Herdr {
   private seq = 0;
 
@@ -719,6 +737,39 @@ export class Herdr {
 
   agentFocus(target: string): HerdrEffect<void> {
     return this.cli(["agent", "focus", target]).pipe(Effect.asVoid);
+  }
+
+  /**
+   * What has become of the agents a Run still has running. One `live` is enough to make
+   * a resume unsafe — it would reset the Step under an agent still writing in that
+   * worktree — and so is one answer herdr could not give: "I could not ask" is not
+   * evidence that nothing is there. Only when every one of them is conclusively gone is
+   * the answer `absent`.
+   *
+   * Draws the same distinction `agentStatus` above does, between an agent herdr no
+   * longer has and an agent it could not be asked about. An agent herdr still has but
+   * calls `idle` or `done` counts as gone here, as it does everywhere else: it is
+   * holding a pane, not the work.
+   */
+  agentsAlive(names: ReadonlyArray<string>): Effect.Effect<AgentsAlive, never, BunServices> {
+    // An arrow rather than the generator's `this`: the loop below only needs the one
+    // question asked, and closing over it keeps the class's scope out of it.
+    const ask = (name: string) => this.agentStatus(name);
+    return Effect.gen(function* () {
+      if (names.length === 0) return "absent" as const;
+      let verdict: AgentsAlive = "absent";
+      for (const name of names) {
+        const status = yield* ask(name).pipe(
+          Effect.catch((cause) =>
+            Effect.succeed(cause.code === "agent_not_found" ? ("gone" as const) : null),
+          ),
+        );
+        if (status === "working" || status === "blocked") return "live" as const;
+        if (status === "gone" || status === "idle" || status === "done") continue;
+        verdict = "unverified";
+      }
+      return verdict;
+    });
   }
 
   agentStatus(target: string): HerdrEffect<AgentStatus> {

@@ -4,7 +4,14 @@
 
 import { Cause, Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { nowIso } from "./time";
-import { isScope, loadDefaults, SCOPES, writeConfigValue } from "./config";
+import {
+  isQuestionMode,
+  isScope,
+  loadDefaults,
+  QUESTION_MODES,
+  SCOPES,
+  writeConfigValue,
+} from "./config";
 import { COMPACTION_OFF, validThreshold } from "./compaction";
 import {
   isStale,
@@ -16,7 +23,13 @@ import {
 } from "./definitions";
 import { ensureWorkspaceTab, executeRun } from "./engine";
 import type { PluginEnv } from "./env";
-import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
+import {
+  Herdr,
+  type AgentInfo,
+  type AgentsAlive,
+  type AsksAgents,
+  type WorkspaceInfo,
+} from "./herdr";
 import { confirmLine, resolveCandidates, settle, type InputPrompts, type PickItem } from "./inputs";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
@@ -658,6 +671,36 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
 const MR_TTL_MS = 60_000;
 
 /**
+ * How long an answer about a Run's agents stays good for. The panel of a stopped Run is
+ * re-produced on every board tick, and asking herdr means a subprocess per agent — so
+ * without this, sitting and looking at a broken Run costs one every three seconds. Short,
+ * because it is advice about what is safe: `run resume` and the resume flow ask again
+ * with no cache, and that is what actually decides.
+ */
+const AGENTS_TTL_MS = 15_000;
+
+/**
+ * A `herdr` that remembers what it was told about a set of agents. Held by the reader,
+ * beside the merge-request and plan caches, for the same reason they are: a redraw must
+ * cost nothing a redraw cannot change.
+ */
+function remembersAgents(herdr: Herdr): AsksAgents {
+  const answers = new Map<string, { at: number; alive: AgentsAlive }>();
+  return {
+    agentsAlive: (names) =>
+      Effect.gen(function* () {
+        const key = names.join("\u0000");
+        const now = yield* Clock.currentTimeMillis;
+        const cached = answers.get(key);
+        if (cached && now - cached.at < AGENTS_TTL_MS) return cached.alive;
+        const alive = yield* herdr.agentsAlive(names);
+        answers.set(key, { at: now, alive });
+        return alive;
+      }),
+  };
+}
+
+/**
  * Everything the app draws, for whatever it is looking at. One closure, because the
  * merge-request cache belongs with the reads it saves: a History of 40 merge-request
  * Runs must make no `glab` call to draw, one selection makes exactly one, and
@@ -684,6 +727,7 @@ export function appState(
    * read, so `R` re-reads a plan the same way it re-reads the merge request.
    */
   const planCache = new Map<string, PlanPanel | null>();
+  const asksAgents = remembersAgents(session.herdr);
 
   const merge = Effect.fn("Flows.mergeRequestFor")(function* (
     target: string | null,
@@ -766,6 +810,7 @@ export function appState(
         ? yield* buildRunDetail({
             stateDir: env.stateDir,
             runId,
+            agents: asksAgents,
             mr,
             tail: focus.tail,
             pages: focus.reviewPages,
@@ -843,7 +888,12 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       const run = yield* runOf(command.runId);
       if (!run) return `${command.runId} has gone`;
       const name = runLabel(run.record);
-      const answered = yield* answerRun(run, command.value, yield* newRequestId());
+      const answered = yield* answerRun(
+        run,
+        command.value,
+        yield* newRequestId(),
+        command.choiceId,
+      );
       return answered.ok ? `answered ${name}` : `${name}: ${answered.error.message}`;
     }
     case "SendReview": {
@@ -933,6 +983,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       if (typed !== "" && command.key === "scope" && !isScope(typed)) {
         return `scope has to be one of ${SCOPES.join(", ")}, not "${command.value}"`;
       }
+      // Same reason as `scope`: a Driver has to either take focus or not, so a typo
+      // is refused here rather than quietly leaving every question stealing focus.
+      if (typed !== "" && command.key === "questions" && !isQuestionMode(typed)) {
+        return `questions has to be one of ${QUESTION_MODES.join(", ")}, not "${command.value}"`;
+      }
       // A threshold no Run can use fails every step that would launch an agent, so
       // it is refused where it is written rather than at the next launch.
       if (typed !== "" && command.key === "compact_at_tokens" && !validThreshold(Number(typed))) {
@@ -962,6 +1017,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       }
 
     case "EditSetting":
+    case "NextQuestion":
     case "ShowView":
     case "ToggleScope":
     case "ToggleTail":
@@ -971,7 +1027,8 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "Quit":
       // The app and the bridge act on these themselves; they never reach a handler.
       // `EditSetting` opens the app's own editor, and the value it gathers comes back
-      // as a `SetDefault` that carries one.
+      // as a `SetDefault` that carries one; `NextQuestion` moves the Selection and
+      // drops a filter, neither of which is anything out here owns.
       return null;
   }
 });
@@ -1035,7 +1092,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     if (waiting && waiting.id !== answering) {
       asking = { index: 0, typed: "" };
       answering = waiting.id;
-      yield* announce(herdr, env);
+      yield* announce(herdr, env, session.configDir);
     }
     if (!waiting) answering = null;
 
@@ -1076,7 +1133,14 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
  * so announcing it here as well would interrupt twice for one question and again
  * whenever the board is reopened.
  */
-const announce = Effect.fn("Flows.announce")(function* (herdr: Herdr, env: PluginEnv) {
+const announce = Effect.fn("Flows.announce")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  configDir: string,
+) {
+  // Same opt-out as the Driver's: `questions: notify` leaves the question on the
+  // board and in the toast, and only stops it moving the human here.
+  if ((yield* loadDefaults(configDir)).questions === "notify") return;
   if (!env.tabId) return;
   // A tab that will not focus is still a tab the human can reach.
   yield* Effect.ignore(herdr.tabFocus(env.tabId));

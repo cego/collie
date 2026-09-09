@@ -1,6 +1,7 @@
 import { Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import type { PlatformError } from "effect/PlatformError";
+import { choiceAnswerable } from "../attention";
 import { layers, loadDefinitions, type PersonaDef, type WorkflowDef } from "../definitions";
 import { readChoice, readProgress } from "../driver";
 import { currentEnv, type PluginEnv } from "../env";
@@ -208,11 +209,16 @@ export const unreadableRuns = Effect.fn("collie.unreadableRuns")(function* (
 });
 
 export const runData = Effect.fn("collie.runData")(function* (run: Run) {
+  // The same Choice `attention` reports, under the same rule: one left behind by a
+  // Driver that has gone is not answerable, and an envelope carrying it here while
+  // `attention.choice` is null would be telling an agent both at once. Asked only where
+  // there is a Choice on disk, so listing Runs costs no ownership probe.
+  const pending = yield* readChoice(run.dir);
   return {
     ...run.record,
     status: yield* runStatus(run),
     progress: yield* readProgress(run.dir),
-    choice: yield* readChoice(run.dir),
+    choice: pending && (yield* choiceAnswerable(run)) ? pending : null,
   };
 });
 

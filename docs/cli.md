@@ -167,6 +167,7 @@ Retry with the same `--request-id` once you have the values.
 ```sh
 collie --json run wait <run-id> --follow
 collie --json run wait <run-id> --timeout "10 minutes"
+collie --json run wait <run-id> --until attention
 collie --json run show <run-id>
 collie --json run list
 collie --json run logs <run-id>
@@ -178,11 +179,82 @@ Without `--follow`, `run wait` prints one envelope when the run reaches a termin
 comes back as the `timeout` error code. Abbreviations like `30s` are refused as
 `invalid_input`.
 
-<!-- prettier-ignore -->
-> [!IMPORTANT]
-> A run that stops to ask a question is **not** terminal, so `run wait` keeps waiting
-> through it. To catch questions, give the wait a `--timeout` and check `run show` for
-> `awaiting` each time it expires, or poll `run show` on your own schedule.
+A run that stops to ask a question is **not** terminal, so a plain `run wait` waits
+straight through it. `--until attention` is the wait that does not: it returns as soon as
+the run has a pending question or reaches a terminal state, whichever comes first, and
+returns immediately when that is already true. `--until terminal` is the default spelled
+out; any other value is `invalid_input`.
+
+The attention envelope is the normal `ok`/`data` shape with one extra key beside `run`:
+
+```json
+{
+  "ok": true,
+  "data": {
+    "run": { "id": "…", "status": "waiting", "…": "…" },
+    "attention": {
+      "category": "question",
+      "reason": "choice_pending",
+      "explanation": "demo-…: Implement or plan?",
+      "step": "decide",
+      "actions": ["answer", "show", "stop"],
+      "choice": {
+        "id": "demo-…-1",
+        "kind": "menu",
+        "step": "decide",
+        "header": "…",
+        "footer": "…",
+        "items": []
+      }
+    }
+  }
+}
+```
+
+| `category`    | What it means                                                                                |
+| ------------- | -------------------------------------------------------------------------------------------- |
+| `question`    | A Choice is open. `choice` carries its id, kind, text and options.                           |
+| `completed`   | The run succeeded. `choice` is null.                                                         |
+| `interrupted` | The run stopped with work left to do. `actions` offers only what is safe, and never a guess. |
+| `none`        | Nothing to do yet — never what a wait returns, only what a snapshot can say.                 |
+
+`reason` is a stable code, additive across releases, and `explanation` is the same fact as
+prose:
+
+| `reason`           | `category`    | What it says                                                |
+| ------------------ | ------------- | ----------------------------------------------------------- |
+| `choice_pending`   | `question`    | A Choice anyone can answer is open.                         |
+| `succeeded`        | `completed`   | The run finished its work.                                  |
+| `working`          | `none`        | The run is getting on with it.                              |
+| `review_exhausted` | `interrupted` | Every review iteration was used with findings still open.   |
+| `step_blocked`     | `interrupted` | A step stopped for a human; its note is in the explanation. |
+| `stopped`          | `interrupted` | Someone stopped the run.                                    |
+| `failed`           | `interrupted` | It ended unsuccessfully and nothing it recorded says why.   |
+| `driver_lost`      | `interrupted` | The record says it is running, but no Driver owns it.       |
+
+`step` is the step the run is on where it is known, and `actions` names the `run`
+subcommands that make sense next. An interrupted run also carries `driver` (`live`, `none`
+or `unknown` — whether a Driver still owns it), `preserved` (the steps a resume keeps),
+`agents` (the agents its record still had running, by name) and `agentsAlive` (what herdr
+says about those agents, asked only where it could change the answer):
+
+| `agentsAlive` | What it says                                                                        |
+| ------------- | ----------------------------------------------------------------------------------- |
+| `absent`      | herdr no longer has any of them, or the run records none.                           |
+| `live`        | herdr still has one of them working; resuming would restart its step underneath it. |
+| `unverified`  | herdr could not be asked. Not permanent — retry when herdr is reachable.            |
+| `unasked`     | Nothing was probed, because a resume was not on the table anyway.                   |
+
+`resume` is offered only where `driver` is conclusively `none` **and** `agentsAlive` is
+`absent`. Anything else — `driver` `unknown`, an agent still live, or an agent herdr could
+not be asked about — means Collie cannot say a second worker would be safe, so it offers
+inspection and an explicit stop instead. `run resume` re-checks both and refuses on the
+same rules, so advice that has gone stale by the time it is acted on cannot start one. A step whose `awaiting` text says it is waiting on its agent is **not** a question:
+only a Choice anyone can answer counts, so attention waiting does not wake on ordinary
+work.
+
+Answer what the wait returned with `run answer --expect-choice <id>` — see
+[Answer a question](#answer-a-question).
 
 A plan run that [fanned out over several repositories](workflows.md#plans-that-span-repositories)
 stays `running` until the last of its repository runs ends, so `run wait` on it returns
@@ -193,14 +265,19 @@ from the parent alone.
 `--follow` streams instead of returning one envelope. It prints newline-delimited JSON
 events, not the `ok`/`data` shape the rest of this page describes:
 
-| Event                                           | When                                                             |
-| ----------------------------------------------- | ---------------------------------------------------------------- |
-| `{"type":"snapshot","run":…}`                   | Once, first thing, carrying the same `run` object as `run show`. |
-| `{"type":"progress","runId":…,"at":…,"text":…}` | Each line the Driver has recorded since the last event.          |
-| `{"type":"terminal","run":…}`                   | Once the run is `succeeded`, `failed` or `stopped`.              |
+| Event                                           | When                                                                                                                                                                                                                     |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `{"type":"snapshot","run":…}`                   | Once, first thing, carrying the same `run` object as `run show`.                                                                                                                                                         |
+| `{"type":"progress","runId":…,"at":…,"text":…}` | Each line the Driver has recorded since the last event.                                                                                                                                                                  |
+| `{"type":"terminal","run":…}`                   | Once the run is `succeeded`, `failed` or `stopped`.                                                                                                                                                                      |
+| `{"type":"attention","run":…,"attention":…}`    | Under `--until attention` only, once the run wants attention without having ended — a question, or an interruption such as `driver_lost`, so `attention.choice` may be null. A terminal end still arrives as `terminal`. |
 
 Failures still arrive as a normal envelope — a timeout, a run deleted mid-wait, or a
 defect — so a consumer reads each line as JSON and branches on whether `type` is present.
+
+`run show` returns the same `attention` object beside its `run`, built from the same
+facts, so the board's detail panel and an agent driving the CLI cannot tell different
+stories about why a run stopped.
 
 `run show` is the snapshot. Its `run` object carries, among other fields:
 
@@ -231,6 +308,16 @@ collie --json run answer <run-id> "Implement now" --request-id "$(uuidgen)"
 collie --json run show <run-id>                            # confirm it took
 ```
 
+`--expect-choice <id>` makes the answer conditional on that Choice still being the open
+one. Pass the `attention.choice.id` a `run wait --until attention` returned, and an answer
+that arrives after the run has moved on comes back as `choice_mismatch` — with the id of
+the question now open in `details.choiceId` — instead of answering it. Without the flag the
+answer applies to whatever question is open, which is what every existing caller gets.
+
+A run whose question is replaced in the instant between the check and the write comes back
+as `choice_mismatch` too, with or without the flag: an answer nothing will ever read is
+never reported as sent.
+
 The answer is the choice's title, exactly as `run show` gives it. An empty answer dismisses
 the menu and leaves the run open for `resume`. A title that is not on offer comes back as
 `invalid_answer` with the valid ones in `details.answers`; a question already answered comes
@@ -245,7 +332,18 @@ collie --json run resume <run-id> --request-id "$(uuidgen)"
 ```
 
 `stop` closes only the panes that run owns. `resume` starts a fresh Driver and skips
-finished steps; it refuses with `run_already_active` when a Driver still owns the run.
+finished steps — completed steps and their Outputs are kept, never redone.
+
+It refuses with `run_already_active` in four cases, which need different things of you.
+`run show`'s `attention.driver`, `attention.agentsAlive` and `attention.actions` say which
+one you are in before you try, and the error message names it:
+
+| Refused because                           | What to do                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------------- |
+| A Driver still owns the run               | `run stop` it, then resume.                                                      |
+| Whether one does could not be determined  | Look at the run: an unreadable claim is not permission to start a second Driver. |
+| A recorded agent is still live in herdr   | `run stop` it — that closes the panes the run owns — then resume.                |
+| herdr could not be asked about its agents | Retry when herdr is reachable. This is not a run that can never be recovered.    |
 
 ## Fork a definition
 
@@ -317,6 +415,7 @@ human line and a failure prints `error.message`.
 | `run_not_waiting`         | The run is not at a question.                                                                         |
 | `invalid_answer`          | That title is not one of the choices on offer.                                                        |
 | `choice_already_answered` | The question was already answered.                                                                    |
+| `choice_mismatch`         | `--expect-choice` named a question the run is no longer asking.                                       |
 | `target_exists`           | A fork would overwrite a file that is already there.                                                  |
 | `needs_input`             | Inputs are missing; `details.inputs` says which, with their questions.                                |
 | `timeout`                 | `run wait --timeout` gave up.                                                                         |

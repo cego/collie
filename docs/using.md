@@ -499,6 +499,7 @@ that field's keys do instead, and the Selection's own buttons go: `k` typed a `k
 | `w`           | Open the selected merge request in a browser                                    |
 | `c`           | Copy that merge request's URL                                                   |
 | `k`           | Stop the selected run — closing a pane no longer does that, because it has none |
+| `n`           | Go to the next unanswered question, wrapping; clears a filter hiding it         |
 | `/`           | Filter the list, and say how much is left — a matching agent keeps its run      |
 | `Esc`         | Clear the filter, from the list as well as from inside it                       |
 | `R`           | Re-read what is on screen, and the one merge request behind it                  |
@@ -522,7 +523,22 @@ an option answers it. The question belongs to that run, so a second run waiting 
 answered by selecting it rather than waiting its turn. The question lives in the run's
 directory, so closing this tab, reopening it, or resuming later shows you the same question
 again rather than losing it. The Driver toasts and brings the tab to the front before it
-asks, so a question is never left unseen in a tab you are not looking at.
+asks, so a question is never left unseen in a tab you are not looking at — unless you have
+set [`questions: notify`](#your-defaults), which keeps the toast and drops the jump.
+
+`n` goes to the next unanswered question, in the board's own order, wrapping once. It works
+from a question as well as from anywhere else, so several waiting runs are answered one
+after another without touching the arrows, and it works at either scope: on a wide board it
+selects another workspace's question where it stands rather than jumping you into a pane.
+A question the filter is hiding is still unanswered, so `n` finds it and visibly clears the
+filter to show it. `[n next question]` on the footer is the same action for the mouse, and
+`n` typed into a field — a free-text answer, `/`, a Settings value — is a character, not a
+jump. With nothing left to answer the Selection stays put and the footer says so.
+
+What you have half-typed or half-chosen against a question is kept per run and per question
+for as long as the tab is open, so moving between waiting runs costs nobody their answer.
+It is dropped when that question is answered or replaced by a new one, and never written to
+a run directory: an unsent answer is yours, not the run's.
 
 ## Actions
 
@@ -537,13 +553,36 @@ is not a pane: the picker starts a detached Driver that outlives it and writes w
 doing into the run directory, and the Control Plane is what renders that. A run therefore
 survives the picker closing, the Control Plane closing, and the terminal being detached.
 
+### Why a run stopped
+
+The detail panel of a run that stopped opens with **Stopped**: one line saying why — the
+review loop out of iterations, a step that stopped for a human, a stop someone asked for,
+or a Driver that is no longer there — then what a resume keeps, then which actions are safe
+right now. Where nothing recorded says why, it says that rather than guessing.
+
+It is the same classification `collie run show` and `collie run wait --until attention`
+return ([the CLI reference](cli.md#watch-a-run) has the codes), from the same function, so
+the board and an agent driving the CLI cannot disagree. Reading it recovers nothing and
+changes nothing: only `u` and `run resume` start a Driver, and both re-check ownership when
+they run.
+
 ## Resuming a run
 
 `prefix+u`, or `collie run resume <id>`, starts a fresh Driver for a run and skips the
 steps that already finished. A step is finished when its `output:` file exists, so an
-agent that went quiet without writing one is restarted rather than assumed done. The
-Driver claims the run atomically, so `resume` refuses to start a second Driver for a run
-something is already driving.
+agent that went quiet without writing one is restarted rather than assumed done.
+Completed steps and their Outputs survive it. The Driver claims the run atomically, so
+`resume` refuses to start a second Driver for a run something is already driving — and a
+claim it cannot read counts as one, so an unreadable `runner.pid` refuses too.
+
+The Driver is not the only thing that can still be working there. A run's record names the
+agents its steps had running, and resuming resets every unfinished step — so before it
+starts, Collie asks herdr about each of those agents. One that herdr still has working
+refuses the resume, and so does one herdr could not be asked about: "I could not check" is
+not the same as "nothing is there". That is a retry, not a dead end — the run resumes once
+herdr is reachable again, or once the agent is stopped. The board's **Stopped** block and
+`collie run show` offer `resume` under the same rule, so what is offered and what is
+allowed cannot drift apart.
 
 Esc at a Choice leaves the step unfinished on purpose, so `resume` finds the run again.
 
@@ -615,7 +654,8 @@ checkout there is no branch and no working tree to review, so the target menu is
   "models": { "opencode": ["mycorp/local-model"] },
   "trust": "ask",
   "permissions": "bypass",
-  "scope": "local"
+  "scope": "local",
+  "questions": "focus"
 }
 ```
 
@@ -623,6 +663,14 @@ checkout there is no branch and no working tree to review, so the target menu is
 workspace of this herdr session Collie has work in ([Scope](#scope-this-workspace-or-the-whole-session)).
 `g` changes it for that tab and nothing remembers it, so this is the only place the answer
 to "the way I use it" lives.
+
+`questions` is what happens when a run stops to ask you something. `focus`, the default,
+brings that workspace's Collie tab to the front — the behavior every install has had.
+`notify` leaves the toast, the tab's `asks you` and the board's own count exactly as they
+are and simply does not move you: the question waits on the board until you go to it. It is
+independent of `notifications`, which is about whether the toast is raised at all; turning
+one off does not turn the other off, and neither hides the question from the board or stops
+you answering it in either scope.
 
 `models` adds models the harness adapter table does not already accept. An unknown harness,
 model, effort, permissions mode or scope fails validation before a single tab opens. See

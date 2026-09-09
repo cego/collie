@@ -58,25 +58,40 @@ Done when you have reported the Run id to the user and said how you will watch i
 
 ## Watch a Run
 
-A Run that stops to ask a question is not in a terminal state, so a plain
-`collie run wait <run-id>` waits straight through it and you would never relay the
-question. Bound the wait and check between rounds:
+Wait until there is something to do, rather than polling on a timer:
 
 ```sh
-collie --json run wait <run-id> --timeout "2 minutes"   # `timeout` code = not done yet
-collie --json run show <run-id>                        # status, and `awaiting` if asking
+collie --json run wait <run-id> --until attention --timeout "2 hours"
 ```
 
-`run show`'s `status` is `running`, `waiting`, `succeeded`, `failed` or `stopped`. On
-`waiting`, go to [Answer a question](#answer-a-question). On `timeout`, relay the step and
-iteration from `run show` and wait again.
+It returns the moment the Run has a question or reaches a terminal state — immediately if
+that is already true — so you never sit through a question you should be relaying. Read
+`data.attention`:
 
-`run wait --follow` is the other option: it streams `{"type":"snapshot"…}`,
-`{"type":"progress"…}` and `{"type":"terminal"…}` lines rather than one envelope, which is
-useful for narrating progress — but it too ends only on a terminal state, so pair it with a
-timeout if the Run can ask something.
+- `category: "question"` — go to [Answer a question](#answer-a-question). `attention.choice`
+  has the id, the question text and every option, so you can relay it without a `run show`.
+- `category: "completed"` — it finished.
+- `category: "interrupted"` — work stopped with something left to do. `attention.reason`
+  says what (`review_exhausted`, `step_blocked`, `stopped`, `driver_lost`, or `failed`
+  where nothing recorded says why), `attention.explanation` says it in a sentence you
+  can relay, `attention.preserved` names the Steps a resume keeps, and `attention.actions`
+  names what is safe. Offer the user exactly those: `resume` appears only where no Driver
+  owns the Run **and** `attention.agentsAlive` is `absent` — an agent herdr still has
+  working, or one it could not be asked about, is something a resume would restart a Step
+  underneath. Never resume to "see if it works" — `run resume` re-checks both and refuses
+  with `run_already_active` where either is there or cannot be ruled out. `unverified` is
+  a retry once herdr is reachable, not a Run that can never be recovered.
 
-Done when `run show` reports a terminal status, or `awaiting` with a question to relay.
+`attention.actions` names the `run` subcommands that make sense next. A `timeout` error
+code means neither happened in the time you gave it; wait again.
+
+A plain `collie run wait <run-id>` — or `--until terminal` — is the older behavior: it waits
+straight through questions to a terminal state. Use it only when the Run cannot ask
+anything. `--follow` streams `{"type":"snapshot"…}`, `{"type":"progress"…}` and
+`{"type":"terminal"…}` lines rather than one envelope, which is useful for narrating
+progress; under `--until attention` it also emits `{"type":"attention"…}`.
+
+Done when the wait reports a terminal status, or a question to relay.
 
 ## Answer a question
 
@@ -85,11 +100,15 @@ options in `choices`.
 
 1. Relay the question and every option to the user verbatim. The titles are the answer, so
    changing their wording costs the user the ability to choose.
-2. Send their choice by its title:
+2. Send their choice by its title, naming the question you are answering:
 
    ```sh
-   collie --json run answer <run-id> "<title>" --request-id "$(uuidgen)"
+   collie --json run answer <run-id> "<title>" \
+     --expect-choice "<attention.choice.id>" --request-id "$(uuidgen)"
    ```
+
+   `--expect-choice` is what stops a late answer from landing on the next question: if the
+   Run has moved on, it comes back as `choice_mismatch` and changes nothing.
 
 3. Confirm with `collie --json run show <run-id>`.
 
@@ -104,8 +123,10 @@ collie --json run stop <run-id>   --request-id "$(uuidgen)"
 ```
 
 `run list` finds the Run when the user names it by repo, workflow or "the one from this
-morning" rather than by id. `resume` skips finished steps; it refuses with
-`run_already_active` while a Driver still owns the Run, so `stop` first.
+morning" rather than by id. `resume` skips finished steps and keeps their Outputs; it
+refuses with `run_already_active` while a Driver still owns the Run — or while whether one
+does could not be determined — so `stop` first. `run show`'s `attention` says which case
+you are in before you try.
 
 Done when `run show` reports the state the user asked for.
 

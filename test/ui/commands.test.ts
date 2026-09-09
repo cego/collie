@@ -507,3 +507,12 @@ effectTest("reviewing a target again names it, classified, and asks nothing", fu
   expect(started?.record.inputs.target_kind).toBe("mr");
   expect(started?.record.decisions).toEqual({});
 });
+
+effectTest("questions is refused unless it is a way of presenting one", function* () {
+  const note = yield* set("questions", "shout");
+
+  expect(note).toContain("focus, notify");
+  expect(yield* readConfig(rig.pluginEnv().configDir)).not.toHaveProperty("questions");
+  expect(yield* set("questions", "notify")).toContain("notify");
+  expect((yield* loadDefaults(rig.pluginEnv().configDir)).questions).toBe("notify");
+});
