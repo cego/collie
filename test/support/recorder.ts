@@ -407,6 +407,10 @@ export class Rig {
       COLLIE_CWD: this.projectDir,
       FAKE_HERDR_LOG: this.logPath,
       FAKE_HERDR_OUTPUTS: this.path.join(this.root, "outputs.json"),
+      // What `herdr status --json` answers with regardless of HERDR_SOCKET_PATH: the
+      // rig's one real socket, so a test that unsets the explicit path still reaches
+      // it through discovery rather than through the env var it is testing the absence of.
+      FAKE_HERDR_STATUS_SOCKET: this.socketPath,
       ...overrides,
     };
     if (this.gone.length > 0) environment.FAKE_HERDR_AGENTS_GONE = this.gone.join(",");
@@ -425,6 +429,8 @@ export class Rig {
       "FAKE_HERDR_BLOCK_START",
       "FAKE_HERDR_VERSION",
       "FAKE_HERDR_PLUGINS",
+      "FAKE_HERDR_STATUS",
+      "FAKE_HERDR_STATUS_SOCKET",
     ]) {
       const value = env[key];
       if (value) Bun.env[key] = value;

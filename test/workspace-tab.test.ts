@@ -309,6 +309,30 @@ effectTest("the first run opens the Collie tab and puts it first", function* () 
   ).not.toContain("status");
 });
 
+effectTest(
+  "no HERDR_SOCKET_PATH: the tab is still put first, via herdr's own status",
+  function* () {
+    // A CLI launch that never got HERDR_SOCKET_PATH injected: the tab.move this run
+    // needs has to find its socket through `herdr status server` rather than fail.
+    yield* rig.queueOutputs([CLEAN]);
+
+    const { status } = yield* runWorkflow(
+      rig,
+      "solo",
+      { goal: "Add a picker" },
+      { env: { HERDR_SOCKET_PATH: "" } },
+    );
+
+    expect(status).toBe("done");
+    const calls = yield* rig.calls();
+    expect(calls.map((c) => c.cmd)).toContain("status server");
+    expect(calls.filter((c) => c.cmd === "tab.move").map((c) => c.params)).toContainEqual({
+      tab_id: "1:1",
+      insert_index: 0,
+    });
+  },
+);
+
 effectTest("the second run reuses that tab and re-asserts its position", function* () {
   yield* rig.queueOutputs([CLEAN, CLEAN]);
 

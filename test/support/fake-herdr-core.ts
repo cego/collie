@@ -314,6 +314,36 @@ export function fakeHerdr(
       return { code: 0, stdout: `${yield* envString("FAKE_HERDR_PLUGINS", "")}\n`, stderr: "" };
     }
 
+    // What the socket boundary falls back to when HERDR_SOCKET_PATH is unset: herdr's
+    // own idea of where its running server's socket is. `FAKE_HERDR_STATUS` scripts a
+    // stopped server or a malformed reply; `FAKE_HERDR_STATUS_SOCKET` overrides which
+    // socket a running one reports, defaulting to this process's own.
+    if (cmd === "status server") {
+      const mode = yield* envString("FAKE_HERDR_STATUS", "running");
+      if (mode === "malformed") {
+        return { code: 0, stdout: `${encodeJson({ nonsense: true })}\n`, stderr: "" };
+      }
+      if (mode === "stopped") {
+        return {
+          code: 0,
+          stdout: `${encodeJson({ status: "stopped", running: false })}\n`,
+          stderr: "",
+        };
+      }
+      const fallbackSocket = yield* envString("HERDR_SOCKET_PATH", "");
+      const socket = yield* envString("FAKE_HERDR_STATUS_SOCKET", fallbackSocket);
+      return {
+        code: 0,
+        stdout: `${encodeJson({
+          status: "running",
+          running: true,
+          socket: socket || null,
+          session: null,
+        })}\n`,
+        stderr: "",
+      };
+    }
+
     if (cmd === "agent prompt") {
       state.prompts += 1;
       yield* writeJson(statePath, state);

@@ -155,6 +155,16 @@ const WorktreeReplyBody = Schema.Struct({
 });
 const WorktreeOpenReply = Schema.Struct({ result: WorktreeReplyBody });
 
+/**
+ * `herdr status server --json`, as far as this plugin needs it: whether a server is
+ * running, and the socket it is listening on. The one thing this module asks the CLI
+ * rather than the socket, since it is what tells this module which socket to open.
+ */
+const HerdrStatusReply = Schema.Struct({
+  running: Schema.Boolean,
+  socket: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
+
 /** herdr's `config.toml`, as far as this plugin has any business reading it. */
 const HerdrConfig = Schema.Struct({
   worktrees: Schema.optionalKey(Schema.Struct({ directory: Schema.optionalKey(Schema.String) })),
@@ -499,8 +509,27 @@ export class Herdr {
    * first newline and the scope closes the socket.
    */
   rpc(method: SocketMethod, params: HerdrParams = {}): HerdrEffect<Schema.Json | undefined> {
-    const path = this.env.socketPath;
-    if (!path) return herdrFail(`cannot call ${method}`, "HERDR_SOCKET_PATH is not set");
+    const explicit = this.env.socketPath;
+    if (explicit) return this.exchange(method, params, explicit);
+    // Some CLI launches never get HERDR_SOCKET_PATH injected, unlike a plugin action or
+    // pane. herdr's own CLI can still say where its running server is listening, so ask
+    // that rather than guess a path.
+    return this.cli(["status", "server", "--json"]).pipe(
+      Effect.flatMap((res) => decodeBoundary(`${method} failed`, HerdrStatusReply, res)),
+      Effect.flatMap((status) =>
+        status.running && status.socket
+          ? Effect.succeed(status.socket)
+          : herdrFail(`cannot call ${method}`, "herdr status reports no running server"),
+      ),
+      Effect.flatMap((path) => this.exchange(method, params, path)),
+    );
+  }
+
+  private exchange(
+    method: SocketMethod,
+    params: HerdrParams,
+    path: string,
+  ): HerdrEffect<Schema.Json | undefined> {
     const id = `hw-${++this.seq}`;
     const payload = `${encodeJson({ id, method, params })}\n`;
 
