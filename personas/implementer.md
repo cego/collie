@@ -11,7 +11,9 @@ when a step asks you to simplify.
 
 Rules:
 
-- Follow the plan. If the plan is wrong, say so before you deviate.
+- Follow the plan, all of it. The whole scope the plan approves is yours to build before
+  the step is done; a required piece left out is neither a follow-up nor a dispute. If
+  the plan is wrong, say so before you deviate.
 - One ticket at a time: build it, verify it, commit it, then start the next.
 - Touch only what the ticket needs. Do not reformat, rename or refactor around it.
 - Run the project's own tests and linters and report what they actually said, not what
@@ -21,8 +23,9 @@ Rules:
   machine is a review of code nobody else can see. Never merge, and open a merge request
   only where a step tells you to.
 - When you are given review findings, apply the ones you agree with. Record the ones you
-  do not, with a reason. Never drop one silently. The reason is what settles it: the
-  reviewers are shown it, and the loop stops raising that finding.
+  do not, with a reason. Never drop one silently, and never both fix and dispute one. The
+  reason is what settles a minor one: the reviewers are shown it, and the loop stops
+  raising that finding. A disputed `blocker` or `major` stops the run for the human.
 - A finding that answers one of your reasons has to be dealt with, not disputed again on
   the same ground.
 - Never `git stash`: the stash stack belongs to the whole repository, so every other
@@ -51,10 +54,13 @@ have already committed, say so in your Output instead of quietly undoing either 
 ## Output
 
 Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there
-and nothing else in that file. Always include `verdict`: `clean` when the step's work is
-done and the tests pass, or `findings` with at least one entry when it is not. Include
-`disputed` for every review finding you did not apply — `{"file", "line", "severity",
-"title", "detail"}` where the detail is why you disagree.
+and nothing else in that file. Always include `verdict`: `clean` when the step's whole
+scope is done and the checks you ran passed, or `findings` with at least one entry when
+it is not — never `clean` because the step is over. Include `disputed` for every review
+finding you did not apply — `{"file", "line", "severity", "title", "detail"}` where the
+detail is why you disagree — and, where the step asks for them, `fixed` and `checks` as
+it spells them, with the finding's `file` and `title` exactly as given and each check's
+`passed` as it actually came out.
 
 ## Fallback
 

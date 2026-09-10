@@ -1,7 +1,7 @@
 ---
 name: implement
-title: implement — build the plan, tidy it, review it, fix until clean
-description: Builds from a plan dir, a Linear issue or a description, improves the architecture it touched, simplifies, fans out to reviewers, loops on findings, then opens the merge request.
+title: implement — build the plan, tidy it, review it, fix until nothing blocks
+description: Builds from a plan dir, a Linear issue or a description, improves the architecture it touched, simplifies, fans out to reviewers, fixes what blocks until a review finds nothing blocking, then opens the merge request.
 inputs:
   plan: work-source
   # One repository's share of a plan that spans several, as the tickets' `Repo:` line
@@ -10,7 +10,9 @@ inputs:
   # `new` gives the Run a herdr worktree workspace of its own; anything else or absent
   # keeps it in the workspace it was started from. See docs/using.md.
   workspace: optional
-max_iterations: 5
+# A ceiling, not a target: at most four review rounds and four fix passes after the
+# build. The run leaves the loop at the first review with nothing blocking.
+max_iterations: 4
 steps:
   - id: build
     persona: implementer
@@ -42,6 +44,9 @@ steps:
     repeat:
       from: review.synthesize
       back_to: simplify
+      # Only blocking findings drive the loop; the last fix's own dispositions and
+      # checks decide the run, and the merge request says it was not re-reviewed.
+      converge: true
   - id: mr
     persona: implementer
     agent: build
@@ -91,6 +96,11 @@ You were started with {{skill:implement}}, so build the tickets in their order, 
 time: {{skill:tdd}} at the seams the spec names, the project's tests green, and
 one commit per ticket. There is no separate commit step.
 
+Build the complete approved scope before you report the step done. A ticket or a
+required behaviour you did not build is not an optional follow-up, and the size of the
+work is not a reason to leave it out or to dispute it. Where the spec genuinely
+conflicts with itself or with the code, stop and ask rather than choose for the human.
+
 Push before you finish: `git push -u origin HEAD -o ci.skip`, onto the branch the work
 source named where there is one. The reviewers read the merge request when there is one,
 and a merge request shows the remote — so anything you want reviewed has to be on the
@@ -103,13 +113,16 @@ Output. The commits are still good and the Run is still worth finishing.
 
 {{session.ask}}
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "branch": "<branch>",
-"pushed": true, "tickets_done": ["ticket title", ...], "commits": ["<subject>", ...], "tests": "what
-you ran and what it said"}`.
+Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what is not
+built or not passing, as findings>], "branch": "<branch>", "pushed": true, "tickets_done":
+["ticket title", ...], "commits": ["<subject>", ...], "tests": "what you ran and what it
+said"}`. `clean` means the whole scope is built and the tests pass; anything else is
+`findings`, with one entry per thing that is not.
 
 ## simplify
 
-Iteration {{iteration}} of at most {{max_iterations}}.
+Iteration {{iteration}} of at most {{max_iterations}}. The maximum is a ceiling the run
+never aims for.
 
 Run {{skill:code-simplification}} over what this branch changed. Behaviour stays identical:
 the tests you ran in `build` still pass, and you say what you ran. Do not touch code
@@ -123,13 +136,16 @@ If you committed anything, push it the same way `build` did — `git push -u ori
 -o ci.skip` — so the reviewers read what you simplified rather than what you replaced. A
 push that fails is reported, not fatal.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "simplified": ["what
-you collapsed and why", ...], "pushed": true, "tests": "what you ran and what it
-said"}`.
+Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [], "simplified":
+["what you collapsed and why", ...], "pushed": true, "tests": "what you ran and what it
+said"}`. `clean` only when the tests still pass.
 
 ## fix
 
-Iteration {{iteration}} of at most {{max_iterations}}.
+Iteration {{iteration}} of at most {{max_iterations}}. That is a ceiling, not a target:
+the run leaves this loop at the first review that finds nothing blocking, and only
+`blocker` and `major` findings bring it back here. Fix `minor` ones alongside them where
+it is cheap; left alone, they stay visible to the human and cost no round.
 
 The review found:
 
@@ -146,18 +162,37 @@ A finding that arrives with `answers your dispute:` is one you rejected before a
 reviewer has now answered. Deal with it: apply it, or dispute it again with a reason that
 answers what they said.
 
+Never defer a blocking finding to a follow-up or leave it out of your Output: every
+`blocker` and `major` above is either under `fixed` or under `disputed`, never both and
+never neither. Disputing every blocking finding stops the run for the human at once. On
+iteration {{max_iterations}} there is no review after you: Collie reads your `fixed`,
+`disputed` and `checks` against the findings above and the merge request says the last
+fix was implementer-reported, not re-reviewed — so report exactly what you did and what
+your checks actually said.
+
 Push the fixups before you finish — `git push -u origin HEAD -o ci.skip` — every
 iteration: the next round reviews the remote, and a fix it cannot see is a finding it
 raises again. A push that fails is reported as `"pushed": false`, not fatal.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "disputed":
-[{"file": "path", "severity": "minor", "title": "the finding", "detail": "why I
-disagree"}], "fixed": ["what you changed", ...], "pushed": true, "tests": "what you ran and what it
-said"}`.
+Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what you
+could not finish>], "fixed": [{"file": "path", "title": "the finding", "note": "what you
+changed"}], "disputed": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
+"title": "the finding", "detail": "why I disagree"}], "checks": [{"name": "the command you
+ran", "passed": true, "note": "what it said"}], "pushed": true}`. `file` and `title` in
+`fixed` and `disputed` are exactly as the finding above gives them, so Collie can match
+them; `checks` lists every test and lint command you ran, one entry each, with `passed`
+as it actually came out.
 
 ## mr
 
-The branch is reviewed and the loop is clean. Push it and open the merge request.
+The branch is reviewed and the loop found nothing blocking. Push it and open the merge
+request.
+
+{{unreviewed}}
+
+Where the line above is not empty, the last fix pass was checked by its own tests and
+dispositions and not by a reviewer: say so in the description, in one sentence, and list
+what that fix changed. Where findings were left open as non-blocking, list them too.
 
 - Assignee: `{{mr.assignee}}`
 - MR template: `{{mr.template}}`
@@ -213,5 +248,7 @@ Linear MCP. If the MCP is not configured, skip it and say so in your Output.
 Never write the company package scope with a leading at-sign — in the MR, in a commit
 message, or anywhere else. Write it as a bare name.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "mr_url": "<url>",
-"linear_issues": [<the ids you linked>], "branch": "<what you pushed>", "pushed": true}`.
+Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [], "mr_url":
+"<url>", "linear_issues": [<the ids you linked>], "branch": "<what you pushed>", "pushed":
+true}`. `clean` means the merge request exists or was updated; a push or `glab` that failed
+is `findings`, saying what.

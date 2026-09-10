@@ -116,7 +116,7 @@ declares it the same way and reads `{{inputs.repo}}`; see
 | `requires`    | string or list | What the environment must provide — see [Requirements](#requirements).                               |
 | `fan_in`      | string         | Reconcile that earlier step's parallel outputs into one — see [Fan-in](#fan-in).                     |
 | `choices`     | list           | Ask instead of running an agent — see [Choice steps](#choice-steps).                                 |
-| `repeat`      | map            | `{from, back_to, max}` — the fix loop; see [Loops](#loops).                                          |
+| `repeat`      | map            | `{from, back_to, max, converge}` — the fix loop; see [Loops](#loops).                                |
 
 ### Requirements
 
@@ -148,7 +148,8 @@ produces `review.md` — see [Outputs](#outputs).
   repeat:
     from: review.synthesize # the gate: loop while that step reports findings
     back_to: simplify # where the next round starts (default: from)
-    max: 5 # falls back to the workflow's max_iterations
+    max: 4 # falls back to the workflow's max_iterations
+    converge: true # blocking findings drive the loop; see below
 ```
 
 The gate is read from the named step's output `verdict`, never from terminal text. A
@@ -156,6 +157,27 @@ finding the implementer marked `disputed`, with its reason, stops driving the lo
 sides cannot settle it, so the run finishes and you decide. A reviewer who can answer the
 reason raises it again with a `rebuttal`, which clears the dispute and puts the finding back
 in front of the implementer.
+
+Without `converge`, every live finding loops, and the last iteration blocks with whatever
+the last review said. With `converge: true` — what the bundled `implement` uses — `max` is
+a ceiling, not a target:
+
+- Only `blocker` and `major` findings bring the run back to `back_to`. A review with only
+  `minor` findings skips the fix step and goes on, noted as "N non-blocking finding(s)
+  remain", never as clean. A severity outside the three blocks.
+- A `blocker` or `major` the implementer disputes is the human's: the run stops with
+  `dispute_unresolved` as soon as nothing blocking is left to fix, whether or not a later
+  review raised it again. A fix that disputes every blocking finding stops at once.
+- A review that raises the same blocking set as the one before it — matched by file and
+  title, not by line or count — stops the run with `no_progress` instead of spending more
+  rounds.
+- On the last iteration no review follows the fix. Its Output has to account for every
+  blocking finding, `fixed` or `disputed`, with `file` and `title` exactly as the review
+  gave them, and report at least one passing `checks` entry; otherwise the run stops with
+  `fix_unverified`. What passes is implementer-reported, not reviewed, and the run's
+  summary, toast and `{{unreviewed}}` say so.
+- A resumed run re-reads the gate's and the fix's Outputs and decides again; evidence that
+  is missing stops it rather than skipping to the next step.
 
 Note the step id: a step embedded with `use:` is addressed as `<embedding step>.<its id>`.
 
@@ -244,6 +266,7 @@ log, so a typo is visible rather than silent.
 | `{{run.dir}}`, `{{run.id}}`, `{{run.slug}}`                                | The run directory and its identifiers.                                          |
 | `{{output_path}}`                                                          | Where this step must write its output.                                          |
 | `{{iteration}}`, `{{max_iterations}}`                                      | Where the loop is, and how far it may go.                                       |
+| `{{unreviewed}}`                                                           | The last fix's own account when no review followed it; otherwise empty.         |
 | `{{cwd}}`                                                                  | The directory the run is rooted at.                                             |
 | `{{step}}`                                                                 | This step's id.                                                                 |
 | `{{harness}}`, `{{model}}`, `{{effort}}`                                   | What this variant is running as.                                                |

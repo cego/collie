@@ -4,7 +4,7 @@
 import { skillsIn } from "./template";
 import { unsafePathComponent } from "./naming";
 import { isYamlMap, parseDocument, YamlError, type YamlMap, type YamlValue } from "./yaml";
-import { Crypto, Data, Effect, FileSystem, Path, Result, Schema, type PlatformError } from "effect";
+import { Crypto, Data, Effect, FileSystem, Path, Result, type PlatformError } from "effect";
 import {
   DEFAULT_MODEL,
   HARNESSES,
@@ -16,7 +16,7 @@ import {
   permissionsAsWritten,
 } from "./harness";
 import type { Defaults } from "./config";
-import { isNumber, isString } from "./schema";
+import { isBoolean, isNumber, isString } from "./schema";
 
 export type LayerName = "baseline" | "user" | "project";
 
@@ -120,8 +120,12 @@ export interface StepDef {
   requires?: StepRequirement[];
   /** This step reconciles that earlier step's parallel Outputs into one. */
   fanIn?: string;
-  /** `from` is the gate; `back_to` is the earliest step to run again (default `from`). */
-  repeat?: { from: string; back_to?: string; max?: number };
+  /**
+   * `from` is the gate; `back_to` is the earliest step to run again (default `from`).
+   * `converge` makes only blocking findings drive the loop and lets the last fix's own
+   * dispositions and checks decide the run; see docs/authoring.md Loops.
+   */
+  repeat?: { from: string; back_to?: string; max?: number; converge?: boolean };
 }
 
 /** What every definition carries about where it came from and what it is built on. */
@@ -206,8 +210,6 @@ const markdownFiles = Effect.fn("Definitions.markdownFiles")(function* (dir: str
     .map((f) => path.join(dir, f));
 });
 
-const isBoolean = Schema.is(Schema.Boolean);
-
 function str(value: YamlValue | undefined, fallback = ""): string {
   return value !== undefined && isString(value) ? value : fallback;
 }
@@ -265,6 +267,7 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
       step.repeat = { from: str(stepData.repeat.from) };
       if (isString(stepData.repeat.back_to)) step.repeat.back_to = stepData.repeat.back_to;
       if (isNumber(stepData.repeat.max)) step.repeat.max = stepData.repeat.max;
+      if (stepData.repeat.converge === true) step.repeat.converge = true;
     }
     return step;
   });

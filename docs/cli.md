@@ -221,16 +221,19 @@ The attention envelope is the normal `ok`/`data` shape with one extra key beside
 `reason` is a stable code, additive across releases, and `explanation` is the same fact as
 prose:
 
-| `reason`           | `category`    | What it says                                                |
-| ------------------ | ------------- | ----------------------------------------------------------- |
-| `choice_pending`   | `question`    | A Choice anyone can answer is open.                         |
-| `succeeded`        | `completed`   | The run finished its work.                                  |
-| `working`          | `none`        | The run is getting on with it.                              |
-| `review_exhausted` | `interrupted` | Every review iteration was used with findings still open.   |
-| `step_blocked`     | `interrupted` | A step stopped for a human; its note is in the explanation. |
-| `stopped`          | `interrupted` | Someone stopped the run.                                    |
-| `failed`           | `interrupted` | It ended unsuccessfully and nothing it recorded says why.   |
-| `driver_lost`      | `interrupted` | The record says it is running, but no Driver owns it.       |
+| `reason`             | `category`    | What it says                                                                                                                  |
+| -------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `choice_pending`     | `question`    | A Choice anyone can answer is open.                                                                                           |
+| `succeeded`          | `completed`   | The run finished its work.                                                                                                    |
+| `working`            | `none`        | The run is getting on with it.                                                                                                |
+| `review_exhausted`   | `interrupted` | Every review iteration was used with findings still open.                                                                     |
+| `no_progress`        | `interrupted` | A review raised the same blocking findings as the one before it.                                                              |
+| `dispute_unresolved` | `interrupted` | The implementer disputed a blocking finding; you decide it.                                                                   |
+| `fix_unverified`     | `interrupted` | The last fix's Output did not account for every blocking finding with passing checks, or the evidence to check it is missing. |
+| `step_blocked`       | `interrupted` | A step stopped for a human; its note is in the explanation.                                                                   |
+| `stopped`            | `interrupted` | Someone stopped the run.                                                                                                      |
+| `failed`             | `interrupted` | It ended unsuccessfully and nothing it recorded says why.                                                                     |
+| `driver_lost`        | `interrupted` | The record says it is running, but no Driver owns it.                                                                         |
 
 `step` is the step the run is on where it is known, and `actions` names the `run`
 subcommands that make sense next. An interrupted run also carries `driver` (`live`, `none`

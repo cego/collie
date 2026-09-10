@@ -43,13 +43,17 @@ import { compactionFor } from "./compactors";
 import {
   findingKey,
   formatFindings,
+  isBlocking,
   parseFindings,
+  parseFixOutput,
   parseReviewOutput,
   parseSynthesis,
   renderReview,
   REVIEW_FILE,
+  settleFinalFix,
   splitDisputed,
   type Finding,
+  type Halt,
   type ReviewOutput,
 } from "./output";
 import {
@@ -250,6 +254,12 @@ interface RunCtx {
   launchPane: { paneId: string; tabId: string } | null;
   /** Whether the last pane read failed, so the next failure is not logged twice. */
   paneReadFailed: boolean;
+  /**
+   * Blocking findings a human put back in front of the implementer by resuming a run
+   * that stopped on their dispute. Handed to the fix step with the review's findings,
+   * and judged with them; cleared once that fix has run.
+   */
+  reopened: Finding[];
 }
 
 export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOptions) {
@@ -267,10 +277,28 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     tabLabels: new Map(),
     launchPane: null,
     paneReadFailed: false,
+    reopened: [],
   };
 
   run.record.status = "running";
   run.record.finished_at = null;
+  // A run resumed after a converging loop stopped it: the stop was the loop's verdict
+  // on the evidence, and the resume is the human's word to retry the blocked fix. No
+  // review is started for it; the fix runs against the review that is already there.
+  if (run.record.halt === "no_progress" && run.record.blocking_seen) {
+    run.record.blocking_seen = { ...run.record.blocking_seen, iteration: run.record.iteration };
+    yield* run.log(
+      `resumed after no_progress: fix ${run.record.iteration} runs again against review ${run.record.iteration}'s findings`,
+    );
+  }
+  if (run.record.halt === "dispute_unresolved") {
+    ctx.reopened = run.record.disputed.filter(isBlocking);
+    run.record.disputed = run.record.disputed.filter((d) => !isBlocking(d));
+    yield* run.log(
+      `resumed after dispute_unresolved: ${ctx.reopened.length} disputed blocking finding(s) put back in front of the implementer`,
+    );
+  }
+  run.record.halt = null;
   // The tab, the toast and the workspace view all name the run the same way.
   run.record.target_label = runTarget(wf, run.record);
   yield* run.save();
@@ -292,10 +320,11 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
             // The gate is `from`; the loop restarts at `back_to`, which may be earlier.
             back: indexOf(s.repeat.back_to ?? s.repeat.from),
             max: s.repeat.max ?? wf.maxIterations,
+            converge: s.repeat.converge === true,
           }
         : null,
     )
-    .filter((r): r is { at: number; from: number; back: number; max: number } => r !== null);
+    .filter((r): r is Repeat => r !== null);
 
   let index = 0;
   while (index < wf.steps.length) {
@@ -304,7 +333,30 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
 
     if (record.status === "done") {
       yield* out(`✓ ${step.id} — already done, skipped`);
-      index += 1;
+      // A converging loop's gate and fix are decisions, not work: a resumed run makes
+      // them again from the Outputs on disk, so a done record cannot carry it past a
+      // verdict it never reached. Evidence that is gone stops it rather than skipping.
+      const decision = repeats.find((r) => r.converge && (r.from === index || r.at === index));
+      if (!decision) {
+        index += 1;
+        continue;
+      }
+      const reloaded = yield* reloadOutcomes(o, step);
+      if (reloaded === null) {
+        return yield* halt(
+          o,
+          ctx,
+          viewSource,
+          decision,
+          "fix_unverified",
+          `cannot re-check ${step.id}: its Output is missing or unreadable`,
+          run.record.outstanding,
+        );
+      }
+      ctx.outputs.set(step.id, reloaded);
+      const next = yield* afterStep(o, ctx, viewSource, repeats, index, reloaded);
+      if (next.kind === "finish") return next.status;
+      index = next.index;
       continue;
     }
 
@@ -435,63 +487,330 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       return yield* finish(o, ctx, "blocked", viewSource, why, announced);
     }
 
-    const gate = repeats.find((r) => r.from === index);
-    if (gate) {
-      const verdict = verdictOf(outcomes, run.record.disputed);
-      // A reviewer that answered a dispute reopens it: the argument has moved on.
-      if (verdict.rebutted.length > 0) {
-        const answered = new Set(verdict.rebutted.map(findingKey));
-        run.record.disputed = run.record.disputed.filter((d) => !answered.has(findingKey(d)));
-        yield* run.save();
-        yield* out(`  ${verdict.rebutted.length} disputed finding(s) answered by a reviewer`);
-      }
-      if (verdict.settled.length > 0) {
-        yield* out(
-          `  ${verdict.settled.length} finding(s) already disputed — your call, not the loop's`,
-        );
-      }
-      if (verdict.clean) {
-        yield* out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
-        for (const s of wf.steps.slice(index + 1, gate.at + 1)) {
-          yield* run.mark(s.id, "done");
-          run.step(s.id).note = "skipped: reviews clean";
-        }
-        yield* run.save();
-        index = gate.at + 1;
-        continue;
-      }
-      yield* out(`  ${verdict.findings.length} finding(s) to fix`);
-    }
-
-    const mine = repeats.find((r) => r.at === index);
-    if (mine) {
-      if (run.record.iteration < mine.max) {
-        run.record.iteration += 1;
-        for (const s of wf.steps.slice(mine.back, index + 1)) {
-          yield* run.mark(s.id, "pending");
-          run.step(s.id).note = null;
-        }
-        yield* run.save();
-        yield* out(
-          `  looping back to ${wf.steps[mine.back]!.id} (iteration ${run.record.iteration})`,
-        );
-        index = mine.back;
-        continue;
-      }
-      // Committing work the reviewers still object to would be worse than stopping.
-      const still = verdictOf(ctx.outputs.get(wf.steps[mine.from]!.id) ?? [], run.record.disputed);
-      run.record.outstanding = still.findings;
-      run.step(step.id).note =
-        `stopped at max_iterations ${mine.max} with ${still.findings.length} finding(s)`;
-      yield* run.save();
-      yield* out(`  max_iterations (${mine.max}) reached with ${still.findings.length} finding(s)`);
-      return yield* finish(o, ctx, "blocked", viewSource, `max_iterations reached with findings`);
-    }
-
-    index += 1;
+    const next = yield* afterStep(o, ctx, viewSource, repeats, index, outcomes);
+    if (next.kind === "finish") return next.status;
+    index = next.index;
   }
 
   return yield* finish(o, ctx, "done", viewSource);
+});
+
+interface Repeat {
+  at: number;
+  from: number;
+  back: number;
+  max: number;
+  /** Only blocking findings drive the loop, and the last fix's own account decides. */
+  converge: boolean;
+}
+
+type Next = { kind: "next"; index: number } | { kind: "finish"; status: RunStatus };
+
+/**
+ * What a step's Outcome decides about where the run goes next: the gate at a loop's
+ * `from` step, and the repeat at its own. Separate from running the step so a resumed
+ * run can decide again from Outputs it reloaded.
+ */
+const afterStep = Effect.fn("Engine.afterStep")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  viewSource: string,
+  repeats: Repeat[],
+  index: number,
+  outcomes: VariantOutcome[],
+) {
+  const { run, wf, out } = o;
+  const step = wf.steps[index]!;
+  const next = (i: number): Next => ({ kind: "next", index: i });
+  const finished = (status: RunStatus): Next => ({ kind: "finish", status });
+
+  const gate = repeats.find((r) => r.from === index);
+  if (gate) {
+    const verdict = verdictOf(outcomes, run.record.disputed);
+    // A reviewer that answered a dispute reopens it: the argument has moved on.
+    if (verdict.rebutted.length > 0) {
+      const answered = new Set(verdict.rebutted.map(findingKey));
+      run.record.disputed = run.record.disputed.filter((d) => !answered.has(findingKey(d)));
+      yield* run.save();
+      yield* out(`  ${verdict.rebutted.length} disputed finding(s) answered by a reviewer`);
+    }
+    if (verdict.settled.length > 0) {
+      yield* out(
+        `  ${verdict.settled.length} finding(s) already disputed — your call, not the loop's`,
+      );
+    }
+    const skipFix = Effect.fn("Engine.skipFix")(function* (note: string) {
+      for (const s of wf.steps.slice(index + 1, gate.at + 1)) {
+        yield* run.mark(s.id, "done");
+        run.step(s.id).note = `skipped: ${note}`;
+      }
+      yield* run.save();
+      return next(gate.at + 1);
+    });
+    if (!gate.converge) {
+      if (verdict.clean) {
+        yield* out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
+        return yield* skipFix("reviews clean");
+      }
+      yield* out(`  ${verdict.findings.length} finding(s) to fix`);
+    } else {
+      if (!verdict.reviewed) {
+        return finished(
+          yield* halt(
+            o,
+            ctx,
+            viewSource,
+            gate,
+            "fix_unverified",
+            `${step.id} left no review verdict to decide on`,
+            run.record.outstanding,
+          ),
+        );
+      }
+      const blocking = [...verdict.findings.filter(isBlocking), ...ctx.reopened];
+      if (blocking.length === 0) {
+        // A dispute the reviewers did not answer settles nothing serious, whether they
+        // raised it again or left it out: the human decides it, not the merge request.
+        // The record's severities are the reviewers' own — see the fix step below.
+        const disputed = run.record.disputed.filter(isBlocking);
+        if (disputed.length > 0) {
+          return finished(
+            yield* halt(
+              o,
+              ctx,
+              viewSource,
+              gate,
+              "dispute_unresolved",
+              `${disputed.length} disputed blocking finding(s) stand unanswered — your call, not the loop's`,
+              [...disputed, ...verdict.findings],
+            ),
+          );
+        }
+        if (verdict.findings.length === 0) {
+          yield* out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
+          return yield* skipFix("reviews clean");
+        }
+        const remain = `${verdict.findings.length} non-blocking finding(s) remain`;
+        yield* out(`  nothing blocking — ${remain}, skipping ${wf.steps[gate.at]!.id}`);
+        return yield* skipFix(remain);
+      }
+      // The same blocking set as the last review, by identity rather than by count
+      // or line: nothing the fix did reached it, and another round would not either.
+      // A finding a reviewer answered a dispute on is the argument moving, not standing.
+      const keys = [
+        ...new Set(verdict.findings.filter((f) => isBlocking(f) && !f.rebuttal).map(findingKey)),
+      ].sort();
+      const seen = run.record.blocking_seen;
+      if (
+        seen &&
+        seen.iteration < run.record.iteration &&
+        keys.length > 0 &&
+        keys.length === seen.keys.length &&
+        keys.every((k, i) => k === seen.keys[i])
+      ) {
+        return finished(
+          yield* halt(
+            o,
+            ctx,
+            viewSource,
+            gate,
+            "no_progress",
+            `no progress: review ${run.record.iteration} raised the same ${keys.length} blocking finding(s) as review ${seen.iteration}`,
+            verdict.findings,
+          ),
+        );
+      }
+      run.record.blocking_seen = { iteration: run.record.iteration, keys };
+      yield* run.save();
+      yield* out(
+        `  ${verdict.findings.length + ctx.reopened.length} finding(s) to fix, ${blocking.length} blocking`,
+      );
+    }
+  }
+
+  const mine = repeats.find((r) => r.at === index);
+  if (mine) {
+    const from = wf.steps[mine.from]!.id;
+    const live = verdictOf(ctx.outputs.get(from) ?? [], run.record.disputed);
+    if (mine.converge) {
+      // Judged against everything the review raised, not against what is left once
+      // this fix's own disputes are taken out: `collect` has already recorded those,
+      // and a blocker disputed is a blocker unresolved, not one gone.
+      const raised = [
+        ...(ctx.outputs.get(from) ?? [])
+          .map((v) => v.review)
+          .filter((r): r is ReviewOutput => r !== null)
+          .flatMap((r) => r.findings),
+        ...ctx.reopened,
+      ];
+      ctx.reopened = [];
+      if (raised.length === 0 && !live.reviewed) {
+        return finished(
+          yield* halt(
+            o,
+            ctx,
+            viewSource,
+            mine,
+            "fix_unverified",
+            `no review verdict from ${from} to check fix ${run.record.iteration} against`,
+            run.record.outstanding,
+          ),
+        );
+      }
+      // The reviewers' severity is the one a dispute carries from here on: an
+      // implementer cannot make a blocker minor by calling it so.
+      const severity = new Map(raised.map((f) => [findingKey(f), f.severity]));
+      run.record.disputed = run.record.disputed.map((d) => ({
+        ...d,
+        severity: severity.get(findingKey(d)) ?? d.severity,
+      }));
+      yield* run.save();
+      // The fix's own account: read leniently between reviews, where the next review is
+      // the check, and strictly at the end, where nothing else is.
+      const raw = outcomes[0]?.output ?? null;
+      const fix = parseFixOutput(raw, outcomes[0]?.record.output ?? step.id);
+      const blocking = raised.filter(isBlocking);
+      if (fix.ok && blocking.length > 0) {
+        const disputed = new Set(run.record.disputed.map(findingKey));
+        const fixed = new Set(fix.value.fixed.map(findingKey));
+        if (blocking.every((f) => disputed.has(findingKey(f)) && !fixed.has(findingKey(f)))) {
+          return finished(
+            yield* halt(
+              o,
+              ctx,
+              viewSource,
+              mine,
+              "dispute_unresolved",
+              `fix ${run.record.iteration} disputed every blocking finding (${blocking.length}) — your call, not the loop's`,
+              raised,
+            ),
+          );
+        }
+      }
+      if (run.record.iteration >= mine.max) {
+        if (!fix.ok) {
+          return finished(
+            yield* halt(o, ctx, viewSource, mine, "fix_unverified", fix.error, raised),
+          );
+        }
+        // A dispute standing from an earlier round is still a dispute of this fix.
+        const own = new Set(fix.value.disputed.map(findingKey));
+        const standing = run.record.disputed.filter((d) => !own.has(findingKey(d)));
+        const settled = settleFinalFix(raised, {
+          ...fix.value,
+          disputed: [...fix.value.disputed, ...standing],
+        });
+        if (!settled.ok) {
+          return finished(
+            yield* halt(
+              o,
+              ctx,
+              viewSource,
+              mine,
+              settled.halt,
+              `last fix not enough: ${settled.reasons.join("; ")}`,
+              settled.outstanding,
+            ),
+          );
+        }
+        // What the fix reported is what the run reports — not the review before it,
+        // which is history now, and not a review either, which the words say.
+        run.record.outstanding = settled.outstanding;
+        run.record.unreviewed = settled.attestation;
+        run.step(step.id).note = settled.attestation;
+        yield* run.save();
+        yield* out(`  ${settled.attestation}`);
+        return next(index + 1);
+      }
+    }
+    if (run.record.iteration < mine.max) {
+      run.record.iteration += 1;
+      for (const s of wf.steps.slice(mine.back, index + 1)) {
+        yield* run.mark(s.id, "pending");
+        run.step(s.id).note = null;
+      }
+      yield* run.save();
+      yield* out(
+        `  looping back to ${wf.steps[mine.back]!.id} (iteration ${run.record.iteration})`,
+      );
+      return next(mine.back);
+    }
+    // Committing work the reviewers still object to would be worse than stopping.
+    run.record.outstanding = live.findings;
+    run.step(step.id).note =
+      `stopped at max_iterations ${mine.max} with ${live.findings.length} finding(s)`;
+    yield* run.save();
+    yield* out(`  max_iterations (${mine.max}) reached with ${live.findings.length} finding(s)`);
+    return finished(
+      yield* finish(o, ctx, "blocked", viewSource, `max_iterations reached with findings`),
+    );
+  }
+
+  return next(index + 1);
+});
+
+/**
+ * A converging loop stopping for the human. The loop's own step is what blocks, so a
+ * resume runs it again and decides again; the reason is on the record for `attention`
+ * and in the note for whoever reads the summary.
+ */
+const halt = Effect.fn("Engine.halt")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  viewSource: string,
+  loop: Repeat,
+  why: Halt,
+  note: string,
+  outstanding: Finding[],
+) {
+  const id = o.wf.steps[loop.at]!.id;
+  yield* o.run.mark(id, "blocked");
+  o.run.step(id).note = note;
+  o.run.record.halt = why;
+  o.run.record.outstanding = outstanding;
+  o.run.record.unreviewed = null;
+  yield* o.run.save();
+  yield* o.out(`  ${note}`);
+  return yield* finish(o, ctx, "blocked", viewSource, note);
+});
+
+/**
+ * A done step's Outcomes, read back from the Outputs it recorded. Only what a gate
+ * needs — the parsed verdict — with none of `collect`'s side effects; null when any
+ * variant's Output is gone or no longer parses.
+ */
+const reloadOutcomes = Effect.fn("Engine.reloadOutcomes")(function* (
+  o: EngineOptions,
+  step: ResolvedStep,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const outcomes: VariantOutcome[] = [];
+  for (const record of o.run.step(step.id).variants) {
+    if (!record.output) return null;
+    const text = yield* fs
+      .readFileString(pathService.join(o.run.dir, record.output))
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (text === null) return null;
+    let output: YamlValue;
+    try {
+      output = Schema.decodeUnknownSync(YamlValueJsonSchema)(text);
+    } catch {
+      return null;
+    }
+    let review: ReviewOutput | null = null;
+    if (step.fanIn) {
+      const parsed = parseSynthesis(text, record.output);
+      if (!parsed.ok) return null;
+      review = parsed.value;
+    } else if (isYamlMap(output) && "verdict" in output) {
+      const parsed = parseReviewOutput(text, record.output);
+      if (!parsed.ok) return null;
+      review = parsed.value;
+    }
+    outcomes.push({ record, output, review });
+  }
+  return outcomes.length > 0 ? outcomes : null;
 });
 
 const runStep = Effect.fn("Engine.runStep")(function* (
@@ -698,10 +1017,7 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       yield* run.stepDir(step.id, key),
       `prompt-${run.record.iteration}.md`,
     );
-    yield* fs.writeFileString(
-      path,
-      `${yield* buildPrompt(o, step, variant, key, ctx.outputs, ctx.skills, ctx.previous, vars)}\n`,
-    );
+    yield* fs.writeFileString(path, `${yield* buildPrompt(o, step, variant, key, ctx, vars)}\n`);
     // Held by a compaction of its own that is still in the air: the prompt file is
     // written, because the step is resumable, but nothing is sent. The variant's own
     // error is how a blocked step already reaches a human — the board draws the
@@ -2606,6 +2922,7 @@ export const ENGINE_SUPPLIED: ReadonlySet<string> = new Set([
   "max_iterations",
   "output_path",
   "target_repo",
+  "unreviewed",
 ]);
 
 const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
@@ -2613,11 +2930,10 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
   step: ResolvedStep,
   variant: Variant,
   variantKey: string | null,
-  outputs: Map<string, VariantOutcome[]>,
-  skills: SkillPaths,
-  previous: PreviousReview,
+  ctx: RunCtx,
   extraVars?: YamlMap,
 ) {
+  const { outputs, skills, previous } = ctx;
   const adapter = HARNESSES[variant.harness]!;
   const outputPath = step.output ? yield* o.run.outputPath(step.id, variantKey, step.output) : "";
   const vars: YamlMap = {
@@ -2630,7 +2946,7 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
         ]),
       ),
     ),
-    findings: formatFindings(lastFindings(o, step, outputs)),
+    findings: formatFindings(lastFindings(o, step, ctx)),
     // `--repo <project>` for an MR target, so a prompt can be followed from anywhere.
     target_repo: repoArgs(parseMrTarget(o.run.record.inputs.target ?? "")?.project ?? null).join(
       " ",
@@ -2642,6 +2958,8 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
     output_path: outputPath,
     iteration: String(o.run.record.iteration),
     max_iterations: String(o.run.record.max_iterations),
+    // Empty until a last fix went unreviewed; the mr prompt says it where it is not.
+    unreviewed: o.run.record.unreviewed ?? "",
     cwd: o.run.record.cwd,
     step: step.id,
     harness: variant.harness,
@@ -2671,17 +2989,17 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
   return parts.join("\n\n");
 });
 
-function lastFindings(
-  o: EngineOptions,
-  step: ResolvedStep,
-  outputs: Map<string, VariantOutcome[]>,
-): Finding[] {
+function lastFindings(o: EngineOptions, step: ResolvedStep, ctx: RunCtx): Finding[] {
   const from = step.repeat?.from;
-  const source = from ? outputs.get(from) : undefined;
-  return source ? verdictOf(source, o.run.record.disputed).findings : [];
+  const source = from ? ctx.outputs.get(from) : undefined;
+  if (!source) return [];
+  const findings = verdictOf(source, o.run.record.disputed).findings;
+  return step.repeat?.converge ? [...findings, ...ctx.reopened] : findings;
 }
 
 interface Verdict {
+  /** False when no variant wrote a review at all — which is not the same as clean. */
+  reviewed: boolean;
   clean: boolean;
   /** What the fix step gets: everything except what is already settled. */
   findings: Finding[];
@@ -2700,6 +3018,7 @@ function verdictOf(outcomes: VariantOutcome[], disputed: Finding[]): Verdict {
   // Clean means "nothing left for the implementer", not "nobody said anything":
   // a finding the implementer already rejected with a reason is the human's call.
   return {
+    reviewed: reviews.length > 0,
     clean: reviews.length > 0 && split.live.length === 0,
     findings: split.live,
     settled: split.settled,
@@ -2783,6 +3102,11 @@ export function outcomeLine(record: RunRecord, status: RunStatus): string {
   const local = record.unpushed ? ` — commits on ${record.unpushed} are not pushed` : "";
   if (record.mr_url) return `merge request: ${record.mr_url}${local}`;
   const open = record.outstanding.length;
+  // A last fix nobody reviewed is not "clean": it is what the implementer said, and
+  // the line says exactly that, plus what it left open.
+  if (status === "done" && record.unreviewed) {
+    return `${record.unreviewed}${open > 0 ? `; ${open} non-blocking finding(s) open` : ""}${local}`;
+  }
   if (open > 0) {
     const counts = new Map<string, number>();
     for (const finding of record.outstanding) {
@@ -2816,6 +3140,9 @@ export function summarise(o: EngineOptions, status: RunStatus): string {
       .map((v) => `\n    ${v.label}: ${v.error}`)
       .join("");
     lines.push(`  ${marks[step.status]} ${step.id}${detail}${errors}`);
+  }
+  if (run.record.unreviewed) {
+    lines.push("", `Not re-reviewed: ${run.record.unreviewed}`);
   }
   if (run.record.outstanding.length > 0) {
     lines.push("", "Findings still open:", formatFindings(run.record.outstanding));
