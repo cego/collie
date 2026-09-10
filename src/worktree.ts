@@ -20,10 +20,18 @@ import {
 } from "./herdr";
 import { defaultBase } from "./inputs";
 import { disambiguate, GLYPH, tabLabel } from "./naming";
-import { branchTargetHead, parseMrTarget, projectHere, repoArgs, shell, type Runner } from "./mr";
+import {
+  branchTargetHead,
+  glabLogin,
+  parseMrTarget,
+  projectHere,
+  repoArgs,
+  shell,
+  type Runner,
+} from "./mr";
 import { withLock } from "./lock";
 import { resumable, RunStore, type WorktreeRecord } from "./run";
-import { slug } from "./template";
+import { slugify } from "./template";
 
 /**
  * The workflows that change the repository, and so need a checkout of their own.
@@ -42,6 +50,7 @@ const MrViewJson = Schema.fromJsonString(
 
 /** What deciding a Run's branch needs to know. */
 export interface BranchAsk {
+  /** Where the Run was started, which is the repository the worktree is cut from. */
   cwd: string;
   /** What this Run is called, which is what a new branch is named after. */
   name: string;
@@ -54,7 +63,24 @@ export interface BranchAsk {
    */
   sources?: Record<string, string> | undefined;
   explicit?: string | null | undefined;
+  /**
+   * The GitLab login a generated branch is namespaced under, from the environment
+   * (`PluginEnv.gitlabLogin`). Null or absent leaves it to glab.
+   */
+  login?: string | null | undefined;
   run?: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+}
+
+/**
+ * What giving a Run its checkout needs to know: everything deciding its branch does,
+ * and the Workflow and workspace only the checkout cares about. One declaration, so an
+ * answer the branch resolver learns to take is not a second edit here.
+ */
+export interface CheckoutAsk extends BranchAsk {
+  workflow: string;
+  /** The workspace the Run was activated from, and stays in. */
+  workspaceId?: string | null;
+  workspaceLabel?: string | null;
 }
 
 /** Where a branch came from, for the line that tells the operator what was decided. */
@@ -62,30 +88,28 @@ export type BranchSource =
   | "explicit"
   | "from target"
   | "from the reviewed branch"
+  | "from the task"
   | "from plan"
   | "from the work"
   | "from the run name";
 
-/**
- * Why a Run cannot be given a checkout. One value rather than a reason beside a
- * question, so a caller cannot read one without the other, or read the wrong one
- * first: a refusal is answerable or it is not, and the value says which.
- */
-export interface Refusal {
-  why: string;
-  /**
-   * What to ask for, when the refusal is one the caller can settle — the answer goes
-   * back as `--input branch=`. Null when nothing the caller could say would help.
-   */
-  ask: string | null;
-}
-
 export interface BranchPlan {
   branch: string;
+  /**
+   * The branch without the login it is namespaced under, which is the part that names
+   * the work. It is what the Run is called: every branch one operator generates shares
+   * the same namespace, so keeping it would spend the slug's length on nothing.
+   */
+  task: string;
   /** What a branch that does not exist yet is based on. */
   base: string;
-  /** Why this Run cannot be given a branch, and null when it can. */
-  refused: Refusal | null;
+  /**
+   * Why this Run cannot be given a branch, and null when it can. Never a question:
+   * every branch a Run needs is now generated, so a refusal here is a checkout git or
+   * herdr would not make, or a GitLab identity nothing establishes — none of which a
+   * caller settles by naming a branch.
+   */
+  refused: string | null;
   source: BranchSource | null;
 }
 
@@ -109,38 +133,111 @@ export function branchListed(
   return mutates(workflow) ? { ...inputs, [BRANCH_INPUT]: "optional" } : inputs;
 }
 
-/** The question a Run with no derivable branch is refused with. */
-const BRANCH_QUESTION =
-  "Which branch should this run work on? Nothing it was given names one short enough to be a branch.";
+/**
+ * The Input carrying a task's agreed short name across a handoff, so a branch is named
+ * after the work rather than after the path Collie chained into or the whole prose the
+ * Run happens to be called.
+ */
+export const TASK_INPUT = "task";
+
+/** Named in the refusal, so an operator with no login is told what to set. */
+const LOGIN_ENV = "GITLAB_USER_LOGIN";
+
+/** How long the task half of a generated branch may be. */
+const SLUG_MAX = 40;
 
 /**
- * Which branch this Run builds, from what the operator said, in this order:
+ * Which branch this Run builds, in this order:
  *
  * 1. `--input branch=<name>`, which beats everything below.
  * 2. The branch the reviewed work is already on, for a Run fixing a review.
  * 3. The `<name>` of a `branch:<base>...<name>` target *a human gave*.
- * 4. The plan directory's own name.
- * 5. A slug of the work itself — the description, or the issue id.
+ * 4. `<login>/<task>`, from the `task` Input a handoff carried.
+ * 5. `<login>/<plan directory's own name>`.
+ * 6. `<login>/<slug of the work itself>` — the description, or the issue id.
+ * 7. `<login>/<slug of the Run's own name>`.
  *
- * Two refusals rather than a guess. A review whose branch cannot be established gets no
+ * The first three are branches that already exist, or that a human named, and are taken
+ * verbatim. The rest name work that does not exist yet, and are namespaced under the
+ * operator's GitLab login — which is what keeps two people's new work apart.
+ *
+ * One refusal rather than a guess. A review whose branch cannot be established gets no
  * new one: a fix round exists to update what was reviewed, and putting those commits on
  * a fresh branch named after the Run would leave the merge request untouched and the
- * fixes somewhere nobody is looking. And a name that hit a length cap is refused with a
- * question, because two names clipped to the same thing are one branch and so one
- * checkout — the whole failure this resolver exists to prevent.
+ * fixes somewhere nobody is looking.
  */
 export const branchFor = Effect.fn("worktree.branchFor")(function* (opts: BranchAsk) {
   const run = opts.run ?? shell;
+  const refuse = (why: string) =>
+    ({ branch: "", task: "", base: "", refused: why, source: null }) satisfies BranchPlan;
   const asked = yield* branchName(opts, run);
-  if (asked.refused !== undefined) {
-    return { branch: "", base: "", refused: asked.refused, source: null } satisfies BranchPlan;
+  if (asked.refused !== null) return refuse(asked.refused);
+  let branch = asked.branch;
+  if (asked.generated) {
+    const who = yield* whoami(opts, run);
+    if (who === null) {
+      return refuse(
+        `no GitLab login to name a branch under: ${LOGIN_ENV} is unset and glab could not say who you are. Log in with \`glab auth login\`, or set ${LOGIN_ENV}.`,
+      );
+    }
+    branch = `${who}/${asked.branch}`;
+    // git's own rules, on the one name Collie made up rather than was given: an
+    // illegal ref would otherwise fail at `worktree add`, after the Run had started.
+    const legal = yield* run("git", ["check-ref-format", `refs/heads/${branch}`], opts.cwd);
+    if (legal.code !== 0) return refuse(`${branch} is not a branch name git will accept`);
   }
-  const branch = asked.branch;
   const base = yield* baseFor(branch, opts.cwd, run, { reviewed: asked.reviewed });
-  if (base.refused !== undefined) {
-    return { branch: "", base: "", refused: base.refused, source: null } satisfies BranchPlan;
-  }
-  return { branch, base: base.base, refused: null, source: asked.source } satisfies BranchPlan;
+  if (base.refused !== undefined) return refuse(base.refused);
+  return {
+    branch,
+    task: asked.branch,
+    base: base.base,
+    refused: null,
+    source: asked.source,
+  } satisfies BranchPlan;
+});
+
+/**
+ * The GitLab login a generated branch is namespaced under: the environment's, else the
+ * authenticated user of whatever host this checkout pushes to. Never the local OS user
+ * and never the merge request's assignee — a branch namespace says who is pushing, and
+ * a wrong answer here is a branch under someone else's name.
+ */
+const whoami = Effect.fn("worktree.whoami")(function* (
+  opts: BranchAsk,
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+) {
+  const named = opts.login?.trim();
+  if (named) return named;
+  return yield* glabLogin(opts.cwd, run);
+});
+
+/** What `branchName` answers with: a name and how to treat it, or why there is none. */
+interface Named {
+  refused: string | null;
+  branch: string;
+  /** Whether the branch already holds the work, which is what `baseFor` cuts from. */
+  reviewed: boolean;
+  /** Whether Collie made this name up, and so has to namespace and validate it. */
+  generated: boolean;
+  source: BranchSource | null;
+}
+
+const refusedName = (why: string): Named => ({
+  refused: why,
+  branch: "",
+  reviewed: false,
+  generated: false,
+  source: null,
+});
+
+/** A branch that already exists, or that a human named: taken exactly as it came. */
+const verbatim = (branch: string, source: BranchSource, reviewed = false): Named => ({
+  refused: null,
+  branch,
+  reviewed,
+  generated: false,
+  source,
 });
 
 const branchName = Effect.fn("worktree.branchName")(function* (
@@ -149,7 +246,7 @@ const branchName = Effect.fn("worktree.branchName")(function* (
 ) {
   const path = yield* Path.Path;
   const explicit = opts.explicit?.trim();
-  if (explicit) return { branch: explicit, reviewed: false, source: "explicit" as const };
+  if (explicit) return verbatim(explicit, "explicit");
   // `reviewed` is what `baseFor` needs from here: a branch that already holds the work
   // has to be cut from that work, and a name for work that does not exist yet cannot be.
   // A review-source Run reads the target itself, and refuses a head that is not a
@@ -158,45 +255,73 @@ const branchName = Effect.fn("worktree.branchName")(function* (
     const reviewed = yield* reviewedBranch(opts.cwd, opts.inputs, run);
     // Nothing the caller could say settles a review with no branch to fix: the work
     // being fixed is on a branch or it is not.
-    return reviewed.refused === undefined
-      ? { ...reviewed, source: "from the reviewed branch" as const }
-      : { refused: { why: reviewed.refused, ask: null } };
+    if (reviewed.refused !== undefined) return refusedName(reviewed.refused);
+    return verbatim(reviewed.branch, "from the reviewed branch", reviewed.reviewed);
   }
   const fromTarget = said(opts, "target") ? targetBranch(opts.inputs.target ?? "") : null;
-  if (fromTarget) return { branch: fromTarget, reviewed: false, source: "from target" as const };
+  if (fromTarget) return verbatim(fromTarget, "from target");
+  const task = opts.inputs[TASK_INPUT]?.trim();
+  if (task) return generated(task, "from the task");
   const work = workSource(opts.inputs);
   // The plan directory's own name, not the path to it: every plan under one `tasks/`
   // directory slugs the same way. Only one the operator named, though — a plan
   // directory Collie itself pointed at is `<run.dir>/plan`, from a chained Run or from
   // the picker's offer of a finished plan, and every one of those is called `plan`.
   if (work?.kind === "plan-dir" && said(opts, "plan")) {
-    return wholeName(path.basename(work.value), "from plan");
+    return generated(path.basename(work.value), "from plan", work.value);
   }
   // The work itself where the operator described it — the whole of what they said, not
   // the Run's name for it, because that name is a label `textLabel` already cut to 24
-  // characters, under the cap `wholeName` applies, and a truncated name must never
+  // characters, under the cap `taskSlug` applies, and a truncated name must never
   // become a branch. Otherwise the Run's name, which is whole: a chained Run is named
   // after its parent, and a plan offered from an earlier Run after that Run.
   // Two sources, because they are two answers: a description the operator typed is the
   // work itself, and the confirm line saying "from the run name" for it would name the
   // wrong thing as what decided.
   const described = work !== null && said(opts, "plan");
-  return described
-    ? wholeName(work.value, "from the work")
-    : wholeName(opts.name, "from the run name");
+  if (described) return generated(work.value, "from the work");
+  // The Run's own name, told apart by the work behind it: a Workflow that declares no
+  // Input naming the work — `architecture` — is called nothing at all, and two of those
+  // sharing a name would share a branch, a checkout, an index and a stash stack. The
+  // plan directory it was pointed at is its parent Run's own, so no two agree.
+  return generated(opts.name, "from the run name", `${opts.name}\n${work?.value ?? ""}`);
 });
 
 /**
- * A name as a branch, but only if it is the whole of what it stands for. Anything that
- * hit the length cap is refused with a question instead: two plans, or two descriptions,
- * whose names agree up to the cap would be one branch and so one checkout.
+ * A name for work that does not exist yet, to be namespaced under the login. `from` is
+ * what it reads as; `distinctBy` is what tells it apart from another whose readable half
+ * came out the same — the whole of the path a basename was taken from, the description
+ * behind a Run's clipped name.
  */
-function wholeName(from: string, source: BranchSource) {
-  const derived = slug(from);
-  if (derived.clipped) {
-    return { refused: { why: `no branch name comes out of ${from}`, ask: BRANCH_QUESTION } };
-  }
-  return { branch: derived.slug, reviewed: false, source };
+function generated(from: string, source: BranchSource, distinctBy = from): Named {
+  return {
+    refused: null,
+    branch: taskSlug(from, distinctBy),
+    reviewed: false,
+    generated: true,
+    source,
+  };
+}
+
+/**
+ * The task half of a generated branch: bounded, legal, and never standing for two
+ * different pieces of work. A slug that does not spell every letter and digit of the
+ * text carries a digest of the whole — the length cap, the `run` fallback and a letter
+ * no slug can hold all lose something, and the branch is what keys the worktree.
+ *
+ * A digest and not a counter, so the answer is stable: the same work asked for twice is
+ * one branch and one checkout, rather than a second merge request on every retry.
+ * `Bun.hash` for the reason `registry.ts` gives.
+ */
+function taskSlug(from: string, distinctBy: string): string {
+  const derived = slugify(from, SLUG_MAX);
+  if (letters(from) === letters(derived)) return derived;
+  return `${derived}-${Bun.hash(distinctBy).toString(36).slice(0, 6)}`;
+}
+
+/** Case, spacing and punctuation are not distinctions: the same words are the same task. */
+function letters(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
 
 /**
@@ -225,8 +350,7 @@ const baseFor = Effect.fn("worktree.baseFor")(function* (
     // not this checkout has heard of it yet.
     yield* run("git", ["fetch", "origin", branch], cwd);
     if ((yield* exists(`origin/${branch}`)).code === 0) return { base: `origin/${branch}` };
-    const why = `${branch} is not on the remote, so there is no reviewed work to fix`;
-    return { refused: { why, ask: null } };
+    return { refused: `${branch} is not on the remote, so there is no reviewed work to fix` };
   }
   const head = (yield* defaultBase(run, cwd)) ?? "master";
   const tracked = (yield* exists(`origin/${head}`)).code === 0;
@@ -486,10 +610,30 @@ export interface Checkout {
   /** One line for the Run's log, empty where there was nothing to say. */
   note: string;
   /** Why this Run must not start, and null when it may. */
-  refused: Refusal | null;
+  refused: string | null;
   /** The branch this Run works on and where it came from, for the line that says so. */
   branch: string | null;
+  /** The branch without the login namespace, which is what the Run is named after. */
+  task: string | null;
   branchSource: BranchSource | null;
+}
+
+/**
+ * What a Run created for this Checkout is called: the whole of what it is named after,
+ * and the shorter form its slug is cut from.
+ *
+ * The branch already resolves what the Run is about, so it names the Run — but only its
+ * task half reaches the slug: the login is the same on every branch one operator
+ * generates, and spending the slug's length cap on it makes two Runs one row.
+ *
+ * `otherwise` is for a Run with no checkout of its own: what it was pointed at, and the
+ * short label beside it, exactly as `primaryName` answers with them.
+ */
+export function runNames(checkout: Checkout, otherwise: { value: string; short: string }) {
+  return {
+    namedAfter: checkout.branch ?? otherwise.value,
+    slugFrom: checkout.task ?? otherwise.short,
+  };
 }
 
 /**
@@ -510,18 +654,7 @@ export interface Checkout {
  */
 export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   herdr: Herdr,
-  opts: {
-    /** Where the Run was started, which is the repository the worktree is cut from. */
-    cwd: string;
-    workflow: string;
-    name: string;
-    inputs: Record<string, string>;
-    sources?: Record<string, string> | undefined;
-    /** The workspace the Run was activated from, and stays in. */
-    workspaceId?: string | null;
-    workspaceLabel?: string | null;
-    explicit?: string | null | undefined;
-  },
+  opts: CheckoutAsk,
 ) {
   const here: Checkout = {
     cwd: opts.cwd,
@@ -531,6 +664,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     note: "",
     refused: null,
     branch: null,
+    task: null,
     branchSource: null,
   };
   if (!mutates(opts.workflow)) return here;
@@ -538,15 +672,13 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   const plan = yield* branchFor(opts);
   if (plan.refused) return { ...here, refused: plan.refused } satisfies Checkout;
   here.branch = plan.branch;
+  here.task = plan.task;
   here.branchSource = plan.source;
 
   // Whichever manager was asked, a Run with nowhere of its own to work says so the
   // same way, naming the branch it could not be given a checkout for.
   const refuse = (why: string) =>
-    ({
-      ...here,
-      refused: { why: `no worktree for ${plan.branch}: ${why}`, ask: null },
-    }) satisfies Checkout;
+    ({ ...here, refused: `no worktree for ${plan.branch}: ${why}` }) satisfies Checkout;
 
   // The Workflow's own `workspace` Input, so both front doors and a chained Run reach
   // it the same way: `startRun` settles it from `--input`, and the Choice that chains

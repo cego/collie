@@ -281,15 +281,7 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     note: line,
     parent: opts.parent?.id,
   };
-  let started = yield* startRun(env, start);
-  // A branch nothing named is an Input like any other here, so it is asked for the way
-  // every other one was a few lines up rather than reported as a failure. Once: an
-  // answer that will not do says why, and the human starts again knowing that.
-  if (started._tag === "Rejected" && started.ask) {
-    const answer = yield* prompts.ask(started.ask);
-    if (answer === null || answer.trim() === "") return null;
-    started = yield* startRun(env, { ...start, branch: answer.trim() });
-  }
+  const started = yield* startRun(env, start);
   if (started._tag === "Rejected") {
     yield* bail(prompts, started.result.error.message);
     return null;

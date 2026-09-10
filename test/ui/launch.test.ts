@@ -138,16 +138,14 @@ Do {{inputs.goal}}.
   expect(runs[0]!.record.decisions).toEqual({});
 });
 
-effectTest(
-  "a branch the picker cannot work out is asked for, not reported as a failure",
-  function* () {
-    // `implement` by name: that is the workflow Collie knows changes the repository, and
-    // so the one that needs a branch before it can start.
-    yield* writeDef(
-      rig.baselineDir,
-      "workflows",
-      "implement",
-      `---
+effectTest("a branch nothing names is worked out, and the picker never asks for one", function* () {
+  // `implement` by name: that is the workflow Collie knows changes the repository, and
+  // so the one that needs a branch before it can start.
+  yield* writeDef(
+    rig.baselineDir,
+    "workflows",
+    "implement",
+    `---
 name: implement
 title: implement — needs somewhere to work
 inputs:
@@ -161,19 +159,23 @@ steps:
 
 Do {{inputs.goal}}.
 `,
-    );
+  );
 
-    // Too long to slug, so nothing the run was given names a branch short enough to be one.
-    const goal = "Fix the parser so a diff of two refs with no branch on either side works";
-    const { asked } = yield* answering(["implement", goal, "fix-the-parser"], (prompts) =>
-      pickFlow(new Herdr(env()), env(), prompts),
-    );
+  // Too long to slug, so nothing the run was given names a branch short enough to be
+  // one — which used to be a question put to whoever was standing at the picker.
+  const goal = "Fix the parser so a diff of two refs with no branch on either side works";
+  const { asked } = yield* answering(["implement", goal], (prompts) =>
+    pickFlow(new Herdr(env()), env(), prompts),
+  );
 
-    // The question itself, not "implement needs input." with no way to answer it — every
-    // other missing input in this flow is asked for, and the CLI front door asks this one.
-    expect(asked.some((question) => question.includes("Which branch"))).toBe(true);
-  },
-);
+  // The workflow and its goal, and no branch: it is generated from the task and the
+  // operator's own GitLab login. This rig's git makes no checkouts, so what is left
+  // is the refusal that follows — and it names the branch that was decided on.
+  expect(asked.slice(0, 2)).toEqual(["Workflows — " + env().cwd, "What is the goal?"]);
+  expect(asked.some((question) => question.toLowerCase().includes("branch"))).toBe(false);
+  expect(asked.at(-1)).toContain("could not be given a checkout");
+  expect(yield* new RunStore(env().stateDir).list()).toHaveLength(0);
+});
 
 effectTest("a launch inline in the tab leaves the session's popup alone", function* () {
   yield* rig.startSocket();

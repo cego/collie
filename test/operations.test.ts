@@ -5,11 +5,18 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Option, Schema } from "effect";
 import { runEffect } from "./support/effect";
-import { Rig } from "./support/recorder";
+import { Rig, TEST_LOGIN } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 import { installFakeSkills } from "./support/defs";
-import { FakeBin } from "./support/bin";
-import { postReview, prepareWorkflow, settleGiven, upgrade, type Failure } from "../src/operations";
+import { FakeBin, gitWorktreeCases } from "./support/bin";
+import {
+  postReview,
+  prepareWorkflow,
+  settleGiven,
+  startRun,
+  upgrade,
+  type Failure,
+} from "../src/operations";
 import { REVIEW_FILE } from "../src/output";
 import { RunStore } from "../src/run";
 
@@ -39,23 +46,27 @@ afterEach(() =>
   ),
 );
 
-const AskedInputs = Schema.Struct({ inputs: Schema.Array(Schema.Struct({ name: Schema.String })) });
-
 const AskedSchema = Schema.Struct({ schema: Schema.Record(Schema.String, Schema.String) });
+
+const CauseSchema = Schema.Struct({ cause: Schema.String });
+
+/** A git that will make a worktree, so a mutating start gets as far as its checkout. */
+const gitThatCheckouts = () =>
+  bin.add("git", `case "$*" in\n${gitWorktreeCases(rig.projectDir)}\n  *) echo main ;;\nesac`);
+
+/** Why a start was refused, as the envelope's details carry it. */
+function causeOf(result: Failure): string {
+  return Schema.decodeUnknownOption(CauseSchema)(result.error.details).pipe(
+    Option.map((detail) => detail.cause),
+    Option.getOrElse(() => ""),
+  );
+}
 
 /** The Input strategies a `needs_input` refusal reports the workflow as taking. */
 function schemaOf(result: Failure): Record<string, string> {
   return Schema.decodeUnknownOption(AskedSchema)(result.error.details).pipe(
     Option.map((detail) => detail.schema),
     Option.getOrElse((): Record<string, string> => ({})),
-  );
-}
-
-/** The Input names a `needs_input` refusal says are still missing. */
-function asked(result: Failure): string[] {
-  return Schema.decodeUnknownOption(AskedInputs)(result.error.details).pipe(
-    Option.map((detail) => detail.inputs.map((input) => input.name)),
-    Option.getOrElse((): string[] => []),
   );
 }
 
@@ -166,14 +177,80 @@ test("the workspace opt-in settles from --input and is never asked for", () =>
         inputs: { plan: "ENG-1" },
         decide: [],
       });
-      // `target`, inherited from the embedded `review`, is what this run still needs —
-      // stated up front so the assertion below cannot pass by asking for nothing at all.
-      if (bare.ok) throw new Error("expected implement to still need its review target");
-      expect(asked(bare)).toEqual(["target"]);
-      expect(asked(bare)).not.toContain("workspace");
+      // `target`, inherited from the embedded `review`, is inferred rather than asked
+      // for: the candidates beside it are the picker's override menu, and a start that
+      // stopped for one asked the caller to retype what Collie had already worked out.
+      if (!bare.ok) throw new Error(`expected implement to start: ${bare.error.code}`);
+      const target = absent.resolutions.find((r) => r.name === "target")!;
+      expect(target.value).not.toBe("");
+      expect(target.needsAsking).toBe(false);
       const left = absent.resolutions.find((r) => r.name === "workspace")!;
       expect(left.value).toBe("");
       expect(left.needsAsking).toBe(false);
+    }),
+  ));
+
+test("a mutating run is given a branch without asking anyone for one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A plan directory whose own name is far too long to be a branch: it used to come
+      // back as a `needs_input` naming `branch`, which is the gate this removed.
+      const fs = yield* FileSystem.FileSystem;
+      const dir = `${rig.projectDir}/tasks/a-plan-directory-whose-name-is-far-too-long-to-be-a-branch`;
+      yield* fs.makeDirectory(dir, { recursive: true });
+      yield* fs.writeFileString(`${dir}/SPEC.md`, "# A plan\n");
+      yield* gitThatCheckouts();
+
+      const ready = yield* prepared("implement");
+      const settled = yield* settleGiven(rig.pluginEnv(), ready, {
+        inputs: { plan: dir },
+        decide: [],
+      });
+      if (!settled.ok) throw new Error(`expected implement to settle: ${settled.error.code}`);
+      yield* startRun(rig.pluginEnv(), {
+        workflow: ready.workflow,
+        resolutions: ready.resolutions,
+        decisions: settled.decisions,
+        workspace: null,
+      });
+
+      // The Run exists with a checkout of its own; no Driver starts here, and none has
+      // to for the branch to be settled — it is decided before anything is created.
+      const [made] = yield* new RunStore(rig.stateDir).list();
+      const branch = made!.record.worktree!.branch;
+      expect(branch.startsWith(`${TEST_LOGIN}/`)).toBe(true);
+      expect(branch.length).toBeLessThanOrEqual(64);
+    }),
+  ));
+
+test("a run whose GitLab identity cannot be established says so, and asks nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* gitThatCheckouts();
+      // Nothing in the environment names the operator, and this rig's glab will not say.
+      const env = rig.pluginEnv({ GITLAB_USER_LOGIN: "" });
+
+      const ready = yield* prepared("implement");
+      const settled = yield* settleGiven(env, ready, {
+        inputs: { plan: "ENG-1" },
+        decide: [],
+      });
+      if (!settled.ok) throw new Error("expected implement to settle");
+      const started = yield* startRun(env, {
+        workflow: ready.workflow,
+        resolutions: ready.resolutions,
+        decisions: settled.decisions,
+        workspace: null,
+      });
+      if (started._tag === "Started") throw new Error("expected no run without a login");
+      // A failure to authenticate, not an Input the caller could supply.
+      expect(started.result.error.code).toBe("operation_failed");
+      expect(causeOf(started.result)).toContain("glab");
+      // In the message, which is the only part the CLI prints and the picker shows:
+      // an operator who cannot act on it has been told nothing.
+      expect(started.result.error.message).toContain("glab auth login");
+      expect(started.result.error.message).toContain("GITLAB_USER_LOGIN");
+      expect(yield* new RunStore(rig.stateDir).list()).toHaveLength(0);
     }),
   ));
 

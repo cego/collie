@@ -87,6 +87,8 @@ test("plan is one agent through grill, spec and tickets, then a menu", () =>
       // `workspace=new` plan chains into an implement that gets one too.
       expect(choices[0]!.inputs).toEqual({
         plan: "{{run.dir}}/plan",
+        // The short name `grill` settled on, which is what the child's branch is called.
+        task: "{{outputs.grill.slug}}",
         workspace: "{{inputs.workspace}}",
       });
       expect(choices[1]).toMatchObject({

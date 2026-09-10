@@ -121,6 +121,7 @@ completes, and `collie upgrade` picks it up next time.
 | `COLLIE_MODE`         | Internal picker mode passed from a herdr action to its picker pane.                                                                          |
 | `COLLIE_RUN`          | Internal Run ID passed to a detached Driver.                                                                                                 |
 | `COLLIE_CWD`          | Working directory passed to picker, agent, and Driver processes; also re-roots a CLI run.                                                    |
+| `GITLAB_USER_LOGIN`   | Who a generated branch is namespaced under. Unset, Collie asks `glab` who you are for this checkout's host.                                  |
 
 `COLLIE_MODE` and `COLLIE_RUN` are process-to-process contracts set by Collie; you do not
 set them yourself.
@@ -186,8 +187,10 @@ instead, which gives the run a workspace of its own the way it used to (ADR-0006
 
 Which branch it is:
 
-- work described in words, a plan directory or a Linear issue → a new branch named after
-  the run, cut from `origin/HEAD`;
+- work described in words, a plan directory or a Linear issue → a new branch
+  `<your GitLab login>/<the task>`, cut from `origin/HEAD`. The login is
+  `GITLAB_USER_LOGIN`, or whoever `glab` is logged in as; a run with neither does not
+  start and says to log in;
 - a fix round on a review → the branch that was reviewed (a merge request's source branch,
   the head of a `branch:a...b` diff, or the branch the reviewed tree was on), so a merge
   request is updated rather than replaced;

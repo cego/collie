@@ -22,7 +22,7 @@
 
 **Output** — A structured JSON file a Step writes to the Run directory (e.g. a review verdict + findings). Gates and loops read Outputs, never terminal text.
 
-**Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents. Its **slug** — `<workflow>-<what it is named after>` — names its agents, its tab and its row on the board, and for a mutating Run it is named after the Worktree's branch, so two Runs on different work can never read as the same row.
+**Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents. Its **slug** — `<workflow>-<what it is named after>` — names its agents, its tab and its row on the board, and for a mutating Run it is named after the task half of the Worktree's branch — the branch without the login it is namespaced under — so two Runs on different work can never read as the same row.
 
 **Session** — One herdr session and one workspace, taken together. It is the
 scope of a Control Plane tab and of the register of live agents, so only Runs in the same
@@ -36,7 +36,8 @@ sends: `docs/using.md`.
 
 **Worktree** — The checkout a mutating Run owns: one per branch, because git allows
 exactly one worktree per checked-out branch. The branch names the work rather than the path
-to it, so two Runs on different work can never key the same checkout
+to it, and new work is generated as `<GitLab login>/<task>` rather than asked for, so two
+Runs on different work can never key the same checkout
 ([the order it is resolved in](docs/cli.md#start-a-run)). Only the Run's cwd moves; its tabs stay in
 the workspace it was activated from and are `cd`-ed into the checkout, because a Run
 belongs where it was started (ADR-0006). `implement` gets one, and `plan`/`architecture`

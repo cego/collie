@@ -21,7 +21,7 @@ import { configValue, readConfig, writeConfigValue } from "./config";
 import type { PluginEnv } from "./env";
 import type { PickItem } from "./inputs";
 import { slugify } from "./template";
-import { checkoutFor } from "./worktree";
+import { checkoutFor, runNames } from "./worktree";
 import {
   isYamlMap,
   YamlMapSchema,
@@ -1150,7 +1150,7 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
   ) {
     const choice = choices.find((c) => c.title === unfinished.title && c.run);
     if (choice) {
-      const result = yield* fanOut(o, step, choice, prompts, {
+      const result = yield* fanOut(o, step, choice, prompts, ctx, {
         repos: [],
         waves: unfinished.waves,
         refusal: null,
@@ -1271,20 +1271,20 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
       // A plan that spans repositories is one run per repository rather than one run,
       // and a plan the fan-out cannot honestly run is refused here: the message is
       // shown, nothing is started, and the menu comes back for the human to pick again.
-      const plan = yield* fanOutOf(o, choice);
+      const plan = yield* fanOutOf(o, choice, ctx);
       if (plan?.refusal) {
         yield* out(`  ${choice.title} cannot run here: ${plan.refusal.message}`);
         yield* run.log(`${step.id}: "${choice.title}" refused — ${plan.refusal.message}`);
         continue;
       }
       if (plan) {
-        const result = yield* fanOut(o, step, choice, prompts, plan);
+        const result = yield* fanOut(o, step, choice, prompts, ctx, plan);
         return choiceResult({
           status: result.status,
           note: `chose "${choice.title}" — ${result.note}`,
         });
       }
-      const child = yield* chain(o, choice, prompts);
+      const child = yield* chain(o, choice, prompts, ctx);
       if (!child) continue;
       return choiceResult({
         status: "done",
@@ -1329,12 +1329,25 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
  * that same value to the child — and rendering it two ways is a fan-out that reads one
  * plan directory while its children build another.
  */
-function chainVars(run: Run) {
+function chainVars(run: Run, ctx: RunCtx) {
   return {
     run: { dir: run.dir, id: run.id, slug: run.record.slug },
     inputs: run.record.inputs,
+    outputs: outputVars(ctx.outputs),
     cwd: run.record.cwd,
   };
+}
+
+/** Every Step's Output so far, as a prompt or a Choice's `inputs:` can address it. */
+function outputVars(outputs: Map<string, VariantOutcome[]>): YamlMap {
+  return Schema.decodeUnknownSync(YamlMapSchema)(
+    Object.fromEntries(
+      [...outputs.entries()].map(([id, list]) => [
+        id,
+        list.length === 1 ? list[0]!.output : list.map((v) => v.output),
+      ]),
+    ),
+  );
 }
 
 /**
@@ -1345,6 +1358,7 @@ const chain = Effect.fn("Engine.chain")(function* (
   o: EngineOptions,
   choice: ChoiceDef,
   prompts: EnginePrompts,
+  ctx: RunCtx,
   /**
    * What the fan-out knows and the choice cannot say: which repository of the plan this
    * child owns, and the checkout to root it at. Absent for every ordinary chain.
@@ -1353,7 +1367,7 @@ const chain = Effect.fn("Engine.chain")(function* (
 ) {
   const { run, out } = o;
   const child = resolveWorkflow(choice.run!, o.defs, o.defaults);
-  const vars = chainVars(run);
+  const vars = chainVars(run, ctx);
   const forwarded: Record<string, string> = {};
   for (const [key, value] of Object.entries(choice.inputs ?? {})) {
     forwarded[key] = renderTemplate(value, vars).text;
@@ -1418,23 +1432,13 @@ const chain = Effect.fn("Engine.chain")(function* (
     sources,
     workspaceId: o.env.workspaceId,
     workspaceLabel: run.record.workspace_label,
+    login: o.env.gitlabLogin,
   };
-  let checkout = yield* checkoutFor(o.herdr, where);
-  // A branch nothing named is settled the way every other missing Input of this child
-  // was a few lines up — the human is right here at the menu that chained it, and the
-  // other two front doors both recover from this rather than stopping.
-  if (checkout.refused?.ask) {
-    const answer = yield* prompts.ask(checkout.refused.ask);
-    if (answer === null || answer.trim() === "") {
-      yield* out(`  ${child.name} needs a branch — nothing started`);
-      return null;
-    }
-    checkout = yield* checkoutFor(o.herdr, { ...where, explicit: answer.trim() });
-  }
+  const checkout = yield* checkoutFor(o.herdr, where);
   // A child that must not share a checkout is not started at all, and the menu comes
   // back: sharing one is what swapped two Runs' uncommitted work in the first place.
   if (checkout.refused) {
-    yield* out(`  ${child.name} has nowhere to work: ${checkout.refused.why} — nothing started`);
+    yield* out(`  ${child.name} has nowhere to work: ${checkout.refused} — nothing started`);
     return null;
   }
   const childRun = yield* new RunStore(o.env.stateDir).create({
@@ -1450,7 +1454,7 @@ const chain = Effect.fn("Engine.chain")(function* (
     inputSources: sources,
     stepIds: child.steps.map((s) => s.id),
     maxIterations: child.maxIterations,
-    namedAfter: checkout.branch ?? tail,
+    ...runNames(checkout, { value: tail, short: tail }),
     parent: run.id,
   });
   yield* childRun.log(`chained from ${run.id}`);
@@ -1521,12 +1525,16 @@ const waitOnRun = Effect.fn("Engine.waitOnRun")(function* (stateDir: string, id:
  * Read here rather than trusted from the plan: the refusals are what stop a fan-out
  * that cannot be honest, so they have to be known before anything is started.
  */
-const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (o: EngineOptions, choice: ChoiceDef) {
+const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (
+  o: EngineOptions,
+  choice: ChoiceDef,
+  ctx: RunCtx,
+) {
   const template = choice.inputs?.plan;
   if (template === undefined) return null;
   // The same rendering `chain` will do with it, so the plan read here is the plan the
   // children are given.
-  const planDir = renderTemplate(template, chainVars(o.run)).text;
+  const planDir = renderTemplate(template, chainVars(o.run, ctx)).text;
   const plan = yield* planReposOf(planDir, o.run.record.cwd);
   return isSingleRepo(plan) ? null : plan;
 });
@@ -1546,6 +1554,7 @@ const fanOut = Effect.fn("Engine.fanOut")(function* (
   step: ResolvedStep,
   choice: ChoiceDef,
   prompts: EnginePrompts,
+  ctx: RunCtx,
   plan: PlanRepos,
 ) {
   const { run, out } = o;
@@ -1649,7 +1658,7 @@ const fanOut = Effect.fn("Engine.fanOut")(function* (
       // work its parent was named for, so every Repo run of one plan is handed the same
       // branch in its own repository — which is what makes the sibling merge requests
       // findable by name. Naming one here would be that decision made twice.
-      const child = yield* chain(o, choice, prompts, {
+      const child = yield* chain(o, choice, prompts, ctx, {
         inputs: { repo },
         cwd: pathService.join(run.record.cwd, repo),
       });
@@ -2891,18 +2900,21 @@ const resolveSkills = Effect.fn("Engine.resolveSkills")(function* (o: EngineOpti
 });
 
 /**
+ * What `chain` renders a forwarded Choice input with — and nothing else. A value
+ * naming anything outside this renders empty and is then forwarded as a settled
+ * input, so the child never asks for what it needed.
+ *
+ * `outputs` among them: a child is handed what its parent worked out, which is how the
+ * short name of the task reaches the branch the child builds.
+ */
+export const CHAIN_SUPPLIED: ReadonlySet<string> = new Set(["run", "cwd", "outputs"]);
+
+/**
  * The variable families `buildPrompt` supplies at step time, named where they are
  * built. A checker rendering a step ahead of a Run cannot know these and must not
  * report them as unresolvable — and it can only stay right about that if the list
  * lives beside the code that decides it.
  */
-/**
- * What `chain` renders a forwarded Choice input with — and nothing else. A value
- * naming anything outside this renders empty and is then forwarded as a settled
- * input, so the child never asks for what it needed.
- */
-export const CHAIN_SUPPLIED: ReadonlySet<string> = new Set(["run", "cwd"]);
-
 export const ENGINE_SUPPLIED: ReadonlySet<string> = new Set([
   "outputs",
   "findings",
@@ -2938,14 +2950,7 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
   const outputPath = step.output ? yield* o.run.outputPath(step.id, variantKey, step.output) : "";
   const vars: YamlMap = {
     inputs: o.run.record.inputs,
-    outputs: Schema.decodeUnknownSync(YamlMapSchema)(
-      Object.fromEntries(
-        [...outputs.entries()].map(([id, list]) => [
-          id,
-          list.length === 1 ? list[0]!.output : list.map((v) => v.output),
-        ]),
-      ),
-    ),
+    outputs: outputVars(outputs),
     findings: formatFindings(lastFindings(o, step, ctx)),
     // `--repo <project>` for an MR target, so a prompt can be followed from anywhere.
     target_repo: repoArgs(parseMrTarget(o.run.record.inputs.target ?? "")?.project ?? null).join(

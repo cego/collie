@@ -35,6 +35,8 @@ export interface PluginEnv {
   actionId: string | null;
   entrypointId: string | null;
   collieMode: string | null;
+  /** The GitLab login a generated branch is namespaced under; null leaves it to glab. */
+  gitlabLogin: string | null;
   /** Directory the run should treat as the project. */
   cwd: string;
   /** True when COLLIE_CWD named it: an explicit directory beats every inference. */
@@ -119,6 +121,7 @@ export function readEnv(
     actionId: first(env, "HERDR_PLUGIN_ACTION_ID"),
     entrypointId: first(env, "HERDR_PLUGIN_ENTRYPOINT_ID"),
     collieMode: first(env, "COLLIE_MODE"),
+    gitlabLogin: first(env, "GITLAB_USER_LOGIN"),
     cwd,
     cwdExplicit: explicitCwd !== null,
     context,
@@ -165,6 +168,7 @@ const environmentKeys = [
   "HERDR_ACTIVE_TAB_ID",
   "HERDR_PANE_ID",
   "HERDR_ACTIVE_PANE_ID",
+  "GITLAB_USER_LOGIN",
 ] as const;
 
 export const currentEnv = Effect.gen(function* () {

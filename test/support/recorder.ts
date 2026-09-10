@@ -90,6 +90,13 @@ export class FakeHerdr extends Herdr {
   }
 }
 
+/**
+ * The GitLab login every rig runs as. In its environment rather than the process's, so
+ * no test reaches out to a real glab to find out who is running it — and none of them
+ * has to put a process-wide variable back afterwards.
+ */
+export const TEST_LOGIN = "tester";
+
 export class Rig {
   readonly logPath: string;
   readonly socketPath: string;
@@ -405,6 +412,7 @@ export class Rig {
       HERDR_TAB_ID: "1:1",
       HERDR_PANE_ID: "1-1",
       COLLIE_CWD: this.projectDir,
+      GITLAB_USER_LOGIN: TEST_LOGIN,
       FAKE_HERDR_LOG: this.logPath,
       FAKE_HERDR_OUTPUTS: this.path.join(this.root, "outputs.json"),
       // What `herdr status --json` answers with regardless of HERDR_SOCKET_PATH: the

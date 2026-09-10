@@ -31,6 +31,7 @@ steps:
         run: implement
         inputs:
           plan: "{{run.dir}}/plan"
+          task: "{{outputs.grill.slug}}"
           workspace: "{{inputs.workspace}}"
       - title: Second opinion
         prompt: second-opinion

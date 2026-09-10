@@ -66,7 +66,8 @@ plan, and is set by the fan-out below rather than by hand.
 
 **Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
 the reviewed branch, else the `<name>` of a `branch:<base>...<name>` target you gave, else
-the plan directory's own name ([the full order](cli.md#start-a-run)).
+a new `<your GitLab login>/<task>` from `--input task=`, the plan directory's own name, or
+the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
 
 **What happens:** one implementer agent builds (a commit per ticket), then improves the
 architecture it touched, then simplifies. It embeds `review` — two models in parallel, one
@@ -176,9 +177,10 @@ strong ones only, and writes a report into the run directory. Everything else is
 with a reason rather than half-applied.
 
 **Ends with a menu:** **Implement now** (chains `implement` on the report) or **Stop here**.
-**Implement now** asks which branch to build on: `architecture` takes no input that names
-the work, so there is nothing to name a branch after, and every architecture run in a repo
-would otherwise be handed the same one ([how the branch is chosen](cli.md#start-a-run)).
+**Implement now** names the branch after the `slug` the architect put in its Output, which
+is the work you agreed on: `architecture` takes no input that names the work, so without it
+every architecture run in a repo would be handed the same branch
+([how the branch is chosen](cli.md#start-a-run)).
 
 Definition: [`workflows/architecture.md`](../workflows/architecture.md).
 

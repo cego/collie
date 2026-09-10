@@ -69,6 +69,7 @@ function unresolvable(wf: ResolvedWorkflow): string[] {
     if (KINDED_STRATEGIES.has(strategy)) inputs[`${name}_kind`] = "";
   }
   const problems: string[] = [];
+  const stepIds = new Set(wf.steps.map((step) => step.id));
   for (const step of wf.steps) {
     // A body, where it is, and which engine-supplied families reach it: a step's
     // prompt is rendered with all of them, a forwarded Choice input with two.
@@ -97,10 +98,15 @@ function unresolvable(wf: ResolvedWorkflow): string[] {
       }
     }
     for (const [where, body, supplied] of bodies) {
-      const missing = renderTemplate(body, { inputs }).missing.filter(
-        (key) => !supplied.has(key.split(".")[0] ?? key),
-      );
-      for (const key of missing) {
+      for (const key of renderTemplate(body, { inputs }).missing) {
+        const [family = key, step = ""] = key.split(".");
+        // An Output is named by the step that writes it, so a mistyped step id is a
+        // supplied family too — reported here rather than rendered empty.
+        if (family === "outputs" && supplied.has(family)) {
+          if (!stepIds.has(step)) problems.push(`${where}: {{${key}}} names no step here`);
+          continue;
+        }
+        if (supplied.has(family)) continue;
         problems.push(`${where}: {{${key}}} is not an input this workflow takes`);
       }
     }
@@ -116,9 +122,11 @@ function unresolvable(wf: ResolvedWorkflow): string[] {
 const BRANCH_HELP = [
   "  branch: which branch this run works on, and so which checkout it gets.",
   "    `--input branch=<name>` wins; else the reviewed branch, for a run fixing a review;",
-  "    else the `<name>` of a `branch:<base>...<name>` target you gave (never an inferred one);",
-  "    else the plan directory's own name, or a slug of the work itself.",
-  "    A name that will not slug — too long, or with nothing in it — is asked for instead.",
+  "    else the `<name>` of a `branch:<base>...<name>` target you gave (never an inferred one).",
+  "    Those are used as they came. Anything else is new work and gets a new",
+  "    `<your GitLab login>/<task>`: from `--input task=<slug>`, else the plan directory's",
+  "    own name, else a slug of the work itself. Nobody is ever asked for a branch — a name",
+  "    too long, or with nothing in it, is cut to fit and given a digest of the work.",
 ].join("\n");
 
 /** One workflow as `check` reports it, and what it is wrong about, one per line. */

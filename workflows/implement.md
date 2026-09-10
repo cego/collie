@@ -4,6 +4,8 @@ title: implement — build the plan, tidy it, review it, fix until nothing block
 description: Builds from a plan dir, a Linear issue or a description, improves the architecture it touched, simplifies, fans out to reviewers, fixes what blocks until a review finds nothing blocking, then opens the merge request.
 inputs:
   plan: work-source
+  # The short kebab-case name of the work, which a generated branch is named after.
+  task: optional
   # One repository's share of a plan that spans several, as the tickets' `Repo:` line
   # names it. Empty means the whole plan, which is every single-repository run.
   repo: optional

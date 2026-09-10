@@ -313,7 +313,8 @@ steps:
         run: implement
         inputs:
           plan: "{{inputs.plna}}"
-          target: "{{outputs.next.summary}}"
+          target: "{{target_repo}}"
+          task: "{{outputs.gril.slug}}"
 ---
 Goal: {{inputs.goal}}
 
@@ -341,9 +342,12 @@ Grill me.
       // ...and a typo in what a Choice forwards would otherwise render empty, be
       // treated as settled, and start the child without the Input it needed.
       expect(problems).toContain("inputs.plna");
-      // A forwarded input is rendered with `run`, `inputs` and `cwd` and nothing
-      // else, so a family a step's prompt may name is still unresolvable here.
-      expect(problems).toContain("outputs.next.summary");
+      // A forwarded input is rendered with `run`, `inputs`, `cwd` and `outputs` and
+      // nothing else, so a family a step's prompt may name is still unresolvable here.
+      expect(problems).toContain("target_repo");
+      // An Output is named by the step that writes it, so a mistyped step id is caught
+      // too — it would otherwise render empty and chain the child without its task.
+      expect(problems).toContain("outputs.gril.slug");
       expect(problems).not.toContain("findings");
       expect(problems).not.toContain("skill:tdd");
       // A file with nothing in it is reported rather than silently skipped by the

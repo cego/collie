@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Layer, Path } from "effect";
-import { Rig } from "./support/recorder";
+import { Rig, TEST_LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { runEffect } from "./support/effect";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
@@ -136,10 +136,32 @@ steps:
 Draft into {{run.dir}}/plan/SPEC.md
 `;
 
+/** `plan`'s shape: its own Output settles the short name the work is called. */
+const TASKED_PARENT = `---
+name: tasked-parent
+inputs:
+  goal: goal
+steps:
+  - id: draft
+    persona: planner
+    output: draft.json
+  - id: next
+    choices:
+      - title: Build it now
+        run: implement
+        inputs:
+          plan: "{{run.dir}}/plan"
+          task: "{{outputs.draft.slug}}"
+---
+## draft
+Draft into {{run.dir}}/plan/SPEC.md
+`;
+
 const IMPLEMENT = `---
 name: implement
 inputs:
   plan: plan-dir
+  task: optional
 steps:
   - id: build
     persona: implementer
@@ -169,47 +191,85 @@ function runWorkflowEffect(...args: Parameters<typeof runWorkflow>) {
   return runWorkflow(...args).pipe(Effect.provide(driverLayer));
 }
 
-test('a parent with nothing to name it after does not hand its child the branch "run"', () =>
+/** The branch a chained child was refused a checkout for, from the parent's own log. */
+function refusedBranch(lines: string[]): string {
+  const line = lines.find((text) => text.includes("no worktree for")) ?? "";
+  return /no worktree for ([^\s:]+)/.exec(line)?.[1] ?? "";
+}
+
+test("a parent with nothing to name it after still hands its child a branch of its own", () =>
   runEffect(
     Effect.gen(function* () {
       yield* writeDef(rig.baselineDir, "workflows", "nameless-parent", NAMELESS_PARENT);
       yield* writeDef(rig.baselineDir, "workflows", "implement", IMPLEMENT);
-      yield* rig.queueOutputs([CLEAN]);
+      yield* rig.queueOutputs([CLEAN, CLEAN]);
       // `architecture` declares only `workspace`, so there is no input to be named
-      // after and the name falls back to the literal "run" — which slugs cleanly and
-      // so slips past the guard. Two of these would build one branch and share one
-      // checkout, index and stash stack.
-      const prompts = scriptedPrompts(["Build it now"], ["tidy-the-exporter"]);
+      // after and the name falls back to the literal "run". Two of these would build one
+      // branch and share one checkout, index and stash stack — so the plan directory
+      // each was pointed at, which is its own parent's, is what tells them apart.
+      const prompts = scriptedPrompts(["Build it now"]);
 
-      const { lines } = yield* runWorkflowEffect(rig, "nameless-parent", {}, { prompts });
+      const one = yield* runWorkflowEffect(rig, "nameless-parent", {}, { prompts });
+      const two = yield* runWorkflowEffect(
+        rig,
+        "nameless-parent",
+        {},
+        { prompts: scriptedPrompts(["Build it now"]) },
+      );
 
-      expect(prompts.asked.some((q) => q.includes("Which branch"))).toBe(true);
-      expect(lines.join("\n")).not.toContain("no worktree for run");
-      expect(lines.join("\n")).toContain("no worktree for tidy-the-exporter");
+      // Nothing was asked: a branch is worked out, not requested.
+      expect(prompts.asked).toEqual([]);
+      // This fixture's git makes no checkouts, so the refusal names the branch decided.
+      const first = refusedBranch(one.lines);
+      expect(first.startsWith(`${TEST_LOGIN}/`)).toBe(true);
+      expect(first).not.toBe(`${TEST_LOGIN}/run`);
+      expect(refusedBranch(two.lines)).not.toBe(first);
     }),
   ));
 
-test("a chained run whose parent's own name was clipped asks for a branch", () =>
+test("a chained run whose parent's own name was clipped still gets a branch of its own", () =>
   runEffect(
     Effect.gen(function* () {
       // Written here rather than in the fixture set: this one overrides the baseline's
       // own `implement`, and every other test in this file should see the real one.
       yield* writeDef(rig.baselineDir, "workflows", "mutating-parent", MUTATING_PARENT);
       yield* writeDef(rig.baselineDir, "workflows", "implement", IMPLEMENT);
-      yield* rig.queueOutputs([CLEAN]);
+      yield* rig.queueOutputs([CLEAN, CLEAN]);
       // Two parents whose goals agree for the first 40 characters slug to one name, and
       // that name is what a chained run is called after — so both children would build
-      // one branch and share one checkout. A name that was already clipped cannot be
-      // caught by slugging it again, so the whole of it has to reach the guard.
+      // one branch and share one checkout.
+      const goals = [
+        "Make the exporter handle a missing column without failing",
+        "Make the exporter handle a missing column by warning instead",
+      ];
+      const branches = new Set<string>();
+      for (const goal of goals) {
+        const prompts = scriptedPrompts(["Build it now"]);
+        const { lines } = yield* runWorkflowEffect(rig, "mutating-parent", { goal }, { prompts });
+        expect(prompts.asked).toEqual([]);
+        branches.add(refusedBranch(lines));
+      }
+
+      expect(branches.size).toBe(2);
+      for (const branch of branches) expect(branch.startsWith(`${TEST_LOGIN}/`)).toBe(true);
+    }),
+  ));
+
+test("the task a parent settled is what its child's branch is named after", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(rig.baselineDir, "workflows", "tasked-parent", TASKED_PARENT);
+      yield* writeDef(rig.baselineDir, "workflows", "implement", IMPLEMENT);
+      // The slug the planner and the human agreed on, in the parent's own Output.
+      yield* rig.queueOutputs([{ ...CLEAN, slug: "exporter-missing-column" }]);
+
       const goal = "Make the exporter handle a missing column without failing";
-      const prompts = scriptedPrompts(["Build it now"], ["exporter-missing-column"]);
+      const prompts = scriptedPrompts(["Build it now"]);
+      const { lines } = yield* runWorkflowEffect(rig, "tasked-parent", { goal }, { prompts });
 
-      const { lines } = yield* runWorkflowEffect(rig, "mutating-parent", { goal }, { prompts });
-
-      expect(prompts.asked.some((q) => q.includes("Which branch"))).toBe(true);
-      // And the answer is what the child is then resolved for, not just collected: this
-      // fixture's git makes no checkouts, so the refusal that follows names the branch.
-      expect(lines.join("\n")).toContain("no worktree for exporter-missing-column");
+      // Not the plan directory Collie chained, and not the whole goal the parent was
+      // named after: the name the work was given.
+      expect(refusedBranch(lines)).toBe(`${TEST_LOGIN}/exporter-missing-column`);
     }),
   ));
 
