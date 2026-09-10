@@ -66,13 +66,21 @@ spec axis says exactly that.
 
 ## review
 
+Iteration {{iteration}} of at most {{max_iterations}}.
+
 {{previous.review}}
 
-Where a review of this target appears above, your job is not to write it again. Check
-each of its findings against the code as it is now and say what happened to it — still
-there, changed but not fixed, or fixed. Then review what has changed since, and raise
-what is new. A finding you carry forward is the same finding: keep its words unless the
-code moved under it.
+The first review of a change — iteration 1, with no earlier review above — is the
+comprehensive one: both review skills, the whole spec, the whole change, and the code
+around it. A later iteration is a follow-up, and so is any review with an earlier review
+above it: do not run the full review skills again over the whole change. The previous
+round's review is at `{{run.dir}}/review.md` and the implementer's account of it — what
+it fixed, what it disputed, what it checked — is that step's Output under
+`{{run.dir}}/steps/` (in the implement workflow, `steps/fix/fix.json`). Check each of its
+findings against the code as it is now and say what happened to it — still there,
+changed but not fixed, or fixed. Then review what has changed since that review, and the
+callers and tests the fixes touched, and raise what is new. A finding you carry forward
+is the same finding: keep its file and title unless the code moved under it.
 
 Review against the project's own standards too — `CLAUDE.md`, `CONTEXT.md`, `README.md`
 and the code around the change.
@@ -106,6 +114,10 @@ The human is watching a rally, not a new list every time.
 
 - One entry per problem. Where two reviewers found the same thing, say it once, in
   whichever of their words is clearer.
+- A finding the previous review raised keeps the same file and title when the problem is
+  the same: that is how Collie tells a round that fixed nothing from one that moved. Give
+  a finding new words only when the problem is genuinely new.
+- Every finding has one of the three severities. Anything else is treated as blocking.
 - Where they disagree, settle it against the diff. A finding only one of them raised
   survives only if you can defend it from the diff yourself.
 - Everything you do not carry goes in `dropped` with a one-line `reason`. Nothing is

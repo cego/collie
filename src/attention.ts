@@ -167,6 +167,15 @@ interface Stopped {
 
 /** Why a Run that has ended did, from what it recorded on its way out. */
 function whyStopped(run: Run, status: string): Stopped {
+  // A converging loop says why it stopped; the step it stopped at carries the words.
+  if (run.record.halt) {
+    const at = run.record.steps.find((step) => step.status === "blocked");
+    return {
+      reason: run.record.halt,
+      explanation: `${run.id} stopped at ${at?.id ?? currentStep(run) ?? "its fix loop"}: ${at?.note ?? run.record.halt}.`,
+      step: at?.id ?? currentStep(run),
+    };
+  }
   const findings = run.record.outstanding.length;
   if (findings > 0 && run.record.iteration >= run.record.max_iterations) {
     return {

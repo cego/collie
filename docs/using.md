@@ -556,9 +556,10 @@ survives the picker closing, the Control Plane closing, and the terminal being d
 ### Why a run stopped
 
 The detail panel of a run that stopped opens with **Stopped**: one line saying why — the
-review loop out of iterations, a step that stopped for a human, a stop someone asked for,
-or a Driver that is no longer there — then what a resume keeps, then which actions are safe
-right now. Where nothing recorded says why, it says that rather than guessing.
+review loop out of iterations or making no progress, a blocking finding the implementer
+disputed, a last fix whose own account did not hold up, a step that stopped for a human, a
+stop someone asked for, or a Driver that is no longer there — then what a resume keeps,
+then which actions are safe right now. Where nothing recorded says why, it says that rather than guessing.
 
 It is the same classification `collie run show` and `collie run wait --until attention`
 return ([the CLI reference](cli.md#watch-a-run) has the codes), from the same function, so
@@ -571,7 +572,15 @@ they run.
 `prefix+u`, or `collie run resume <id>`, starts a fresh Driver for a run and skips the
 steps that already finished. A step is finished when its `output:` file exists, so an
 agent that went quiet without writing one is restarted rather than assumed done.
-Completed steps and their Outputs survive it. The Driver claims the run atomically, so
+Completed steps and their Outputs survive it. An `implement` run's review gate and fix
+decision are made again from those Outputs rather than skipped, and a run that stopped on
+them is resumed as the human's word to retry the blocked fix, never as a waiver: after
+`no_progress` the fix step runs again against the review that repeated itself; after
+`dispute_unresolved` the disputed blocking findings go back in front of the implementer,
+who fixes them or disputes them again; after `fix_unverified` the fix step runs again and
+its new Output is judged. No review is started to repair the bookkeeping — the next review
+happens where the loop would have run one anyway. A run whose review Output is missing
+stops again until it is restored. The Driver claims the run atomically, so
 `resume` refuses to start a second Driver for a run something is already driving — and a
 claim it cannot read counts as one, so an unreadable `runner.pid` refuses too.
 

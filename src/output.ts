@@ -2,7 +2,7 @@
 // never terminal text (CONTEXT.md, Output).
 
 import { Schema } from "effect";
-import { isNumber, isString } from "./schema";
+import { isBoolean, isNumber, isString } from "./schema";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
 
 export const FindingSchema = Schema.Struct({
@@ -119,7 +119,7 @@ export function parseFindings(raw: YamlValue | undefined, where: string): Parsed
  * What makes two findings the same finding. The line is deliberately left out: it
  * moves as the branch is fixed, and a dispute has to survive that to ever settle.
  */
-export function findingKey(f: Finding): string {
+export function findingKey(f: Pick<Finding, "file" | "title">): string {
   return `${f.file ?? ""}::${f.title.trim().toLowerCase()}`;
 }
 
@@ -159,7 +159,7 @@ export function parseSynthesis(text: string, where: string): Parsed<Synthesis> {
 }
 
 /** What the last review raised and this one could not find any more. */
-function parseFixed(value: YamlValue | undefined, where: string): Parsed<Fixed[]> {
+export function parseFixed(value: YamlValue | undefined, where: string): Parsed<Fixed[]> {
   if (value === undefined || value === null) return { ok: true, value: [] };
   if (!Array.isArray(value)) return { ok: false, error: `${where}: expected a list` };
   const out: Fixed[] = [];
@@ -175,6 +175,158 @@ function parseFixed(value: YamlValue | undefined, where: string): Parsed<Fixed[]
   }
   return { ok: true, value: out };
 }
+
+/** One check the implementer ran: a command, and whether it passed. */
+export interface Check {
+  name: string;
+  passed: boolean;
+  note?: string;
+}
+
+/**
+ * What a fix step reports under a converging loop: each finding it fixed, keyed like
+ * the finding itself, each one it disputed, and the checks it ran. A `fixed` entry is
+ * an object here, not a sentence, because the engine has to match it to a finding.
+ */
+export interface FixOutput {
+  verdict: "clean" | "findings";
+  /** What the fix itself still reports open: work it did not finish. */
+  findings: Finding[];
+  fixed: Fixed[];
+  disputed: Finding[];
+  checks: Check[];
+}
+
+export function parseFixOutput(raw: YamlValue, where: string): Parsed<FixOutput> {
+  if (!isYamlMap(raw)) return { ok: false, error: `${where}: expected a JSON object` };
+  if (raw.verdict !== "clean" && raw.verdict !== "findings") {
+    return { ok: false, error: `${where}: verdict must be "clean" or "findings"` };
+  }
+  const findings = parseFindings(raw.findings, `${where}: findings`);
+  if (!findings.ok) return findings;
+  if (raw.verdict === "findings" && findings.value.length === 0) {
+    return { ok: false, error: `${where}: verdict "findings" with an empty findings list` };
+  }
+  const fixed = parseFixed(raw.fixed, `${where}: fixed`);
+  if (!fixed.ok) return fixed;
+  const disputed = parseFindings(raw.disputed, `${where}: disputed`);
+  if (!disputed.ok) return disputed;
+  const checks = parseChecks(raw.checks, `${where}: checks`);
+  if (!checks.ok) return checks;
+  return {
+    ok: true,
+    value: {
+      verdict: raw.verdict,
+      findings: findings.value,
+      fixed: fixed.value,
+      disputed: disputed.value,
+      checks: checks.value,
+    },
+  };
+}
+
+function parseChecks(value: YamlValue | undefined, where: string): Parsed<Check[]> {
+  if (value === undefined || value === null) return { ok: true, value: [] };
+  if (!Array.isArray(value)) return { ok: false, error: `${where}: expected a list` };
+  const out: Check[] = [];
+  for (const [i, item] of value.entries()) {
+    if (!isYamlMap(item)) return { ok: false, error: `${where}[${i}]: expected an object` };
+    if (!isString(item.name) || item.name.trim() === "") {
+      return { ok: false, error: `${where}[${i}]: name is required` };
+    }
+    if (!isBoolean(item.passed)) {
+      return { ok: false, error: `${where}[${i}]: passed must be true or false` };
+    }
+    const check: Check = { name: item.name.trim(), passed: item.passed };
+    if (isString(item.note)) check.note = item.note;
+    out.push(check);
+  }
+  return { ok: true, value: out };
+}
+
+/** Minor is the one severity not worth blocking on; anything unrecognised fails closed. */
+export function isBlocking(finding: Finding): boolean {
+  return finding.severity !== "minor";
+}
+
+/** Why a converging loop stopped for the human; `attention` reports it as `reason`. */
+export type Halt = "no_progress" | "dispute_unresolved" | "fix_unverified";
+
+export type FinalFix =
+  | { ok: true; attestation: string; outstanding: Finding[] }
+  | { ok: false; halt: Halt; reasons: string[]; outstanding: Finding[] };
+
+/**
+ * The last fix of a loop has no review after it, so its own report is what decides:
+ * every blocking finding the review raised is fixed by key, nothing is disputed, and
+ * at least one check ran and passed. The review before it is history, not evidence
+ * that the fixed code still has its findings — and the fix's word is not a review
+ * either, which is what the attestation says.
+ */
+export function settleFinalFix(live: Finding[], fix: FixOutput): FinalFix {
+  const fixed = new Set(fix.fixed.map(findingKey));
+  const disputed = new Set(fix.disputed.map(findingKey));
+  const disputes: string[] = [];
+  const unverified: string[] = [];
+  if (fix.verdict !== "clean") unverified.push(`the fix reports verdict "findings"`);
+  if (fix.findings.length > 0) {
+    unverified.push(
+      `the fix reports ${fix.findings.length} finding(s) of its own: ${fix.findings.map(oneLine).join(", ")}`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const entry of [...fix.fixed, ...fix.disputed]) {
+    const key = findingKey(entry);
+    if (seen.has(key) && !(fixed.has(key) && disputed.has(key))) {
+      unverified.push(`duplicate disposition: ${key}`);
+    }
+    seen.add(key);
+  }
+  for (const finding of live.filter(isBlocking)) {
+    const key = findingKey(finding);
+    if (fixed.has(key) && disputed.has(key)) {
+      unverified.push(`both fixed and disputed: ${oneLine(finding)}`);
+    } else if (fixed.has(key)) {
+      continue;
+    } else if (disputed.has(key)) {
+      disputes.push(`disputed blocking finding: ${oneLine(finding)}`);
+    } else {
+      unverified.push(`no disposition for ${oneLine(finding)}`);
+    }
+  }
+  // A blocking dispute the review did not raise again is still a dispute: the reviewers
+  // were told to leave it to the human, and leaving it out is not the human deciding.
+  const raised = new Set(live.map(findingKey));
+  const standing = fix.disputed.filter((d) => isBlocking(d) && !raised.has(findingKey(d)));
+  for (const d of standing) disputes.push(`disputed blocking finding: ${oneLine(d)}`);
+  if (fix.checks.length === 0) unverified.push("no checks reported");
+  for (const check of fix.checks.filter((c) => !c.passed)) {
+    unverified.push(`check failed: ${check.name}${check.note ? ` (${check.note})` : ""}`);
+  }
+  // A fix that does not hold up verifies nothing: everything the review raised stays open.
+  const unresolved = [...live, ...fix.findings, ...standing];
+  // A dispute is the human's call only once everything else about the fix holds up.
+  if (unverified.length > 0) {
+    return {
+      ok: false,
+      halt: "fix_unverified",
+      reasons: [...unverified, ...disputes],
+      outstanding: unresolved,
+    };
+  }
+  if (disputes.length > 0) {
+    return { ok: false, halt: "dispute_unresolved", reasons: disputes, outstanding: unresolved };
+  }
+  const outstanding = live.filter((f) => !fixed.has(findingKey(f)));
+  const blocking = live.filter(isBlocking).length;
+  return {
+    ok: true,
+    attestation: `last fix: ${blocking} blocking finding(s) reported fixed, ${fix.checks.length} check(s) passed — implementer-reported, not re-reviewed`,
+    outstanding,
+  };
+}
+
+const oneLine = (f: Finding) => `[${f.severity}] ${f.title}${f.file ? ` (${f.file})` : ""}`;
 
 /** Worst first; anything a fork's own vocabulary adds sorts after these, by name. */
 const SEVERITIES = ["blocker", "major", "minor"];

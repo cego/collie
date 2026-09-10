@@ -398,6 +398,7 @@ steps:
     persona: implementer
     repeat:
       from: review.synthesize
+      converge: true
 ---
 ## build
 build it
@@ -415,6 +416,8 @@ fix it
       expect(wf.steps.map((s) => s.id)).toEqual(["build", "review", "review.synthesize", "fix"]);
       // The fan-in reference moved with the step it points at.
       expect(wf.steps[2]!.fanIn).toBe("review");
+      // The loop's policy travels with the rebased reference.
+      expect(wf.steps[3]!.repeat).toEqual({ from: "review.synthesize", converge: true });
       expect(yield* validateWorkflow(wf, defs, defaults)).toEqual([]);
     }),
   ));

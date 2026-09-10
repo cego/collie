@@ -1136,6 +1136,31 @@ effectTest("an exhausted review loop is named as one rather than a bare failure"
 });
 
 effectTest(
+  "a converging loop that stopped says why, ahead of the exhausted-loop guess",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const { runId, runDir } = yield* startDemo("recover-no-progress");
+    const file = path.join(runDir, "run.json");
+    const snapshot = parseJson(yield* fs.readFileString(file));
+    snapshot.status = "blocked";
+    snapshot.iteration = snapshot.max_iterations;
+    snapshot.halt = "no_progress";
+    snapshot.outstanding = [{ severity: "blocker", title: "no exit code" }];
+    snapshot.steps[0].status = "blocked";
+    snapshot.steps[0].note =
+      "no progress: review 2 raised the same 1 blocking finding(s) as review 1";
+    yield* fs.writeFileString(file, stringifyJson(snapshot));
+
+    const waited = yield* waitAttention(runId, "30 seconds");
+    expect(waited.body.data.attention.category).toBe("interrupted");
+    expect(waited.body.data.attention.reason).toBe("no_progress");
+    expect(waited.body.data.attention.explanation).toContain("same 1 blocking finding(s)");
+    expect(waited.body.data.attention.step).toBe(snapshot.steps[0].id);
+  },
+);
+
+effectTest(
   "a Step that stopped for the human is named, and a bare failure is not guessed at",
   function* () {
     const fs = yield* FileSystem.FileSystem;

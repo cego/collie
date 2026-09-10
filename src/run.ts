@@ -256,6 +256,18 @@ const RunSchema = Schema.Struct({
   unpushed: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** How many of the previous review's findings this one found fixed. */
   fixed: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
+  /** Why a converging loop stopped for the human, as `attention` reports it. */
+  halt: Schema.NullOr(
+    Schema.Literals(["no_progress", "dispute_unresolved", "fix_unverified"]),
+  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /** The blocking findings the last review raised, so the next can say nothing moved. */
+  blocking_seen: Schema.NullOr(
+    Schema.Struct({ iteration: Schema.Number, keys: Schema.Array(Schema.String) }),
+  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /** The last fix's own account of itself, where no review followed it. */
+  unreviewed: Schema.NullOr(Schema.String).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  ),
   /** The finished Run whose review this one was given, when it is a second look. */
   previous_review: Schema.NullOr(Schema.String).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(null)),
@@ -567,6 +579,9 @@ export class RunStore {
         synthesis: null,
         unpushed: null,
         fixed: 0,
+        halt: null,
+        blocking_seen: null,
+        unreviewed: null,
         notified: [],
         previous_review: null,
         mr_url: null,
