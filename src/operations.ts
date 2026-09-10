@@ -43,7 +43,7 @@ import { readRegistry, registryPath, scopeOfRun } from "./registry";
 import { currentPid, withLock } from "./lock";
 import { REVIEW_FILE } from "./output";
 import { fanoutRepos, fanoutUnfinished, runningAgents, Run, RunStore } from "./run";
-import { branchListed, BRANCH_INPUT, checkoutFor, pruneWorktrees } from "./worktree";
+import { branchListed, checkoutFor, pruneWorktrees, runNames } from "./worktree";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
 const ErrorCode = Schema.Literals([
@@ -398,8 +398,10 @@ export const settleGiven = Effect.fn("operations.settleGiven")(function* (
 
   yield* settleExplicit(env, resolutions, given.inputs);
 
-  // Nobody is here to be asked; an unsettled Input is the caller's to give.
-  const unresolved = resolutions.filter((item) => item.needsAsking || item.candidates);
+  // Nobody is here to be asked; an unsettled Input is the caller's to give. A value
+  // inference already chose is settled, whatever it offers beside it: candidates are
+  // the picker's override menu, not a question this caller has to answer.
+  const unresolved = resolutions.filter((item) => item.needsAsking);
   if (unresolved.length > 0) {
     return err(
       "needs_input",
@@ -572,35 +574,18 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     workspaceId: workspace?.workspaceId ?? env.workspaceId,
     workspaceLabel: workspace?.label ?? null,
     explicit: options.branch,
+    login: env.gitlabLogin,
   });
   // Nothing has been created yet, so a Run that must not share a checkout is simply
-  // not started, and the caller is told which branch could not be given one. A refusal
-  // the caller could settle — a branch nothing named — comes back in the same shape as
-  // any missing Input, so a retry with the same request id and `--input branch=` starts
-  // the Run rather than repeating the refusal.
+  // not started, and the caller is told which branch could not be given one.
   if (checkout.refused) {
-    const { why, ask } = checkout.refused;
-    if (!ask) {
-      return {
-        _tag: "Rejected" as const,
-        ask: null,
-        result: err("operation_failed", `${workflow.name} could not be given a checkout.`, {
-          cause: why,
-        }),
-      };
-    }
     return {
       _tag: "Rejected" as const,
-      // The question beside the envelope that carries it: a front door with a human to
-      // hand puts it to them rather than digging it back out of the error details.
-      ask,
+      // In the message: it is the only part the CLI prints and the picker shows.
       result: err(
-        "needs_input",
-        `${workflow.name} needs input.`,
-        Schema.decodeUnknownSync(YamlMapSchema)({
-          inputs: [{ name: BRANCH_INPUT, candidates: [], question: ask }],
-          schema: branchListed(workflow.name, workflow.inputs),
-        }),
+        "operation_failed",
+        `${workflow.name} could not be given a checkout: ${checkout.refused}`,
+        { cause: checkout.refused },
       ),
     };
   }
@@ -618,10 +603,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     decisions: options.decisions,
     stepIds: workflow.steps.map((step) => step.id),
     maxIterations: workflow.maxIterations,
-    // The branch already resolves what this Run is about, and resolves it without
-    // clipping; the Run is named the same way so its slug and its checkout agree.
-    namedAfter: checkout.branch ?? named.value,
-    slugFrom: checkout.branch ?? named.short,
+    ...runNames(checkout, named),
     parent: options.parent,
   });
   yield* run.log(`created from ${workflow.path} (${workflow.layer} layer)`);
@@ -630,7 +612,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   if (options.note) yield* run.log(options.note);
   const undriven = yield* handOver(env, run);
   return undriven
-    ? { _tag: "Rejected" as const, ask: null, result: undriven.result }
+    ? { _tag: "Rejected" as const, result: undriven.result }
     : // The checkout as well as the Run: the branch is decided here, and the line that
       // tells the operator what was started is the only place they see it.
       { _tag: "Started" as const, run, checkout };

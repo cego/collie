@@ -98,7 +98,7 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 
 `--input branch=<name>` is the one input no workflow declares, and `workflow show` lists it
 for every mutating workflow. It names the branch the run works on, and so which worktree it
-gets. A branch nobody named is resolved in this order:
+gets. Nobody is ever asked for one: a branch nobody named is resolved in this order:
 
 1. `--input branch=<name>`, which wins over everything below.
 2. The branch the reviewed work is already on, for a run fixing a review.
@@ -106,19 +106,33 @@ gets. A branch nobody named is resolved in this order:
    bare ref too, and turns it into one) — so the checkout and the review target agree. A
    target Collie inferred does not count: it names the branch you are standing on, and
    building that would hand the run your own checkout.
-4. The plan directory's own name, for a run given a plan directory.
-5. Otherwise a slug of the work itself — the description, or the issue id.
 
-A name that would not survive being slugged is refused rather than fudged — one too long
-for the cap, and one with nothing in it to slug at all, which is what `architecture` has.
-Two plans under one directory would clip to the same branch, and two runs with no name of
-their own would share a stand-in; the branch is what keys the worktree, so either way that
-is one checkout for two pieces of work. The refusal is a `needs_input` naming `branch`, so
-the same request id retries with `--input branch=`.
+Those three are branches that already exist, or that you named, and are used exactly as
+they came. Everything else is new work, and gets a new branch called
+`<your GitLab login>/<the task>`:
 
-The resolved branch also names the run itself — its `slug`, and so its agents, its tab and
-its row on the board — so what `run show` calls the run and what the checkout is on always
-say the same thing.
+4. `--input task=<slug>`, which is also what `plan` and `architecture` forward when you
+   choose **Implement now**, and what a fan-out gives every repository run.
+5. The plan directory's own name, for a run given a plan directory.
+6. A slug of the work itself — the description, or the issue id.
+7. Otherwise a slug of the run's own name.
+
+The login is `GITLAB_USER_LOGIN` where the environment sets it, and otherwise whoever
+`glab` is logged in as for this checkout's host. Neither is the merge request's assignee
+and neither is your OS username. Where there is no login to be had the run does not start
+and says to log in — it is an authentication failure, not a question about branches.
+
+A name too long for the cap, or with nothing in it to slug at all, is cut to fit and given
+a short digest of the whole of what it stands for: two plans under one directory, and two
+runs with no name of their own, would otherwise clip to the same branch, and the branch is
+what keys the worktree. The digest is of the work and not a counter, so the same work asked
+for twice is the same branch — a retry reuses the checkout rather than opening a second
+merge request. Every generated name is put to `git check-ref-format` before it is used.
+
+The task half of the branch also names the run itself — its `slug`, and so its agents, its
+tab and its row on the board — so what `run show` calls the run and what the checkout is on
+always say the same thing. The login is left out of it: it is the same on every branch you
+generate, and spending the slug's length cap on it would make two long plans one row.
 
 It is ignored by a workflow that changes nothing.
 

@@ -29,6 +29,8 @@ let env: CollieCliEnv;
 
 interface CollieCliEnv extends Record<string, string> {
   PATH: string;
+  /** The operator a generated branch is namespaced under, so no test asks a real glab. */
+  GITLAB_USER_LOGIN: string;
   HOME: string;
   HERDR_PLUGIN_ROOT: string;
   HERDR_PLUGIN_CONFIG_DIR: string;
@@ -126,6 +128,7 @@ printf '%s\n' "$COLLIE_RUN" >> "${path.join(dir, "drivers")}"
       );
       env = {
         PATH: yield* Config.string("PATH").pipe(Config.withDefault("")),
+        GITLAB_USER_LOGIN: "tester",
         HOME: dir,
         HERDR_PLUGIN_ROOT: plugin,
         HERDR_PLUGIN_CONFIG_DIR: path.join(dir, "config"),
@@ -364,53 +367,57 @@ function checkout(at: string) {
   git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "--allow-empty", "-m", "x");
 }
 
-effectTest(
-  "a run whose branch cannot be worked out asks for one and starts on the answer",
-  function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    // A real checkout, because the answer to the question makes a worktree of it.
-    checkout(path.join(dir, "workspace"));
+effectTest("a run whose branch nothing names is given one, without asking", function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // A real checkout, because the branch that is worked out makes a worktree of it.
+  checkout(path.join(dir, "workspace"));
 
-    // A plan directory whose own name is too long to slug: every such plan under one
-    // `tasks/` directory would otherwise clip to the same branch, and the branch is the
-    // key to the worktree.
-    const plan = path.join(
-      dir,
-      "tasks",
-      "a-plan-directory-whose-name-is-far-too-long-to-be-a-branch",
-    );
-    yield* fs.makeDirectory(plan, { recursive: true });
-    yield* fs.writeFileString(path.join(plan, "SPEC.md"), "# A plan\n");
+  // A plan directory whose own name is too long to slug: every such plan under one
+  // `tasks/` directory clips to the same branch, and the branch is the key to the
+  // worktree — so what the cap dropped comes back as a digest rather than a question.
+  const plan = path.join(
+    dir,
+    "tasks",
+    "a-plan-directory-whose-name-is-far-too-long-to-be-a-branch",
+  );
+  yield* fs.makeDirectory(plan, { recursive: true });
+  yield* fs.writeFileString(path.join(plan, "SPEC.md"), "# A plan\n");
 
-    const start = ["--workspace", "w1", "run", "start", "implement", "--input", `plan=${plan}`];
-    const refused = yield* cli([...start, "--request-id", "branch-1"]);
+  const start = ["--workspace", "w1", "run", "start", "implement", "--input", `plan=${plan}`];
+  const started = yield* cli([...start, "--request-id", "branch-1"]);
+  expect(Number(started.exit)).toBe(0);
 
-    expect(refused.body.error.code).toBe("needs_input");
-    expect(refused.body.error.details.inputs).toMatchObject([{ name: "branch" }]);
-    // A declared strategy, so an agent reading the schema back can act on it.
-    expect(refused.body.error.details.schema).toMatchObject({ branch: "optional" });
-    // Nothing happened, so the same request id is free to be retried with the answer.
-    expect(yield* fs.exists(path.join(dir, "drivers"))).toBe(false);
+  const runId = Schema.decodeUnknownSync(Schema.String)(started.body.data.runId);
+  const record = parseJson(
+    yield* fs.readFileString(path.join(dir, "state", "runs", runId, "run.json")),
+  );
+  const branch = Schema.decodeUnknownSync(Schema.String)(record.worktree.branch);
+  expect(branch.startsWith(`${env.GITLAB_USER_LOGIN}/`)).toBe(true);
+  expect(record.worktree.path).toBe(
+    path.join(dir, ".herdr", "worktrees", "workspace", ...branch.split("/")),
+  );
 
-    const started = yield* cli([
-      ...start,
-      "--input",
-      "branch=global-board",
-      "--request-id",
-      "branch-1",
-    ]);
-    expect(Number(started.exit)).toBe(0);
-    const runId = Schema.decodeUnknownSync(Schema.String)(started.body.data.runId);
-    const record = parseJson(
-      yield* fs.readFileString(path.join(dir, "state", "runs", runId, "run.json")),
-    );
-    expect(record.worktree.branch).toBe("global-board");
-    expect(record.worktree.path).toBe(
-      path.join(dir, ".herdr", "worktrees", "workspace", "global-board"),
-    );
-  },
-);
+  // Retried with the same request id, it is the same Run and the same checkout: a
+  // generated name is a function of the work, so nothing new is created.
+  const again = yield* cli([...start, "--request-id", "branch-1"]);
+  expect(Schema.decodeUnknownSync(Schema.String)(again.body.data.runId)).toBe(runId);
+
+  // An explicit branch still wins, and is taken exactly as it was given.
+  const named = yield* cli([
+    ...start,
+    "--input",
+    "branch=global-board",
+    "--request-id",
+    "branch-2",
+  ]);
+  expect(Number(named.exit)).toBe(0);
+  const namedId = Schema.decodeUnknownSync(Schema.String)(named.body.data.runId);
+  const second = parseJson(
+    yield* fs.readFileString(path.join(dir, "state", "runs", namedId, "run.json")),
+  );
+  expect(second.worktree.branch).toBe("global-board");
+});
 
 effectTest("run show lists a parent's repository runs, with their status", function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -494,11 +501,13 @@ effectTest("two plans under one directory are two runs, named apart", function* 
     );
     // The branch already names the work; the run is named the same way, so the two
     // cannot say the same thing.
-    expect(record.worktree.branch).toBe(name);
+    expect(record.worktree.branch).toBe(`${env.GITLAB_USER_LOGIN}/${name}`);
     slugs.push(Schema.decodeUnknownSync(Schema.String)(record.slug));
   }
 
   expect(slugs[0]).not.toBe(slugs[1]);
+  // The task, not the whole branch: the login namespace is the same on every run this
+  // operator starts, and spending the slug's cap on it made two long plans one row.
   expect(slugs[0]).toBe(`implement-${plans[0]}`);
   expect(slugs[1]).toBe(`implement-${plans[1]}`);
 });

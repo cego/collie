@@ -18,6 +18,7 @@ steps:
         run: implement
         inputs:
           plan: "{{run.dir}}/plan"
+          task: "{{outputs.architecture.slug}}"
           workspace: "{{inputs.workspace}}"
       - title: Stop here
         stop: true
@@ -40,7 +41,9 @@ If we agree on work worth doing, write it up the way the planner would — a spe
 that Implement now has a plan to build from.
 
 Then write the Output JSON as your persona describes, with everything we agreed not to
-do now under `deferred`.
+do now under `deferred`, and one more key: `"slug":
+"<short-kebab-case-name-for-the-work-we-agreed-on>"`. It is what the branch an Implement
+now would build is named after, so make it name the work rather than the repository.
 
 ## unattended
 

@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Layer, Path, Schema } from "effect";
-import { Rig } from "./support/recorder";
+import { Rig, TEST_LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { runEffect } from "./support/effect";
 import { EffectFakeHerdr, installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
@@ -39,6 +39,7 @@ steps:
         run: implement
         inputs:
           plan: "{{run.dir}}/plan"
+          task: "{{outputs.draft.slug}}"
       - title: Refine
         agent: draft
         prompt: refine
@@ -64,7 +65,9 @@ function ticket(title: string, repo: string, blockedBy = "None") {
 function plan(tickets: Record<string, string>) {
   return {
     __write: { "plan/SPEC.md": "# Add a version flag\n", ...tickets },
-    output: CLEAN,
+    // The short name the planner and the human agreed the work is called, which is
+    // what every repository run's branch is named after.
+    output: { ...CLEAN, slug: "version-flag" },
   };
 }
 
@@ -265,7 +268,9 @@ test("a two-repo plan chains one run per repository, in waves, and the parent wa
       for (const repo of ["cego/api", "cego/web"]) {
         branches.add((yield* store.load(runs[repo]!)).record.worktree!.branch);
       }
-      expect([...branches]).toEqual(["add-a-version-flag"]);
+      // The task's own name under the operator's login — not the plan directory Collie
+      // chained, and not the whole goal the parent was named after.
+      expect([...branches]).toEqual([`${TEST_LOGIN}/version-flag`]);
       expect(run.record.children).toEqual([runs["cego/api"]!, runs["cego/web"]!]);
     }),
   ));

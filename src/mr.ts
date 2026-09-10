@@ -405,6 +405,22 @@ export function gitlabForProject<R>(
   });
 }
 
+/**
+ * Whoever glab is logged in as for this checkout's host, and null where it will not
+ * say. The authenticated user, not a configured assignee: a branch belongs to whoever
+ * is pushing it, and the two are different people whenever an assignee is set at all.
+ */
+export function glabLogin<R>(cwd: string, run: Runner<R>): Effect.Effect<string | null, never, R> {
+  return Effect.gen(function* () {
+    const me = yield* run("glab", ["api", "user"], cwd);
+    if (me.code !== 0) return null;
+    return Option.match(Schema.decodeUnknownOption(UserJson)(me.stdout), {
+      onNone: () => null,
+      onSome: (user) => (user.username === "" ? null : user.username),
+    });
+  });
+}
+
 /** The configured assignee wins; otherwise whoever glab is logged in as. */
 export function resolveAssignee<R>(
   cwd: string,
@@ -414,12 +430,7 @@ export function resolveAssignee<R>(
   return Effect.gen(function* () {
     if (configured !== undefined && isString(configured) && configured.trim() !== "")
       return configured.trim();
-    const me = yield* run("glab", ["api", "user"], cwd);
-    if (me.code !== 0) return null;
-    return Option.match(Schema.decodeUnknownOption(UserJson)(me.stdout), {
-      onNone: () => null,
-      onSome: (user) => (user.username === "" ? null : user.username),
-    });
+    return yield* glabLogin(cwd, run);
   });
 }
 

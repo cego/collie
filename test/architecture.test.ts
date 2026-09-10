@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
-import { Rig } from "./support/recorder";
+import { Rig, TEST_LOGIN } from "./support/recorder";
 import { FakeBin, gitWorktreeCases } from "./support/bin";
 import { runEffect } from "./support/effect";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
@@ -158,23 +158,25 @@ test("the deferred list reaches the run record and the summary", () =>
     }),
   ));
 
-test("Implement now chains implement with the plan the grill wrote", () =>
+test("Implement now chains implement on the slug the architect named the work", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([DEFERRED]);
-      // `architecture` declares no Input that names the work, so nothing names a branch
-      // for the implement it chains — and a stand-in would be the same stand-in for
-      // every architecture run in the repo. It asks, like any other missing Input.
-      const prompts = scriptedPrompts(["Implement now"], ["tidy-the-exporter"]);
+      // `architecture` declares no Input that names the work, so without the `slug` its
+      // Output settles there is nothing to name a branch after — and a stand-in would be
+      // the same stand-in for every architecture run in the repo.
+      yield* rig.queueOutputs([{ ...DEFERRED, slug: "tidy-the-exporter" }]);
+      const prompts = scriptedPrompts(["Implement now"]);
 
       const { run, status } = yield* runWorkflowEffect(rig, "architecture", {}, { prompts });
 
-      expect(prompts.asked.some((q) => q.includes("Which branch"))).toBe(true);
+      // Nobody was asked for a branch: it is worked out from the task and the login.
+      expect(prompts.asked).toEqual([]);
       expect(status).toBe("done");
       expect(run.record.children).toHaveLength(1);
       const child = yield* new RunStore(rig.stateDir).load(run.record.children[0]!);
       expect(child.record.workflow).toBe("implement");
       expect(child.record.inputs.plan).toBe(`${run.dir}/plan`);
-      expect(child.record.worktree?.branch).toBe("tidy-the-exporter");
+      expect(child.record.inputs.task).toBe("tidy-the-exporter");
+      expect(child.record.worktree?.branch).toBe(`${TEST_LOGIN}/tidy-the-exporter`);
     }),
   ));

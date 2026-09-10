@@ -192,6 +192,7 @@ A step with `choices:` asks you instead of running an agent:
       run: implement
       inputs:
         plan: "{{run.dir}}/plan"
+        task: "{{outputs.grill.slug}}" # what the child's branch is named after
     - title: Second opinion # one agent round, then the menu again
       prompt: second-opinion # sends the "## second-opinion" section
       persona: reviewer
@@ -214,20 +215,20 @@ A step with `choices:` asks you instead of running an agent:
 Each choice needs a `title` and exactly one of `run`, `prompt`, `post`, `handoff` or
 `stop`.
 
-| Key         | Type           | What it does                                                                                       |
-| ----------- | -------------- | -------------------------------------------------------------------------------------------------- |
-| `title`     | string         | What the menu shows, and what `run answer` and `--decide` name.                                    |
-| `run`       | string         | Chain that workflow as a child run in the same workspace.                                          |
-| `prompt`    | string         | Run one agent round on that body section, then offer the menu again.                               |
-| `post`      | true           | Send this run's `review.md` to the merge request it reviewed, as one `glab mr note`.               |
-| `handoff`   | string         | Give this run's result to the session's live agent for that role.                                  |
-| `stop`      | true           | End the step.                                                                                      |
-| `unless`    | string         | Offer this only when no agent for that role is live in this session.                               |
-| `requires`  | string or list | What the environment must provide for this choice to be offered at all.                            |
-| `inputs`    | map            | Inputs forwarded to a chained workflow. Values are templated.                                      |
-| `max`       | number         | How often this choice may be taken in one run.                                                     |
-| `config`    | map            | `{key, question}` — ask for a value once, keep it in `config.json`, read it as `{{config.<key>}}`. |
-| `follow_up` | map            | A second round, run only when the first reported findings. Same keys as a round.                   |
+| Key         | Type           | What it does                                                                                                                                                                                                                  |
+| ----------- | -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`     | string         | What the menu shows, and what `run answer` and `--decide` name.                                                                                                                                                               |
+| `run`       | string         | Chain that workflow as a child run in the same workspace.                                                                                                                                                                     |
+| `prompt`    | string         | Run one agent round on that body section, then offer the menu again.                                                                                                                                                          |
+| `post`      | true           | Send this run's `review.md` to the merge request it reviewed, as one `glab mr note`.                                                                                                                                          |
+| `handoff`   | string         | Give this run's result to the session's live agent for that role.                                                                                                                                                             |
+| `stop`      | true           | End the step.                                                                                                                                                                                                                 |
+| `unless`    | string         | Offer this only when no agent for that role is live in this session.                                                                                                                                                          |
+| `requires`  | string or list | What the environment must provide for this choice to be offered at all.                                                                                                                                                       |
+| `inputs`    | map            | Inputs forwarded to a chained workflow. Values are templated, and may name a step's own Output — `task: "{{outputs.grill.slug}}"` hands the child the short name the work was given, which is what its branch is named after. |
+| `max`       | number         | How often this choice may be taken in one run.                                                                                                                                                                                |
+| `config`    | map            | `{key, question}` — ask for a value once, keep it in `config.json`, read it as `{{config.<key>}}`.                                                                                                                            |
+| `follow_up` | map            | A second round, run only when the first reported findings. Same keys as a round.                                                                                                                                              |
 
 A `prompt` choice is a **round**, and takes the round keys inline: `prompt` (the section),
 `agent`, `persona`, `harness`, `model`, `effort`, `permissions`, `fresh`, `skill` and
