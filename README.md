@@ -59,3 +59,5 @@ Everything is also a command, so an agent can drive Collie:
 - [`CONTEXT.md`](CONTEXT.md) — the vocabulary.
 - [ADRs](docs/adr) — the decisions and why.
 - [`AGENTS.md`](AGENTS.md) — where an agent working on this repo should look first.
+
+Where this is going: [PRODUCT.md](PRODUCT.md). What the words mean: [CONTEXT.md](CONTEXT.md).

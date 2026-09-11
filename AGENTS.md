@@ -6,6 +6,7 @@ actions, and the `collie` CLI.
 
 ## Where to look
 
+- **Where this is going, and why the next thing is the next thing** → [`PRODUCT.md`](PRODUCT.md).
 - **A term you are unsure of, or one you are about to redefine** → [`CONTEXT.md`](CONTEXT.md).
   It is canonical for vocabulary; docs pages link to it rather than restating a definition.
 - **Which file owns what** → [`src/README.md`](src/README.md).
@@ -22,6 +23,16 @@ actions, and the `collie` CLI.
   Where it is called from: [`docs/internals.md`](docs/internals.md#compaction-at-a-work-boundary).
   What each installed harness actually supports, and what the release gate still needs:
   [ADR-0007](docs/adr/0007-compact-a-reused-agent-at-a-work-boundary.md).
+- **Changing what a Run is steered against, how a message reaches an agent, or what a
+  harness has been shown to do about one** → [`docs/steering.md`](docs/steering.md),
+  alongside `src/intent.ts`, `src/dispatcher.ts`, `src/steering.ts` and
+  `src/steering-caps.ts`. A capability moves to `proven` only from a recorded live result
+  in the Run's `CAPABILITIES.md`.
+- **Changing what the board draws, what it is a board of, or which workspace owns it** →
+  [`docs/using.md`](docs/using.md#the-control-plane), alongside `src/home.ts` (ownership),
+  `src/live.ts` (what the Live region is given) and `src/ui/live.tsx` (how it is drawn).
+  One board per Herd, in the Home ([ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md));
+  a workspace is a filter over it, never a board of its own.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →
@@ -49,3 +60,8 @@ binary still starts.
 5. Definition merge semantics (`extends:`, `use:`, layers) are canonical in
    `src/definitions.ts` and `docs/authoring.md` — change both together.
 6. Docs change in the same merge request as the behavior they describe.
+7. Steering's design decisions are [ADR-0008](docs/adr/0008-collie-steers-through-the-driver.md)
+   (the Driver is the only actor over agents) and
+   [ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md) (one board per Herd, in the
+   Home). ADR-0009 supersedes only ADR-0006's sentence about where the Collie tab is
+   created; a Run still stays in the workspace it was started from.

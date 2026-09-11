@@ -11,12 +11,14 @@
 import type { PendingChoice } from "../driver";
 import type { PickItem } from "../inputs";
 import { GLYPH } from "../naming";
+import { markFor, marksOf, NO_MARKS, worstOf, type Marks } from "../lines";
 import { agoShort } from "../time";
 import type { Mode } from "../flows";
 import type { DefinitionRow, RunDetail, SettingsView } from "../views";
 import { MAX_AGENTS, type AgentRow, type RunRow } from "../workspace";
 import type { WideGroup, WideView, WorkspaceView } from "../workspace";
 import type { Scope } from "../config";
+import type { Live } from "../live";
 
 /** What the nav switches between. One at a time, each a projection of state. */
 export type ViewName = "runs" | "history" | "workflows" | "settings";
@@ -28,14 +30,59 @@ export const VIEWS: ReadonlyArray<{ name: ViewName; title: string }> = [
 ];
 
 /**
+ * What the Runs view is a board of. One Herd has one board (ADR-0009), so "this
+ * workspace" is a filter over it rather than a board of its own — and a run filter is
+ * how a `navigate` action puts one piece of work on screen without focusing a pane.
+ */
+export type Filter =
+  | { kind: "all" }
+  | { kind: "workspace"; id: string }
+  | { kind: "run"; id: string };
+
+/**
+ * Whether this board is one Session's. Starting a run and handing off a review act on
+ * one workspace's checkout and on this Session's register, so they mean something only
+ * where the board has been narrowed — to a workspace, or to a Run inside one. Asked of
+ * the filter itself rather than of a `local`/`all` copy of it: the persisted default is
+ * the one place that vocabulary belongs, and every key set that used to be handed a
+ * `Scope` was answering this one question about the filter.
+ */
+export function sessionLocal(filter: Filter): boolean {
+  return filter.kind !== "all";
+}
+
+/**
+ * Which filter a board opens on. `local` means the workspace it was opened from, which
+ * is a thing only where that workspace is known: the Home is opened from anywhere, and
+ * a Home whose shortcut recorded no origin has nothing to narrow to.
+ */
+export function openingFilter(scope: Scope, origin: string | null): Filter {
+  return scope === "local" && origin !== null ? { kind: "workspace", id: origin } : { kind: "all" };
+}
+
+/**
  * What is being looked at, which is what decides how much has to be read. Plain data,
  * and held by the bridge as one source: which View is showing and what is selected
  * decide what the producers read, so they are state rather than render-local signals.
  */
 export interface Focus {
   view: ViewName;
-  /** What the Runs view is a board of: this workspace, or the whole herdr session. */
-  scope: Scope;
+  /** Which of the Herd's work the Runs view is showing. */
+  filter: Filter;
+  /**
+   * The workspace the board was opened from, which is what `g` narrows to. Null for a
+   * board nobody opened from anywhere — there is then nothing to narrow to, and `g`
+   * says so by doing nothing rather than by inventing a workspace.
+   */
+  origin: string | null;
+  /**
+   * What is half-typed in the Steer box. State rather than a render-local signal for
+   * the same reason the Selection is: it decides what the Steer box draws, and it has
+   * to survive the redraw every board tick causes.
+   */
+  steerDraft: string | null;
+  /** The proposal whose actions are on screen for a yes or no, or null. */
+  previewing: string | null;
   /**
    * Every View shown at least once. Those are kept fresh; one never opened is never
    * read at all, which is what keeps opening the tab cheap however much is on disk.
@@ -67,7 +114,7 @@ export interface Focus {
  */
 export interface AppState {
   view: ViewName;
-  scope: Scope;
+  filter: Filter;
   board: WorkspaceView;
   /**
    * Every workspace of this herdr session Collie has work in, or null while the scope
@@ -81,6 +128,19 @@ export interface AppState {
   settings: SettingsView | null;
   /** The selected Run, read from its directory. Null for any other Selection. */
   detail: RunDetail | null;
+  /**
+   * What steering has found about each Run on the board. Herd-wide, because a mark is
+   * what makes a row worth selecting — a human must not have to select a Run to find
+   * out that it has drifted.
+   */
+  marks: Marks;
+  /**
+   * What the Live region draws, or null until the Runs view has been shown. Produced for
+   * the Selection's Run, and the Herd's newest cards while nothing is selected.
+   */
+  live: Live | null;
+  steerDraft: string | null;
+  previewing: string | null;
 }
 
 export type RowKind =
@@ -108,6 +168,8 @@ export interface Row {
   /** The digit that focuses this agent, where the board had one left to give. */
   key: string | null;
   glyph: string;
+  /** What steering has found about this row's Run, as glyphs. Empty for most rows. */
+  marks: string;
   title: string;
   detail: string;
   runId: string | null;
@@ -182,6 +244,19 @@ export type Command =
   | { _tag: "OpenMr"; target: string; runId: string | null }
   | { _tag: "RunWorkflow"; workflow: string }
   /**
+   * Say something to Collie about one Run. The target is named rather than taken from
+   * the Selection: a steer is about a specific piece of work, and a board whose filter
+   * moved between reading a row and typing about it would otherwise steer another one.
+   */
+  | { _tag: "Steer"; text: string; runId: string; from?: string }
+  /**
+   * Carry out a proposal. The hash travels with the id because that is what makes this
+   * consent to a payload rather than to a summary — the board passes back exactly what
+   * it drew.
+   */
+  | { _tag: "ConfirmProposal"; id: string; hash: string }
+  | { _tag: "DeclineProposal"; id: string }
+  /**
    * Ask for a value, rather than write one. The app answers this itself by opening its
    * editor: an empty `SetDefault` used to stand in for "ask me first", which the
    * keyboard honoured and a click on the same button took literally — unsetting the
@@ -204,8 +279,13 @@ export type Command =
   | { _tag: "Select"; id: string | null }
   /** Go to what a row points at, resolved from its key at the moment Enter is pressed. */
   | { _tag: "Jump"; jump: Jump }
-  /** This workspace ⇄ every workspace of this herdr session. */
-  | { _tag: "ToggleScope" }
+  /** The whole Herd ⇄ the workspace this board was opened from. */
+  | { _tag: "ToggleFilter" }
+  /** Which of the Herd's work the board shows: a group row narrows, Esc widens. */
+  | { _tag: "SetFilter"; filter: Filter }
+  | { _tag: "DraftSteer"; text: string | null }
+  /** Put one proposal's actions on screen for a yes or no, or take them off. */
+  | { _tag: "Preview"; id: string | null }
   | { _tag: "Refresh" }
   | { _tag: "Quit" };
 
@@ -219,7 +299,10 @@ const FOCUS_ONLY = [
   "ToggleTail",
   "MoreReview",
   "Select",
-  "ToggleScope",
+  "ToggleFilter",
+  "SetFilter",
+  "DraftSteer",
+  "Preview",
   "Refresh",
   "Quit",
 ] as const;
@@ -245,10 +328,18 @@ export function retarget(at: Focus, command: FocusCommand): Focus {
       };
     case "ToggleTail":
       return { ...at, tail: !at.tail };
-    // A row of one scope is not a row of the other, so the Selection starts again:
+    // A row of one filter is not a row of the other, so the Selection starts again:
     // `clampSelection` then lands it on the first row of the board that arrives.
-    case "ToggleScope":
-      return { ...at, scope: at.scope === "local" ? "all" : "local", selected: null };
+    case "ToggleFilter":
+      return retarget(at, { _tag: "SetFilter", filter: widened(at) });
+    case "SetFilter":
+      return { ...at, filter: command.filter, selected: null, previewing: null };
+    // Neither is a change in the world: the Steer box is a field, and a preview is what
+    // was already read, drawn. `rereads` is where that costs nothing.
+    case "DraftSteer":
+      return { ...at, steerDraft: command.text };
+    case "Preview":
+      return { ...at, previewing: command.id };
     case "MoreReview":
       return { ...at, reviewPages: at.reviewPages + 1 };
     // From the first page again: how far the last Selection had been paged says nothing
@@ -294,12 +385,31 @@ export function rereads(last: Focus | null, next: Focus): Rereads {
   // per arrow key is a lag on every keypress — the tick and every command still re-read.
   const movedOnly =
     last.view === next.view &&
-    last.scope === next.scope &&
+    sameFilter(last.filter, next.filter) &&
     sameViews(last.shown, next.shown) &&
     last.tail === next.tail &&
     last.reviewPages === next.reviewPages &&
-    last.selected !== next.selected;
+    // Typing in the Steer box and previewing a proposal are the two focus changes that
+    // read nothing at all: the draft is a field, and the proposal is already in `live`.
+    // Neither is required to move the Selection, so they reuse whether it moved or not.
+    (last.selected !== next.selected ||
+      last.steerDraft !== next.steerDraft ||
+      last.previewing !== next.previewing);
   return { reuse: !asked && movedOnly, forceMr: asked };
+}
+
+const sameFilter = (a: Filter, b: Filter) =>
+  a.kind === b.kind && ("id" in a ? "id" in b && a.id === b.id : true);
+
+/**
+ * Where `g` goes from here: the whole Herd from anything narrower, and the workspace
+ * this board was opened from when it is already showing everything. A board with no
+ * origin has nothing to narrow to, so it stays where it is rather than narrowing to a
+ * workspace nobody named.
+ */
+function widened(at: Focus): Filter {
+  if (at.filter.kind !== "all" || at.origin === null) return { kind: "all" };
+  return { kind: "workspace", id: at.origin };
 }
 
 /** The fields every row shares, so each builder below only states what it differs in. */
@@ -307,6 +417,7 @@ const BLANK = {
   ago: "",
   key: null,
   glyph: " ",
+  marks: "",
   detail: "",
   runId: null,
   agent: null,
@@ -325,11 +436,14 @@ const BLANK = {
  * last of a run's agents closes the group — and the run named by the row above it is not
  * named again here.
  */
-function agentRow(a: AgentRow, connector: string): Row {
+function agentRow(a: AgentRow, connector: string, marks?: Marks): Row {
   return {
     ...BLANK,
     id: `agent:${a.agent}`,
     kind: "agent",
+    // Only the override: the rest of a Run's marks are about the Run, and repeating
+    // them on every agent under it would say the same thing four times.
+    marks: markFor(marks, a.run).override ? marksOf({ ...NO_MARKS, override: true }) : "",
     // An agent's row is its live status, which herdr answers with no time attached.
     key: a.key === "" ? null : a.key,
     title: `${connector} ${a.name}`,
@@ -357,8 +471,8 @@ function doingLine(a: AgentRow, ...rest: string[]): string {
  * One agent in the trailing group. It has no run above it, so its own row is the only
  * place left to say which run it names.
  */
-function orphanRow(a: AgentRow, connector: string): Row {
-  return { ...agentRow(a, connector), detail: doingLine(a, a.run) };
+function orphanRow(a: AgentRow, connector: string, marks?: Marks): Row {
+  return { ...agentRow(a, connector, marks), detail: doingLine(a, a.run) };
 }
 
 /**
@@ -368,9 +482,10 @@ function orphanRow(a: AgentRow, connector: string): Row {
  */
 function agentGroup(
   agents: readonly AgentRow[],
-  row: (a: AgentRow, connector: string) => Row,
+  row: (a: AgentRow, connector: string, marks?: Marks) => Row,
+  marks?: Marks,
 ): Row[] {
-  return agents.map((a, at) => row(a, at === agents.length - 1 ? "└" : "├"));
+  return agents.map((a, at) => row(a, at === agents.length - 1 ? "└" : "├", marks));
 }
 
 /** The prefix a Run's row id carries, minted here and read back by `runIdOf`. */
@@ -385,13 +500,14 @@ export function runIdOf(rowId: string | null): string | null {
   return rowId !== null && rowId.startsWith(RUN_ROW) ? rowId.slice(RUN_ROW.length) : null;
 }
 
-function runRow(r: RunRow, now: number, kind: "active" | "recent" | "history"): Row {
+function runRow(r: RunRow, now: number, kind: "active" | "recent" | "history", marks?: Marks): Row {
   return {
     ...BLANK,
     id: `${RUN_ROW}${r.id}`,
     kind,
     ago: agoShort(r.at, now),
     glyph: r.glyph,
+    marks: marksOf(markFor(marks, r.id)),
     title: r.title,
     detail: r.detail,
     runId: r.id,
@@ -452,7 +568,7 @@ function settingRow(id: string, key: string, value: string, writable: boolean): 
  * was started for, and filing it under "no run here" while its Run sat two rows above
  * was the board contradicting itself.
  */
-export function rowsOf(board: WorkspaceView): Row[] {
+export function rowsOf(board: WorkspaceView, marks?: Marks): Row[] {
   const rows: Row[] = [];
   const onBoard = [...board.active, ...board.recent];
   /** The rows this board has, by id: what a child id and an agent's run resolve against. */
@@ -464,10 +580,10 @@ export function rowsOf(board: WorkspaceView): Row[] {
    * run per repository is one thing on the board, not several beside each other.
    */
   const under = (run: RunRow, kind: "active" | "recent", depth = 0): Row[] => [
-    nested(runRow(run, board.now, kind), depth),
+    nested(runRow(run, board.now, kind, marks), depth),
     // An agent sits at its run's own depth: the connector is what joins it, and the
     // gutter is what says which run is inside which.
-    ...agentGroup(agentsOf(run), agentRow).map((a) => nested(a, depth)),
+    ...agentGroup(agentsOf(run), agentRow, marks).map((a) => nested(a, depth)),
     ...childrenOf(run).flatMap((child) =>
       under(child, board.active.includes(child) ? "active" : "recent", depth + 1),
     ),
@@ -492,7 +608,7 @@ export function rowsOf(board: WorkspaceView): Row[] {
   const orphans = board.agents.filter((a) => !byId.has(a.run));
   if (orphans.length > 0) {
     rows.push(headerRow("agents with no run here"));
-    rows.push(...agentGroup(orphans, orphanRow));
+    rows.push(...agentGroup(orphans, orphanRow, marks));
   }
   return rows;
 }
@@ -503,7 +619,7 @@ export function rowsOf(board: WorkspaceView): Row[] {
  * one flat list the way the local board is — the depth is in the gutter, so title,
  * detail and age start in the same column at every level.
  */
-export function wideRows(wide: WideView): Row[] {
+export function wideRows(wide: WideView, marks?: Marks): Row[] {
   const rows: Row[] = [];
   for (const [at, group] of wide.groups.entries()) {
     // A blank line between workspaces. Groups of one-line rows with nothing between
@@ -523,12 +639,13 @@ export function wideRows(wide: WideView): Row[] {
     const inGroup = [...group.active, ...group.recent];
     const byId = new Map(inGroup.map((r) => [r.id, r]));
     const under = (run: RunRow, kind: "active" | "recent", depth = 1): Row[] => {
-      const row = runRow(run, wide.now, kind);
+      const row = runRow(run, wide.now, kind, marks);
       return [
         nested(away ? row : unqualified(row), depth),
         ...agentGroup(
           group.agents.filter((a) => a.run === run.id),
           agentRow,
+          marks,
         ).map((agent) => nested(agent, depth + 1)),
         // A repository run of a plan that fanned out, under the plan run that started it.
         ...run.children
@@ -546,12 +663,13 @@ export function wideRows(wide: WideView): Row[] {
     // has stopped for you is costing its whole wall-clock while it waits.
     const active = [...atTop.filter((r) => r.needsYou), ...atTop.filter((r) => !r.needsYou)];
     const inside = [
-      groupRow(group),
+      groupRow(group, marks),
       ...active.flatMap((r) => under(r, "active")),
       ...top(group.recent).flatMap((r) => under(r, "recent")),
       ...agentGroup(
         group.agents.filter((a) => !byId.has(a.run)),
         orphanRow,
+        marks,
       ).map((row) => nested(row, 1)),
     ];
     rows.push(...(away ? inside.map(unreachable) : inside));
@@ -608,12 +726,13 @@ const unqualified = (row: Row): Row => ({ ...row, title: row.title.split(" · ")
  * the footer counts and what a run row is ordered by, and a workspace counted beside
  * its own waiting run made "1 run(s) need you" read as two.
  */
-function groupRow(group: WideGroup): Row {
+function groupRow(group: WideGroup, marks?: Marks): Row {
   return {
     ...BLANK,
     id: `group:${group.workspaceId ?? ELSEWHERE}`,
     kind: "group",
     glyph: group.glyph,
+    marks: worstOf([...group.active, ...group.recent].map((run) => markFor(marks, run.id))),
     title: group.label,
     detail: group.summary,
     jump: group.workspaceId
@@ -688,7 +807,47 @@ export function selectableRows(rows: readonly Row[]): Row[] {
  * it is drawn there for the same reason.
  */
 export function runsRows(state: AppState): Row[] {
-  return state.scope === "all" && state.wide ? wideRows(state.wide) : rowsOf(state.board);
+  const filter = state.filter;
+  if (filter.kind === "run") return onlyRun(everyRow(state), filter.id);
+  if (filter.kind === "workspace" && state.wide) {
+    const group = state.wide.groups.find((g) => g.workspaceId === filter.id);
+    // Not on the wide board at all — a workspace Collie has nothing in — so this
+    // board's own runs are what is left to show.
+    if (!group) return rowsOf(state.board, state.marks);
+    return wideRows({ ...state.wide, groups: [group], quiet: [] }, state.marks);
+  }
+  return everyRow(state);
+}
+
+/** The Herd's whole board, and this board's own until the wide one has been read. */
+function everyRow(state: AppState): Row[] {
+  return state.wide ? wideRows(state.wide, state.marks) : rowsOf(state.board, state.marks);
+}
+
+/**
+ * One Run and what hangs off it: the run's row, the agents working for it, and the
+ * repository runs it fanned out.
+ *
+ * Not by depth: on the local board an agent sits at its run's *own* depth — the connector
+ * is what joins them — so a depth test ended the group at the first agent and showed a
+ * run with nothing under it. An agent is kept when it names this run, and a deeper row
+ * when it is nested under what has been kept so far.
+ */
+function onlyRun(rows: readonly Row[], runId: string): Row[] {
+  const at = rows.findIndex((row) => row.kind !== "agent" && row.runId === runId);
+  if (at < 0) return [];
+  const start = rows[at]!;
+  const kept = [start];
+  const mine = new Set([runId]);
+  for (const row of rows.slice(at + 1)) {
+    const nestedDeeper = row.depth > start.depth;
+    const ofMine = row.runId !== null && mine.has(row.runId);
+    if (!nestedDeeper && !(row.kind === "agent" && ofMine)) break;
+    kept.push(row);
+    // A child run of this one brings its own agents along, so it joins the set.
+    if (row.kind !== "agent" && row.runId !== null) mine.add(row.runId);
+  }
+  return kept;
 }
 
 export function viewRows(state: AppState): Row[] {
@@ -696,7 +855,7 @@ export function viewRows(state: AppState): Row[] {
     case "runs":
       return runsRows(state);
     case "history":
-      return (state.history ?? []).map((r) => runRow(r, state.board.now, "history"));
+      return (state.history ?? []).map((r) => runRow(r, state.board.now, "history", state.marks));
     case "workflows":
       // Workflows only: a persona is instructions, not something that can be run, so a
       // persona row here offered a key that did nothing. Fork is where they are acted on.
@@ -775,7 +934,7 @@ export interface Action {
  * every workspace would start one against the wrong repository. They are offered on a
  * local board only, the way `s` is.
  */
-export function actionsFor(row: Row | null, scope: Scope): Action[] {
+export function actionsFor(row: Row | null, filter: Filter): Action[] {
   if (!row) return [];
   // A workspace is somewhere to go and nothing else: Enter on it is the jump, which
   // `keyIntent` answers from the row for every kind of row alike.
@@ -808,13 +967,13 @@ export function actionsFor(row: Row | null, scope: Scope): Action[] {
   // A finished run has no driver left to stop, so the key is not offered for one.
   if (row.kind === "active") {
     actions.push({ key: "k", label: "stop", command: { _tag: "StopRun", runId } });
-  } else if (row.fixable && scope === "local") {
+  } else if (row.fixable && sessionLocal(filter)) {
     // Only for a run that has stopped: a fix round over a run still writing its own
     // review would build from half of it.
     actions.push({ key: "x", label: "fix what is open", command: { _tag: "FixFindings", runId } });
   }
   if (row.target) {
-    if (scope === "local") {
+    if (sessionLocal(filter)) {
       actions.push({
         key: "a",
         label: "review again",
@@ -848,26 +1007,40 @@ export function actionsFor(row: Row | null, scope: Scope): Action[] {
  */
 export type Keyboarding =
   | { _tag: "Flow" }
+  /** A proposal on screen, which takes exactly two keys and refuses every other. */
+  | { _tag: "Proposal"; proposal: { id: string; hash: string } }
   | { _tag: "Choice"; choice: PendingChoice }
   | { _tag: "Filter" }
   | { _tag: "Setting"; setting: { key: string; value: string } }
+  | { _tag: "Steering"; draft: string }
   | { _tag: "Board" };
 
 /** Where the keyboard is, from what the tab has open. Pure, and the order is the point. */
 export function keyboardOn(at: {
   /** A flow asking a question inline; it has handlers of its own. */
   flow: boolean;
+  /**
+   * The proposal on screen, where one is. Above the question, because it is the narrower
+   * of the two — two keys and nothing else — and a human reading one has already been
+   * put in front of a decision.
+   */
+  proposal?: { id: string; hash: string } | null;
   /** The selected run's pending question, where it has one. */
   choice: PendingChoice | null;
   /** Whether the cursor is in the filter, which outlives the text being kept. */
   filtering: boolean;
   /** A Settings row being given a new value. */
   setting: { key: string; value: string } | null;
+  steering?: string | null;
 }): Keyboarding {
   if (at.flow) return { _tag: "Flow" };
+  if (at.proposal) return { _tag: "Proposal", proposal: at.proposal };
   if (at.choice) return { _tag: "Choice", choice: at.choice };
   if (at.filtering) return { _tag: "Filter" };
   if (at.setting) return { _tag: "Setting", setting: at.setting };
+  if (at.steering !== null && at.steering !== undefined) {
+    return { _tag: "Steering", draft: at.steering };
+  }
   return { _tag: "Board" };
 }
 
@@ -917,13 +1090,13 @@ export interface Windowed<T> {
  */
 export function footerActions(opts: {
   row: Row | null;
-  scope: Scope;
+  filter: Filter;
   /** Whether anything on this board is asking, which is what `n` can act on. */
   questions: boolean;
   on: Keyboarding;
 }): Action[] {
   return [
-    ...(fieldHasKeys(opts.on) ? [] : actionsFor(opts.row, opts.scope)),
+    ...(fieldHasKeys(opts.on) ? [] : actionsFor(opts.row, opts.filter)),
     ...(opts.questions && !takesText(opts.on)
       ? [
           {
@@ -938,7 +1111,13 @@ export function footerActions(opts: {
 
 /** Whether anything but the board has the keys: a question, the filter, a value. */
 function fieldHasKeys(on: Keyboarding): boolean {
-  return on._tag === "Choice" || on._tag === "Filter" || on._tag === "Setting";
+  return (
+    on._tag === "Choice" ||
+    on._tag === "Filter" ||
+    on._tag === "Setting" ||
+    on._tag === "Steering" ||
+    on._tag === "Proposal"
+  );
 }
 
 /**
@@ -971,9 +1150,10 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "k", what: "Stop the selected run" },
   { key: "n", what: "Go to the next unanswered question" },
   { key: "Enter", what: "Go to it, or run what is selected" },
+  { key: ":", what: "Steer the selected run" },
   { key: "/", what: "Filter the list" },
-  { key: "Esc", what: "Clear the filter" },
-  { key: "g", what: "Scope: this workspace, or all of them" },
+  { key: "Esc", what: "Clear the filter, then widen" },
+  { key: "g", what: "This workspace, or the whole Herd" },
   { key: "R", what: "Re-read what is on screen" },
   { key: "?", what: "This list; any key closes it" },
   { key: "q", what: "Close the tab" },
@@ -985,11 +1165,11 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
  * rather than behind `?` because it is the one thing about this board that is not
  * visible on it — and the key names where it goes, not where it is.
  */
-const globalKeys = (scope: Scope): ReadonlyArray<string> => [
-  `g ${scope === "local" ? "all" : "local"}`,
+const globalKeys = (filter: Filter): ReadonlyArray<string> => [
+  `g ${sessionLocal(filter) ? "all" : "local"}`,
   // Starting a run is this Session's, so it is not offered from a board of every
   // workspace; `g local` above is how you get back to somewhere it means something.
-  ...(scope === "local" ? ["p run"] : []),
+  ...(sessionLocal(filter) ? ["p run"] : []),
   "? keys",
   "q close",
 ];
@@ -1002,14 +1182,16 @@ const globalKeys = (scope: Scope): ReadonlyArray<string> => [
 export function footerKeys(opts: {
   panel: ReadonlyArray<string>;
   on: Keyboarding;
-  scope: Scope;
+  filter: Filter;
 }): string {
   if (opts.on._tag === "Choice") return "↑↓ move · Enter choose · Esc leave the run open";
   if (opts.on._tag === "Setting") return "type a value · Enter set it · Esc leave it";
   // The filter has the keys too, so the board's own are as much a lie here as the
   // Selection's buttons were: `k` typed a `k` while `[k stop]` stopped the run.
   if (opts.on._tag === "Filter") return "type to narrow · Enter keep it · Esc drop it";
-  return [...opts.panel, ...globalKeys(opts.scope)].join(" · ");
+  if (opts.on._tag === "Steering") return "type · Enter send it to Collie · Esc leave it";
+  if (opts.on._tag === "Proposal") return "Enter carry it out · Esc decline it";
+  return [...opts.panel, ...globalKeys(opts.filter)].join(" · ");
 }
 
 /**
@@ -1034,11 +1216,11 @@ export interface KeyContext {
   /** Which View is showing: the scope is the Runs view's, so `g` is that view's key. */
   view: ViewName;
   /**
-   * Which scope the board is at. Only the Session-local keys ask: a hand-off names one
+   * What the board is filtered to. Only the Session-local keys ask: a hand-off names one
    * of this Session's live agents, and a board of the whole session has rows that are
    * not this Session's.
    */
-  scope: Scope;
+  filter: Filter;
   /**
    * Where the keyboard is. `keyboardOn` above is the one answer to that, shared with the
    * paste handler and the footer, so this does not restate the facts it is made of.
@@ -1051,8 +1233,8 @@ export interface KeyContext {
   helping: boolean;
   /** Where answering the pending question has got to. */
   asking: Asking;
-  /** The filter text, while the keyboard is in it. */
-  filter: string;
+  /** The text narrowing the list, while the keyboard is in it. Not the board's Filter. */
+  query: string;
   /** Whether the detail panel is on screen and can be scrolled. */
   scrollable: boolean;
   /** The Selection, and every row, for the keys that act on one or find one. */
@@ -1075,6 +1257,8 @@ export type KeyIntent =
   /** Where one keystroke left a pending question: what to show, and what to send. */
   | { _tag: "Answered"; asking: Asking; value: string | null }
   | { _tag: "Filtering"; filter: string; typing: boolean }
+  /** What is in the Steer box now, or `null` for a box the human has closed. */
+  | { _tag: "Steering"; draft: string | null }
   | { _tag: "Editing"; editing: { key: string; value: string } | null }
   /**
    * The value being edited, sent: dispatch it and close the editor. One intent for one
@@ -1105,7 +1289,7 @@ const NEXT_QUESTION = "n";
  * value — which is what keeps `n` from jumping while a free-text question is open.
  */
 function takesText(on: Keyboarding): boolean {
-  if (on._tag === "Filter" || on._tag === "Setting") return true;
+  if (on._tag === "Filter" || on._tag === "Setting" || on._tag === "Steering") return true;
   return on._tag === "Choice" && on.choice.kind === "ask";
 }
 
@@ -1157,6 +1341,15 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   // A flow asking a question owns the keyboard: `Flow` has its own handler, and a key
   // that also moved the Selection underneath would act on a board nobody is looking at.
   if (at.on._tag === "Flow") return null;
+  // A proposal on screen: two keys, and every other one refused. A human reading what
+  // they are being asked to consent to must not be able to stop a run by pressing `k` at
+  // it — the payload is on screen, and the only answers to it are yes and no.
+  if (at.on._tag === "Proposal") {
+    const { id, hash } = at.on.proposal;
+    if (key.name === "return") return doing({ _tag: "ConfirmProposal", id, hash });
+    if (key.name === "escape") return doing({ _tag: "DeclineProposal", id });
+    return null;
+  }
   // Before whoever has the keyboard, but only where that is not a field taking text:
   // this is the one way to a question on a board where a question already has the keys.
   if (key.sequence === NEXT_QUESTION && !takesText(at.on)) return { _tag: "NextQuestion" };
@@ -1168,12 +1361,12 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
     // Enter stops typing and keeps the text — `/` narrows the list so a row can then be
     // acted on — and only Esc drops it.
     if (key.name === "escape") return { _tag: "Filtering", filter: "", typing: false };
-    if (key.name === "return") return { _tag: "Filtering", filter: at.filter, typing: false };
+    if (key.name === "return") return { _tag: "Filtering", filter: at.query, typing: false };
     if (key.name === "backspace") {
-      return { _tag: "Filtering", filter: at.filter.slice(0, -1), typing: true };
+      return { _tag: "Filtering", filter: at.query.slice(0, -1), typing: true };
     }
     if (PRINTABLE.test(key.sequence)) {
-      return { _tag: "Filtering", filter: at.filter + key.sequence, typing: true };
+      return { _tag: "Filtering", filter: at.query + key.sequence, typing: true };
     }
     return null;
   }
@@ -1194,12 +1387,30 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
     }
     return null;
   }
+  // The Steer box. Enter names the Run rather than sending to whichever one the board
+  // decides later: a steer is about a specific piece of work, and with nothing selected
+  // there is nothing to send it about — so the box says so and sends nothing.
+  if (at.on._tag === "Steering") {
+    const draft = at.on.draft;
+    if (key.name === "escape") return { _tag: "Steering", draft: null };
+    if (key.name === "return") {
+      const runId = at.row?.runId ?? null;
+      if (runId === null || draft.trim() === "") return null;
+      return { _tag: "Submitted", command: { _tag: "Steer", text: draft, runId } };
+    }
+    if (key.name === "backspace") return { _tag: "Steering", draft: draft.slice(0, -1) };
+    if (PRINTABLE.test(key.sequence)) return { _tag: "Steering", draft: draft + key.sequence };
+    return null;
+  }
   // A filter kept so a row can be acted on outlives the keyboard being in it, so Esc
   // has to reach it from the board too: it used to mean `/` first, and a filter nobody
   // remembers setting hides whole workspaces on a wide board.
-  if (key.name === "escape" && at.filter !== "") {
+  if (key.name === "escape" && at.query !== "") {
     return { _tag: "Filtering", filter: "", typing: false };
   }
+  // And once there is no text filter left to drop, Esc widens the board: narrowing to a
+  // workspace is a filter too, and the way out of one has to be the same key.
+  if (key.name === "escape") return doing({ _tag: "SetFilter", filter: { kind: "all" } });
   // After everything that takes text, never before: a printable character belongs to
   // the answer, the filter or the value being typed, and a free-text answer that could
   // not contain a question mark was the cost of checking this first.
@@ -1219,7 +1430,10 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   if (key.name === "up") return { _tag: "Move", by: -1 };
   if (key.name === "down") return { _tag: "Move", by: 1 };
   if (key.name === "tab") return { _tag: "ShowViewBy", by: key.shift ? -1 : 1 };
-  if (key.sequence === "/") return { _tag: "Filtering", filter: at.filter, typing: true };
+  if (key.sequence === "/") return { _tag: "Filtering", filter: at.query, typing: true };
+  // `:` and not `s`: `s` is the hand-off, and a key that sometimes sends a review and
+  // sometimes opens a text box is a key nobody can press with confidence.
+  if (key.sequence === ":") return { _tag: "Steering", draft: "" };
   // Re-reading what is on screen, and the one merge request behind it: a cached read is
   // what makes selecting cheap, so there has to be a way to say "ask again".
   if (key.sequence === "R") return doing({ _tag: "Refresh" });
@@ -1239,13 +1453,13 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   // The way into the whole session, and back. The Runs view's own key: it is the only
   // View a Scope means anything to, and widening one nobody is looking at would read
   // the whole session on every tick for nothing.
-  if (key.sequence === "g") return at.view === "runs" ? doing({ _tag: "ToggleScope" }) : null;
+  if (key.sequence === "g") return at.view === "runs" ? doing({ _tag: "ToggleFilter" }) : null;
   // The local board's keys, all four under the one rule: starting a workflow, resuming
   // one and forking a definition act on this workspace's checkout rather than on the
   // selected row, and the hand-off `s` names an agent on this Session's register —
   // none of which is what a board of every workspace is about. A wide board falls
   // through to the row's own keys, which are none of these.
-  if (at.scope === "local") {
+  if (sessionLocal(at.filter)) {
     const mode = SESSION_MODES.get(key.sequence);
     if (mode) return doing({ _tag: "OpenMode", mode });
     if (key.sequence === "s") return doing({ _tag: "SendReview", runId: at.row?.runId ?? null });
@@ -1254,8 +1468,13 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   // agent, in either scope — resolved from the row's own key when it is pressed rather
   // than from an id cached when the row was drawn. A Workflow and a Settings row point
   // at nothing and keep Enter for their own action, below.
+  // A workspace row is a filter, not a pane: Enter narrows the board to it, and its
+  // runs are what Enter jumps into from there.
+  if (key.name === "return" && at.row?.kind === "group" && at.row.jump?.kind === "workspace") {
+    return doing({ _tag: "SetFilter", filter: { kind: "workspace", id: at.row.jump.workspaceId } });
+  }
   if (key.name === "return" && at.row?.jump) return doing({ _tag: "Jump", jump: at.row.jump });
-  const action = actionsFor(at.row, at.scope).find(
+  const action = actionsFor(at.row, at.filter).find(
     (a) => a.key === (key.name === "return" ? "\r" : key.sequence),
   );
   return action ? doing(action.command) : null;

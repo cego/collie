@@ -91,6 +91,84 @@ export class FakeHerdr extends Herdr {
 }
 
 /**
+ * What a `*.report_metadata` call leaves behind. herdr keeps plugin metadata, and the
+ * Home's ownership proof is read back off `workspace list` and `pane list` — so a fake
+ * that only logged these calls made every second ensure an `ownership_unknown`.
+ *
+ * Its own file, beside the fake's state rather than in it: the CLI writes that state from
+ * a subprocess and this runs in a socket callback here, and two writers of one file
+ * interleaved into something neither could read.
+ *
+ * Synchronous, deliberately: the callback has no Effect runtime around it, and the next
+ * `workspace list` may be the very next line on the wire.
+ */
+export const tokensPath = (logPath: string) => `${logPath}.tokens.json`;
+
+/** Tokens by workspace id and by pane id, which is the whole of what that file holds. */
+const TokenStoreJson = Schema.fromJsonString(
+  Schema.Record(
+    Schema.Literals(["workspaces", "panes"]),
+    Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.String)),
+  ),
+);
+const encodeTokens = Schema.encodeSync(TokenStoreJson);
+const decodeTokens = Schema.decodeUnknownOption(TokenStoreJson);
+
+const MetadataParams = Schema.Struct({
+  workspace_id: Schema.optionalKey(Schema.String),
+  pane_id: Schema.optionalKey(Schema.String),
+  tokens: Schema.Record(Schema.String, Schema.String),
+});
+const asMetadataParams = Schema.decodeUnknownOption(MetadataParams);
+
+/** One `*.report_metadata` call, as much of it as the store keeps. */
+interface MetadataCall {
+  readonly on: "workspaces" | "panes";
+  readonly id: string;
+  readonly tokens: Readonly<Record<string, string>>;
+}
+
+/** That call, or null for anything else on the wire. */
+function metadataCall(method: string, params: Schema.JsonObject): MetadataCall | null {
+  if (method !== "workspace.report_metadata" && method !== "pane.report_metadata") return null;
+  const decoded = asMetadataParams(params);
+  if (decoded._tag === "None") return null;
+  const on = method === "workspace.report_metadata" ? "workspaces" : "panes";
+  const id = (on === "workspaces" ? decoded.value.workspace_id : decoded.value.pane_id) ?? "";
+  return id === "" ? null : { on, id, tokens: decoded.value.tokens };
+}
+
+/**
+ * What a `*.report_metadata` call leaves behind. herdr keeps plugin metadata, and the
+ * Home's ownership proof is read back off `workspace list` and `pane list` — so a fake
+ * that only logged these calls made every second ensure an `ownership_unknown`.
+ *
+ * Its own file beside the log, not the fake's state: the CLI writes that state from a
+ * subprocess and this writes here, and two writers of one file interleaved into
+ * something neither could read. On the log's own queue, so it has landed before the
+ * reply goes back — the very next line on the wire may be the `workspace list` that
+ * reads it.
+ */
+const rememberTokens = Effect.fn("Rig.rememberTokens")(function* (
+  logPath: string,
+  call: MetadataCall,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const file = tokensPath(logPath);
+  const raw = yield* fs.readFileString(file, "utf8").pipe(Effect.catch(() => Effect.succeed("")));
+  const held = decodeTokens(raw);
+  const store = held._tag === "Some" ? held.value : { workspaces: {}, panes: {} };
+  const kind = store[call.on] ?? {};
+  yield* fs.writeFileString(
+    file,
+    `${encodeTokens({
+      ...store,
+      [call.on]: { ...kind, [call.id]: { ...kind[call.id], ...call.tokens } },
+    })}\n`,
+  );
+});
+
+/**
  * The GitLab login every rig runs as. In its environment rather than the process's, so
  * no test reaches out to a real glab to find out who is running it — and none of them
  * has to put a process-wide variable back afterwards.
@@ -338,15 +416,20 @@ export class Rig {
       const fs = yield* FileSystem.FileSystem;
       const writes = yield* Queue.unbounded<{
         readonly entry: string;
+        /** Metadata this call attached, written before its reply goes back. */
+        readonly tokens: MetadataCall | null;
         readonly succeed: () => void;
         readonly fail: () => void;
       }>();
       setFiber(
         yield* Queue.take(writes).pipe(
-          Effect.flatMap(({ entry, succeed, fail }) =>
+          Effect.flatMap(({ entry, tokens, succeed, fail }) =>
             fs
               .writeFileString(logPath, entry, { flag: "a" })
-              .pipe(Effect.match({ onFailure: fail, onSuccess: succeed })),
+              .pipe(
+                Effect.andThen(tokens === null ? Effect.void : rememberTokens(logPath, tokens)),
+                Effect.match({ onFailure: fail, onSuccess: succeed }),
+              ),
           ),
           Effect.forever,
           Effect.forkDetach,
@@ -360,6 +443,11 @@ export class Rig {
               for (const req of requestsFrom(String(chunk))) {
                 const params = req.params ?? {};
                 const entry = `${encodeJson({ transport: "rpc", cmd: req.method, method: req.method, params })}\n`;
+                // The two calls that change what a later `workspace list` or `pane list`
+                // answers: herdr keeps plugin metadata, and the Home's ownership proof is
+                // read back off these lists. A fake that only logged them made every
+                // second ensure an `ownership_unknown`.
+                const tokens = metadataCall(req.method, params);
                 // The same FAKE_HERDR_FAIL map the CLI side reads, so an rpc-only
                 // call like `tab.move` can be made to fail in a test.
                 const failure = Option.getOrElse(
@@ -370,6 +458,7 @@ export class Rig {
                 )[req.method];
                 Queue.offerUnsafe(writes, {
                   entry,
+                  tokens,
                   succeed: () =>
                     socket.write(
                       `${encodeJson(
@@ -440,6 +529,7 @@ export class Rig {
       "FAKE_HERDR_PLUGINS",
       "FAKE_HERDR_STATUS",
       "FAKE_HERDR_STATUS_SOCKET",
+      "FAKE_HERDR_RUNTIME_MISSING",
     ]) {
       const value = env[key];
       if (value) Bun.env[key] = value;

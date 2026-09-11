@@ -1,11 +1,25 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ConfigProvider, Effect, FileSystem, Path, Schema } from "effect";
 import { FakeHerdr, Rig } from "./support/recorder";
-import { COLLIE_TAB } from "../src/naming";
+import {} from "../src/naming";
 import { fakeHerdr } from "./support/fake-herdr-core";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
+import { writeInbox } from "../src/operations";
+import { amend, seedIntent, writeIntent } from "../src/intent";
+import { deliveriesOf, herdOf, ledgerPath, readLedger, type Delivery } from "../src/steering";
+import {
+  currentReports,
+  electionsPath,
+  pendingEvaluation,
+  readDrift,
+  readElections,
+  shouldStand,
+} from "../src/drift";
+import { FakeBin } from "./support/bin";
+import { REQUIRED_FLAGS } from "../src/evaluator";
+import { RunStore } from "../src/run";
 
 const Json = Schema.fromJsonString(Schema.Any);
 const decodeJson = Schema.decodeUnknownSync(Json);
@@ -177,25 +191,34 @@ test("plan runs one step in a tab of its own and records the run", () =>
       });
 
       expect(status).toBe("done");
-      // The workspace's board is found or opened and put first, and then the step opens
-      // its own tab — after checking whether the launch pane is a reusable numbered
-      // shell. Nothing asks what the other tabs are called: a run's tab is named after
-      // the run, so there is no collision to judge. The run itself is driven headlessly.
+      // The Herd's Home first — the runtime gate, then a workspace of Collie's own with
+      // the board's pane in it, owned by the tokens it is given (ADR-0009) — and then
+      // the step opens its own tab, after checking whether the launch pane is a reusable
+      // numbered shell. Collie owns no tab in *this* workspace yet, so there is no
+      // anchor and nothing is reordered. The run itself is driven headlessly.
       expect(yield* rig.cmds()).toEqual([
-        "tab list",
+        "api schema",
+        "status server",
+        "workspace list",
+        "pane list",
+        "workspace create",
+        // Tokened before its pane is opened, so a pane herdr refuses still leaves a
+        // workspace that says whose it is.
+        "workspace.report_metadata",
         "plugin pane",
-        "pane rename",
-        "tab rename",
-        "tab.move",
+        "pane list",
+        "pane.report_metadata",
         "tab list",
         "pane list",
         "tab create",
-        // The new tab is placed by rank as soon as it exists, and never again.
         "tab list",
-        "tab.move",
         "pane run",
         "agent start",
         "agent.view.set",
+        // Who is in that pane, twice: once to build the entry the send is addressed to,
+        // and once inside the Dispatcher transaction that holds the ledger lock.
+        "agent list",
+        "agent list",
         // What the agent was doing before the prompt, so that a turn seen afterwards
         // is known to be this prompt's and not one already running.
         "agent get",
@@ -216,11 +239,12 @@ test("plan runs one step in a tab of its own and records the run", () =>
       // the only pane this plugin keeps, and the step's tab holds the agent.
       for (const cmd of ["pane split", "pane move", "pane swap"])
         expect(yield* rig.cmds()).not.toContain(cmd);
-      // One pane rename in the whole run: the board's own. The agent's pane is alone in
-      // its tab, so the tab says `Solo` and the pane says nothing.
+      // No pane rename in the whole run. The board's pane is the Home's and is owned by
+      // a token rather than by a name, and the agent's pane is alone in its tab — so the
+      // tab says `Solo` and the pane says nothing.
       expect(
         (yield* rig.calls()).filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2)),
-      ).toEqual([["1-1", COLLIE_TAB]]);
+      ).toEqual([]);
       expect(
         (yield* rig.calls())
           .filter((c) => c.cmd === "tab rename")
@@ -941,12 +965,19 @@ test("a herdr that cannot move tabs still finishes the run, with a log line", ()
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+      yield* rig.queueOutputs([
+        { verdict: "clean", findings: [] },
+        { verdict: "clean", findings: [] },
+      ]);
 
+      // Two runs, because the first tab Collie opens in a workspace is the anchor for
+      // the ones after it: with nothing of Collie's in the strip there is no anchor and
+      // nothing to reorder, so the failure this is about only happens to the second.
+      yield* runWorkflowEffect(rig, "solo", { goal: "one", ticket: "" });
       const { run, status } = yield* runWorkflowEffect(
         rig,
         "solo",
-        { goal: "Add a picker", ticket: "" },
+        { goal: "two", ticket: "" },
         { env: { FAKE_HERDR_FAIL: encodeJson({ "tab.move": "no such method" }) } },
       );
 
@@ -1168,5 +1199,331 @@ test("herdr going quiet for a moment does not discard a live step", () =>
 
       expect(status).toBe("done");
       expect(run.record.steps[0]!.variants[0]!.error).toBeNull();
+    }),
+  ));
+
+test("a hold written while a Run works stops the next piece of work, and a release starts it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [], slug: "s" }]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          outputPollMs: 20,
+          // Written before the Driver looks: the boundary of the first step is the
+          // first thing that reads the inbox, so this is the hold it finds there.
+          before: (started) =>
+            Effect.gen(function* () {
+              yield* writeInbox(started.dir, {
+                type: "hold",
+                requestId: "hold-1",
+                reason: "wrong branch",
+              });
+              // Released from beside the Driver, after it is already holding: the point
+              // of the test is that the hold loop keeps reading the inbox while it waits,
+              // rather than checking once on the way past.
+              yield* Effect.forkDetach(
+                writeInbox(started.dir, {
+                  type: "release",
+                  requestId: "rel-1",
+                  reason: "fixed",
+                }).pipe(Effect.delay(200)),
+              );
+            }),
+        },
+      );
+
+      expect(status).toBe("done");
+      const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
+      expect(log).toContain("held: wrong branch");
+      expect(log).toContain("released: fixed");
+      // The hold is over, so the Run is not left marked as waiting on a human.
+      expect(run.record.awaiting).toBeNull();
+    }),
+  ));
+
+test("an Intent amended under a live Driver is loaded, and a stale drift report is refused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [], slug: "s" }]);
+
+      const { run } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          outputPollMs: 20,
+          before: (started) =>
+            Effect.gen(function* () {
+              const v1 = seedIntent(started.id, { goal: "Add a picker" });
+              yield* writeIntent(
+                started.dir,
+                amend(v1, { kind: "set-goal", goal: "Add two" }, "human:req", "t"),
+              );
+              yield* writeInbox(started.dir, {
+                type: "intent_changed",
+                requestId: "int-1",
+                version: 2,
+              });
+              // Judged against v1, which is not the Intent any more.
+              yield* writeInbox(started.dir, {
+                type: "drift_report",
+                requestId: "dr-1",
+                report: { id: "dr-1", constraint: "gone" },
+                vector: { intentVersion: 1, cardId: null },
+              });
+            }),
+        },
+      );
+
+      const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
+      expect(log).toContain("intent v2 loaded");
+      expect(log).toContain("drift_report_stale: judged at intent v1, now v2");
+      // Nothing was appended *from the stale command*. Not "the journal is empty": this
+      // Run has a goal, so `finish` owes it a judgement, and one nobody could make is a
+      // `skipped` line — which is what keeps the Run `unverified` rather than clean.
+      const journal = yield* readDrift(run.dir);
+      expect(journal.filter((line) => line.kind !== "skipped")).toEqual([]);
+    }),
+  ));
+
+test("a boundary steer is composed in front of the next work, and recorded as its own delivery", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [], slug: "s" }]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          outputPollMs: 20,
+          before: (started) =>
+            writeInbox(started.dir, {
+              type: "deliver",
+              requestId: "steer-1",
+              deliver: {
+                deliveryId: "steer-1",
+                incarnation: "term-solo-add-a-picker-solo-r1",
+                agent: "solo-add-a-picker-solo-r1",
+                text: "stay inside src/",
+                mode: "boundary",
+                cause: { kind: "steer", ref: "s1" },
+                intentVersion: 1,
+                attempt: 1,
+              },
+            }),
+        },
+      );
+
+      expect(status).toBe("done");
+      const prompt = yield* fs.readFileString(path.join(run.dir, "steps", "solo", "prompt-1.md"));
+      // In front of the work, not behind it: a steer that queued behind the task would
+      // be read after the thing it was meant to change.
+      expect(prompt.startsWith("## Steering\n")).toBe(true);
+      expect(prompt).toContain("(steer-1) stay inside src/");
+      expect(prompt).toContain(path.join(run.dir, "steering", "acks", "steer-1.json"));
+
+      // Its own ledger line, saying which prompt carried it.
+      const ledger = yield* readLedger(
+        yield* ledgerPath(rig.stateDir, "term-solo-add-a-picker-solo-r1"),
+      );
+      const composed = ledger.filter((line) => "state" in line && line.id === "steer-1");
+      expect(composed.map((line) => ("state" in line ? line.state : ""))).toEqual(["submitted"]);
+    }),
+  ));
+
+test("a hand-off herdr saw no turn come of says so, in the record and to the human", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [], slug: "s" }]);
+
+      // Queued the way `sendReview` queues one: through the receiving Run's inbox, for
+      // its Driver to compose into the next prompt. herdr's `--wait` then runs out
+      // without a turn seen — the text was written; nobody can say it was read.
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          env: { FAKE_HERDR_PROMPT_ERROR: "timeout" },
+          outputPollMs: 20,
+          before: (started) =>
+            writeInbox(started.dir, {
+              type: "deliver",
+              requestId: "handoff-1",
+              deliver: {
+                deliveryId: "handoff-1",
+                incarnation: "term-solo-add-a-picker-solo-r1",
+                agent: "solo-add-a-picker-solo-r1",
+                text: "review.md is ready for you",
+                mode: "boundary",
+                cause: { kind: "handoff", ref: "review-run-1" },
+                intentVersion: 0,
+                attempt: 1,
+              },
+            }),
+        },
+      );
+
+      // Written and worked on: the Run is not failed for a wait that ran out.
+      expect(status).toBe("done");
+      const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
+      expect(log).toContain("solo-add-a-picker-solo-r1: prompt written, no turn observed");
+
+      // The audit trail: the carrier is `submitted`, never rounded up, with the doubt as
+      // its note — and it stays that way once the Output is collected, because an Output
+      // beside a prompt nobody saw taken does not say the prompt was read. The hand-off it
+      // carried inherits exactly that doubt.
+      const ledger = (yield* readLedger(
+        yield* ledgerPath(rig.stateDir, "term-solo-add-a-picker-solo-r1"),
+      )).filter((line): line is Delivery => "state" in line);
+      const carrier = ledger.filter((line) => line.cause.kind === "step");
+      expect(carrier.map((line) => [line.state, line.note ?? ""])).toEqual([
+        ["reserved", ""],
+        ["submitted", "unobserved"],
+      ]);
+      const handoff = ledger.filter((line) => line.id === "handoff-1");
+      expect(handoff.map((line) => line.state)).toEqual(["submitted"]);
+      expect(handoff[0]?.note).toMatch(/^composed into .*; unobserved$/);
+
+      // What the human is shown: `run deliveries` says it beside the state.
+      const shown = (yield* deliveriesOf(rig.stateDir, run.id)).map((entry) => entry.delivery);
+      expect(shown.find((d) => d.id === "handoff-1")?.note).toContain("unobserved");
+    }),
+  ));
+
+test("a cross-run winner re-judges a stale snapshot twice, then leaves the Herd a pending mark", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const key = yield* herdOf(rig.socketPath);
+      const elections = yield* electionsPath(rig.stateDir, key ?? "");
+      yield* fs.makeDirectory(path.dirname(elections), { recursive: true });
+
+      // A model that answers every Judgement cleanly — and a Herd that moves under it:
+      // every call, a loser's `dirty` lands after the snapshot the call was made from.
+      const bin = yield* FakeBin.make(path.join(rig.root, "fakebin"));
+      const flags = REQUIRED_FLAGS.join(" ");
+      yield* bin.add(
+        "claude",
+        [
+          `case "$1" in --help) echo "${flags}"; exit 0;; esac`,
+          "cat >/dev/null",
+          `printf '{"kind":"dirty","at":"%s","by":"boundary","run":"sibling"}\\n' "$(date -u +%Y-%m-%dT%H:%M:%S.999Z)" >> "${elections}"`,
+          `echo '{"result":"{\\"reports\\":[]}"}'`,
+        ].join("\n"),
+      );
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [], slug: "s" }]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          outputPollMs: 20,
+          before: (started) =>
+            Effect.gen(function* () {
+              // A child makes this Run related, so it stands; an Intent is what a
+              // Judgement is charged to.
+              const sibling = yield* new RunStore(rig.stateDir).create({
+                workflow: "solo",
+                cwd: started.record.cwd,
+                inputs: {},
+                inputSources: {},
+                stepIds: ["solo"],
+                maxIterations: 1,
+                namedAfter: "sibling",
+              });
+              started.record.children.push(sibling.id);
+              yield* started.save();
+              yield* writeIntent(started.dir, seedIntent(started.id, { goal: "Add a picker" }));
+            }),
+        },
+      ).pipe(Effect.ensuring(bin.restore()));
+
+      expect(status).toBe("done");
+      const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
+      // One call, then at most two more — never a third extra pass, however the Herd moves.
+      expect(log).toContain("cross-run snapshot went stale; judging again (extra pass 1)");
+      expect(log).toContain("cross-run snapshot went stale; judging again (extra pass 2)");
+      expect(log).not.toContain("extra pass 3");
+      expect(log).toContain("the Herd kept moving through the passes");
+      // Durable, and everybody's: the mark names both sides of the relationship, so the
+      // wake rule hands it to the next Driver event anywhere in the Herd.
+      const lines = yield* readElections(elections);
+      const pending = pendingEvaluation(lines);
+      expect([...(pending?.runs ?? [])].sort()).toEqual([run.id, run.record.children[0]!].sort());
+      expect(shouldStand(lines, false)).toBe(true);
+    }),
+  ));
+
+test("a rule constraint is checked against the tree, once per finding", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [], slug: "s" }]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          outputPollMs: 20,
+          before: (started) =>
+            Effect.gen(function* () {
+              // Everything outside `src/` is out of bounds; the run's own directory has
+              // nothing in `src/` at all, so whatever it writes is a breach.
+              yield* writeIntent(
+                started.dir,
+                seedIntent(started.id, {
+                  goal: "Add a picker",
+                  constraints: [
+                    {
+                      id: "paths",
+                      kind: "rule",
+                      text: "rule:protected_paths:src/**",
+                      severity: "block",
+                      source: "human",
+                      rule: { kind: "protected_paths", globs: ["src/**"] },
+                    },
+                  ],
+                }),
+              );
+              // A change the check will find, in the tree the Run works in: untracked,
+              // which is what a file an agent just wrote looks like.
+              yield* Effect.sync(() => {
+                for (const argv of [
+                  ["init", "-q"],
+                  ["config", "user.email", "t@example.com"],
+                  ["config", "user.name", "t"],
+                ])
+                  Bun.spawnSync(["git", ...argv], { cwd: started.record.cwd, stdout: "pipe" });
+              });
+              yield* fs.writeFileString(path.join(started.record.cwd, "notes.md"), "hello\n");
+            }),
+        },
+      );
+
+      expect(status).toBe("done");
+      const reports = currentReports(yield* readDrift(run.dir));
+      expect(reports.map((report) => report.constraint)).toEqual(["paths"]);
+      expect(reports[0]?.evidence.map((ref) => ref.path)).toContain("notes.md");
+      // Checked at collect, at the boundary and at finish, and still one finding: the
+      // same breach in the same place is not three of them.
+      expect(reports).toHaveLength(1);
     }),
   ));

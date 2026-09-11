@@ -22,6 +22,75 @@
 
 **Output** — A structured JSON file a Step writes to the Run directory (e.g. a review verdict + findings). Gates and loops read Outputs, never terminal text.
 
+**Herd** — One herdr session: every workspace in it. The scope of the Collie tab, the
+conversation, proposals, the budget and elections. Keyed by the canonical path of the
+session's socket, never by a directory. **Session** keeps its own meaning below — one
+workspace — and is not the Herd.
+
+**Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
+`collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
+label is never proof. Anything uncertain is `ownership_unknown` and waits for a human.
+
+**Redirect notice** — What a per-workspace Collie pane from an older release shows on its
+next launch: one line and "Open Collie". No board, no chat.
+
+**Steer** — One free-form human message with a named target. A question: it records what
+was said, asks, and prints what came back. Targets are never inferred from the words.
+
+**Proposal** — A durable, hash-bound set of closed actions Collie suggests. Nothing in it
+runs until confirmed, except an action the target's own Authority already grants — and a
+proposal that came out of a conversation is never that.
+
+**Confirmation** — A human command naming a Proposal's id **and** its content hash. A yes
+to a summary is not consent to a payload nobody read. Who is human is derived by the front
+door — a controlling terminal or the board — never claimed by a caller.
+
+**Delivery** — One message to one live agent incarnation, with states `reserved`,
+`submitted`, `acknowledged`, `verified` and the terminal `failed`, `unknown`, `superseded`,
+`expired`. They are separate because they are separate facts.
+
+**Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger lock
+across the compaction decision, the composition and the send.
+
+**Incarnation** — An agent as one live process, identified by herdr's own `terminal_id` and
+`agent_session`. A name and a pane are inherited by whatever takes the role next; neither
+names a process. A registry entry without one is never a delivery target.
+
+**Drift** — A recorded evidence–Intent mismatch. `rule` drift Collie establishes itself;
+`semantic` drift is judged against bounded actual evidence. Nothing passes on an absence.
+
+**Correction** — A Delivery caused by Drift, counted against Authority. `correction_submitted`
+on send, never `corrected`: sending text is not the work changing.
+
+**Manual override** — An incarnation that received input Collie did not send. Automatic
+corrections to it stop until an explicit `run clear-override`; nothing times it back on.
+
+**Verification** — An independently collected command result bound to the tree it ran on,
+before and after. A result whose snapshots differ is `unstable`, never `pass`. An agent's
+statement about tests is a **claim**, and is shown as one.
+
+**Card** — A Driver-written record of one slice of work: what was asked for, what changed,
+what backs it, and what nobody checked. Its **readiness** — `claimed`, `inspect-ready`,
+`verified` — says how far the evidence goes and no further.
+
+**Significance** — Whether a Card is worth interrupting a human for, decided by rules over
+facts: `decision` > `consequential` > `try-it` > `routine`. A narrative never raises it.
+
+**Hold** — The Driver dispatches no new work until released. It takes effect at a work
+boundary, so what is already running finishes.
+
+**Conversation** — The durable journal of human and Collie turns for a Herd. Redacted for
+credential-shaped values, bounded to 500 turns and 30 days, and never a worker transcript.
+
+**Follow-up Run** — A child Run started from a finished one to act on its outcome, reusing
+its worktree under guards. A finished Run is immutable; there is no mode that reopens one.
+
+**Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what the human named at launch, and amended only by an explicit human act. Everything Collie says about drift is a comparison against it.
+
+**Constraint** — One thing a Run's work must respect. `kind: rule` is checked by Collie itself; `kind: semantic` is judged. `severity: block | warn`. Its `source` says where it came from — `human`, `workspace-default`, `parent` or `plan` — and a `plan` entry carries the file, heading and line it was read from. Text is evidence: no Constraint, wherever it came from, grants Authority.
+
+**Authority** — What Collie may do to a Run without asking: correct drift, send at a work boundary or interrupt, stop the Run, and how many corrections a constraint gets. Per Run, every grant off by default, and set only by a human command — never read from a plan, a repository or a prompt. Model-call usage is recorded per Run and per Herd but is not an Authority: it is data, and never a quota that blocks work.
+
 **Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents. Its **slug** — `<workflow>-<what it is named after>` — names its agents, its tab and its row on the board, and for a mutating Run it is named after the task half of the Worktree's branch — the branch without the login it is namespaced under — so two Runs on different work can never read as the same row.
 
 **Session** — One herdr session and one workspace, taken together. It is the
@@ -31,8 +100,10 @@ One workspace, always: a mutating Run's checkout does not take it out of the Ses
 was started in, which is what keeps a hand-off between `plan` and `implement` working.
 
 **Hand-off** — Giving one Run's result to another Run's live agent in the same Session
-instead of starting a second one. Both Runs record it. Which hand-offs exist and what each
-sends: `docs/using.md`.
+instead of starting a second one. Both Runs record it. Routed through the receiving Run's
+inbox and composed by its own Driver, never typed into the pane: a Run nobody is driving
+has nothing to hold the message behind a compaction or record whether it was understood,
+so a hand-off to one is refused. Which hand-offs exist and what each sends: `docs/using.md`.
 
 **Worktree** — The checkout a mutating Run owns: one per branch, because git allows
 exactly one worktree per checked-out branch. The branch names the work rather than the path
@@ -102,8 +173,8 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Deferred** — Architecture candidates the architect chose not to apply unattended, kept in the summary for the human.
 
-**Collie tab** — The Session's own tab, labelled `🐕 Collie`: the Control Plane rendered
-as an application (ADR-0005). One per workspace. Effect produces its state and Solid renders
+**Collie tab** — The Herd's own tab, labelled `🐕 Collie`: the Control Plane rendered
+as an application (ADR-0005). One per Herd, in the Home (ADR-0009). Effect produces its state and Solid renders
 it; a pane that cannot start the renderer falls back to the one-screen text view.
 
 **View** — What the Collie tab's nav switches between, one at a time, each a projection of
@@ -141,6 +212,10 @@ view is drawn at a **Scope**. What it shows and what its keys do: `docs/using.md
 `review`, then anything else in start order: Collie places each tab by its Run's workflow
 when it creates it, and never moves a tab it does not own or one a human has since dragged.
 
+**Filter** — What the Home board shows: `all`, one workspace, or one Run. A view property
+and nothing more — supervision never reads it, so a Run outside the current filter is still
+driven, still checked and still corrected.
+
 **Scope** — What a Control Plane's Runs view is a board of: `local`, this Session's own
 workspace, or `all`, every workspace of this herdr session that Collie has a Run, an agent
 or a history in — one grouped tree, with the session's other workspaces named on a closing
@@ -175,7 +250,8 @@ three: "I could not tell" is not permission to start a second Driver, so only `n
 a resume. Canonical in `src/driver.ts`.
 
 **Attention** — What a Run wants from whoever is watching it, as one classification both
-front doors render: a pending Choice, a completed Run, an interruption, or nothing yet.
+front doors render: a pending Choice, drift Collie could not settle, a completed Run, an
+interruption, or nothing yet.
 Additive to the lifecycle status rather than a redefinition of it — `waiting` still means
 "has not settled" for every existing wait and fan-out — and derived from what the Run
 already recorded: its Step results, the findings the loop still owns, the stop marker and

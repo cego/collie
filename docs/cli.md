@@ -240,6 +240,9 @@ prose:
 | `choice_pending`     | `question`    | A Choice anyone can answer is open.                                                                                           |
 | `succeeded`          | `completed`   | The run finished its work.                                                                                                    |
 | `working`            | `none`        | The run is getting on with it.                                                                                                |
+| `held`               | `none`        | Someone held it; it takes no new work until `run release`.                                                                    |
+| `drift_unresolved`   | `drift`       | It drifted and Collie could not correct it. `run drift` says from what.                                                       |
+| `cross_run_pending`  | `drift`       | It and its related runs were never checked against each other.                                                                |
 | `review_exhausted`   | `interrupted` | Every review iteration was used with findings still open.                                                                     |
 | `no_progress`        | `interrupted` | A review raised the same blocking findings as the one before it.                                                              |
 | `dispute_unresolved` | `interrupted` | The implementer disputed a blocking finding; you decide it.                                                                   |
@@ -361,6 +364,220 @@ one you are in before you try, and the error message names it:
 | Whether one does could not be determined  | Look at the run: an unreadable claim is not permission to start a second Driver. |
 | A recorded agent is still live in herdr   | `run stop` it — that closes the panes the run owns — then resume.                |
 | herdr could not be asked about its agents | Retry when herdr is reachable. This is not a run that can never be recovered.    |
+
+## Intent
+
+A run's **Intent** is what it is for, what its work must respect, and what Collie may do
+about it without asking. It is written once when the run starts and amended only by an
+explicit human act; everything Collie later says about drift is a comparison against it.
+
+```sh
+collie --json run start implement --input plan=./plans/steering \
+  --goal "land steering behind the existing envelope" \
+  --constraint "rule:protected_paths:src/**,test/**" --severity block \
+  --constraint "no new dependencies"
+
+collie --json run intent show <run-id>
+collie --json run intent set-goal <run-id> "<goal>" --request-id "$(uuidgen)"
+collie --json run intent add-constraint <run-id> "<text>" --severity block
+collie --json run intent remove-constraint <run-id> <constraint-id>
+collie --json run intent authority <run-id> auto_correct=true --propagate
+```
+
+Version 1 is the workspace's defaults, then what the work source itself asks for, then
+what `--goal` and `--constraint` named — later beating earlier where they name the same
+constraint. For a plan directory the work source's ask is read from its `SPEC.md`: the
+bullets under a heading matching `Requirements`, `Success criteria`, `Boundaries` or
+`Constraints` become `warn` constraints carrying the file, heading and line they came
+from. **No text ever grants authority** — not a plan, not the repository, not a prompt.
+
+`--severity` pairs with the `--constraint` in the same position; a constraint given
+without one is `warn`. A `block` constraint stops work; a `warn` one is reported.
+
+A constraint spelled `rule:<kind>:<args>` is one Collie checks itself; anything else is
+judged. The spellings:
+
+| Rule                                         | What it holds the run to              |
+| -------------------------------------------- | ------------------------------------- |
+| `rule:protected_paths:<glob>[,<glob>…]`      | Changes stay inside these paths.      |
+| `rule:branch_is:<branch>`                    | The run works on this branch.         |
+| `rule:mr_target:<project>[:<iid>]`           | Its merge request targets this.       |
+| `rule:output_field:<step>:<path>:eq\|ne:<v>` | A step's Output field reads this way. |
+| `rule:command_exit:<name>:<code>`            | A named verification exits this way.  |
+
+`authority` takes `k=v` pairs: `auto_correct`, `now_allowed`, `interrupt_allowed`,
+`stop_allowed` and `exclusive_steering` are `true`/`false`; `max_corrections_per_constraint`
+is a whole number. Every grant is off by default, and a key that is not one of these is
+refused rather than stored. There is no model-call quota among them: how many calls a run
+or the Herd makes, and what they cost, is recorded under `herd/<herdKey>/budget.jsonl` as
+usage, and never used to refuse the next one. An Intent written by an earlier build with
+`model_calls_per_run` still reads; the number decides nothing.
+
+The one grant that is not a `k=v` word is a command Collie may run itself:
+
+```sh
+collie run intent verification <run-id> --name unit -- bun test
+collie run intent verification <run-id> --name unit --remove
+```
+
+It is bound argument for argument — `bun test` and `bun test --bail` are two different
+permissions — and `--cwd` is `worktree` or a path relative to the run's cwd. A granted
+verification whose name a `rule:command_exit` constraint refers to is run once, at the
+run's finish, so that rule is checked against a result rather than against nobody having
+looked. Everything else on `steering/verifications.jsonl` is written by an agent calling
+`collie verify`, and is recorded `by: agent`.
+
+`--propagate` applies the amended Intent to every child run that is still going: the
+child's own constraints are kept, the parent's are replaced, and anything the two disagree
+about is reported rather than resolved. A child inherits its parent's constraints and goal
+at birth, never its authority — a grant is per run.
+
+```sh
+collie --json run intent defaults show
+collie --json run intent defaults add-constraint "<text>" --severity warn
+collie --json run intent defaults remove-constraint <constraint-id>
+collie --json run intent defaults set-authority max_corrections_per_constraint=3
+```
+
+Defaults are per workspace: every run started there begins with them.
+
+## Talk to Collie
+
+```sh
+collie --json steer "why is this on main?" --target run:<run-id>
+collie --json steer "what is going on?"
+collie --json steer "hold it and look at the branch" --target run:<id> --dry-run
+```
+
+A steer is a **question**. It writes down what you said, asks Collie, records what comes
+back, and prints it — it never does anything. What comes back depends on whether you named
+a target:
+
+- **No `--target`** — a question about the board. You get an answer, read-only, with
+  nothing to confirm. Anything that would change something is refused with
+  `target_required`: Collie does not guess which run you meant from what you typed.
+- **`--target run:<id>`** — a **proposal** about that run: what Collie understood, and a
+  list of actions. Every one of them is `pending`, even where that run granted Collie
+  authority to correct its own drift. The grant was for the Driver's own checks; "we were
+  talking about it" is not "you asked for it".
+
+`--from <card>` binds the proposal to that card's revision, so confirming it after the
+tree moved is refused rather than applied to different work. `--dry-run` prints what
+Collie would propose and records no proposal.
+
+```sh
+collie --json confirm <proposal-id> --hash <content-hash>
+collie --json decline <proposal-id>
+collie --json proposal reconcile <proposal-id> <index> --as applied|not-applied
+```
+
+`confirm` names the proposal **and its content hash**, because a yes to a summary is not
+consent to a payload you did not read. It is refused when the hash differs, when the
+proposal expired (thirty minutes), when a target run's Intent moved since, or when the
+caller is not a person — a controlling terminal or the board, derived, never claimed.
+
+Actions run in order, each one re-checked immediately before it runs and journalled on
+both sides. The first failure stops the rest. An action whose kind this build cannot carry
+out is `skipped: executor_missing`. An action that started and never settled makes the next
+`confirm` refuse with `reconcile_required` until you say what happened to it.
+
+```sh
+collie --json run deliveries <run-id>
+collie --json run deliveries <run-id> --reconcile <delivery-id> --as sent|not-sent
+```
+
+What has been sent to a run's agents, and the one thing only you can settle: a delivery
+that went out and never came back. Collie never decides that for itself — see
+[Delivery](steering.md#delivery).
+
+## Follow up a finished run
+
+```sh
+collie --json run follow-up <run-id> "the docs change is still outside src/"
+collie --json run follow-up <run-id> "<text>" --allow-dirty
+```
+
+A finished run is immutable — there is no mode that reopens one. A follow-up is a **child
+run** of workflow `implement`, on the same branch, updating the same merge request: it
+inherits the parent's Intent as its own v1, and its spec is what you wrote plus whatever
+drift was still open when the parent finished.
+
+It reuses the parent's checkout, so each guard on that is checked and each refusal names
+which one failed: the checkout must still be on the branch that run built, nothing else
+may be working in it, and it must be clean unless you pass `--allow-dirty`.
+
+The only thing written to the parent is its `children` list — without that the follow-up
+would be invisible from the thing it follows up.
+
+## Drift
+
+```sh
+collie --json run drift <run-id>
+```
+
+What this run has drifted from, and the evidence for each. Two kinds, and the difference
+matters: a **rule** constraint is one Collie checks itself — which paths changed, which
+branch, which exit code — with no model involved at all; a **semantic** one is judged, and
+judged against a capped diff of the files it names rather than a summary of them.
+
+A rule check never passes on an absence. A `command_exit` rule whose verification nobody
+ran is a breach, not a pass; so is an `output_field` rule against a step that wrote
+nothing, and an `mr_target` rule with no merge request. "Nobody looked" and "it was fine"
+are different answers.
+
+Open drift while a run is going is reported in `run show`'s explanation but is not
+attention: the Driver may still correct it. Drift it could not correct — the correction
+bound spent, or nobody live to evaluate it — becomes attention `drift_unresolved` and a
+`drift-unresolved` notification, once.
+
+A run with a parent or children stands for the Herd's cross-run check when it reaches a
+boundary. The judgement itself is a model call nothing grants yet, so winning records that
+the check is owed rather than that it happened: the run's final card says
+`cross_run: pending`, its attention becomes `cross_run_pending`, and it notifies once. An
+evaluation nobody was left to make is offered as follow-up input, never silently made
+later.
+
+## Verify
+
+```sh
+collie --json verify --run <run-id> -- bun test
+collie verify --run <run-id> --name typecheck --cwd <path> -- bun run typecheck
+```
+
+Runs the command, watches its exit, and records the result against the run's tree — the
+commit it was on and a digest of everything not committed, taken **before and after**.
+That pair is the point: a pass on a tree that changed while the command ran says nothing
+about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
+to fingerprint at all, because two unmeasured trees are not one tree.
+
+| Flag     | What it does                                                                |
+| -------- | --------------------------------------------------------------------------- |
+| `--run`  | Required. The run this is a verification of, and whose tree is snapshotted. |
+| `--cwd`  | Where to run it. Must be inside that run's own checkout; defaults to it.    |
+| `--name` | What to call it on a card. The executable by default.                       |
+
+Everything after `--` is the executable and its arguments, spawned directly. There is no
+shell: what was written down is what ran. The command's own exit status is passed
+through, so anything wrapping `collie verify -- bun test` behaves as it would around
+`bun test`.
+
+Results go to the run's `steering/verifications.jsonl`. An agent's Output saying the tests
+passed is a **claim** and is shown as one; only a collected result is a verification.
+
+## Hold and release
+
+```sh
+collie --json run hold <run-id> --reason "the branch is wrong" --request-id "$(uuidgen)"
+collie --json run release <run-id> --request-id "$(uuidgen)"
+```
+
+`hold` stops a run taking on **new** work; whatever is already running carries on. The
+Driver acts on it at its next work boundary, so a step in flight finishes rather than
+being cut off. `run show` then reports attention `held` with the reason, and `release` is
+the only thing that starts it moving again.
+
+Both need a live Driver — the hold is a command to it, and a run with nobody driving has
+nothing to decline to start.
 
 ## Fork a definition
 

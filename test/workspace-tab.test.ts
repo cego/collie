@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Rig, type RigError } from "./support/recorder";
 import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
-import { COLLIE_TAB, LEGACY_TABS } from "../src/naming";
+import { COLLIE_TAB } from "../src/naming";
 import {
   registerAgent,
   registryPath,
@@ -13,7 +13,16 @@ import {
   readRegistry,
   scopeFor,
 } from "../src/registry";
-import { buildView, buildWideView, renderWorkspace } from "../src/workspace";
+import {
+  buildView,
+  buildWideView,
+  renderRedirect,
+  renderWorkspace,
+  type WorkspaceView,
+} from "../src/workspace";
+import { NO_MARKS } from "../src/lines";
+import { originPath, readOrigin } from "../src/home";
+import { herdOf } from "../src/steering";
 import { appState, boardFlow, type ControlSession } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { RunStore } from "../src/run";
@@ -29,8 +38,10 @@ let rig: Rig;
 function effectTest(
   name: string,
   body: () => Effect.gen.Return<void, RigError | PlatformError.PlatformError | Error, BunServices>,
+  /** For the few that open the Home twice: each ensure is a fake-herdr subprocess. */
+  timeout?: number,
 ) {
-  test(name, () => runEffect(Effect.gen(body)));
+  test(name, () => runEffect(Effect.gen(body)), timeout);
 }
 
 const SOLO = `---
@@ -92,7 +103,15 @@ function live(
   /** Which workspace herdr says it is in; this Session's unless a test says otherwise. */
   workspaceId: string | null = rig.pluginEnv().workspaceId,
 ): AgentInfo {
-  return { name, paneId, workspaceId, status, title };
+  return {
+    name,
+    paneId,
+    workspaceId,
+    status,
+    title,
+    terminalId: `term-${name}`,
+    agentSession: null,
+  };
 }
 
 /** A run in this Session, with whatever the test needs on top. */
@@ -274,66 +293,33 @@ function opened(entrypoint: string) {
     );
 }
 
-effectTest("the first run opens the Collie tab and puts it first", function* () {
+effectTest("the first run makes the Herd a Home and opens its board there", function* () {
   yield* rig.queueOutputs([CLEAN]);
 
   const { status } = yield* runWorkflow(rig, "solo", { goal: "Add a picker" });
 
   expect(status).toBe("done");
 
-  // One view pane, opened as a tab of its own, then labelled `workflows` twice:
-  // once on the tab, once on the pane, so the next run can find both.
+  // A workspace of Collie's own, with the board's pane opened in it as a tab. One Home
+  // per Herd (ADR-0009), so it is created rather than found in the Run's own workspace.
+  const created = (yield* rig.calls()).filter((c) => c.cmd === "workspace create");
+  expect(created).toHaveLength(1);
   const view = yield* opened("workspace");
   expect(view).toHaveLength(1);
-  expect(view[0]!).toContain("--placement");
-  expect(view[0]![view[0]!.indexOf("--placement") + 1]).toBe("tab");
-  const renames = (yield* rig.calls())
-    .filter((c) => c.cmd === "tab rename")
-    .map((c) => c.argv!.slice(2));
-  expect(renames[0]).toEqual(["1:1", COLLIE_TAB]);
-  expect(
-    (yield* rig.calls()).filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1)),
-  ).toContain(COLLIE_TAB);
+  expect(view[0]![view[0]!.indexOf("--workspace") + 1]).toBe("w1");
 
-  // First tab of the workspace, over the socket: there is no CLI for it. The step's
-  // own tab is placed after it, by rank.
-  const move = (yield* rig.calls()).filter((c) => c.cmd === "tab.move");
-  expect(move[0]!.params).toEqual({ tab_id: "1:1", insert_index: 0 });
-  expect(move.map((c) => c.params)).toContainEqual({ tab_id: "1:2", insert_index: 1 });
+  // Owned by metadata and not by a label: the token on the workspace and on the pane is
+  // what the next ensure reads, and no rename decides anything.
+  const marked = (yield* rig.calls()).filter((c) => c.cmd === "workspace.report_metadata");
+  expect(marked).toHaveLength(1);
+  expect((yield* rig.calls()).map((c) => c.cmd)).toContain("pane.report_metadata");
 
-  // The board's pane is the only one this plugin keeps: the run has none of its own,
-  // so nothing is moved or swapped and nothing is a `status` strip.
+  // The board's own tab is never the anchor: this Run's step tab is ordered in the
+  // Run's own workspace, and Collie owns nothing else there yet.
   for (const cmd of ["pane move", "pane swap"]) expect(yield* rig.cmds()).not.toContain(cmd);
-  expect(
-    (yield* rig.calls()).filter((c) => c.cmd === "pane rename").map((c) => c.argv!.at(-1)),
-  ).not.toContain("status");
 });
 
-effectTest(
-  "no HERDR_SOCKET_PATH: the tab is still put first, via herdr's own status",
-  function* () {
-    // A CLI launch that never got HERDR_SOCKET_PATH injected: the tab.move this run
-    // needs has to find its socket through `herdr status server` rather than fail.
-    yield* rig.queueOutputs([CLEAN]);
-
-    const { status } = yield* runWorkflow(
-      rig,
-      "solo",
-      { goal: "Add a picker" },
-      { env: { HERDR_SOCKET_PATH: "" } },
-    );
-
-    expect(status).toBe("done");
-    const calls = yield* rig.calls();
-    expect(calls.map((c) => c.cmd)).toContain("status server");
-    expect(calls.filter((c) => c.cmd === "tab.move").map((c) => c.params)).toContainEqual({
-      tab_id: "1:1",
-      insert_index: 0,
-    });
-  },
-);
-
-effectTest("the second run reuses that tab and re-asserts its position", function* () {
+effectTest("a second run finds the Home rather than making another", function* () {
   yield* rig.queueOutputs([CLEAN, CLEAN]);
 
   yield* runWorkflow(rig, "solo", { goal: "one" });
@@ -341,37 +327,31 @@ effectTest("the second run reuses that tab and re-asserts its position", functio
   yield* runWorkflow(rig, "solo", { goal: "two" });
 
   const later = (yield* rig.calls()).slice(first);
-  const reopened = later.filter((c) => c.cmd === "plugin pane" && c.argv!.includes("workspace"));
-  expect(reopened).toHaveLength(0);
-  // It found the tab by its label, and put it back at the front regardless.
-  expect(later.map((c) => c.cmd)).toContain("tab list");
-  expect(later.filter((c) => c.cmd === "tab.move").map((c) => c.params)).toContainEqual({
-    tab_id: "1:1",
-    insert_index: 0,
-  });
+  // No second Home and no second board pane: the record plus the live token is proof,
+  // so the second Run refreshes the claim rather than deciding again.
+  expect(later.filter((c) => c.cmd === "workspace create")).toHaveLength(0);
+  expect(
+    later.filter((c) => c.cmd === "plugin pane" && c.argv!.includes("workspace")),
+  ).toHaveLength(0);
+  expect(later.map((c) => c.cmd)).toContain("workspace.report_metadata");
 });
 
-effectTest("a tab under an older name is renamed in place, not joined by a second", function* () {
-  // A session that opened this tab before the rename. Its label is the identity
-  // `findOrOpenView` matches on, so a constant flipped without this lookup would
-  // leave the human with two Collie tabs and the run asking in the one they closed.
-  const legacy = LEGACY_TABS[0]!;
-  const seeded = yield* rig.addTab(legacy, legacy);
+effectTest("no HERDR_SOCKET_PATH: the Home is still found, via herdr's own status", function* () {
+  // A CLI launch that never got HERDR_SOCKET_PATH injected. The Herd is named by the
+  // socket, so without discovery there would be no Herd and no Home at all.
   yield* rig.queueOutputs([CLEAN]);
 
-  const { status } = yield* runWorkflow(rig, "solo", { goal: "one" });
+  const { status } = yield* runWorkflow(
+    rig,
+    "solo",
+    { goal: "Add a picker" },
+    { env: { HERDR_SOCKET_PATH: "" } },
+  );
 
   expect(status).toBe("done");
-  // No second Collie tab: the pane entrypoint was never opened again.
-  expect(yield* opened("workspace")).toHaveLength(0);
-  const renamed = (yield* rig.calls())
-    .filter((c) => c.cmd === "tab rename")
-    .map((c) => c.argv!.slice(2));
-  expect(renamed).toContainEqual([seeded.tabId, COLLIE_TAB]);
-  // The view pane wears the label too, or the next run stops finding it inside the tab.
-  expect(
-    (yield* rig.calls()).filter((c) => c.cmd === "pane rename").map((c) => c.argv!.slice(2)),
-  ).toContainEqual([seeded.paneId, COLLIE_TAB]);
+  const calls = yield* rig.calls();
+  expect(calls.map((c) => c.cmd)).toContain("status server");
+  expect(calls.filter((c) => c.cmd === "workspace create")).toHaveLength(1);
 });
 
 effectTest("a step whose prompt cannot be delivered still records its agents", function* () {
@@ -424,7 +404,7 @@ effectTest(
   },
 );
 
-effectTest("a run with no workspace opens no board at all", function* () {
+effectTest("a run in no workspace orders nothing, and still has a Home", function* () {
   yield* rig.queueOutputs([CLEAN]);
 
   const { status } = yield* runWorkflow(
@@ -435,7 +415,10 @@ effectTest("a run with no workspace opens no board at all", function* () {
   );
 
   expect(status).toBe("done");
-  expect(yield* opened("workspace")).toHaveLength(0);
+  // The Home is the Herd's, not this Run's workspace, so it is made either way. What a
+  // Run with no workspace of its own has is no strip to order: `tab.move` is a local
+  // fact about one workspace, and there is none here.
+  expect(yield* rig.cmds()).toContain("workspace create");
   expect(yield* rig.cmds()).not.toContain("tab.move");
 });
 
@@ -613,7 +596,7 @@ effectTest("a wide board asks herdr no more than the local board it is built bes
   // The wide board is built from the same read: the local board already asks for both,
   // and asking twice cost two extra calls a tick and let the two boards reconcile the
   // same tab from two different answers about the same agent.
-  yield* board.load(focus({ scope: "all" }));
+  yield* board.load(focus({ filter: { kind: "all" } }));
 
   expect(counted(yield* rig.cmds())).toEqual({ agents: 2, workspaces: 2 });
 });
@@ -626,7 +609,7 @@ effectTest("no View but Runs reads the wide board, whatever the scope says", fun
   // `g` is the Runs view's key, but the scope outlives leaving it: reading a board no
   // View is drawing is a workspace list and a group per workspace for nothing.
   const state = yield* board.load(
-    focus({ scope: "all", view: "history", shown: ["runs", "history"] }),
+    focus({ filter: { kind: "all" }, view: "history", shown: ["runs", "history"] }),
   );
 
   expect(state.wide).toBeNull();
@@ -1031,39 +1014,44 @@ test("a plan run that fanned out says which wave it is on, and its children nest
     }),
   ));
 
-effectTest("the board key opens the Collie tab where the workspace has none", function* () {
-  const env = rig.pluginEnv();
+effectTest(
+  "the board key makes the Home and goes to it",
+  function* () {
+    const env = rig.pluginEnv();
 
-  expect(yield* boardFlow(new Herdr(env), env)).toBe(0);
+    expect(yield* boardFlow(new Herdr(env), env)).toBe(0);
 
-  expect(yield* opened("workspace")).toHaveLength(1);
-  const cmds = yield* rig.cmds();
-  expect(cmds).toContain("tab rename");
-  // Focused, and put first the way a run does: the board is what `prefix+1` means.
-  expect(cmds).toContain("tab.move");
-  expect(cmds).toContain("tab focus");
-});
+    expect(yield* opened("workspace")).toHaveLength(1);
+    const cmds = yield* rig.cmds();
+    // The Home is somewhere else, so reaching it is a workspace switch as well as a tab
+    // focus — and it is owned by the token it was just given, never by its label.
+    expect(cmds).toContain("workspace create");
+    expect(cmds).toContain("workspace.report_metadata");
+    expect(cmds).toContain("workspace.focus");
+    // And where the shortcut was pressed, so the board opens narrowed to that work.
+    const origin = yield* readOrigin(
+      yield* originPath(env.stateDir, yield* herdOf(env.socketPath)),
+    );
+    expect(origin?.workspaceId).toBe("1");
+  },
+  20_000,
+);
 
-// The tab is seeded rather than opened by a first call: two rounds of this is a dozen
-// fake-herdr subprocesses in one test, which is what made it time out under load.
-effectTest("the board key focuses the tab that is already there", function* () {
-  const env = rig.pluginEnv();
-  yield* rig.addTab(COLLIE_TAB, COLLIE_TAB);
+effectTest(
+  "the board key finds the Home it made rather than making a second",
+  function* () {
+    const env = rig.pluginEnv();
+    expect(yield* boardFlow(new Herdr(env), env)).toBe(0);
+    const first = (yield* rig.calls()).length;
 
-  expect(yield* boardFlow(new Herdr(env), env)).toBe(0);
+    expect(yield* boardFlow(new Herdr(env), env)).toBe(0);
 
-  const cmds = yield* rig.cmds();
-  expect(cmds).toContain("tab focus");
-  // No second Collie tab: the label is the identity, so the one there is the one used.
-  expect(cmds).not.toContain("plugin pane");
-});
-
-effectTest("the board key says so where there is no workspace to open one in", function* () {
-  const env = { ...rig.pluginEnv(), workspaceId: null };
-
-  expect(yield* boardFlow(new Herdr(env), env)).toBe(1);
-  expect(yield* rig.cmds()).not.toContain("plugin pane");
-});
+    const later = (yield* rig.calls()).slice(first);
+    expect(later.filter((c) => c.cmd === "workspace create")).toHaveLength(0);
+    expect(later.map((c) => c.cmd)).toContain("workspace.focus");
+  },
+  20_000,
+);
 
 /** The whole herdr session as groups, for a given set of workspaces and live agents. */
 function wide(workspaces: WorkspaceInfo[], alive: AgentInfo[] = [], now?: number) {
@@ -1078,7 +1066,7 @@ function wide(workspaces: WorkspaceInfo[], alive: AgentInfo[] = [], now?: number
 }
 
 function workspace(workspaceId: string, label: string, cwd = rig.projectDir): WorkspaceInfo {
-  return { workspaceId, label, cwd, worktree: null };
+  return { workspaceId, label, cwd, worktree: null, tokens: {} };
 }
 
 /** A run recorded against a workspace, running or finished as the test needs. */
@@ -1335,4 +1323,56 @@ effectTest("no group, run or agent row carries a herdr id", function* () {
   ]);
   // A herdr id is `w28`, `w28:t3` or `1-4`: none of them is anything a human reads.
   for (const word of words) expect(word).not.toMatch(/\bw\d+(:[a-z]\d+)?\b|\b\d+-\d+\b/);
+});
+
+test("the text view carries the marks and the live lines the app draws", () => {
+  const view: WorkspaceView = {
+    repo: "collie",
+    cwd: "/w/collie",
+    worktrees: [],
+    behind: null,
+    now: Date.parse("2026-09-10T12:00:00.000Z"),
+    agents: [],
+    extraAgents: 0,
+    active: [
+      {
+        id: "r1",
+        dir: "/state/runs/r1",
+        glyph: "⚙",
+        title: "Implement · steering",
+        detail: "build",
+        at: Date.parse("2026-09-10T11:58:00.000Z"),
+        target: null,
+        children: [],
+        fixable: false,
+        choice: null,
+        needsYou: false,
+      },
+    ],
+    recent: [],
+  };
+
+  const text = renderWorkspace(view, undefined, undefined, {
+    marks: { r1: { ...NO_MARKS, drift: true, held: true } },
+    live: {
+      run: "r1",
+      cards: [],
+      drift: [],
+      deliveries: [],
+      conversation: [],
+      proposals: [],
+      pending: [],
+      ownership: { why: "two workspaces carry this Herd's token", candidates: ["w1", "w2"] },
+    },
+  });
+
+  expect(text).toContain("↯ ⏸");
+  expect(text).toContain("collie home reconcile");
+  expect(text).toContain("two workspaces carry this Herd's token");
+});
+
+test("a legacy pane says Collie moved, and nothing else", () => {
+  const text = renderRedirect();
+  expect(text).toContain("Collie moved to the Home");
+  expect(text.split("\n").filter((line) => line.trim() !== "")).toHaveLength(2);
 });

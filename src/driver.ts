@@ -96,12 +96,52 @@ const encodeJson = Schema.encodeSync(JsonString);
  * A command for the Run's owning Driver. The Driver reads the inbox, so the shape
  * lives here with it and every writer imports it; two definitions of one persisted
  * boundary is exactly what run.json stopped having.
+ *
+ * One struct rather than a union of one per type: the file is written by an older or
+ * newer build as often as by this one, and a union would refuse the whole command over
+ * a key it did not know. The consumer for each type checks what that type needs.
  */
 const InboxCommand = Schema.Struct({
-  type: Schema.Literals(["answer", "stop", "resume"]),
+  type: Schema.Literals([
+    "answer",
+    "stop",
+    "resume",
+    "deliver",
+    "hold",
+    "release",
+    "intent_changed",
+    "drift_report",
+  ]),
   requestId: Schema.String,
   choiceId: Schema.optionalKey(Schema.String),
   answer: Schema.optionalKey(Schema.String),
+  /** `hold`/`release`: why, in the human's words. */
+  reason: Schema.optionalKey(Schema.String),
+  /** `intent_changed`: the version now on disk. */
+  version: Schema.optionalKey(Schema.Int),
+  /** `deliver`: one message for one live agent, composed by whoever asked for it. */
+  deliver: Schema.optionalKey(
+    Schema.Struct({
+      deliveryId: Schema.String,
+      incarnation: Schema.String,
+      agent: Schema.String,
+      text: Schema.String,
+      mode: Schema.Literals(["boundary", "now", "interrupt"]),
+      cause: Schema.Struct({ kind: Schema.String, ref: Schema.String }),
+      intentVersion: Schema.Int,
+      attempt: Schema.Int,
+    }),
+  ),
+  /**
+   * `drift_report`: a report another process judged, with the snapshot it judged
+   * against. This Driver is the only writer of its own drift journal, so it revalidates
+   * the vector before it appends — a report about a revision that has moved on is
+   * evidence about work that no longer exists.
+   */
+  report: Schema.optionalKey(Schema.Unknown),
+  vector: Schema.optionalKey(
+    Schema.Struct({ intentVersion: Schema.Int, cardId: Schema.NullOr(Schema.String) }),
+  ),
 });
 export const InboxCommandJson = Schema.fromJsonString(InboxCommand);
 export interface InboxCommandValue extends Schema.Schema.Type<typeof InboxCommand> {}
@@ -230,6 +270,12 @@ export const inboxFiles = Effect.fn("inboxFiles")(function* (dir: string) {
  * a process that is gone. A Driver therefore starts from an empty inbox, and only
  * commands written during its own life reach it.
  */
+const OUTLIVES_A_DRIVER: ReadonlySet<string> = new Set([
+  "deliver",
+  "intent_changed",
+  "drift_report",
+]);
+
 export const clearPreviousDriver = Effect.fn("clearPreviousDriver")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   yield* clearChoice(dir);
@@ -239,9 +285,48 @@ export const clearPreviousDriver = Effect.fn("clearPreviousDriver")(function* (d
     // record of the request that started it, so it is read before it is cleared.
     const command = yield* read(InboxCommandJson, file);
     if (command?.type === "resume") resumedBy = command.requestId;
+    // Some commands are about the work rather than about the process that was driving
+    // it: a message for an agent, an amended Intent, a report someone else judged.
+    // Those still mean what they meant. A `hold` does not — it was part of the previous
+    // Driver's state, and the human re-holds if they still want one.
+    if (command && OUTLIVES_A_DRIVER.has(command.type)) continue;
     yield* fs.remove(file, { force: true });
   }
   return resumedBy;
+});
+
+/**
+ * The commands a Driver acts on while a step is running, oldest first, taken out of the
+ * inbox as they are read. `answer` is left where it is: it belongs to a Choice's own
+ * wait, and consuming it here would answer a question that has not been asked yet. A
+ * `stop` is raised as a signal on ourselves, exactly as the Choice wait does, so one
+ * path records what a stop does to the Run.
+ *
+ * A file this build cannot decode is logged and left in place — a newer Collie may know
+ * what it is, and deleting it would be this version deciding for that one.
+ */
+export const readInboxMidStep = Effect.fn("readInboxMidStep")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const taken: InboxCommandValue[] = [];
+  const unreadable: string[] = [];
+  // A directory that cannot be listed is an inbox with nothing in it as far as this poll
+  // is concerned: steering is never the reason a Run stops.
+  const files = yield* inboxFiles(dir).pipe(Effect.catch(() => Effect.succeed([])));
+  for (const file of files) {
+    const command = yield* read(InboxCommandJson, file);
+    if (!command) {
+      unreadable.push(file);
+      continue;
+    }
+    if (command.type === "answer" || command.type === "resume") continue;
+    yield* fs.remove(file, { force: true }).pipe(Effect.ignore);
+    if (command.type === "stop") {
+      yield* signalProcess(yield* currentPid, "SIGTERM");
+      continue;
+    }
+    taken.push(command);
+  }
+  return { taken, unreadable };
 });
 
 /** Whether a stop already took effect on this Run before anyone came to drive it. */

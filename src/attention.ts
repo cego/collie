@@ -13,6 +13,8 @@ import {
 import type { AgentsAlive, AsksAgents } from "./herdr";
 import { runSettled, runStatus } from "./operations";
 import { runningAgents, type Run } from "./run";
+import { currentReports, openReports, readDrift } from "./drift";
+import { readCards } from "./cards";
 
 /**
  * What a Run wants from whoever is watching it. `none` is the ordinary case — the Run
@@ -21,7 +23,7 @@ import { runningAgents, type Run } from "./run";
  * something (a Run that has not settled), and redefining it would change what every
  * existing wait and fan-out returns.
  */
-export type AttentionCategory = "none" | "question" | "completed" | "interrupted";
+export type AttentionCategory = "none" | "question" | "drift" | "completed" | "interrupted";
 
 export interface Attention {
   readonly category: AttentionCategory;
@@ -102,6 +104,33 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (
       actions: ["answer", "show", "stop"],
       choice,
     };
+  // Drift Collie could not settle. Below a pending question, because a question is the
+  // human being waited on and this is the human being told; above `completed`, because a
+  // Run that finished having drifted is one whose result is not what was asked for.
+  const unresolved = yield* driftUnresolved(run);
+  if (unresolved !== null)
+    return {
+      ...facts,
+      category: "drift",
+      reason: "drift_unresolved",
+      explanation: `${run.id} drifted from ${unresolved} and Collie could not correct it; \`run drift\` shows what it found.`,
+      step: currentStep(run),
+      actions: ["drift", "steer", "show"],
+      choice: null,
+    };
+  // Below `held` and `working` in effect, because only a Run that has ended can reach it:
+  // one still going has a Driver that may yet stand for the check, and reporting it
+  // earlier would take a held Run's `release` away.
+  if (runSettled(status) && (yield* crossRunPending(run)))
+    return {
+      ...facts,
+      category: "drift",
+      reason: "cross_run_pending",
+      explanation: `${run.id} and its related runs were never checked against each other; nobody was left to do it.`,
+      step: currentStep(run),
+      actions: ["drift", "steer", "show"],
+      choice: null,
+    };
   if (status === "succeeded")
     return {
       ...facts,
@@ -112,13 +141,29 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (
       actions: ["show", "output"],
       choice: null,
     };
+  // A Run that has been told to take on no new work: not interrupted — its Driver is
+  // alive and everything already in flight is still running — but not working either,
+  // and nothing moves again until a human releases it.
+  if (run.record.awaiting === "hold" && !gone)
+    return {
+      ...facts,
+      category: "none",
+      reason: "held",
+      explanation: `${run.id} is held; \`run release\` to continue.`,
+      step: currentStep(run),
+      actions: ["release", "stop", "show"],
+      choice: null,
+    };
   const interrupted = whyInterrupted(run, status, gone);
   if (interrupted === null)
     return {
       ...facts,
       category: "none",
       reason: "working",
-      explanation: `${run.id} is ${status}.`,
+      // Open drift while a Run is still going is said out loud but is not attention: the
+      // Driver may still correct it, and a board that asked for a human on every warning
+      // would ask on every run. Only drift it could not settle becomes `drift` above.
+      explanation: `${run.id} is ${status}.${yield* driftNote(run)}`,
       step: currentStep(run),
       actions: ["show", "stop"],
       choice: null,
@@ -308,3 +353,29 @@ function currentStep(run: Run): string | null {
   if (running) return running.id;
   return run.record.steps.findLast((step) => step.status !== "pending")?.id ?? null;
 }
+
+/**
+ * The constraint a Run drifted from and nobody settled, or null. `escalated` is what the
+ * correction loop writes when it has spent its bound: at that point the Run is going to
+ * keep going the way it is going unless a human does something.
+ */
+const driftUnresolved = Effect.fn("attention.driftUnresolved")(function* (run: Run) {
+  const lines = yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
+  const stuck = currentReports(lines).find((report) => report.resolution === "escalated");
+  return stuck?.constraint ?? null;
+});
+
+/** Whether this Run's newest card says the Herd still owes a cross-run evaluation. */
+const crossRunPending = Effect.fn("attention.crossRunPending")(function* (run: Run) {
+  const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
+  return cards.at(-1)?.cross_run === "pending";
+});
+
+/** Open drift, as an addendum rather than a category: the Driver may still correct it. */
+const driftNote = Effect.fn("attention.driftNote")(function* (run: Run) {
+  const lines = yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
+  const open = openReports(lines);
+  if (open.length === 0) return "";
+  const blocking = open.filter((report) => report.severity === "block").length;
+  return ` ${open.length} open drift report${open.length === 1 ? "" : "s"}${blocking > 0 ? `, ${blocking} blocking` : ""}.`;
+});

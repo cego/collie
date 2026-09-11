@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { fakeChannel } from "./support/compaction";
 import { COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
 import type { AgentContext } from "../src/compaction";
 
@@ -20,17 +21,12 @@ const pi = COMPACTION_PORTS.pi!;
 const prompted: string[] = [];
 const ctx = (): AgentContext => ({
   agent: "reuse-run-two-r1",
+  run: "reuse-run-two",
   harness: "pi",
   cwd: rig.projectDir,
   dir,
   endpoint: null,
-  herdr: {
-    agentPrompt: (_target, text) =>
-      Effect.sync(() => {
-        prompted.push(text);
-        return "observed" as const;
-      }),
-  },
+  channel: fakeChannel(prompted),
 });
 
 /** One line of what a control appends, exactly as the extension writes it. */

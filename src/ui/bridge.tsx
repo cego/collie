@@ -12,13 +12,12 @@ import type { InputPrompts } from "../inputs";
 import { App } from "./App";
 import { Flow } from "./Flow";
 import { signalPrompts, type Pending } from "./prompts";
-// `Scope` is Effect's here, so the board's own is named for what it is a scope of.
-import type { Scope as BoardScope } from "../config";
 import {
   changesFocusOnly,
   retarget,
   type AppState,
   type Command,
+  type Filter,
   type Focus,
   type FocusCommand,
 } from "./state";
@@ -45,8 +44,16 @@ export interface Bridge<E, R> {
   act: (command: Command, prompts: InputPrompts) => Effect.Effect<string | null, E, R>;
   /** Where a change to a Run shows up, which is what the watch is put on. */
   stateDir: string;
-  /** Which scope the board opens on: the `scope` default, read once at startup. */
-  scope: BoardScope;
+  /** Which of the Herd's work the board opens on, decided once at startup. */
+  filter: Filter;
+  /** The workspace this board was opened from, which `g` narrows to. */
+  origin: string | null;
+  /**
+   * Handed this board's own `dispatch` once it is running. What a confirmed `navigate`
+   * needs: an executor is an Effect and the Selection is the app's, so this is the one
+   * wire between them — and it is a dispatch, never a herdr focus call.
+   */
+  onReady?: (dispatch: (command: Command) => void) => void;
 }
 
 /**
@@ -164,8 +171,12 @@ export function driveBridge<E, R>(
      */
     const focus = yield* SubscriptionRef.make<Focus>({
       view: "runs",
-      // The board opens on the scope the human set as their default; `g` widens it.
-      scope: bridge.scope,
+      // The filter the board opens on — the origin workspace under `scope: local`, the
+      // whole Herd otherwise — and the workspace `g` narrows back to.
+      filter: bridge.filter,
+      origin: bridge.origin,
+      steerDraft: null,
+      previewing: null,
       shown: ["runs"],
       selected: null,
       tail: false,
@@ -267,6 +278,7 @@ export function runApp<E, R>(
 ): Effect.Effect<void, E, R | FileSystem.FileSystem> {
   return Effect.gen(function* () {
     const driven = yield* driveBridge(bridge);
+    bridge.onReady?.(driven.dispatch);
     const renderer = yield* Effect.acquireRelease(
       Effect.promise(() => createCliRenderer({ exitOnCtrlC: false })),
       (r) => Effect.sync(() => r.destroy()),

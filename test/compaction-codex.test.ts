@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { Effect, FileSystem, Path, Result, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
 import { COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
 import { boundThread, withCodex } from "../src/codex";
@@ -159,11 +160,12 @@ function why<A, E>(result: Result.Result<A, E>): string {
 
 const ctx = (): AgentContext => ({
   agent: "build-r1",
+  run: "run-1",
   harness: "codex",
   cwd: fake.cwd,
   dir,
   endpoint: `ws://127.0.0.1:${server.port}`,
-  herdr: { agentPrompt: () => Effect.succeed("observed" as const) },
+  channel: fakeChannel([]),
 });
 
 beforeAll(() => {

@@ -26,7 +26,7 @@ const encodeControl = Schema.encodeSync(
     }),
   ),
 );
-import { scriptedPort } from "./support/compaction";
+import { fakeChannel, scriptedPort } from "./support/compaction";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -356,16 +356,14 @@ test("a second boundary on the same agent refuses while the first attempt is unr
           ports: again.ports,
           stateDir: rig.pluginEnv().stateDir,
           configured: 372_000,
-          herdr: {
-            agentPrompt: () => Effect.succeed("observed" as const),
-            agentList: () => Effect.succeed([]),
-          },
+          herdr: { agentList: () => Effect.succeed([]) },
           log: () => Effect.void,
           warn: () => Effect.void,
           waitMs: 60,
           pollMs: 20,
         },
         { agent, run: "another-run", step: "fix" },
+        fakeChannel([]),
       );
 
       expect(boundary.dispatch).toBe(false);
@@ -392,16 +390,14 @@ test("an interactive caller asks and reports, rather than waiting out the budget
           ports: interactive.ports,
           stateDir: rig.pluginEnv().stateDir,
           configured: 372_000,
-          herdr: {
-            agentPrompt: () => Effect.succeed("observed" as const),
-            agentList: () => Effect.succeed([]),
-          },
+          herdr: { agentList: () => Effect.succeed([]) },
           log: () => Effect.void,
           warn: () => Effect.void,
           waitMs: 0,
           pollMs: 20,
         },
         { agent, run: "control-plane", step: "hand-off to the implementer" },
+        fakeChannel([]),
       );
 
       expect(boundary.dispatch).toBe(false);
@@ -426,16 +422,14 @@ test("a confirmed outcome clears the attempt, so the next boundary measures agai
           ports: again.ports,
           stateDir: rig.pluginEnv().stateDir,
           configured: 372_000,
-          herdr: {
-            agentPrompt: () => Effect.succeed("observed" as const),
-            agentList: () => Effect.succeed([]),
-          },
+          herdr: { agentList: () => Effect.succeed([]) },
           log: () => Effect.void,
           warn: () => Effect.void,
           waitMs: 60,
           pollMs: 20,
         },
         { agent, run: "another-run", step: "fix" },
+        fakeChannel([]),
       );
 
       expect(boundary.dispatch).toBe(true);

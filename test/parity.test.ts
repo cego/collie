@@ -248,7 +248,13 @@ const makeRun = Effect.fn("parity.makeRun")(function* () {
     startRun(pluginEnv(), {
       workflow: prepared.workflow,
       resolutions: prepared.resolutions,
-      workspace: { workspaceId: "w1", label: "One", cwd: env.COLLIE_CWD, worktree: null },
+      workspace: {
+        workspaceId: "w1",
+        label: "One",
+        cwd: env.COLLIE_CWD,
+        worktree: null,
+        tokens: {},
+      },
     }),
   );
   if (started._tag === "Rejected") throw new Error(started.result.error.message);

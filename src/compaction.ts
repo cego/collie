@@ -7,6 +7,7 @@
 
 import { Clock, Data, Effect, FileSystem, Path, PlatformError, Result, Schema } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { Channel } from "./dispatcher";
 import type { Herdr, Submission } from "./herdr";
 import { reason } from "./naming";
 
@@ -86,8 +87,15 @@ export interface LaunchContext {
 }
 
 export interface AgentContext extends LaunchContext {
-  /** The human's channel, which is how a harness with no RPC is asked to compact. */
-  herdr: Pick<Herdr, "agentPrompt">;
+  /** The Run this agent belongs to. A delivery's ledger line names the Run, not the agent. */
+  run: string;
+  /**
+   * The one channel to this agent, owned by the Dispatcher transaction the caller opened.
+   * A compaction is a delivery like any other — it is recorded, it is ordered against
+   * whatever else is due, and it goes out under the same lock — so an adapter is handed
+   * a channel rather than herdr itself.
+   */
+  channel: Channel;
   /** The local endpoint this agent's controls talk to, where it has one. */
   endpoint: string | null;
 }
@@ -249,7 +257,7 @@ export interface CompactionDeps {
   stateDir: string;
   /** The user-wide threshold as configured, unvalidated. */
   configured: number;
-  herdr: Pick<Herdr, "agentPrompt" | "agentList">;
+  herdr: Pick<Herdr, "agentList">;
   /** The run's audit trail, for everything the transcript has to be able to explain. */
   log: (line: string) => Effect.Effect<void, PortError, PortServices>;
   /** The Run's own channel, so a warning reaches the CLI and the board, not just a log. */
@@ -392,6 +400,8 @@ export const gateHarnesses = Effect.fn("Compaction.gateHarnesses")(function* (
 export const atBoundary = Effect.fn("Compaction.atBoundary")(function* (
   deps: CompactionDeps,
   at: { agent: string; run: string; step: string },
+  /** From the caller's open transaction: the ports never take a lock of their own. */
+  channel: Channel,
 ) {
   const limit = yield* enabled(deps.configured);
   if (!limit) return DISPATCH;
@@ -403,11 +413,12 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* (
   if (!record || !port) return DISPATCH;
   const ctx: AgentContext = {
     agent: record.agent,
+    run: at.run,
     harness: record.harness,
     cwd: record.cwd,
     dir: record.dir,
     endpoint: record.endpoint,
-    herdr: deps.herdr,
+    channel,
   };
 
   // An attempt an earlier boundary left unresolved outranks a fresh reading. It is the

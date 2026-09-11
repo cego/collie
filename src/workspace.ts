@@ -7,6 +7,18 @@ import { choiceAnswerable } from "./attention";
 import { behindRemote } from "./doctor";
 import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
 import { COLLIE_TAB, displayName, GLYPH, runLabel, stepNow } from "./naming";
+import type { Live } from "./live";
+import {
+  asText,
+  cardLines,
+  deliveryLine,
+  driftLines,
+  markFor,
+  marksOf,
+  ownershipLines,
+  type Line,
+  type Marks,
+} from "./lines";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
 import { REVIEW_FILE } from "./output";
 import {
@@ -763,13 +775,46 @@ function askingRows(choice: PendingChoice, asking: Asking): string[] {
   return rows;
 }
 
-function runRows(rows: RunRow[], asking: Asking, waiting: string | null): string[] {
+function runRows(rows: RunRow[], asking: Asking, waiting: string | null, marks?: Marks): string[] {
   const out: string[] = [];
   for (const r of rows) {
-    out.push(`  ${r.glyph} ${r.title.padEnd(30)}${r.detail}`);
+    // The same marks the app draws, in the same order: this view is what a pane too
+    // narrow for the app shows, and it must not say less about a Run than the app does.
+    const mark = marksOf(markFor(marks, r.id));
+    out.push(`  ${r.glyph} ${r.title.padEnd(30)}${mark === "" ? "" : `${mark}  `}${r.detail}`);
     if (r.choice && r.id === waiting) out.push(...askingRows(r.choice, asking));
   }
   return out;
+}
+
+/**
+ * What has been happening, as lines. The very same lines the Live region draws — the app
+ * maps each one's tone to a colour and this joins the text — because a human on a pane too
+ * narrow for the app must not be shown a shorter, more reassuring version of a card.
+ */
+function liveLines(live: Live): string[] {
+  const lines: Line[] = [
+    ...(live.ownership === null
+      ? []
+      : ownershipLines(live.ownership.why, live.ownership.candidates)),
+    ...live.cards.flatMap(cardLines),
+    ...live.drift.flatMap((report) => driftLines(report)),
+    ...live.pending.flatMap((report) => driftLines(report, true)),
+    ...live.deliveries.map(deliveryLine),
+  ];
+  return lines.map((entry) => `  ${asText(entry)}`);
+}
+
+/**
+ * What a legacy per-workspace pane shows: one line saying where Collie went, and the key
+ * that goes there. Nothing else — no board and no chat — because two boards disagreeing
+ * about the same Runs is exactly what one Home per Herd exists to prevent (ADR-0009).
+ */
+export function renderRedirect(): string {
+  return [
+    "Collie moved to the Home — one board for the whole herdr session.",
+    "o open Collie",
+  ].join("\n");
 }
 
 /** The run whose question is being answered, if any: the first one asking. */
@@ -782,6 +827,8 @@ export function renderWorkspace(
   view: WorkspaceView,
   note?: string,
   asking: Asking = { index: 0, typed: "" },
+  /** What steering has found, and what has been happening. Absent where nothing has. */
+  steering: { marks?: Marks; live?: Live | null } = {},
 ): string {
   const lines = [`${COLLIE_TAB} — ${view.repo}`, view.cwd];
   if (view.behind !== null && view.behind > 0) {
@@ -814,8 +861,13 @@ export function renderWorkspace(
     // say here, and an empty section would be noise on every refresh.
     ...(view.worktrees.length > 0 ? section("Worktrees", view.worktrees.map(indent), "") : []),
     ...section("Agents", agents, "none live here"),
-    ...section("Runs", runRows(view.active, asking, waiting?.id ?? null), "none running"),
-    ...section("Finished", runRows(view.recent, asking, null), "nothing yet"),
+    ...section(
+      "Runs",
+      runRows(view.active, asking, waiting?.id ?? null, steering.marks),
+      "none running",
+    ),
+    ...section("Finished", runRows(view.recent, asking, null, steering.marks), "nothing yet"),
+    ...(steering.live ? section("Live", liveLines(steering.live), "nothing yet") : []),
     "",
     keys.join(" · "),
   );

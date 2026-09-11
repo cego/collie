@@ -21,6 +21,27 @@ export const NOTIFICATION_KINDS = [
   "step-stuck",
   "output-unusable",
   "mr-opened",
+  /**
+   * Drift that Collie could not settle: the correction bound was spent, or nobody was
+   * live to evaluate it. `request`, because it is the case where nothing else is going
+   * to happen without the human.
+   */
+  "drift-unresolved",
+  /**
+   * Collie sent a correction to an agent by itself. `request` on purpose: the human
+   * granted `auto_correct`, which is not the same as wanting it done behind their back.
+   */
+  "correction-sent",
+  /** Something is waiting for a yes or a no, and nothing else will happen until it gets one. */
+  "proposal-pending",
+  /**
+   * A slice of work a human could actually try. `done`, because it is good news — and
+   * only for a slice there is something to look at: an agent's claim on its own never
+   * toasts, because a claim is not a thing you can go and try.
+   */
+  "slice-ready",
+  /** The Intent moved. Silent: it matters when the board is closed, and not before then. */
+  "intent-changed",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -34,6 +55,11 @@ const SOUND = {
   "step-stuck": "request",
   "output-unusable": "request",
   "mr-opened": "done",
+  "drift-unresolved": "request",
+  "correction-sent": "request",
+  "proposal-pending": "request",
+  "slice-ready": "done",
+  "intent-changed": "none",
 } satisfies Record<NotificationKind, "none" | "done" | "request">;
 
 /**
@@ -50,6 +76,13 @@ const HEADLINE = {
   "step-stuck": (step?: string) => `stopped: ${step ?? "a step"} went quiet`,
   "output-unusable": () => "stopped on an unusable Output",
   "mr-opened": (mr?: string) => (mr ? `opened ${mr}` : "opened a merge request"),
+  "drift-unresolved": (what?: string) =>
+    what ? `drifted from ${what} and could not be corrected` : "has drift nobody has settled",
+  "correction-sent": (what?: string) =>
+    what ? `was corrected about ${what}` : "was corrected by Collie",
+  "proposal-pending": () => "has something waiting for your yes or no",
+  "slice-ready": (how?: string) => `has a slice you can try (${how ?? "inspect-ready"})`,
+  "intent-changed": () => "was given a new Intent",
 } satisfies Record<NotificationKind, (subject?: string) => string>;
 
 /** One herdr session runs several checkouts, so the repo is part of every title. */

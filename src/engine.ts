@@ -1,7 +1,19 @@
 // Executes a Run: one tab per Step, agents started with the right Harness,
 // Model and Persona, gates and loops driven by Output files.
 
-import { Clock, Crypto, Effect, FileSystem, Option, Path, Result, Schema, Stream } from "effect";
+import {
+  Clock,
+  Crypto,
+  Deferred,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  Path,
+  Result,
+  Schema,
+  Stream,
+} from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { ago, nowIso } from "./time";
@@ -29,17 +41,18 @@ import {
   type YamlMap,
   type YamlValue,
 } from "./yaml";
-import type { AgentStatus, Herdr } from "./herdr";
+import type { AgentInfo, AgentStatus, Herdr } from "./herdr";
 import { HerdrError, herdrFailureReason } from "./herdr";
 import { HARNESSES, isPermissionMode, PERMISSION_MODES, personaPrefix, startArgs } from "./harness";
 import {
   atBoundary,
+  controlDir,
   gateHarnesses,
   installControls,
   type CompactionPorts,
   type CompactionSettings,
 } from "./compaction";
-import { compactionFor } from "./compactors";
+import { compactionFor, externalSubmissions } from "./compactors";
 import {
   findingKey,
   formatFindings,
@@ -69,11 +82,16 @@ import {
   stepLabel,
   tabLabelsFor,
   targetLabel,
-  COLLIE_TAB,
-  isCollieTab,
   reason,
 } from "./naming";
-import { registerAgent, registryPath, scopeFor } from "./registry";
+import {
+  deliverable,
+  readRegistry,
+  registerAgent,
+  registryPath,
+  scopeFor,
+  type AgentEntry,
+} from "./registry";
 import {
   classifyWorkSource,
   inferInputs,
@@ -83,7 +101,77 @@ import {
   type InputPrompts,
 } from "./inputs";
 import { fanoutRepos, fanoutUnfinished, RunStore, type FanoutRecord } from "./run";
-import { handOver, postReview, resumeRun, runSettled, runStatus } from "./operations";
+import { propagate, readIntent, seedIntent, writeIntent, type Intent } from "./intent";
+import { withLock } from "./lock";
+import {
+  alignment,
+  appendDrift,
+  askJudgement,
+  alreadyStood,
+  appendElection,
+  findingKey as driftFindingKey,
+  checkRules,
+  correctionCause,
+  correctionText,
+  correctionsSent,
+  decideCorrections,
+  flattenOutput,
+  judge,
+  newReports,
+  NOT_JUDGED,
+  recordSkipped,
+  electionsPath,
+  evaluatedFor,
+  openReports,
+  pendingEvaluation,
+  readDrift,
+  readElections,
+  shouldStand,
+  supersededBy,
+  type Judged,
+  type Judgement,
+  type JudgementDeps,
+  EXTRA_PASSES,
+  staleSince,
+} from "./drift";
+import { capabilitiesOf } from "./steering-caps";
+import { fingerprint, readVerifications, runApproved } from "./verify";
+import { appendCard, buildCard, inspectFor, readCards, readCheckpoints, type Card } from "./cards";
+import { ensureHomeFor } from "./home";
+import { shell } from "./mr";
+import { readChoice, readInboxMidStep, type InboxCommandValue } from "./driver";
+import * as dispatch from "./dispatcher";
+import type { SubmitOutcome } from "./dispatcher";
+import {
+  appendLine,
+  budgetPath,
+  causalKey,
+  deliveriesOf,
+  herdOf,
+  ledgerPath,
+  newestById,
+  overrideActive,
+  readLedger,
+  textHash,
+  type Cause,
+} from "./steering";
+import {
+  pendingFor,
+  proposalsPath,
+  read as readProposals,
+  record as recordProposal,
+} from "./proposals";
+import { DriftReportSchema, type Ref } from "./evaluator";
+import {
+  evaluationDeps,
+  handOver,
+  newRequestId,
+  writeInbox,
+  postReview,
+  resumeRun,
+  runSettled,
+  runStatus,
+} from "./operations";
 import { isSingleRepo, planReposOf, type PlanRepos } from "./plan";
 import { notify as notifyRun, type NotificationKind } from "./notify";
 import {
@@ -242,7 +330,17 @@ interface RunCtx {
   groups: Map<string, VariantRecord>;
   viewSource: string;
   /** The Control Plane tab this run asks its questions in, when there is one. */
-  workspaceTabId: string | null;
+  /**
+   * The Home's tab, where a pending question is put. It may be in another workspace
+   * entirely — one Herd has one board — so it is never used to order anything.
+   */
+  boardTabId: string | null;
+  /**
+   * A tab in *this* Run's own workspace to order against, or null. Ordering is a local
+   * fact about one strip; the board is a Herd-wide one, and conflating them made a Run in
+   * one workspace reorder the tabs of another.
+   */
+  orderAnchorTabId: string | null;
   /**
    * What this process last called each of the run's tabs, so a reconcile that learns
    * nothing new sends no rename. herdr is not asked what a tab is called: the label is
@@ -254,12 +352,38 @@ interface RunCtx {
   launchPane: { paneId: string; tabId: string } | null;
   /** Whether the last pane read failed, so the next failure is not logged twice. */
   paneReadFailed: boolean;
+  /** What the inbox has said about this Run since the last time anything looked. */
+  steering: Steering;
+  /**
+   * How far the last Judgement got. Carried rather than re-derived, because it is the
+   * difference between `aligned: true` and `unverified`, and a Driver that lost it would
+   * report a Run as unverified for no reason other than having been restarted.
+   */
+  judged: Judged;
   /**
    * Blocking findings a human put back in front of the implementer by resuming a run
    * that stopped on their dispute. Handed to the fix step with the review's findings,
    * and judged with them; cleared once that fix has run.
    */
   reopened: Finding[];
+}
+
+/**
+ * The steering state a Driver carries through a Run. Plain arrays and plain values: the
+ * inbox is the only way in, the Driver is the only reader, and anything cleverer would
+ * be a second place a Run's state lives.
+ */
+interface Steering {
+  /** Messages for this Run's agents, waiting for the ticket that sends them. */
+  deliveries: InboxCommandValue[];
+  /** Why the Run is holding, or null. No new work goes out while this is set. */
+  held: { reason: string } | null;
+  /** The Intent version this Driver has loaded. */
+  intentVersion: number;
+  /** External submissions already turned into an override, by agent. */
+  externals: Map<string, number>;
+  /** Progress checkpoints already turned into a card, by file. */
+  checkpointed: Set<string>;
 }
 
 export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOptions) {
@@ -273,10 +397,19 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     ran: new Set(),
     groups: new Map(),
     viewSource,
-    workspaceTabId: null,
+    boardTabId: null,
+    orderAnchorTabId: null,
     tabLabels: new Map(),
     launchPane: null,
     paneReadFailed: false,
+    steering: {
+      deliveries: [],
+      held: null,
+      intentVersion: 0,
+      externals: new Map(),
+      checkpointed: new Set(),
+    },
+    judged: NOT_JUDGED,
     reopened: [],
   };
 
@@ -303,8 +436,11 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
   run.record.target_label = runTarget(wf, run.record);
   yield* run.save();
 
-  // Before anything opens: this is where the run's own pane and its menus live.
-  ctx.workspaceTabId = yield* ensureWorkspaceTab(tabFor(o));
+  // Before anything opens. Two different questions, answered separately: which tab a
+  // question goes to — the Herd's one Home, which may be in another workspace entirely
+  // (ADR-0009) — and which strip this Run's own tabs are ordered in, which is a local
+  // fact about the workspace it runs in.
+  ctx.boardTabId = yield* homeTabOf(o);
   ctx.launchPane = yield* reusableLaunchPane(o).pipe(
     Effect.catch((e) => o.run.log(`launch pane: ${reason(e)}`).pipe(Effect.as(null))),
   );
@@ -997,64 +1133,133 @@ const runStep = Effect.fn("Engine.runStep")(function* (
   // Set where a reused agent's compaction is still unresolved: no prompt goes out for
   // it, and the step ends blocked with that reason — the Run's existing way of
   // stopping for the human, in both front doors, rather than a second control plane.
+  // The work boundary is where steering reaches a Run that is between pieces of work:
+  // a hold takes effect here rather than mid-turn, and a message composed into the next
+  // prompt has to arrive before the prompt is built.
+  yield* takeSteering(o, ctx);
+  yield* holdUntilReleased(o, ctx);
+  yield* checkDrift(o, ctx, `boundary before ${step.id}`, "boundary");
+  yield* standForElection(o, `boundary before ${step.id}`);
+
   const boundaryDeps = yield* compactionDeps(o);
-  // Why a variant was not given its work: a compaction of its own still in the air, or
-  // a prompt that could not be delivered. One variant's problem must not abandon the
-  // others, which are working.
+  // One Dispatcher transaction per agent, holding its ledger lock across the compaction
+  // decision, the composition of anything steering has queued for it, and the send —
+  // so nothing else can slip a message into that pane between the three. Concurrent
+  // across agents, as the boundary already was: the locks are per incarnation.
+  //
+  // The compaction decisions run together — each one can wait out a whole compaction, and
+  // a fan-out step's variants must not do that one after another — but the sends go out in
+  // the order the step declares its variants. A latch per variant buys both: the
+  // transaction stays open across boundary, composition and send, and a log still reads
+  // in the order a human would expect.
+  //
+  // What comes back per variant is why it was not given its work: a compaction of its
+  // own still in the air, or a prompt that could not be delivered. One variant's problem
+  // must not abandon the others, which are working.
+  const sendTurn = yield* Effect.forEach(records, () => Deferred.make<void>());
+  // The incarnation each prompt went to, so its delivery can be settled once the work
+  // it asked for has been collected.
+  const entries: (AgentEntry | undefined)[] = [];
   const withheld = yield* Effect.forEach(
     records,
     (record, i) =>
-      reuses[i]
-        ? atBoundary(boundaryDeps, { agent: record.agent, run: run.id, step: step.id }).pipe(
-            Effect.map((boundary) => (boundary.dispatch ? null : boundary.reason)),
+      Effect.gen(function* () {
+        const variant = variants[i]!;
+        const key = keys[i]!;
+        // A multi-line prompt cannot be typed into a harness reliably, so the prompt
+        // goes to a file in the run dir and the agent is pointed at it.
+        const path = pathService.join(
+          yield* run.stepDir(step.id, key),
+          `prompt-${run.record.iteration}.md`,
+        );
+        const addressed = yield* agentEntry(o, record, step.persona ?? step.id);
+        const entry = addressed.entry;
+        if (entry === null) {
+          yield* o.out(`  ⏸ ${addressed.reason}`);
+          yield* run.log(addressed.reason);
+          return addressed.reason;
+        }
+        entries[i] = entry;
+        return yield* dispatch
+          .transaction(dispatcherDeps(o), entry, (channel) =>
+            Effect.gen(function* () {
+              // Held by a compaction of its own that is still in the air: the prompt file
+              // is written, because the step is resumable, but nothing is sent. The
+              // variant's own error is how a blocked step already reaches a human — the
+              // board draws the waiting glyph, the ending raises `needs-you` with this
+              // reason, and `run resume` picks the Run back up. Not `awaiting`: that says
+              // a Run is still going.
+              const boundary = reuses[i]
+                ? yield* atBoundary(
+                    boundaryDeps,
+                    { agent: record.agent, run: run.id, step: step.id },
+                    channel,
+                  )
+                : { dispatch: true as const };
+              const previous = sendTurn[i - 1];
+              if (previous) yield* Deferred.await(previous);
+              // Written whichever way the boundary went, so a held step is resumable.
+              const steering = takeBoundaryFor(ctx, record.agent);
+              const body = yield* buildPrompt(o, step, variant, key, ctx, vars);
+              yield* fs.writeFileString(
+                path,
+                `${dispatch.steeringSection(run.dir, steering)}${body}\n`,
+              );
+              if (!boundary.dispatch) {
+                yield* o.out(`  ⏸ ${boundary.reason}`);
+                yield* run.log(boundary.reason);
+                return boundary.reason;
+              }
+              yield* run.log(`prompt ${record.agent} -> ${pathService.relative(run.dir, path)}`);
+              // A skill marked `disable-model-invocation` refuses an agent that invokes it
+              // itself; `agent prompt` is the human's channel, so a slash command here runs.
+              const command = step.skill
+                ? `${skillCommandFor(variant.harness).call(null, step.skill)} `
+                : "";
+              const outcome = yield* channel.submit(
+                `${command}Your task for this step is in ${path} — read it and follow it.`,
+                {
+                  run: run.id,
+                  cause: stepCause(step, key, run),
+                  mode: "boundary",
+                  intentVersion: ctx.steering.intentVersion,
+                  attempt: run.record.iteration,
+                  requestId: `${run.id}-${step.id}-${key}-${run.record.iteration}`,
+                },
+              );
+              // Each steering item composed into this prompt gets its own line, so the
+              // ledger says which message reached the agent and inside what.
+              for (const item of steering) yield* recordComposed(o, entry, item, outcome);
+              if (outcome.ok) {
+                // Written but unconfirmed is kept apart from delivered: what tells a
+                // prompt that never arrived from one the agent ignored.
+                if (outcome.submission === "unobserved")
+                  yield* run.log(`${record.agent}: prompt written, no turn observed`);
+                return null;
+              }
+              // A send herdr refused, or never answered, withholds this variant the way a
+              // compaction in the air does: the reason reaches the human through the
+              // variant's own error, and `run resume` is the recovery.
+              const why = `${record.agent} was not given its prompt: ${outcome.reason} (${outcome.detail})`;
+              yield* o.out(`  ⚠ ${why}`);
+              yield* run.log(why);
+              return why;
+            }),
           )
-        : Effect.succeed(null),
+          .pipe(
+            Effect.ensuring(Deferred.done(sendTurn[i]!, Exit.void)),
+            // A refusal to open the transaction at all — no incarnation, or a different
+            // process in that pane — pauses the step for a human instead: `run resume`
+            // starts a fresh agent, which is the recovery for it.
+            Effect.catchTag("NotDeliverable", (cause) =>
+              run
+                .log(`dispatch to ${record.agent} refused: ${cause.reason}`)
+                .pipe(Effect.as(`${record.agent} could not be sent to: ${cause.reason}`)),
+            ),
+          );
+      }),
     { concurrency: "unbounded" },
   );
-  for (const [i, record] of records.entries()) {
-    const variant = variants[i]!;
-    const key = keys[i]!;
-    // A multi-line prompt cannot be typed into a harness reliably, so the prompt
-    // goes to a file in the run dir and the agent is pointed at it.
-    const path = pathService.join(
-      yield* run.stepDir(step.id, key),
-      `prompt-${run.record.iteration}.md`,
-    );
-    yield* fs.writeFileString(path, `${yield* buildPrompt(o, step, variant, key, ctx, vars)}\n`);
-    // Held by a compaction of its own that is still in the air: the prompt file is
-    // written, because the step is resumable, but nothing is sent. The variant's own
-    // error is how a blocked step already reaches a human — the board draws the
-    // waiting glyph, the ending raises `needs-you` with this reason, and `run resume`
-    // picks the Run back up. Not `awaiting`: that says a Run is still going.
-    const held = withheld[i];
-    if (held) {
-      yield* o.out(`  ⏸ ${held}`);
-      yield* run.log(held);
-      continue;
-    }
-    yield* run.log(`prompt ${record.agent} -> ${pathService.relative(run.dir, path)}`);
-    // A skill marked `disable-model-invocation` refuses an agent that invokes it
-    // itself; `agent prompt` is the human's channel, so a slash command here runs.
-    const command = step.skill
-      ? `${skillCommandFor(variants[i]!.harness).call(null, step.skill)} `
-      : "";
-    const submission = yield* herdr
-      .agentPrompt(
-        record.agent,
-        `${command}Your task for this step is in ${path} — read it and follow it.`,
-      )
-      .pipe(Effect.result);
-    if (Result.isFailure(submission)) {
-      const why = `${record.agent} was not given its prompt: ${reason(submission.failure)}`;
-      yield* o.out(`  ⚠ ${why}`);
-      yield* run.log(why);
-      withheld[i] = why;
-      continue;
-    }
-    if (submission.success === "unobserved") {
-      yield* run.log(`${record.agent}: prompt written, no turn observed`);
-    }
-  }
 
   // Watched together, because they were prompted together: a second reviewer that
   // hangs the moment it starts must not wait out the first one's whole turn before
@@ -1078,7 +1283,27 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       outcomes.push({ record, output: null, review: null });
       continue;
     }
-    const outcome = yield* collectWatched(o, step, record, key, stuckReasons[i] ?? null);
+    const outcome = yield* collectWatched(o, ctx, step, record, key, stuckReasons[i] ?? null);
+    // The agent went quiet and a usable Output was read, so the prompt's work is in the
+    // Run and its delivery is over: a later prompt about this step is a new attempt, not
+    // this one again. Not after a give-up, and not for an Output that is missing or
+    // unusable — neither says the agent did this prompt's work — so the delivery stays
+    // `submitted` and the same work is not sent to that agent twice. The Dispatcher adds
+    // its own condition: a submission herdr never saw a turn come of stays in flight.
+    const terminalId = entries[i]?.incarnation?.terminalId;
+    if (terminalId !== undefined && stuckReasons[i] == null && outcome.problem === undefined) {
+      yield* dispatch
+        .settleCollected(
+          o.env.stateDir,
+          terminalId,
+          causalKey(run.id, stepCause(step, key, run), ctx.steering.intentVersion),
+        )
+        .pipe(
+          Effect.catch((cause) =>
+            run.log(`could not settle ${record.agent}'s step delivery: ${reason(cause)}`),
+          ),
+        );
+    }
     // An agent that was given up on is not going to answer a prompt, so the repair
     // round is not offered to one.
     if (stuckReasons[i]) {
@@ -1358,6 +1583,31 @@ function outputVars(outputs: Map<string, VariantOutcome[]>): YamlMap {
 }
 
 /**
+ * The child's Intent v1: its parent's constraints, re-sourced `parent`, with
+ * `parent.applied` recording which version they came from. Authority is deliberately
+ * not inherited — a grant is per Run (SPEC §7.1) and a child that silently arrived
+ * with `auto_correct` would be a Run nobody granted anything.
+ *
+ * A parent with no Intent leaves the child with none, and an unreadable one is logged
+ * on the child rather than stopping a chain that is otherwise ready to run.
+ */
+const inheritIntent = Effect.fn("Engine.inheritIntent")(function* (parent: Run, child: Run) {
+  const intent = yield* readIntent(parent.dir).pipe(
+    Effect.catch((cause) =>
+      child.log(`parent intent unreadable: ${String(cause)}`).pipe(Effect.as(null)),
+    ),
+  );
+  if (!intent) return;
+  const { intent: seeded } = propagate(intent, seedIntent(child.id, {}));
+  yield* writeIntent(child.dir, seeded).pipe(
+    Effect.matchEffect({
+      onFailure: (cause) => child.log(`intent v1 not written: ${String(cause)}`),
+      onSuccess: () => child.log(`intent v1 written from ${parent.id} v${intent.version}`),
+    }),
+  );
+});
+
+/**
  * Starts the chosen Workflow as a child Run in this workspace and links it to this
  * one. Returns null when the human abandoned it at a question, so the menu comes back.
  */
@@ -1465,6 +1715,7 @@ const chain = Effect.fn("Engine.chain")(function* (
     parent: run.id,
   });
   yield* childRun.log(`chained from ${run.id}`);
+  yield* inheritIntent(run, childRun);
   if (checkout.note) yield* childRun.log(checkout.note);
   run.record.children.push(childRun.id);
   yield* run.save();
@@ -1854,7 +2105,16 @@ const register = Effect.fn("Engine.register")(function* (
 ) {
   const path = yield* registryPath(o.env.stateDir, scopeFor(o.env, o.run.record.cwd));
   yield* Effect.gen(function* () {
-    yield* registerAgent(path, {
+    // herdr's own identity for the process that was just started, read back from the
+    // listing rather than assumed: this is what later makes "the agent that was
+    // registered" and "the agent in that pane now" two answerable questions. An agent
+    // herdr does not name a `terminal_id` for is registered without one and is simply
+    // never a delivery target — the entry is still worth having for stop and prune.
+    const live: AgentInfo[] = yield* o.herdr
+      .agentList()
+      .pipe(Effect.catch(() => Effect.succeed([])));
+    const info = live.find((a) => a.name === record.agent && a.paneId === record.paneId);
+    const entry: AgentEntry = {
       role: step.persona ?? step.id,
       agent: record.agent,
       paneId: record.paneId!,
@@ -1862,8 +2122,15 @@ const register = Effect.fn("Engine.register")(function* (
       runId: o.run.id,
       workflow: o.run.record.workflow,
       at: yield* nowIso(),
-    });
-    yield* o.run.log(`registered ${record.agent} as ${step.persona ?? step.id}`);
+    };
+    if (info?.terminalId)
+      entry.incarnation = { terminalId: info.terminalId, agentSession: info.agentSession };
+    yield* registerAgent(path, entry);
+    yield* o.run.log(
+      info?.terminalId
+        ? `registered ${record.agent} as ${step.persona ?? step.id}`
+        : `registered ${record.agent} as ${step.persona ?? step.id} without an incarnation`,
+    );
   }).pipe(
     // A register nobody can write is a hand-off nobody gets, not a failed run.
     Effect.catch((e) => o.run.log(`register ${record.agent} failed: ${reason(e)}`)),
@@ -1882,9 +2149,12 @@ const placeTab = Effect.fn("Engine.placeTab")(function* (
   ctx: RunCtx,
   tabId: string,
 ) {
-  // No board means no workspace Collie owns anything in, and a strip it has no
-  // business reordering.
-  if (!ctx.workspaceTabId) return;
+  // Asked again while there is no answer: the first tab Collie opens in a workspace is
+  // the anchor for the ones after it, and a Run that resolved `null` once at its start
+  // would then never order any of its own tabs. No anchor at all means no strip Collie
+  // has any business reordering — the tab being placed is the only one it owns here.
+  ctx.orderAnchorTabId ??= yield* orderAnchorOf(o);
+  if (!ctx.orderAnchorTabId) return;
   yield* Effect.gen(function* () {
     const owners = new Map<string, number>();
     for (const run of yield* new RunStore(o.env.stateDir).list()) {
@@ -1902,106 +2172,48 @@ const placeTab = Effect.fn("Engine.placeTab")(function* (
       .filter((tab) => tab.tabId !== tabId)
       .map((tab) => ({
         rank: owners.get(tab.tabId) ?? null,
-        board: tab.tabId === ctx.workspaceTabId,
+        board: tab.tabId === ctx.orderAnchorTabId,
       }));
     yield* o.herdr.tabMove(tabId, insertIndexFor(tabs, rankOf(o.run.record.workflow)));
   }).pipe(Effect.catch((e) => o.run.log(`tab order: ${reason(e)}`)));
 });
 
 /**
- * What finding or opening the Session's tab needs. Deliberately not `EngineOptions`:
- * the board's own key opens the same tab with no Run behind it, and a second copy of
- * this logic is how the two would drift into opening two Collie tabs.
+ * The Home's tab, where a pending question goes. Never used to order anything: the Home
+ * is one board for the whole Herd, and a Run in another workspace ordering that
+ * workspace's strip was the board and the anchor being the same value.
  */
-export interface WorkspaceTab {
-  herdr: Herdr;
-  workspaceId: string | null;
-  /** The directory the view pane runs in. */
-  cwd: string;
-  /** Where a failure that must not stop the caller is written. */
-  log: (
-    line: string,
-  ) => Effect.Effect<void, Error | PlatformError, FileSystem.FileSystem | Path.Path>;
-}
-
-/** The tab facts a Run carries, for the engine's own calls. */
-function tabFor(o: EngineOptions): WorkspaceTab {
-  return {
-    herdr: o.herdr,
-    workspaceId: o.env.workspaceId,
-    // The workspace's directory, not this Run's worktree: the tab outlives the Run and
-    // roots the next `p` from wherever the human activated it.
-    cwd: o.run.record.activated_cwd ?? o.run.record.cwd,
-    log: (line) => o.run.log(line),
-  };
-}
-
-/**
- * The Session's own tab, found by its label and created when it is not there, and
- * moved to the front of the workspace either way. It is the only pane this plugin
- * keeps open in a workspace: the driver has no pane, and every question it asks is
- * rendered there. Returns the tab id, or null when there is no workspace to own one.
- */
-export const ensureWorkspaceTab = Effect.fn("Engine.ensureWorkspaceTab")(function* (
-  o: WorkspaceTab,
-) {
-  return yield* Effect.gen(function* () {
-    const view = yield* findOrOpenView(o);
-    if (!view) return null;
-    // First tab, every run: the Session's board is where `prefix+1` should land,
-    // and a tab that drifts down the list is one the human stops looking at.
-    yield* o.herdr
-      .tabMove(view.tabId, 0)
-      .pipe(Effect.catch((e) => o.log(`workspace tab order: ${reason(e)}`)));
-    return view.tabId;
-  }).pipe(
-    // Without the tab the run still runs; it just has nowhere to ask.
-    Effect.catch((e) => o.log(`workspace tab: ${reason(e)}`).pipe(Effect.as(null))),
-  );
+const homeTabOf = Effect.fn("Engine.homeTabOf")(function* (o: EngineOptions) {
+  const ensured = yield* ensureHomeFor(o.herdr, o.env, (line) =>
+    Effect.ignore(o.run.log(line)),
+  ).pipe(Effect.catch((e) => o.run.log(`home: ${reason(e)}`).pipe(Effect.as(null))));
+  if (ensured === null) return null;
+  if (ensured.kind === "ownership_unknown") {
+    yield* o.run.log(`home: ${ensured.why}; \`collie home reconcile\` settles it`);
+    return null;
+  }
+  // Made but not opened: nothing to settle, and no tab to send a question to yet.
+  if (ensured.kind === "incomplete") return null;
+  return ensured.record.tabId;
 });
 
-const findOrOpenView = Effect.fn("Engine.findOrOpenView")(function* (o: WorkspaceTab) {
-  if (!o.workspaceId) return null;
-  const open = Effect.fn("Engine.openWorkspaceView")(function* (
-    placement: "tab" | "split",
-    targetPaneId?: string,
-  ) {
-    const opened = yield* o.herdr.pluginPaneOpen({
-      entrypoint: "workspace",
-      placement,
-      targetPaneId,
-      direction: placement === "split" ? "down" : undefined,
-      focus: false,
-      workspaceId: o.workspaceId,
-      cwd: o.cwd,
-      env: { COLLIE_CWD: o.cwd },
-    });
-    if (!opened.paneId) return null;
-    yield* o.herdr.paneRename(opened.paneId, COLLIE_TAB);
-    return opened;
-  });
-
-  // By label, under this name or an older one: the label is the identity, so a tab
-  // opened before a rename has to be found and relabelled rather than joined by a
-  // second Collie tab the human never asked for.
-  const tab = (yield* o.herdr.tabList()).find((t) => isCollieTab(t.label));
-  if (!tab) {
-    const opened = yield* open("tab");
-    if (!opened?.tabId) return null;
-    yield* o.herdr.tabRename(opened.tabId, COLLIE_TAB);
-    return opened;
-  }
-  if (tab.label !== COLLIE_TAB) yield* o.herdr.tabRename(tab.tabId, COLLIE_TAB);
-  // The tab is there; its view pane may not be, if someone closed just that pane.
-  const panes = (yield* o.herdr.paneList()).filter((p) => p.tabId === tab.tabId);
-  const view = panes.find((p) => p.label !== null && isCollieTab(p.label));
-  if (view) {
-    if (view.label !== COLLIE_TAB) yield* o.herdr.paneRename(view.paneId, COLLIE_TAB);
-    return { tabId: tab.tabId, paneId: view.paneId };
-  }
-  if (panes.length === 0) return null;
-  const opened = yield* open("split", panes[0]!.paneId);
-  return opened ? { tabId: tab.tabId, paneId: opened.paneId } : null;
+/**
+ * A tab in *this* Run's own workspace to order against: the first one in the strip that
+ * any Run of this workspace opened. Null while Collie owns nothing here, which is a
+ * strip it has no business reordering — the one tab it is about to open is the only one
+ * there, and where that sits is herdr's answer, not Collie's.
+ */
+const orderAnchorOf = Effect.fn("Engine.orderAnchorOf")(function* (o: EngineOptions) {
+  return yield* Effect.gen(function* () {
+    const owned = new Set<string>();
+    for (const run of yield* new RunStore(o.env.stateDir).list()) {
+      if (run.record.workspace !== o.run.record.workspace) continue;
+      for (const step of run.record.steps) {
+        for (const variant of step.variants) if (variant.tabId) owned.add(variant.tabId);
+      }
+    }
+    return (yield* o.herdr.tabList()).find((tab) => owned.has(tab.tabId))?.tabId ?? null;
+  }).pipe(Effect.catch((e) => o.run.log(`tab anchor: ${reason(e)}`).pipe(Effect.as(null))));
 });
 
 /**
@@ -2024,9 +2236,11 @@ const callAttention = Effect.fn("Engine.callAttention")(function* (
   // rather than the step it stopped in the middle of.
   yield* reconcileTabs(o, ctx, nothingLive, true);
   yield* notify(o, "needs-you", detail, { step: stepId });
-  if (o.defaults.questions === "notify" || !ctx.workspaceTabId) return;
+  if (o.defaults.questions === "notify" || !ctx.boardTabId) return;
+  // The one thing that still takes focus, and only under `questions: focus`: a question
+  // is the human being waited on. Cards, corrections and proposals never do this.
   // A tab that will not focus is still a tab the human can reach.
-  yield* Effect.ignore(o.herdr.tabFocus(ctx.workspaceTabId));
+  yield* Effect.ignore(o.herdr.tabFocus(ctx.boardTabId));
 });
 
 /**
@@ -2283,22 +2497,14 @@ const repairOutput = Effect.fn("Engine.repairOutput")(function* (
   // A prompt that cannot be delivered — the agent is gone, the socket is not there —
   // is a repair that did not happen, not a Run that failed: the step still has the
   // Output problem it had, and that is what the human needs to be told about.
-  const submission = yield* o.herdr
-    .agentPrompt(
-      record.agent,
-      `Your Output file is not usable: ${problem}. Write ${relative} again — the JSON your step described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${path}`,
-    )
-    .pipe(
-      Effect.catch((cause) =>
-        o.run.log(`repair prompt failed: ${reason(cause)}`).pipe(Effect.as(null)),
-      ),
-    );
-  if (submission === null) return null;
-  // Kept, so a repair that goes quiet later is read as this uncertainty and not as an
-  // agent ignoring the ask.
-  if (submission === "unobserved") {
-    yield* o.run.log(`${record.agent}: repair prompt written, no turn observed`);
-  }
+  const asked = yield* sendTo(o, record, {
+    text: `Your Output file is not usable: ${problem}. Write ${relative} again — the JSON your step described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${path}`,
+    cause: { kind: "repair", ref: `${step.id}#${o.run.record.iteration}` },
+    requestId: `${o.run.id}-repair-${step.id}-${variantKey ?? ""}-${o.run.record.iteration}`,
+    attempt: record.repairs.length + 1,
+    intentVersion: ctx.steering.intentVersion,
+  });
+  if (!asked) return null;
   // Recorded once it has actually been asked: a repair that was never delivered must
   // not make the summary say the Output was rewritten, or the toast say the agent was
   // asked already.
@@ -2308,7 +2514,7 @@ const repairOutput = Effect.fn("Engine.repairOutput")(function* (
   // An agent that goes quiet writing one file is as stuck as one that goes quiet
   // doing the work, and the Driver holds it to the same bound.
   const stuck = yield* awaitAgent(o, ctx, record);
-  return yield* collectWatched(o, step, record, variantKey, stuck);
+  return yield* collectWatched(o, ctx, step, record, variantKey, stuck);
 });
 
 /**
@@ -2319,6 +2525,7 @@ const repairOutput = Effect.fn("Engine.repairOutput")(function* (
  */
 const collectWatched = Effect.fn("Engine.collectWatched")(function* (
   o: EngineOptions,
+  ctx: RunCtx,
   step: ResolvedStep,
   record: VariantRecord,
   variantKey: string | null,
@@ -2330,6 +2537,15 @@ const collectWatched = Effect.fn("Engine.collectWatched")(function* (
     outcome.record.error = stuck;
     outcome.stuck = true;
   }
+  // The Run has just produced something, which is the moment its rules can be checked
+  // against what is actually there. Rules only: a judgement costs money and belongs at a
+  // boundary, and a fact Collie can check itself is one it should never pay to have judged.
+  yield* checkDrift(o, ctx, `${step.id} collected`);
+  yield* writeCard(o, ctx, {
+    kind: step.id.startsWith("review") ? "review" : "slice",
+    step: step.id,
+    claims: outcome.record.output === null ? [] : [`wrote ${outcome.record.output}`],
+  });
   return outcome;
 });
 
@@ -2373,6 +2589,1229 @@ const previousReviewVars = Effect.fn("Engine.previousReviewVars")(function* (o: 
     when,
     run: previous.id,
   };
+});
+
+/**
+ * The Run's own steering journals, read the way a Driver has to read them: a file it
+ * cannot read says nothing, and nothing is not a reason to fail the work. Every caller
+ * below wants that, so it is one name rather than a `catch` at each of them.
+ */
+const intentOf = (o: EngineOptions) =>
+  readIntent(o.run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
+const driftOf = (o: EngineOptions) =>
+  readDrift(o.run.dir).pipe(Effect.catch(() => Effect.succeed([])));
+const verificationsOf = (o: EngineOptions) =>
+  readVerifications(o.run.dir).pipe(Effect.catch(() => Effect.succeed([])));
+const electionsOf = (file: string) =>
+  readElections(file).pipe(Effect.catch(() => Effect.succeed([])));
+/** The Herd this Run is in, or none: no socket is a Driver with no Herd to write to. */
+const herdKeyOf = (o: EngineOptions) =>
+  herdOf(o.env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+
+/**
+ * One message to one of this Run's agents, through its own Dispatcher transaction.
+ * `false` where nothing was sent, whatever the reason — the caller records that as its
+ * own kind of failure, and none of them is a reason for the Run to end.
+ */
+/**
+ * What a step prompt is about, for the ledger. The variant as well as the step: a Choice
+ * step's rounds are separate pieces of work in one step, and a key that could not tell
+ * them apart would read the second round as a repeat of the first.
+ */
+const stepCause = (step: ResolvedStep, key: string | null, run: Run): Cause => ({
+  kind: "step",
+  ref: `${step.id}/${key ?? ""}#${run.record.iteration}`,
+});
+
+const sendTo = Effect.fn("Engine.sendTo")(function* (
+  o: EngineOptions,
+  record: VariantRecord,
+  draft: {
+    readonly text: string;
+    readonly cause: Cause;
+    readonly requestId: string;
+    readonly attempt: number;
+    readonly intentVersion: number;
+    /** Default `boundary`; anything else is gated on what this harness has been shown to do. */
+    readonly mode?: "boundary" | "now" | "interrupt";
+  },
+) {
+  const deps = dispatcherDeps(o);
+  const entry = yield* agentEntry(o, record);
+  if (entry.entry === null) {
+    yield* o.run.log(`${draft.cause.kind} to ${record.agent}: ${entry.reason}`);
+    return false;
+  }
+  const addressed = entry.entry;
+  const mode = draft.mode ?? "boundary";
+  const carried = {
+    run: o.run.id,
+    harness: record.harness,
+    cause: draft.cause,
+    mode,
+    intentVersion: draft.intentVersion,
+    attempt: draft.attempt,
+    requestId: draft.requestId,
+  };
+  return yield* dispatch
+    .transaction(deps, addressed, (channel) =>
+      // An interrupt is keys and then the text; the text alone is a `now` under
+      // an interrupt's name.
+      mode === "interrupt"
+        ? dispatch.interrupt(
+            {
+              ...deps,
+              status: (agent) =>
+                o.herdr.agentStatus(agent).pipe(Effect.catch(() => Effect.succeed("unknown"))),
+            },
+            channel,
+            addressed,
+            draft.text,
+            carried,
+          )
+        : channel.submit(draft.text, carried),
+    )
+    .pipe(
+      Effect.flatMap((outcome) =>
+        outcome.ok
+          ? Effect.succeed(true)
+          : o.run
+              .log(`${draft.cause.kind} to ${record.agent} not sent: ${outcome.reason}`)
+              .pipe(Effect.as(false)),
+      ),
+      Effect.catch((cause) =>
+        o.run
+          .log(`${draft.cause.kind} to ${record.agent} refused: ${reason(cause)}`)
+          .pipe(Effect.as(false)),
+      ),
+    );
+});
+
+/**
+ * Whether anyone has typed into one of this Run's agents. A submission Collie did not
+ * make means a human is steering that pane directly, and automatic corrections to it
+ * stop until someone explicitly clears the override — Collie never argues with a human
+ * through the same keyboard.
+ *
+ * The count is compared against what was seen last time rather than the file being
+ * consumed: the telemetry belongs to the compaction controls, and two readers deleting
+ * from it would be two owners of one journal.
+ */
+const noticeOverrides = Effect.fn("Engine.noticeOverrides")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+) {
+  for (const record of ctx.groups.values()) {
+    const dir = yield* controlDir(o.env.stateDir, record.agent);
+    const seen = yield* externalSubmissions(dir).pipe(Effect.catch(() => Effect.succeed(0)));
+    if (seen <= (ctx.steering.externals.get(record.agent) ?? 0)) continue;
+    ctx.steering.externals.set(record.agent, seen);
+    const addressed = yield* agentEntry(o, record);
+    const terminalId = addressed.entry?.incarnation?.terminalId;
+    if (terminalId === undefined) continue;
+    yield* appendLine(yield* ledgerPath(o.env.stateDir, terminalId), {
+      kind: "manual_override",
+      at: yield* nowIso(),
+      incarnation: terminalId,
+      by: "hook:UserPromptSubmit",
+    });
+    yield* o.run.log(`${record.agent}: manual_override — someone typed into its pane`);
+  }
+});
+
+/**
+ * Every rule constraint this Run has, checked against what is actually there, and any new
+ * breach written down. Called wherever the Run has just produced something and at the
+ * boundary before it takes on more, because those are the two moments the answer can
+ * change.
+ *
+ * Never fatal, and never blocking: a check that could not read the tree says nothing,
+ * which is what "no evidence" looks like.
+ */
+/**
+ * What a Judgement is made with, and where its call is written down. `evaluationDeps` is
+ * where the execution bounds are decided, so the CLI and the Driver call alike.
+ */
+const judgementDeps = Effect.fn("Engine.judgementDeps")(function* (o: EngineOptions) {
+  const key = yield* herdKeyOf(o);
+  if (key === null) return null;
+  const built = yield* evaluationDeps(o.env);
+  return {
+    evaluator: built.evaluator,
+    budgetFile: yield* budgetPath(o.env.stateDir, key),
+    limits: built.limits,
+    newId: newRequestId().pipe(Effect.orDie),
+    // A journal write that will not happen must not be what stops a judgement.
+    log: (line: string) => Effect.ignore(o.run.log(line)),
+  } satisfies JudgementDeps;
+});
+
+/**
+ * The semantic half of a drift check: one Judgement at a boundary and at `finish`, never
+ * at `collect` (SPEC §7.9). A fact Collie can check itself is never paid for; a judgement
+ * that could not be made is recorded as skipped, which keeps the Run `unverified` rather
+ * than letting it read as checked.
+ */
+const judgeDrift = Effect.fn("Engine.judgeDrift")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  intent: Intent,
+  at: string,
+  final: boolean,
+) {
+  // A goal is judged once, at `finish`. It is what `aligned` needs and there is nothing
+  // to correct from it mid-Run, so judging it at every boundary would spend a Run's whole
+  // grant on the same question. Semantic constraints are different: a correction can go
+  // out about one, so they are judged at every boundary as SPEC §7.9 asks.
+  const semantic = intent.constraints.some((constraint) => constraint.kind === "semantic");
+  if (!final && !semantic) return;
+  const deps = yield* judgementDeps(o);
+  if (deps === null) {
+    yield* recordSkipped(o.run.dir, o.run.id, "there is no Herd to charge a judgement to");
+    return;
+  }
+  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
+  const outcome = yield* judge(deps, intent, {
+    runDir: o.run.dir,
+    worktree: cwd,
+    base: yield* baseOf(cwd),
+    at: yield* nowIso(),
+  }).pipe(
+    // A judgement that fell over is a judgement that did not happen, and no Driver stops
+    // a Run over one (SPEC §9.3). The skipped line is what keeps the Run honest.
+    Effect.catch((cause) =>
+      Effect.gen(function* () {
+        yield* recordSkipped(o.run.dir, o.run.id, `the judgement failed: ${reason(cause)}`);
+        return { judged: NOT_JUDGED, reports: [] } satisfies Judgement;
+      }),
+    ),
+  );
+  ctx.judged = outcome.judged;
+
+  const before = yield* driftOf(o);
+  for (const report of newReports(outcome.reports, before)) {
+    yield* appendDrift(o.run.dir, report);
+    yield* o.run.log(
+      `drift at ${at}: ${report.constraint} (${report.severity}) — judged against ${
+        report.evidence.length
+      } piece(s) of evidence`,
+    );
+  }
+});
+
+const checkDrift = Effect.fn("Engine.checkDrift")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  at: string,
+  /** Whether to judge what Collie cannot check by itself. `collect` never does. */
+  judging: "none" | "boundary" | "finish" = "none",
+) {
+  const intent = yield* intentOf(o);
+  if (intent === null) return;
+  if (judging !== "none") yield* judgeDrift(o, ctx, intent, at, judging === "finish");
+  const rules = intent.constraints.some((constraint) => constraint.kind === "rule");
+  if (rules) yield* checkRuleDrift(o, intent, at);
+  // With no rule to check there may still be something to correct, from the judgement.
+  if (rules || judging !== "none") yield* correctDrift(o, ctx, intent);
+});
+
+/** The half Collie establishes itself: what the rules say about the evidence, recorded. */
+const checkRuleDrift = Effect.fn("Engine.checkRuleDrift")(function* (
+  o: EngineOptions,
+  intent: Intent,
+  at: string,
+) {
+  const facts = yield* ruleFacts(o);
+  const now = yield* nowIso();
+  const found = checkRules(intent, facts, now);
+  const before = yield* driftOf(o);
+  const fresh = newReports(found, before);
+  for (const report of fresh) {
+    yield* appendDrift(o.run.dir, report);
+    yield* o.run.log(
+      `drift at ${at}: ${report.constraint} (${report.severity}) — ${report.evidence
+        .map((ref) => ref.path ?? ref.excerpt ?? ref.kind)
+        .join(", ")}`,
+    );
+  }
+  // A report that was open and is no longer found is one the work came back from — but
+  // only where the check actually found fewer things. Re-checking an unchanged tree finds
+  // the same ones, and calling that a fix would clear a report nobody acted on.
+  for (const report of openReports(before))
+    if (!found.some((still) => still.constraint === report.constraint)) {
+      yield* appendDrift(o.run.dir, { ...report, at: now, resolution: "verified" });
+      yield* o.run.log(`drift ${report.constraint} cleared at ${at}`);
+    }
+});
+
+/**
+ * Send what this Run's own authority lets Collie send about its open drift, and give up
+ * where it does not. Every refusal is somebody being deferred to: the human at that
+ * keyboard, the human who held the Run, the human who never granted this.
+ *
+ * A correction is `correction_submitted`, never `corrected` and never `verified`. Sending
+ * text is not the same as the work changing, and only new evidence settles that.
+ */
+const correctDrift = Effect.fn("Engine.correctDrift")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  intent: Intent,
+) {
+  if (!intent.authority.auto_correct) return;
+  const lines = yield* driftOf(o);
+  const open = openReports(lines);
+  if (open.length === 0) return;
+
+  for (const record of ctx.groups.values()) {
+    const addressed = yield* agentEntry(o, record);
+    const entry = addressed.entry;
+    const terminalId = entry?.incarnation?.terminalId;
+    if (!entry || terminalId === undefined) continue;
+
+    const ledger = yield* readLedger(yield* ledgerPath(o.env.stateDir, terminalId));
+    const deliveries = [...newestById(ledger).values()];
+    const sentSoFar = correctionsSent(deliveries);
+    const decided = decideCorrections(intent, open, {
+      overridden: overrideActive(ledger),
+      attributable: capabilitiesOf(record.harness)?.attribution.status === "proven",
+      held: ctx.steering.held !== null,
+      sent: sentSoFar,
+      inFlight: new Set(
+        deliveries
+          .filter((entry) => entry.cause.kind === "correction" && !SETTLED.has(entry.state))
+          .map((entry) => entry.cause.ref),
+      ),
+      nowProven: capabilitiesOf(record.harness)?.now.status === "proven",
+    });
+
+    for (const { report, mode } of decided) {
+      const constraint = intent.constraints.find((entry) => entry.id === report.constraint);
+      if (!constraint) continue;
+      const requestId = `${o.run.id}-correction-${report.constraint}-${intent.version}`;
+      const sent = yield* sendTo(o, record, {
+        text: correctionText(requestId, constraint, report),
+        cause: correctionCause(report),
+        requestId,
+        attempt: (sentSoFar[report.constraint] ?? 0) + 1,
+        intentVersion: intent.version,
+        mode,
+      });
+      if (!sent) continue;
+      yield* appendDrift(o.run.dir, {
+        ...report,
+        at: yield* nowIso(),
+        resolution: "correction_submitted",
+        correction: requestId,
+      });
+      yield* notify(o, "correction-sent", report.constraint, { step: report.constraint });
+      yield* o.run.log(`correction sent for ${report.constraint} (${mode})`);
+    }
+
+    // The bound is spent and it is still open: nothing else Collie can do about it.
+    for (const report of open) {
+      if (report.resolution === "escalated") continue;
+      if ((sentSoFar[report.constraint] ?? 0) < intent.authority.max_corrections_per_constraint)
+        continue;
+      if (decided.some((entry) => entry.report.constraint === report.constraint)) continue;
+      yield* appendDrift(o.run.dir, { ...report, at: yield* nowIso(), resolution: "escalated" });
+      yield* notify(o, "drift-unresolved", report.constraint, { step: report.constraint });
+      yield* o.run.log(`drift ${report.constraint} escalated: the correction bound is spent`);
+    }
+  }
+});
+
+/**
+ * What a finished Run leaves behind: nothing queued that will never go out, an honest
+ * answer about whether the work is what was asked for, and — where something is still
+ * open and blocking — a proposal for the human rather than another prompt to an agent.
+ *
+ * A finished Run is immutable. Nothing here re-prompts anybody; the follow-up is a
+ * proposal for a *child* Run, and it waits for a yes like everything else.
+ */
+const settleAtFinish = Effect.fn("Engine.settleAtFinish")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+) {
+  // A boundary delivery is composed into the next piece of work. There is no next piece
+  // of work, so saying so is better than leaving it looking pending for ever.
+  for (const command of ctx.steering.deliveries) {
+    const deliver = command.deliver;
+    if (!deliver) continue;
+    const cause = { kind: "steer" as const, ref: deliver.deliveryId };
+    yield* appendLine(yield* ledgerPath(o.env.stateDir, deliver.incarnation), {
+      id: deliver.deliveryId,
+      at: yield* nowIso(),
+      run: o.run.id,
+      incarnation: deliver.incarnation,
+      agent: deliver.agent,
+      causal_key: causalKey(o.run.id, cause, deliver.intentVersion),
+      request_id: command.requestId,
+      cause,
+      mode: deliver.mode,
+      text_hash: textHash(deliver.text),
+      intent_version: deliver.intentVersion,
+      attempt: deliver.attempt,
+      state: "expired",
+      note: "the Run finished before there was any work to compose it into",
+    }).pipe(Effect.ignore);
+  }
+  ctx.steering.deliveries = [];
+
+  const intent = yield* intentOf(o);
+  const lines = yield* driftOf(o);
+  // What the Judgement at `finish` actually got to, not an assumption about it: a
+  // skipped or refused judgement leaves these false and the verdict `unverified`.
+  const verdict = alignment(intent, lines, ctx.judged);
+  yield* o.run.log(`aligned: ${verdict.aligned} — ${verdict.why}`);
+
+  const blocking = openReports(lines).filter((report) => report.severity === "block");
+  if (blocking.length === 0) return;
+  yield* proposeFollowup(o, blocking);
+});
+
+/**
+ * A finished Run with open blocking drift, offered as a child Run rather than acted on.
+ * `origin: driver`, so every action in it is pending however much authority the Run had:
+ * starting work is a decision, and a Run that has ended is not one Collie may extend.
+ */
+const proposeFollowup = Effect.fn("Engine.proposeFollowup")(function* (
+  o: EngineOptions,
+  blocking: ReadonlyArray<{ readonly constraint: string; readonly evidence: ReadonlyArray<Ref> }>,
+) {
+  const key = yield* herdKeyOf(o);
+  if (key === null) {
+    yield* o.run.log("no Herd to record a follow-up proposal in; drift is on the Run's journal");
+    return;
+  }
+  const text = blocking
+    .map(
+      (report) =>
+        `${report.constraint}: ${report.evidence.map((ref) => ref.path ?? ref.excerpt ?? ref.kind).join(", ")}`,
+    )
+    .join("\n");
+  yield* recordProposal(yield* proposalsPath(o.env.stateDir, key), {
+    interpretation: `${o.run.id} finished with ${blocking.length} blocking constraint(s) still open`,
+    targets: [{ run: o.run.id }],
+    actions: [{ kind: "followup", run: o.run.id, text }],
+    allowedNow: [],
+    intentVersions: {},
+    by: `driver:${o.run.id}`,
+  }).pipe(
+    Effect.tap((recorded) => notify(o, "proposal-pending", o.run.id, { step: recorded.id })),
+    Effect.catch((cause) => o.run.log(`could not record a follow-up proposal: ${reason(cause)}`)),
+  );
+});
+
+/**
+ * Whether this Driver takes the Herd's cross-run check this time. Why the Drivers elect
+ * one at all, and what a loser's `dirty` line is for, is in `src/drift.ts`.
+ *
+ * The wake rule is the last clause: a `pending` evaluation makes *every* Driver in the
+ * Herd a candidate, not only ones with siblings. Without it an evaluation nobody could
+ * finish would wait for a Driver that may never run again.
+ *
+ * The judgement itself is a model call and no Driver has a grant to spend on one, so a
+ * winner at a boundary can snapshot but not evaluate, and it records nothing: saying an
+ * evaluation is owed at every boundary would be a mark no later boundary could clear.
+ *
+ * `pending` is written at `finish` and only there, by a Driver that is leaving and cannot
+ * clear what it stood for — the durable unevaluated state §9.6 defines, which the wake
+ * rule, the final card's `cross_run` and the attention all read.
+ */
+const standForElection = Effect.fn("Engine.standForElection")(function* (
+  o: EngineOptions,
+  at: string,
+  leaving = false,
+) {
+  const key = yield* herdKeyOf(o);
+  if (key === null) return;
+  const file = yield* electionsPath(o.env.stateDir, key);
+  const intent = yield* intentOf(o);
+  // `?? null` because a Run with no Intent has `undefined` here, and `undefined !== null`
+  // made every Run a candidate for a check about siblings it does not have.
+  const related = (intent?.parent ?? null) !== null || o.run.record.children.length > 0;
+  const standing = yield* electionsOf(file);
+  if (!shouldStand(standing, related)) return;
+  const now = yield* nowIso();
+  // Standing again at every boundary is the wake rule; saying so again is an unbounded
+  // journal. One candidate line per Run per pending.
+  if (!alreadyStood(standing, o.run.id))
+    yield* appendElection(file, { kind: "candidate", at: now, by: at, run: o.run.id }).pipe(
+      Effect.ignore,
+    );
+
+  const lock = `${file}.evaluator.lock`;
+  yield* withLock(
+    lock,
+    // Somebody else is doing it. Saying so is not a formality: it is what tells the
+    // winner that its snapshot was already out of date.
+    appendElection(file, { kind: "dirty", at: now, by: at, run: o.run.id }).pipe(Effect.ignore),
+    Effect.gen(function* () {
+      // Won it, so this Driver is the one caller. The vector is the snapshot the
+      // judgement is made from and written down either way, because an election that
+      // recorded a check without looking would be the worst of both. Standing under a
+      // `pending`, the Runs it names are in the snapshot too — that is what the wake
+      // rule is for — so the Judgement made here is the one the Herd owed.
+      const owed = pendingEvaluation(standing)?.runs ?? [];
+      let snapshotAt = now;
+      let passes = 0;
+      while (true) {
+        const targets = yield* versionVector(o, owed);
+        yield* o.run.log(
+          `cross-run vector at ${snapshotAt}: ${targets.map((t) => t.line).join("; ")}`,
+        );
+        const why = yield* judgeCrossRun(o, targets, snapshotAt).pipe(
+          // A judgement that fell over never stops a worker (SPEC §9.3): it becomes the
+          // reason a `pending` is written instead.
+          Effect.catch((cause) => Effect.succeed(`the judgement failed: ${reason(cause)}`)),
+        );
+        if (why !== null) {
+          yield* o.run.log(`cross-run judgement not made at ${snapshotAt}: ${why}`);
+          // Not leaving: the next boundary stands again, and a mark at every boundary
+          // nobody could pay for would be a mark no later boundary could clear.
+          if (!leaving) return;
+          const pending = pendingEvaluation(yield* readElections(file));
+          if (pending !== null) {
+            yield* o.run.log(`cross-run evaluation still pending since ${pending.since}`);
+            return;
+          }
+          yield* markPending(o, file, now, "nobody could make it");
+          return;
+        }
+        // Answered — for the snapshot it was made from. A loser's `dirty` newer than that
+        // snapshot means something moved while the call was out, so what was judged is
+        // already behind: snapshot again and judge once more, a bounded number of times.
+        const lines = yield* readElections(file);
+        if (!staleSince(lines, snapshotAt)) {
+          if (pendingEvaluation(lines) === null && owed.length > 0)
+            yield* o.run.log(`cross-run evaluation owed for ${owed.join(", ")} was made`);
+          return;
+        }
+        if (passes >= EXTRA_PASSES) {
+          // Still moving after the extra passes: durable, unevaluated state, which the
+          // wake rule hands to the next Driver event anywhere in the Herd.
+          yield* markPending(o, file, yield* nowIso(), "the Herd kept moving through the passes");
+          return;
+        }
+        passes += 1;
+        snapshotAt = yield* nowIso();
+        yield* o.run.log(`cross-run snapshot went stale; judging again (extra pass ${passes})`);
+      }
+    }),
+  ).pipe(Effect.ignore);
+});
+
+/**
+ * The `pending` line §9.6 defines. Everything the relationship spans is named, not just
+ * this Run's own side of it: a parent that only named its children would leave each
+ * sibling's final card saying nothing is owed.
+ */
+const markPending = Effect.fn("Engine.markPending")(function* (
+  o: EngineOptions,
+  file: string,
+  since: string,
+  why: string,
+) {
+  const runs = yield* relatedRuns(o);
+  yield* appendElection(file, { kind: "pending", since, runs }).pipe(Effect.ignore);
+  yield* o.run.log(`cross-run evaluation pending for ${runs.join(", ")}: ${why}`);
+});
+
+/**
+ * Every Run the cross-run question is about: this one, its children, its parent and that
+ * parent's other children. A relationship has more than one side, and a `pending` naming
+ * one side leaves the others reporting that nothing is owed.
+ */
+const relatedRuns = Effect.fn("Engine.relatedRuns")(function* (o: EngineOptions) {
+  const store = new RunStore(o.env.stateDir);
+  const ids = new Set([o.run.id, ...o.run.record.children]);
+  const parentId = o.run.record.parent;
+  if (parentId !== null) {
+    ids.add(parentId);
+    const parent = yield* store.load(parentId).pipe(Effect.catch(() => Effect.succeed(null)));
+    for (const sibling of parent?.record.children ?? []) ids.add(sibling);
+  }
+  return [...ids];
+});
+
+/** What one approved verification may take before the finish stops waiting for it. */
+const VERIFICATION_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** One related Run as the cross-run question sees it: the vector, and what it is about. */
+interface CrossRunTarget {
+  readonly id: string;
+  readonly dir: string;
+  readonly intentVersion: number;
+  readonly cardId: string | null;
+  readonly goal: string | null;
+  readonly constraints: ReadonlyArray<string>;
+  readonly open: number;
+  /** The vector as one line, which is what the log and the pack both show. */
+  readonly line: string;
+}
+
+/**
+ * What a Judgement is given: every related Run's current Intent version, its newest card
+ * and how much drift is open on it. Read whether or not anyone can judge it, because the
+ * alternative is an election that says a check happened without ever looking.
+ */
+const versionVector = Effect.fn("Engine.versionVector")(function* (
+  o: EngineOptions,
+  /** Runs a `pending` evaluation named, which this snapshot is answering for as well. */
+  owed: ReadonlyArray<string> = [],
+) {
+  const store = new RunStore(o.env.stateDir);
+  const targets: CrossRunTarget[] = [];
+  for (const id of new Set([...(yield* relatedRuns(o)), ...owed])) {
+    const run = yield* store.load(id).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (run === null) continue;
+    const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
+    const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
+    const open = openReports(
+      yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
+    );
+    const card = cards.at(-1);
+    targets.push({
+      id,
+      dir: run.dir,
+      intentVersion: intent?.version ?? 0,
+      cardId: card?.id ?? null,
+      goal: intent?.goal ?? null,
+      constraints: (intent?.constraints ?? []).map(
+        (constraint) =>
+          `${constraint.id} (${constraint.kind}/${constraint.severity}): ${constraint.text}`,
+      ),
+      open: open.length,
+      line: `${id} v${intent?.version ?? 0} ${card === undefined ? "no card" : `${card.id}@${card.revision.head_sha.slice(0, 8)}`} drift ${open.length}`,
+    });
+  }
+  return targets;
+});
+
+/**
+ * The cross-run question, as the one thing the model is asked: what each related Run was
+ * for, what bounds it, and where each has got to. No diff and no transcript — this is a
+ * judgement about how Runs relate, not about anybody's code.
+ */
+function crossRunPack(targets: ReadonlyArray<CrossRunTarget>): string {
+  return [
+    "These Runs are related — a parent and its children, or siblings of one parent.",
+    "Report only where one Run's work breaks what another Run was told to respect.",
+    "",
+    ...targets.flatMap((target) => [
+      `run: ${target.id}`,
+      `  vector: ${target.line}`,
+      `  goal: ${target.goal ?? "(none stated)"}`,
+      ...target.constraints.map((constraint) => `  constraint: ${constraint}`),
+    ]),
+  ].join("\n");
+}
+
+/**
+ * The Judgement the election exists to make: one call over the version vector, and a
+ * `drift_report` into each target Run's **own** inbox, because that Run's Driver is the
+ * only writer of its drift journal and the only thing that can revalidate the vector the
+ * report was judged against (SPEC §9.6).
+ *
+ * Recorded against the electing Run rather than the Herd alone: the Run whose boundary
+ * triggered this is the one the call was for, and usage is shown per Run.
+ */
+const judgeCrossRun = Effect.fn("Engine.judgeCrossRun")(function* (
+  o: EngineOptions,
+  targets: ReadonlyArray<CrossRunTarget>,
+  at: string,
+) {
+  const intent = yield* intentOf(o);
+  if (intent === null) return "no Intent to charge a cross-run judgement to";
+  const key = yield* herdKeyOf(o);
+  const deps = key === null ? null : yield* judgementDeps(o);
+  if (key === null || deps === null) return "no Herd to charge a cross-run judgement to";
+
+  const asked = yield* askJudgement(deps, o.run.id, crossRunPack(targets));
+  if (asked.refused !== null) return asked.refused;
+
+  const byId = new Map(targets.map((target) => [target.id, target]));
+  let written = 0;
+  for (const report of asked.reports) {
+    // Only a Run this question was actually about: a report naming anything else is a
+    // model reaching outside what it was shown, and it is dropped rather than delivered.
+    const target = byId.get(report.run);
+    if (target === undefined) {
+      yield* o.run.log(`cross-run report about "${report.run}", which is not related; dropped`);
+      continue;
+    }
+    yield* writeInbox(target.dir, {
+      type: "drift_report",
+      requestId: yield* newRequestId().pipe(Effect.orDie),
+      report: { ...report, at, intent_version: target.intentVersion, resolution: "open" },
+      vector: { intentVersion: target.intentVersion, cardId: target.cardId },
+    }).pipe(Effect.ignore);
+    written += 1;
+  }
+  yield* o.run.log(`cross-run judged at ${at}: ${written} report(s) delivered`);
+  // Written down, so every target's final card can say the question was answered rather
+  // than that there never was one. A later `dirty` makes it stale again.
+  const elections = yield* electionsPath(o.env.stateDir, key);
+  yield* appendElection(elections, {
+    kind: "evaluated",
+    at,
+    by: o.run.id,
+    runs: targets.map((target) => target.id),
+  }).pipe(Effect.ignore);
+  return null;
+});
+
+/**
+ * The verifications the human granted, run once at the end for the rules that need one.
+ * At finish and nowhere else: a `command_exit` rule is checked at every boundary, and
+ * running a test suite each time would be a Run that spends its life verifying itself.
+ */
+const runGrantedVerifications = Effect.fn("Engine.runGrantedVerifications")(function* (
+  o: EngineOptions,
+) {
+  const intent = yield* intentOf(o);
+  const approved = intent?.authority.run_verification ?? [];
+  if (approved.length === 0) return;
+  const wanted = new Set(
+    (intent?.constraints ?? []).flatMap((constraint) =>
+      constraint.rule?.kind === "command_exit" ? [constraint.rule.name] : [],
+    ),
+  );
+  const already = new Set((yield* verificationsOf(o)).map((record) => record.name));
+  const run = {
+    id: o.run.id,
+    cwd: o.run.record.cwd,
+    worktree: o.run.record.worktree?.path ?? null,
+  };
+  for (const spec of approved) {
+    if (!wanted.has(spec.name) || already.has(spec.name)) continue;
+    // Bounded, because this runs while the Run is finishing: an approved command that
+    // hangs would hold the final card, the status and the worktree release behind it for
+    // ever, and one permitted verification cannot be allowed to do that.
+    const outcome = yield* runApproved(o.run.dir, run, approved, spec).pipe(
+      Effect.map((record) => `${record.result} (exit ${record.exit})`),
+      Effect.catch((cause) => Effect.succeed(`refused — ${cause.why}`)),
+      Effect.timeoutOption(VERIFICATION_TIMEOUT_MS),
+    );
+    yield* o.run.log(
+      `verification ${spec.name}: ${
+        outcome._tag === "Some" ? outcome.value : `gave up after ${VERIFICATION_TIMEOUT_MS / 1000}s`
+      }`,
+    );
+  }
+});
+
+/**
+ * What the Herd's elections say about this Run: `pending` when an evaluation names it and
+ * nobody has made it, `evaluated` only where a Judgement was actually written down —
+ * being elected is not a check, which is the claim §9.6 exists to avoid.
+ *
+ * The final card only. A slice written mid-run is about work in progress, and a Run whose
+ * Driver is still going has not yet failed to make the check.
+ */
+const crossRunState = Effect.fn("Engine.crossRunState")(function* (
+  o: EngineOptions,
+  kind: Card["kind"],
+) {
+  if (kind !== "final") return "none";
+  const key = yield* herdKeyOf(o);
+  if (key === null) return "none";
+  const file = yield* electionsPath(o.env.stateDir, key);
+  const lines = yield* electionsOf(file);
+  const pending = pendingEvaluation(lines);
+  if (pending !== null && pending.runs.includes(o.run.id)) return "pending" as const;
+  // `none` is "there was nothing to check", so a Judgement that was made has to say so.
+  return evaluatedFor(lines, o.run.id) ? ("evaluated" as const) : ("none" as const);
+});
+
+/**
+ * One card for one slice of work, from what is already recorded. Everything here is a
+ * view of evidence that exists: a card that said something nothing else recorded would be
+ * a claim nobody can check.
+ *
+ * Never fatal. A card is how a human learns what happened; failing a Run because it could
+ * not be written would be losing the work to protect the report of it.
+ */
+const writeCard = Effect.fn("Engine.writeCard")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  what: {
+    readonly kind: Card["kind"];
+    readonly step: string;
+    readonly claims: ReadonlyArray<string>;
+  },
+) {
+  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
+  const base = yield* baseOf(cwd);
+  const crossRun = yield* crossRunState(o, what.kind);
+  const snapshot = yield* fingerprint(cwd);
+  const intent = yield* intentOf(o);
+  const lines = yield* driftOf(o);
+  const open = openReports(lines);
+  const files = yield* shell("git", ["diff", "--name-only", `${base}..HEAD`], cwd);
+  const commits = yield* shell("git", ["log", "--oneline", `${base}..HEAD`], cwd);
+  const dirty = yield* shell("git", ["status", "--porcelain"], cwd);
+  const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+  const verifications = yield* verificationsOf(o);
+
+  const revision = {
+    branch: branch.code === 0 ? branch.stdout.trim() : null,
+    head_sha: snapshot.head_sha,
+    fingerprint: snapshot.fingerprint,
+    dirty: dirty.stdout.trim() !== "",
+  };
+  const links: Card["links"] = o.run.record.mr_url === null ? {} : { mr: o.run.record.mr_url };
+  const missing: string[] = [];
+  for (const constraint of intent?.constraints ?? []) {
+    const rule = constraint.rule;
+    if (rule?.kind !== "command_exit") continue;
+    if (!verifications.some((entry) => entry.name === rule.name))
+      missing.push(`no verification named ${rule.name}`);
+  }
+  for (const step of o.run.record.steps)
+    if (step.status === "done" && step.variants.every((variant) => variant.output === null))
+      missing.push(`${step.id} wrote no Output`);
+  for (const line of lines)
+    if (line.kind === "skipped") missing.push(`a judgement was skipped: ${line.reason}`);
+
+  const card = buildCard({
+    run: o.run.id,
+    kind: what.kind,
+    step: what.step,
+    iteration: o.run.record.iteration,
+    at: yield* nowIso(),
+    intentVersion: intent?.version ?? 0,
+    revision,
+    changes: {
+      files: files.stdout.split("\n").filter((line) => line.trim() !== ""),
+      commits: commits.stdout.split("\n").filter((line) => line.trim() !== ""),
+    },
+    requested: {
+      goal: intent?.goal ?? null,
+      constraints: (intent?.constraints ?? []).map((constraint) => constraint.text),
+    },
+    verifications,
+    claims: what.claims.map((text) => ({ text, ref: `${o.run.id}:${what.step}` })),
+    missing,
+    inspect: inspectFor({
+      worktree: o.run.record.worktree?.path ?? null,
+      base,
+      mr: o.run.record.mr_url,
+    }),
+    links,
+    drift: open.map((report) => report.id),
+    deliveries: (yield* deliveriesOf(o.env.stateDir, o.run.id).pipe(
+      Effect.catch(() => Effect.succeed([])),
+    )).map((entry) => entry.delivery.id),
+    aligned: alignment(intent, lines, ctx.judged).aligned,
+    crossRun,
+    significance: {
+      readiness: "claimed",
+      mrTouched: what.kind === "mr",
+      pendingChoice:
+        (yield* readChoice(o.run.dir).pipe(Effect.catch(() => Effect.succeed(null)))) !== null,
+      driftUnresolved: open.some((report) => report.resolution === "escalated"),
+      pendingProposal: (yield* pendingProposalsFor(o)).length > 0,
+      correctionUnacknowledged: open.some((r) => r.resolution === "correction_submitted"),
+      blockingDrift: open.some((report) => report.severity === "block"),
+      correctionSent: open.some((report) => report.correction !== undefined),
+      intentChanged: (intent?.version ?? 1) > 1,
+      ended: null,
+    },
+    narrative: null,
+  });
+  yield* appendCard(o.run.dir, card).pipe(Effect.ignore);
+  // Only something a human could act on: a routine card is the ordinary case, and a toast
+  // for every one of those is a toast nobody reads.
+  if (card.significance === "try-it")
+    yield* notify(o, "slice-ready", card.readiness, { step: card.id });
+  void ctx;
+  return card;
+});
+
+/** Proposals about this Run nobody has answered: a card written now is a `decision`. */
+const pendingProposalsFor = Effect.fn("Engine.pendingProposalsFor")(function* (o: EngineOptions) {
+  const key = yield* herdKeyOf(o);
+  if (key === null) return [];
+  const file = yield* proposalsPath(o.env.stateDir, key);
+  const lines = yield* readProposals(file).pipe(Effect.catch(() => Effect.succeed([])));
+  return pendingFor(lines, o.run.id, yield* Clock.currentTimeMillis);
+});
+
+/**
+ * A card per finished ticket, while the step is still running. That is the point of the
+ * checkpoint: a human sees a slice land without waiting for the whole step, and the
+ * agent's own words for it are carried as claims and labelled as claims.
+ */
+const cardsForCheckpoints = Effect.fn("Engine.cardsForCheckpoints")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  step: string,
+) {
+  for (const { file, checkpoint } of yield* readCheckpoints(o.run.dir).pipe(
+    Effect.catch(() => Effect.succeed([])),
+  )) {
+    if (checkpoint.status !== "done") continue;
+    if (ctx.steering.checkpointed.has(file)) continue;
+    ctx.steering.checkpointed.add(file);
+    yield* writeCard(o, ctx, { kind: "slice", step, claims: checkpoint.claims });
+    yield* o.run.log(`card for ${checkpoint.ticket} (${checkpoint.claims.length} claim(s))`);
+  }
+});
+
+/** Delivery states nothing follows, so a correction with one is not in flight. */
+const SETTLED: ReadonlySet<string> = new Set(["verified", "failed", "superseded", "expired"]);
+
+/** What a rule check compares against: the tree, the record, and what has been verified. */
+const ruleFacts = Effect.fn("Engine.ruleFacts")(function* (o: EngineOptions) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
+  // What the change is measured against. A worktree Collie made records no base of its
+  // own, so the merge-base with the default branch is what "since this work started"
+  // means; a repository that cannot answer leaves the comparison at HEAD, which reports
+  // only what is uncommitted rather than reporting nothing.
+  const base = yield* baseOf(cwd);
+  const committed = yield* shell("git", ["diff", "--name-only", `${base}..HEAD`], cwd);
+  const dirty = yield* shell("git", ["diff", "--name-only", "HEAD"], cwd);
+  // Untracked too: a file an agent created is exactly the case a `protected_paths` rule
+  // exists for, and it is in no diff until somebody commits it.
+  const untracked = yield* shell("git", ["ls-files", "--others", "--exclude-standard"], cwd);
+  const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+
+  const outputs: Record<string, Record<string, string>> = {};
+  for (const step of o.run.record.steps)
+    for (const variant of step.variants) {
+      if (!variant.output) continue;
+      const file = path.resolve(o.run.dir, variant.output);
+      const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
+      if (text !== "") outputs[step.id] = flattenOutput(text);
+    }
+
+  const verifications: Record<string, { exit: number; ref: string }> = {};
+  for (const record of yield* verificationsOf(o))
+    verifications[record.name] = { exit: record.exit, ref: record.id };
+
+  return {
+    changedFiles: [
+      ...new Set(
+        `${committed.stdout}\n${dirty.stdout}\n${untracked.stdout}`
+          .split("\n")
+          .map((line) => line.trim())
+          .filter((line) => line !== ""),
+      ),
+    ],
+    branch: branch.code === 0 ? branch.stdout.trim() : null,
+    mrTarget: mrTargetOf(o.run.record.mr_url),
+    outputs,
+    verifications,
+  };
+});
+
+/** The commit this Run's changes are measured from, or HEAD where nothing else answers. */
+const baseOf = Effect.fn("Engine.baseOf")(function* (cwd: string) {
+  const head = yield* shell("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], cwd);
+  const upstream = head.code === 0 ? head.stdout.trim() : "origin/main";
+  const merged = yield* shell("git", ["merge-base", upstream, "HEAD"], cwd);
+  return merged.code === 0 && merged.stdout.trim() !== "" ? merged.stdout.trim() : "HEAD";
+});
+
+/** A recorded merge request URL as the project and iid a rule compares against. */
+function mrTargetOf(url: string | null): { project: string; iid: string | null } | null {
+  if (url === null) return null;
+  const found = /https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/.exec(url);
+  return found ? { project: found[1]!, iid: found[2]! } : null;
+}
+
+/** What every send from this Driver is made with. One shape, one place it is built. */
+function dispatcherDeps(o: EngineOptions): dispatch.DispatcherDeps {
+  return {
+    stateDir: o.env.stateDir,
+    herdr: o.herdr,
+    log: (line: string) => o.run.log(line).pipe(Effect.ignore),
+  };
+}
+
+/**
+ * The registry entry for one of this Run's agents. A registered incarnation wins: it is
+ * what the agent was at start, and one rederived from the current listing is compared
+ * with itself, so a restarted agent would always pass.
+ *
+ * An entry with no incarnation is not an answer — herdr had not named a `terminal_id`
+ * yet when the agent started, and taking that as final would make a moment's gap in one
+ * listing an unsteerable Run for ever. That one is read live and written back, so the
+ * next delivery has something to check a restart against. Fan-out variants are never
+ * registered and take the same live path.
+ */
+const agentEntry = Effect.fn("Engine.agentEntry")(function* (
+  o: EngineOptions,
+  record: VariantRecord,
+  role = record.label,
+) {
+  const file = yield* registryPath(o.env.stateDir, scopeFor(o.env, o.run.record.cwd)).pipe(
+    Effect.catch(() => Effect.succeed(null)),
+  );
+  const registered =
+    file === null
+      ? null
+      : yield* readRegistry(file).pipe(
+          Effect.map((entries) => entries.find((entry) => entry.agent === record.agent) ?? null),
+          Effect.catch(() => Effect.succeed(null)),
+        );
+  if (registered !== null && deliverable(registered)) return { entry: registered, reason: null };
+
+  const live = yield* dispatch.entryFromLive(dispatcherDeps(o), {
+    role,
+    agent: record.agent,
+    paneId: record.paneId,
+    workspaceId: o.env.workspaceId,
+    runId: o.run.id,
+    workflow: o.run.record.workflow,
+  });
+  // Healed on the register, so the incarnation this delivery goes to is the one the next
+  // one is checked against.
+  if (registered !== null && live.entry !== null && file !== null)
+    yield* registerAgent(file, live.entry).pipe(Effect.ignore);
+  return live;
+});
+
+/** The boundary deliveries queued for this agent, taken off the queue as they are used. */
+function takeBoundaryFor(ctx: RunCtx, agent: string) {
+  const mine = ctx.steering.deliveries.filter(
+    (command) => command.deliver?.agent === agent && command.deliver.mode === "boundary",
+  );
+  ctx.steering.deliveries = ctx.steering.deliveries.filter((command) => !mine.includes(command));
+  // By the ordering rule, not by when the inbox happened to receive them: two messages
+  // due for one agent go into the prompt worst-waited first (SPEC §7.4).
+  return dispatch
+    .dispatchOrder(mine.flatMap((command) => (command.deliver ? [command.deliver] : [])))
+    .map((deliver) => ({
+      id: deliver.deliveryId,
+      text: deliver.text,
+      intentVersion: deliver.intentVersion,
+      attempt: deliver.attempt,
+    }));
+}
+
+/**
+ * A delivery that does not wait for the next prompt. Queuing one would leave it pending
+ * until `finish` expired it, which is neither the delivery the human confirmed nor the
+ * capability refusal that would have told them why it could not go.
+ */
+const deliverOutOfBand = Effect.fn("Engine.deliverOutOfBand")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  deliver: NonNullable<InboxCommandValue["deliver"]>,
+  requestId: string,
+) {
+  const record = [...ctx.groups.values()].find((entry) => entry.agent === deliver.agent);
+  if (record === undefined) {
+    yield* o.run.log(
+      `${deliver.mode} delivery for ${deliver.agent}, which this Run is not driving`,
+    );
+    return;
+  }
+  const sent = yield* sendTo(o, record, {
+    text: deliver.text,
+    cause: { kind: "steer", ref: deliver.deliveryId },
+    requestId,
+    attempt: deliver.attempt,
+    intentVersion: deliver.intentVersion,
+    mode: deliver.mode,
+  });
+  yield* o.run.log(`${deliver.mode} delivery ${deliver.deliveryId}: ${sent ? "sent" : "not sent"}`);
+});
+
+/**
+ * A steering item that travelled inside a step's prompt. It is its own delivery — it has
+ * its own id, its own acknowledgement and its own place in the ledger — and the note
+ * says which prompt carried it, because "sent" for a composed item means that prompt
+ * went out.
+ */
+const recordComposed = Effect.fn("Engine.recordComposed")(function* (
+  o: EngineOptions,
+  entry: AgentEntry,
+  item: { readonly id: string; readonly text: string; readonly intentVersion: number },
+  carriedBy: SubmitOutcome,
+) {
+  const terminalId = entry.incarnation?.terminalId;
+  if (terminalId === undefined) return;
+  const file = yield* ledgerPath(o.env.stateDir, terminalId);
+  const at = yield* nowIso();
+  const cause = { kind: "steer" as const, ref: item.id };
+  yield* appendLine(file, {
+    id: item.id,
+    at,
+    run: o.run.id,
+    incarnation: terminalId,
+    agent: entry.agent,
+    // The key the Dispatcher would compute: a delivery id cannot block a dispatched
+    // entry about the same work.
+    causal_key: causalKey(o.run.id, cause, item.intentVersion),
+    request_id: item.id,
+    cause,
+    mode: "boundary",
+    text_hash: textHash(item.text),
+    intent_version: item.intentVersion,
+    attempt: 1,
+    state: carriedBy.ok ? "submitted" : "failed",
+    // What is known of the carrier is all that is known of this: a prompt herdr saw no
+    // turn come of carried this item into the same uncertainty.
+    note: !carriedBy.ok
+      ? "the prompt it was composed into was not sent"
+      : carriedBy.submission === "unobserved"
+        ? `composed into ${carriedBy.id}; unobserved`
+        : `composed into ${carriedBy.id}`,
+  });
+});
+
+/**
+ * Everything the inbox has to say, folded into the Run's steering state. Called at the
+ * work boundary and once per poll while an agent works; a `stop` has already raised its
+ * own signal by the time this returns.
+ */
+const takeSteering = Effect.fn("Engine.takeSteering")(function* (o: EngineOptions, ctx: RunCtx) {
+  // What the agents have said they understood, before what anyone else has asked of
+  // them: an ack is about a delivery that has already gone, and reading it first keeps
+  // the ledger's account of one message in order.
+  yield* dispatch.readAcks(o.env.stateDir, o.run.dir, (line) =>
+    o.run.log(`ack: ${line}`).pipe(Effect.ignore),
+  );
+  yield* noticeOverrides(o, ctx);
+  const { taken, unreadable } = yield* readInboxMidStep(o.run.dir);
+  for (const file of unreadable) yield* o.run.log(`inbox: unreadable command ${file}`);
+  for (const command of taken) {
+    switch (command.type) {
+      case "hold": {
+        const why = command.reason ?? "no reason given";
+        ctx.steering.held = { reason: why };
+        yield* o.run.log(`held: ${why}`);
+        yield* o.out(`  ⏸ held: ${why}`);
+        break;
+      }
+      case "release": {
+        ctx.steering.held = null;
+        yield* o.run.log(`released: ${command.reason ?? "no reason given"}`);
+        yield* o.out(`  ▶ released`);
+        break;
+      }
+      case "intent_changed": {
+        const intent = yield* intentOf(o);
+        ctx.steering.intentVersion = intent?.version ?? command.version ?? 0;
+        yield* o.run.log(`intent v${ctx.steering.intentVersion} loaded`);
+        yield* supersedeOlderDrift(o, intent);
+        // Silent, but said: the board may not be open. Keyed by version, so a later
+        // change says so again.
+        yield* notify(o, "intent-changed", `now at v${ctx.steering.intentVersion}`, {
+          step: `v${ctx.steering.intentVersion}`,
+        });
+        break;
+      }
+      case "deliver":
+        if (command.deliver && command.deliver.mode !== "boundary") {
+          yield* deliverOutOfBand(o, ctx, command.deliver, command.requestId);
+          break;
+        }
+        // Queued, not sent: the Dispatcher is the only thing that sends.
+        ctx.steering.deliveries.push(command);
+        yield* o.run.log(`delivery queued for ${command.deliver?.agent ?? "an agent"}`);
+        break;
+      case "drift_report":
+        yield* recordDriftReport(o, ctx, command);
+        break;
+      default:
+        break;
+    }
+  }
+});
+
+/** Settles what `supersededBy` names: the Driver is the only writer of its own journal. */
+const supersedeOlderDrift = Effect.fn("Engine.supersedeOlderDrift")(function* (
+  o: EngineOptions,
+  intent: Intent | null,
+) {
+  if (intent === null) return;
+  const at = yield* nowIso();
+  for (const report of supersededBy(openReports(yield* driftOf(o)), intent)) {
+    yield* appendDrift(o.run.dir, { ...report, at, resolution: "superseded" }).pipe(Effect.ignore);
+    yield* o.run.log(
+      `drift ${report.constraint} superseded: judged at v${report.intent_version}, intent is v${intent.version}`,
+    );
+  }
+});
+
+/**
+ * A report another process judged, appended to this Run's drift journal — but only if it
+ * is still about this Run as it is now. The Driver is the only writer of its own drift
+ * journal precisely so that this check happens somewhere: a report judged against an
+ * older Intent or an older card is evidence about work that has moved on.
+ */
+const recordDriftReport = Effect.fn("Engine.recordDriftReport")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  command: InboxCommandValue,
+) {
+  const vector = command.vector;
+  if (!vector || command.report === undefined) {
+    yield* o.run.log("drift_report without a report or a vector, ignored");
+    return;
+  }
+  const intent = yield* intentOf(o);
+  const version = intent?.version ?? ctx.steering.intentVersion;
+  if (vector.intentVersion !== version) {
+    yield* o.run.log(
+      `drift_report_stale: judged at intent v${vector.intentVersion}, now v${version}`,
+    );
+    return;
+  }
+  // A report about an earlier card is evidence about work this Run has moved past.
+  if (vector.cardId !== null) {
+    const newest = (yield* readCards(o.run.dir).pipe(Effect.catch(() => Effect.succeed([])))).at(
+      -1,
+    );
+    if (newest?.id !== vector.cardId) {
+      yield* o.run.log(
+        `drift_report_stale: judged against card ${vector.cardId}, now ${newest?.id ?? "none"}`,
+      );
+      return;
+    }
+  }
+  const decoded = Schema.decodeUnknownOption(DriftReportSchema)(command.report);
+  if (decoded._tag === "None") {
+    yield* o.run.log("drift_report that is not a report, ignored");
+    return;
+  }
+  const report = decoded.value;
+  const lines = yield* driftOf(o);
+  const already = new Set(
+    openReports(lines).map((entry) => driftFindingKey(entry.constraint, entry.evidence)),
+  );
+  if (already.has(driftFindingKey(report.constraint, report.evidence))) {
+    yield* o.run.log(`drift_report duplicate of an open finding on ${report.constraint}, ignored`);
+    return;
+  }
+  yield* appendDrift(o.run.dir, report);
+  yield* o.run.log(`drift report recorded at intent v${version}`);
+});
+
+/**
+ * Nothing new goes out while a Run is held. The current step's agents have already been
+ * waited on by the time this is reached, so what is held is the *next* piece of work —
+ * the Driver is not interrupting anyone, it is declining to start anything.
+ */
+const holdUntilReleased = Effect.fn("Engine.holdUntilReleased")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+) {
+  if (!ctx.steering.held) return;
+  o.run.record.awaiting = "hold";
+  yield* o.run.save();
+  while (ctx.steering.held) {
+    yield* Effect.sleep(o.outputPollMs ?? 2000);
+    yield* takeSteering(o, ctx);
+  }
+  o.run.record.awaiting = null;
+  yield* o.run.save();
 });
 
 /**
@@ -2421,6 +3860,13 @@ const awaitAgent = Effect.fn("Engine.awaitAgent")(function* (
         ),
       );
     const now = yield* Clock.currentTimeMillis;
+    // Once per poll, so a hold or a message written while an agent works is seen within
+    // seconds rather than at the next question. It is two directory reads against the
+    // Run's own inbox — cheaper than the herdr round trip already made above.
+    yield* takeSteering(o, ctx);
+    // A slice a human can look at, while the step is still running. That is the whole
+    // point of a checkpoint: without this they wait for the step, which can be an hour.
+    yield* cardsForCheckpoints(o, ctx, record.label);
     if (status === "gone") return `${record.agent} is gone — herdr no longer has it`;
     if (status === null) {
       silentSince ??= now;
@@ -2467,12 +3913,13 @@ const awaitAgent = Effect.fn("Engine.awaitAgent")(function* (
     const due = Math.floor(quietFor / quiet);
     if (due > spell && record.nudges < 2) {
       spell = due;
-      yield* Effect.ignore(
-        o.herdr.agentPrompt(
-          record.agent,
-          nudgeText(record.harness, minutes(quietFor), record.nudges >= 1),
-        ),
-      );
+      yield* sendTo(o, record, {
+        text: nudgeText(record.harness, minutes(quietFor), record.nudges >= 1),
+        cause: { kind: "nudge", ref: `${record.agent}#${record.nudges + 1}` },
+        requestId: `${o.run.id}-nudge-${record.agent}-${record.nudges + 1}`,
+        attempt: record.nudges + 1,
+        intentVersion: ctx.steering.intentVersion,
+      });
       // The nudge is typed into the agent's own pane, so the next poll would read it
       // as activity, reset the deadline it is counting against, and nudge forever.
       // Re-baseline on our own writing; only the agent's next output counts.
@@ -3082,6 +4529,20 @@ const finish = Effect.fn("Engine.finish")(function* (
   announced = false,
 ) {
   const { run, out } = o;
+  // Before the Run is closed: whatever it ended up doing is what it will be read as
+  // having done, and this is the last moment the rules can be checked against it. The
+  // granted verifications run first, so a rule about one is checked against a result.
+  yield* runGrantedVerifications(o).pipe(Effect.ignore);
+  yield* checkDrift(o, ctx, "finish", "finish");
+  yield* standForElection(o, "finish", true);
+  yield* settleAtFinish(o, ctx);
+  const final = yield* writeCard(o, ctx, { kind: "final", step: "finish", claims: [] });
+  // Once, here: the finish is the only moment at which nobody is left to make it, which
+  // is what turns an owed evaluation into something a human has to know about (§9.6).
+  if (final?.cross_run === "pending")
+    yield* notify(o, "drift-unresolved", "cross_run_pending", { step: "cross_run" }).pipe(
+      Effect.ignore,
+    );
   run.record.status = status;
   run.record.finished_at = yield* nowIso();
   run.record.awaiting = null;

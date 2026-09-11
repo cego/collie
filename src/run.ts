@@ -447,7 +447,7 @@ const writeRecord = Effect.fn("writeRecord")(function* (dir: string, record: Run
   yield* fs.rename(tmp, path.join(dir, RUN_FILE));
 });
 
-function withRunLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) {
+export function withRunLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) {
   return Effect.gen(function* () {
     const path = yield* Path.Path;
     const lock = path.join(dir, `${RUN_FILE}.lock`);
@@ -739,6 +739,29 @@ export class RunStore {
       );
     }).pipe(Effect.withSpan("RunStore.nextSeq"));
   }
+}
+
+/**
+ * What a board row's marks need of a Run's record, in one place: two callers read it, and
+ * a `null` record is a Run whose file could not be loaded rather than a Run with no marks.
+ */
+export function markedFrom(record: RunRecord | null) {
+  return {
+    awaiting: record?.awaiting ?? null,
+    harnesses: record === null ? [] : runningHarnesses(record),
+  };
+}
+
+/** The harnesses a Run's running agents are on, deduplicated. */
+function runningHarnesses(record: RunRecord): ReadonlyArray<string> {
+  return [
+    ...new Set(
+      record.steps
+        .flatMap((step) => step.variants)
+        .filter((variant) => variant.status === "running")
+        .map((variant) => variant.harness),
+    ),
+  ];
 }
 
 /** The agents a Run's record still has running, by name. */

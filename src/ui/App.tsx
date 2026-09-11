@@ -12,6 +12,7 @@ import {
   clampSelection,
   nextQuestionId,
   runsRows,
+  sessionLocal,
   detailFor,
   emptyStateOf,
   footerKeys,
@@ -28,14 +29,15 @@ import {
   type AppState,
   type Asking,
   type Command,
+  type Filter,
   type Keyboarding,
   type Row,
   type ViewName,
 } from "./state";
 import { commitsBehind } from "../workspace";
-import type { Scope } from "../config";
 import { truncated } from "../views";
 import { Detail } from "./detail";
+import { ProposalPreview, SteerBox } from "./live";
 import { usePasteInto } from "./paste";
 import { Flow } from "./Flow";
 import type { Pending } from "./prompts";
@@ -84,6 +86,8 @@ const QUESTION_CHROME = 4;
  */
 const GUTTER = 4;
 const TITLE = 48;
+/** What a row's marks get: `⚠ manual` is the longest of them, plus a space. */
+const MARKS = 10;
 const DOING = 62;
 const AGE = 8;
 /**
@@ -292,6 +296,35 @@ export function App(props: AppProps) {
   const flow = () => props.pending?.() ?? null;
 
   /**
+   * The proposal on screen, resolved from what is pending rather than from what was
+   * drawn: a confirmation names an id and a hash, and one cached when the overlay opened
+   * would consent to a payload that has since been superseded.
+   */
+  const previewing = () => {
+    const id = props.state().previewing;
+    return props.state().live?.proposals.find((p) => p.id === id) ?? null;
+  };
+  const previewed = () => {
+    const found = previewing();
+    return found === null ? null : { id: found.id, hash: found.content_hash };
+  };
+  /**
+   * A proposal that has just appeared is put on screen. That is what makes `:` a
+   * conversation — the steer goes out and what came back is drawn — and it is the one
+   * thing the board does about a proposal on its own. It takes no pane focus: nothing
+   * but a pending question does.
+   */
+  let answered = new Set<string>();
+  createEffect(() => {
+    const pending = props.state().live?.proposals ?? [];
+    const fresh = pending.find((p) => !answered.has(p.id));
+    answered = new Set(pending.map((p) => p.id));
+    if (fresh && untrack(() => props.state().previewing) === null) {
+      tell({ _tag: "Preview", id: fresh.id });
+    }
+  });
+
+  /**
    * Everything a row or the footer asks for goes through here. `EditSetting` is the
    * app's own — it opens the editor rather than writing anything — and every other
    * command goes to the bridge. One path, so a click and a key cannot mean different
@@ -315,9 +348,11 @@ export function App(props: AppProps) {
   const keyboard = createMemo<Keyboarding>(() =>
     keyboardOn({
       flow: flow() !== null,
+      proposal: previewed(),
       choice: question(),
       filtering: typing(),
       setting: editingKey(),
+      steering: props.state().steerDraft,
     }),
   );
 
@@ -329,6 +364,7 @@ export function App(props: AppProps) {
       return setAsking({ ...was, typed: append(was.typed) });
     }
     if (at._tag === "Filter") return setFilter(append);
+    if (at._tag === "Steering") return tell({ _tag: "DraftSteer", text: append(at.draft) });
     if (at._tag === "Setting") setEditing({ ...at.setting, value: append(at.setting.value) });
   });
 
@@ -344,10 +380,10 @@ export function App(props: AppProps) {
       {
         on: keyboard(),
         view: props.state().view,
-        scope: props.state().scope,
         helping: helping(),
         asking: asking(),
-        filter: filter(),
+        filter: props.state().filter,
+        query: filter(),
         scrollable: panel() !== undefined,
         row: current(),
         rows: all(),
@@ -367,11 +403,17 @@ export function App(props: AppProps) {
       case "Filtering":
         setFilter(intent.filter);
         return setTyping(intent.typing);
+      case "Steering":
+        return tell({ _tag: "DraftSteer", text: intent.draft });
       case "Editing":
         return setEditing(intent.editing);
       case "Submitted":
         act(intent.command);
-        return setEditing(null);
+        // Both fields the key can submit are closed by submitting them: the Steer box
+        // has said what it had to say, and the value is written.
+        setEditing(null);
+        if (intent.command._tag === "Steer") tell({ _tag: "DraftSteer", text: null });
+        return;
       case "NextQuestion":
         return goToQuestion();
       case "Move":
@@ -403,7 +445,7 @@ export function App(props: AppProps) {
       <Show when={flow() === null && !helping()}>
         <Nav
           view={props.state().view}
-          scope={props.state().scope}
+          filter={props.state().filter}
           groups={props.state().wide?.groups.length ?? 0}
           repo={props.state().board.repo}
           behind={props.state().board.behind}
@@ -425,6 +467,7 @@ export function App(props: AppProps) {
               ref={setPanel}
               row={current()}
               detail={detail()}
+              live={props.state().live}
               cwd={props.state().board.cwd}
               overlay={false}
               dispatch={props.dispatch}
@@ -436,6 +479,7 @@ export function App(props: AppProps) {
             ref={setPanel}
             row={current()}
             detail={detail()}
+            live={props.state().live}
             cwd={props.state().board.cwd}
             overlay
             dispatch={props.dispatch}
@@ -450,12 +494,27 @@ export function App(props: AppProps) {
       <Show when={question() && !helping()}>
         <Question choice={question()!} asking={asking()} dispatch={props.dispatch} />
       </Show>
+      {/* What a confirmation is consent to, over everything: a human answering one is
+          answering it, and the keys behind it act on rows they cannot see. */}
+      <Show when={previewing() && !helping()}>
+        <ProposalPreview proposal={previewing()!} />
+      </Show>
+      {/* The Steer box, at the bottom of the Runs view and only while it is open: a
+          field that is always on screen is a field the board's own keys type into. */}
+      <Show when={props.state().steerDraft !== null && !helping() && !previewing()}>
+        <SteerBox
+          draft={props.state().steerDraft!}
+          target={current()?.runId ?? null}
+          turns={props.state().live?.conversation ?? []}
+          pending={props.state().live?.proposals.length ?? 0}
+        />
+      </Show>
       <Show when={!helping()}>
         <Footer
           row={current()}
           dispatch={act}
           on={keyboard()}
-          scope={props.state().scope}
+          boardFilter={props.state().filter}
           panel={panelKeys()}
           note={ownNote() ?? props.state().note}
           needsYou={needsYouStatus(rows(), selected())}
@@ -527,8 +586,8 @@ function Help() {
  */
 function Nav(props: {
   view: ViewName;
-  /** Which scope the Runs view is showing, and how many groups are in a wide one. */
-  scope: Scope;
+  /** What the Runs view is filtered to, and how many groups are in an unfiltered one. */
+  filter: Filter;
   groups: number;
   repo: string;
   /** How far behind its remote this installation is, where that is worth saying. */
@@ -538,7 +597,7 @@ function Nav(props: {
 }) {
   /** Which scope, with the count of what is in it once that board has been read. */
   const scope = () => {
-    if (props.scope !== "all") return "  local";
+    if (sessionLocal(props.filter)) return "  local";
     return props.groups > 0 ? `  all · ${props.groups} workspace(s)` : "  all";
   };
   return (
@@ -557,14 +616,14 @@ function Nav(props: {
       {/* The launch flow, without a popup: `p` does the same thing from the keyboard,
           and like `p` it belongs to the board of this workspace — a run starts in this
           checkout, which is not what a board of every workspace is about. */}
-      <Show when={props.scope === "local"}>
+      <Show when={sessionLocal(props.filter)}>
         <text fg={ACCENT} onMouseDown={() => props.onNewRun()}>
           {"  ＋ New run"}
         </text>
       </Show>
       {/* The scope is the one thing about this board that is not obvious from what is
           on it, so it says which one this is and which key changes it. */}
-      <text fg={props.scope === "all" ? WIDE : DIM}>{scope()}</text>
+      <text fg={sessionLocal(props.filter) ? DIM : WIDE}>{scope()}</text>
       {/* Shown, never sent: being a few commits behind is worth seeing here and not
           worth interrupting anyone for. */}
       <Show when={(props.behind ?? 0) > 0}>
@@ -657,6 +716,17 @@ function RowLine(props: { row: Row; selected: boolean; onSelect: (id: string) =>
         attributes={props.selected || heading() ? TextAttributes.BOLD : TextAttributes.NONE}
       >
         {props.row.title}
+      </text>
+      {/* What steering found, between the name and what the row is doing: a mark is
+          what makes a row worth selecting, so it must be visible without selecting it.
+          It takes no width at all on a row that has none — the columns are shared out by
+          a pane that is narrower than they want at every ordinary width, and a marks
+          column that was always there would clip every other row's detail for nothing. */}
+      <text
+        style={{ width: props.row.marks === "" ? 0 : MARKS, height: 1, flexShrink: 1 }}
+        fg={ACCENT}
+      >
+        {props.row.marks}
       </text>
       <text style={{ width: DOING, height: 1, flexShrink: 1 }} fg={heading() ? undefined : DIM}>
         {props.row.detail}
@@ -768,8 +838,8 @@ function Footer(props: {
   filter: string;
   /** How many rows the filter left, so a narrowed list says how narrow it is. */
   matched: number | null;
-  /** Which scope is showing, so `g` can offer the other one by name. */
-  scope: Scope;
+  /** What the board is filtered to, so `g` can offer the other one by name. */
+  boardFilter: Filter;
   /** Whether anything on this board is asking, which is what `n` can act on. */
   questions: boolean;
 }) {
@@ -783,14 +853,14 @@ function Footer(props: {
   const own = () =>
     footerActions({
       row: props.row,
-      scope: props.scope,
+      filter: props.boardFilter,
       questions: props.questions,
       on: props.on,
     });
   // The keys the footer offers are the ones the Selection can actually be asked for,
   // plus the globals; a key with nothing to act on is a lie, and the rest of them
   // live behind `?`.
-  const keys = () => footerKeys({ panel: props.panel, on: props.on, scope: props.scope });
+  const keys = () => footerKeys({ panel: props.panel, on: props.on, filter: props.boardFilter });
   const status = () => {
     const value = editing();
     if (value) return `${value.key} = ${value.value}\u258f`;

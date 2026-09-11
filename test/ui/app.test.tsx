@@ -75,7 +75,7 @@ function listLines(frame: string): string[] {
 function appState(over: Partial<AppState> = {}): AppState {
   return {
     view: "runs",
-    scope: "local",
+    filter: { kind: "workspace", id: "w1" },
     wide: null,
     board: board(),
     note: NOTE,
@@ -83,6 +83,10 @@ function appState(over: Partial<AppState> = {}): AppState {
     definitions: null,
     settings: null,
     detail: null,
+    marks: {},
+    live: null,
+    steerDraft: null,
+    previewing: null,
     ...over,
   };
 }
@@ -1241,10 +1245,10 @@ test("g widens the board to the whole session, and the nav says which scope it i
 
       app.mockInput.pressKey("g");
       yield* app.flush;
-      expect(app.acted()).toEqual([{ _tag: "ToggleScope" }]);
+      expect(app.acted()).toEqual([{ _tag: "ToggleFilter" }]);
 
       // The bridge answers the toggle and the next read carries the wide board.
-      const wide = yield* mount(appState({ scope: "all", wide: wideView() }), WIDE_PANE);
+      const wide = yield* mount(appState({ filter: { kind: "all" }, wide: wideView() }), WIDE_PANE);
       const frame = wide.frame();
       expect(frame).toContain("all · 2 workspace(s)");
       expect(frame).toContain("g local");
@@ -1264,21 +1268,16 @@ test("g widens the board to the whole session, and the nav says which scope it i
 test("a run in another workspace is answered from the wide board", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ scope: "all", wide: wideView() }), WIDE_PANE);
+      const app = yield* mount(appState({ filter: { kind: "all" }, wide: wideView() }), WIDE_PANE);
 
-      // The group row is where the Selection lands, and Enter on it is a jump to that
-      // workspace — one command, and the footer says the key is there.
+      // The group row is where the Selection lands, and Enter on it narrows the board
+      // to that workspace: a workspace is a filter over the Herd's one board, not a
+      // board of its own (ADR-0009).
       yield* app.click(4, app.lineOf("Implement · control-plane-glass"));
       expect(app.acted()).toEqual([]);
-      expect(app.frame()).toContain("Enter go to it");
       app.mockInput.pressEnter();
       yield* app.flush;
-      expect(app.acted()).toEqual([
-        {
-          _tag: "Jump",
-          jump: { kind: "workspace", workspaceId: "w1", label: "Implement · control-plane-glass" },
-        },
-      ]);
+      expect(app.acted()).toEqual([{ _tag: "SetFilter", filter: { kind: "workspace", id: "w1" } }]);
 
       // Selecting the waiting run in the other workspace opens its question under it,
       // rendered exactly as the local board renders one. A run inside a group is named
@@ -1303,7 +1302,7 @@ test("the tree's columns line up at every depth, and on a pane too narrow for th
       // in the same place whatever a row's depth — which is what makes a tree of four
       // levels comparable down a column instead of a staircase.
       for (const width of [WIDE_PANE, 100]) {
-        const app = yield* mount(appState({ scope: "all", wide: wideView() }), width);
+        const app = yield* mount(appState({ filter: { kind: "all" }, wide: wideView() }), width);
         // Each row's detail column, by the one word only that row's detail carries:
         // the workspace, the run under it, and the agent under that.
         const column = (detail: string) => app.columnOf(detail, detail);
@@ -1353,7 +1352,7 @@ test("no row changes height when the mouse crosses it", () =>
       // A row used to grow a line of buttons when it was selected or hovered, so moving
       // the mouse across the list reflowed everything under the pointer. Unreadable on
       // a board of the whole session, where every row is one line of a tree.
-      const app = yield* mount(appState({ scope: "all", wide: wideView() }), WIDE_PANE);
+      const app = yield* mount(appState({ filter: { kind: "all" }, wide: wideView() }), WIDE_PANE);
       const before = app.lineOf("Collie");
 
       yield* app.hover(4, app.lineOf("Implement · control-plane-glass"));
@@ -1383,9 +1382,10 @@ test("Esc clears the filter from the board, not only while typing in it", () =>
       expect(app.frame()).toContain("Implement · add-a-picker");
       expect(app.frame()).not.toContain("/worktree");
 
-      // And with nothing to clear it does what it did before, which is nothing.
+      // And with nothing left to clear it widens the board instead: narrowing to one
+      // workspace is a filter too, and the way out of both is the same key.
       yield* app.escape;
-      expect(app.acted()).toEqual([]);
+      expect(app.acted()).toEqual([{ _tag: "SetFilter", filter: { kind: "all" } }]);
       expect(app.frame()).toContain("Implement · add-a-picker");
     }),
   ));
@@ -1898,7 +1898,7 @@ test("n reaches a question the filter is hiding, and clears the filter to show i
 test("n on a wide board selects another workspace's question where it is", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ scope: "all", wide: wideView() }), WIDE_PANE);
+      const app = yield* mount(appState({ filter: { kind: "all" }, wide: wideView() }), WIDE_PANE);
 
       app.mockInput.pressKey("n");
       yield* app.flush;
@@ -2041,5 +2041,74 @@ test("the detail panel says why a Run stopped and which actions are safe", () =>
       expect(said).toContain("used all 5 review");
       expect(said).toContain("kept: plan");
       expect(said).toContain("safe now: show, logs,");
+    }),
+  ));
+
+test(": opens the Steer box, and what it sends names the selected run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ board: BOARD }));
+
+      app.mockInput.pressKey(":");
+      yield* app.flush;
+      expect(app.acted()).toEqual([{ _tag: "DraftSteer", text: "" }]);
+
+      // The draft is state, so the box draws whatever the bridge has: the board asks
+      // for each character and redraws with what came back.
+      yield* app.setState(appState({ board: BOARD, steerDraft: "slow down" }));
+      expect(app.frame()).toContain("slow down");
+      expect(app.frame()).toContain("r1");
+
+      app.mockInput.pressEnter();
+      yield* app.flush;
+      // Sent, and the box closed behind it: a field left open is one the board's own
+      // keys type into.
+      expect(app.acted()).toContainEqual({ _tag: "Steer", text: "slow down", runId: "r1" });
+      expect(app.acted().at(-1)).toEqual({ _tag: "DraftSteer", text: null });
+    }),
+  ));
+
+test("a proposal that has appeared is drawn, and Enter confirms exactly what is on it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const proposal = {
+        kind: "proposal" as const,
+        id: "p1",
+        content_hash: "deadbeef",
+        interpretation: "You want the implementer to slow down.",
+        targets: [{ run: "r1" }],
+        actions: [{ kind: "hold" as const, run: "r1" }],
+        allowed_now: [],
+        created_at: "2026-09-02T12:00:00.000Z",
+        expires_at: "2026-09-02T12:30:00.000Z",
+        intent_versions: { r1: 1 },
+        by: "board",
+        state: "pending" as const,
+      };
+      const live = {
+        run: "r1",
+        cards: [],
+        drift: [],
+        deliveries: [],
+        conversation: [],
+        proposals: [proposal],
+        pending: [],
+        ownership: null,
+      };
+      const app = yield* mount(appState({ board: BOARD, live }));
+
+      // Drawn without being asked for: a proposal waiting on an answer is the board
+      // telling the human it is waiting, and it takes no pane focus to do it.
+      expect(app.acted()).toEqual([{ _tag: "Preview", id: "p1" }]);
+      yield* app.setState(appState({ board: BOARD, live, previewing: "p1" }));
+      expect(app.frame()).toContain("You want the implementer to slow down.");
+
+      app.mockInput.pressEnter();
+      yield* app.flush;
+      expect(app.acted().at(-1)).toEqual({
+        _tag: "ConfirmProposal",
+        id: "p1",
+        hash: "deadbeef",
+      });
     }),
   ));

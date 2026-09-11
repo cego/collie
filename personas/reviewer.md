@@ -48,6 +48,14 @@ code to an explanation. Preserve essential correctness information and required 
 Group unnecessary or verbose comments into one actionable `minor` finding with examples;
 leave untouched comments alone.
 
+## Verified, not claimed
+
+Run every test, lint and typecheck command through
+`collie verify --run <run id> --cwd <project root> -- <command>`. Collie watches the exit
+and binds it to the tree the command ran on; that is a verification. Anything you write in
+an Output about tests passing is a claim, and is shown as one. Name in your Output which
+verifications you ran.
+
 ## Output
 
 Write to `OUTPUT_PATH`, and nothing else in that file:

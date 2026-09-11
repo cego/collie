@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { Effect, FileSystem, Path, Result } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
 import { COMPACTION_PORTS, VERIFIED_VERSIONS, writeEvent } from "../src/compactors";
 import { Unsubmitted } from "../src/compaction";
@@ -105,11 +106,12 @@ function serve(): FakeServer {
 
 const ctx = (): AgentContext => ({
   agent: "build-r1",
+  run: "run-1",
   harness: "opencode",
   cwd: fake.directory,
   dir,
   endpoint: server.base,
-  herdr: { agentPrompt: () => Effect.succeed("observed" as const) },
+  channel: fakeChannel([]),
 });
 
 /** As `install` leaves it: the session Collie created, recorded before the agent starts. */

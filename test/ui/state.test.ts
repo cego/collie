@@ -8,6 +8,7 @@ import {
   needsYouStatus,
   nextQuestionId,
   runIdOf,
+  runsRows,
   answerFor,
   clampSelection,
   keyboardOn,
@@ -15,6 +16,8 @@ import {
   optionWindow,
   pasteInto,
   rereads,
+  sessionLocal,
+  type Filter,
   retarget,
   rowsOf,
   NEEDS_YOU,
@@ -23,8 +26,10 @@ import {
   wideRows,
   type KeyContext,
   type Keypress,
+  type AppState,
   type Row,
 } from "../../src/ui/state";
+import { NO_MARKS } from "../../src/lines";
 import { DateTime } from "effect";
 import { ago, agoShort, took } from "../../src/time";
 import type { PendingChoice } from "../../src/driver";
@@ -135,7 +140,7 @@ test("an agent is listed under the run it works for", () => {
   // Every agent row keeps what a key and an action are aimed at.
   expect(rows[1]!.agent).toBe("implementer-1");
   expect(rows[1]!.key).toBe("1");
-  expect(actionsFor(rows[1]!, "local").map((a) => a.key)).toEqual(["1"]);
+  expect(actionsFor(rows[1]!, HERE).map((a) => a.key)).toEqual(["1"]);
 });
 
 test("a run's children are listed under it, and its agents under those", () => {
@@ -227,7 +232,7 @@ test("an agent whose run is not on the board goes in a group of its own", () => 
   expect(
     actionsFor(
       rows.find((r) => r.kind === "header")!,
-      "local",
+      HERE,
     ),
   ).toEqual([]);
 });
@@ -454,14 +459,19 @@ test("Enter on a row says where to go, from a key rather than a cached id", () =
   // where you went, and "went to Implement" says less than the run's whole name.
   expect(active!.jump).toEqual({ kind: "run", runId: "r1", label: "Implement · r1" });
   expect(agentRow!.jump).toEqual({ kind: "agent", agent: "implementer-1", label: "Implementer" });
-  // Enter is what does it, on every one of them, and it is the same key on every row
-  // rather than one of the row's own actions.
-  for (const row of [workspace, active, agentRow]) {
+  // Enter is what does it, on a run and on an agent alike, and it is the same key on
+  // every row rather than one of the row's own actions. A workspace row is the one
+  // exception: it is a filter, so Enter narrows the board to it instead.
+  for (const row of [active, agentRow]) {
     expect(keyIntent(keys({ row }), press("\r", { name: "return" }))).toEqual({
       _tag: "Do",
       command: { _tag: "Jump", jump: row!.jump! },
     });
   }
+  expect(keyIntent(keys({ row: workspace }), press("\r", { name: "return" }))).toEqual({
+    _tag: "Do",
+    command: { _tag: "SetFilter", filter: { kind: "workspace", id: "w28" } },
+  });
 });
 
 test("nothing under Elsewhere is somewhere this session can go", () => {
@@ -498,7 +508,7 @@ test("Enter goes to it in the local scope too", () => {
 test("a History row is not somewhere to jump: its run is a record, not a pane", () => {
   const rows = viewRows({
     view: "history",
-    scope: "local",
+    filter: { kind: "workspace", id: "w1" },
     wide: null,
     board: board(),
     note: null,
@@ -506,6 +516,10 @@ test("a History row is not somewhere to jump: its run is a record, not a pane", 
     definitions: null,
     settings: null,
     detail: null,
+    marks: {},
+    live: null,
+    steerDraft: null,
+    previewing: null,
   });
 
   expect(rows[0]!.jump).toBeNull();
@@ -517,16 +531,16 @@ test("the keys that start something are this Session's, not a wide board's", () 
   const row = rowsOf(board({ active: [run("r1")] }))[0]!;
 
   for (const key of ["p", "u", "f", "s"]) {
-    expect(keyIntent(keys({ row, scope: "local" }), press(key))).not.toBeNull();
-    expect(keyIntent(keys({ row, scope: "all" }), press(key))).toBeNull();
+    expect(keyIntent(keys({ row, filter: HERE }), press(key))).not.toBeNull();
+    expect(keyIntent(keys({ row, filter: EVERYWHERE }), press(key))).toBeNull();
   }
   // What a wide row can still be asked for goes through, so gating them is not a gate
   // on everything after.
-  expect(keyIntent(keys({ row, scope: "all" }), press("l"))).toEqual({
+  expect(keyIntent(keys({ row, filter: EVERYWHERE }), press("l"))).toEqual({
     _tag: "Do",
     command: { _tag: "OpenLog", runId: "r1" },
   });
-  expect(keyIntent(keys({ row, scope: "all" }), press("\r", { name: "return" }))).toEqual({
+  expect(keyIntent(keys({ row, filter: EVERYWHERE }), press("\r", { name: "return" }))).toEqual({
     _tag: "Do",
     command: { _tag: "Jump", jump: row.jump! },
   });
@@ -540,29 +554,29 @@ test("starting a workflow is this Session's, so a wide row is not offered one", 
   // SAFETY: one recent row goes in, so one row comes out.
   const [row] = rowsOf(board({ recent: [run("r0", { target, fixable: true })] })) as [Row];
 
-  expect(actionsFor(row, "local").map((a) => a.key)).toEqual(["l", "x", "a", "o", "w"]);
+  expect(actionsFor(row, HERE).map((a) => a.key)).toEqual(["l", "x", "a", "o", "w"]);
   // The merge request is still the run's own: opening it and posting its review act on
   // the run, not on this checkout.
-  expect(actionsFor(row, "all").map((a) => a.key)).toEqual(["l", "o", "w"]);
+  expect(actionsFor(row, EVERYWHERE).map((a) => a.key)).toEqual(["l", "o", "w"]);
   // And the keys go with the buttons, so neither can be pressed from a wide board.
-  expect(keyIntent(keys({ row, scope: "local" }), press("x"))).toEqual({
+  expect(keyIntent(keys({ row, filter: HERE }), press("x"))).toEqual({
     _tag: "Do",
     command: { _tag: "FixFindings", runId: "r0" },
   });
-  expect(keyIntent(keys({ row, scope: "all" }), press("x"))).toBeNull();
+  expect(keyIntent(keys({ row, filter: EVERYWHERE }), press("x"))).toBeNull();
 });
 
 test("a hand-off is this Session's, so it is not offered from a board of all of them", () => {
   const row = rowsOf(board({ active: [run("r1")] }))[0]!;
   const key = press("s");
 
-  expect(keyIntent(keys({ row, scope: "local" }), key)).toEqual({
+  expect(keyIntent(keys({ row, filter: HERE }), key)).toEqual({
     _tag: "Do",
     command: { _tag: "SendReview", runId: "r1" },
   });
   // Nothing moves the register or a hand-off across workspaces, so `s` on a wide board
   // would act on this Session with another workspace's review.
-  expect(keyIntent(keys({ row, scope: "all" }), key)).toBeNull();
+  expect(keyIntent(keys({ row, filter: EVERYWHERE }), key)).toBeNull();
 });
 
 test("a re-sorted list keeps the same run selected", () => {
@@ -603,15 +617,15 @@ test("a row's actions name the row, not the newest run", () => {
   // length is asserted above, so the three rows are there in that order.
   const [active, working, recent] = rows as [Row, Row, Row];
 
-  expect(actionsFor(working, "local").map((a) => [a.key, a.command])).toEqual([
+  expect(actionsFor(working, HERE).map((a) => [a.key, a.command])).toEqual([
     ["3", { _tag: "FocusAgent", agent: "rev-1" }],
   ]);
-  expect(actionsFor(active, "local").map((a) => [a.key, a.command])).toEqual([
+  expect(actionsFor(active, HERE).map((a) => [a.key, a.command])).toEqual([
     ["l", { _tag: "OpenLog", runId: "r1" }],
     ["k", { _tag: "StopRun", runId: "r1" }],
   ]);
   // A finished run has no driver to stop; offering the key would be a lie.
-  expect(actionsFor(recent, "local").map((a) => a.key)).toEqual(["l"]);
+  expect(actionsFor(recent, HERE).map((a) => a.key)).toEqual(["l"]);
 });
 
 test("a clean review can still be opened in a browser", () => {
@@ -623,8 +637,8 @@ test("a clean review can still be opened in a browser", () => {
 
   // Nothing to fix and nothing to post, but the merge request is still there to look at:
   // opening it has nothing to do with whether the review found anything.
-  expect(actionsFor(clean, "local").map((a) => a.key)).toEqual(["l", "a", "w"]);
-  expect(actionsFor(withFindings, "local").map((a) => a.key)).toEqual(["l", "x", "a", "o", "w"]);
+  expect(actionsFor(clean, HERE).map((a) => a.key)).toEqual(["l", "a", "w"]);
+  expect(actionsFor(withFindings, HERE).map((a) => a.key)).toEqual(["l", "x", "a", "o", "w"]);
 });
 
 test("one thing owns the keyboard, in one order", () => {
@@ -914,7 +928,7 @@ test("nothing acts on a header row", () => {
   // It is a name for the group under it: selectable like every row, and inert, so no
   // key and no button is ever offered for one.
   expect(rows[0]!.kind).toBe("header");
-  expect(actionsFor(rows[0]!, "local")).toEqual([]);
+  expect(actionsFor(rows[0]!, HERE)).toEqual([]);
 });
 
 test("the footer counts the runs waiting on you, and only while the Selection is elsewhere", () => {
@@ -940,14 +954,14 @@ test("how long something took reads in the coarsest unit that still says it", ()
 
 test("the footer offers the panel's keys and the globals, and no more", () => {
   const globals = "g all · p run · ? keys · q close";
-  expect(footerKeys({ panel: [], on: { _tag: "Board" }, scope: "local" })).toBe(globals);
-  expect(footerKeys({ panel: ["t log tail"], on: { _tag: "Board" }, scope: "local" })).toBe(
+  expect(footerKeys({ panel: [], on: { _tag: "Board" }, filter: HERE })).toBe(globals);
+  expect(footerKeys({ panel: ["t log tail"], on: { _tag: "Board" }, filter: HERE })).toBe(
     `t log tail · ${globals}`,
   );
   // `g` names where it goes, not where it is: the nav is what says which scope this is.
   // And starting a run is this Session's, so a board of every workspace does not offer
   // it — the key is gated the same way.
-  expect(footerKeys({ panel: [], on: { _tag: "Board" }, scope: "all" })).toBe(
+  expect(footerKeys({ panel: [], on: { _tag: "Board" }, filter: EVERYWHERE })).toBe(
     "g local · ? keys · q close",
   );
 });
@@ -955,17 +969,17 @@ test("the footer offers the panel's keys and the globals, and no more", () => {
 test("a field that has taken the keys says what they do instead", () => {
   // Every other key is inert while one of these has the keyboard, so offering the
   // board's would be a lie — `k` typed a `k` while `[k stop]` stopped the run.
-  expect(footerKeys({ panel: [], on: { _tag: "Choice", choice: MENU }, scope: "local" })).toBe(
+  expect(footerKeys({ panel: [], on: { _tag: "Choice", choice: MENU }, filter: HERE })).toBe(
     "↑↓ move · Enter choose · Esc leave the run open",
   );
   expect(
     footerKeys({
       panel: [],
       on: { _tag: "Setting", setting: { key: "model", value: "opus" } },
-      scope: "local",
+      filter: HERE,
     }),
   ).toBe("type a value · Enter set it · Esc leave it");
-  expect(footerKeys({ panel: [], on: { _tag: "Filter" }, scope: "local" })).toBe(
+  expect(footerKeys({ panel: [], on: { _tag: "Filter" }, filter: HERE })).toBe(
     "type to narrow · Enter keep it · Esc drop it",
   );
 });
@@ -1025,15 +1039,19 @@ test("markdown lines carry the one thing that makes a long review skimmable", ()
   expect(markdownLines("#!/bin/sh").map((l) => l.style)).toEqual(["plain"]);
 });
 
+/** The two boards the Session-local keys distinguish: this workspace's, and the Herd's. */
+const HERE: Filter = { kind: "workspace", id: "w1" };
+const EVERYWHERE: Filter = { kind: "all" };
+
 /** The board as the keyboard sees it, with only what a test cares about set. */
 function keys(over: Partial<KeyContext> = {}): KeyContext {
   return {
     on: { _tag: "Board" },
     view: "runs",
-    scope: "local",
+    filter: HERE,
     helping: false,
     asking: { index: 0, typed: "" },
-    filter: "",
+    query: "",
     scrollable: false,
     row: null,
     rows: [],
@@ -1042,6 +1060,28 @@ function keys(over: Partial<KeyContext> = {}): KeyContext {
     ...over,
   };
 }
+
+/** The whole of what the app draws, with everything a test does not care about empty. */
+function state(): AppState {
+  return {
+    view: "runs",
+    filter: { kind: "all" },
+    wide: null,
+    board: board(),
+    note: null,
+    history: null,
+    definitions: null,
+    settings: null,
+    detail: null,
+    marks: {},
+    live: null,
+    steerDraft: null,
+    previewing: null,
+  };
+}
+
+/** A bare Row, for the keys that only need one to exist. */
+const ROW: Row = rowsOf(board({ active: [run("r1")] }))[0]!;
 
 /** One keypress, as OpenTUI reports one. */
 function press(sequence: string, over: Omit<Keypress, "sequence"> = {}) {
@@ -1086,7 +1126,7 @@ test("a literal question mark reaches the text it was typed into", () => {
       press("?"),
     ),
   ).toEqual({ _tag: "Answered", asking: { index: 0, typed: "why?" }, value: null });
-  expect(keyIntent(keys({ on: { _tag: "Filter" }, filter: "why" }), press("?"))).toEqual({
+  expect(keyIntent(keys({ on: { _tag: "Filter" }, query: "why" }), press("?"))).toEqual({
     _tag: "Filtering",
     filter: "why?",
     typing: true,
@@ -1103,7 +1143,7 @@ test("a literal question mark reaches the text it was typed into", () => {
 });
 
 test("the filter keeps the keyboard until Enter or Esc, and Enter keeps the text", () => {
-  const typing = keys({ on: { _tag: "Filter" }, filter: "revi" });
+  const typing = keys({ on: { _tag: "Filter" }, query: "revi" });
 
   expect(keyIntent(typing, press("e"))).toEqual({
     _tag: "Filtering",
@@ -1132,13 +1172,18 @@ test("the filter keeps the keyboard until Enter or Esc, and Enter keeps the text
 });
 
 test("Esc on the board drops a filter it is still narrowed by, and nothing else", () => {
-  const narrowed = keys({ filter: "gitlab" });
+  const narrowed = keys({ query: "gitlab" });
   const esc = press("\x1b", { name: "escape" });
 
   expect(keyIntent(narrowed, esc)).toEqual({ _tag: "Filtering", filter: "", typing: false });
   // With nothing set it is not the filter's key at all, so the board does what it did
   // before: nothing.
-  expect(keyIntent(keys({ filter: "" }), esc)).toBeNull();
+  // With none set it widens the board instead: narrowing to one workspace is a filter
+  // too, and the way out of both has to be the same key.
+  expect(keyIntent(keys({ query: "" }), esc)).toEqual({
+    _tag: "Do",
+    command: { _tag: "SetFilter", filter: { kind: "all" } },
+  });
 });
 
 test("a Settings row being edited owns the keyboard until it is sent or abandoned", () => {
@@ -1365,4 +1410,178 @@ test("the next-question key is the board's, unless a field is taking text", () =
       press("n", { name: "n" }),
     ),
   ).toEqual({ _tag: "Editing", editing: { key: "model", value: "opun" } });
+});
+
+// --- The Home board's filter ---------------------------------------------------------
+
+test("the filter says which board this is, and the Session-local keys read it", () => {
+  // Narrowed either way is one Session's: a Run belongs to the workspace it was started
+  // in, so a board filtered to one is as local as a board filtered to that workspace.
+  expect(sessionLocal({ kind: "all" })).toBe(false);
+  expect(sessionLocal({ kind: "workspace", id: "w1" })).toBe(true);
+  expect(sessionLocal({ kind: "run", id: "r1" })).toBe(true);
+});
+
+test("g toggles between the whole Herd and the workspace the board was opened from", () => {
+  const home = focus({ filter: { kind: "all" }, origin: "w1" });
+  expect(retarget(home, { _tag: "ToggleFilter" }).filter).toEqual({
+    kind: "workspace",
+    id: "w1",
+  });
+  const narrowed = focus({ filter: { kind: "workspace", id: "w1" }, origin: "w1" });
+  expect(retarget(narrowed, { _tag: "ToggleFilter" }).filter).toEqual({ kind: "all" });
+  // A run filter widens rather than toggling into a workspace nobody named.
+  const onRun = focus({ filter: { kind: "run", id: "r1" }, origin: "w1" });
+  expect(retarget(onRun, { _tag: "ToggleFilter" }).filter).toEqual({ kind: "all" });
+  // Nothing to narrow to: a board with no origin stays where it is rather than
+  // narrowing to a workspace it would have to invent.
+  const nowhere = focus({ filter: { kind: "all" }, origin: null });
+  expect(retarget(nowhere, { _tag: "ToggleFilter" }).filter).toEqual({ kind: "all" });
+});
+
+test("a new filter starts the Selection again", () => {
+  const at = focus({ filter: { kind: "all" }, selected: "run:r1" });
+  const set = retarget(at, { _tag: "SetFilter", filter: { kind: "workspace", id: "w2" } });
+  expect(set.filter).toEqual({ kind: "workspace", id: "w2" });
+  expect(set.selected).toBeNull();
+});
+
+test("the steer draft and the proposal being previewed cost no read", () => {
+  const at = focus({ selected: "run:r1" });
+  expect(rereads(at, { ...at, steerDraft: "slow down" }).reuse).toBe(true);
+  expect(rereads(at, { ...at, previewing: "p1" }).reuse).toBe(true);
+  // The filter is a different board, so it is read again.
+  expect(rereads(at, { ...at, filter: { kind: "all" } }).reuse).toBe(false);
+});
+
+test("a row says what steering has found about its Run, worst mark first", () => {
+  const marks = {
+    r1: { ...NO_MARKS, drift: true, tryIt: true },
+    r2: { ...NO_MARKS, held: true },
+    r3: { ...NO_MARKS, override: true, proposal: true },
+  };
+  const rows = rowsOf(
+    board({ active: [run("r1"), run("r2"), run("r3")], agents: [agent("1", "Fix", "r3")] }),
+    marks,
+  );
+  const marked = (id: string) => rows.find((r) => r.id === id)!.marks;
+  expect(marked("run:r1")).toBe("↯ ▶");
+  expect(marked("run:r2")).toBe("⏸");
+  expect(marked("run:r3")).toBe("⚠ manual !");
+  // The override is a fact about the agents a human typed at, so their rows carry it.
+  expect(marked("agent:fix-1")).toBe("⚠ manual");
+  // A Run nothing has found anything about is unmarked.
+  expect(rowsOf(board({ active: [run("r4")] }))[0]!.marks).toBe("");
+});
+
+test("a workspace row inherits the worst mark of the runs under it", () => {
+  const wide: WideView = {
+    groups: [
+      {
+        workspaceId: "w1",
+        label: "collie",
+        glyph: "⚙",
+        running: 2,
+        needsYou: 0,
+        summary: "2 running",
+        active: [run("r1"), run("r2")],
+        recent: [],
+        agents: [],
+      },
+    ],
+    quiet: [],
+    now: NOW,
+  };
+  const rows = wideRows(wide, {
+    r1: { ...NO_MARKS, proposal: true },
+    r2: { ...NO_MARKS, drift: true },
+  });
+  expect(rows.find((r) => r.id === "group:w1")!.marks).toBe("↯");
+});
+
+test(": opens the Steer box, and the box then owns every key", () => {
+  const row = { ...ROW, kind: "active" as const, runId: "r1" };
+  expect(keyIntent(keys({ row }), press(":"))).toEqual({ _tag: "Steering", draft: "" });
+
+  const typing = keys({ row, on: { _tag: "Steering", draft: "slow" } });
+  expect(keyIntent(typing, press("k"))).toEqual({ _tag: "Steering", draft: "slowk" });
+  // `k` stops a run on the board, and `n` jumps to the next question; inside the box
+  // both are characters, which is what a field owning the keyboard means.
+  expect(keyIntent(typing, press("n"))).toEqual({ _tag: "Steering", draft: "slown" });
+  expect(keyIntent(typing, press("\x7f", { name: "backspace" }))).toEqual({
+    _tag: "Steering",
+    draft: "slo",
+  });
+  expect(keyIntent(typing, press("\r", { name: "return" }))).toEqual({
+    _tag: "Submitted",
+    command: { _tag: "Steer", text: "slow", runId: "r1" },
+  });
+  expect(keyIntent(typing, press("\x1b", { name: "escape" }))).toEqual({
+    _tag: "Steering",
+    draft: null,
+  });
+  // Nothing to steer: the box says what to select rather than sending to a guess.
+  const nowhere = keys({ row: null, on: { _tag: "Steering", draft: "slow" } });
+  expect(keyIntent(nowhere, press("\r", { name: "return" }))).toBeNull();
+});
+
+test("a proposal on screen takes Enter and Esc, and nothing else", () => {
+  const previewing = keys({
+    row: { ...ROW, kind: "active" as const, runId: "r1" },
+    on: { _tag: "Proposal", proposal: { id: "p1", hash: "deadbeef" } },
+  });
+  expect(keyIntent(previewing, press("\r", { name: "return" }))).toEqual({
+    _tag: "Do",
+    command: { _tag: "ConfirmProposal", id: "p1", hash: "deadbeef" },
+  });
+  expect(keyIntent(previewing, press("\x1b", { name: "escape" }))).toEqual({
+    _tag: "Do",
+    command: { _tag: "DeclineProposal", id: "p1" },
+  });
+  expect(keyIntent(previewing, press("k"))).toBeNull();
+});
+
+test("Esc drops the filter text first, and widens the board once there is none", () => {
+  const narrowed = keys({
+    row: null,
+    filter: HERE,
+    query: "picker",
+  });
+  expect(keyIntent(narrowed, press("\x1b", { name: "escape" }))).toEqual({
+    _tag: "Filtering",
+    filter: "",
+    typing: false,
+  });
+  expect(keyIntent(keys({ row: null, filter: HERE }), press("\x1b", { name: "escape" }))).toEqual({
+    _tag: "Do",
+    command: { _tag: "SetFilter", filter: { kind: "all" } },
+  });
+});
+
+test("Enter on a workspace nobody can reach still answers", () => {
+  const [away] = wideRows(
+    wideView([group("Elsewhere", { workspaceId: null, active: [run("r1")] })]),
+  );
+  expect(
+    keyIntent(keys({ row: away, filter: EVERYWHERE }), press("\r", { name: "return" })),
+  ).toEqual({
+    _tag: "Do",
+    command: { _tag: "Jump", jump: away!.jump! },
+  });
+});
+
+test("a run filter keeps that run's agents and its repository runs", () => {
+  const rows = runsRows({
+    ...state(),
+    filter: { kind: "run", id: "r1" },
+    board: board({
+      active: [run("r1"), run("r2")],
+      agents: [agent("1", "Implementer", "r1"), agent("2", "Reviewer", "r2")],
+    }),
+  });
+
+  // The run, and what hangs off it. On the local board an agent sits at its run's own
+  // depth — the connector is what joins them — so depth alone cannot say where the
+  // group ends.
+  expect(rows.map((r) => r.id)).toEqual(["run:r1", "agent:implementer-1"]);
 });

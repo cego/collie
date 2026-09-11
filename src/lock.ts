@@ -1,4 +1,4 @@
-import { Data, Schema, FileSystem, Clock, Effect, Option, Schedule, Stream } from "effect";
+import { Data, Schema, FileSystem, Clock, Effect, Option, Path, Schedule, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 // Cooperative pid-lock files: `wx` creation is the claim; holder liveness, not age, decides
@@ -88,6 +88,16 @@ export const withLock = <A, E, R, A2, E2, R2>(
     if (!(yield* acquireLock(lock))) return yield* contended;
     return yield* effect.pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
   });
+
+/**
+ * The directory a lock is about to be written into. The lock is usually the first thing in
+ * it, so without this the first claim fails on a directory nothing has created yet.
+ */
+export const ensureLockDir = Effect.fn("ensureLockDir")(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+});
 
 /**
  * Breaks a lock that no longer protects anything. True means the caller may retry its claim.

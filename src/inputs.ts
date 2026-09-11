@@ -39,7 +39,7 @@ export interface PickItem {
 }
 
 /** Where the work to be done was described. */
-export type WorkSourceKind = "plan-dir" | "linear" | "text" | "review";
+export type WorkSourceKind = "plan-dir" | "linear" | "text" | "review" | "followup";
 
 /** What a review is pointed at. */
 export type TargetKind = "mr" | "branch" | "worktree";
@@ -521,6 +521,12 @@ export function classifyWorkSource(
     const path = yield* Path.Path;
     const text = typed.trim();
     const source = "typed";
+
+    // A finished Run whose outcome needs more work. Named rather than inferred: a
+    // follow-up reuses that Run's branch and updates its merge request, and neither of
+    // those is something to guess at from a path.
+    if (text.startsWith("followup:"))
+      return { kind: "followup", value: text, source, label: text.slice("followup:".length) };
 
     const url = /linear\.app\/[^/\s]+\/issue\/([A-Za-z][A-Za-z0-9]*-\d+)/.exec(text);
     if (url) return { kind: "linear", source, value: url[1]!.toUpperCase() };

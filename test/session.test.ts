@@ -2,8 +2,8 @@ import { Clock, Effect, FileSystem, Path } from "effect";
 import { nowIso } from "../src/time";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { REVIEW_FILE } from "../src/output";
-import { liveRole, record, sendReview, type Session } from "../src/handoff";
-import { STOPPED } from "../src/driver";
+import { liveRole, record, type Session } from "../src/handoff";
+import { acquireDriver, readInboxMidStep, RUNNER_PID, STOPPED } from "../src/driver";
 import { liveEntries, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { RunStore, type HandoffRecord } from "../src/run";
 import type { AgentInfo } from "../src/herdr";
@@ -118,16 +118,22 @@ const liveImplementer = Effect.fn("sessionTest.liveImplementer")(function* (
     runId: run.id,
     workflow: "implement",
     at: yield* nowIso(),
+    incarnation: { terminalId: `term-${agent}`, agentSession: null },
   });
   // The fake `agent list` answers from the agents it has been asked to start, so the
   // rig is told about this one the same way.
   yield* rig.addAgent(agent, paneId);
+  // A hand-off is queued for the target Run's Driver, so there has to be one: this
+  // process's own claim stands in for it.
+  yield* acquireDriver(run.dir);
   return {
     name: agent,
     paneId,
     workspaceId: env.workspaceId,
     status: "idle",
     title: null,
+    terminalId: `term-${agent}`,
+    agentSession: null,
   } satisfies AgentInfo;
 });
 
@@ -180,14 +186,23 @@ test("with an implementer live, the review hands it the findings and both runs r
         ["Fix findings", "Fix findings in a full implement run", "Don't post"],
       ]);
 
-      const sent = must(
-        (yield* rig.calls()).filter((c) => c.cmd === "agent prompt").at(-1)?.argv,
-        "expected prompt call",
+      // Queued for the implementer's own Driver rather than typed into its pane: the
+      // Driver is what composes it into the agent's next piece of work, holds it behind
+      // an unresolved compaction, and records whether it was understood.
+      const queued = must(
+        (yield* readInboxMidStep(before.dir)).taken.at(0)?.deliver,
+        "expected a deliver in the implementer's inbox",
       );
-      expect(sent[2]).toBe(implementer.name);
-      expect(sent[3]).toContain(path.join(run.dir, REVIEW_FILE));
-      expect(sent[3]).toContain(path.join(run.dir, "steps", "synthesize", "synthesized.json"));
-      expect(sent[3]).toContain("disagree with a finding say so with a reason");
+      expect(queued.agent).toBe(implementer.name);
+      expect(queued.mode).toBe("boundary");
+      expect(queued.text).toContain(path.join(run.dir, REVIEW_FILE));
+      expect(queued.text).toContain(path.join(run.dir, "steps", "synthesize", "synthesized.json"));
+      expect(queued.text).toContain("disagree with a finding say so with a reason");
+      expect(
+        (yield* rig.calls()).some(
+          (c) => c.cmd === "agent prompt" && c.argv?.[2] === implementer.name,
+        ),
+      ).toBe(false);
 
       expect(run.record.handoffs).toEqual([
         {
@@ -205,37 +220,6 @@ test("with an implementer live, the review hands it the findings and both runs r
         ["received", "implementer", run.id],
       ]);
       expect(run.step("post").note).toContain("sent");
-    }),
-  ));
-
-test("a hand-off herdr saw no turn come of says so, in the message and the record", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const implementer = yield* liveImplementer();
-      const env = rig.pluginEnv({ FAKE_HERDR_PROMPT_ERROR: "timeout" });
-      const review = yield* new RunStore(env.stateDir).create({
-        workflow: "review",
-        cwd: env.cwd,
-        inputs: {},
-        inputSources: {},
-        stepIds: ["synthesize"],
-        maxIterations: 1,
-        namedAfter: "review",
-      });
-      yield* fs.writeFileString(path.join(review.dir, REVIEW_FILE), "# One blocker\n");
-
-      const result = yield* sendReview(session(env), review);
-
-      // Sent, because it was: what nobody can say is whether it was read, and the
-      // human is the one who can go and look.
-      expect(result.ok).toBe(true);
-      expect(result.message).toContain(implementer.name);
-      expect(result.message).toContain("herdr saw no turn start");
-      expect(must(review.record.handoffs.at(0), "expected sent handoff").note).toContain(
-        "herdr saw no turn start",
-      );
     }),
   ));
 
@@ -413,9 +397,16 @@ test("a plan that changes under a live implementer is sent the diff, once per ch
       expect(status).toBe("blocked");
       expect(run.step("next").note).toBe("no choice taken");
 
-      const prompted = (yield* rig.calls())
-        .filter((c) => c.cmd === "agent prompt" && c.argv?.[2] === implementer.name)
-        .map((c) => must(c.argv?.[3], "expected prompt text"));
+      // Queued for the implementer's Driver, once per change, not typed into its pane.
+      const prompted = (yield* readInboxMidStep(planned.dir)).taken.flatMap((command) => {
+        const deliver = command.deliver;
+        return deliver && deliver.agent === implementer.name ? [deliver.text] : [];
+      });
+      expect(
+        (yield* rig.calls()).some(
+          (c) => c.cmd === "agent prompt" && c.argv?.[2] === implementer.name,
+        ),
+      ).toBe(false);
 
       expect(prompted).toHaveLength(1);
       const prompt = must(prompted.at(0), "expected one prompt");
@@ -514,6 +505,7 @@ test("the implementer is told where to take a decision the plan does not cover",
         runId: planned.id,
         workflow: "plan",
         at: "t",
+        incarnation: { terminalId: "term-plan-1", agentSession: null },
       });
       yield* rig.addAgent("plan-1", "1-8");
       yield* rig.queueOutputs([CLEAN]);
@@ -586,6 +578,8 @@ test("another workspace's implementer is not this Session's", () =>
         workspaceId: "9",
         status: "idle",
         title: null,
+        terminalId: "term-impl-1",
+        agentSession: null,
       };
       expect(liveEntries([...(yield* readRegistry(file))], [alive])).toEqual([]);
       expect(
@@ -885,11 +879,19 @@ const installedControls = Effect.fn("sessionTest.installedControls")(function* (
   );
 });
 
-test("a hand-off is a work boundary: the implementer compacts before it takes the review", () =>
+test("a hand-off is queued for the receiving Driver, whatever that agent is doing", () =>
   runEffect(
     Effect.gen(function* () {
       const implementer = yield* liveImplementer();
-      const port = scriptedPort({ usage: [400_000], poll: [{ kind: "success" }] });
+      const planned = must(
+        (yield* new RunStore(rig.stateDir).list()).at(0),
+        "expected implement run",
+      );
+      // An unresolved compaction on the receiving agent. It no longer decides anything
+      // here: the hand-off is a command to that agent's own Driver, and it is that
+      // Driver's next work boundary that holds the message behind the compaction —
+      // the same check every other piece of work for that agent goes through.
+      const port = scriptedPort({ usage: [400_000] });
       yield* installedControls(implementer.name, port);
       yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
       const prompts = scriptedPrompts(["Fix findings"]);
@@ -902,45 +904,46 @@ test("a hand-off is a work boundary: the implementer compacts before it takes th
       );
 
       expect(status).toBe("done");
-      expect(port.requests).toHaveLength(1);
-      // The review still reached it, once, after the compaction completed.
-      const sent = (yield* rig.calls()).filter(
-        (c) => c.cmd === "agent prompt" && c.argv?.[2] === implementer.name,
-      );
-      expect(sent).toHaveLength(1);
+      // Nothing was asked of the agent from here: not a compaction, not a prompt.
+      expect(port.requests).toHaveLength(0);
+      expect(
+        (yield* rig.calls()).some(
+          (c) => c.cmd === "agent prompt" && c.argv?.[2] === implementer.name,
+        ),
+      ).toBe(false);
+
+      const queued = (yield* readInboxMidStep(planned.dir)).taken;
+      expect(queued.map((c) => c.deliver?.agent)).toEqual([implementer.name]);
       expect(run.record.handoffs).toHaveLength(1);
     }),
   ));
 
-test("a hand-off into an unresolved compaction is refused, and nothing is recorded", () =>
+test("a hand-off to a Run nobody is driving is refused rather than typed into a pane", () =>
   runEffect(
     Effect.gen(function* () {
       const path = yield* Path.Path;
       const implementer = yield* liveImplementer();
-      // Acknowledged and then silent: the outcome nobody has established.
-      const port = scriptedPort({ usage: [400_000] });
-      yield* installedControls(implementer.name, port);
+      const planned = must(
+        (yield* new RunStore(rig.stateDir).list()).at(0),
+        "expected implement run",
+      );
+      // The Driver claim `liveImplementer` left behind, removed: an agent in a pane with
+      // nothing driving its Run has nothing to compose a hand-off into its next work,
+      // nothing to hold it behind a compaction, and nothing to record whether it landed.
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.remove(path.join(planned.dir, RUNNER_PID), { force: true });
       yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
-      // The hand-off does not land, so the menu comes back; the human leaves the Run
-      // open rather than being handed a fix round nothing sent.
       const prompts = scriptedPrompts(["Fix findings", null]);
 
-      const { run, status } = yield* runWorkflow(
-        rig,
-        "review",
-        {},
-        { prompts, compaction: port.ports, compactionWaitMs: 120 },
-      );
+      const { run, status } = yield* runWorkflow(rig, "review", {}, { prompts });
 
       expect(status).toBe("blocked");
-      // The reason is on the Run, which is what both front doors show.
       expect(run.record.summary).toContain("no choice taken");
-      const log = yield* readText(path.join(run.dir, "log.txt"));
-      expect(log).toContain("neither completed nor failed");
-      const sent = (yield* rig.calls()).filter(
-        (c) => c.cmd === "agent prompt" && c.argv?.[2] === implementer.name,
-      );
-      expect(sent).toEqual([]);
+      expect(
+        (yield* rig.calls()).some(
+          (c) => c.cmd === "agent prompt" && c.argv?.[2] === implementer.name,
+        ),
+      ).toBe(false);
       expect(run.record.handoffs).toEqual([]);
     }),
   ));

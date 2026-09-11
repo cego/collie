@@ -34,6 +34,10 @@ const replies = {
   SocketReply: { of: replySchemas.SocketReply, at: { schema: "success_response" } },
   TabCreateReply: { of: replySchemas.TabCreateReply, at: { envelope: "tab_created" } },
   WorkspaceListReply: { of: replySchemas.WorkspaceListReply, at: { envelope: "workspace_list" } },
+  WorkspaceCreateReply: {
+    of: replySchemas.WorkspaceCreateReply,
+    at: { envelope: "workspace_created" },
+  },
   TabListReply: { of: replySchemas.TabListReply, at: { envelope: "tab_list" } },
   PaneListReply: { of: replySchemas.PaneListReply, at: { envelope: "pane_list" } },
   PaneSplitReply: { of: replySchemas.PaneSplitReply, at: { envelope: "pane_info" } },
@@ -66,6 +70,19 @@ const requests = {
     filter: { op: "in", field: "pane_id", values: ["1-1", "1-2"] },
   },
   "agent.view.clear": { source: "cego.collie" },
+  "agent.send_keys": { target: "impl-1", keys: ["Escape"] },
+  "workspace.report_metadata": {
+    workspace_id: "w28",
+    source: "cego.collie",
+    tokens: { collie_home: "abc123" },
+    ttl_ms: 86_400_000,
+  },
+  "pane.report_metadata": {
+    pane_id: "1-2",
+    source: "cego.collie",
+    tokens: { collie_home: "abc123" },
+    ttl_ms: 86_400_000,
+  },
   "popup.close": {},
 } satisfies Record<SocketMethod, Schema.JsonObject>;
 

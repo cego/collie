@@ -357,7 +357,9 @@ effectTest(
       (yield* cli(["--workspace", "w1", "run", "show", runId])).body.data.run.steps[0].status,
     ).toBe("done");
   },
-  10_000,
+  // Nine CLI subprocesses, each a cold Bun start; ten seconds was a coin toss on a
+  // loaded machine. The budget is here to catch a hang, not to time the hardware.
+  60_000,
 );
 
 /** The workspace as a real git checkout, for the tests that make a worktree of it. */
@@ -367,109 +369,119 @@ function checkout(at: string) {
   git("-c", "user.email=t@example.com", "-c", "user.name=T", "commit", "--allow-empty", "-m", "x");
 }
 
-effectTest("a run whose branch nothing names is given one, without asking", function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  // A real checkout, because the branch that is worked out makes a worktree of it.
-  checkout(path.join(dir, "workspace"));
+effectTest(
+  "a run whose branch nothing names is given one, without asking",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    // A real checkout, because the branch that is worked out makes a worktree of it.
+    checkout(path.join(dir, "workspace"));
 
-  // A plan directory whose own name is too long to slug: every such plan under one
-  // `tasks/` directory clips to the same branch, and the branch is the key to the
-  // worktree — so what the cap dropped comes back as a digest rather than a question.
-  const plan = path.join(
-    dir,
-    "tasks",
-    "a-plan-directory-whose-name-is-far-too-long-to-be-a-branch",
-  );
-  yield* fs.makeDirectory(plan, { recursive: true });
-  yield* fs.writeFileString(path.join(plan, "SPEC.md"), "# A plan\n");
+    // A plan directory whose own name is too long to slug: every such plan under one
+    // `tasks/` directory clips to the same branch, and the branch is the key to the
+    // worktree — so what the cap dropped comes back as a digest rather than a question.
+    const plan = path.join(
+      dir,
+      "tasks",
+      "a-plan-directory-whose-name-is-far-too-long-to-be-a-branch",
+    );
+    yield* fs.makeDirectory(plan, { recursive: true });
+    yield* fs.writeFileString(path.join(plan, "SPEC.md"), "# A plan\n");
 
-  const start = ["--workspace", "w1", "run", "start", "implement", "--input", `plan=${plan}`];
-  const started = yield* cli([...start, "--request-id", "branch-1"]);
-  expect(Number(started.exit)).toBe(0);
+    const start = ["--workspace", "w1", "run", "start", "implement", "--input", `plan=${plan}`];
+    const started = yield* cli([...start, "--request-id", "branch-1"]);
+    expect(Number(started.exit)).toBe(0);
 
-  const runId = Schema.decodeUnknownSync(Schema.String)(started.body.data.runId);
-  const record = parseJson(
-    yield* fs.readFileString(path.join(dir, "state", "runs", runId, "run.json")),
-  );
-  const branch = Schema.decodeUnknownSync(Schema.String)(record.worktree.branch);
-  expect(branch.startsWith(`${env.GITLAB_USER_LOGIN}/`)).toBe(true);
-  expect(record.worktree.path).toBe(
-    path.join(dir, ".herdr", "worktrees", "workspace", ...branch.split("/")),
-  );
+    const runId = Schema.decodeUnknownSync(Schema.String)(started.body.data.runId);
+    const record = parseJson(
+      yield* fs.readFileString(path.join(dir, "state", "runs", runId, "run.json")),
+    );
+    const branch = Schema.decodeUnknownSync(Schema.String)(record.worktree.branch);
+    expect(branch.startsWith(`${env.GITLAB_USER_LOGIN}/`)).toBe(true);
+    expect(record.worktree.path).toBe(
+      path.join(dir, ".herdr", "worktrees", "workspace", ...branch.split("/")),
+    );
 
-  // Retried with the same request id, it is the same Run and the same checkout: a
-  // generated name is a function of the work, so nothing new is created.
-  const again = yield* cli([...start, "--request-id", "branch-1"]);
-  expect(Schema.decodeUnknownSync(Schema.String)(again.body.data.runId)).toBe(runId);
+    // Retried with the same request id, it is the same Run and the same checkout: a
+    // generated name is a function of the work, so nothing new is created.
+    const again = yield* cli([...start, "--request-id", "branch-1"]);
+    expect(Schema.decodeUnknownSync(Schema.String)(again.body.data.runId)).toBe(runId);
 
-  // An explicit branch still wins, and is taken exactly as it was given.
-  const named = yield* cli([
-    ...start,
-    "--input",
-    "branch=global-board",
-    "--request-id",
-    "branch-2",
-  ]);
-  expect(Number(named.exit)).toBe(0);
-  const namedId = Schema.decodeUnknownSync(Schema.String)(named.body.data.runId);
-  const second = parseJson(
-    yield* fs.readFileString(path.join(dir, "state", "runs", namedId, "run.json")),
-  );
-  expect(second.worktree.branch).toBe("global-board");
-});
+    // An explicit branch still wins, and is taken exactly as it was given.
+    const named = yield* cli([
+      ...start,
+      "--input",
+      "branch=global-board",
+      "--request-id",
+      "branch-2",
+    ]);
+    expect(Number(named.exit)).toBe(0);
+    const namedId = Schema.decodeUnknownSync(Schema.String)(named.body.data.runId);
+    const second = parseJson(
+      yield* fs.readFileString(path.join(dir, "state", "runs", namedId, "run.json")),
+    );
+    expect(second.worktree.branch).toBe("global-board");
+  },
+  // Several cold CLI starts, and a Driver start now ensures the Herd's Home before
+  // anything else. Five seconds was a coin toss rather than a deadline.
+  20_000,
+);
 
-effectTest("run show lists a parent's repository runs, with their status", function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const parent = yield* cli([
-    "--workspace",
-    "w1",
-    "run",
-    "start",
-    "demo",
-    "--input",
-    "goal=ship",
-    "--request-id",
-    "parent-1",
-  ]);
-  const child = yield* cli([
-    "--workspace",
-    "w1",
-    "run",
-    "start",
-    "demo",
-    "--input",
-    "goal=ship the api",
-    "--request-id",
-    "child-1",
-  ]);
-  const parentId = Schema.decodeUnknownSync(Schema.String)(parent.body.data.runId);
-  const childId = Schema.decodeUnknownSync(Schema.String)(child.body.data.runId);
-  // The fan-out as it stands after the first wave started, written the way the parent's
-  // Driver writes it.
-  const file = path.join(dir, "state", "runs", parentId, "run.json");
-  const snapshot = parseJson(yield* fs.readFileString(file));
-  snapshot.children = [childId];
-  snapshot.fanout = {
-    title: "Implement now",
-    waves: [["cego/api"], ["cego/web"]],
-    runs: { "cego/api": childId },
-    mrs: {},
-    wave: 1,
-    blocked: null,
-  };
-  yield* fs.writeFileString(file, JSON.stringify(snapshot));
+effectTest(
+  "run show lists a parent's repository runs, with their status",
+  function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const parent = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "start",
+      "demo",
+      "--input",
+      "goal=ship",
+      "--request-id",
+      "parent-1",
+    ]);
+    const child = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "start",
+      "demo",
+      "--input",
+      "goal=ship the api",
+      "--request-id",
+      "child-1",
+    ]);
+    const parentId = Schema.decodeUnknownSync(Schema.String)(parent.body.data.runId);
+    const childId = Schema.decodeUnknownSync(Schema.String)(child.body.data.runId);
+    // The fan-out as it stands after the first wave started, written the way the parent's
+    // Driver writes it.
+    const file = path.join(dir, "state", "runs", parentId, "run.json");
+    const snapshot = parseJson(yield* fs.readFileString(file));
+    snapshot.children = [childId];
+    snapshot.fanout = {
+      title: "Implement now",
+      waves: [["cego/api"], ["cego/web"]],
+      runs: { "cego/api": childId },
+      mrs: {},
+      wave: 1,
+      blocked: null,
+    };
+    yield* fs.writeFileString(file, JSON.stringify(snapshot));
 
-  const shown = yield* run(["--workspace", "w1", "run", "show", parentId]);
+    const shown = yield* run(["--workspace", "w1", "run", "show", parentId]);
 
-  // An agent driving Collie follows a fan-out from here: the child, which repository it
-  // is building, and where it has got to.
-  expect(shown.stdout).toContain(`${childId}\tcego/api\trunning`);
-  // And the relation is in the payload as well, for a caller that parses it.
-  const json = yield* cli(["--workspace", "w1", "run", "show", parentId]);
-  expect(json.body.data.run.children).toEqual([childId]);
-});
+    // An agent driving Collie follows a fan-out from here: the child, which repository it
+    // is building, and where it has got to.
+    expect(shown.stdout).toContain(`${childId}\tcego/api\trunning`);
+    // And the relation is in the payload as well, for a caller that parses it.
+    const json = yield* cli(["--workspace", "w1", "run", "show", parentId]);
+    expect(json.body.data.run.children).toEqual([childId]);
+  },
+  20_000,
+);
 
 effectTest("two plans under one directory are two runs, named apart", function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -680,6 +692,10 @@ effectTest(
     expect(personaRetry.body).toEqual(persona.body);
     expect(persona.body.data.path).toContain("/workspace/.herdr/personas/project-helper.md");
   },
+  // Four CLI subprocesses, each a cold Bun start. The default five seconds was close
+  // enough to the real cost that a loaded machine lost the coin toss; this is a budget
+  // that says "something is wrong" rather than "the machine was busy".
+  30_000,
 );
 
 effectTest("wait follow writes every event through the supplied Stdio service", function* () {
@@ -1270,14 +1286,20 @@ effectTest("a Run a live Driver still owns is not offered a resume", function* (
   expect(resumed.body.error.code).toBe("run_already_active");
 });
 
-effectTest("a Run whose Driver has not claimed it yet is not reported as lost", function* () {
-  // `run start` returns as soon as it has spawned a Driver; the claim lands a process
-  // start later. Calling that gap a lost Driver would make the ordinary
-  // start-then-wait sequence report every new Run as broken.
-  const { runId } = yield* startDemo("attention-unclaimed");
-  const waited = yield* waitAttention(runId, "3 seconds");
-  expect(waited.body.error.code).toBe("timeout");
-});
+effectTest(
+  "a Run whose Driver has not claimed it yet is not reported as lost",
+  function* () {
+    // `run start` returns as soon as it has spawned a Driver; the claim lands a process
+    // start later. Calling that gap a lost Driver would make the ordinary
+    // start-then-wait sequence report every new Run as broken.
+    const { runId } = yield* startDemo("attention-unclaimed");
+    const waited = yield* waitAttention(runId, "3 seconds");
+    expect(waited.body.error.code).toBe("timeout");
+  },
+  // Its own budget: three seconds of deliberate waiting, on top of a Driver start that
+  // ensures the Herd's Home before it does anything else.
+  20_000,
+);
 
 effectTest(
   "a question left behind by a dead Driver is recovery, not something to answer",
@@ -1314,6 +1336,8 @@ effectTest(
     const starting = yield* waitAttention(runId, "2 seconds");
     expect(starting.body.error.code).toBe("timeout");
   },
+  // As above: two waits of its own, and a Driver start before either of them.
+  20_000,
 );
 
 /** The inbox record `run resume` leaves for the Driver it has just spawned. */

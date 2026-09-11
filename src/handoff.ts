@@ -2,14 +2,20 @@
 // agent from another Run should act on prompts that agent directly, instead of
 // starting a second one that knows none of the history.
 
-import { Crypto, Effect, FileSystem, Path, Result } from "effect";
+import { Crypto, Effect, FileSystem, Path } from "effect";
 import { nowIso } from "./time";
-import { atBoundary, type CompactionSettings } from "./compaction";
-import { compactionFor } from "./compactors";
+import type { CompactionSettings } from "./compaction";
 import type { Herdr } from "./herdr";
-import { STOPPED } from "./driver";
+import { driverOwnership, STOPPED } from "./driver";
 import { REVIEW_FILE } from "./output";
-import { liveAgent, registryPath, type AgentEntry, type RegistryScope } from "./registry";
+import { newRequestId, writeInbox } from "./operations";
+import {
+  liveAgent,
+  registryPath,
+  verifyIncarnation,
+  type AgentEntry,
+  type RegistryScope,
+} from "./registry";
 import { RunStore, type HandoffRecord, type Run } from "./run";
 
 export interface Session extends RegistryScope {
@@ -37,49 +43,53 @@ export interface Session extends RegistryScope {
  * warnings: a hand-off has no progress channel of its own, and its result message is
  * what both front doors show.
  */
-const boundary = Effect.fn("Handoff.boundary")(function* (
+const queue = Effect.fn("Handoff.queue")(function* (
   session: Session,
   from: Run,
   target: AgentEntry,
+  text: string,
 ) {
-  if (!session.configDir) return null;
-  const deps = yield* compactionFor({
-    herdr: session.herdr,
-    stateDir: session.stateDir,
-    configDir: session.configDir,
-    log: (line: string) => from.log(line),
-    known: session.compaction,
+  const store = new RunStore(session.stateDir);
+  const owner = yield* store.load(target.runId).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (!owner) return failed(`the ${target.role}'s run ${target.runId} is gone`);
+  // No Driver, no hand-off. A direct send would put text in a pane with nothing to
+  // compose it into the agent's next piece of work, nothing to hold it behind a
+  // compaction, and nothing to record whether it was understood.
+  if ((yield* driverOwnership(owner.dir)) !== "live")
+    return failed(`no Driver owns ${target.runId}; use run follow-up`);
+  const requestId = yield* newRequestId();
+  const incarnation = target.incarnation?.terminalId;
+  if (incarnation === undefined) return failed(`${target.agent} has no incarnation to address`);
+  yield* writeInbox(owner.dir, {
+    type: "deliver",
+    requestId,
+    deliver: {
+      deliveryId: requestId,
+      incarnation,
+      agent: target.agent,
+      text,
+      mode: "boundary",
+      cause: { kind: "handoff", ref: from.id },
+      intentVersion: 0,
+      attempt: 1,
+    },
   });
-  const decided = yield* atBoundary(deps, {
-    agent: target.agent,
-    run: from.id,
-    step: `hand-off to the ${target.role}`,
-  });
-  return decided.dispatch ? null : held(decided.reason);
+  return { ok: true as const, message: "" };
 });
 
 export interface HandoffResult {
   ok: boolean;
   message: string;
   /**
-   * True where the hand-off did not happen because the receiving agent's own
-   * compaction is unresolved. Not the same as having nobody to hand to, which is
-   * ordinary and quiet: this one has to reach the human, because the spec asks both
-   * front doors to say why work is being held.
+   * True where the hand-off did not happen because the receiving Run is holding it.
+   * Not the same as having nobody to hand to, which is ordinary and quiet: this one has
+   * to reach the human, because the spec asks both front doors to say why work is held.
    */
   held?: true;
 }
 
-/** Said where herdr saw no turn come of a hand-off: written, but not known read. */
-const UNOBSERVED = " — herdr saw no turn start; check its pane";
-
 function failed(message: string): HandoffResult {
   return { ok: false, message };
-}
-
-/** A hand-off that is being held by a compaction, which is a thing to say out loud. */
-function held(message: string): HandoffResult {
-  return { ok: false, message, held: true };
 }
 
 /**
@@ -157,6 +167,14 @@ export const liveRole = Effect.fn("Handoff.liveRole")(function* (session: Sessio
   const file = yield* registryPath(session.stateDir, session);
   const entry = yield* liveAgent(file, alive, role);
   if (!entry) return null;
+  // A hand-off is a delivery, so it is held to the delivery rule: an entry with no
+  // incarnation names a role and a pane, both of which the next agent inherits, and
+  // whatever is in that pane now is not the agent the register was written about.
+  const identified = verifyIncarnation(entry, alive);
+  if (!identified.ok) {
+    yield* Effect.logDebug(`handoff: ${role} is not deliverable (${identified.reason})`);
+    return null;
+  }
   const run = yield* new RunStore(session.stateDir)
     .load(entry.runId)
     .pipe(Effect.catch(() => Effect.succeed(null)));
@@ -214,17 +232,13 @@ export const sendReview = Effect.fn("Handoff.sendReview")(function* (session: Se
   }
   const target = yield* liveRole(session, "implementer");
   if (!target) return { ok: false, message: "no implementer is live in this workspace" };
-  const held = yield* boundary(session, run, target);
-  if (held) return held;
-
-  const prompt = yield* reviewPrompt(run);
-  const submission = yield* session.herdr.agentPrompt(target.agent, prompt).pipe(Effect.result);
-  if (Result.isFailure(submission)) {
-    return failed(`${target.agent} would not take the prompt: ${String(submission.failure)}`);
-  }
-  const unseen = submission.success === "unobserved" ? UNOBSERVED : "";
-  yield* record(session, run, target, `sent ${REVIEW_FILE} to the ${target.role}${unseen}`);
-  return { ok: true, message: `sent ${run.record.slug}'s review to ${target.agent}${unseen}` };
+  const queued = yield* queue(session, run, target, yield* reviewPrompt(run));
+  if (!queued.ok) return queued;
+  yield* record(session, run, target, `sent ${REVIEW_FILE} to the ${target.role}`);
+  return {
+    ok: true,
+    message: `sent ${run.record.slug}'s review to ${target.agent}, queued for ${target.runId}'s Driver`,
+  };
 });
 
 /**
@@ -260,9 +274,6 @@ export const sendPlanChange = Effect.fn("Handoff.sendPlanChange")(function* (
 ) {
   const target = yield* implementerOfPlan(session, opts.planDir);
   if (!target) return { ok: false, message: "no implementer is building from this plan" };
-  const held = yield* boundary(session, run, target);
-  if (held) return held;
-
   const text = [
     `The plan you are building from has changed.${opts.changelog ? ` ${opts.changelog}` : ""}`,
     `The diff of ${opts.planDir} is in ${opts.diff}.`,
@@ -271,13 +282,13 @@ export const sendPlanChange = Effect.fn("Handoff.sendPlanChange")(function* (
     "quietly undoing either side.",
   ].join(" ");
 
-  const submission = yield* session.herdr.agentPrompt(target.agent, text).pipe(Effect.result);
-  if (Result.isFailure(submission)) {
-    return failed(`${target.agent} would not take the prompt: ${String(submission.failure)}`);
-  }
-  const unseen = submission.success === "unobserved" ? UNOBSERVED : "";
-  yield* record(session, run, target, `sent the plan change to the implementer${unseen}`);
-  return { ok: true, message: `told ${target.agent} the plan changed${unseen}` };
+  const queued = yield* queue(session, run, target, text);
+  if (!queued.ok) return queued;
+  yield* record(session, run, target, "sent the plan change to the implementer");
+  return {
+    ok: true,
+    message: `told ${target.agent} the plan changed, queued for ${target.runId}'s Driver`,
+  };
 });
 
 /**

@@ -26,18 +26,30 @@ export class FakeBin {
     });
   }
 
-  /** `script` is sh; exit code and stdout are what the runner sees. */
+  /**
+   * `script` is sh; exit code and stdout are what the runner sees.
+   *
+   * Written to a fresh file and renamed over the old one, never written in place: Linux
+   * refuses to open a running executable for writing, so a test that replaced a stub
+   * while a previous copy of it was still executing failed with ETXTBSY. A rename
+   * replaces the name without touching the file the running process holds open.
+   */
   add(name: string, script: string) {
     return Effect.gen(
       function* (this: FakeBin) {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const file = path.join(this.dir, name);
-        yield* fs.writeFileString(file, `#!/bin/sh\n${script}\n`);
-        yield* fs.chmod(file, 0o755);
+        const staged = `${file}.${process.pid}.${++this.writes}.tmp`;
+        yield* fs.writeFileString(staged, `#!/bin/sh\n${script}\n`);
+        yield* fs.chmod(staged, 0o755);
+        yield* fs.rename(staged, file);
       }.bind(this),
     );
   }
+
+  /** Makes each staged name its own, so two writes in one process cannot collide. */
+  private writes = 0;
 
   restore() {
     return Effect.sync(() => {
