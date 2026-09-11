@@ -998,7 +998,10 @@ const runStep = Effect.fn("Engine.runStep")(function* (
   // it, and the step ends blocked with that reason — the Run's existing way of
   // stopping for the human, in both front doors, rather than a second control plane.
   const boundaryDeps = yield* compactionDeps(o);
-  const paused = yield* Effect.forEach(
+  // Why a variant was not given its work: a compaction of its own still in the air, or
+  // a prompt that could not be delivered. One variant's problem must not abandon the
+  // others, which are working.
+  const withheld = yield* Effect.forEach(
     records,
     (record, i) =>
       reuses[i]
@@ -1023,7 +1026,7 @@ const runStep = Effect.fn("Engine.runStep")(function* (
     // error is how a blocked step already reaches a human — the board draws the
     // waiting glyph, the ending raises `needs-you` with this reason, and `run resume`
     // picks the Run back up. Not `awaiting`: that says a Run is still going.
-    const held = paused[i];
+    const held = withheld[i];
     if (held) {
       yield* o.out(`  ⏸ ${held}`);
       yield* run.log(held);
@@ -1035,10 +1038,22 @@ const runStep = Effect.fn("Engine.runStep")(function* (
     const command = step.skill
       ? `${skillCommandFor(variants[i]!.harness).call(null, step.skill)} `
       : "";
-    yield* herdr.agentPrompt(
-      record.agent,
-      `${command}Your task for this step is in ${path} — read it and follow it.`,
-    );
+    const submission = yield* herdr
+      .agentPrompt(
+        record.agent,
+        `${command}Your task for this step is in ${path} — read it and follow it.`,
+      )
+      .pipe(Effect.result);
+    if (Result.isFailure(submission)) {
+      const why = `${record.agent} was not given its prompt: ${reason(submission.failure)}`;
+      yield* o.out(`  ⚠ ${why}`);
+      yield* run.log(why);
+      withheld[i] = why;
+      continue;
+    }
+    if (submission.success === "unobserved") {
+      yield* run.log(`${record.agent}: prompt written, no turn observed`);
+    }
   }
 
   // Watched together, because they were prompted together: a second reviewer that
@@ -1049,25 +1064,17 @@ const runStep = Effect.fn("Engine.runStep")(function* (
     records,
     (record, i) =>
       // An agent that was never prompted has nothing to go quiet about.
-      paused[i]
-        ? Effect.succeed(null)
-        : Effect.gen(function* () {
-            // The agent may settle before herdr reports `working`; that is not an error.
-            yield* Effect.ignore(
-              o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 }),
-            );
-            return yield* awaitAgent(o, ctx, record);
-          }),
+      withheld[i] ? Effect.succeed(null) : awaitAgent(o, ctx, record),
     { concurrency: "unbounded" },
   );
 
   const outcomes: VariantOutcome[] = [];
   for (const [i, record] of records.entries()) {
     const key = keys[i]!;
-    const pause = paused[i];
-    if (pause) {
+    const why = withheld[i];
+    if (why) {
       record.status = "blocked";
-      record.error = pause;
+      record.error = why;
       outcomes.push({ record, output: null, review: null });
       continue;
     }
@@ -2276,23 +2283,26 @@ const repairOutput = Effect.fn("Engine.repairOutput")(function* (
   // A prompt that cannot be delivered — the agent is gone, the socket is not there —
   // is a repair that did not happen, not a Run that failed: the step still has the
   // Output problem it had, and that is what the human needs to be told about.
-  const asked = yield* o.herdr
+  const submission = yield* o.herdr
     .agentPrompt(
       record.agent,
       `Your Output file is not usable: ${problem}. Write ${relative} again — the JSON your step described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${path}`,
     )
     .pipe(
-      Effect.as(true),
       Effect.catch((cause) =>
-        o.run.log(`repair prompt failed: ${reason(cause)}`).pipe(Effect.as(false)),
+        o.run.log(`repair prompt failed: ${reason(cause)}`).pipe(Effect.as(null)),
       ),
     );
-  if (!asked) return null;
+  if (submission === null) return null;
+  // Kept, so a repair that goes quiet later is read as this uncertainty and not as an
+  // agent ignoring the ask.
+  if (submission === "unobserved") {
+    yield* o.run.log(`${record.agent}: repair prompt written, no turn observed`);
+  }
   // Recorded once it has actually been asked: a repair that was never delivered must
   // not make the summary say the Output was rewritten, or the toast say the agent was
   // asked already.
   record.repairs.push(problem);
-  yield* Effect.ignore(o.herdr.agentWait(record.agent, { until: ["working"], timeoutMs: 10_000 }));
   record.status = "running";
   record.error = null;
   // An agent that goes quiet writing one file is as stuck as one that goes quiet

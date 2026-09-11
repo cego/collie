@@ -107,6 +107,27 @@ test("a reused agent over the threshold is compacted before it is given the next
     }),
   ));
 
+test("a compaction request no turn was seen to come of is logged, not taken as sent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
+      const port = scriptedPort({
+        usage: [400_000],
+        poll: [{ kind: "success" }],
+        request: "unobserved",
+      });
+
+      const { run, status } = yield* ran({ compaction: port.ports, outputPollMs: 20 });
+
+      // The harness confirmed the compaction itself, so the work still goes out — but
+      // the audit trail keeps what the channel could not vouch for.
+      expect(status).toBe("done");
+      const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
+      expect(log).toContain("compaction request written, no turn observed");
+    }),
+  ));
+
 test("below the threshold the work goes straight out, and nothing is asked to compact", () =>
   runEffect(
     Effect.gen(function* () {
@@ -335,7 +356,10 @@ test("a second boundary on the same agent refuses while the first attempt is unr
           ports: again.ports,
           stateDir: rig.pluginEnv().stateDir,
           configured: 372_000,
-          herdr: { agentPrompt: () => Effect.void, agentList: () => Effect.succeed([]) },
+          herdr: {
+            agentPrompt: () => Effect.succeed("observed" as const),
+            agentList: () => Effect.succeed([]),
+          },
           log: () => Effect.void,
           warn: () => Effect.void,
           waitMs: 60,
@@ -368,7 +392,10 @@ test("an interactive caller asks and reports, rather than waiting out the budget
           ports: interactive.ports,
           stateDir: rig.pluginEnv().stateDir,
           configured: 372_000,
-          herdr: { agentPrompt: () => Effect.void, agentList: () => Effect.succeed([]) },
+          herdr: {
+            agentPrompt: () => Effect.succeed("observed" as const),
+            agentList: () => Effect.succeed([]),
+          },
           log: () => Effect.void,
           warn: () => Effect.void,
           waitMs: 0,
@@ -399,7 +426,10 @@ test("a confirmed outcome clears the attempt, so the next boundary measures agai
           ports: again.ports,
           stateDir: rig.pluginEnv().stateDir,
           configured: 372_000,
-          herdr: { agentPrompt: () => Effect.void, agentList: () => Effect.succeed([]) },
+          herdr: {
+            agentPrompt: () => Effect.succeed("observed" as const),
+            agentList: () => Effect.succeed([]),
+          },
           log: () => Effect.void,
           warn: () => Effect.void,
           waitMs: 60,

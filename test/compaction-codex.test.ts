@@ -163,7 +163,7 @@ const ctx = (): AgentContext => ({
   cwd: fake.cwd,
   dir,
   endpoint: `ws://127.0.0.1:${server.port}`,
-  herdr: { agentPrompt: () => Effect.void },
+  herdr: { agentPrompt: () => Effect.succeed("observed" as const) },
 });
 
 beforeAll(() => {

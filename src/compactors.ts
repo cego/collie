@@ -697,6 +697,8 @@ const codex: CompactionPort = {
           yield* submitting(startCompaction(client, threadId));
         }),
       );
+      // Its own socket, not the human's channel: no submission for herdr to have seen.
+      return null;
     }).pipe(beforeSubmitting),
   poll: (ctx, requestId) =>
     Effect.gen(function* () {
@@ -848,6 +850,8 @@ const opencode: CompactionPort = {
       // A 200 here is the handler's own `true` after its loop, which says nothing
       // about what the loop did. The outcome is read back off the session.
       yield* submitting(summarize(base, session, model));
+      // Its own HTTP call, not the human's channel: no submission for herdr to see.
+      return null;
     }).pipe(beforeSubmitting),
   poll: (ctx, requestId) =>
     Effect.gen(function* () {

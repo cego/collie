@@ -240,6 +240,44 @@ directory (probed against herdr 0.8.2). So every pane the engine opens is `cd`-e
 tabs in one workspace and its work in another directory. Keep both: the `--cwd` is
 harmless and right if herdr ever honours it, and the `cd` is what actually works.
 
+The second gotcha it works around is submission itself. `agent prompt` writes the text
+and an encoded Enter and reports success once both are written — which is not the same as
+the agent having read them. A harness whose TUI takes the pane over just after that write
+keeps the text in its editor, unsent: probed against pi 0.85.1 under herdr 0.9.0, where
+about one launch in three lost the Enter that way and the step then sat silent until its
+quiet clock ran out.
+
+So `agentPrompt` answers a `Submission` — what herdr could actually tell us — rather than
+nothing. It reads the agent's status first, because only a submission that started from a
+settled agent can be told apart from a turn that was already running; then it submits with
+herdr's own gate, `--wait --until working --until blocked`. A turn observed after a settled
+start is `observed`. A gate that times out, and a prompt to an agent that was already
+working, are `unobserved`: the text and the Enter were written, and nothing at this
+boundary can say whether the agent took them. The engine records that line against the
+variant, because a step that goes quiet later is explained by it.
+
+Settled means a status herdr actually gave — `idle` or `done`. A status it could not
+give rules nothing out, so it is treated like a turn already running: no evidence.
+
+`agent_prompt_stalled` is herdr saying it saw no turn come of a settled agent's
+submission, and it is the one case with a recovery: one `agent send-keys <agent> enter`.
+The Enter, never the text again — re-sending the text would run the step's work twice —
+and never to an agent that is no longer settled, because a dialog that came up after the
+stall would take that Enter as its answer, which is exactly what herdr refuses to do on a
+caller's behalf. A turn seen after that Enter makes it a recovery; nothing seen leaves the
+submission `unobserved` rather than failed, because a turn can start and finish inside the
+wait and the variant's Output has to be collected either way. A genuinely lost Enter is
+what the step's quiet clock is for.
+
+A submission that fails outright — no such agent, a socket that is gone — blocks that one
+variant with the reason rather than failing every agent beside it. `unobserved` is never
+erased: the engine logs it against the variant, a hand-off says so in what it reports back
+and in both Runs' audit trails, and a compaction request records it, so an unresolved
+compaction can be told from one whose request may never have arrived.
+
+Because the submission settles all of this, nothing waits again after it: the engine
+watches a prompted agent straight away rather than keeping a readiness wait of its own.
+
 `env.ts` is the plugin environment herdr provides — state directory, config directory,
 socket path, plugin root. `HERDR_PLUGIN_ROOT` is what pins the baseline definitions to the
 installation the runner came from; the `collie` on PATH is a two-line shim that sets it.

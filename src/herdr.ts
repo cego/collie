@@ -5,7 +5,7 @@
 // `test/support/` enough to test everything above it.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Data, Deferred, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import { Data, Deferred, Effect, FileSystem, Option, Path, Result, Schema, Stream } from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { PlatformError } from "effect/PlatformError";
@@ -230,6 +230,27 @@ function envelopeError(operation: string, value: BoundaryValue): HerdrError | nu
   });
 }
 const herdrFail = (message: string, detail: string) => Effect.fail(herdrError(message, detail));
+
+/** The ceiling on a submission, so a harness slow to report never fails a step. */
+const SUBMIT_TIMEOUT_MS = 15_000;
+
+/**
+ * What herdr could tell us about a submission: a turn it saw start after this prompt, or
+ * no evidence — the text and the Enter were written, and it cannot say they were read.
+ */
+export type Submission = "observed" | "unobserved";
+
+/** Between turns, as herdr itself says so: anything else may be hiding a turn. */
+const isSettled = (status: AgentStatus) => status === "idle" || status === "done";
+
+/** The code herdr named, where a failed call printed an error envelope as its output. */
+function envelopeCode(text: string): string | undefined {
+  return Schema.decodeUnknownOption(JsonString)(text).pipe(
+    Option.flatMap((json) => Schema.decodeUnknownOption(ErrorEnvelope)(json)),
+    Option.map((envelope) => envelope.error.code),
+    Option.getOrUndefined,
+  );
+}
 
 /**
  * A target herdr does not have — a branch with no checkout, a repository it cannot key
@@ -463,9 +484,12 @@ export class Herdr {
     return Effect.gen(function* () {
       const { code, stdout, stderr } = yield* exec(args);
       if (code !== 0) {
+        const detail = stderr.trim() || stdout.trim();
         return yield* new HerdrError({
           message: `herdr ${args.slice(0, 2).join(" ")} failed (exit ${code})`,
-          detail: stderr.trim() || stdout.trim(),
+          detail,
+          // Named even on a non-zero exit, where herdr still prints its envelope.
+          code: envelopeCode(detail),
         });
       }
       const text = stdout.trim();
@@ -745,9 +769,57 @@ export class Herdr {
     return this.cli(args).pipe(Effect.asVoid);
   }
 
-  /** Submits without waiting so several agents can work at once. */
-  agentPrompt(target: string, text: string): HerdrEffect<void> {
-    return this.cli(["agent", "prompt", target, text]).pipe(Effect.asVoid);
+  /**
+   * Waits for the agent to take the prompt, not for its turn to finish, so several
+   * agents can work at once. Fails only where the prompt is known not to be in front
+   * of the agent; see [Internals](../docs/internals.md#checking-the-boundary-against-herdr)
+   * for why a written submission is not a delivered one.
+   */
+  agentPrompt(target: string, text: string): HerdrEffect<Submission> {
+    const statusNow = () =>
+      this.agentStatus(target).pipe(Effect.catch(() => Effect.succeed("unknown" as const)));
+    const submit = this.cli([
+      "agent",
+      "prompt",
+      target,
+      text,
+      "--wait",
+      "--until",
+      "working",
+      "--until",
+      "blocked",
+      "--timeout",
+      String(SUBMIT_TIMEOUT_MS),
+    ]).pipe(Effect.asVoid);
+    const press = this.agentSendKeys(target, "enter");
+    const startedATurn = this.agentWait(target, {
+      until: ["working", "blocked"],
+      timeoutMs: SUBMIT_TIMEOUT_MS,
+    });
+    return Effect.gen(function* () {
+      // `--wait` matches a turn that was already running, so only a settled start
+      // makes a match evidence of this prompt.
+      const settled = isSettled(yield* statusNow());
+      const outcome = yield* submit.pipe(Effect.result);
+      if (Result.isSuccess(outcome)) return settled ? "observed" : "unobserved";
+      const { code } = outcome.failure;
+      if (code === "timeout") return "unobserved";
+      if (code !== "agent_prompt_stalled") return yield* Effect.fail(outcome.failure);
+      // One Enter sends what is in the editor. Never the text again — the work would
+      // run twice — and never at an agent whose dialog would take it.
+      if (!isSettled(yield* statusNow())) return "unobserved";
+      yield* press;
+      // Nothing seen is not proof it was lost: a turn can start and finish inside the
+      // wait, so this is unobserved like any other and the Output is still collected.
+      return yield* startedATurn.pipe(
+        Effect.as<Submission>("observed"),
+        Effect.catch(() => Effect.succeed<Submission>("unobserved")),
+      );
+    });
+  }
+
+  agentSendKeys(target: string, ...keys: string[]): HerdrEffect<void> {
+    return this.cli(["agent", "send-keys", target, ...keys]).pipe(Effect.asVoid);
   }
 
   agentWait(

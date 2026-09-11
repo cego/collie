@@ -109,7 +109,7 @@ const ctx = (): AgentContext => ({
   cwd: fake.directory,
   dir,
   endpoint: server.base,
-  herdr: { agentPrompt: () => Effect.void },
+  herdr: { agentPrompt: () => Effect.succeed("observed" as const) },
 });
 
 /** As `install` leaves it: the session Collie created, recorded before the agent starts. */

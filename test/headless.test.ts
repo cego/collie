@@ -141,7 +141,9 @@ const configLayer = (driver?: string) =>
   );
 
 const currentPid = Effect.sync(() => globalThis.process.pid);
-const fakeHerdrFail = '{"agent prompt":"no such agent"}';
+// A step that cannot start its agent at all is what fails a run outright; a prompt
+// that does not arrive blocks the variant instead, which is a different row.
+const fakeHerdrFail = '{"agent start":"no such pane"}';
 
 effectTest("a review is one run tab of agent panes, and the plugin keeps one pane", function* () {
   yield* rig.queueOutputs([CLEAN, CLEAN, { ...CLEAN, summary: "nothing to fix", dropped: [] }]);
@@ -507,7 +509,7 @@ effectTest(
       { env: { FAKE_HERDR_FAIL: fakeHerdrFail } },
     );
     expect(status).toBe("failed");
-    yield* appendProgress(run.dir, "✗ solo — herdr agent prompt failed (exit 1): no such agent");
+    yield* appendProgress(run.dir, "✗ solo — herdr agent start failed (exit 1): no such pane");
 
     // The row carries the reason, because there is no pane it could have printed in.
     const view = yield* board();
@@ -515,7 +517,7 @@ effectTest(
     if (!row) return yield* Effect.fail(new Error("expected one recent run"));
     expect(row.glyph).toBe("✗");
     expect(row.detail).toContain("failed");
-    expect(row.detail).toContain("no such agent");
+    expect(row.detail).toContain("no such pane");
     // And a toast said so at the time.
     const toast = (yield* rig.calls()).filter((c) => c.cmd === "notification show").at(-1)?.argv;
     expect(toast?.[2]).toBe(`project · ${run.record.slug} failed`);

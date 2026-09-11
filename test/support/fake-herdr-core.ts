@@ -354,6 +354,20 @@ export function fakeHerdr(
       if (failFrom > 0 && state.prompts >= failFrom) {
         return { code: 1, stdout: "", stderr: `no agent ${argv[2]}\n` };
       }
+      // The code `--wait` answers a submission with, exit 1 and an envelope on stdout
+      // the way herdr really answers one: `agent_prompt_stalled` for a lost Enter,
+      // `timeout` for a wait the caller ran out of.
+      const code = yield* envString("FAKE_HERDR_PROMPT_ERROR", "");
+      if (code !== "") {
+        return {
+          code: 1,
+          stdout: `${encodeJson({
+            id: "cli:agent:prompt",
+            error: { code, message: `agent prompt answered ${code}` },
+          })}\n`,
+          stderr: "",
+        };
+      }
       const line = argv[3] ?? "";
       const ref = /is in (\S+\.md) /.exec(line);
       const text =

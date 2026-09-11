@@ -374,7 +374,7 @@ effectTest("a tab under an older name is renamed in place, not joined by a secon
   ).toContainEqual([seeded.paneId, COLLIE_TAB]);
 });
 
-effectTest("a step that fails after starting its agents still records them", function* () {
+effectTest("a step whose prompt cannot be delivered still records its agents", function* () {
   // The Control Plane finds its agents in the run record, so an agent that was
   // started has to be in there whatever happens to the step afterwards.
   yield* rig.queueOutputs([CLEAN]);
@@ -382,9 +382,14 @@ effectTest("a step that fails after starting its agents still records them", fun
 
   const { run, status } = yield* runWorkflow(rig, "solo", { goal: "g" }, { env });
 
-  expect(status).toBe("failed");
+  // Blocked, not failed: a prompt that did not arrive is the variant's problem, and
+  // the Run stops for the human the way a held compaction does — `run resume` picks
+  // it back up rather than the whole fan-out being abandoned.
+  expect(status).toBe("blocked");
   const variants = run.step("solo").variants;
   expect(variants).toHaveLength(1);
+  expect(variants[0]!.status).toBe("blocked");
+  expect(variants[0]!.error).toContain("was not given its prompt");
   expect(variants[0]!.agent).toBe("solo-g-solo-r1");
   expect(variants[0]!.paneId).not.toBeNull();
 

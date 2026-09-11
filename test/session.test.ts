@@ -2,7 +2,7 @@ import { Clock, Effect, FileSystem, Path } from "effect";
 import { nowIso } from "../src/time";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { REVIEW_FILE } from "../src/output";
-import { liveRole, record, type Session } from "../src/handoff";
+import { liveRole, record, sendReview, type Session } from "../src/handoff";
 import { STOPPED } from "../src/driver";
 import { liveEntries, readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { RunStore, type HandoffRecord } from "../src/run";
@@ -205,6 +205,37 @@ test("with an implementer live, the review hands it the findings and both runs r
         ["received", "implementer", run.id],
       ]);
       expect(run.step("post").note).toContain("sent");
+    }),
+  ));
+
+test("a hand-off herdr saw no turn come of says so, in the message and the record", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const implementer = yield* liveImplementer();
+      const env = rig.pluginEnv({ FAKE_HERDR_PROMPT_ERROR: "timeout" });
+      const review = yield* new RunStore(env.stateDir).create({
+        workflow: "review",
+        cwd: env.cwd,
+        inputs: {},
+        inputSources: {},
+        stepIds: ["synthesize"],
+        maxIterations: 1,
+        namedAfter: "review",
+      });
+      yield* fs.writeFileString(path.join(review.dir, REVIEW_FILE), "# One blocker\n");
+
+      const result = yield* sendReview(session(env), review);
+
+      // Sent, because it was: what nobody can say is whether it was read, and the
+      // human is the one who can go and look.
+      expect(result.ok).toBe(true);
+      expect(result.message).toContain(implementer.name);
+      expect(result.message).toContain("herdr saw no turn start");
+      expect(must(review.record.handoffs.at(0), "expected sent handoff").note).toContain(
+        "herdr saw no turn start",
+      );
     }),
   ));
 

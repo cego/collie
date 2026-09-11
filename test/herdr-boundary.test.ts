@@ -507,3 +507,124 @@ test("an agent's terminal title decodes, and an agent without one has none", () 
       expect(list[3]!.title).toBe("[Fix] the parser");
     }),
   ));
+
+test("a submission herdr saw no turn come of is finished with one Enter, not sent again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_PROMPT_ERROR: "agent_prompt_stalled" }));
+      const text = "Your task for this step is in /tmp/prompt-1.md — read it and follow it.";
+      expect(yield* herdr.agentPrompt("reviewer", text)).toBe("observed");
+
+      const calls = yield* rig.calls();
+      // Once: sending the text again would run the reviewer's whole turn twice.
+      expect(calls.filter((call) => call.cmd === "agent prompt").map((call) => call.argv)).toEqual([
+        [
+          "agent",
+          "prompt",
+          "reviewer",
+          text,
+          "--wait",
+          "--until",
+          "working",
+          "--until",
+          "blocked",
+          "--timeout",
+          "15000",
+        ],
+      ]);
+      expect(
+        calls.filter((call) => call.cmd === "agent send-keys").map((call) => call.argv),
+      ).toEqual([["agent", "send-keys", "reviewer", "enter"]]);
+      // And the Enter is a recovery only once herdr has seen the turn it started.
+      expect(calls.filter((call) => call.cmd === "agent wait").map((call) => call.argv)).toEqual([
+        [
+          "agent",
+          "wait",
+          "reviewer",
+          "--until",
+          "working",
+          "--until",
+          "blocked",
+          "--timeout",
+          "15000",
+        ],
+      ]);
+    }),
+  ));
+
+test("an Enter with no turn seen after it is unobserved, not a turn that never ran", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(
+        rig.pluginEnv({
+          FAKE_HERDR_PROMPT_ERROR: "agent_prompt_stalled",
+          FAKE_HERDR_FAIL: '{"agent wait":"timeout"}',
+        }),
+      );
+      // A turn can start and finish inside that wait, so nothing seen is not proof the
+      // Enter was lost. Failing here would block a variant whose Output already exists.
+      expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toHaveLength(1);
+    }),
+  ));
+
+test("a status herdr could not give is not read as an agent between turns", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // `--wait` matches a turn that was already running, so a status that cannot rule
+      // one out cannot make a match evidence of this prompt.
+      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "unknown" }));
+      expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+    }),
+  ));
+
+test("a submission nobody could vouch for is unobserved, not failed and not pressed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A wait the caller ran out of says nothing, so nothing is pressed on it.
+      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_PROMPT_ERROR: "timeout" }));
+      expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+    }),
+  ));
+
+test("an agent already working cannot vouch for a new prompt, so nothing pretends it did", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // herdr matches the turn already running, which says nothing about this prompt.
+      const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" }));
+      expect(yield* herdr.agentPrompt("reviewer", "steer left")).toBe("unobserved");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+    }),
+  ));
+
+test("no Enter goes to an agent that blocked after the stall", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(
+        rig.pluginEnv({
+          FAKE_HERDR_PROMPT_ERROR: "agent_prompt_stalled",
+          FAKE_HERDR_AGENT_STATUS: "idle,blocked",
+        }),
+      );
+      // That Enter would answer the dialog with whatever its default is, which is the
+      // one thing herdr refuses to do on a caller's behalf.
+      expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+    }),
+  ));
+
+test("a submission that failed for any other reason still fails, and nothing is pressed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const herdr = new Herdr(
+        rig.pluginEnv({ FAKE_HERDR_FAIL: '{"agent prompt":"no agent reviewer"}' }),
+      );
+      const failure = yield* Effect.flip(herdr.agentPrompt("reviewer", "do the thing"));
+      expect(failure._tag).toBe("HerdrError");
+      // An Enter into a pane whose agent is gone, or whose dialog is waiting, is not a
+      // recovery.
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+    }),
+  ));

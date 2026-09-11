@@ -2,7 +2,7 @@
 // agent from another Run should act on prompts that agent directly, instead of
 // starting a second one that knows none of the history.
 
-import { Crypto, Effect, FileSystem, Path } from "effect";
+import { Crypto, Effect, FileSystem, Path, Result } from "effect";
 import { nowIso } from "./time";
 import { atBoundary, type CompactionSettings } from "./compaction";
 import { compactionFor } from "./compactors";
@@ -69,6 +69,9 @@ export interface HandoffResult {
    */
   held?: true;
 }
+
+/** Said where herdr saw no turn come of a hand-off: written, but not known read. */
+const UNOBSERVED = " — herdr saw no turn start; check its pane";
 
 function failed(message: string): HandoffResult {
   return { ok: false, message };
@@ -215,15 +218,13 @@ export const sendReview = Effect.fn("Handoff.sendReview")(function* (session: Se
   if (held) return held;
 
   const prompt = yield* reviewPrompt(run);
-  const promptFailure = yield* session.herdr.agentPrompt(target.agent, prompt).pipe(
-    Effect.as(null),
-    Effect.catch((error) =>
-      Effect.succeed(failed(`${target.agent} would not take the prompt: ${String(error)}`)),
-    ),
-  );
-  if (promptFailure) return promptFailure;
-  yield* record(session, run, target, `sent ${REVIEW_FILE} to the ${target.role}`);
-  return { ok: true, message: `sent ${run.record.slug}'s review to ${target.agent}` };
+  const submission = yield* session.herdr.agentPrompt(target.agent, prompt).pipe(Effect.result);
+  if (Result.isFailure(submission)) {
+    return failed(`${target.agent} would not take the prompt: ${String(submission.failure)}`);
+  }
+  const unseen = submission.success === "unobserved" ? UNOBSERVED : "";
+  yield* record(session, run, target, `sent ${REVIEW_FILE} to the ${target.role}${unseen}`);
+  return { ok: true, message: `sent ${run.record.slug}'s review to ${target.agent}${unseen}` };
 });
 
 /**
@@ -270,15 +271,13 @@ export const sendPlanChange = Effect.fn("Handoff.sendPlanChange")(function* (
     "quietly undoing either side.",
   ].join(" ");
 
-  const promptFailure = yield* session.herdr.agentPrompt(target.agent, text).pipe(
-    Effect.as(null),
-    Effect.catch((error) =>
-      Effect.succeed(failed(`${target.agent} would not take the prompt: ${String(error)}`)),
-    ),
-  );
-  if (promptFailure) return promptFailure;
-  yield* record(session, run, target, "sent the plan change to the implementer");
-  return { ok: true, message: `told ${target.agent} the plan changed` };
+  const submission = yield* session.herdr.agentPrompt(target.agent, text).pipe(Effect.result);
+  if (Result.isFailure(submission)) {
+    return failed(`${target.agent} would not take the prompt: ${String(submission.failure)}`);
+  }
+  const unseen = submission.success === "unobserved" ? UNOBSERVED : "";
+  yield* record(session, run, target, `sent the plan change to the implementer${unseen}`);
+  return { ok: true, message: `told ${target.agent} the plan changed${unseen}` };
 });
 
 /**

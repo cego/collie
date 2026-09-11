@@ -28,6 +28,7 @@ const ctx = (): AgentContext => ({
     agentPrompt: (_target, text) =>
       Effect.sync(() => {
         prompted.push(text);
+        return "observed" as const;
       }),
   },
 });
