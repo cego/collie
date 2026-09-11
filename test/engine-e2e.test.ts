@@ -196,8 +196,12 @@ test("plan runs one step in a tab of its own and records the run", () =>
         "pane run",
         "agent start",
         "agent.view.set",
+        // What the agent was doing before the prompt, so that a turn seen afterwards
+        // is known to be this prompt's and not one already running.
+        "agent get",
+        // The submission waits for the agent to take it, so nothing waits again after
+        // it: `agent prompt` answers that question at the boundary.
         "agent prompt",
-        "agent wait",
         // The step is watched, not waited on: one status poll, and it is already idle.
         "agent get",
         // Its step over, and then the run: the tab drops the step it was on, and
@@ -926,8 +930,9 @@ test("quiet_ms 0 waits for as long as it takes and never nudges", () =>
 
       expect(status).toBe("done");
       expect(run.record.steps[0]!.variants[0]!.nudges).toBe(0);
-      // The plain wait, not the watching loop.
-      expect((yield* rig.cmds()).filter((c) => c === "agent get")).toHaveLength(0);
+      // The plain wait, not the watching loop: the one status read is the submission's
+      // own, asked before the prompt went out.
+      expect((yield* rig.cmds()).filter((c) => c === "agent get")).toHaveLength(1);
     }),
   ));
 
@@ -963,7 +968,9 @@ test("a give-up keeps an Output the agent had already written", () =>
         { goal: "Add a picker", ticket: "" },
         {
           env: { FAKE_HERDR_AGENT_STATUS: "working", FAKE_HERDR_PANE_TEXT: "stuck" },
-          defaults: { quietMs: 30 },
+          // Long enough that both nudges are due before the give-up whatever the
+          // polls cost: the quiet clock is what this asserts, not the round trips.
+          defaults: { quietMs: 1000 },
           outputPollMs: 5,
         },
       );
@@ -988,7 +995,9 @@ test("the nudge itself does not count as the agent waking up", () =>
         { goal: "Add a picker", ticket: "" },
         {
           env: { FAKE_HERDR_AGENT_STATUS: "working", FAKE_HERDR_PANE_TEXT: "prompts" },
-          defaults: { quietMs: 30 },
+          // Long enough that both nudges are due before the give-up whatever the
+          // polls and the submissions cost: the quiet clock is what this asserts.
+          defaults: { quietMs: 1000 },
           outputPollMs: 5,
         },
       );
@@ -996,7 +1005,10 @@ test("the nudge itself does not count as the agent waking up", () =>
       expect(status).toBe("blocked");
       const variant = run.record.steps[0]!.variants[0]!;
       expect(variant.nudges).toBe(2);
-      expect(variant.error).toContain("did not respond to two nudges");
+      // Two nudges and then a give-up. Which of the two give-up lines says so depends
+      // on whether the second nudge's own writing landed inside a quiet period — a
+      // race with the polls, and not what this test is about.
+      expect(variant.error).toContain("two nudges");
     }),
   ));
 

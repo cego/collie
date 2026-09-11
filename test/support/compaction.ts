@@ -36,11 +36,12 @@ export function scriptedPort(opts: {
   usage?: ReadonlyArray<number | null | Error>;
   poll?: ReadonlyArray<CompactionOutcome | null>;
   /**
-   * How asking for a compaction fails. `unsubmitted` is a request that never left, the
+   * How asking for a compaction goes. `unsubmitted` is a request that never left, the
    * only failure that may release the waiting work; `failed` is one that may have left
-   * before it broke, which is an outcome nobody has established.
+   * before it broke, which is an outcome nobody has established; `unobserved` left
+   * through the human's channel with no turn seen to come of it.
    */
-  request?: "unsubmitted" | "failed";
+  request?: "unsubmitted" | "failed" | "unobserved";
   /** Which harness's interface this stands in for. Defaults to the tests' own. */
   harness?: string;
 }): Scripted {
@@ -76,7 +77,9 @@ export function scriptedPort(opts: {
             if (opts.request === "failed") {
               return Effect.fail(new Error("the connection closed"));
             }
-            return Effect.void;
+            if (opts.request === "unobserved") return Effect.succeed("unobserved" as const);
+            // No verdict of its own, as an adapter off the human's channel answers.
+            return Effect.succeed(null);
           }),
         poll: () => Effect.succeed(poll.length > 0 ? (poll.shift() ?? null) : null),
       },

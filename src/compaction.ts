@@ -5,9 +5,9 @@
 // next step, a fix round, a hand-off from another Run — and a threshold repeated per
 // harness is a threshold that disagrees with itself.
 
-import { Clock, Data, Effect, FileSystem, Path, PlatformError, Schema } from "effect";
+import { Clock, Data, Effect, FileSystem, Path, PlatformError, Result, Schema } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import type { Herdr } from "./herdr";
+import type { Herdr, Submission } from "./herdr";
 import { reason } from "./naming";
 
 /**
@@ -132,8 +132,15 @@ export interface CompactionPort {
   install(ctx: LaunchContext): Effect.Effect<Installed, PortError, PortServices>;
   /** The harness's own current-context total. `null` where no usable sample exists. */
   usage(ctx: AgentContext): Effect.Effect<number | null, PortError, PortServices>;
-  /** Submits a native compaction request. Acknowledgement only, never completion. */
-  request(ctx: AgentContext, requestId: string): Effect.Effect<void, PortError, PortServices>;
+  /**
+   * Submits a native compaction request. Acknowledgement only, never completion — and
+   * `unobserved` where the channel it went through could not confirm even that much.
+   * `null` from an adapter whose channel has no such notion.
+   */
+  request(
+    ctx: AgentContext,
+    requestId: string,
+  ): Effect.Effect<Submission | null, PortError, PortServices>;
   /** What this request has established, or `null` while it is still unresolved. */
   poll(
     ctx: AgentContext,
@@ -450,10 +457,12 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* (
   yield* deps.warn(
     `  ⇣ ${at.agent}: ${sample} tokens in context — asking it to compact before ${at.step}`,
   );
-  const failure = yield* port.request(ctx, attempt.id).pipe(
-    Effect.as(null),
-    Effect.catch((cause) => Effect.succeed(cause)),
-  );
+  const submitted = yield* port.request(ctx, attempt.id).pipe(Effect.result);
+  const failure = Result.isFailure(submitted) ? submitted.failure : null;
+  // Written but unconfirmed: what tells a request that never arrived from one ignored.
+  if (Result.isSuccess(submitted) && submitted.success === "unobserved") {
+    yield* deps.log(`${at.agent}: compaction request written, no turn observed`);
+  }
   if (failure instanceof Unsubmitted) {
     // It never left, so nothing is in flight to wait for. A channel that refused a
     // submission is a temporary failure, which warns and continues; it is not the
