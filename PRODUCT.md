@@ -83,8 +83,8 @@ autonomy are not success measures by themselves.
 
 ## Relationship to today's product
 
-The [README](../README.md) describes workflow execution, while the
-[glossary](../CONTEXT.md) defines the Control Plane, Runs, Attention, and hand-offs.
+The [README](README.md) describes workflow execution, while the
+[glossary](CONTEXT.md) defines the Control Plane, Runs, Attention, and hand-offs.
 These are foundations for this direction, not evidence that conversational steering
 or proactive intent-level correction already exists.
 

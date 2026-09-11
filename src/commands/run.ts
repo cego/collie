@@ -55,6 +55,7 @@ import { scopeFor, scopeKey } from "../registry";
 import { runDeliveries } from "./steer";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
+import { latest, readDispositions, recordDisposition, statusLine } from "../disposition";
 import { nowIso } from "../time";
 import type { Run } from "../run";
 import type { PluginEnv } from "../env";
@@ -291,14 +292,17 @@ const runShow = Command.make(
           const run = resolved.run;
           // The snapshot carries the status, so it is not worked out a second time here.
           const snapshot = yield* runData(run);
-          const head = `${run.id}\t${snapshot.status}\t${run.record.workflow}`;
+          // Both facts on the head line: how execution ended, and what became of the
+          // work. A Run that failed and whose work shipped anyway says both.
+          const disposition = latest(yield* readDispositions(run.dir));
+          const head = `${run.id}\t${statusLine(snapshot.status, disposition)}\t${run.record.workflow}`;
           // The same facts the attention wait returns, from the same place: a Run that
           // stopped explains itself identically whichever command asked. Reading it
           // changes nothing — no recovery happens here, only the account of it.
           const attention = yield* attentionFor(run, new Herdr(resolved.env));
           return {
             ok: true,
-            data: { run: snapshot, attention },
+            data: { run: snapshot, attention, disposition },
             human: [
               head,
               attention.explanation,
@@ -716,6 +720,72 @@ const runClearOverride = Command.make(
     ),
 ).pipe(
   Command.withDescription("Let Collie correct an agent again after someone typed into its pane"),
+);
+
+/**
+ * What became of a Run's work, which is not the same fact as how its execution ended. A
+ * Run that failed still failed; this says whether the work landed anyway, and by what.
+ * Nothing here can reach the Run's status, so a row can stop being a lie without the
+ * history becoming one. Without `--as` it reads rather than writes, like its neighbours.
+ */
+const runDisposition = Command.make(
+  "disposition",
+  {
+    runId: runIdArg,
+    as: Flag.choice("as", ["merged", "abandoned", "superseded"]).pipe(
+      Flag.withDescription("Record what became of the work; without it, this only reads"),
+      Flag.optional,
+    ),
+    ref: Flag.string("ref").pipe(
+      Flag.withDescription("What backs it up: a merge request, a commit, or the Run that took it"),
+      Flag.withDefault(""),
+    ),
+    note: Flag.string("note").pipe(
+      Flag.withDescription("Anything a reader would need, in your own words"),
+      Flag.optional,
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ runId, as, ref, note, requestId }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* resolveCommandRun(global, runId);
+          if (resolved._tag === "RunFailure") return resolved.result;
+          const run = resolved.run;
+          const kind = Option.getOrNull(as);
+          if (kind === null) {
+            const lines = yield* readDispositions(run.dir);
+            return {
+              ok: true,
+              data: { run: run.id, status: run.record.status, disposition: latest(lines), lines },
+              human: statusLine(run.record.status, latest(lines)),
+            };
+          }
+          return yield* mutation(resolved.env, "run-disposition", requestId, (id) =>
+            Effect.gen(function* () {
+              const line = {
+                at: yield* nowIso(),
+                by: actorName(actorNow(id)),
+                kind,
+                ref,
+                note: Option.getOrNull(note),
+              };
+              yield* recordDisposition(run.dir, line);
+              return {
+                ok: true,
+                data: { run: run.id, status: run.record.status, disposition: line },
+                human: statusLine(run.record.status, line),
+              };
+            }),
+          );
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription("What became of a Run's work, recorded beside its status not over it"),
 );
 
 const runDrift = Command.make("drift", { runId: runIdArg }, ({ runId }) =>
@@ -1178,6 +1248,7 @@ export const run = Command.make("run").pipe(
     runRelease,
     runClearOverride,
     runDeliveries,
+    runDisposition,
     runDrift,
     runCards,
     runFollowUp,

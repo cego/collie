@@ -37,6 +37,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `drift.ts`         | Where the work and the Intent disagree: rules, judgement, and the correction loop        |
 | `verify.ts`        | A command's result bound to the tree it ran on, so a card can say verified not claimed   |
 | `cards.ts`         | One slice of work as a human wants it handed over, with its readiness and significance   |
+| `disposition.ts`   | What became of a Run's work, recorded beside its status and never over it                |
 | `conversation.ts`  | What the human and Collie have said about this Herd, redacted and reference-checked      |
 | `home.ts`          | Which workspace is this Herd's Home, decided by proof and never by a label               |
 | `live.ts`          | The board's Live region and every row's marks, from one pass. Read-only                  |

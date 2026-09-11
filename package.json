@@ -9,6 +9,7 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "bun test",
+    "acceptance": "bun run tools/acceptance.ts",
     "contract:check": "bun run tools/herdr-schema.ts pinned --check",
     "contract:regen": "bun run tools/herdr-schema.ts pinned --write",
     "typecheck": "tsc --noEmit",

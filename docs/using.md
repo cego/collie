@@ -760,7 +760,7 @@ checkout there is no branch and no working tree to review, so the target menu is
 ```
 
 `scope` is which board a Control Plane opens on — `local`, this workspace, or `all`, every
-workspace of this herdr session Collie has work in ([Scope](#scope-this-workspace-or-the-whole-session)).
+workspace of this herdr session Collie has work in ([Filters](#filters-which-of-the-herds-work-is-showing)).
 `g` changes it for that tab and nothing remembers it, so this is the only place the answer
 to "the way I use it" lives.
 
