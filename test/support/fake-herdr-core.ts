@@ -1,7 +1,7 @@
 // Fake herdr. Records every invocation and answers with canned ids so a whole
 // run can be driven without a herdr server.
 
-import { Cause, Config, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { Cause, Config, Effect, FileSystem, Option, Path, Schema, Semaphore } from "effect";
 
 interface FakeTab {
   tab_id: string;
@@ -17,11 +17,16 @@ interface FakePane {
   agent?: string | null;
   workspace_id?: string | null;
   foreground_cwd?: string | null;
+  /** What a plugin attached, which is what the Home's ownership proof reads back. */
+  tokens?: Record<string, string>;
+  terminal_id?: string | null;
 }
 
 interface FakeAgent {
   name: string;
   pane_id: string;
+  /** herdr's identity for the process; defaulted per name unless a test pins one. */
+  terminal_id?: string;
 }
 
 /** A workspace herdr has. Empty by default: a test that cares adds its own. */
@@ -29,6 +34,8 @@ interface FakeWorkspace {
   workspace_id: string;
   label: string;
   cwd?: string | null;
+  /** As on a pane: what `workspace.report_metadata` attached. */
+  tokens?: Record<string, string>;
 }
 
 interface FakeWorktree {
@@ -75,22 +82,39 @@ const FakePaneSchema = Schema.Struct({
   pane_id: Schema.String,
   tab_id: Schema.String,
   label: Schema.NullOr(Schema.String),
+  /** What a plugin has attached to it. The Home's ownership proof rests on one of these. */
+  tokens: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  terminal_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
   workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   foreground_cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
-const FakeAgentSchema = Schema.Struct({ name: Schema.String, pane_id: Schema.String });
+const FakeAgentSchema = Schema.Struct({
+  name: Schema.String,
+  pane_id: Schema.String,
+  terminal_id: Schema.optionalKey(Schema.String),
+});
 const FakeWorkspaceSchema = Schema.Struct({
   workspace_id: Schema.String,
   label: Schema.String,
   cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** As on a pane: what `workspace.report_metadata` attached, which is what owns a Home. */
+  tokens: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
 });
 const FakeWorktreeSchema = Schema.Struct({
   path: Schema.String,
   branch: Schema.String,
   open_workspace_id: Schema.NullOr(Schema.String),
 });
+/** The metadata file the socket side writes: tokens by workspace id and by pane id. */
+const TokensJson = Schema.fromJsonString(
+  Schema.Record(
+    Schema.Literals(["workspaces", "panes"]),
+    Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.String)),
+  ),
+);
+
 const StateJson = Schema.fromJsonString(
   Schema.Struct({
     tabs: Schema.optionalKey(Schema.Number),
@@ -181,9 +205,24 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
   };
 }
 
+/**
+ * One call at a time. The fake keeps its state in a JSON file it reads, edits and writes
+ * back; Collie now sends to several agents at once, and two concurrent calls would both
+ * read the same output-queue index. A real herdr serialises on its own socket, so this is
+ * the fake catching up with what it is standing in for, not a test-only relaxation.
+ */
+const turn = Semaphore.makeUnsafe(1);
+
 export function fakeHerdr(
   argv: string[],
   environment: Readonly<Record<string, string | undefined>> = {},
+): Effect.Effect<FakeResult, never, FileSystem.FileSystem | Path.Path> {
+  return turn.withPermits(1)(handle(argv, environment));
+}
+
+function handle(
+  argv: string[],
+  environment: Readonly<Record<string, string | undefined>>,
 ): Effect.Effect<FakeResult, never, FileSystem.FileSystem | Path.Path> {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -196,6 +235,18 @@ export function fakeHerdr(
     };
     const log = yield* envString("FAKE_HERDR_LOG");
     const statePath = `${log}.state.json`;
+    /**
+     * The plugin metadata `*.report_metadata` attached, which only the socket side sees.
+     * Its own file, so the two writers never share one: this is read here and merged into
+     * whatever `workspace list` and `pane list` answer.
+     */
+    const tokensFor = Effect.fn("fake.tokensFor")(function* (on: "workspaces" | "panes") {
+      const raw = yield* fs
+        .readFileString(`${log}.tokens.json`, "utf8")
+        .pipe(Effect.catch(() => Effect.succeed("")));
+      const held = Schema.decodeUnknownOption(TokensJson)(raw);
+      return held._tag === "Some" ? (held.value[on] ?? {}) : {};
+    });
 
     const readState = (file: string) =>
       fs.readFileString(file, "utf8").pipe(
@@ -254,8 +305,16 @@ export function fakeHerdr(
       return tab;
     }
 
-    function newPane(tabId: string, label: string | null = null): FakePane {
-      const pane = { pane_id: `1-${(state.panes += 1)}`, tab_id: tabId, label };
+    function newPane(tabId: string, label: string | null = null, workspaceId?: string): FakePane {
+      const pane = {
+        pane_id: `1-${(state.panes += 1)}`,
+        tab_id: tabId,
+        label,
+        // The workspace it was opened in. herdr reports this on every pane, and the
+        // Home's ownership proof is "the recorded pane, in the recorded workspace" —
+        // so a pane that always claimed workspace 1 lost the proof every time.
+        workspace_id: workspaceId ?? null,
+      };
       state.paneList.push(pane);
       return pane;
     }
@@ -344,6 +403,39 @@ export function fakeHerdr(
       };
     }
 
+    // The installed binary's own description of what it can do, which the Home's
+    // runtime gate reads. Only what the gate reads: the real document is a quarter of a
+    // megabyte, and a fake that pushed that down a pipe was testing Bun's writes rather
+    // than the gate. `FAKE_HERDR_RUNTIME_MISSING` names what this herdr does *not*
+    // declare, which is how a test reaches the refusal.
+    if (cmd === "api schema") {
+      const absent = (yield* envString("FAKE_HERDR_RUNTIME_MISSING", ""))
+        .split(",")
+        .filter((name) => name !== "");
+      const declared = (name: string) => !absent.includes(name);
+      const properties = (...fields: string[]) =>
+        Object.fromEntries(fields.filter(declared).map((field) => [field, {}]));
+      const methods = ["workspace.report_metadata", "pane.report_metadata", "workspace.create"]
+        .filter(declared)
+        .map((method) => ({ method }));
+      return {
+        code: 0,
+        stdout: `${encodeJson({
+          protocol: 20,
+          schemas: {
+            socket: {
+              methods,
+              $defs: {
+                WorkspaceInfo: { properties: properties("workspace_id", "tokens") },
+                PaneInfo: { properties: properties("pane_id", "tokens", "terminal_id") },
+              },
+            },
+          },
+        })}\n`,
+        stderr: "",
+      };
+    }
+
     if (cmd === "agent prompt") {
       state.prompts += 1;
       yield* writeJson(statePath, state);
@@ -358,16 +450,18 @@ export function fakeHerdr(
       // the way herdr really answers one: `agent_prompt_stalled` for a lost Enter,
       // `timeout` for a wait the caller ran out of.
       const code = yield* envString("FAKE_HERDR_PROMPT_ERROR", "");
-      if (code !== "") {
-        return {
-          code: 1,
-          stdout: `${encodeJson({
-            id: "cli:agent:prompt",
-            error: { code, message: `agent prompt answered ${code}` },
-          })}\n`,
-          stderr: "",
-        };
-      }
+      const answered = {
+        code: 1,
+        stdout: `${encodeJson({
+          id: "cli:agent:prompt",
+          error: { code, message: `agent prompt answered ${code}` },
+        })}\n`,
+        stderr: "",
+      };
+      // A `timeout` is a wait that ran out, not a prompt that was lost: the text and the
+      // Enter were written, and the agent works on it whether or not herdr saw the turn
+      // start. So the Output is still produced, and then the wait's answer is given.
+      if (code !== "" && code !== "timeout") return answered;
       const line = argv[3] ?? "";
       const ref = /is in (\S+\.md) /.exec(line);
       const text =
@@ -417,6 +511,7 @@ export function fakeHerdr(
           }
         }
       }
+      if (code === "timeout") return answered;
     }
 
     let result = {};
@@ -437,9 +532,28 @@ export function fakeHerdr(
         if (tab) tab.label = argv[3] ?? tab.label;
         break;
       }
-      case "workspace list":
-        result = { type: "workspace_list", workspaces: state.workspaces };
+      case "workspace list": {
+        const held = yield* tokensFor("workspaces");
+        result = {
+          type: "workspace_list",
+          workspaces: state.workspaces.map((w) => ({
+            ...w,
+            tokens: { ...w.tokens, ...held[w.workspace_id] },
+          })),
+        };
         break;
+      }
+      case "workspace create": {
+        const workspace = {
+          workspace_id: `w${state.workspaces.length + 1}`,
+          label: flag("--label") ?? "",
+          cwd: flag("--cwd") ?? null,
+        };
+        state.workspaces.push(workspace);
+        yield* writeJson(statePath, state);
+        result = { type: "workspace_created", workspace };
+        break;
+      }
       case "tab list":
         result = {
           type: "tab_list",
@@ -465,21 +579,33 @@ export function fakeHerdr(
         result = { type: "pane_move", move_result: { changed: true } };
         break;
       }
-      case "pane list":
+      case "pane list": {
+        const held = yield* tokensFor("panes");
         result = {
           type: "pane_list",
           // A pane herdr made carries the workspace it was made in; one a test placed
           // may name its own.
-          panes: state.paneList.map((p) => ({ ...p, workspace_id: p.workspace_id ?? "1" })),
+          panes: state.paneList.map((p) => ({
+            ...p,
+            workspace_id: p.workspace_id ?? "1",
+            tokens: { ...p.tokens, ...held[p.pane_id] },
+            // A pane herdr made has a terminal behind it; its id is the other half of
+            // the Home's ownership proof, so it is as stable as the pane's own id.
+            terminal_id: p.terminal_id ?? `t-${p.pane_id}`,
+          })),
         };
         break;
+      }
       case "plugin pane": {
         const target = flag("--target-pane");
         const tabId =
           flag("--placement") === "split" && target ? tabOf(target) : newTab("plugin").tab_id;
         result = {
           type: "plugin_pane_opened",
-          plugin_pane: { entrypoint: flag("--entrypoint") ?? "", pane: newPane(tabId) },
+          plugin_pane: {
+            entrypoint: flag("--entrypoint") ?? "",
+            pane: newPane(tabId, null, flag("--workspace")),
+          },
         };
         break;
       }
@@ -496,7 +622,13 @@ export function fakeHerdr(
           type: "agent_list",
           agents: state.agents
             .filter((a) => !gone.has(a.name))
-            .map((a) => ({ ...a, agent_status: status })),
+            .map((a) => ({
+              ...a,
+              agent_status: status,
+              // herdr names every live agent's process; Collie's registry records it as
+              // the incarnation, so the fake has to have one or nothing is deliverable.
+              terminal_id: a.terminal_id ?? `term-${a.name}`,
+            })),
         };
         break;
       }

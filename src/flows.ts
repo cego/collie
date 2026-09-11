@@ -12,7 +12,25 @@ import {
   SCOPES,
   writeConfigValue,
 } from "./config";
+import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformError } from "effect/PlatformError";
+import type { SchemaError } from "effect/Schema";
 import { COMPACTION_OFF, validThreshold } from "./compaction";
+import { herdDir, herdOf, HerdrUnreachable } from "./steering";
+import {
+  ensureHomeFor,
+  homePath,
+  LEGACY_PANE_TOKEN,
+  originPath,
+  readHome,
+  readOrigin,
+  TOKEN_TTL_MS,
+  writeOrigin,
+  UNREADABLE,
+} from "./home";
+import { liveFor, type Live } from "./live";
+import type { IntentUnreadable } from "./intent";
+import { ProposalsBusy, type Actor } from "./proposals";
 import {
   isStale,
   layers,
@@ -21,7 +39,7 @@ import {
   type Definitions,
   type Provenance,
 } from "./definitions";
-import { ensureWorkspaceTab, executeRun } from "./engine";
+import { executeRun } from "./engine";
 import type { PluginEnv } from "./env";
 import {
   Herdr,
@@ -35,7 +53,7 @@ import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { notify } from "./notify";
 import { COLLIE_TAB, reason, runLabel, shellQuote, tabLabelsFor } from "./naming";
-import { RunStore, type Run } from "./run";
+import { markedFrom, RunStore, type Run } from "./run";
 import { pruneWorktrees } from "./worktree";
 import { sendReview, sendReviewToImplementer, type Session } from "./handoff";
 import {
@@ -59,10 +77,24 @@ import {
   type ExpectedError,
   postReview,
   resumeRun,
+  err,
   startRun,
+  carryOutProposal,
+  declineProposal,
+  evaluationDeps,
+  registerRunExecutors,
+  workspaceCwdFromPanes,
+  steer,
   stopRun as stopRunOperation,
 } from "./operations";
-import { answerFor, rereads, runIdOf, type AppState, type Command } from "./ui/state";
+import {
+  answerFor,
+  openingFilter,
+  rereads,
+  runIdOf,
+  type AppState,
+  type Command,
+} from "./ui/state";
 import type { Focus } from "./ui/bridge";
 import {
   buildHistory,
@@ -88,6 +120,7 @@ import {
   askingRun,
   buildView,
   buildWideView,
+  renderRedirect,
   renderWorkspace,
   type Asking,
   type RunRow,
@@ -155,20 +188,106 @@ export const openPicker = Effect.fn("Flows.openPicker")(function* (
  * one workspace ends up with two Collie tabs.
  */
 export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, env: PluginEnv) {
-  const tabId = yield* ensureWorkspaceTab({
-    herdr,
-    workspaceId: env.workspaceId,
-    cwd: env.cwd,
-    log: (line) => Console.error(line),
-  });
-  if (tabId === null) {
-    yield* Console.error("No workspace here to open the Control Plane in.");
+  const ensured = yield* ensureHomeFor(herdr, env, (line) => Console.error(line));
+  if (ensured === null) return 1;
+  if (ensured.kind === "ownership_unknown") {
+    yield* Console.error(
+      [
+        `Collie cannot tell which workspace is this Herd's Home: ${ensured.why}.`,
+        `Candidates: ${ensured.candidates.join(", ")}`,
+        "`collie home reconcile --adopt <id>` or `--forget` settles it.",
+      ].join("\n"),
+    );
     return 1;
   }
-  // A tab that will not focus is still a tab the human can reach, so this is not
-  // what the exit status turns on.
-  yield* Effect.ignore(herdr.tabFocus(tabId));
+  const home = ensured.record;
+  // Where the shortcut was pressed, so the board opens narrowed to the work the human
+  // came from. Pressed inside the Home it means the opposite — show me everything — so
+  // that is what it records.
+  const inHome = env.workspaceId !== null && env.workspaceId === home.workspaceId;
+  yield* writeOrigin(yield* originPath(env.stateDir, yield* herdOf(env.socketPath)), {
+    workspaceId: inHome ? null : env.workspaceId,
+    cwd: env.cwd,
+    filter: inHome ? "all" : null,
+  });
+  // The Home may be another workspace entirely: one Herd has one board (ADR-0009), so
+  // reaching it is a workspace switch as well as a tab focus. Neither is what the exit
+  // status turns on — a tab that will not focus is still a tab the human can reach.
+  yield* Effect.ignore(herdr.workspaceFocus(home.workspaceId));
+  if (home.tabId !== null) yield* Effect.ignore(herdr.tabFocus(home.tabId));
   return 0;
+});
+
+/**
+ * The environment a run is rooted in. The board is the Herd's one Home (ADR-0009), and
+ * its own directory is Collie's namespace rather than a checkout — so a launch from
+ * there asks which workspace the work is in, and roots the Run in that workspace's
+ * directory. A launch from anywhere else is already in one.
+ *
+ * `null` is the human backing out, or being told why a workspace will not do.
+ * `WorkspaceInfo` carries no directory of its own on every herdr, so it is resolved from
+ * the workspace's worktree and then from its first pane's cwd — never invented.
+ */
+const rootedWhere = Effect.fn("Flows.rootedWhere")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  prompts: FlowPrompts,
+) {
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
+  if (home === null || home === UNREADABLE || env.workspaceId !== home.workspaceId) return env;
+
+  const namespaceDir = key === null ? "" : yield* herdDir(env.stateDir, key);
+  const workspaces = (yield* herdr
+    .workspaceList()
+    .pipe(Effect.catch(() => Effect.succeed([])))).filter(
+    (workspace) => workspace.workspaceId !== home.workspaceId,
+  );
+  const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
+  const candidates = yield* Effect.forEach(workspaces, (workspace) =>
+    Effect.gen(function* () {
+      const cwd =
+        workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
+      return { workspace, cwd, why: yield* whyNotRootable(cwd, namespaceDir) };
+    }),
+  );
+  if (candidates.length === 0) {
+    yield* bail(prompts, "No workspace to start a run in: open one on a checkout first.");
+    return null;
+  }
+  const chosen = yield* prompts.menu(
+    candidates.map((entry) => ({
+      id: entry.workspace.workspaceId,
+      title: entry.workspace.label,
+      subtitle: entry.why ?? entry.cwd,
+    })),
+    {
+      header: "Which workspace?",
+      footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
+    },
+  );
+  if (!chosen) return null;
+  const picked = candidates.find((entry) => entry.workspace.workspaceId === chosen.id);
+  if (!picked) return null;
+  if (picked.why !== null) {
+    yield* bail(prompts, `${picked.workspace.label}: ${picked.why}`);
+    return null;
+  }
+  // Confirmed on screen before a single Input is asked for: the directory a Run is
+  // rooted in is the one thing nothing downstream can put right.
+  yield* Console.log(`Starting in ${picked.cwd}`);
+  return { ...env, workspaceId: picked.workspace.workspaceId, cwd: picked.cwd };
+});
+
+/** Why a workspace's directory will not root a Run, or null when it will. */
+const whyNotRootable = Effect.fn("Flows.whyNotRootable")(function* (
+  cwd: string,
+  namespaceDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  if (cwd === "") return "herdr names no directory for it";
+  if (namespaceDir !== "" && cwd === namespaceDir) return "that is Collie's own namespace";
+  return (yield* fs.exists(cwd)) ? null : "its directory is not on disk";
 });
 
 function banner(defs: Definitions): string | undefined {
@@ -234,8 +353,13 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     parent?: Run;
   },
 ) {
+  // A run starts in a checkout, and the Home has none: it is Collie's own namespace
+  // directory, so a Run rooted there would have nothing to work on. Asked once, before
+  // anything else, because every Input after it is resolved against the answer.
+  const at = yield* rootedWhere(herdr, env, prompts);
+  if (at === null) return null;
   // Resolving, validating and inferring is what `collie run start` does too.
-  const prepared = yield* prepareWorkflow(env, opts.workflow);
+  const prepared = yield* prepareWorkflow(at, opts.workflow);
   if (!prepared.ok) {
     yield* bail(prompts, whyNotRunnable(opts.workflow, prepared.error));
     return null;
@@ -246,7 +370,7 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   // directory settled, and re-asking for it would let the human contradict the row. The
   // operation layer's own settler, because a given value owes the prompts its kind —
   // `implement` branches on `plan_kind`, and a hand-rolled settle here recorded none.
-  yield* settleExplicit(env, resolutions, opts.given ?? {});
+  yield* settleExplicit(at, resolutions, opts.given ?? {});
   // An embedded workflow's inputs belong to the run that embeds it, which never asks.
   const embedded = new Set(resolved.embeddedInputs);
   for (const r of resolutions) {
@@ -277,11 +401,11 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   const start = {
     workflow: resolved,
     resolutions,
-    workspace: yield* resolveWorkspace(herdr, env).pipe(Effect.catch(() => Effect.succeed(null))),
+    workspace: yield* resolveWorkspace(herdr, at).pipe(Effect.catch(() => Effect.succeed(null))),
     note: line,
     parent: opts.parent?.id,
   };
-  const started = yield* startRun(env, start);
+  const started = yield* startRun(at, start);
   if (started._tag === "Rejected") {
     yield* bail(prompts, started.result.error.message);
     return null;
@@ -631,15 +755,61 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     compaction: { waitMs: 0 },
     pruned: { at: 0, lines: [], running: false },
   };
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
+  // A board outside the Home is a board this Herd no longer has: one Home per Herd, so
+  // two of them would be two boards disagreeing about the same Runs (ADR-0009). It is
+  // marked as legacy — which is the only thing `home cleanup` will close — and it says
+  // where Collie went rather than drawing a second board.
+  if (
+    home !== null &&
+    home !== UNREADABLE &&
+    env.workspaceId !== null &&
+    env.workspaceId !== home.workspaceId
+  ) {
+    if (env.paneId !== null) {
+      yield* Effect.ignore(
+        herdr.paneReportMetadata(env.paneId, { [LEGACY_PANE_TOKEN]: "legacy" }, TOKEN_TTL_MS),
+      );
+    }
+    return yield* redirectBoard(herdr, env);
+  }
+  /**
+   * Where the shortcut was pressed, which is what `g` narrows to and what the board
+   * opens on. `env.workspaceId` is the fallback for a board nobody arrived at through
+   * the shortcut — its own workspace is then the only origin there is.
+   */
+  const noted = key === null ? null : yield* readOrigin(yield* originPath(env.stateDir, key));
+  const origin = noted?.workspaceId ?? env.workspaceId;
+  /** `all` when the shortcut was pressed inside the Home, which means "show me everything". */
+  const opening =
+    noted?.filter === "all"
+      ? ({ kind: "all" } as const)
+      : openingFilter((yield* loadDefaults(env.configDir)).scope, origin);
   const why =
     (yield* whyNoRenderer()) ??
     (yield* Effect.gen(function* () {
       const { runApp } = yield* Effect.promise(() => import("./ui/bridge"));
       const app = appState(session, env);
+      /**
+       * The board's own dispatch, once it is running. A confirmed `navigate` puts its
+       * target on screen through this and through nothing else: the board never calls a
+       * herdr focus method to show a human something (ADR-0008).
+       */
+      let dispatch: ((command: Command) => void) | null = null;
+      yield* registerRunExecutors(env, {
+        navigate: (target) =>
+          dispatch?.({ _tag: "SetFilter", filter: { kind: "run", id: target.run } }),
+      });
       yield* runApp({
+        onReady: (own) => {
+          dispatch = own;
+        },
         stateDir: env.stateDir,
-        // The scope the board opens on, read once: `g` is what changes it after that.
-        scope: (yield* loadDefaults(env.configDir)).scope,
+        // Which of the Herd's work the board opens on, read once: `g` and a group row
+        // are what change it after that.
+        filter: opening,
+        origin,
         load: (focus) => app.load(focus),
         act: (command, prompts) => runCommand(session, env, command, prompts),
       });
@@ -657,6 +827,36 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     ));
   if (why === null) return 0;
   return yield* textBoard(session, herdr, env, why);
+});
+
+/**
+ * A pane left over from when every workspace had its own Collie tab. One line saying
+ * where the board went, and the key that goes there — no board and no chat, because two
+ * boards disagreeing about one Herd's Runs is what one Home exists to prevent.
+ *
+ * Old binaries already running are not touched: this is what a pane shows the next time
+ * it is drawn, and `collie home cleanup --confirm` is what closes one.
+ */
+const redirectBoard = Effect.fn("Flows.redirectBoard")(function* (herdr: Herdr, env: PluginEnv) {
+  const text = renderRedirect();
+  if (!process.stdin.isTTY) {
+    process.stdout.write(`${text}\n`);
+    return 0;
+  }
+  startKeyboard();
+  process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
+  for (;;) {
+    const key = takeKey();
+    if (key === "q" || key === "\x03") {
+      releaseKeyboard();
+      return 0;
+    }
+    if (key === "o") {
+      releaseKeyboard();
+      return yield* boardFlow(herdr, env);
+    }
+    yield* Effect.sleep(TICK_MS);
+  }
 });
 
 /** How long a merge request read stays good for. Re-selecting inside it costs nothing. */
@@ -710,6 +910,13 @@ export function appState(
    * output a human reads, like `OpenMr`.
    */
   run: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell,
+  /**
+   * The Home's ownership question, when there is one nobody has settled. Decided once at
+   * startup rather than per tick: it is a herdr answer, `collie home reconcile` is what
+   * clears it, and re-asking every three seconds would be two calls a tick for a fact
+   * only a human changes.
+   */
+  ownership: Live["ownership"] = null,
 ) {
   const mrCache = new Map<string, { at: number; panel: MrPanel }>();
   /**
@@ -740,6 +947,11 @@ export function appState(
   /** The board from the last read, for whatever `rereads` says may be taken from it. */
   let last: { focus: Focus; state: AppState } | null = null;
 
+  /** One row per Run: a Run on the local board is on the wide one too. */
+  const dedupe = (rows: ReadonlyArray<{ id: string; dir: string }>) => [
+    ...new Map(rows.map((row) => [row.id, { id: row.id, dir: row.dir }])).values(),
+  ];
+
   const load = Effect.fn("Flows.appState.load")(function* (focus: Focus) {
     const again = rereads(last?.focus ?? null, focus);
     const reuse = again.reuse ? last : null;
@@ -753,7 +965,7 @@ export function appState(
     const board = reuse ? reuse.state.board : yield* boardOf(session, runs, live);
     // Read only while the Runs view is showing it: a local board, and every other View,
     // must cost no group it is not going to draw.
-    const widening = focus.scope === "all" && focus.view === "runs";
+    const widening = focus.filter.kind !== "workspace" && focus.view === "runs";
     const wide = widening ? (reuse ? reuse.state.wide : yield* wideOf(session, runs, live)) : null;
     // Before the Selection is resolved, because a History row is a row too: the board
     // keeps five finished runs and History keeps two hundred from every session that ran
@@ -780,9 +992,46 @@ export function appState(
     // is `rereads`' decision, not a second copy of it here.
     const mr = yield* merge(selected?.target ?? null, env.cwd, again.forceMr);
     if (again.forceMr) planCache.clear();
+    /**
+     * Every Run on whichever board is showing, for the marks and for the Herd-wide
+     * cards. From the boards rather than from the store's whole list: History keeps two
+     * hundred finished Runs, and reading each one's journals per tick to mark rows
+     * nobody is looking at is the cost this used to pay for nothing.
+     */
+    const onBoard = [
+      ...board.active,
+      ...board.recent,
+      ...(wide?.groups.flatMap((g) => [...g.active, ...g.recent]) ?? []),
+    ];
+    /** What each Run's record says about it that a row does not carry. */
+    const recorded = new Map((runs ?? []).map((run) => [run.id, markedFrom(run.record)]));
+    /**
+     * The Live region and every row's marks, from one pass over the same journals. The
+     * region is the Runs view's alone — nothing else draws it, and the journals of every
+     * Run on the board are not worth reading to fill a field Settings will not look at —
+     * but the marks are on a History row too, so a reuse tick outside the Runs view is
+     * the one that keeps the marks it already had.
+     */
+    const found =
+      reuse && focus.view !== "runs"
+        ? null
+        : yield* liveFor({
+            stateDir: env.stateDir,
+            socketPath: env.socketPath,
+            run: selected ? { id: selected.id, dir: selected.dir } : null,
+            // From the scan this read already made, never a second load per Run: the
+            // record is the only thing the marks need that a row does not carry, and
+            // re-reading every `run.json` per tick is what a shared scan exists to avoid.
+            runs: dedupe(onBoard).map((row) => ({
+              ...row,
+              ...(recorded.get(row.id) ?? markedFrom(null)),
+            })),
+            ownership,
+            region: focus.view === "runs",
+          });
     const state = {
       view: focus.view,
-      scope: focus.scope,
+      filter: focus.filter,
       wide,
       board,
       note: null,
@@ -797,6 +1046,10 @@ export function appState(
         : focus.shown.includes("settings")
           ? yield* buildSettings(env)
           : null,
+      marks: found?.marks ?? reuse?.state.marks ?? {},
+      steerDraft: focus.steerDraft,
+      previewing: focus.previewing,
+      live: found?.live ?? null,
       // Always re-read: this is the one thing a moved Selection actually changes.
       detail: runId
         ? yield* buildRunDetail({
@@ -935,6 +1188,37 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       return (yield* postReview(run)).message;
     }
 
+    /**
+     * A steer from the board. The target is whatever the row named, and the board is a
+     * human's own front door — so its actor is `board`, and the proposal it gets back is
+     * the one it will later confirm by id and hash.
+     */
+    case "Steer": {
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      const said = yield* steer(env, yield* evaluationDeps(env), {
+        text: command.text,
+        target: command.runId,
+        from: command.from ?? null,
+        requestId: yield* newRequestId(),
+      }).pipe(Effect.catch((cause) => Effect.succeed(err("operation_failed", reason(cause)))));
+      return said.ok ? said.human : said.error.message;
+    }
+
+    case "ConfirmProposal":
+      return yield* fromBoard(env, (actor) =>
+        carryOutProposal(env, command.id, command.hash, actor).pipe(
+          Effect.map((done) => (done.ok ? done.human : done.error.message)),
+        ),
+      );
+
+    case "DeclineProposal":
+      return yield* fromBoard(env, (actor) =>
+        declineProposal(env, command.id, actor).pipe(
+          Effect.map((done) => (done.ok ? done.human : done.error.message)),
+        ),
+      );
+
     case "OpenMr": {
       const ref = parseMrTarget(command.target);
       if (!ref) return `${command.target} is not a merge request`;
@@ -1011,7 +1295,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "EditSetting":
     case "NextQuestion":
     case "ShowView":
-    case "ToggleScope":
+    case "ToggleFilter":
+    case "SetFilter":
+    case "DraftSteer":
+    case "Preview":
     case "ToggleTail":
     case "MoreReview":
     case "Select":
@@ -1062,10 +1349,32 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   why: string,
 ) {
   yield* Console.error(`${COLLIE_TAB}: ${why}; showing the text view.`);
+  /**
+   * What steering has found about the Runs on the board, and what has been happening.
+   * The same reads the app makes, so this view says no less about a Run than the app
+   * does — a pane too narrow for the renderer must not be a quieter board.
+   */
+  const steeringOf = Effect.fn("Flows.textBoard.steering")(function* (view: WorkspaceView) {
+    const rows = [...view.active, ...view.recent];
+    return yield* liveFor({
+      stateDir: env.stateDir,
+      socketPath: env.socketPath,
+      run: null,
+      runs: yield* Effect.forEach(rows, (row) =>
+        Effect.gen(function* () {
+          const run = yield* loadRun(env.stateDir, row.id);
+          return { id: row.id, dir: row.dir, ...markedFrom(run?.record ?? null) };
+        }),
+      ),
+      ownership: null,
+      region: true,
+    });
+  });
   // Nothing to loop on: with no keyboard the board is a report, so it is printed once
   // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
   if (!process.stdin.isTTY) {
-    const once = renderWorkspace(yield* boardOf(session), why);
+    const view = yield* boardOf(session);
+    const once = renderWorkspace(view, why, undefined, yield* steeringOf(view));
     process.stdout.write(`${once}\n`);
     return 0;
   }
@@ -1088,7 +1397,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     }
     if (!waiting) answering = null;
 
-    const text = renderWorkspace(view, note ?? undefined, asking);
+    const text = renderWorkspace(view, note ?? undefined, asking, yield* steeringOf(view));
     if (text !== drawn) {
       process.stdout.write(`${CLEAR}${text.replace(/\n/g, "\r\n")}\r\n`);
       drawn = text;
@@ -1263,7 +1572,7 @@ export const openLog = Effect.fn("Flows.openLog")(function* (session: ControlSes
 });
 
 /** What herdr answers about the session right now: every agent, and every workspace. */
-interface Live {
+interface SessionNow {
   alive: AgentInfo[];
   workspaces: WorkspaceInfo[];
 }
@@ -1280,7 +1589,7 @@ const liveOf = Effect.fn("Flows.liveOf")(function* (session: ControlSession) {
     { concurrency: "unbounded" },
   ).pipe(
     // A herdr that will not answer means "nothing verified live", not a crash.
-    Effect.catch(() => Effect.succeed<Live>({ alive: [], workspaces: [] })),
+    Effect.catch(() => Effect.succeed<SessionNow>({ alive: [], workspaces: [] })),
   );
 });
 
@@ -1386,7 +1695,7 @@ const reconcileTabs = Effect.fn("Flows.reconcileTabs")(function* (
 const boardOf = Effect.fn("Flows.boardOf")(function* (
   session: ControlSession,
   scanned?: ReadonlyArray<Run>,
-  seen?: Live,
+  seen?: SessionNow,
 ) {
   yield* sweep(session);
   const live = seen ?? (yield* liveOf(session));
@@ -1416,7 +1725,7 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
 const wideOf = Effect.fn("Flows.wideOf")(function* (
   session: ControlSession,
   scanned?: ReadonlyArray<Run>,
-  seen?: Live,
+  seen?: SessionNow,
 ) {
   const live = seen ?? (yield* liveOf(session));
   const runs = scanned ?? (yield* new RunStore(session.stateDir).list());
@@ -1468,4 +1777,23 @@ const notice = Effect.fn("Flows.notice")(function* (
     footer: "Enter or Esc closes this",
   });
   return code;
+});
+
+/**
+ * The board's own front door. A keypress on it is a person acting, so it stamps `board`
+ * — the one origin besides a controlling terminal that counts as human, and the reason
+ * `confirm` from here is allowed at all.
+ */
+const fromBoard = Effect.fn("Flows.fromBoard")(function* (
+  env: PluginEnv,
+  what: (
+    actor: Actor,
+  ) => Effect.Effect<
+    string,
+    HerdrUnreachable | IntentUnreadable | PlatformError | ProposalsBusy | SchemaError,
+    BunServices
+  >,
+) {
+  const actor: Actor = { origin: "board", requestId: yield* newRequestId() };
+  return yield* what(actor).pipe(Effect.catch((cause) => Effect.succeed(reason(cause))));
 });

@@ -10,6 +10,7 @@ import * as BunSocket from "@effect/platform-bun/BunSocket";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
+import { isString } from "./schema";
 import { PLUGIN_ID } from "./env";
 import { reason } from "./naming";
 
@@ -20,6 +21,14 @@ export class HerdrError extends Data.TaggedError("HerdrError")<{
   readonly detail: string;
   /** herdr's own code, where it answered with one — `agent_not_found` and friends. */
   readonly code?: string;
+  /**
+   * True where herdr demonstrably answered: an error envelope, or a CLI that ran and
+   * exited non-zero. Absent where nobody can say whether the request arrived — a
+   * subprocess that would not start, a socket that closed mid-exchange. The difference
+   * decides whether a delivery is `failed` (herdr decided) or `unknown` (nobody knows),
+   * and only one of those is safe to send again.
+   */
+  readonly answered?: true;
 }> {}
 
 export function herdrFailureReason(cause: unknown): string {
@@ -66,6 +75,15 @@ const WorkspaceReply = Schema.Struct({
     ),
   ),
   worktree_path: Schema.optionalKey(Schema.String),
+  /**
+   * Metadata a plugin has attached to this workspace. Collie's Home is owned by a token
+   * here, never by a label: a label is what a human sees, and two of them can say the
+   * same thing.
+   */
+  tokens: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.String))),
+});
+const WorkspaceCreateReply = Schema.Struct({
+  result: Schema.Struct({ workspace: Schema.Struct({ workspace_id: Schema.String }) }),
 });
 const WorkspaceListReply = Schema.Struct({
   result: Schema.Struct({ workspaces: Schema.Array(WorkspaceReply) }),
@@ -88,6 +106,9 @@ const PaneListReply = Schema.Struct({
         // Where the process in the pane is now, which is not where it started once
         // anything has `cd`-ed.
         foreground_cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        /** Metadata a plugin attached to this pane, and herdr's identity for its terminal. */
+        tokens: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.String))),
+        terminal_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
       }),
     ),
   }),
@@ -107,6 +128,24 @@ const AgentReply = Schema.Struct({
    * it is on there. herdr omits it for a pane that never set one.
    */
   terminal_title: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /**
+   * herdr's own identity for the process in the pane, and for the harness session it is
+   * driving. This is what makes "this live agent" a thing Collie can name: an agent name
+   * is reused by the next incarnation in the same role, and a pane outlives what ran in
+   * it. Optional because a release older than the pin omits them, and an agent with no
+   * `terminal_id` is refused as a delivery target rather than guessed at.
+   */
+  terminal_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  agent_session: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        source: Schema.String,
+        agent: Schema.String,
+        kind: Schema.String,
+        value: Schema.String,
+      }),
+    ),
+  ),
 });
 const AgentListReply = Schema.Struct({
   result: Schema.Struct({ agents: Schema.Array(AgentReply) }),
@@ -163,6 +202,9 @@ const WorktreeOpenReply = Schema.Struct({ result: WorktreeReplyBody });
 const HerdrStatusReply = Schema.Struct({
   running: Schema.Boolean,
   socket: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  /** Optional because an older herdr answers without them; the Home records what it can. */
+  version: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  protocol: Schema.optionalKey(Schema.NullOr(Schema.Int)),
 });
 
 /** herdr's `config.toml`, as far as this plugin has any business reading it. */
@@ -189,6 +231,9 @@ export const SOCKET_METHODS = [
   "tab.move",
   "agent.view.set",
   "agent.view.clear",
+  "agent.send_keys",
+  "workspace.report_metadata",
+  "pane.report_metadata",
   "popup.close",
 ] as const;
 
@@ -204,6 +249,7 @@ export const replySchemas = {
   ErrorReply,
   SocketReply,
   TabCreateReply,
+  WorkspaceCreateReply,
   WorkspaceListReply,
   TabListReply,
   PaneListReply,
@@ -215,8 +261,23 @@ export const replySchemas = {
   PluginPaneReply,
 } as const;
 
+const encodeJsonValue = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+
+/**
+ * What each binary has said it can do, by its path. A capability declaration cannot change
+ * while that binary is the one on disk, and asking again is a quarter of a megabyte down a
+ * pipe — on a Run start that already pays for the ownership calls. A herdr *replaced* under
+ * a running process keeps the answer this process was started against, which is the same
+ * thing every other decision here does about the binary it was launched with.
+ */
+const schemas = new Map<string, string>();
+
 const herdrError = (message: string, detail: string, code?: string) =>
-  new HerdrError({ message, detail, code });
+  // A code means herdr answered with an error envelope; without one it is this side
+  // saying something went wrong, and that says nothing about whether herdr saw it.
+  code === undefined
+    ? new HerdrError({ message, detail })
+    : new HerdrError({ message, detail, code, answered: true });
 
 /** herdr answers a missing target with an error envelope and exit 0, not a failure. */
 const ErrorEnvelope = Schema.Struct({ error: ErrorReply });
@@ -286,7 +347,13 @@ const decodeReply = (
     Effect.flatMap((message) => decodeBoundary(method, SocketReply, message)),
     Effect.flatMap((message) =>
       message.error
-        ? herdrFail(`${method} failed`, message.error.message ?? message.error.code ?? "unknown")
+        ? Effect.fail(
+            herdrError(
+              `${method} failed`,
+              message.error.message ?? message.error.code ?? "unknown",
+              message.error.code ?? "unknown",
+            ),
+          )
         : Effect.succeed(message.result),
     ),
   );
@@ -344,6 +411,8 @@ export interface WorkspaceInfo {
   label: string;
   cwd: string;
   worktree: string | null;
+  /** What a plugin has attached to it. Collie's Home ownership rests on one of these. */
+  tokens: Readonly<Record<string, string>>;
 }
 
 /** One checkout of a repository, as `herdr worktree list` reports it. */
@@ -382,6 +451,9 @@ export interface PaneInfo {
   cwd: string | null;
   /** Where it is working now, where herdr can see that — an agent that `cd`-ed. */
   foregroundCwd: string | null;
+  tokens: Readonly<Record<string, string>>;
+  /** herdr's identity for the terminal in this pane, where it names one. */
+  terminalId: string | null;
 }
 
 /** A live agent as herdr sees it. Only named agents — the ones this plugin started. */
@@ -397,6 +469,10 @@ export interface AgentInfo {
    * board that kept it would redraw a row that had not changed.
    */
   title: string | null;
+  /** herdr's identity for this live process, or `null` from a release that omits it. */
+  terminalId: string | null;
+  /** The harness session it is driving, where herdr knows one. */
+  agentSession: { kind: string; value: string } | null;
 }
 
 /**
@@ -428,6 +504,10 @@ export const decodeAgentList = (res: BoundaryValue) =>
                 workspaceId: agent.workspace_id ?? null,
                 status: agentStatus(agent.agent_status),
                 title: agentTitle(agent.terminal_title),
+                terminalId: agent.terminal_id ?? null,
+                agentSession: agent.agent_session
+                  ? { kind: agent.agent_session.kind, value: agent.agent_session.value }
+                  : null,
               },
             ]
           : [],
@@ -436,6 +516,11 @@ export const decodeAgentList = (res: BoundaryValue) =>
   );
 
 /** `herdr workspace list` as this plugin reads it; a worktree-backed workspace's checkout is its directory. */
+const decodeWorkspaceCreate = (res: BoundaryValue) =>
+  decodeBoundary("herdr workspace create", WorkspaceCreateReply, res).pipe(
+    Effect.map(({ result }) => result.workspace.workspace_id),
+  );
+
 export const decodeWorkspaceList = (res: BoundaryValue) =>
   decodeBoundary("herdr workspace list", WorkspaceListReply, res).pipe(
     Effect.map(({ result }) =>
@@ -450,6 +535,7 @@ export const decodeWorkspaceList = (res: BoundaryValue) =>
           label: workspace.label,
           cwd: workspace.cwd ?? workspace.working_directory ?? worktree ?? "",
           worktree,
+          tokens: workspace.tokens ?? {},
         };
       }),
     ),
@@ -490,6 +576,7 @@ export class Herdr {
           detail,
           // Named even on a non-zero exit, where herdr still prints its envelope.
           code: envelopeCode(detail),
+          answered: true,
         });
       }
       const text = stdout.trim();
@@ -677,6 +764,8 @@ export class Herdr {
           workspaceId: pane.workspace_id ?? null,
           cwd: pane.cwd ?? null,
           foregroundCwd: pane.foreground_cwd ?? null,
+          tokens: pane.tokens ?? {},
+          terminalId: pane.terminal_id ?? null,
         }));
       }),
     );
@@ -791,7 +880,7 @@ export class Herdr {
       "--timeout",
       String(SUBMIT_TIMEOUT_MS),
     ]).pipe(Effect.asVoid);
-    const press = this.agentSendKeys(target, "enter");
+    const press = this.cli(["agent", "send-keys", target, "enter"]).pipe(Effect.asVoid);
     const startedATurn = this.agentWait(target, {
       until: ["working", "blocked"],
       timeoutMs: SUBMIT_TIMEOUT_MS,
@@ -816,10 +905,6 @@ export class Herdr {
         Effect.catch(() => Effect.succeed<Submission>("unobserved")),
       );
     });
-  }
-
-  agentSendKeys(target: string, ...keys: string[]): HerdrEffect<void> {
-    return this.cli(["agent", "send-keys", target, ...keys]).pipe(Effect.asVoid);
   }
 
   agentWait(
@@ -1058,6 +1143,87 @@ export class Herdr {
 
   agentViewClear(source: string): HerdrEffect<void> {
     return this.rpc("agent.view.clear", { source }).pipe(Effect.asVoid);
+  }
+
+  /**
+   * Raw keys into an agent's terminal. The only use is an interrupt — the key a harness
+   * takes as "stop what you are doing" — and herdr answering says the keys were sent,
+   * which is not the same as the harness having acted on them. Nothing here ever reports
+   * an agent as stopped: no proof of quiescence exists at this boundary.
+   */
+  agentSendKeys(target: string, keys: ReadonlyArray<string>): HerdrEffect<void> {
+    return this.rpc("agent.send_keys", { target, keys: [...keys] }).pipe(Effect.asVoid);
+  }
+
+  /**
+   * A workspace of Collie's own, for the Herd's Home. `focus: false`: creating it is not
+   * the same as going to it, and the shortcut is what does the going.
+   */
+  workspaceCreate(opts: { cwd: string; label: string }): HerdrEffect<string> {
+    return this.cli(["workspace", "create", "--cwd", opts.cwd, "--label", opts.label]).pipe(
+      Effect.flatMap((value) => decodeWorkspaceCreate(value)),
+    );
+  }
+
+  /**
+   * Attach metadata to a workspace, with a lifetime. The Home is owned by one of these
+   * rather than by a label, and the TTL is what makes a stale claim expire on its own
+   * instead of needing something to come along and clean it up.
+   */
+  workspaceReportMetadata(
+    workspaceId: string,
+    tokens: Readonly<Record<string, string>>,
+    ttlMs: number,
+  ): HerdrEffect<void> {
+    return this.rpc("workspace.report_metadata", {
+      workspace_id: workspaceId,
+      source: PLUGIN_ID,
+      tokens: { ...tokens },
+      ttl_ms: ttlMs,
+    }).pipe(Effect.asVoid);
+  }
+
+  paneReportMetadata(
+    paneId: string,
+    tokens: Readonly<Record<string, string>>,
+    ttlMs: number,
+  ): HerdrEffect<void> {
+    return this.rpc("pane.report_metadata", {
+      pane_id: paneId,
+      source: PLUGIN_ID,
+      tokens: { ...tokens },
+      ttl_ms: ttlMs,
+    }).pipe(Effect.asVoid);
+  }
+
+  /**
+   * The installed binary's own description of what it can do. The pinned schema says
+   * what Collie was built against; this says what is actually there, which is the only
+   * one that can refuse a feature at runtime.
+   */
+  /**
+   * Which herdr this is, as its own CLI reports it. Recorded in the Herd's `server.json`
+   * at every ensure, so a version or protocol change is something the log can name
+   * rather than something a human works out from a call that started failing.
+   */
+  serverInfo(): HerdrEffect<{ socket: string; version: string; protocol: number }> {
+    return this.cli(["status", "server", "--json"]).pipe(
+      Effect.flatMap((res) => decodeBoundary("status server failed", HerdrStatusReply, res)),
+      Effect.map((status) => ({
+        socket: status.socket ?? this.env.socketPath ?? "",
+        version: status.version ?? "unknown",
+        protocol: status.protocol ?? 0,
+      })),
+    );
+  }
+
+  apiSchema(): HerdrEffect<string> {
+    const cached = schemas.get(this.env.binPath);
+    if (cached !== undefined) return Effect.succeed(cached);
+    return this.cli(["api", "schema", "--json"]).pipe(
+      Effect.map((value) => (isString(value) ? value : encodeJsonValue(value))),
+      Effect.tap((schema) => Effect.sync(() => schemas.set(this.env.binPath, schema))),
+    );
   }
 
   popupClose(): HerdrEffect<void> {

@@ -38,6 +38,35 @@ import {
   type LaunchContext,
 } from "./compaction";
 import { loadDefaults } from "./config";
+import { DELIVERY_TOKEN } from "./dispatcher";
+
+/**
+ * A compaction request, through the Dispatcher's channel. `Unsubmitted` is reserved for
+ * the case the policy treats specially — the channel provably never sent it, so nothing
+ * is in flight and the waiting work may be released. Anything else may already have
+ * reached the harness, so it is an ordinary failure and the attempt's budget runs.
+ */
+const submitCompaction = (ctx: AgentContext, requestId: string, text: string) =>
+  ctx.channel
+    .submit(text, {
+      run: ctx.run,
+      cause: { kind: "compaction", ref: requestId },
+      mode: "boundary",
+      intentVersion: 0,
+      attempt: 1,
+      requestId,
+    })
+    .pipe(
+      Effect.flatMap((outcome) =>
+        outcome.ok
+          ? Effect.succeed(outcome.submission ?? null)
+          : outcome.reason === "unknown"
+            ? Effect.succeed(null)
+            : outcome.reason === "failed"
+              ? Effect.fail(new Error(outcome.detail))
+              : Effect.fail(new Unsubmitted({ message: outcome.detail })),
+      ),
+    );
 import type { Herdr } from "./herdr";
 import { selfCommand } from "./env";
 import { shell } from "./mr";
@@ -68,7 +97,7 @@ const EventSchema = Schema.Struct({
   at: Schema.Number,
   /** The harness's own session identity, so a `/new` in the pane invalidates the rest. */
   session: Schema.NullOr(Schema.String),
-  kind: Schema.Literals(["session", "usage", "start", "done", "failed", "auto"]),
+  kind: Schema.Literals(["session", "usage", "start", "done", "failed", "auto", "submit"]),
   /** Current-context total. `null` where the harness has not measured this context. */
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Number)),
   /** Collie's own request id, which is what correlates an outcome to an attempt. */
@@ -189,7 +218,7 @@ const outcomeOf = Effect.fn("Compactors.outcomeOf")(function* (dir: string, requ
 });
 
 /** `a.b.c` against `x.y.z`, numerically, missing parts as zero. */
-function atLeast(installed: string, wanted: string): boolean {
+export function atLeast(installed: string, wanted: string): boolean {
   const parts = (text: string) =>
     (/(\d+(?:\.\d+)*)/.exec(text)?.[1] ?? "").split(".").map((n) => Number.parseInt(n, 10) || 0);
   const have = parts(installed);
@@ -207,6 +236,21 @@ function atLeast(installed: string, wanted: string): boolean {
  * in it — the installed binary does not change under a running Driver.
  */
 const gated = new Map<string, string | null>();
+
+/**
+ * What this machine has installed, as the harness itself reports it, or null where it
+ * cannot be asked. Unknown is never treated as new enough: a gate that guessed would be
+ * a gate.
+ */
+export const installedVersion = Effect.fn("Compactors.installedVersion")(function* (
+  harness: string,
+) {
+  const { code, stdout } = yield* shell(harness, ["--version"], process.cwd()).pipe(
+    Effect.catch(() => Effect.succeed({ code: 1, stdout: "", stderr: "" })),
+  );
+  if (code !== 0) return null;
+  return stdout.trim().split("\n").at(-1)?.trim() || null;
+});
 
 const gateVersion = Effect.fn("Compactors.gateVersion")(function* (harness: string) {
   const wanted = VERIFIED_VERSIONS.get(harness);
@@ -337,10 +381,7 @@ const pi: CompactionPort = {
   // Through the human's channel, which is what a slash command is: the extension's
   // command carries the request id, so the outcome that comes back is this request's.
   // The human's channel, so a refusal from herdr is a request that never left.
-  request: (ctx, requestId) =>
-    ctx.herdr
-      .agentPrompt(ctx.agent, `/collie-compact ${requestId}`)
-      .pipe(Effect.mapError((cause) => new Unsubmitted({ message: reason(cause) }))),
+  request: (ctx, requestId) => submitCompaction(ctx, requestId, `/collie-compact ${requestId}`),
   poll: (ctx, requestId) => outcomeOf(ctx.dir, requestId),
 };
 
@@ -379,6 +420,8 @@ const ClaudePayload = Schema.Struct({
   /** Absent for the status line; `PreCompact` or `PostCompact` for a hook. */
   hook_event_name: Schema.optionalKey(Schema.String),
   trigger: Schema.optionalKey(Schema.String),
+  /** `UserPromptSubmit` only: what was submitted, which is how Collie's own is told. */
+  prompt: Schema.optionalKey(Schema.String),
   custom_instructions: Schema.optionalKey(Schema.NullOr(Schema.String)),
   context_window: Schema.optionalKey(
     Schema.NullOr(
@@ -437,6 +480,17 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
     : null;
 
   const event = payload.hook_event_name;
+  if (event === "UserPromptSubmit") {
+    // Recorded whole? No: the prompt is the human's own text, and a transcript is not
+    // Collie's to keep (SPEC §2). Only whether it carried Collie's delivery token, which
+    // is the whole question attribution asks.
+    yield* writeEvent(dir, {
+      session,
+      kind: "submit",
+      reason: (payload.prompt ?? "").includes(DELIVERY_TOKEN) ? "collie" : "external",
+    });
+    return "";
+  }
   if (event === "PreCompact" || event === "PostCompact") {
     // Only `PreCompact` is given the instructions back, so only it can carry the
     // marker. Everything else — Claude's own automatic compaction, a human's
@@ -479,10 +533,14 @@ export const recordClaudeEvent = Effect.fn("Compactors.recordClaudeEvent")(funct
 function claudeSettings(dir: string): string {
   const helper = [...selfCommand(), "herdr", "compaction", dir].map(shellQuote).join(" ");
   const hook = { matcher: "manual|auto", hooks: [{ type: "command", command: helper }] };
+  // `UserPromptSubmit` is the only place a submitted turn is visible to Collie, and it
+  // is what attribution rests on: a prompt with no delivery token is somebody typing in
+  // the pane. It carries no matcher — every submission counts, which is the point.
+  const submitted = { hooks: [{ type: "command", command: helper }] };
   return `${JSON.stringify(
     {
       statusLine: { type: "command", command: helper },
-      hooks: { PreCompact: [hook], PostCompact: [hook] },
+      hooks: { PreCompact: [hook], PostCompact: [hook], UserPromptSubmit: [submitted] },
     },
     null,
     2,
@@ -530,9 +588,7 @@ const claude: CompactionPort = {
   // real instructions with the correlation token appended: Claude has no request id
   // for a compaction, and this field is the only one both hooks give back.
   request: (ctx, requestId) =>
-    ctx.herdr
-      .agentPrompt(ctx.agent, `/compact ${claudeInstructions(requestId)}`)
-      .pipe(Effect.mapError((cause) => new Unsubmitted({ message: reason(cause) }))),
+    submitCompaction(ctx, requestId, `/compact ${claudeInstructions(requestId)}`),
   // No documented compact-failed hook exists, so `poll` can only ever return success
   // or nothing: a missing PostCompact is an unresolved outcome, which the shared
   // policy pauses on, and never a confirmed failure.
@@ -911,4 +967,21 @@ export const compactionFor = Effect.fn("Compactors.compactionFor")(function* (op
     waitMs: opts.known?.waitMs ?? COMPACTION_WAIT_MS,
     pollMs: opts.pollMs ?? 2000,
   } satisfies CompactionDeps;
+});
+
+/**
+ * Submissions this agent has taken that Collie did not make. Claude's `UserPromptSubmit`
+ * hook is the only place a submitted turn is visible, and a submission without Collie's
+ * delivery token is a human typing into that pane — which is the one thing automatic
+ * correction must never fight.
+ *
+ * Counted rather than timestamped: the caller compares this against what it saw last
+ * time, so a submission it has already turned into an override is not one again.
+ */
+export const externalSubmissions = Effect.fn("Compactors.externalSubmissions")(function* (
+  dir: string,
+) {
+  return (yield* readEvents(dir)).filter(
+    (event) => event.kind === "submit" && event.reason === "external",
+  ).length;
 });

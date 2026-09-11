@@ -1,3 +1,4 @@
+import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import type { PlatformError } from "effect/PlatformError";
@@ -8,9 +9,10 @@ import { currentEnv, type PluginEnv } from "../env";
 import { Herdr, type WorkspaceInfo } from "../herdr";
 import { reason, unsafePathComponent } from "../naming";
 import { err, resolveWorkspace, runStatus, type Failure } from "../operations";
+import { actorName, type Actor } from "../proposals";
 import { InvalidRunState, Run, RunStore } from "../run";
 import { branchListed } from "../worktree";
-import type { Result } from "../envelope";
+import { attempt, mutation, type CollieError, type Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 
 const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
@@ -290,3 +292,53 @@ export const root = Command.make("collie").pipe(
   }),
   Command.withDescription("Discover and run Collie workflows"),
 );
+
+/**
+ * A command that answers a question: the global flags, the resolved context, and one
+ * envelope. A workspace the caller named that cannot be resolved is refused here rather
+ * than in each command.
+ */
+export function answering<E, R>(
+  apply: (env: PluginEnv) => Effect.Effect<Result, E, R>,
+  resolveLive = false,
+) {
+  return Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* context(global, resolveLive);
+        if (resolved._tag === "ContextFailure") return resolved.result;
+        return yield* apply(resolved.env);
+      }),
+      global.json,
+    );
+  });
+}
+
+/**
+ * The same for a command that changes something, with the request id around it: a retry
+ * of the same id returns the first result rather than acting twice.
+ */
+export function mutating(
+  operation: string,
+  requestId: Option.Option<string>,
+  apply: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, BunServices>,
+) {
+  return answering((env) => mutation(env, operation, requestId, (id) => apply(env, id)));
+}
+
+/**
+ * Who is asking, derived rather than supplied. A controlling terminal means a person
+ * typed this; anything else — a script, a Driver, the evaluator — is not a human and
+ * cannot confirm, amend or reconcile anything. The board stamps `board` through its own
+ * front door.
+ *
+ * All three streams, not stdout alone: `collie --json confirm … > out.json` is a person
+ * at a terminal, and a Driver has a pipe on every one of them.
+ */
+export function actorNow(requestId: string): Actor {
+  const terminal = process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY;
+  return { origin: terminal ? "cli-tty" : "driver", requestId };
+}
+
+export { actorName };

@@ -8,7 +8,10 @@ import type { Focus } from "../../src/ui/state";
 export function focus(over: Partial<Focus> = {}): Focus {
   return {
     view: "runs",
-    scope: "local",
+    filter: { kind: "workspace", id: "w1" },
+    origin: "w1",
+    steerDraft: null,
+    previewing: null,
     shown: ["runs"],
     selected: null,
     tail: false,

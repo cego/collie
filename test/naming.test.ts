@@ -7,8 +7,6 @@ import {
   evenRatio,
   GLYPH,
   insertIndexFor,
-  isCollieTab,
-  LEGACY_TABS,
   rankOf,
   paneLabel,
   stepLabel,
@@ -181,11 +179,6 @@ test("the Collie tab's label survives its own helpers", () => {
   expect(Array.from(name)).toHaveLength(6);
   // A run tab keeps its status glyph and gains no dog.
   expect(tabNameOf(tabLabel(GLYPH.running, "implement"))).toBe("Implement");
-  // Every name this tab has worn is still matched, or a rename duplicates the tab.
-  expect(LEGACY_TABS).toContain("Control Plane");
-  expect(isCollieTab("Control Plane")).toBe(true);
-  expect(isCollieTab(COLLIE_TAB)).toBe(true);
-  expect(isCollieTab("Implement")).toBe(false);
 });
 
 /** A run record, as much of one as a tab label is made of. */

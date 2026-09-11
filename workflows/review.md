@@ -94,6 +94,11 @@ can, raise it with a `"rebuttal"` saying why that reason does not hold; that put
 in front of the implementer. If you cannot, leave it alone — it is the human's call now,
 not another round's.
 
+Where you run something to check a finding, run it through the collector so the result
+is bound to the tree you checked it on: `collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`; Collie records the result
+against the tree it ran on, and only that is a verification — an Output that says the
+tests pass is a claim. Say in your Output which verifications you ran, by name.
+
 Change nothing outside your Output file.
 
 ## synthesize

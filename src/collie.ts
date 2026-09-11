@@ -8,11 +8,28 @@ import { run } from "./commands/run";
 import { root } from "./commands/shared";
 import { doctor } from "./commands/doctor";
 import { upgrade } from "./commands/upgrade";
+import { verify } from "./commands/verify";
+import { confirm, decline, proposal, steer } from "./commands/steer";
+import { home } from "./commands/home";
 import { workflow } from "./commands/workflow";
 import { printResult } from "./envelope";
 import { err } from "./operations";
 
-export const app = root.pipe(Command.withSubcommands([workflow, persona, run, upgrade, doctor]));
+export const app = root.pipe(
+  Command.withSubcommands([
+    workflow,
+    persona,
+    run,
+    steer,
+    confirm,
+    decline,
+    proposal,
+    verify,
+    home,
+    upgrade,
+    doctor,
+  ]),
+);
 
 /**
  * Read from `Bun.argv` rather than Stdio's `args` because both decide how the program

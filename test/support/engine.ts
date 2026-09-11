@@ -1,4 +1,6 @@
 import { Effect, FileSystem, Path } from "effect";
+import type { BunServices } from "@effect/platform-bun/BunServices";
+import type { PlatformError } from "effect/PlatformError";
 import { FALLBACK_DEFAULTS, type Defaults } from "../../src/config";
 import { layers, loadDefinitions, resolveWorkflow, validateWorkflow } from "../../src/definitions";
 import { executeRun } from "../../src/engine";
@@ -140,6 +142,8 @@ export function runWorkflow(
     compactionWaitMs?: number;
     /** For prompts that need the run dir, which only exists once the run does. */
     promptsFor?: (run: Run) => EnginePrompts;
+    /** Set up state the run only has a directory for once it exists, e.g. its Intent. */
+    before?: (run: Run) => Effect.Effect<unknown, Error | PlatformError, BunServices>;
     env?: Record<string, string>;
     workspaceLabel?: string;
     /** What the human answered at launch, by Choice step id. */
@@ -201,6 +205,8 @@ export function runWorkflow(
       maxIterations: wf.maxIterations,
       ...named(inferred, merged),
     });
+
+    if (opts.before) yield* opts.before(run);
 
     const lines: string[] = [];
     const status = yield* executeRun({

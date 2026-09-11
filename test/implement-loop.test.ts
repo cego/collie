@@ -21,6 +21,7 @@ import {
   inputValues,
   targetKind,
 } from "../src/inputs";
+import { deliveriesOf } from "../src/steering";
 import { RunStore, type Run } from "../src/run";
 
 let rig: Rig;
@@ -187,6 +188,14 @@ class TestHerdr extends Herdr {
             yield* fs.makeDirectory(p.dirname(outputPath), { recursive: true });
             yield* fs.writeFileString(outputPath, encodeJson(next));
           }
+          // A wait that ran out, as the shared fake answers it: the Output was still
+          // written, because the agent works on a prompt whether or not herdr saw the turn.
+          if (fakeEnv.FAKE_HERDR_PROMPT_ERROR === "timeout")
+            return {
+              code: 1,
+              stdout: `${encodeJson({ id: "fake", error: { code: "timeout", message: "timeout" } })}\n`,
+              stderr: "",
+            };
           return { code: 0, stdout: `${encodeJson({ id: "fake", result: {} })}\n`, stderr: "" };
         }),
       ),
@@ -502,9 +511,10 @@ test(
         expect(renames).toContain("Sonnet");
         expect(renames).toContain("Synthesize");
         // Nothing names the run: the implementer's pane is unlabelled and the run has no
-        // pane of its own, so the only other rename is the board's.
+        // pane of its own. The board's pane is not renamed either — the Home's pane is
+        // owned by a token, not by a name (ADR-0009).
         expect(renames.some((n) => n!.includes("add-picker"))).toBe(false);
-        expect(renames[0]).toBe(COLLIE_TAB);
+        expect(renames).not.toContain(COLLIE_TAB);
 
         const reviewer = path.join(run.dir, "personas", "reviewer.claude.md");
         const starts = (yield* rig.calls()).filter((c) => c.cmd === "agent start");
@@ -1560,6 +1570,78 @@ test(
         expect(fixedNow.status).toBe("done");
         expect(fixedNow.run.record.disputed).toEqual([]);
         expect(fixedNow.run.record.iteration).toBe(3);
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "a fix prompt herdr saw no turn come of is not sent again by a resume, to the same agent",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* bundledImplement(withMax(5));
+        yield* plannedRun(rig, "add-picker");
+        const resume = Effect.fn("test.resume")(function* (
+          run: Run,
+          outputs: Schema.Json[],
+          env: Record<string, string> = {},
+        ) {
+          run.record.status = "running";
+          run.record.finished_at = null;
+          for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
+          yield* run.save();
+          yield* queueOutputs(outputs);
+          return yield* runWorkflowEffect("implement", {}, { existing: run, env });
+        });
+
+        // A dispute stops the run; the human resumes it — and this time herdr's wait for a
+        // turn runs out. The fix is written and worked on (the fake still writes its
+        // Output), so the run stops on the dispute again with the prompt `submitted` but
+        // `unobserved`.
+        yield* queueOutputs([
+          CLEAN,
+          CLEAN,
+          CLEAN,
+          blocking(NO_EXIT, MAJOR),
+          CLEAN,
+          blocking(NO_EXIT, MAJOR),
+          { ...fixed("unhandled rejection"), disputed: [{ ...NO_EXIT, detail: "no" }] },
+          CLEAN,
+          CLEAN,
+          CLEAN,
+          SYNTH,
+        ]);
+        const disputed = yield* runWorkflowEffect("implement", {});
+        expect(disputed.run.record.halt).toBe("dispute_unresolved");
+        const unseen = yield* resume(
+          disputed.run,
+          [{ ...fixed(), disputed: [{ ...NO_EXIT, detail: "still no" }] }],
+          { FAKE_HERDR_PROMPT_ERROR: "timeout" },
+        );
+        expect(unseen.run.record.halt).toBe("dispute_unresolved");
+        const doubted = (yield* deliveriesOf(rig.stateDir, disputed.run.id))
+          .map((entry) => entry.delivery)
+          .filter((delivery) => delivery.cause.ref === "fix/#2");
+        // Collected, but not settled: an Output beside a prompt nobody saw taken does not
+        // say the prompt was read.
+        expect(doubted.map((d) => [d.state, d.note])).toEqual([["submitted", "unobserved"]]);
+
+        // Resumed again, with the same implementer live: the same work is not sent to it
+        // a second time. The step is withheld with the delivery to reconcile, and no
+        // prompt goes out.
+        const before = (yield* rig.calls()).filter((c) => c.cmd === "agent prompt").length;
+        const again = yield* resume(disputed.run, [FIX_OK, CLEAN, CLEAN, CLEAN, SYNTH]);
+        expect(again.status).toBe("blocked");
+        expect(again.run.step("fix").status).toBe("blocked");
+        expect(
+          again.run
+            .step("fix")
+            .variants.map((v) => v.error)
+            .join(" "),
+        ).toContain(`${doubted[0]!.id} is submitted`);
+        expect((yield* rig.calls()).filter((c) => c.cmd === "agent prompt")).toHaveLength(before);
+        expect(again.lines.join("\n")).toContain("was not given its prompt: blocked");
       }),
     ),
   60_000,

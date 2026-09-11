@@ -2,6 +2,8 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
+import { readIntent, seedIntent, writeIntent } from "../src/intent";
+import { RunStore } from "../src/run";
 
 const root = new URL("../", import.meta.url).pathname;
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
@@ -445,5 +447,74 @@ test("the version the CLI reports is the one the manifest declares", () =>
 
       expect(declared).toBeDefined();
       expect(shown.stdout.trim()).toContain(declared!);
+    }),
+  ));
+
+test("intent defaults round trip, and a Run's Intent is amended through the envelope", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectory({ prefix: "collie-intent-" });
+      const state = join(home, "state");
+      const shared = {
+        HERDR_PLUGIN_STATE_DIR: state,
+        HERDR_PLUGIN_CONFIG_DIR: join(home, "config"),
+      };
+
+      const added = yield* cli(
+        ["--json", "run", "intent", "defaults", "add-constraint", "no new dependencies"],
+        shared,
+      );
+      expect(added.exit).toBe(0);
+      expect(yield* parseEnvelope(added.stdout)).toMatchObject({ ok: true });
+      const shown = yield* cli(["--json", "run", "intent", "defaults", "show"], shared);
+      expect(shown.stdout).toContain("no new dependencies");
+
+      // A grant nobody named is not a grant: the file is refused, not silently ignored.
+      const bogus = yield* cli(
+        ["--json", "run", "intent", "defaults", "set-authority", "invented=true"],
+        shared,
+      );
+      expect(bogus.exit).toBe(2);
+      expect(yield* parseEnvelope(bogus.stdout)).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
+
+      const run = yield* new RunStore(state).create({
+        workflow: "implement",
+        cwd: root,
+        inputs: {},
+        inputSources: {},
+        stepIds: ["build"],
+        maxIterations: 1,
+        namedAfter: "steering",
+      });
+      yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
+
+      const amended = yield* cli(
+        [
+          "--json",
+          "run",
+          "intent",
+          "add-constraint",
+          run.id,
+          "preserve the public --json envelope",
+          "--severity",
+          "block",
+        ],
+        shared,
+      );
+      expect(yield* parseEnvelope(amended.stdout)).toMatchObject({
+        ok: true,
+        data: { version: 2 },
+      });
+
+      const intent = yield* readIntent(run.dir);
+      expect(intent?.version).toBe(2);
+      expect(intent?.history).toHaveLength(1);
+      expect(intent?.constraints[0]?.severity).toBe("block");
+
+      yield* fs.remove(home, { recursive: true, force: true });
     }),
   ));

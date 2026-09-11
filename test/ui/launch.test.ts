@@ -14,6 +14,8 @@ import { layers } from "../../src/definitions";
 import { forkFlow, pickFlow, resumeFlow } from "../../src/flows";
 import { Herdr } from "../../src/herdr";
 import { RunStore } from "../../src/run";
+import { homePath, writeHome } from "../../src/home";
+import { herdDir, herdOf } from "../../src/steering";
 import { signalPrompts, type Pending } from "../../src/ui/prompts";
 
 let rig: Rig;
@@ -81,7 +83,7 @@ const answering = Effect.fn("launch.answering")(function* (
     question.answer(answers.length > 0 ? (answers.shift() ?? null) : null);
   };
   // Answers whatever is on screen until the flow is finished with it.
-  for (let tries = 0; tries < 400; tries++) {
+  for (let tries = 0; tries < 2_000; tries++) {
     const question = pending();
     if (question) answer(question);
     const done = flow.pollUnsafe();
@@ -328,4 +330,59 @@ effectTest("resume offers only runs with unfinished steps", function* () {
   );
 
   expect(asked[0]).toBe("Resume a run");
+});
+
+effectTest("a launch from the Home asks which workspace the work is in", function* () {
+  // The Home is Collie's own workspace and its directory is the Herd's namespace: a Run
+  // rooted there would have nothing to work on, so the workspace is the first question.
+  // The launch asks herdr which workspaces there are, so there has to be one to ask.
+  yield* rig.startSocket();
+  const at = env();
+  const key = yield* herdOf(at.socketPath);
+  const namespaceDir = yield* herdDir(at.stateDir, key);
+  yield* writeHome(yield* homePath(at.stateDir, key), {
+    workspaceId: "home",
+    tabId: "home:1",
+    paneId: "home-1",
+    terminalId: "t-home-1",
+    createdAt: "2026-09-10T10:00:00.000Z",
+    token: key,
+    state: "ready",
+    previous: [],
+  });
+  yield* rig.addWorkspace("home", "🐕 Collie", namespaceDir);
+  yield* rig.addWorkspace("w2", "collie · main", rig.projectDir);
+  yield* writeDef(
+    rig.baselineDir,
+    "workflows",
+    "goalful",
+    `---
+name: goalful
+title: goalful
+inputs:
+  goal: goal
+steps:
+  - id: build
+    persona: implementer
+    output: build.json
+---
+## build
+
+Do {{inputs.goal}}.
+`,
+  );
+
+  const inHome = { ...at, workspaceId: "home", cwd: namespaceDir };
+  const { code, asked } = yield* answering(
+    // Answered by id, which for a workspace is what herdr calls it.
+    ["goalful", "w2", "Add a picker"],
+    (prompts) => pickFlow(new Herdr(inHome), inHome, prompts),
+  );
+
+  expect(code).toBe(0);
+  expect(asked).toEqual(["Workflows — " + namespaceDir, "Which workspace?", "What is the goal?"]);
+  // And rooted there rather than in Collie's own namespace.
+  const runs = yield* new RunStore(at.stateDir).list();
+  expect(runs).toHaveLength(1);
+  expect(runs[0]!.record.cwd).toBe(rig.projectDir);
 });

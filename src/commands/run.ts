@@ -5,6 +5,7 @@ import {
   FileSystem,
   Option,
   Path,
+  PlatformError,
   Ref,
   Schema,
   Semaphore,
@@ -17,7 +18,11 @@ import { RUNNER_LOG, readProgress } from "../driver";
 import { Herdr } from "../herdr";
 import {
   answerRun,
+  clearOverride,
   err,
+  followUp,
+  holdRun,
+  releaseRun,
   prepareWorkflow,
   resumeRun,
   settleGiven,
@@ -25,9 +30,32 @@ import {
   runSettled,
   startRun,
   stopRun,
+  writeInbox,
   type Failure,
 } from "../operations";
-import { fanoutRepos, RunStore } from "../run";
+import { fanoutRepos, withRunLock, RunStore } from "../run";
+import {
+  EMPTY_DEFAULTS,
+  amend,
+  defaultsPath,
+  authorityPatch,
+  parseConstraint,
+  propagate,
+  readDefaults,
+  readIntent,
+  writeDefaults,
+  writeIntent,
+  writeIntentHeld,
+  type Change,
+  type Constraint,
+  type Defaults,
+  type Intent,
+} from "../intent";
+import { scopeFor, scopeKey } from "../registry";
+import { runDeliveries } from "./steer";
+import { currentReports, readDrift } from "../drift";
+import { newest, readCards } from "../cards";
+import { nowIso } from "../time";
 import type { Run } from "../run";
 import type { PluginEnv } from "../env";
 import {
@@ -42,7 +70,10 @@ import {
 import {
   PrettyUnknownJson,
   UnknownJson,
+  actorName,
+  actorNow,
   context,
+  mutating,
   parseInput,
   readRun,
   requestIdFlag,
@@ -53,6 +84,27 @@ import {
   unreadableRuns,
   type Global,
 } from "./shared";
+
+/**
+ * What `--constraint` and `--severity` say together. Paired by position rather than by
+ * interleaved order, because a repeated flag arrives as its own list and the order
+ * between two lists is not recoverable — so the pairing has to be one the human can see
+ * in what they typed.
+ */
+function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArray<string>) {
+  const constraints: Array<Omit<Constraint, "since">> = [];
+  const refuse = (error: string) => ({ error, constraints });
+  if (severities.length > texts.length)
+    return refuse(`--severity was given more times than --constraint.`);
+  for (const [index, text] of texts.entries()) {
+    const level = severityOf(severities[index] ?? "warn");
+    if (level === null) return refuse(`--severity is block or warn.`);
+    const parsed = parseConstraint(text, level);
+    if ("error" in parsed) return refuse(parsed.error);
+    constraints.push(parsed);
+  }
+  return { error: null, constraints };
+}
 
 const runStart = Command.make(
   "start",
@@ -76,9 +128,25 @@ const runStart = Command.make(
       ),
       Flag.atLeast(0),
     ),
+    goal: Flag.string("goal").pipe(
+      Flag.withDescription("What this Run is for, in the human's own words"),
+      Flag.optional,
+    ),
+    constraint: Flag.string("constraint").pipe(
+      Flag.withDescription(
+        "What the work must respect, repeatable; `rule:<kind>:<args>` for one Collie checks",
+      ),
+      Flag.atLeast(0),
+    ),
+    severity: Flag.string("severity").pipe(
+      Flag.withDescription(
+        "block or warn for the --constraint in the same position; warn where none is given",
+      ),
+      Flag.atLeast(0),
+    ),
     requestId: requestIdFlag,
   },
-  ({ workflow, input, inputsJson, decide, requestId: request }) =>
+  ({ workflow, input, inputsJson, decide, goal, constraint, severity, requestId: request }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
@@ -87,6 +155,8 @@ const runStart = Command.make(
           if (base._tag === "ContextFailure") return base.result;
           const explicit = yield* parseInput(input, inputsJson);
           if (!explicit.ok) return explicit.error;
+          const named = namedConstraints(constraint, severity);
+          if (named.error !== null) return err("invalid_input", named.error);
           return yield* mutation(base.env, "run-start", request, (_id) =>
             Effect.gen(function* () {
               // The live workspace is resolved inside the mutation, so replaying a
@@ -110,6 +180,7 @@ const runStart = Command.make(
                 // works in, and the Workflow never sees it. (`workspace` is a declared
                 // Input, so it travels with the rest of them.)
                 branch: explicit.inputs.branch,
+                intent: { goal: Option.getOrNull(goal), constraints: named.constraints },
               });
               if (started._tag === "Rejected") return started.result;
               return {
@@ -607,9 +678,492 @@ const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
   ),
 ).pipe(Command.withDescription("Stop a Run and close only the panes it owns"));
 
+const reasonFlag = Flag.string("reason").pipe(
+  Flag.withDescription("Why, in your own words; it is shown wherever the hold is"),
+  Flag.withDefault("no reason given"),
+);
+
+const runHold = Command.make(
+  "hold",
+  { runId: runIdArg, reason: reasonFlag, requestId: requestIdFlag },
+  ({ runId, reason, requestId }) =>
+    runMutationCommand("run-hold", runId, requestId, (_env, run, id) => holdRun(run, reason, id)),
+).pipe(
+  Command.withDescription("Stop a Run taking on new work; what is already running carries on"),
+);
+
+const runRelease = Command.make(
+  "release",
+  { runId: runIdArg, reason: reasonFlag, requestId: requestIdFlag },
+  ({ runId, reason, requestId }) =>
+    runMutationCommand("run-release", runId, requestId, (_env, run, id) =>
+      releaseRun(run, reason, id),
+    ),
+).pipe(Command.withDescription("Let a held Run carry on"));
+
+const runClearOverride = Command.make(
+  "clear-override",
+  {
+    runId: runIdArg,
+    agent: Argument.string("agent").pipe(
+      Argument.withDescription("The agent, as `run show` names it"),
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ runId, agent, requestId }) =>
+    runMutationCommand("run-clear-override", runId, requestId, (env, run, id) =>
+      clearOverride(env.stateDir, new Herdr(env), run, agent, actorName(actorNow(id))),
+    ),
+).pipe(
+  Command.withDescription("Let Collie correct an agent again after someone typed into its pane"),
+);
+
+const runDrift = Command.make("drift", { runId: runIdArg }, ({ runId }) =>
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* resolveCommandRun(global, runId);
+        if (resolved._tag === "RunFailure") return resolved.result;
+        const lines = yield* readDrift(resolved.run.dir);
+        const reports = currentReports(lines);
+        const skipped = lines.flatMap((line) => (line.kind === "skipped" ? [line] : []));
+        return {
+          ok: true,
+          data: { reports, skipped },
+          human:
+            [
+              ...reports.map(
+                (report) =>
+                  `${report.resolution}\t${report.severity}\t${report.kind}\t${report.constraint}\t${report.evidence
+                    .map((ref) => ref.path ?? ref.excerpt ?? ref.kind)
+                    .join(", ")}${report.evidence_truncated ? " (evidence truncated)" : ""}`,
+              ),
+              // A judgement nobody could make is worth saying: the alternative is a Run
+              // that looks clean because nothing looked at it.
+              ...skipped.map((line) => `skipped\t${line.reason}`),
+            ].join("\n") || "Nothing has drifted.",
+        };
+      }),
+      global.json,
+    );
+  }),
+).pipe(Command.withDescription("What this Run has drifted from, and the evidence for it"));
+
+const runCards = Command.make("cards", { runId: runIdArg }, ({ runId }) =>
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* resolveCommandRun(global, runId);
+        if (resolved._tag === "RunFailure") return resolved.result;
+        const cards = newest(yield* readCards(resolved.run.dir));
+        return {
+          ok: true,
+          data: { cards },
+          human:
+            cards
+              .map(
+                (card) =>
+                  `${card.at}\t${card.kind}\t${card.step}\t${card.readiness}\t${card.significance}\taligned:${card.aligned}` +
+                  (card.missing.length > 0 ? `\n  unchecked: ${card.missing.join("; ")}` : ""),
+              )
+              .join("\n") || "No cards yet.",
+        };
+      }),
+      global.json,
+    );
+  }),
+).pipe(
+  Command.withDescription(
+    "Each slice of this Run's work: what changed, what backs it, what does not",
+  ),
+);
+
+const runFollowUp = Command.make(
+  "follow-up",
+  {
+    runId: runIdArg,
+    text: Argument.string("text").pipe(
+      Argument.withDescription("What still needs doing, in your own words"),
+    ),
+    allowDirty: Flag.boolean("allow-dirty").pipe(
+      Flag.withDescription("Build on the uncommitted changes already in that checkout"),
+      Flag.withDefault(false),
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ runId, text, allowDirty, requestId }) =>
+    runMutationCommand("run-follow-up", runId, requestId, (env, run, id) =>
+      followUp(env, run, text, id, { allowDirty }),
+    ),
+).pipe(
+  Command.withDescription("Start a child Run on a finished one's outcome, on the same branch"),
+);
+
 const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =>
   runMutationCommand("run-resume", runId, requestId, (env, run, id) => resumeRun(env, run, id)),
 ).pipe(Command.withDescription("Start a fresh Driver for a Run, skipping finished Steps"));
+/**
+ * Every `run intent` mutation goes through here: read the Intent, apply one pure
+ * `amend`, write it back. The version the caller is told is the one on disk, so a
+ * change that turned out to be a no-op reports the version that still stands rather
+ * than one nobody wrote.
+ */
+function intentChange(
+  operation: string,
+  runId: string,
+  requestId: Option.Option<string>,
+  change: (intent: Intent) => Change | Failure,
+  options: { readonly propagate?: boolean } = {},
+) {
+  return runMutationCommand(operation, runId, requestId, (env, target, id) =>
+    Effect.gen(function* () {
+      // Read, decide and write as one act. Two amendments that both read v1 would
+      // otherwise both report v2 and the later rename would erase the earlier one.
+      const amended = yield* withRunLock<
+        Failure | Intent,
+        Error | PlatformError.PlatformError,
+        FileSystem.FileSystem | Path.Path | BunServices
+      >(
+        target.dir,
+        Effect.gen(function* () {
+          const intent = yield* readIntent(target.dir).pipe(
+            Effect.mapError((cause) => new Error(String(cause))),
+          );
+          if (intent === null)
+            return err("invalid_state", `Run "${runId}" has no Intent to amend.`);
+          const wanted = change(intent);
+          if ("ok" in wanted) return wanted;
+          const next = amend(intent, wanted, actorName(actorNow(id)), yield* nowIso());
+          if (next !== intent) yield* writeIntentHeld(target.dir, next);
+          return next;
+        }),
+      );
+      if ("ok" in amended) return amended;
+      // The command a confirmed `update_intent` writes. Without it a live Driver keeps
+      // checking against the version it loaded (SPEC §9.4).
+      yield* writeInbox(target.dir, {
+        type: "intent_changed",
+        requestId: id,
+        version: amended.version,
+      }).pipe(Effect.ignore);
+      const propagated = options.propagate ? yield* propagateToChildren(env, target, amended) : [];
+      return {
+        ok: true,
+        data: { runId, version: amended.version, propagated },
+        human: [`${runId}: intent v${amended.version}`, ...propagated].join("\n"),
+      };
+    }),
+  );
+}
+
+/**
+ * The parent's amended Intent applied to every child that is still going. The child's own
+ * entries are kept and conflicts are reported, never resolved — `propagate` decides that,
+ * and this only writes what it decided.
+ *
+ * The child's file is written but its Driver is not told: it picks the new version up at
+ * its next boundary.
+ */
+const propagateToChildren = Effect.fn("run.propagateToChildren")(function* (
+  env: PluginEnv,
+  parent: Run,
+  intent: Intent,
+) {
+  const store = new RunStore(env.stateDir);
+  const lines: string[] = [];
+  for (const id of parent.record.children) {
+    const child = yield* store.load(id).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (child === null) continue;
+    if (child.record.status !== "running" && child.record.status !== "blocked") continue;
+    const current = yield* readIntent(child.dir).pipe(Effect.catch(() => Effect.succeed(null)));
+    if (current === null) continue;
+    const { intent: next, conflicts } = propagate(intent, current);
+    yield* writeIntent(child.dir, next);
+    yield* child.log(`intent propagated from ${parent.id} v${intent.version}`);
+    lines.push(`  ${id}: propagated${conflicts.length ? ` (${conflicts.join("; ")})` : ""}`);
+  }
+  return lines;
+});
+
+const severityFlag = Flag.string("severity").pipe(
+  Flag.withDescription("block or warn; warn is the default"),
+  Flag.withDefault("warn"),
+);
+
+const propagateFlag = Flag.boolean("propagate").pipe(
+  Flag.withDescription("Apply the amended Intent to every child Run that is still going"),
+  Flag.withDefault(false),
+);
+
+function severityOf(value: string): "block" | "warn" | null {
+  return value === "block" || value === "warn" ? value : null;
+}
+
+const intentShow = Command.make("show", { runId: runIdArg }, ({ runId }) =>
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* resolveCommandRun(global, runId);
+        if (resolved._tag === "RunFailure") return resolved.result;
+        const intent = yield* readIntent(resolved.run.dir);
+        if (intent === null) return err("invalid_state", `Run "${runId}" has no Intent.`);
+        return {
+          ok: true,
+          data: { intent },
+          human: [
+            `v${intent.version}\tgoal: ${intent.goal ?? "(none)"}`,
+            ...intent.constraints.map(
+              (c) => `  ${c.id}\t${c.severity}\t${c.kind}\t${c.source}\t${c.text}`,
+            ),
+            ...intent.history.map((h) => `  v${h.version}\t${h.by}\t${h.change}`),
+          ].join("\n"),
+        };
+      }),
+      global.json,
+    );
+  }),
+).pipe(Command.withDescription("Show a Run's goal, constraints, authority and history"));
+
+const intentSetGoal = Command.make(
+  "set-goal",
+  {
+    runId: runIdArg,
+    goal: Argument.string("goal").pipe(Argument.withDescription("What this Run is for")),
+    propagate: propagateFlag,
+    requestId: requestIdFlag,
+  },
+  ({ runId, goal, propagate: wants, requestId }) =>
+    intentChange("run-intent-goal", runId, requestId, () => ({ kind: "set-goal", goal }), {
+      propagate: wants,
+    }),
+).pipe(Command.withDescription("Set what a Run is for"));
+
+const intentAdd = Command.make(
+  "add-constraint",
+  {
+    runId: runIdArg,
+    text: Argument.string("text").pipe(
+      Argument.withDescription("The constraint, or `rule:<kind>:<args>` for one Collie checks"),
+    ),
+    severity: severityFlag,
+    propagate: propagateFlag,
+    requestId: requestIdFlag,
+  },
+  ({ runId, text, severity, propagate: wants, requestId }) =>
+    intentChange(
+      "run-intent-add",
+      runId,
+      requestId,
+      () => {
+        const level = severityOf(severity);
+        if (level === null) return err("invalid_input", `--severity is block or warn.`);
+        const constraint = parseConstraint(text, level);
+        if ("error" in constraint) return err("invalid_input", constraint.error);
+        return { kind: "add-constraint", constraint };
+      },
+      { propagate: wants },
+    ),
+).pipe(Command.withDescription("Add a constraint this Run's work is judged against"));
+
+const intentRemove = Command.make(
+  "remove-constraint",
+  {
+    runId: runIdArg,
+    id: Argument.string("constraint-id").pipe(
+      Argument.withDescription("The constraint's id, as `run intent show` lists it"),
+    ),
+    propagate: propagateFlag,
+    requestId: requestIdFlag,
+  },
+  ({ runId, id, propagate: wants, requestId }) =>
+    intentChange("run-intent-remove", runId, requestId, () => ({ kind: "remove-constraint", id }), {
+      propagate: wants,
+    }),
+).pipe(Command.withDescription("Remove a constraint from a Run's Intent"));
+
+const authorityArgs = Argument.string("pair").pipe(
+  Argument.withDescription("k=v, repeatable; e.g. auto_correct=true"),
+  Argument.variadic({ min: 1 }),
+);
+
+const intentAuthority = Command.make(
+  "authority",
+  { runId: runIdArg, pairs: authorityArgs, propagate: propagateFlag, requestId: requestIdFlag },
+  ({ runId, pairs, propagate: wants, requestId }) =>
+    intentChange(
+      "run-intent-authority",
+      runId,
+      requestId,
+      () => {
+        const patch = authorityPatch(pairs);
+        return "error" in patch ? err("invalid_input", patch.error) : { kind: "authority", patch };
+      },
+      { propagate: wants },
+    ),
+).pipe(Command.withDescription("Grant or withdraw what Collie may do to a Run without asking"));
+
+/**
+ * The one grant that is not a `k=v` word: a command Collie may run itself, bound argument
+ * for argument. The wrapper is part of what was approved — `bun test` and `bun test
+ * --bail` are two different permissions.
+ */
+const intentVerification = Command.make(
+  "verification",
+  {
+    runId: runIdArg,
+    name: Flag.string("name").pipe(
+      Flag.withDescription("What to call it; the same name a `command_exit` rule refers to"),
+    ),
+    cwd: Flag.string("cwd").pipe(
+      Flag.withDescription("`worktree`, or a path relative to the Run's cwd"),
+      Flag.withDefault("worktree"),
+    ),
+    remove: Flag.boolean("remove").pipe(
+      Flag.withDescription("Withdraw the grant of this name instead of making one"),
+      Flag.withDefault(false),
+    ),
+    command: Argument.string("command").pipe(
+      Argument.withDescription("The executable and its arguments, after `--`"),
+      Argument.variadic({ min: 0 }),
+    ),
+    propagate: propagateFlag,
+    requestId: requestIdFlag,
+  },
+  ({ runId, name, cwd, remove, command, propagate: wants, requestId }) =>
+    intentChange(
+      "run-intent-verification",
+      runId,
+      requestId,
+      (intent) => {
+        const approved = intent.authority.run_verification.filter((spec) => spec.name !== name);
+        if (remove) return { kind: "authority", patch: { run_verification: approved } };
+        const [executable, ...argv] = command;
+        if (executable === undefined)
+          return err("invalid_input", "A verification grant needs a command, after `--`.");
+        return {
+          kind: "authority",
+          patch: { run_verification: [...approved, { name, executable, argv, cwd }] },
+        };
+      },
+      { propagate: wants },
+    ),
+).pipe(Command.withDescription("Let Collie run one exact command itself, as a verification"));
+
+/** The Session's own defaults file, which is what every Run it starts begins with. */
+const defaultsFile = Effect.fn("run.defaultsFile")(function* (env: PluginEnv) {
+  return yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env, env.cwd)));
+});
+
+function defaultsCommand(
+  operation: string,
+  requestId: Option.Option<string>,
+  change: (defaults: Defaults) => Defaults | Failure,
+) {
+  return mutating(operation, requestId, (env) =>
+    Effect.gen(function* () {
+      const file = yield* defaultsFile(env);
+      const current = (yield* readDefaults(file)) ?? EMPTY_DEFAULTS;
+      const next = change(current);
+      if ("ok" in next) return next;
+      yield* writeDefaults(file, next);
+      return { ok: true, data: { defaults: next }, human: describeDefaults(next) };
+    }),
+  );
+}
+
+function describeDefaults(defaults: Defaults): string {
+  return [
+    ...defaults.constraints.map((c) => `${c.id}\t${c.severity}\t${c.kind}\t${c.text}`),
+    ...Object.entries(defaults.authority).map(([k, v]) => `authority ${k}=${JSON.stringify(v)}`),
+  ].join("\n");
+}
+
+const defaultsShow = Command.make("show", {}, () =>
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* context(global, false);
+        if (resolved._tag === "ContextFailure") return resolved.result;
+        const defaults = (yield* readDefaults(yield* defaultsFile(resolved.env))) ?? EMPTY_DEFAULTS;
+        return { ok: true, data: { defaults }, human: describeDefaults(defaults) };
+      }),
+      global.json,
+    );
+  }),
+).pipe(Command.withDescription("Show what every Run started here begins with"));
+
+const defaultsAdd = Command.make(
+  "add-constraint",
+  {
+    text: Argument.string("text").pipe(
+      Argument.withDescription("The constraint, or `rule:<kind>:<args>` for one Collie checks"),
+    ),
+    severity: severityFlag,
+    requestId: requestIdFlag,
+  },
+  ({ text, severity, requestId }) =>
+    defaultsCommand("run-intent-defaults-add", requestId, (defaults) => {
+      const level = severityOf(severity);
+      if (level === null) return err("invalid_input", `--severity is block or warn.`);
+      const parsed = parseConstraint(text, level);
+      if ("error" in parsed) return err("invalid_input", parsed.error);
+      // Filed as what it is: a default, not something a human typed for this Run.
+      const constraint = { ...parsed, source: "workspace-default" as const, since: 1 };
+      return {
+        ...defaults,
+        constraints: [...defaults.constraints.filter((c) => c.id !== constraint.id), constraint],
+      };
+    }),
+).pipe(Command.withDescription("Add a constraint every Run started here begins with"));
+
+const defaultsRemove = Command.make(
+  "remove-constraint",
+  {
+    id: Argument.string("constraint-id").pipe(
+      Argument.withDescription("The constraint's id, as `defaults show` lists it"),
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ id, requestId }) =>
+    defaultsCommand("run-intent-defaults-remove", requestId, (defaults) => ({
+      ...defaults,
+      constraints: defaults.constraints.filter((c) => c.id !== id),
+    })),
+).pipe(Command.withDescription("Remove a constraint from this workspace's defaults"));
+
+const defaultsAuthority = Command.make(
+  "set-authority",
+  { pairs: authorityArgs, requestId: requestIdFlag },
+  ({ pairs, requestId }) =>
+    defaultsCommand("run-intent-defaults-authority", requestId, (defaults) => {
+      const patch = authorityPatch(pairs);
+      if ("error" in patch) return err("invalid_input", patch.error);
+      return { ...defaults, authority: { ...defaults.authority, ...patch } };
+    }),
+).pipe(Command.withDescription("Set what every Run started here may do without asking"));
+
+const intentDefaults = Command.make("defaults").pipe(
+  Command.withDescription("What every Run started in this workspace begins with"),
+  Command.withSubcommands([defaultsShow, defaultsAdd, defaultsRemove, defaultsAuthority]),
+);
+
+const runIntent = Command.make("intent").pipe(
+  Command.withDescription("A Run's goal, its constraints and what Collie may do about them"),
+  Command.withSubcommands([
+    intentShow,
+    intentSetGoal,
+    intentAdd,
+    intentRemove,
+    intentAuthority,
+    intentVerification,
+    intentDefaults,
+  ]),
+);
+
 export const run = Command.make("run").pipe(
   Command.withDescription("Start Runs and follow, answer, stop or resume them"),
   Command.withSubcommands([
@@ -620,6 +1174,14 @@ export const run = Command.make("run").pipe(
     runStop,
     runResume,
     runAnswer,
+    runHold,
+    runRelease,
+    runClearOverride,
+    runDeliveries,
+    runDrift,
+    runCards,
+    runFollowUp,
+    runIntent,
     runLogs,
     runOutput,
   ]),

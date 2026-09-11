@@ -1,6 +1,6 @@
 import { Clock, DateTime } from "effect";
 import { nowIso } from "../src/time";
-import { COLLIE_TAB } from "../src/naming";
+import {} from "../src/naming";
 import { readEnv } from "../src/env";
 
 /** A Date this far back, without reaching for the global clock. */
@@ -158,15 +158,16 @@ effectTest("a review is one run tab of agent panes, and the plugin keeps one pan
   );
 
   expect(status).toBe("done");
-  // One tab for the run — the reviewers' — plus the Collie tab's, and no pane of
-  // the run's own anywhere: no runner pane to move, swap or name.
+  // One tab for the run — the reviewers' — plus the Home's, and no pane of the run's
+  // own anywhere: no runner pane to move, swap or name. The Home's pane is not renamed:
+  // it is owned by the token it carries, never by what it is called (ADR-0009).
   const cmds = yield* rig.cmds();
   const calls = yield* rig.calls();
   expect(cmds.filter((c) => c === "tab create")).toHaveLength(1);
   for (const cmd of ["pane move", "pane swap"]) expect(cmds).not.toContain(cmd);
   expect(calls.filter((c) => c.cmd === "plugin pane")).toHaveLength(1);
   const panes = calls.filter((c) => c.cmd === "pane rename").map((c) => c.argv?.at(-1));
-  expect(panes).toEqual([COLLIE_TAB, "Opus", "Sonnet", "Synthesize"]);
+  expect(panes).toEqual(["Opus", "Sonnet", "Synthesize"]);
   expect(run.step("review").variants).toHaveLength(2);
 });
 

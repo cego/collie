@@ -9,6 +9,8 @@ import { useRenderer } from "@opentui/solid";
 import { sinceReview, type MrDetails, type MrPanel } from "../mr";
 import { truncated, type Panel, type PlanPanel, type RunDetail } from "../views";
 import { markdownLines, type Command, type LineStyle, type Row } from "./state";
+import type { Live } from "../live";
+import { LiveRegion } from "./live";
 
 const DIM = "#8a8a8a";
 const ACCENT = "#7aa2f7";
@@ -17,6 +19,12 @@ const BAD = "#f7768e";
 export interface DetailProps {
   row: Row | null;
   detail: RunDetail | null;
+  /**
+   * What has been happening, drawn under the Run's own facts. Inside this scrollbox
+   * rather than in a region of its own, so it scrolls with what it is about and takes
+   * no share of the pane away from the list.
+   */
+  live: Live | null;
   cwd: string;
   overlay: boolean;
   /**
@@ -76,6 +84,12 @@ export function Detail(props: DetailProps) {
         <Show when={props.row!.definition !== null}>
           <Definition row={props.row!} />
         </Show>
+      </Show>
+      {/* Whatever the Selection is: an ownership notice and the Herd's newest cards are
+          not about one Run, and a board nobody has moved the cursor on still has to say
+          what has been happening. */}
+      <Show when={props.live !== null}>
+        <LiveRegion live={props.live!} />
       </Show>
     </scrollbox>
   );

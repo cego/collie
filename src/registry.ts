@@ -1,6 +1,18 @@
 import { Schema, Effect, FileSystem, Path } from "effect";
 import type { AgentInfo } from "./herdr";
 
+/**
+ * herdr's own identity for one live agent process, recorded when it is registered and
+ * checked again every time something is about to be sent to it. An agent name is reused
+ * by whatever takes that role next and a pane outlives what ran in it, so neither names
+ * a process; `terminal_id` does. Nothing here is invented — no pid, no start time.
+ */
+export interface Incarnation {
+  terminalId: string;
+  /** The harness session herdr says it is driving, where it knows one. */
+  agentSession: { kind: string; value: string } | null;
+}
+
 export interface AgentEntry {
   role: string;
   agent: string;
@@ -9,6 +21,8 @@ export interface AgentEntry {
   runId: string;
   workflow: string;
   at: string;
+  /** Absent on an entry written before incarnations: never a delivery target. */
+  incarnation?: Incarnation;
 }
 export interface RegistryScope {
   session: string | null;
@@ -16,6 +30,11 @@ export interface RegistryScope {
   /** Names the register only where there is no workspace to name it by. */
   cwd: string;
 }
+
+const IncarnationSchema = Schema.Struct({
+  terminalId: Schema.String,
+  agentSession: Schema.NullOr(Schema.Struct({ kind: Schema.String, value: Schema.String })),
+});
 
 const AgentEntrySchema = Schema.Struct({
   role: Schema.String,
@@ -25,6 +44,9 @@ const AgentEntrySchema = Schema.Struct({
   runId: Schema.String,
   workflow: Schema.String,
   at: Schema.String,
+  // Optional so a register written before incarnations still decodes. It reads as an
+  // entry that can be stopped and pruned but never delivered to, which is what it is.
+  incarnation: Schema.optionalKey(IncarnationSchema),
 });
 const RegistryJson = Schema.fromJsonString(Schema.Array(AgentEntrySchema));
 const encodeRegistry = Schema.encodeSync(RegistryJson);
@@ -40,15 +62,24 @@ export const registryPath = Effect.fn("registryPath")(function* (
   scope: RegistryScope,
 ) {
   const path = yield* Path.Path;
-  // The workspace is the Session, so a Run's own worktree and the board's directory
-  // read the same register; the directory only stands in where there is no workspace.
   const where = scope.workspaceId ?? scope.cwd;
-  const key = Bun.hash(`${scope.session ?? ""} ${where}`)
+  const name = path.basename(where).replace(/[^A-Za-z0-9._-]+/g, "-") || "repo";
+  return path.join(stateDir, "agents", `${name}-${scopeKey(scope)}.json`);
+});
+
+/**
+ * The short stable key a Session's per-workspace state is filed under. The workspace is
+ * the Session, so a Run's own worktree and the board's directory read the same one; the
+ * directory only stands in where there is no workspace. Exported because the register is
+ * no longer the only thing keyed this way — steering defaults are too — and two copies of
+ * the formula is two answers to "which workspace is this".
+ */
+export function scopeKey(scope: RegistryScope): string {
+  const where = scope.workspaceId ?? scope.cwd;
+  return Bun.hash(`${scope.session ?? ""} ${where}`)
     .toString(16)
     .slice(0, 12);
-  const name = path.basename(where).replace(/[^A-Za-z0-9._-]+/g, "-") || "repo";
-  return path.join(stateDir, "agents", `${name}-${key}.json`);
-});
+}
 
 export function scopeFor(
   env: { socketPath: string | null; workspaceId: string | null },
@@ -110,18 +141,57 @@ export const registerAgent = Effect.fn("registerAgent")(function* (
   return entries;
 });
 
+/**
+ * Whether anything may be sent to this entry at all. A register is a cache of what herdr
+ * was last seen to have, and an entry with no incarnation names a role and a pane, both
+ * of which the next agent inherits — so a delivery to it could reach a process nobody
+ * addressed. Fail closed: the entry stays stoppable and prunable, and undeliverable.
+ */
+export function deliverable(entry: AgentEntry): entry is AgentEntry & { incarnation: Incarnation } {
+  return entry.incarnation !== undefined;
+}
+
+/**
+ * Whether this entry still names the process it was registered for. `liveEntries`
+ * answers "is an agent by this name on this pane", which the next incarnation in the
+ * same role also satisfies; this additionally requires herdr's own identity to match.
+ * The reason is returned rather than logged here, so the caller records it where its
+ * own refusal is recorded.
+ */
+export function verifyIncarnation(
+  entry: AgentEntry,
+  alive: ReadonlyArray<AgentInfo>,
+): { ok: true; info: AgentInfo } | { ok: false; reason: string } {
+  if (!deliverable(entry)) return { ok: false, reason: "no_incarnation" };
+  const [live] = matching(entry, alive);
+  if (!live) return { ok: false, reason: "agent_gone" };
+  if (live.terminalId !== entry.incarnation.terminalId)
+    return { ok: false, reason: "incarnation_changed" };
+  const session = entry.incarnation.agentSession;
+  if (
+    session !== null &&
+    (live.agentSession === null ||
+      live.agentSession.kind !== session.kind ||
+      live.agentSession.value !== session.value)
+  )
+    return { ok: false, reason: "incarnation_changed" };
+  return { ok: true, info: live };
+}
+
+function matching(entry: AgentEntry, alive: ReadonlyArray<AgentInfo>): AgentInfo[] {
+  return alive.filter(
+    (a) =>
+      a.name === entry.agent &&
+      a.paneId === entry.paneId &&
+      (a.workspaceId === null || entry.workspaceId === null || a.workspaceId === entry.workspaceId),
+  );
+}
+
 export function liveEntries(
   entries: ReadonlyArray<AgentEntry>,
   alive: ReadonlyArray<AgentInfo>,
 ): AgentEntry[] {
-  return entries.filter((e) =>
-    alive.some(
-      (a) =>
-        a.name === e.agent &&
-        a.paneId === e.paneId &&
-        (a.workspaceId === null || e.workspaceId === null || a.workspaceId === e.workspaceId),
-    ),
-  );
+  return entries.filter((e) => matching(e, alive).length > 0);
 }
 
 export const pruneRegistry = Effect.fn("pruneRegistry")(function* (

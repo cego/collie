@@ -92,19 +92,6 @@ const COLLIE_GLYPH = "\u{1F415}";
 export const COLLIE_TAB = `${COLLIE_GLYPH} Collie`;
 
 /**
- * Every name this tab has worn. An emoji prefix is the same migration as a rename —
- * it changes the identity herdr is asked about — so a tab under an old name is found
- * and renamed in place rather than joined by a second one. Add to this list; never
- * replace it.
- */
-export const LEGACY_TABS = ["Control Plane"] as const;
-
-/** Whether a tab label names Collie's own tab, under this name or an older one. */
-export function isCollieTab(label: string): boolean {
-  return label === COLLIE_TAB || LEGACY_TABS.some((legacy) => legacy === label);
-}
-
-/**
  * Everything a human reads is Capitalized. A model id that is not a word keeps
  * its own casing (`gpt-5.6-sol`), and a target keeps whatever it actually is —
  * a branch is not a branch any more once it has been prettied up.

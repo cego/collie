@@ -51,6 +51,20 @@ have already committed, say so in your Output instead of quietly undoing either 
 - Before finishing, delete unnecessary comments you added or changed. Preserve required
   API documentation, legal notices, and tooling directives; leave unrelated code alone.
 
+## Verified, not claimed
+
+Run every test, lint and typecheck command through
+`collie verify --run <run id> --cwd <project root> -- <command>`. Collie watches the exit
+and binds it to the tree the command ran on; that is a verification. Anything you write in
+an Output about tests passing is a claim, and is shown as one. Name in your Output which
+verifications you ran.
+
+When you start each ticket and when you finish it, write
+`<run dir>/steering/progress/<ticket-slug>.json` as `{"ticket":"<file>","status":
+"started"|"done","claims":["<what you believe is done>"],"at":"<iso>"}`. These are your
+claims, and Collie labels them as such — they are how a human sees a slice of work land
+before the whole step is over.
+
 ## Output
 
 Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there

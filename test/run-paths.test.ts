@@ -310,12 +310,14 @@ test("a claim that changed since it was inspected is never the one removed", () 
       );
       expect(yield* fs.exists(changed)).toBe(true);
 
+      // An ordinary file for this half, not a fifo: what is being tested is that a claim
+      // which has *not* changed between the two reads is broken, and a file gives both
+      // reads the same bytes by construction. Feeding a fifo twice does not — the two
+      // writes can be taken as one read, leaving the second read with nothing and the
+      // test failing for a reason that has nothing to do with the lock.
       const unchanged = path.join(run.dir, "unchanged.lock");
-      Bun.spawnSync(["mkfifo", unchanged]);
+      yield* fs.writeFileString(unchanged, stale);
       const second = breakInChild(unchanged, path.join(run.dir, "unchanged.ready"));
-      yield* awaitMarker(path.join(run.dir, "unchanged.ready"));
-      yield* feed(unchanged, stale);
-      yield* feed(unchanged, stale);
 
       expect(yield* Effect.promise(() => new Response(second.stdout).text())).toContain(
         "broke=true",

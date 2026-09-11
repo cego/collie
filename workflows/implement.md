@@ -63,7 +63,7 @@ This run's directory: {{run.dir}}
 
 ## build
 
-The work source above is one of four kinds. Do the one that matches
+The work source above is one of five kinds. Do the one that matches
 `{{inputs.plan_kind}}` and ignore the others.
 
 - **plan-dir** — a plan is already written. Read `{{inputs.plan}}/SPEC.md` and every
@@ -85,6 +85,12 @@ The work source above is one of four kinds. Do the one that matches
   its description as the spec. Before building, write that spec to
   `{{run.dir}}/plan/SPEC.md` and a short task list to `{{run.dir}}/plan/issues/NN-*.md`,
   one file per slice, so the run records what you decided to build.
+- **followup** — a finished run's outcome needs more work. `{{inputs.plan}}` names it as
+  `followup:<run id>`; that run's `steering/drift.jsonl` open reports and the text in
+  `{{run.dir}}/plan/SPEC.md` are the spec. Write one ticket per open report under
+  `{{run.dir}}/plan/issues/`. This checkout is already on the branch that run built, and
+  its merge request is updated rather than replaced — the parent run is finished and
+  immutable, so nothing you do belongs in it.
 - **text** — the work in the human's own words. Same as `linear` without the fetch:
   write `{{run.dir}}/plan/SPEC.md` and the task list from the text, then build. If the
   text does not say enough to build from, stop and say what you need — do not guess.
@@ -113,6 +119,16 @@ If the push fails — no remote, no permission, a protected branch, a rejected
 non-fast-forward — say what failed, report `"pushed": false`, and carry on to your
 Output. The commits are still good and the Run is still worth finishing.
 
+Run every test, lint and typecheck command through
+`collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`; Collie records the result
+against the tree it ran on, and only that is a verification — an Output that says the
+tests pass is a claim. Say in your Output which verifications you ran, by name.
+
+When you start each ticket and when you finish it, write
+`{{run.dir}}/steering/progress/<ticket-slug>.json` as `{"ticket":"<file>","status":
+"started"|"done","claims":["<what you believe is done>"],"at":"<iso>"}`. These are your
+claims, and Collie labels them as such.
+
 {{session.ask}}
 
 Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what is not
@@ -133,6 +149,11 @@ this branch did not.
 Apply your persona's **Code comment hygiene** rules to comments this branch added or
 changed: make the code self-explanatory, delete unnecessary comments, and reduce each
 essential comment to the fewest words that preserve its meaning.
+
+Run every test, lint and typecheck command through
+`collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`; Collie records the result
+against the tree it ran on, and only that is a verification — an Output that says the
+tests pass is a claim. Say in your Output which verifications you ran, by name.
 
 If you committed anything, push it the same way `build` did — `git push -u origin HEAD
 -o ci.skip` — so the reviewers read what you simplified rather than what you replaced. A
@@ -164,6 +185,15 @@ A finding that arrives with `answers your dispute:` is one you rejected before a
 reviewer has now answered. Deal with it: apply it, or dispute it again with a reason that
 answers what they said.
 
+Run every test, lint and typecheck command through
+`collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`; Collie records the result
+against the tree it ran on, and only that is a verification — an Output that says the
+tests pass is a claim. Say in your Output which verifications you ran, by name.
+
+When you start each ticket and when you finish it, write
+`{{run.dir}}/steering/progress/<ticket-slug>.json` as `{"ticket":"<file>","status":
+"started"|"done","claims":["<what you believe is done>"],"at":"<iso>"}`. These are your
+claims, and Collie labels them as such.
 Never defer a blocking finding to a follow-up or leave it out of your Output: every
 `blocker` and `major` above is either under `fixed` or under `disputed`, never both and
 never neither. Disputing every blocking finding stops the run for the human at once. On
@@ -199,6 +229,11 @@ what that fix changed. Where findings were left open as non-blocking, list them 
 - Assignee: `{{mr.assignee}}`
 - MR template: `{{mr.template}}`
 - Linear tickets: `{{mr.issues}}`
+
+Run every test, lint and typecheck command through
+`collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`; Collie records the result
+against the tree it ran on, and only that is a verification — an Output that says the
+tests pass is a claim. Say in your Output which verifications you ran, by name.
 
 Push anything the earlier steps have not pushed yet, this time **without** `ci.skip`:
 yours is the push that runs the pipeline, and the state a human will look at.

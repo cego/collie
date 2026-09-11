@@ -8,6 +8,7 @@ import { layerSet, writeDef } from "./support/defs";
 import { FALLBACK_DEFAULTS } from "../src/config";
 import { loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
 import { RunStore } from "../src/run";
+import { readIntent, seedIntent, writeIntent } from "../src/intent";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -315,6 +316,60 @@ test("a run: choice starts a child run with the forwarded inputs and the parent 
       expect(run.step("after").status).toBe("pending");
       expect(run.step("after").note).toContain("not run");
       expect(run.record.summary).toContain(`Chained: ${child.id}`);
+    }),
+  ));
+
+test("a child inherits its parent's constraints, re-sourced, and never its authority", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
+      const prompts = scriptedPrompts(["Build it now"]);
+      const store = new RunStore(rig.stateDir);
+
+      // The parent's Intent is written before it chains, exactly as a Run started with
+      // `--goal`/`--constraint` would have it, and with a grant a child must not inherit.
+      const seeded = seedIntent("placeholder", {
+        goal: "Add a picker",
+        constraints: [
+          {
+            id: "keep-envelope",
+            kind: "semantic",
+            text: "keep the --json envelope",
+            severity: "block",
+            source: "human",
+            since: 1,
+          },
+        ],
+      });
+
+      const { run } = yield* runWorkflowEffect(
+        rig,
+        "parent",
+        { goal: "Add a picker" },
+        {
+          prompts,
+          before: (parent) =>
+            writeIntent(parent.dir, {
+              ...seeded,
+              run: parent.id,
+              authority: {
+                ...seeded.authority,
+                auto_correct: true,
+              },
+            }),
+        },
+      );
+
+      const child = yield* store.load(run.record.children[0]!);
+      const intent = yield* readIntent(child.dir);
+      expect(intent?.version).toBe(1);
+      expect(intent?.parent).toEqual({ run: run.id, version: 1, applied: 1 });
+      expect(intent?.goal).toBe("Add a picker");
+      expect(intent?.constraints.map((c) => [c.id, c.source])).toEqual([
+        ["keep-envelope", "parent"],
+      ]);
+      // A grant is per Run: the child arrives with none, whatever its parent had.
+      expect(intent?.authority.auto_correct).toBe(false);
     }),
   ));
 

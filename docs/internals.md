@@ -48,6 +48,23 @@ produced one, and `log.txt`. That is the audit trail and what `resume` reads.
 > `run wait`, `run answer` — and never by reading or writing run-directory files. Writing
 > one directly races the Driver that owns it.
 
+The Driver reads its inbox **during** a step as well as at a question: once per
+`awaitAgent` poll, and again at every work boundary before a prompt is composed. That is
+what makes steering reach a run that is busy rather than waiting — before this, a command
+written while an agent worked sat unread until the next Choice.
+
+What survives a Driver is decided by what the command is addressed to. `deliver`,
+`intent_changed` and `drift_report` are about the work, so a new Driver keeps them;
+`answer`, `stop`, `hold` and `release` were about the process that is gone, so it drops
+them. A `stop` in particular must not survive: a stop written mid-step used to outlive its
+Driver and kill the next one at its first question, which made any Workflow that asks a
+question unresumable. A command this build cannot decode is logged and left in place —
+a newer Collie may know what it is.
+
+A `hold` takes effect at a work boundary, never mid-turn: the Driver declines to start the
+next piece of work rather than interrupting anyone. It then loops on the inbox until a
+`release` or a `stop`, with `awaiting` set to `hold` so both front doors say so.
+
 Plan artefacts are the same story from the other side: `SPEC.md`, tickets, wayfinder maps
 and architecture reports go into the run's `plan/` directory and never into the repository
 ([ADR-0002](adr/0002-plan-artefacts-live-in-the-run-directory.md)). Glossary and ADR changes
@@ -271,9 +288,12 @@ what the step's quiet clock is for.
 
 A submission that fails outright — no such agent, a socket that is gone — blocks that one
 variant with the reason rather than failing every agent beside it. `unobserved` is never
-erased: the engine logs it against the variant, a hand-off says so in what it reports back
-and in both Runs' audit trails, and a compaction request records it, so an unresolved
-compaction can be told from one whose request may never have arrived.
+erased. Every send goes through the Dispatcher, which writes the `submitted` ledger line
+with `unobserved` as its note and hands the answer back to the caller: the engine logs it
+against the variant, a boundary item composed into that prompt — a hand-off queued through
+the receiving Run's inbox among them — inherits the note, `run deliveries` shows it beside
+the state, and a compaction request records it, so an unresolved compaction can be told
+from one whose request may never have arrived.
 
 Because the submission settles all of this, nothing waits again after it: the engine
 watches a prompted agent straight away rather than keeping a readiness wait of its own.
@@ -332,6 +352,137 @@ does not move it out of the workspace it was started from.
 so `handoff.ts` can give one run's result to another run's live agent rather than starting
 a second one. There is only ever one agent per role in a session, and a session never sees
 another workspace's agents — even for the same repo.
+
+Each entry also records an **incarnation**: herdr's own `terminal_id` for the process in
+the pane, and the harness session it is driving where herdr knows one. An agent name is
+reused by whatever takes that role next and a pane outlives what ran in it, so neither
+names a process — which is why a delivery is checked against the incarnation and not
+against the name. `verifyIncarnation` requires name, pane and workspace to match as
+before, and `terminal_id` (and the recorded `agent_session`) on top.
+
+An entry from before incarnations decodes as one without the field, and that is
+**fail-closed**: it can still be stopped and pruned, but nothing is ever sent to it —
+`deliverable` is false and `liveRole` returns null with `no_incarnation`. The alternative
+would be a hand-off delivered to whichever agent happens to be in that pane now.
+
+## The Dispatcher
+
+`dispatcher.ts` is the only code that sends text to an agent, and a test reads every
+source file to keep it that way. Six callers used to send independently — the next step's
+prompt, a repair, a nudge, two hand-offs and a compaction request — none of them aware of
+the others, so a hand-off from the board and a nudge from a Driver could land in one pane
+in either order.
+
+`Dispatcher.transaction(deps, entry, body)` holds one agent's ledger lock for the whole of
+what a caller wants to do with it: it revalidates the incarnation against a fresh
+`agent list`, hands `body` a `Channel` bound to that identity, and releases the lock when
+`body` returns. A channel used after its transaction closes, or a second transaction for
+one agent in one process, is a defect rather than a runtime error — the second would
+deadlock on the lock that makes the first safe.
+
+`channel.submit(text, draft)` writes `reserved` **before** it calls herdr and settles it
+after: `submitted` where herdr took it, `failed` where herdr refused, `unknown` where the
+transport never answered. Those last two are different facts — one is a decision, the
+other is nobody knowing — and only `unknown` blocks the same work from going out again
+until a human reconciles it. Nothing is ever retried automatically. What blocks a repeat
+is the **causal key**, not the text.
+
+Ordering when several messages are due for one agent: `interrupt` before `now` before
+`boundary`, and within a mode, correction, steer, step, repair, follow-up, hand-off,
+nudge, and a compaction last of all. A compaction goes out only with nothing else in
+flight, and it travels on the caller's channel — `atBoundary` takes the channel as an
+argument, so the ports never take a lock of their own.
+
+Steering queued for an agent with `mode: boundary` is composed into the **front** of its
+next prompt as a `## Steering` section, not queued behind the work: a steer that arrived
+after the task text would be read after the thing it was meant to change. Each composed
+item is its own delivery with its own id and its own acknowledgement, and its ledger line
+names the prompt that carried it.
+
+A hand-off is a delivery like any other, so it goes into the receiving Run's inbox for
+that Run's Driver to compose — never straight into the pane. A hand-off to a Run nobody is
+driving is refused: there would be nothing to compose it into the agent's next piece of
+work, nothing to hold it behind an unresolved compaction, and nothing to record whether it
+was understood.
+
+## The Herd and its Home
+
+A **Herd** is one herdr session — every workspace in it — keyed by the canonical path of
+its socket. Never by a directory: a cwd would key two sessions in one repository to the
+same Herd, and one session across two repositories to different ones. Everything shared
+across a session's workspaces lives under `<state>/herd/<herdKey>/`: the conversation, the
+proposals, the budget, the elections, and `home.json`.
+
+The **Home** is the one workspace that Herd's board lives in. Ownership is a **record**
+Collie wrote plus **proof** that what it names is still what it meant — either a live
+`collie_home` token on the workspace, or the recorded pane still carrying the recorded
+`terminal_id`. Either proof alone is enough, and the second is what heals an expired
+token: the pane Collie opened is still there, so the claim was true and the TTL merely
+lapsed.
+
+A **label is never proof**. Two workspaces can be called the same thing, and a home test
+reads `home.ts` to keep it that way. A live token with no record is not proof either — it
+is a previous Collie's Home or another state directory's, and adopting it silently would
+be one Herd taking over another's board.
+
+Anything uncertain is `ownership_unknown` and stops: `collie home show` says what was
+recorded, what herdr has, and which candidates there are; `collie home reconcile --adopt`
+or `--forget` is how a person settles it. Two things this must never do are creating a
+second Home because a token expired, and adopting one because it looks right.
+
+The record is written **before** the pane is opened, so a crash in that window leaves
+something attributable rather than a workspace nobody can explain. `server.json` records
+the socket, version and protocol at every ensure and logs when they move; no start time
+and no pid, because `status server` exposes neither and inventing one would be worse than
+re-checking.
+
+The **runtime gate** is a different question from the pinned contract. `herdr-pin.json`
+and `test/herdr-contract.test.ts` say what Collie was _built_ against; `home.capabilityGate`
+parses the installed binary's own `herdr api schema --json` and requires
+`workspace.report_metadata`, `pane.report_metadata`, `workspace.create`,
+`WorkspaceInfo.tokens`, `PaneInfo.tokens` and `PaneInfo.terminal_id`. A binary older than
+the pin runs this code, and the only honest answer then is `herdr_capability_missing:<name>`
+and an exit — there is deliberately no label-only path to fall back to. The schema is asked
+for once per process and remembered by binary path: a capability declaration cannot change
+while that binary is the one on disk, and it is a quarter of a megabyte down a pipe.
+
+The shortcut writes `origin.json` beside the record — the workspace and directory it was
+pressed in, or `filter: "all"` when it was pressed inside the Home — with a 60-second TTL.
+The board reads it once at startup for its opening filter. Short on purpose: it exists so
+the board opens on the work you came from, and a note from an hour ago says nothing about
+the board in front of you.
+
+The board tab and the tab-ordering anchor are separate: `RunCtx.boardTabId` comes from
+`ensureHome` and is where a pending question goes — it may be in another workspace
+entirely — while `RunCtx.orderAnchorTabId` is a tab in the Run's _own_ workspace: the first
+one in that strip any Run of that workspace opened. Conflating them made a Run in one
+workspace reorder the tabs of another. The anchor is resolved again while it is still null,
+because the first tab Collie opens in a workspace is the anchor for the ones after it; with
+no anchor at all nothing is reordered, which is a strip Collie has no business touching.
+Only a pending question ever focuses anything, and only under `questions: focus`.
+
+## Steering ledgers
+
+Two append-only journals, both written only by `steering.ts`, both read by deriving state
+from their lines rather than by rewriting them:
+
+- `<state>/agents/<incarnation>/deliveries.jsonl` — one line per state change of one
+  message to one agent, under a lock per incarnation. `reserved` is written **before**
+  herdr is called, so a crash leaves a durable record that something may have been sent;
+  `submitted`, `acknowledged` and `verified` are separate facts and are never collapsed.
+  A `reserved` line nobody settled becomes `unknown`, which blocks further deliveries
+  about the same work until a human reconciles it. Collie never retries out of `unknown`.
+- `<state>/herd/<herdKey>/budget.jsonl` — a line before every model call and a settlement
+  after it: which Run it was for, how long it took, how many bytes it produced and what the
+  CLI said it cost. Usage, never a quota: nothing reads it back to refuse or throttle a
+  call, and a reservation nobody settled is written down as a failure so the count is
+  honest. Lines from before spending caps were dropped carry a `max_usd` that decides
+  nothing. The **Herd** is one herdr session, keyed by the canonical path of its socket,
+  never by a directory.
+
+What blocks a second delivery is the **causal key** — the run, the cause and the Intent
+version — not the text. Two corrections for one constraint are the same work in different
+words, and a nudge and a re-sent prompt are different work in the same words.
 
 ## Build and release
 
