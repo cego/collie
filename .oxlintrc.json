@@ -23,6 +23,9 @@
     // herdr download the contract check verifies.
     "tools/build.ts",
     "tools/herdr-schema.ts",
+    // The acceptance gate: it shells out to `bun test` and `git` and prints a table, and
+    // runs as a plain script for the same reason the build does.
+    "tools/acceptance.ts",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [

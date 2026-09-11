@@ -65,6 +65,8 @@ on send, never `corrected`: sending text is not the work changing.
 **Manual override** — An incarnation that received input Collie did not send. Automatic
 corrections to it stop until an explicit `run clear-override`; nothing times it back on.
 
+**Disposition** — What became of a Run's work, which is not how its execution ended. Recorded by a human beside the Run's status and never over it — `merged`, `abandoned` or `superseded`, with the merge request, commit or Run that backs it up. A Run that failed still failed; its disposition says whether the work landed anyway. Append-only, so a correction keeps what was believed before. Nothing to do with **Delivery**, which is one message to one agent.
+
 **Verification** — An independently collected command result bound to the tree it ran on,
 before and after. A result whose snapshots differ is `unstable`, never `pass`. An agent's
 statement about tests is a **claim**, and is shown as one.

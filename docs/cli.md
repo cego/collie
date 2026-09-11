@@ -509,6 +509,32 @@ may be working in it, and it must be clean unless you pass `--allow-dirty`.
 The only thing written to the parent is its `children` list — without that the follow-up
 would be invisible from the thing it follows up.
 
+## What became of the work
+
+```sh
+collie --json run disposition <run-id>
+collie --json run disposition <run-id> --as merged --ref "cego/collie!43"
+collie --json run disposition <run-id> --as superseded --ref <other-run-id> --note "restarted clean"
+```
+
+A run's status says how its execution ended, and it is never rewritten. When the work it
+was for lands by some other route — a person finishes it by hand and merges — that is a
+different fact, recorded beside the status rather than over it, with what backs it up.
+This is not a [Delivery](../CONTEXT.md), which is one message to one agent; `run
+deliveries` is that.
+
+Without `--as` the command reads. With it, `--as` is `merged`, `abandoned`, or
+`superseded`, and there is deliberately no value meaning the run succeeded after all.
+`run show` then says both: `failed · merged cego/collie!43 by mk`. Nothing is inferred —
+Collie does not decide that a merge request it did not open was this run's work, so a
+person says so and the record says who and when.
+
+A correction is a new record rather than an edit, so what was believed before is still
+readable. The most recent one is what `run show` reports.
+
+This is integrated here and not yet on the board: the Home's rows and Live region do not
+read it, so a Run whose work shipped still reads as a plain failure there.
+
 ## Drift
 
 ```sh

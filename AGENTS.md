@@ -14,6 +14,9 @@ actions, and the `collie` CLI.
   lookup** → [`docs/authoring.md`](docs/authoring.md), alongside `src/definitions.ts`.
 - **Changing the CLI surface, an error code, or a `--json` envelope** →
   [`docs/cli.md`](docs/cli.md), alongside `src/envelope.ts` and `src/operations.ts`.
+- **Claiming a change works, or reviewing one that claims to** →
+  [`docs/acceptance.md`](docs/acceptance.md), alongside `bun run acceptance`. A green
+  suite is not evidence that a promise was kept; that gate says which are.
 - **Adding a herdr call, or a red `contract:stable` pipeline** →
   [`docs/internals.md`](docs/internals.md#checking-the-boundary-against-herdr), alongside
   `herdr-pin.json` and `test/herdr-contract.test.ts`.
