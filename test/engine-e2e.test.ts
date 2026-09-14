@@ -3,7 +3,7 @@ import { ConfigProvider, Effect, FileSystem, Path, Schema } from "effect";
 import { FakeHerdr, Rig } from "./support/recorder";
 import {} from "../src/naming";
 import { fakeHerdr } from "./support/fake-herdr-core";
-import { installBaseline, runWorkflow, scriptedPrompts } from "./support/engine";
+import { installBaseline, plannedRun, runWorkflow, scriptedPrompts } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
 import { writeInbox } from "../src/operations";
@@ -69,6 +69,29 @@ steps:
 Interview me about {{inputs.goal}}, then write the plan.
 `;
 
+const BUILDER = `---
+name: builder
+title: builder — a fresh look, then the agent that builds
+inputs:
+  plan: work-source
+steps:
+  - id: look
+    persona: reviewer
+    fresh: true
+    output: look.json
+  - id: build
+    persona: implementer
+    output: build.json
+---
+## look
+
+Read the tickets in {{inputs.plan}} ({{inputs.plan_kind}}).
+
+## build
+
+Build them.
+`;
+
 beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
@@ -76,6 +99,7 @@ beforeEach(() =>
       yield* rig.startSocket();
       yield* installBaseline(rig);
       yield* writeDef(rig.baselineDir, "workflows", "solo", SOLO);
+      yield* writeDef(rig.baselineDir, "workflows", "builder", BUILDER);
     }),
   ),
 );
@@ -1525,5 +1549,68 @@ test("a rule constraint is checked against the tree, once per finding", () =>
       // Checked at collect, at the boundary and at finish, and still one finding: the
       // same breach in the same place is not three of them.
       expect(reports).toHaveLength(1);
+    }),
+  ));
+
+test("a ticket rewritten under a building step is sent to it as a change to reconcile", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const planDir = yield* plannedRun(rig, "add-picker");
+      const ticket = path.join(planDir, "issues", "01-first.md");
+      yield* fs.writeFileString(ticket, "# 01: first\n\n- [ ] keep the existing layout\n");
+      yield* rig.queueOutputs([
+        { verdict: "clean", findings: [] },
+        { verdict: "clean", findings: [] },
+      ]);
+
+      // The live planner, answering a question by rewriting the ticket instead of
+      // only saying so — which is the case nothing used to notice.
+      yield* Effect.forkDetach(
+        Effect.sleep(100).pipe(
+          Effect.andThen(
+            fs.writeFileString(
+              ticket,
+              "# 01: first\n\n- [ ] collisions are explicit refusals\n- [ ] a destination-keyed lock\n",
+            ),
+          ),
+        ),
+      );
+
+      const { status } = yield* runWorkflowEffect(
+        rig,
+        "builder",
+        { plan: planDir },
+        {
+          env: {
+            // Each step polls until its own `idle`, so the edit lands during `look`.
+            FAKE_HERDR_AGENT_STATUS: [
+              ...Array(40).fill("working"),
+              "idle",
+              ...Array(40).fill("working"),
+              "idle",
+            ].join(","),
+            FAKE_HERDR_PANE_TEXT: "changing",
+          },
+          defaults: { quietMs: 3000 },
+          outputPollMs: 10,
+        },
+      );
+
+      expect(status).toBe("done");
+      const changed = (yield* rig.calls()).filter(
+        (c) => c.cmd === "agent prompt" && c.argv![3]!.includes("changed on disk"),
+      );
+      // Once, and to the agent that is going to build it — never to the fresh reader,
+      // which started after the edit and read the new ticket in the first place.
+      expect(changed).toHaveLength(1);
+      expect(changed[0]!.argv![2]).toContain("build");
+      const told = changed.map((c) => c.argv![3]!);
+      // The checkboxes, both ways: what the ticket now demands and what it dropped.
+      expect(told[0]).toContain("01-first.md changed:");
+      expect(told[0]).toContain("+ - [ ] a destination-keyed lock");
+      expect(told[0]).toContain("- - [ ] keep the existing layout");
+      expect(told[0]).toContain("Reconcile rather than restart");
     }),
   ));
