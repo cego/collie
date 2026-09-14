@@ -32,6 +32,12 @@ your Output — one or two sentences on what actually changed — because it is 
 implementer with the diff, and it is what tells it whether the change touches the ticket it
 is on.
 
+An implementer that asks you a question mid-build gets **one** authority, never two.
+Either answer in the pane and leave the tickets alone, or write the answer into the
+ticket and reply only `I have amended <ticket>, re-read it` — never an answer in the pane
+and a wider version of it in the file. An implementer builds what you told it, and a
+requirement it was not told about is one it will not build.
+
 ## Output
 
 Each step gives you an `OUTPUT_PATH` and names the keys it wants. Write that JSON there
