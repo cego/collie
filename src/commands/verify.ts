@@ -27,15 +27,27 @@ export const verify = Command.make(
       Flag.withDescription("What to call it on a card; the executable by default"),
       Flag.optional,
     ),
+    expect: Flag.string("expect").pipe(
+      Flag.withDescription(
+        "What a pass looks like: `pass` (default), or `fail` for a reproduction that must fail",
+      ),
+      Flag.optional,
+    ),
     command: Argument.string("command").pipe(
       Argument.withDescription("The executable and its arguments, after `--`"),
       Argument.variadic({ min: 1 }),
     ),
   },
-  ({ runId, cwd, name, command }) => {
+  ({ runId, cwd, name, expect, command }) => {
     const [executable, ...argv] = command;
     if (executable === undefined)
       return printResult(err("invalid_input", "verify needs a command to run."), true);
+    const wanted = Option.getOrElse(expect, () => "pass");
+    if (wanted !== "pass" && wanted !== "fail")
+      return printResult(
+        err("invalid_input", `--expect is "pass" or "fail", not "${wanted}".`),
+        true,
+      );
     return answering((env) =>
       Effect.gen(function* () {
         const found = yield* readRun(env, runId, env.workspaceId);
@@ -59,6 +71,7 @@ export const verify = Command.make(
           argv,
           cwd: where,
           by: "agent",
+          expect: wanted,
         }).pipe(
           Effect.map((record) => {
             // The command's own exit, passed through: a wrapper around this must behave
@@ -87,6 +100,11 @@ export const verify = Command.make(
     {
       command: "collie verify --run <id> --name typecheck -- bun run typecheck",
       description: "Name it, so a card can say which verification passed",
+    },
+    {
+      command:
+        "collie verify --run <id> --name regression --expect fail -- bun test test/bug.test.ts",
+      description: "Prove a bug exists: the record passes because the command failed",
     },
   ]),
 );

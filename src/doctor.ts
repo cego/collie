@@ -257,6 +257,62 @@ const count = Effect.fn("Doctor.count")(function* (
 });
 
 /**
+ * The steps the bundled `implement` shed and the second reviewer `review` shed, so an
+ * override that still carries them is recognisable as the old flow rather than as a
+ * customisation. A user's own `architecture` step is their business; the report names
+ * the edit and edits nothing.
+ */
+const OLD_IMPLEMENT_STEPS = new Set(["architecture", "simplify"]);
+
+/**
+ * What the effective `implement` and `review` resolve to on this machine, in this
+ * project. A user or project override wins over the bundled definition, so a change to
+ * the bundled flow is not in effect where one exists — and one that keeps the old flow
+ * is what a Run here would actually run. Reported with the exact edit, never applied.
+ */
+const overrides = Effect.fn("Doctor.overrides")(function* (env: PluginEnv) {
+  const loaded = yield* layers(env).pipe(Effect.flatMap(loadDefinitions), Effect.result);
+  if (Result.isFailure(loaded))
+    return failed(`the definitions do not load: ${String(loaded.failure)}`, "");
+  const defs = loaded.success;
+  const defaults = yield* loadDefaults(env.configDir);
+  const kept: string[] = [];
+  const edits: string[] = [];
+  const own: string[] = [];
+  for (const name of ["implement", "review"] as const) {
+    let wf;
+    try {
+      wf = resolveWorkflow(name, defs, defaults);
+    } catch (cause) {
+      if (cause instanceof DefinitionError) return failed(`${name}: ${cause.message}`, "");
+      throw cause;
+    }
+    if (wf.layer === "baseline") continue;
+    own.push(`${name} (${wf.layer}, ${wf.path})`);
+    if (name === "implement") {
+      const old = wf.steps.filter((step) => OLD_IMPLEMENT_STEPS.has(step.id)).map((s) => s.id);
+      if (old.length > 0) {
+        kept.push(`${name} still runs ${old.join(" and ")}`);
+        edits.push(`remove the ${old.join(" and ")} step(s) from ${wf.path}`);
+      }
+    } else {
+      const review = wf.steps.find((step) => step.id === "review");
+      const reviewers = review ? stepVariants(review, defaults).length : 0;
+      if (reviewers > 1) {
+        kept.push(`${name} still runs ${reviewers} reviewers`);
+        edits.push(`keep one entry under \`parallel:\` of step review in ${wf.path}`);
+      }
+    }
+  }
+  if (own.length === 0) return passed("implement and review are the bundled ones");
+  if (kept.length === 0) return passed(`overridden here, current flow: ${own.join("; ")}`);
+  return noted(
+    `${kept.join("; ")} — an override keeps the old flow, so the bundled change is not in effect here`,
+    `${edits.join("; ")} (or delete the override to take the bundled definition)`,
+  );
+});
+
+/**
  * Every check, in one pass, whatever the state of the machine: a prerequisite that
  * is missing must not stop the ones after it from being reported, or `doctor` is one
  * failed Run at a time again.
@@ -393,6 +449,8 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
 
   const glabDir = yield* onPath(search, "glab");
   const auth = glabDir ? yield* answered(run("glab", ["auth", "status"], root)) : null;
+  checks.push({ name: "workflows", ...(yield* overrides(env)) });
+
   checks.push({
     name: "glab",
     ...(!glabDir

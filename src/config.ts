@@ -73,6 +73,15 @@ export interface Defaults {
   notifications: Readonly<Record<string, boolean>>;
   /** Whether a new question takes the human's focus, or only says so. */
   questions: Questions;
+  /**
+   * Whether Collie starts a turn of its own when something meaningful happens — a Run
+   * stopping, asking, going round, or claiming to be finished without proving it. On by
+   * default: a conversation you have to start every time is polling by hand.
+   *
+   * It changes what is *said*, never what may be *done*: a proposal from a proactive
+   * turn goes through the same authority path as one you typed.
+   */
+  proactive: boolean;
 }
 
 export const FALLBACK_DEFAULTS: Defaults = {
@@ -89,6 +98,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   scope: "local",
   notifications: {},
   questions: "focus",
+  proactive: true,
 };
 
 const ConfigJson = Schema.fromJsonString(YamlMapSchema);
@@ -191,6 +201,9 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDi
       isString(raw.questions) && isQuestionMode(raw.questions)
         ? raw.questions
         : FALLBACK_DEFAULTS.questions,
+    // Only an explicit `false` turns it off: anything else, including a value nobody
+    // meant, leaves a human being told what happened.
+    proactive: raw.proactive !== false,
   };
   if (isString(raw.effort)) defaults.effort = raw.effort;
   return defaults;

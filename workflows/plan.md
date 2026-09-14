@@ -32,6 +32,16 @@ steps:
         inputs:
           plan: "{{run.dir}}/plan"
           task: "{{outputs.grill.slug}}"
+          # What kind of result this is, settled during the interview rather than asked
+          # for again at the start of the build.
+          outcome: "{{outputs.grill.outcome}}"
+          workspace: "{{inputs.workspace}}"
+      # Architecture is no longer a pass every implement run takes, so this is where a
+      # plan that actually needs architectural decisions gets them: offered always,
+      # chosen by the human, never inferred from the tickets.
+      - title: Architecture first
+        run: architecture
+        inputs:
           workspace: "{{inputs.workspace}}"
       - title: Second opinion
         prompt: second-opinion
@@ -89,9 +99,17 @@ your Output. You cannot start that skill yourself — only I can — and the map
 Glossary (`CONTEXT.md`) and ADR changes we agree on go into the repository as we agree
 them — they are domain knowledge. Nothing else does.
 
+Part of stating the plan back to me is saying what kind of result it is, because that
+decides what will have to be proved before it can ship: `feature`, `bug`, `refactor`,
+`investigation`, `docs` or `migration`. Work it out from what we have agreed and say it in
+one line as part of the interview — never as a separate question at the end, and never by
+guessing from a word in the goal. If it genuinely is not one of those, leave it empty:
+unclassified work is held to this project's verifications and nothing more, which is
+better than being held to the wrong thing.
+
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "slug":
-"<short-kebab-case-name-for-this-work>", "decided": ["what we settled", ...],
-"wayfinder": true or false}`.
+"<short-kebab-case-name-for-this-work>", "outcome": "<one of the kinds above, or empty>",
+"decided": ["what we settled", ...], "wayfinder": true or false}`.
 
 ## spec
 

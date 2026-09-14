@@ -1,10 +1,16 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { ConfigProvider, Effect, FileSystem, Path, PlatformError, Schema } from "effect";
+import { ConfigProvider, DateTime, Effect, FileSystem, Path, PlatformError, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { COLLIE_TAB } from "../src/naming";
 import { FakeBin } from "./support/bin";
-import { installBaseline, plannedRun, scriptedPrompts } from "./support/engine";
-import { testDefaults } from "./support/compaction";
+import {
+  approveVerification,
+  installBaseline,
+  plannedRun,
+  scriptedPrompts,
+} from "./support/engine";
+import { scriptedPort, testDefaults } from "./support/compaction";
+import type { CompactionPorts } from "../src/compaction";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
 import { FALLBACK_DEFAULTS, type Defaults } from "../src/config";
@@ -22,7 +28,12 @@ import {
   targetKind,
 } from "../src/inputs";
 import { deliveriesOf } from "../src/steering";
+import { approvedFrom } from "../src/verify-spec";
+import { appendVerification, fingerprint, readVerifications } from "../src/verify";
+import { metricsOf, readMetrics } from "../src/metrics";
+import { readCheckpoints } from "../src/cards";
 import { RunStore, type Run } from "../src/run";
+import { resumeRun, settleGiven } from "../src/operations";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -30,6 +41,10 @@ let fs: FileSystem.FileSystem;
 let path: Path.Path;
 let queuedOutputs: ReadonlyArray<Schema.Json> = [];
 let outputIndex = 0;
+/** What the fake agent does besides writing its Output, when a test wants it to. */
+let onPrompt:
+  | ((text: string) => Effect.Effect<void, PlatformError.PlatformError, TestServices>)
+  | null = null;
 const Json = Schema.fromJsonString(Schema.Json);
 const encodeJson = Schema.encodeSync(Json);
 
@@ -44,9 +59,13 @@ beforeEach(() =>
       bin = yield* FakeBin.make(path.join(rig.root, "bin"));
       queuedOutputs = [];
       outputIndex = 0;
+      onPrompt = null;
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
       yield* plannedRun(rig, "add-picker");
+      // `tests` → `true`: the approved set every Run here is held to, and the check the
+      // fixtures' last fix names. A test that wants it to fail approves `false` instead.
+      yield* approveVerification(rig);
     }),
   ),
 );
@@ -61,7 +80,15 @@ afterEach(() =>
 );
 
 const CLEAN = { verdict: "clean", findings: [] } satisfies Schema.JsonObject;
-const NO_EXIT = { file: "cli.js", line: 4, severity: "blocker", title: "no exit code" };
+// Blocking findings carry `file` and `detail`: a blocker that says neither where nor why
+// is sent back to the reviewer, which is a different test's subject and not this one's.
+const NO_EXIT = {
+  file: "cli.js",
+  line: 4,
+  severity: "blocker",
+  title: "no exit code",
+  detail: "It returns 1 on success, so a caller cannot tell it worked.",
+};
 const FINDING = { verdict: "findings", findings: [NO_EXIT] } satisfies Schema.JsonObject;
 const OTHER_FINDING = {
   verdict: "findings",
@@ -76,7 +103,13 @@ const synthesized = (...raw: { findings: readonly Schema.Json[] }[]): Schema.Jso
   findings: raw.flatMap((r) => r.findings),
 });
 
-const MAJOR = { file: "cli.js", line: 9, severity: "major", title: "unhandled rejection" };
+const MAJOR = {
+  file: "cli.js",
+  line: 9,
+  severity: "major",
+  title: "unhandled rejection",
+  detail: "The promise has no catch, so a failure takes the process down.",
+};
 const blocking = (...findings: Schema.JsonObject[]): Schema.JsonObject => ({
   verdict: "findings",
   summary: `${SUMMARY}The reviewers found something.`,
@@ -87,7 +120,8 @@ const fixed = (...titles: string[]) => ({
   verdict: "clean",
   findings: [],
   fixed: titles.map((title) => ({ file: "cli.js", title, note: "done" })),
-  checks: [{ name: "bun test", passed: true, note: "all pass" }],
+  // A check is a verification name; `tests` is what the rig approves, and Collie runs it.
+  checks: [{ name: "tests", note: "all pass" }],
 });
 const FIX_OK = fixed("no exit code");
 
@@ -188,6 +222,7 @@ class TestHerdr extends Herdr {
             yield* fs.makeDirectory(p.dirname(outputPath), { recursive: true });
             yield* fs.writeFileString(outputPath, encodeJson(next));
           }
+          if (onPrompt !== null) yield* onPrompt(text);
           // A wait that ran out, as the shared fake answers it: the Output was still
           // written, because the agent works on a prompt whether or not herdr saw the turn.
           if (fakeEnv.FAKE_HERDR_PROMPT_ERROR === "timeout")
@@ -222,6 +257,8 @@ function runWorkflowEffect(
     workspaceLabel?: string;
     /** Drive this run again instead of creating one: what a resume does. */
     existing?: Run;
+    /** Scripted harness compaction interfaces; compaction is off unless a test sets them. */
+    compaction?: CompactionPorts;
   } = {},
 ): Effect.Effect<RanRun, Error | PlatformError.PlatformError, TestServices> {
   const program: Effect.Effect<RanRun, Error | PlatformError.PlatformError, TestServices> =
@@ -233,6 +270,7 @@ function runWorkflowEffect(
       const defaults = Object.assign(
         yield* testDefaults(env.configDir),
         { trust: "never" },
+        opts.compaction ? { compactAtTokens: FALLBACK_DEFAULTS.compactAtTokens } : {},
         opts.defaults,
       );
       const wf = resolveWorkflow(name, defs, defaults);
@@ -260,6 +298,11 @@ function runWorkflowEffect(
           workspaceLabel: opts.workspaceLabel ?? "test",
           inputs: merged,
           inputSources: inputSources(inferred),
+          definition: wf,
+          approvedVerifications: yield* approvedFrom({
+            cwd: env.cwd,
+            configDir: env.configDir,
+          }),
           stepIds: wf.steps.map((s) => s.id),
           maxIterations: wf.maxIterations,
           namedAfter:
@@ -285,6 +328,7 @@ function runWorkflowEffect(
               handoffTimeoutMs: opts.handoffTimeoutMs,
               outputPollMs: opts.outputPollMs,
               prompts: opts.promptsFor ? opts.promptsFor(run) : opts.prompts,
+              compaction: opts.compaction,
               env,
             }),
           ),
@@ -295,16 +339,16 @@ function runWorkflowEffect(
   return program;
 }
 
-test("implement is build, architecture, simplify, review, fix — and no commit step", () =>
+test("implement is build, review, fix, mr — and no commit step", () =>
   runEffect(
     Effect.gen(function* () {
       const defs = yield* loadTestDefinitions();
       const wf = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
 
+      // No architecture and no simplify: they are passes the work asks for, not passes
+      // every Run takes. `architecture` is still its own workflow and a `plan` Choice.
       expect(wf.steps.map((s) => s.id)).toEqual([
         "build",
-        "architecture",
-        "simplify",
         "review",
         "review.synthesize",
         "fix",
@@ -312,18 +356,16 @@ test("implement is build, architecture, simplify, review, fix — and no commit 
       ]);
       expect(wf.steps.map((s) => s.agent)).toEqual([
         undefined,
-        "build",
-        "build",
         undefined,
         undefined,
         "build",
         "build",
       ]);
-      // The gate is the one synthesised review, not the reviewers' raw union.
-      expect(wf.steps[4]!.fanIn).toBe("review");
-      expect(wf.steps[5]!.repeat).toEqual({
+      // The gate is the review, whether one reviewer wrote it or several were reconciled.
+      expect(wf.steps[2]!.fanIn).toBe("review");
+      expect(wf.steps[3]!.repeat).toEqual({
         from: "review.synthesize",
-        back_to: "simplify",
+        back_to: "review",
         converge: true,
       });
       expect(wf.maxIterations).toBe(4);
@@ -332,6 +374,9 @@ test("implement is build, architecture, simplify, review, fix — and no commit 
       const build = wf.steps[0]!.prompt;
       expect(build).toContain("checkout of its own, on the branch it is building");
       expect(build).toContain("one commit per ticket");
+      // The slice hand-off, which is what keeps a plan off one transcript.
+      expect(build).toContain("build that one ticket and no other");
+      expect(build).toContain("{{progress}}");
       // The skill is named, not spelled: the harness decides whether that is `/tdd`.
       expect(skillsIn(build)).toContain("tdd");
       expect(
@@ -355,17 +400,13 @@ test("implement takes an optional repo, and the build prompt builds only its tic
   ));
 
 test(
-  "findings loop fix → simplify → review, and architecture stays out of the loop",
+  "findings loop fix → review, and nothing else runs between them",
   () =>
     runEffect(
       Effect.gen(function* () {
         yield* queueOutputs([
           CLEAN, // build
-          CLEAN, // architecture
-          CLEAN, // simplify
-          FINDING, // review/claude-opus
-          OTHER_FINDING, // review/claude-sonnet
-          synthesized(FINDING, OTHER_FINDING), // review.synthesize
+          synthesized(FINDING, OTHER_FINDING), // review — the only one, so it is the review
           {
             ...CLEAN,
             disputed: [
@@ -377,10 +418,7 @@ test(
               },
             ],
           }, // fix
-          CLEAN, // simplify, iteration 2
-          CLEAN, // review/claude-opus
-          CLEAN, // review/claude-sonnet
-          SYNTH, // review.synthesize
+          SYNTH, // review
         ]);
 
         const { run, status, lines } = yield* runWorkflowEffect("implement", {});
@@ -389,37 +427,38 @@ test(
         expect(run.record.iteration).toBe(2);
         expect(promptOrder(yield* rig.calls(), run.dir)).toEqual([
           "steps/build/prompt-1.md",
-          "steps/architecture/prompt-1.md",
-          "steps/simplify/prompt-1.md",
-          "steps/review/claude-opus/prompt-1.md",
-          "steps/review/claude-sonnet/prompt-1.md",
-          "steps/review.synthesize/prompt-1.md",
+          "steps/review/prompt-1.md",
           "steps/fix/prompt-1.md",
-          "steps/simplify/prompt-2.md",
-          "steps/review/claude-opus/prompt-2.md",
-          "steps/review/claude-sonnet/prompt-2.md",
-          "steps/review.synthesize/prompt-2.md",
+          "steps/review/prompt-2.md",
         ]);
         expect(run.record.steps.map((s) => [s.id, s.status, s.note])).toEqual([
           ["build", "done", null],
-          ["architecture", "done", null],
-          ["simplify", "done", null],
           ["review", "done", null],
-          ["review.synthesize", "done", null],
+          ["review.synthesize", "done", "skipped: one review, nothing to reconcile"],
           ["fix", "done", "skipped: reviews clean"],
           // No glab in the rig, so the MR step is skipped rather than failing the run.
           ["mr", "done", "skipped: glab is not installed"],
         ]);
         expect(lines).toContain("  2 finding(s) to fix, 1 blocking");
-        expect(lines).toContain("  looping back to simplify (iteration 2)");
+        expect(lines).toContain("  looping back to review (iteration 2)");
         expect(lines).toContain("  reviews clean — skipping fix");
 
-        // One synthesised review reaches the implementer, carrying both reviewers' findings.
+        // One review reaches the implementer, carrying everything it raised.
         const fix = yield* readText(path.join(run.dir, "steps", "fix", "prompt-1.md"));
         expect(fix).toContain("- [blocker] no exit code (cli.js:4)");
         expect(fix).toContain("- [minor] loose equality (cli.js:2)");
         expect(fix).toContain("Iteration 1 of at most 4");
         expect(run.record.summary).toContain("Disputed findings");
+
+        // Every prompt says how evidence is collected, and what the Run will be held to.
+        // An agent told "run the tests" and not told this reports a claim instead.
+        const build = yield* readText(path.join(run.dir, "steps", "build", "prompt-1.md"));
+        for (const prompt of [build, fix]) {
+          expect(prompt).toContain("collie verify --run");
+          expect(prompt).toContain("Collie runs exactly these itself");
+        }
+        // The rig's one approved command, named in the prompt as the set the Run is held to.
+        expect(build).toContain("- tests: true (in .)");
       }),
     ),
   20_000,
@@ -431,20 +470,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* bundledImplement((text) => legacy(withMax(2)(text)));
-        yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
-          synthesized(FINDING),
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
-          synthesized(FINDING),
-          CLEAN,
-        ]);
+        yield* queueOutputs([CLEAN, synthesized(FINDING), CLEAN, synthesized(FINDING), CLEAN]);
 
         const { run, status, lines } = yield* runWorkflowEffect("implement", {});
 
@@ -461,23 +487,11 @@ test(
 );
 
 test(
-  "the reviewers are one persona at two models, side by side in one tab, restarted every round",
+  "the reviewer is one persona in the implementer's tab, restarted every round",
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
-          synthesized(FINDING),
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          SYNTH,
-        ]);
+        yield* queueOutputs([CLEAN, synthesized(FINDING), CLEAN, SYNTH]);
 
         const { run } = yield* runWorkflowEffect("implement", {});
 
@@ -496,20 +510,23 @@ test(
           (c) => c.cmd === "pane split" && c.argv!.includes("right"),
         );
         const sideBySide = rightSplits.filter((c) => c.argv!.includes("--ratio"));
-        expect(sideBySide).toHaveLength(1);
+        // One reviewer, so nothing is put side by side with a second one.
+        expect(sideBySide).toHaveLength(0);
         for (const split of sideBySide) {
           expect(split.argv![split.argv!.indexOf("--ratio") + 1]).toBe("0.5");
         }
-        // The two reviewers and the synthesiser, all restarted for the second round.
-        expect(rightSplits.length - sideBySide.length).toBe(3);
+        // The reviewer, restarted for the second round. No second reviewer beside it,
+        // and no synthesiser under it.
+        expect(rightSplits.length - sideBySide.length).toBe(1);
         // Parallel panes say which model they are, and nothing else does: the run's own
         // pane on the board says the workflow, and no pane anywhere names the run.
         const renames = (yield* rig.calls())
           .filter((c) => c.cmd === "pane rename")
           .map((c) => c.argv!.at(-1));
-        expect(renames).toContain("Opus");
-        expect(renames).toContain("Sonnet");
-        expect(renames).toContain("Synthesize");
+        // One reviewer, so no pane is labelled to tell it from a second one, and there
+        // is no synthesiser pane at all.
+        expect(renames).not.toContain("Sonnet");
+        expect(renames).not.toContain("Synthesize");
         // Nothing names the run: the implementer's pane is unlabelled and the run has no
         // pane of its own. The board's pane is not renamed either — the Home's pane is
         // owned by a token, not by a name (ADR-0009).
@@ -533,40 +550,39 @@ test(
             "--append-system-prompt-file",
             path.join(run.dir, "personas", "implementer.claude.md"),
           ],
+          // One reviewer per round, and nothing started to reconcile it with nothing.
           ["--", "--model", "opus", "--effort", "medium", "--append-system-prompt-file", reviewer],
-          ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
-          ["--", "--model", "opus", "--effort", "medium", "--append-system-prompt-file", reviewer],
-          ["--", "--model", "opus", "--effort", "medium", "--append-system-prompt-file", reviewer],
-          ["--", "--model", "sonnet", "--effort", "xhigh", "--append-system-prompt-file", reviewer],
           ["--", "--model", "opus", "--effort", "medium", "--append-system-prompt-file", reviewer],
         ]);
-        expect(starts.flatMap((c) => c.argv!).filter((a) => a === "--model")).toHaveLength(7);
+        expect(starts.flatMap((c) => c.argv!).filter((a) => a === "--model")).toHaveLength(3);
 
         // Every step that keeps the implementer's agent records the model it is actually on.
-        for (const step of ["build", "architecture", "simplify", "fix"]) {
+        for (const step of ["build", "fix"]) {
           expect(run.step(step).variants[0]!.model).toBe("opus");
           expect(run.step(step).variants[0]!.effort).toBe("medium");
         }
         expect(run.step("review").variants.map((v) => [v.model, v.effort])).toEqual([
           ["opus", "medium"],
-          ["sonnet", "xhigh"],
         ]);
 
-        // One implementer throughout: build, architecture, simplify and fix share its agent.
+        // One implementer throughout: build and fix share its agent. `mr` would too,
+        // but this rig has no glab, so that step is skipped rather than run.
         const implementer = run.step("build").variants[0]!.agent;
-        for (const step of ["architecture", "simplify", "fix"]) {
+        for (const step of ["fix"]) {
           expect(run.step(step).variants[0]!.agent).toBe(implementer);
         }
-        expect((yield* rig.cmds()).filter((c) => c === "pane close")).toHaveLength(3);
+        // The reviewer's pane, closed when it is restarted for the second round. There
+        // is no second reviewer's pane and no synthesiser's to close beside it.
+        expect((yield* rig.cmds()).filter((c) => c === "pane close")).toHaveLength(1);
       }),
     ),
   20_000,
 );
 
-test("review standalone is the same two variants, and says so when it has no spec", () =>
+test("review standalone is one reviewer, and says so when it has no spec", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
 
       const { run, status } = yield* runWorkflowEffect(
         "review",
@@ -579,11 +595,8 @@ test("review standalone is the same two variants, and says so when it has no spe
       expect(status).toBe("done");
       expect(run.record.steps[0]!.variants.map((v) => [v.harness, v.model, v.effort])).toEqual([
         ["claude", "opus", "medium"],
-        ["claude", "sonnet", "xhigh"],
       ]);
-      const prompt = yield* readText(
-        path.join(run.dir, "steps", "review", "claude-opus", "prompt-1.md"),
-      );
+      const prompt = yield* readText(path.join(run.dir, "steps", "review", "prompt-1.md"));
       expect(prompt).toContain("Review target: worktree");
       expect(prompt).toContain("Spec: \n");
       expect(prompt).toContain("there is no spec");
@@ -597,13 +610,11 @@ test("review standalone is the same two variants, and says so when it has no spe
 test("review inside implement is held to the plan the run was given", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([CLEAN, SYNTH]);
 
       const { run } = yield* runWorkflowEffect("implement", {});
 
-      const prompt = yield* readText(
-        path.join(run.dir, "steps", "review", "claude-opus", "prompt-1.md"),
-      );
+      const prompt = yield* readText(path.join(run.dir, "steps", "review", "prompt-1.md"));
       expect(prompt).toContain(`Spec: ${run.record.inputs.plan}`);
       expect(run.record.inputs.plan).toContain("/plan");
     }),
@@ -624,16 +635,9 @@ test(
         yield* bundledImplement(legacy);
         yield* queueOutputs([
           CLEAN, // build
-          CLEAN, // architecture
-          CLEAN, // simplify
-          FINDING, // review/claude-opus
-          FINDING, // review/claude-sonnet
-          synthesized(FINDING), // review.synthesize
+          synthesized(FINDING), // review
           { ...CLEAN, disputed: [DISPUTED_REASON] }, // fix: applies nothing, disputes it
-          CLEAN, // simplify, iteration 2
-          FINDING, // review/claude-opus, raises it again
-          FINDING, // review/claude-sonnet, raises it again
-          synthesized(FINDING), // review.synthesize carries it through
+          synthesized(FINDING), // review raises it again
         ]);
 
         const { run, status, lines } = yield* runWorkflowEffect("implement", {});
@@ -646,9 +650,7 @@ test(
         expect(run.record.summary).toContain("- [minor] no exit code (cli.js)");
 
         // The reviewers were told what had already been argued.
-        const second = yield* readText(
-          path.join(run.dir, "steps", "review", "claude-opus", "prompt-2.md"),
-        );
+        const second = yield* readText(path.join(run.dir, "steps", "review", "prompt-2.md"));
         expect(second).toContain("Already disputed");
         expect(second).toContain("- [minor] no exit code (cli.js)");
         expect(second).toContain("the spec asks for this");
@@ -671,21 +673,11 @@ test(
         };
         yield* queueOutputs([
           CLEAN, // build
-          CLEAN, // architecture
-          CLEAN, // simplify
-          FINDING, // review/claude-opus
-          FINDING, // review/claude-sonnet
-          synthesized(FINDING), // review.synthesize
+          synthesized(FINDING), // review
           { ...CLEAN, disputed: [DISPUTED_REASON] }, // fix disputes it
-          CLEAN, // simplify, iteration 2
-          rebutted, // review/claude-opus answers the dispute
-          CLEAN, // review/claude-sonnet
-          synthesized(rebutted), // the synthesis carries the rebuttal through
+          synthesized(rebutted), // review answers the dispute
           CLEAN, // fix applies it
-          CLEAN, // simplify, iteration 3
-          CLEAN, // review/claude-opus
-          CLEAN, // review/claude-sonnet
-          SYNTH, // review.synthesize
+          SYNTH, // review
         ]);
 
         const { run, status, lines } = yield* runWorkflowEffect("implement", {});
@@ -712,7 +704,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+        yield* queueOutputs([CLEAN, SYNTH]);
 
         const { run } = yield* runWorkflowEffect("implement", {});
 
@@ -741,7 +733,11 @@ test("review's inputs are the embedder's when it is embedded, so implement never
       expect(implement.inputs.plan).toBe("work-source");
       expect(implement.inputs.target).toBe("diff-target");
       // `previous` is review's own too, and never asked for: it defaults to empty.
+      // `risks` is declared by both now, and the embedder's declaration wins — so it is
+      // implement's own Input rather than one inherited.
       expect(implement.embeddedInputs).toEqual(["target", "previous"]);
+      expect(implement.inputs.risks).toBe("optional");
+      expect(implement.inputs.outcome).toBe("optional");
       // The post choice is standalone, so embedding review drops it.
       expect(implement.steps.some((s) => s.id.endsWith("post"))).toBe(false);
       expect(resolveWorkflow("review", defs, FALLBACK_DEFAULTS).steps.at(-1)!.id).toBe("post");
@@ -753,9 +749,14 @@ test("review's inputs are the embedder's when it is embedded, so implement never
     }),
   ));
 
-/** glab and git as they look in a repo that really is on GitLab. */
+/**
+ * glab and git as they look in a repo that really is on GitLab — and a verification the
+ * project has approved. Together they are the case the evidence gate exists for: a Run
+ * about to open a merge request, in a project that has written down what proves it.
+ */
 function onGitLab(branch: string) {
   return Effect.gen(function* () {
+    yield* approveVerification(rig);
     yield* bin.add(
       "glab",
       `case "$1 $2" in
@@ -787,7 +788,7 @@ test("the mr step is skipped, not failed, when this repo cannot have a merge req
         "git",
         `case "$1 $2" in "remote -v") echo "origin\tgit@github.com:me/x.git (fetch)" ;; *) echo main ;; esac`,
       );
-      yield* queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([CLEAN, SYNTH]);
 
       const { run, status, lines } = yield* runWorkflowEffect("implement", {});
 
@@ -807,10 +808,6 @@ test(
         yield* onGitLab("FRO-149-modal");
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          CLEAN,
           SYNTH,
           {
             verdict: "clean",
@@ -822,7 +819,7 @@ test(
 
         const { run, status } = yield* runWorkflowEffect("implement", {});
 
-        expect(status).toBe("done");
+        expect([status, run.record.evidence_gaps.join("; ")]).toEqual(["done", ""]);
         const prompt = yield* readText(path.join(run.dir, "steps", "mr", "prompt-1.md"));
         expect(prompt).toContain("Assignee: `mk`");
         // The branch names the ticket, so the MR has something to link.
@@ -863,15 +860,7 @@ test(
           path.join(rig.projectDir, ".gitlab", "merge_request_templates", "default.md"),
           "## Description\n",
         );
-        yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          SYNTH,
-          { verdict: "clean", findings: [] },
-        ]);
+        yield* queueOutputs([CLEAN, SYNTH, { verdict: "clean", findings: [] }]);
 
         const { run } = yield* runWorkflowEffect("implement", {});
 
@@ -885,30 +874,16 @@ test(
 );
 
 test(
-  "build, architecture, simplify and fix are one unlabelled pane in one tab",
+  "build and fix are one unlabelled pane in one tab",
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
-          synthesized(FINDING),
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          SYNTH,
-        ]);
+        yield* queueOutputs([CLEAN, synthesized(FINDING), CLEAN, SYNTH]);
 
         const { run } = yield* runWorkflowEffect("implement", {});
 
         // One pane, in the implementer's own tab, for every step that reuses the agent.
-        const panes = ["build", "architecture", "simplify", "fix"].map(
-          (id) => run.step(id).variants[0]!.paneId,
-        );
+        const panes = ["build", "fix"].map((id) => run.step(id).variants[0]!.paneId);
         expect(new Set(panes).size).toBe(1);
 
         // It is never labelled: it is alone in its tab, and the tab names the run.
@@ -951,9 +926,9 @@ test("implement converges: four iterations at most, and the fix loop says so", (
       const defs = yield* loadTestDefinitions();
       const wf = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
       expect(wf.maxIterations).toBe(4);
-      expect(wf.steps[5]!.repeat).toEqual({
+      expect(wf.steps[3]!.repeat).toEqual({
         from: "review.synthesize",
-        back_to: "simplify",
+        back_to: "review",
         converge: true,
       });
       expect(yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
@@ -965,7 +940,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* queueOutputs([CLEAN, CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+        yield* queueOutputs([CLEAN, SYNTH]);
 
         const { run, status, lines } = yield* runWorkflowEffect("implement", {});
 
@@ -974,7 +949,8 @@ test(
         expect(run.step("fix").note).toBe("skipped: reviews clean");
         expect(lines).toContain("  reviews clean — skipping fix");
         const order = promptOrder(yield* rig.calls(), run.dir);
-        expect(order.filter((p) => p.startsWith("steps/review"))).toHaveLength(3);
+        // One review, and no model started to reconcile it with nothing.
+        expect(order.filter((p) => p.startsWith("steps/review"))).toHaveLength(1);
         expect(order.some((p) => p.startsWith("steps/fix"))).toBe(false);
         expect(run.record.unreviewed).toBeNull();
         expect(outcomeLine(run.record, "done")).toBe("clean");
@@ -988,14 +964,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          OTHER_FINDING,
-          CLEAN,
-          synthesized(OTHER_FINDING),
-        ]);
+        yield* queueOutputs([CLEAN, synthesized(OTHER_FINDING)]);
 
         const { run, status, lines } = yield* runWorkflowEffect("implement", {});
 
@@ -1021,20 +990,13 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const odd = { file: "cli.js", severity: "nit", title: "odd severity" };
-        yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          blocking(odd),
-          fixed("odd severity"),
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          SYNTH,
-        ]);
+        const odd = {
+          file: "cli.js",
+          severity: "nit",
+          title: "odd severity",
+          detail: "a severity nobody here has a rule for",
+        };
+        yield* queueOutputs([CLEAN, blocking(odd), fixed("odd severity"), SYNTH]);
 
         const { run, status, lines } = yield* runWorkflowEffect("implement", {});
 
@@ -1051,19 +1013,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
-          synthesized(FINDING),
-          FIX_OK,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          SYNTH,
-        ]);
+        yield* queueOutputs([CLEAN, synthesized(FINDING), FIX_OK, SYNTH]);
 
         const { run, status } = yield* runWorkflowEffect("implement", {});
 
@@ -1074,12 +1024,8 @@ test(
         expect(run.record.outstanding).toEqual([]);
         // The first review is the comprehensive one; the second is told where the
         // previous round's review and the fix's account of it are.
-        const first = yield* readText(
-          path.join(run.dir, "steps", "review", "claude-opus", "prompt-1.md"),
-        );
-        const second = yield* readText(
-          path.join(run.dir, "steps", "review", "claude-opus", "prompt-2.md"),
-        );
+        const first = yield* readText(path.join(run.dir, "steps", "review", "prompt-1.md"));
+        const second = yield* readText(path.join(run.dir, "steps", "review", "prompt-2.md"));
         expect(first).toContain("Iteration 1 of at most 4");
         expect(second).toContain("Iteration 2 of at most 4");
         expect(second).toContain(`${run.dir}/review.md`);
@@ -1097,24 +1043,23 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const b = (n: number) => ({ file: "cli.js", severity: "blocker", title: `problem ${n}` });
-        // simplify, two reviewers, the synthesis, the fix.
-        const round = (n: number) => [
-          CLEAN,
-          CLEAN,
-          blocking(b(n)),
-          blocking(b(n)),
-          fixed(`problem ${n}`),
-        ];
-        yield* queueOutputs([CLEAN, CLEAN, ...round(1), ...round(2), ...round(3), ...round(4)]);
+        const b = (n: number) => ({
+          file: "cli.js",
+          severity: "blocker",
+          title: `problem ${n}`,
+          detail: `what goes wrong in round ${n}`,
+        });
+        // simplify, the one review, the fix.
+        const round = (n: number) => [blocking(b(n)), fixed(`problem ${n}`)];
+        yield* queueOutputs([CLEAN, ...round(1), ...round(2), ...round(3), ...round(4)]);
 
         const { run, status, lines } = yield* runWorkflowEffect("implement", {});
 
         expect(status).toBe("done");
         expect(run.record.iteration).toBe(4);
         const order = promptOrder(yield* rig.calls(), run.dir);
-        expect(order.filter((p) => p.startsWith("steps/review/"))).toHaveLength(8);
-        expect(order.filter((p) => p.startsWith("steps/review.synthesize"))).toHaveLength(4);
+        expect(order.filter((p) => p.startsWith("steps/review/"))).toHaveLength(4);
+        expect(order.filter((p) => p.startsWith("steps/review.synthesize"))).toHaveLength(0);
         expect(order.filter((p) => p.startsWith("steps/fix"))).toHaveLength(4);
         // The fourth fix is judged on its own account, not on the fourth review's findings.
         expect(run.record.outstanding).toEqual([]);
@@ -1122,7 +1067,7 @@ test(
         expect(run.record.unreviewed).toContain("not re-reviewed");
         expect(run.step("fix").note).toContain("not re-reviewed");
         expect(lines).toContain(
-          "  last fix: 1 blocking finding(s) reported fixed, 1 check(s) passed — implementer-reported, not re-reviewed",
+          "  last fix: 1 blocking finding(s) reported fixed, 1 check(s) verified on this tree — implementer-reported, not re-reviewed",
         );
         expect(run.record.summary).toContain("not re-reviewed");
         expect(outcomeLine(run.record, "done")).toContain("not re-reviewed");
@@ -1140,10 +1085,6 @@ test(
         yield* bundledImplement(withMax(1));
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          OTHER_FINDING,
           synthesized(FINDING, OTHER_FINDING),
           FIX_OK,
           { verdict: "clean", findings: [], mr_url: "https://gitlab.cego.dk/x/-/merge_requests/9" },
@@ -1179,14 +1120,15 @@ test(
           [CLEAN, "no disposition for [blocker] no exit code (cli.js); no checks reported"],
           // The shape the fix step used to write does not even parse.
           [{ ...CLEAN, fixed: ["added process.exit"] }, "fix.json: fixed[0]: expected an object"],
+          // A check nobody recorded and Collie may not run is a claim, and says so.
           [
-            { ...FIX_OK, checks: [{ name: "bun test", passed: false, note: "1 fail" }] },
-            "check failed: bun test (1 fail)",
+            { ...FIX_OK, checks: [{ name: "bun lint", note: "clean" }] },
+            'check "bun lint" has no verification record — run it through collie verify (clean)',
           ],
         ];
         for (const [last, reason] of cases) {
           yield* plannedRun(rig, "add-picker");
-          yield* queueOutputs([CLEAN, CLEAN, CLEAN, FINDING, FINDING, synthesized(FINDING), last]);
+          yield* queueOutputs([CLEAN, synthesized(FINDING), last]);
 
           const { run, status } = yield* runWorkflowEffect("implement", {});
 
@@ -1212,10 +1154,6 @@ test(
         yield* bundledImplement(withMax(1));
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
           synthesized(FINDING),
           { ...fixed(), disputed: [{ ...NO_EXIT, detail: "out of scope" }] },
         ]);
@@ -1233,10 +1171,6 @@ test(
         yield* plannedRun(rig, "add-picker");
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          blocking(MAJOR),
           blocking(NO_EXIT, MAJOR),
           {
             ...fixed("unhandled rejection"),
@@ -1268,18 +1202,12 @@ test(
       Effect.gen(function* () {
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          blocking(NO_EXIT, MAJOR),
-          CLEAN,
           blocking(NO_EXIT, MAJOR),
           {
             ...fixed("unhandled rejection"),
             disputed: [{ ...NO_EXIT, severity: "minor", detail: "out of scope" }],
           },
-          CLEAN, // simplify
-          CLEAN, // the reviewers were told not to raise the dispute again, and did not
-          CLEAN,
+          CLEAN, // the reviewer was told not to raise the dispute again, and did not
           SYNTH,
         ]);
 
@@ -1306,10 +1234,6 @@ test(
         // Every blocker disputed, nothing fixed: no review round is spent on it.
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
           synthesized(FINDING),
           { ...fixed(), disputed: [{ ...NO_EXIT, detail: "out of scope" }] },
         ]);
@@ -1327,15 +1251,8 @@ test(
         yield* plannedRun(rig, "add-picker");
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          blocking(MAJOR),
           blocking(NO_EXIT, MAJOR),
           { ...fixed("unhandled rejection"), disputed: [{ ...NO_EXIT, detail: "no" }] },
-          CLEAN,
-          FINDING,
-          CLEAN,
           synthesized(FINDING),
         ]);
         const partial = yield* runWorkflowEffect("implement", {});
@@ -1364,19 +1281,7 @@ test(
           verdict: "findings",
           findings: [{ ...NO_EXIT, line: 11, detail: "still no exit code" }],
         };
-        yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
-          synthesized(FINDING),
-          FIX_OK,
-          CLEAN,
-          moved,
-          moved,
-          synthesized(moved),
-        ]);
+        yield* queueOutputs([CLEAN, synthesized(FINDING), FIX_OK, synthesized(moved)]);
         const stuck = yield* runWorkflowEffect("implement", {});
         expect(stuck.status).toBe("blocked");
         expect(stuck.run.record.iteration).toBe(2);
@@ -1395,20 +1300,10 @@ test(
         yield* plannedRun(rig, "add-picker");
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          blocking(NO_EXIT, MAJOR),
-          CLEAN,
           blocking(NO_EXIT, MAJOR),
           fixed("unhandled rejection", "no exit code"),
-          CLEAN,
-          FINDING,
-          FINDING,
           synthesized(FINDING),
           FIX_OK,
-          CLEAN,
-          CLEAN,
-          CLEAN,
           SYNTH,
         ]);
         const shrinking = yield* runWorkflowEffect("implement", {});
@@ -1426,7 +1321,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* bundledImplement(withMax(1));
-        yield* queueOutputs([CLEAN, CLEAN, CLEAN, FINDING, FINDING, synthesized(FINDING), FIX_OK]);
+        yield* queueOutputs([CLEAN, synthesized(FINDING), FIX_OK]);
         const first = yield* runWorkflowEffect("implement", {});
         expect(first.status).toBe("done");
         const run = first.run;
@@ -1466,7 +1361,9 @@ test(
         // guess its way to the merge request.
         yield* writeText(fixJson, encodeJson(FIX_OK));
         run.step("fix").status = "done";
-        yield* fs.remove(path.join(run.dir, "steps", "review.synthesize", "synthesized.json"));
+        // The one review's Output: the skipped fan-in has none of its own, and this is
+        // what its verdict is re-read from.
+        yield* fs.remove(path.join(run.dir, "steps", "review", "review.json"));
         const missing = yield* resume();
         expect(missing.status).toBe("blocked");
         expect(missing.run.record.halt).toBe("fix_unverified");
@@ -1504,32 +1401,17 @@ test(
           verdict: "findings",
           findings: [{ ...NO_EXIT, line: 11 }],
         };
-        yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
-          synthesized(FINDING),
-          FIX_OK,
-          CLEAN,
-          moved,
-          moved,
-          synthesized(moved),
-        ]);
+        yield* queueOutputs([CLEAN, synthesized(FINDING), FIX_OK, synthesized(moved)]);
         const stuck = yield* runWorkflowEffect("implement", {});
         expect(stuck.run.record.halt).toBe("no_progress");
         const before = (yield* rig.calls()).filter((c) => c.cmd === "agent prompt").length;
-        const retried = yield* resume(stuck.run, [FIX_OK, CLEAN, CLEAN, CLEAN, SYNTH]);
+        const retried = yield* resume(stuck.run, [FIX_OK, SYNTH]);
         expect(retried.status).toBe("done");
         expect(retried.run.record.halt).toBeNull();
         expect(retried.run.record.iteration).toBe(3);
         expect(yield* prompts(stuck.run.dir, before)).toEqual([
           "steps/fix/prompt-2.md",
-          "steps/simplify/prompt-3.md",
-          "steps/review/claude-opus/prompt-3.md",
-          "steps/review/claude-sonnet/prompt-3.md",
-          "steps/review.synthesize/prompt-3.md",
+          "steps/review/prompt-3.md",
         ]);
         expect(yield* readText(path.join(stuck.run.dir, "log.txt"))).toContain(
           "resumed after no_progress: fix 2 runs again against review 2's findings",
@@ -1540,15 +1422,8 @@ test(
         yield* plannedRun(rig, "add-picker");
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          blocking(NO_EXIT, MAJOR),
-          CLEAN,
           blocking(NO_EXIT, MAJOR),
           { ...fixed("unhandled rejection"), disputed: [{ ...NO_EXIT, detail: "no" }] },
-          CLEAN,
-          CLEAN,
-          CLEAN,
           SYNTH,
         ]);
         const disputed = yield* runWorkflowEffect("implement", {});
@@ -1566,7 +1441,7 @@ test(
         expect(fix).toContain("The review found:");
         expect(again.lines).toContain("  1 finding(s) to fix, 1 blocking");
         // Fixed this time: the loop verifies it with the review it would have run anyway.
-        const fixedNow = yield* resume(disputed.run, [FIX_OK, CLEAN, CLEAN, CLEAN, SYNTH]);
+        const fixedNow = yield* resume(disputed.run, [FIX_OK, SYNTH]);
         expect(fixedNow.status).toBe("done");
         expect(fixedNow.run.record.disputed).toEqual([]);
         expect(fixedNow.run.record.iteration).toBe(3);
@@ -1601,15 +1476,8 @@ test(
         // `unobserved`.
         yield* queueOutputs([
           CLEAN,
-          CLEAN,
-          CLEAN,
-          blocking(NO_EXIT, MAJOR),
-          CLEAN,
           blocking(NO_EXIT, MAJOR),
           { ...fixed("unhandled rejection"), disputed: [{ ...NO_EXIT, detail: "no" }] },
-          CLEAN,
-          CLEAN,
-          CLEAN,
           SYNTH,
         ]);
         const disputed = yield* runWorkflowEffect("implement", {});
@@ -1631,7 +1499,7 @@ test(
         // a second time. The step is withheld with the delivery to reconcile, and no
         // prompt goes out.
         const before = (yield* rig.calls()).filter((c) => c.cmd === "agent prompt").length;
-        const again = yield* resume(disputed.run, [FIX_OK, CLEAN, CLEAN, CLEAN, SYNTH]);
+        const again = yield* resume(disputed.run, [FIX_OK, SYNTH]);
         expect(again.status).toBe("blocked");
         expect(again.run.step("fix").status).toBe("blocked");
         expect(
@@ -1653,19 +1521,17 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* bundledImplement(withMax(2));
-        const late = { file: "cli.js", severity: "blocker", title: "late problem" };
+        const late = {
+          file: "cli.js",
+          severity: "blocker",
+          title: "late problem",
+          detail: "the new code path has no test at all",
+        };
         yield* queueOutputs([
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          blocking(NO_EXIT, MAJOR),
           CLEAN,
           blocking(NO_EXIT, MAJOR),
           { ...fixed("unhandled rejection"), disputed: [{ ...NO_EXIT, detail: "out of scope" }] },
-          CLEAN, // simplify
-          blocking(late), // the reviewers, told not to raise the dispute again, find something new
-          CLEAN,
-          blocking(late),
+          blocking(late), // the reviewer, told not to raise the dispute again, finds something new
           fixed("late problem"), // the last fix: new blocker fixed, checks green, dispute standing
         ]);
 
@@ -1703,7 +1569,7 @@ test("the prompts ask for complete scope, a thorough first review, a focused fol
       // Complete scope before completion; no quiet deferral.
       expect(build).toContain("complete approved scope");
       expect(build).toContain("not an optional follow-up");
-      for (const text of [build, step("simplify").prompt, fix, mr]) {
+      for (const text of [build, fix, mr]) {
         expect(text).not.toContain(`{"verdict": "clean", "findings": []`);
       }
       // Ceiling, not target.
@@ -1725,5 +1591,533 @@ test("the prompts ask for complete scope, a thorough first review, a focused fol
       expect(reviewer).toContain("follow-up");
       const implementer = defs.personas.get("implementer")!.body;
       expect(implementer).toContain("whole scope");
+    }),
+  ));
+
+test("a layer that keeps simplify keeps it, and a prompt section it has not got is named", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The user's own override, mid-migration: the step is back and its section is not.
+      yield* bundledImplement((text) =>
+        text.replace(
+          "  - id: review\n",
+          "  - id: simplify\n    persona: implementer\n    agent: build\n    output: simplify.json\n  - id: review\n",
+        ),
+      );
+      const defs = yield* loadTestDefinitions();
+      const wf = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
+
+      // Not silently dropped: what the layer says is what this installation runs.
+      expect(wf.steps.map((s) => s.id)).toContain("simplify");
+      expect(wf.layer).toBe("project");
+
+      // And the missing half is named rather than rendered as an empty prompt.
+      const problems = yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS);
+      expect(problems.join("\n")).toContain("simplify");
+    }),
+  ));
+
+test("a layer that keeps simplify still runs it, so a default change is not assumed effective", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bundledImplement((text) =>
+        text
+          .replace(
+            "  - id: review\n",
+            "  - id: simplify\n    persona: implementer\n    agent: build\n    output: simplify.json\n  - id: review\n",
+          )
+          .replace("## fix\n", "## simplify\n\nTidy what this branch changed.\n\n## fix\n"),
+      );
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+
+      const { run, status } = yield* runWorkflowEffect("implement", {});
+
+      expect(status).toBe("done");
+      expect(promptOrder(yield* rig.calls(), run.dir)).toEqual([
+        "steps/build/prompt-1.md",
+        "steps/simplify/prompt-1.md",
+        "steps/review/prompt-1.md",
+      ]);
+    }),
+  ));
+
+test("a Run recorded with the old steps is refused a resume rather than run as the new shape", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      // A Run from before this change: it has `architecture` and `simplify`, and it
+      // predates frozen definitions, so there is nothing to hold it to but its steps.
+      const run = yield* new RunStore(env.stateDir).create({
+        workflow: "implement",
+        cwd: env.cwd,
+        inputs: { plan: yield* plannedRun(rig, "old-shape"), plan_kind: "plan-dir" },
+        inputSources: { plan: "plan run" },
+        stepIds: ["build", "architecture", "simplify", "review", "review.synthesize", "fix", "mr"],
+        maxIterations: 4,
+        namedAfter: "add-picker",
+      });
+      run.record.status = "blocked";
+      yield* run.save();
+
+      const loaded = yield* new RunStore(env.stateDir).load(run.id);
+      const result = yield* resumeRun(env, loaded, "req-old-shape");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe("definition_changed");
+        expect(result.error.message).toContain("architecture");
+        expect(result.error.message).toContain("simplify");
+      }
+    }),
+  ));
+
+test(
+  "a Run about to open a merge request with nothing proved stops, and says what is missing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* onGitLab("add-a-picker");
+        // Approved, but the command fails: the tree does not pass what this project says
+        // proves it, and the agent's "clean" verdict does not change that.
+        yield* approveVerification(rig, { name: "tests", executable: "false" });
+        yield* queueOutputs([CLEAN, SYNTH, { verdict: "clean", findings: [] }]);
+
+        const { run, status } = yield* runWorkflowEffect("implement", {});
+
+        expect(status).toBe("blocked");
+        expect(run.record.halt).toBe("evidence_missing");
+        expect(run.record.evidence_gaps).toEqual(["tests failed"]);
+        expect(run.step("mr").status).toBe("pending");
+        expect(run.record.mr_url).toBeNull();
+      }),
+    ),
+  20_000,
+);
+
+test(
+  "a bug proves it reproduced before it proves it is fixed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* onGitLab("fix-the-exit-code");
+        yield* queueOutputs([
+          CLEAN,
+          SYNTH,
+          { verdict: "clean", findings: [], mr_url: "https://gitlab.cego.dk/x/-/merge_requests/3" },
+        ]);
+
+        // No reproduction recorded: the approved set passes, and that is not enough.
+        const missing = yield* runWorkflowEffect("implement", { outcome: "bug" });
+        expect(missing.status).toBe("blocked");
+        expect(missing.run.record.outcome).toBe("bug");
+        expect(missing.run.record.evidence_gaps.join(" ")).toContain("never reproduced");
+        expect(missing.run.record.evidence_gaps.join(" ")).toContain(
+          "the Output does not name the verification",
+        );
+        // The embedded review is told the same outcome, so its judgement field is the
+        // one the gate will read — and a bug asks it for none.
+        const review = yield* readText(
+          path.join(missing.run.dir, "steps", "review", "prompt-1.md"),
+        );
+        expect(review).toContain("Outcome the change has to prove (empty means unclassified): bug");
+        expect(review).toContain("a `bug` needs none");
+      }),
+    ),
+  20_000,
+);
+
+test(
+  "an investigation that concludes there is nothing to change finishes without a merge request",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* onGitLab("look-into-the-stall");
+        yield* queueOutputs([
+          {
+            verdict: "clean",
+            findings: [],
+            conclusion: "The stall is in the prompt submission, not in the harness.",
+            evidence: ["plan/INVESTIGATION.md"],
+            patch: false,
+          },
+          // `supported` is the reviewer's word for it, and is only read from a review.
+          { ...SYNTH, supported: true },
+        ]);
+
+        const { run, status } = yield* runWorkflowEffect("implement", {
+          outcome: "investigation",
+        });
+
+        expect(status).toBe("done");
+        expect(run.record.evidence_gaps).toEqual([]);
+        expect(run.step("mr").status).toBe("done");
+        expect(run.step("mr").note).toBe("skipped: investigation, no patch");
+        // Nothing was invented to have something to merge.
+        expect(run.record.mr_url).toBeNull();
+      }),
+    ),
+  20_000,
+);
+
+test(
+  "an investigation whose evidence points outside the Run is not a supported conclusion",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* onGitLab("look-into-the-stall");
+        yield* queueOutputs([
+          {
+            verdict: "clean",
+            findings: [],
+            conclusion: "It is the harness.",
+            evidence: ["/etc/passwd", "../somewhere-else/notes.md"],
+            patch: false,
+          },
+          { ...SYNTH, supported: true },
+        ]);
+
+        const { run, status } = yield* runWorkflowEffect("implement", {
+          outcome: "investigation",
+        });
+
+        expect(status).toBe("blocked");
+        expect(run.record.halt).toBe("evidence_missing");
+        expect(run.record.evidence_gaps.join(" ")).toContain("/etc/passwd");
+        expect(run.record.evidence_gaps.join(" ")).toContain("outside this Run");
+      }),
+    ),
+  20_000,
+);
+
+test("the outcome a Run was started with is the one it is held to, and a wrong one is refused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const defs = yield* loadTestDefinitions();
+      const workflow = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
+      const prepared = {
+        workflow,
+        resolutions: yield* inferInputs(workflow.inputs, {
+          cwd: env.cwd,
+          stateDir: env.stateDir,
+        }),
+      };
+
+      const bad = yield* settleGiven(env, prepared, {
+        inputs: { plan: yield* plannedRun(rig, "add-picker"), outcome: "chore" },
+        decide: [],
+      });
+      expect(bad.ok).toBe(false);
+      if (!bad.ok) expect(bad.error.message).toContain("is not an outcome");
+    }),
+  ));
+
+/** A plan of several tickets, with an order its `Blocked by` lines describe. */
+const slicedPlan = Effect.fn("test.slicedPlan")(function* () {
+  const dir = yield* plannedRun(rig, "add-picker");
+  yield* fs.remove(path.join(dir, "issues", "01-first.md"), { force: true });
+  const ticket = (file: string, title: string, blocked: string) =>
+    writeText(
+      path.join(dir, "issues", file),
+      `# ${title}\n\n**Blocked by:** ${blocked}\n**Repo:** .\n\nBuild it.\n`,
+    );
+  yield* ticket("01-schema.md", "the schema", "None");
+  yield* ticket("02-api.md", "the API", "01");
+  yield* ticket("03-docs.md", "the docs", "None");
+  return dir;
+});
+
+test(
+  "a plan of several tickets is built one at a time, in an order its Blocked by allows",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const plan = yield* slicedPlan();
+        yield* queueOutputs([CLEAN, CLEAN, CLEAN, SYNTH]);
+
+        const { run, status, lines } = yield* runWorkflowEffect("implement", { plan });
+
+        expect(status).toBe("done");
+        // 01 and 03 wait for nothing, in plan order; 02 waits for 01.
+        expect(run.step("build").slices.map((s) => [s.ticket, s.status])).toEqual([
+          ["01-schema.md", "done"],
+          ["03-docs.md", "done"],
+          ["02-api.md", "done"],
+        ]);
+        expect(promptOrder(yield* rig.calls(), run.dir)).toEqual([
+          "steps/build/1/prompt-1.md",
+          "steps/build/3/prompt-1.md",
+          "steps/build/2/prompt-1.md",
+          "steps/review/prompt-1.md",
+        ]);
+        expect(lines).toContain("  3 tickets, one at a time");
+
+        // One agent across every slice: the point is the hand-off, not a new agent.
+        const agents = run.step("build").variants.map((v) => v.agent);
+        expect(new Set(agents).size).toBe(1);
+
+        // Each slice has its own Output, under its own ticket.
+        expect(run.step("build").slices.map((s) => s.output)).toEqual([
+          path.join("steps", "build", "1", "build.json"),
+          path.join("steps", "build", "3", "build.json"),
+          path.join("steps", "build", "2", "build.json"),
+        ]);
+        // Collie's own checkpoint per slice, in the shape the cards read — so a ticket
+        // landing is a card whether or not the agent wrote one — and a summary line each.
+        const checkpoints = yield* readCheckpoints(run.dir);
+        expect(
+          checkpoints
+            .map((c) => [path.basename(c.file), c.checkpoint.status, c.checkpoint.claims])
+            .sort((a, b) => String(a[0]).localeCompare(String(b[0]))),
+        ).toEqual([
+          ["01-schema.json", "done", ["the schema"]],
+          ["02-api.json", "done", ["the API"]],
+          ["03-docs.json", "done", ["the docs"]],
+        ]);
+        expect(run.record.summary).toContain(
+          "  ✓ build\n    ✓ 01-schema.md — the schema (0 commit(s), verified: nothing)\n    ✓ 03-docs.md — the docs (1 commit(s), verified: nothing)",
+        );
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "the boundary between two slices is a work boundary: the agent's context is checked there",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const plan = yield* slicedPlan();
+        yield* queueOutputs([CLEAN, CLEAN, CLEAN, SYNTH]);
+        // Over the threshold before slice two, under it before slice three. The review
+        // starts a fresh agent, so no boundary of its own.
+        const port = scriptedPort({
+          usage: [400_000, 1_000],
+          poll: [{ kind: "success" }],
+        });
+
+        const { run, status, lines } = yield* runWorkflowEffect(
+          "implement",
+          { plan },
+          { compaction: port.ports, outputPollMs: 20 },
+        );
+
+        expect(status).toBe("done");
+        expect(run.step("build").slices.map((s) => s.status)).toEqual(["done", "done", "done"]);
+        // One reused agent, two hand-offs, two samples — and one compaction, asked once.
+        expect(port.usageReads).toBe(2);
+        expect(port.requests).toHaveLength(1);
+        expect(lines.join("\n")).toContain("asking it to compact before build");
+        const agent = run.step("build").variants[0]!.agent;
+        const samples = (yield* readMetrics(run.dir)).filter((l) => l.kind === "context");
+        expect(samples.map((l) => [l.subject, l.value])).toEqual([
+          [agent, 400_000],
+          [agent, 1_000],
+        ]);
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a slice is told its own ticket and what the ones before it left, and nothing else",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const plan = yield* slicedPlan();
+        yield* queueOutputs([CLEAN, CLEAN, CLEAN, SYNTH]);
+        // The first slice's agent runs the tests through the collector, as it is told to.
+        onPrompt = (text) =>
+          Effect.gen(function* () {
+            const runDir = /^OUTPUT_PATH: (.+)\/steps\/build\/1\//m.exec(text)?.[1];
+            if (runDir === undefined) return;
+            const tree = yield* fingerprint(rig.projectDir);
+            yield* appendVerification(runDir, {
+              id: "v-slice-1",
+              run: path.basename(runDir),
+              name: "tests",
+              executable: "/usr/bin/true",
+              argv: [],
+              cwd: rig.projectDir,
+              start: tree,
+              end: tree,
+              exit: 0,
+              seconds: 1,
+              tail: { stdout: "", stderr: "" },
+              expect: "pass",
+              result: "pass",
+              at: DateTime.formatIso(yield* DateTime.now),
+              by: "agent",
+            });
+          });
+
+        const { run } = yield* runWorkflowEffect("implement", { plan });
+
+        const first = yield* readText(path.join(run.dir, "steps", "build", "1", "prompt-1.md"));
+        expect(first).toContain("01-schema.md — the schema");
+        expect(first).toContain("(this is the first ticket)");
+        expect(first).not.toContain("03-docs.md");
+
+        // The slice that ran the tests says so to the next one; the one that did not says
+        // that too, so a hand-off never implies evidence that was not collected.
+        expect(run.step("build").slices.map((s) => s.verifications)).toEqual([
+          ["tests: pass"],
+          [],
+          [],
+        ]);
+        const second = yield* readText(path.join(run.dir, "steps", "build", "3", "prompt-1.md"));
+        expect(second).toContain(
+          "- 01-schema.md — the schema\n    (no commit)\n    verified: tests: pass",
+        );
+
+        const last = yield* readText(path.join(run.dir, "steps", "build", "2", "prompt-1.md"));
+        expect(last).toContain("02-api.md — the API");
+        // What came before, by name — and not the prompts that built them.
+        expect(last).toContain("01-schema.md — the schema");
+        // The fake git answers every log with "main", so that slice's commit line is that.
+        expect(last).toContain("03-docs.md — the docs\n    main\n    verified: nothing");
+        expect(last).not.toContain("(this is the first ticket)");
+        expect(last).not.toContain("Build it.");
+      }),
+    ),
+  30_000,
+);
+
+test(
+  "a slice that does not land stops the plan there, and a resume picks up at it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const plan = yield* slicedPlan();
+        // The second slice writes no Output at all, and none for the one repair it is
+        // given either.
+        yield* queueOutputs([CLEAN, null, null]);
+
+        const { run, status } = yield* runWorkflowEffect("implement", { plan });
+
+        expect(status).toBe("blocked");
+        expect(run.step("build").status).toBe("blocked");
+        expect(run.step("build").slices.map((s) => [s.ticket, s.status])).toEqual([
+          ["01-schema.md", "done"],
+          ["03-docs.md", "blocked"],
+        ]);
+        // The ticket after the one that failed was never started: it would have been
+        // built against work that is not there.
+        expect(run.step("build").slices.some((s) => s.ticket === "02-api.md")).toBe(false);
+
+        // Resumed: the done slice is not built again, and the failed one is.
+        run.record.status = "running";
+        run.record.finished_at = null;
+        for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
+        yield* run.save();
+        const before = (yield* rig.calls()).filter((c) => c.cmd === "agent prompt").length;
+        yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+
+        const again = yield* runWorkflowEffect("implement", { plan }, { existing: run });
+
+        expect(again.status).toBe("done");
+        expect(again.lines).toContain("  ✓ 01-schema.md — already done, skipped");
+        const prompted = (yield* rig.calls()).filter((c) => c.cmd === "agent prompt").slice(before);
+        expect(prompted).toHaveLength(3);
+        expect(again.run.step("build").slices.map((s) => s.status)).toEqual([
+          "done",
+          "done",
+          "done",
+        ]);
+      }),
+    ),
+  40_000,
+);
+
+test("a one-ticket plan and a text source build in one prompt, with no slice hand-off", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // `plannedRun` writes exactly one ticket: a plan, but not one to slice.
+      yield* queueOutputs([CLEAN, SYNTH]);
+      const one = yield* runWorkflowEffect("implement", {});
+      expect(one.run.step("build").slices).toEqual([]);
+      expect(promptOrder(yield* rig.calls(), one.run.dir)).toEqual([
+        "steps/build/prompt-1.md",
+        "steps/review/prompt-1.md",
+      ]);
+
+      yield* queueOutputs([CLEAN, SYNTH]);
+      const text = yield* runWorkflowEffect("implement", { plan: "add a --version flag" });
+      expect(text.run.record.inputs.plan_kind).toBe("text");
+      expect(text.run.step("build").slices).toEqual([]);
+    }),
+  ));
+
+test(
+  "a command failing the same way three times becomes an obstacle, and stops nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* onGitLab("add-a-picker");
+        // Approved and failing, so the gate collects a real failure of its own.
+        yield* approveVerification(rig, { name: "tests", executable: "false" });
+        yield* queueOutputs([CLEAN, SYNTH, { verdict: "clean", findings: [] }]);
+
+        const first = yield* runWorkflowEffect("implement", {});
+        const run = first.run;
+        expect(first.status).toBe("blocked");
+        expect(run.record.halt).toBe("evidence_missing");
+        // One failure is not a pattern, and nothing claims it is.
+        expect(run.record.obstacle).toBeNull();
+
+        // Two more of the same, as the agent's own `collie verify` calls would record
+        // them: same command, same exit, same last line.
+        const collected = yield* readVerifications(run.dir);
+        const failed = collected.find((r) => r.name === "tests" && r.result === "fail")!;
+        for (const n of [2, 3]) {
+          yield* appendVerification(run.dir, {
+            ...failed,
+            id: `${failed.id}-${n}`,
+            by: "agent",
+            at: DateTime.formatIso(DateTime.makeUnsafe(Date.parse(failed.at) + n * 1000)),
+          });
+        }
+
+        // Resumed: the same loop, and now the pattern is there to be seen.
+        run.record.status = "running";
+        run.record.finished_at = null;
+        run.record.halt = null;
+        for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
+        run.step("mr").status = "pending";
+        yield* run.save();
+        yield* queueOutputs([]);
+
+        const again = yield* runWorkflowEffect("implement", {}, { existing: run });
+
+        expect(again.run.record.obstacle).toContain("tests has failed 3 times in a row");
+        expect(again.run.record.obstacle).toContain("change approach");
+        expect(again.lines.join("\n")).toContain("tests has failed 3 times in a row");
+        // The obstacle is not a halt: what stopped this Run is the evidence gate reading
+        // a failed command, exactly as it did before the counter reached anything.
+        expect(again.run.record.halt).toBe("evidence_missing");
+
+        const metrics = yield* readMetrics(run.dir);
+        expect(metrics.filter((m) => m.kind === "checkpoint")).toHaveLength(1);
+        expect(metrics.filter((m) => m.kind === "verification").length).toBeGreaterThanOrEqual(3);
+        expect(metrics.some((m) => m.kind === "evidence")).toBe(true);
+      }),
+    ),
+  40_000,
+);
+
+test("a Run that never repeats itself carries no obstacle", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* onGitLab("add-a-picker");
+      yield* queueOutputs([CLEAN, SYNTH, { verdict: "clean", findings: [] }]);
+
+      const { run } = yield* runWorkflowEffect("implement", {});
+
+      expect(run.record.obstacle).toBeNull();
+      const metrics = yield* readMetrics(run.dir);
+      expect(metrics.filter((m) => m.kind === "checkpoint")).toEqual([]);
+      // The approved command passed, and that is recorded as evidence with a time on it.
+      expect(metrics.filter((m) => m.kind === "verification" && m.note === "pass")).toHaveLength(1);
+      expect(metricsOf(metrics, run.record.created_at).timeToFirstEvidence).not.toBeNull();
     }),
   ));

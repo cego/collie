@@ -9,6 +9,7 @@ import { installBaseline, runWorkflow } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
 import { atBoundary, controlDir, type CompactionPorts } from "../src/compaction";
+import { metricsOf, readMetrics } from "../src/metrics";
 import { Schema } from "effect";
 
 /** One agent's controls, as `compaction.ts` writes them. */
@@ -104,6 +105,34 @@ test("a reused agent over the threshold is compacted before it is given the next
       expect(lines.join("\n")).toContain("asking it to compact before two");
       const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
       expect(log).toContain("native compaction");
+    }),
+  ));
+
+test("every usable context sample is a line in the Run's metrics journal", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
+      // Under the threshold: nothing to compact, and still a number worth keeping.
+      const port = scriptedPort({ usage: [12_345] });
+
+      const { run, status } = yield* ran({ compaction: port.ports, outputPollMs: 20 });
+
+      expect(status).toBe("done");
+      expect(port.requests).toHaveLength(0);
+      const agent = run.step("two").variants[0]!.agent;
+      const samples = (yield* readMetrics(run.dir)).filter((line) => line.kind === "context");
+      expect(samples.map((line) => [line.subject, line.value, line.note])).toEqual([
+        [agent, 12_345, "two"],
+      ]);
+      expect(metricsOf(yield* readMetrics(run.dir), run.record.created_at).peakContext).toEqual({
+        agent,
+        tokens: 12_345,
+      });
+      // An unreadable sample is no sample: nothing is written, and nothing is zero.
+      yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
+      const blind = scriptedPort({ usage: [null] });
+      const second = yield* ran({ compaction: blind.ports, outputPollMs: 20 });
+      expect((yield* readMetrics(second.run.dir)).filter((l) => l.kind === "context")).toEqual([]);
     }),
   ));
 

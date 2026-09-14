@@ -235,22 +235,24 @@ The attention envelope is the normal `ok`/`data` shape with one extra key beside
 `reason` is a stable code, additive across releases, and `explanation` is the same fact as
 prose:
 
-| `reason`             | `category`    | What it says                                                                                                                  |
-| -------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `choice_pending`     | `question`    | A Choice anyone can answer is open.                                                                                           |
-| `succeeded`          | `completed`   | The run finished its work.                                                                                                    |
-| `working`            | `none`        | The run is getting on with it.                                                                                                |
-| `held`               | `none`        | Someone held it; it takes no new work until `run release`.                                                                    |
-| `drift_unresolved`   | `drift`       | It drifted and Collie could not correct it. `run drift` says from what.                                                       |
-| `cross_run_pending`  | `drift`       | It and its related runs were never checked against each other.                                                                |
-| `review_exhausted`   | `interrupted` | Every review iteration was used with findings still open.                                                                     |
-| `no_progress`        | `interrupted` | A review raised the same blocking findings as the one before it.                                                              |
-| `dispute_unresolved` | `interrupted` | The implementer disputed a blocking finding; you decide it.                                                                   |
-| `fix_unverified`     | `interrupted` | The last fix's Output did not account for every blocking finding with passing checks, or the evidence to check it is missing. |
-| `step_blocked`       | `interrupted` | A step stopped for a human; its note is in the explanation.                                                                   |
-| `stopped`            | `interrupted` | Someone stopped the run.                                                                                                      |
-| `failed`             | `interrupted` | It ended unsuccessfully and nothing it recorded says why.                                                                     |
-| `driver_lost`        | `interrupted` | The record says it is running, but no Driver owns it.                                                                         |
+| `reason`             | `category`    | What it says                                                                                                                                                                        |
+| -------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `choice_pending`     | `question`    | A Choice anyone can answer is open.                                                                                                                                                 |
+| `succeeded`          | `completed`   | The run finished its work.                                                                                                                                                          |
+| `working`            | `none`        | The run is getting on with it.                                                                                                                                                      |
+| `held`               | `none`        | Someone held it; it takes no new work until `run release`.                                                                                                                          |
+| `drift_unresolved`   | `drift`       | It drifted and Collie could not correct it. `run drift` says from what.                                                                                                             |
+| `cross_run_pending`  | `drift`       | It and its related runs were never checked against each other.                                                                                                                      |
+| `review_exhausted`   | `interrupted` | Every review iteration was used with findings still open.                                                                                                                           |
+| `no_progress`        | `interrupted` | A review raised the same blocking findings as the one before it.                                                                                                                    |
+| `dispute_unresolved` | `interrupted` | The implementer disputed a blocking finding; you decide it.                                                                                                                         |
+| `fix_unverified`     | `interrupted` | The last fix's Output did not account for every blocking finding, or a check it names has no passing verification on the tree as it stands, or the evidence to check it is missing. |
+| `evidence_missing`   | `interrupted` | The evidence gate before the merge request found gaps; they are listed in the explanation and on the record, and `run show` names them.                                             |
+| `definition_changed` | `interrupted` | Its workflow predates frozen definitions and the layers no longer resolve to the steps it recorded.                                                                                 |
+| `step_blocked`       | `interrupted` | A step stopped for a human; its note is in the explanation.                                                                                                                         |
+| `stopped`            | `interrupted` | Someone stopped the run.                                                                                                                                                            |
+| `failed`             | `interrupted` | It ended unsuccessfully and nothing it recorded says why.                                                                                                                           |
+| `driver_lost`        | `interrupted` | The record says it is running, but no Driver owns it.                                                                                                                               |
 
 `step` is the step the run is on where it is known, and `actions` names the `run`
 subcommands that make sense next. An interrupted run also carries `driver` (`live`, `none`
@@ -563,6 +565,68 @@ the check is owed rather than that it happened: the run's final card says
 evaluation nobody was left to make is offered as follow-up input, never silently made
 later.
 
+## Outcomes
+
+```sh
+collie run start implement --input plan=<source> --input outcome=bug
+```
+
+What kind of result a run has to prove, and so what evidence closes it:
+
+| `outcome`       | What closes it, beyond the approved verifications passing on the final tree                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| _(empty)_       | nothing more. Unclassified work is not a feature by default.                                                                                                |
+| `feature`       | the tickets it built are named, every check a ticket's `**Checks:**` line promised has a passing verification, and the review says the agreed scope was met |
+| `bug`           | a `regression` recorded with `--expect fail` before the fix, and passing after                                                                              |
+| `refactor`      | the review says behaviour was preserved                                                                                                                     |
+| `investigation` | a conclusion, references inside the run, and whether there is a patch at all                                                                                |
+| `docs`          | the documented commands, run as written, each with a passing verification                                                                                   |
+| `migration`     | `migrate-up` and `migrate-down` (or `rollback`) both passing                                                                                                |
+
+The gate runs before the merge request, which is where the claim is made. Collie runs the
+run's own approved set itself at the tree as it stands, then says what is missing; gaps
+stop the run with `evidence_missing` and are listed on the record and in `run show`. A run
+with nothing approved is told so rather than passed — an empty set would make the gate say
+yes to anything.
+
+An investigation that concludes there is nothing to change skips the merge request with a
+note and finishes. That is a real outcome, and nothing is invented to have something to
+merge.
+
+`plan` settles the outcome during its interview and forwards it, so a chained build is not
+asked again. A value that is not one of these is refused at the front door rather than
+discovered at the gate.
+
+`plan` and `review` runs have a kind of their own that nobody chooses — `plan` proves it
+wrote tickets (`issues_dir` in its Output), `review` that it wrote a summary a human can
+read — and neither opens a merge request, so there is no gate to stop them. Their row is
+read once when the run finishes, and what is missing is recorded on the run, shown on the
+board and in `run show`, and does not stop a run a human's Choice already closed.
+
+## Metrics
+
+```sh
+collie --json run metrics <run-id>
+```
+
+What a Run actually did, from its own journal: time to the first collected verification,
+how many passed, failed or were unstable and how many Collie ran itself, how many slices
+landed, how much rework (fix rounds and halts), and the largest context sample any of its
+agents reported. Plus the outcome it is being held to, what the evidence gate found
+missing, and the obstacle where there is one.
+
+Terminal activity is not on this list, on purpose. A changing pane says an agent is alive;
+it does not say anything was produced. The pane clock is liveness; this is progress.
+
+Nothing here is a limit. Counts, tokens, costs and timings are recorded and shown; none of
+them refuses anything, and there is no quota to exceed.
+
+**Obstacles.** Where one command fails several times in a row the same way — same exit,
+same last line — Collie says so: on the record, in `run show`, and in the next prompt, so
+the agent can change approach rather than repeat itself. It is a sentence, not a stop. A
+counter reaching a number is not evidence that work cannot be done, and what prevents a
+false claim of success is the evidence gate reading collected results.
+
 ## Verify
 
 ```sh
@@ -576,11 +640,38 @@ That pair is the point: a pass on a tree that changed while the command ran says
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
 
-| Flag     | What it does                                                                |
-| -------- | --------------------------------------------------------------------------- |
-| `--run`  | Required. The run this is a verification of, and whose tree is snapshotted. |
-| `--cwd`  | Where to run it. Must be inside that run's own checkout; defaults to it.    |
-| `--name` | What to call it on a card. The executable by default.                       |
+| Flag       | What it does                                                                |
+| ---------- | --------------------------------------------------------------------------- |
+| `--run`    | Required. The run this is a verification of, and whose tree is snapshotted. |
+| `--cwd`    | Where to run it. Must be inside that run's own checkout; defaults to it.    |
+| `--name`   | What to call it on a card. The executable by default.                       |
+| `--expect` | What a pass looks like: `pass` (default), or `fail` for a reproduction.     |
+
+`--expect fail` is how a bug is proved to exist. A regression test that exits non-zero on
+the tree before the fix is the evidence, so that record is a `pass`; the same command
+succeeding is the reproduction failing, not the bug being fixed. Stability comes first
+either way — a tree that moved under the command is `unstable` whatever was expected.
+
+```sh
+collie verify --run <run-id> --name regression --expect fail -- bun test test/bug.test.ts
+```
+
+### What Collie may run itself
+
+An agent may `collie verify` anything; Collie runs only this run's
+[approved set](../CONTEXT.md), matched argument for argument. The set is read when the run starts — `.herdr/verify.json`
+in the project, else `verify.json` in the config directory, whichever is found first and
+taken whole — and copied into `run.json` and into the run's Intent as its
+`run_verification` grant. Editing the file afterwards changes the next run and never a
+running one. From then on the Intent is the set: `run intent verification` adds to it or
+removes from it, and an Intent whose list has been emptied is a run Collie may run nothing
+for — the seed is not put back behind the human who removed it.
+
+```json
+[{ "name": "tests", "executable": "bun", "argv": ["test"], "cwd": "worktree" }]
+```
+
+A file that is there and does not decode is an error naming it, never an empty set.
 
 Everything after `--` is the executable and its arguments, spawned directly. There is no
 shell: what was written down is what ran. The command's own exit status is passed
@@ -673,13 +764,14 @@ human line and a failure prints `error.message`.
 | `run_not_found`           | No run with that id.                                                                                  |
 | `run_already_active`      | A Driver still owns that run; stop it before resuming.                                                |
 | `run_not_waiting`         | The run is not at a question.                                                                         |
-| `invalid_answer`          | That title is not one of the choices on offer.                                                        |
+| `invalid_answer`          | That title is not one of the choices on offer, or a menu title was typed into a settings question.    |
 | `choice_already_answered` | The question was already answered.                                                                    |
 | `choice_mismatch`         | `--expect-choice` named a question the run is no longer asking.                                       |
 | `target_exists`           | A fork would overwrite a file that is already there.                                                  |
 | `needs_input`             | Inputs are missing; `details.inputs` says which, with their questions.                                |
 | `timeout`                 | `run wait --timeout` gave up.                                                                         |
 | `invalid_state`           | The run is not in a state where that makes sense — resuming one that already succeeded, for instance. |
+| `definition_changed`      | The run predates frozen definitions and its workflow no longer has the steps it recorded.             |
 | `invalid_input`           | A flag or argument was wrong.                                                                         |
 | `operation_failed`        | Anything else, including a caught defect.                                                             |
 

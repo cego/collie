@@ -7,7 +7,7 @@ import { Effect, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeHerdr, Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
-import { installFakeSkills } from "./support/defs";
+import { installFakeSkills, writeDef } from "./support/defs";
 import { FakeBin } from "./support/bin";
 import { doctor } from "../src/doctor";
 import { shell } from "../src/mr";
@@ -119,8 +119,10 @@ test("a healthy machine passes every check and says so", () =>
         "skills",
         "harnesses",
         "up to date",
+        "workflows",
         "glab",
       ]);
+      expect(check(result, "workflows").detail).toBe("implement and review are the bundled ones");
     }),
   ));
 
@@ -316,5 +318,62 @@ test("every failing check carries its fix, and the message lists them", () =>
       expect(failed.length).toBeGreaterThan(0);
       expect(failed.every((c) => c.fix !== "")).toBe(true);
       expect(result.ok === false && result.error.message).toContain("herdr");
+    }),
+  ));
+
+test("an override that keeps the old expensive flow is reported with the edit, and never edited", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* healthy();
+      const project = `${rig.projectDir}/.herdr`;
+      const bundled = yield* fs.readFileString(`${rig.baselineDir}/workflows/implement.md`);
+      // The 0.7 shape: architecture and simplify between the build and the review.
+      const old = bundled.replace(
+        /^  - id: review$/m,
+        [
+          "  - id: architecture",
+          "    persona: architect",
+          "    output: architecture.json",
+          "  - id: simplify",
+          "    persona: implementer",
+          "    agent: build",
+          "    output: simplify.json",
+          "  - id: review",
+        ].join("\n"),
+      );
+      yield* writeDef(project, "workflows", "implement", old);
+      const review = yield* fs.readFileString(`${rig.baselineDir}/workflows/review.md`);
+      yield* writeDef(
+        project,
+        "workflows",
+        "review",
+        review.replace(
+          /^    parallel:\n      - \{ harness: claude, model: opus, effort: medium \}$/m,
+          "    parallel:\n      - { harness: claude, model: opus, effort: medium }\n      - { harness: codex, model: gpt-5, effort: high }",
+        ),
+      );
+      const before = yield* fs.readFileString(`${project}/workflows/implement.md`);
+
+      const result = yield* report();
+
+      const found = check(result, "workflows");
+      // Not a failure: a customisation is the user's, and doctor still exits clean.
+      expect(found.ok).toBe(true);
+      expect(found.detail).toContain("implement still runs architecture and simplify");
+      expect(found.detail).toContain("review still runs 2 reviewers");
+      expect(found.fix).toContain(
+        `remove the architecture and simplify step(s) from ${project}/workflows/implement.md`,
+      );
+      expect(found.fix).toContain("keep one entry under `parallel:` of step review");
+      expect(yield* fs.readFileString(`${project}/workflows/implement.md`)).toBe(before);
+
+      // An override that already has the current flow is just named.
+      yield* writeDef(project, "workflows", "implement", bundled);
+      yield* fs.remove(`${project}/workflows/review.md`);
+      const current = check(yield* report(), "workflows");
+      expect(current.ok).toBe(true);
+      expect(current.detail).toContain("overridden here, current flow: implement (project");
+      expect(current.fix).toBe("");
     }),
   ));

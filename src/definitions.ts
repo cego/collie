@@ -36,7 +36,7 @@ export const INPUT_STRATEGIES = [
 ] as const;
 
 /** What a step may declare it needs before it is worth starting. */
-export const STEP_REQUIREMENTS = ["gitlab", "mr-target"] as const;
+export const STEP_REQUIREMENTS = ["gitlab", "mr-target", "someone-elses-mr"] as const;
 export type StepRequirement = string;
 export type InputStrategy = string;
 
@@ -120,6 +120,11 @@ export interface StepDef {
   requires?: StepRequirement[];
   /** This step reconciles that earlier step's parallel Outputs into one. */
   fanIn?: string;
+  /**
+   * Run this step once per ticket of the plan, in an order its `Blocked by` lines allow,
+   * on the same agent, with a compact hand-off between slices. See docs/authoring.md.
+   */
+  each?: string;
   /**
    * `from` is the gate; `back_to` is the earliest step to run again (default `from`).
    * `converge` makes only blocking findings drive the loop and lets the last fix's own
@@ -262,6 +267,7 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
     const requires = parseRequires(stepData.requires);
     if (requires) step.requires = requires;
     if (isString(stepData.fan_in)) step.fanIn = stepData.fan_in;
+    if (isString(stepData.each)) step.each = stepData.each;
     if (Array.isArray(stepData.choices)) step.choices = stepData.choices.map(parseChoice);
     if (isYamlMap(stepData.repeat)) {
       step.repeat = { from: str(stepData.repeat.from) };
@@ -945,6 +951,26 @@ export const validateWorkflow = Effect.fn("Definitions.validateWorkflow")(functi
     // The reconciled review is this step's Output; without one there is nothing to read.
     if (step.fanIn && !step.output) {
       errors.push(`${where(step.id)}: fan_in needs an output, so the synthesis can be read`);
+    }
+    if (step.each !== undefined) {
+      if (step.each !== "tickets") {
+        errors.push(`${where(step.id)}: each must be "tickets" (got "${step.each}")`);
+      }
+      // The tickets come from a work source, so without one there is nothing to loop.
+      if (!Object.values(wf.inputs).includes("work-source")) {
+        errors.push(
+          `${where(step.id)}: each: tickets needs a work-source input to take the tickets from`,
+        );
+      }
+      // Slices are sequential on one agent; a parallel step and a fan-in are the two
+      // shapes that cannot also be one-at-a-time.
+      if (step.parallel !== undefined) {
+        errors.push(`${where(step.id)}: each and parallel cannot both be set`);
+      }
+      if (step.fanIn) errors.push(`${where(step.id)}: each and fan_in cannot both be set`);
+      if (!step.output) {
+        errors.push(`${where(step.id)}: each needs an output, so every slice records one`);
+      }
     }
     if (step.agent && !earlier(wf, step, step.agent)) {
       errors.push(`${where(step.id)}: agent "${step.agent}" is not an earlier step`);

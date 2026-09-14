@@ -50,6 +50,7 @@ function stateFor(selected: string | null): AppState {
     marks: {},
     live: null,
     steerDraft: null,
+    steerAimed: false,
     previewing: null,
   };
 }

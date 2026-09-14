@@ -127,6 +127,10 @@ declares it the same way and reads `{{inputs.repo}}`; see
   `glab` is authenticated for the target merge request's own host, so a review needs no
   checkout of that project; on its own it means this directory is a checkout with a GitLab
   remote, which is what a step that pushes needs.
+- `someone-elses-mr` — the target merge request is assigned to somebody other than you.
+  What a step gated on this does is address the person who owns the change: a note on the
+  merge request, a reviewer added. On your own merge request the findings are yours to fix,
+  so the step is skipped rather than spending a round telling you what you already know.
 
 A requirement this machine or this run cannot meet is a skip with a note naming the gap,
 never a failed run.
@@ -138,6 +142,39 @@ A step with `fan_in: <step>` is handed the paths of that step's parallel outputs
 engine does not union anything: reconciling is the step's job. Over reviewers this is what
 produces `review.md` — see [Outputs](#outputs).
 
+### Slices
+
+```yaml
+- id: build
+  persona: implementer
+  output: build.json
+  each: tickets # one run of this step per ticket of the plan
+```
+
+A step with `each: tickets` runs once per ticket of the work source's plan directory, on
+the same agent, in an order the tickets' `Blocked by` lines allow — plan order among
+tickets that wait for nothing. Each slice gets its own directory under the step
+(`steps/build/<number>/`), its own prompt and its own Output, and is recorded in
+`run.json` under `steps[].slices`. A resumed run skips the slices that are `done` and
+picks up at the first that is not.
+
+The prompt gets `{{ticket}}` (`file`, `number`, `title`) and `{{progress}}`: the earlier
+slices by name, with the commits each of them left. That is the whole hand-off — never the
+earlier prompts, and never the transcript. One prompt carrying a whole plan grows a
+transcript for the length of the run, and every later ticket is then built by an agent
+re-reading work it did hours ago.
+
+A work source that is not a plan directory, or a plan of a single ticket, runs the step
+once with `{{ticket}}` empty: the hand-off would be empty and the loop would be a longer
+way of writing what the step already does.
+
+`each` requires a `work-source` input and an `output`, and is mutually exclusive with
+`parallel` and `fan_in` — slices are one at a time on one agent, and those are the two
+shapes that are not.
+
+A slice that does not land stops the plan there: the next ticket is written against work
+that is not on the branch, and building it would be building on nothing.
+
 ### Loops
 
 ```yaml
@@ -147,7 +184,7 @@ produces `review.md` — see [Outputs](#outputs).
   output: fix.json
   repeat:
     from: review.synthesize # the gate: loop while that step reports findings
-    back_to: simplify # where the next round starts (default: from)
+    back_to: review # where the next round starts (default: from)
     max: 4 # falls back to the workflow's max_iterations
     converge: true # blocking findings drive the loop; see below
 ```
@@ -173,8 +210,10 @@ a ceiling, not a target:
   rounds.
 - On the last iteration no review follows the fix. Its Output has to account for every
   blocking finding, `fixed` or `disputed`, with `file` and `title` exactly as the review
-  gave them, and report at least one passing `checks` entry; otherwise the run stops with
-  `fix_unverified`. What passes is implementer-reported, not reviewed, and the run's
+  gave them, and name at least one check; each `checks` entry is a verification name, and
+  its result is read from the run's journal on the tree as it stands — a check Collie may
+  run itself and has no fresh record of, it runs then. Otherwise the run stops with
+  `fix_unverified`. The dispositions are implementer-reported, not reviewed, and the run's
   summary, toast and `{{unreviewed}}` say so.
 - A resumed run re-reads the gate's and the fix's Outputs and decides again; evidence that
   is missing stops it rather than skipping to the next step.
@@ -207,7 +246,7 @@ A step with `choices:` asks you instead of running an agent:
         output: revise.json
     - title: Post to MR
       post: true
-      requires: [mr-target, gitlab]
+      requires: [mr-target, gitlab, someone-elses-mr]
     - title: Stop here
       stop: true
 ```

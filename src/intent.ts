@@ -7,6 +7,11 @@
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
 import { withRunLock } from "./run";
+// The schema lives there and not here because `run.json` records an approved set too, and
+// `run.ts` cannot import this module: this one imports `withRunLock` from it.
+import { VerifySpecSchema, type VerifySpec } from "./verify-spec";
+
+export { VerifySpecSchema, type VerifySpec };
 
 const RuleSpecSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("protected_paths"), globs: Schema.Array(Schema.String) }),
@@ -30,18 +35,6 @@ const RuleSpecSchema = Schema.Union([
   }),
 ]);
 export type RuleSpec = Schema.Schema.Type<typeof RuleSpecSchema>;
-
-/**
- * Exactly what Collie may run for a verification, bound argument by argument: the
- * wrapper is part of what was approved, so nothing here is a shell string (SPEC §7.7).
- */
-const VerifySpecSchema = Schema.Struct({
-  name: Schema.String,
-  executable: Schema.String,
-  argv: Schema.Array(Schema.String),
-  cwd: Schema.String,
-});
-export type VerifySpec = Schema.Schema.Type<typeof VerifySpecSchema>;
 
 const ConstraintSchema = Schema.Struct({
   id: Schema.String,
@@ -225,6 +218,12 @@ export interface SeedOptions {
   readonly goal?: string | null;
   /** What the human typed, and what the work source's own text asked for. */
   readonly constraints?: ReadonlyArray<Omit<Constraint, "since"> & { since?: number }>;
+  /**
+   * The approved set the Run was started with — `.herdr/verify.json` as read at start.
+   * Written into `run_verification` so the Intent *is* the set from version 1, and `run
+   * intent verification` amends one list rather than a list that shadows another.
+   */
+  readonly runVerification?: ReadonlyArray<VerifySpec>;
 }
 
 /**
@@ -242,7 +241,12 @@ export function seedIntent(run: string, options: SeedOptions): Intent {
     run,
     goal: options.goal ?? null,
     constraints: [...byId.values()],
-    authority: options.defaults?.authority ?? DEFAULT_AUTHORITY,
+    authority: {
+      ...(options.defaults?.authority ?? DEFAULT_AUTHORITY),
+      run_verification: [
+        ...(options.runVerification ?? options.defaults?.authority.run_verification ?? []),
+      ],
+    },
     parent: null,
     history: [],
   };

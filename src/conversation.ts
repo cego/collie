@@ -23,7 +23,12 @@ export const MAX_AGE_DAYS = 30;
 const TurnSchema = Schema.Struct({
   id: Schema.String,
   at: Schema.String,
-  role: Schema.Literals(["human", "collie"]),
+  /**
+   * Who said it. `event` is a turn nobody typed: the board noticed something and asked
+   * Collie about it on the human's behalf. Kept distinct so the conversation never shows
+   * the human asking a question they did not ask.
+   */
+  role: Schema.Literals(["human", "collie", "event"]),
   text: Schema.String,
   /** The Run this turn was about, where it named one. */
   target: Schema.optionalKey(Schema.String),
@@ -106,7 +111,7 @@ export function keep(turns: ReadonlyArray<Turn>, nowMs: number): Turn[] {
 }
 
 export interface NewTurn {
-  readonly role: "human" | "collie";
+  readonly role: Turn["role"];
   readonly text: string;
   readonly target?: string;
   readonly card?: string;

@@ -176,6 +176,7 @@ export function driveBridge<E, R>(
       filter: bridge.filter,
       origin: bridge.origin,
       steerDraft: null,
+      steerAimed: false,
       previewing: null,
       shown: ["runs"],
       selected: null,

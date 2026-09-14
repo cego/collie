@@ -27,6 +27,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `handoff.ts`       | Giving one Run's result to another Run's live agent                                      |
 | `output.ts`        | The Output and Synthesis schemas, `review.md`, and which findings the loop still owns    |
 | `run.ts`           | The run directory: audit trail and resume state                                          |
+| `snapshot.ts`      | The resolved workflow a Run is running, frozen in its run directory at creation          |
 | `intent.ts`        | What a Run is for, what bounds it, and what Collie may do about it without asking        |
 | `steering.ts`      | The delivery ledger per live agent, and the Herd's model-call budget                     |
 | `dispatcher.ts`    | The only sender: one transaction per agent, reserved before the send, ordered            |
@@ -36,9 +37,13 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `executors.ts`     | Which action kinds this build can carry out; an unregistered one is refused, never faked |
 | `drift.ts`         | Where the work and the Intent disagree: rules, judgement, and the correction loop        |
 | `verify.ts`        | A command's result bound to the tree it ran on, so a card can say verified not claimed   |
+| `verify-spec.ts`   | Which commands Collie may run itself for a Run, and where that permission came from      |
+| `outcome.ts`       | What a Run must prove to close, per kind, and what is still missing                      |
+| `metrics.ts`       | What a Run produced and when: evidence, slices, rework, context — never pane activity    |
 | `cards.ts`         | One slice of work as a human wants it handed over, with its readiness and significance   |
 | `disposition.ts`   | What became of a Run's work, recorded beside its status and never over it                |
 | `conversation.ts`  | What the human and Collie have said about this Herd, redacted and reference-checked      |
+| `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                 |
 | `home.ts`          | Which workspace is this Herd's Home, decided by proof and never by a label               |
 | `live.ts`          | The board's Live region and every row's marks, from one pass. Read-only                  |
 | `lines.ts`         | A card, a report, a delivery, a row's marks and an action, as the same words everywhere  |

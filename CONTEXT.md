@@ -81,8 +81,10 @@ facts: `decision` > `consequential` > `try-it` > `routine`. A narrative never ra
 **Hold** — The Driver dispatches no new work until released. It takes effect at a work
 boundary, so what is already running finishes.
 
-**Conversation** — The durable journal of human and Collie turns for a Herd. Redacted for
-credential-shaped values, bounded to 500 turns and 30 days, and never a worker transcript.
+**Conversation** — The durable journal of human and Collie turns for a Herd, plus the turns
+the board starts (`event`) when something meaningful changes — recorded as the board's, never
+as the human's. Redacted for credential-shaped values, bounded to 500 turns and 30 days, and
+never a worker transcript.
 
 **Follow-up Run** — A child Run started from a finished one to act on its outcome, reusing
 its worktree under guards. A finished Run is immutable; there is no mode that reopens one.
@@ -144,6 +146,8 @@ manager does it. The conditions and their order are canonical in `src/worktree.t
 
 **Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking takes a baseline definition into a Layer.
 
+**Definition snapshot** — The resolved Workflow a Run is actually running — after `extends:` and `use:`, with rebased step ids, merged variant settings and each Step's prompt text — frozen as JSON in the Run directory when the Run is created and never rewritten. A Driver resolves from it, so editing a Layer changes the next Run and not a running or resumed one. A Run recorded before snapshots is resumed only while the Layers still resolve to the steps it recorded; otherwise `definition_changed`.
+
 **Override** — A definition that declares `extends: <name>` and changes only what it names; everything else still follows the parent in the Layer below. A file without `extends:` replaces the whole definition, and a full copy records `forked_from_hash` so a parent that has moved on can be marked stale. The merge rules are canonical in `src/definitions.ts` and `docs/authoring.md`.
 
 **Fan-in** — Combining several parallel Outputs into one. A Step declares `fan_in: <step>`, is given that Step's Output files, and reconciles them itself; it sits in that Step's tab. The engine no longer unions findings.
@@ -157,9 +161,19 @@ manager does it. The conditions and their order are canonical in `src/worktree.t
 What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 - `plan` — interviews the human, then writes `SPEC.md` and one ticket per slice into its Run's plan directory (ADR-0002).
-- `implement` — builds from a work source, embeds `review`, loops on the findings, and ends at `mr`, the only step that opens or updates the merge request.
-- `review` — standalone; you pick the target; parallel reviewers, then one Synthesis.
+- `implement` — builds from a work source, embeds `review`, loops on the findings, and ends at `mr`, the only step that opens or updates the merge request. No architecture or simplification pass: those are work the change asks for, not work every Run does.
+- `review` — standalone; you pick the target; one complete review, and a fan-in that reconciles several where a layer asks for several.
 - `architecture` — runs the architect over the project and reports into its Run's plan directory.
+
+**Outcome** — The kind of result a Run has to prove, and the evidence that closes it: a feature names what it built, a bug reproduces before it is fixed, a refactor preserves behaviour, an investigation reaches a supported conclusion and may have no patch, docs run what they document, a migration proves it can go back. A Run nobody classified is `unspecified` and proves only its approved verifications — never a feature by default.
+
+**Approved set** — The verifications Collie may run itself for one Run, each bound argument for argument: `.herdr/verify.json` in the project, else `verify.json` in the config directory, read at start and written into the Run's Intent as its `run_verification` grant. From then on the Intent is the set, amended only by `run intent verification`. An agent may `collie verify` anything; only the approved set is what Collie runs at the gate.
+
+**Evidence** — A Verification collected at a revision. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
+
+**Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
+
+**Slice** — One ticket's build within a Step that declares `each: tickets`. It has its own prompt, its own Output and its own record under `steps[].slices`, runs on the Step's one agent, and is handed only its ticket and a few lines of fact about the slices before it — their commits and what they verified, never their transcripts. A resumed Run skips the slices that are done.
 
 **Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice chains to another Workflow (`run`), prompts a named agent (`prompt`), posts the run's review to the merge request it reviewed (`post`), or just ends the Step (`stop`). A Choice with one thing left to offer is taken rather than asked.
 

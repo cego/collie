@@ -3,7 +3,7 @@
 // every refusal is one small case.
 
 import { expect, test } from "bun:test";
-import { isSingleRepo, readPlanRepos } from "../src/plan";
+import { checksIn, isSingleRepo, orderedTickets, readPlanRepos } from "../src/plan";
 
 function ticket(file: string, opts: { repo?: string; blockedBy?: string } = {}) {
   const repo = opts.repo === undefined ? "" : `**Repo:** ${opts.repo}\n\n`;
@@ -263,4 +263,120 @@ test("only the run's own root is a single-repo plan", () => {
 test("a single-repo plan is not asked for a checkout: the chain refuses that as it always did", () => {
   const plan = readPlanRepos([ticket("01-a", { repo: "." })], new Set());
   expect(plan.refusal).toBeNull();
+});
+
+test("a number claimed twice is refused however many repositories the plan names", () => {
+  const plan = readPlanRepos(
+    [
+      { file: "01-api.md", text: "**Blocked by:** None\n" },
+      { file: "01-web.md", text: "**Blocked by:** None\n" },
+    ],
+    new Set(["."]),
+  );
+  // One repository, so this used to take the shortcut below and never be looked at —
+  // and a "Blocked by: 01" in the same plan could not have said which it meant.
+  expect(plan.refusal?.kind).toBe("duplicate-ticket");
+  expect(plan.refusal?.message).toContain("01-api.md and 01-web.md");
+});
+
+test("a blocker naming nothing in the plan is refused in a single-repository plan too", () => {
+  const dangling = readPlanRepos(
+    [
+      { file: "01-api.md", text: "**Blocked by:** None\n" },
+      { file: "02-web.md", text: "**Blocked by:** 07\n" },
+    ],
+    new Set(["."]),
+  );
+  expect(dangling.refusal?.kind).toBe("unknown-blocker");
+  expect(dangling.refusal?.message).toContain("02-web.md (blocked by 7)");
+
+  const prose = readPlanRepos(
+    [{ file: "01-api.md", text: "**Blocked by:** after the migration\n" }],
+    new Set(["."]),
+  );
+  expect(prose.refusal?.kind).toBe("unknown-blocker");
+});
+
+test("an ordinary single-repository plan still needs nothing said about repositories", () => {
+  const plan = readPlanRepos(
+    [
+      { file: "01-api.md", text: "**Blocked by:** None\n" },
+      { file: "02-web.md", text: "**Blocked by:** 01\n" },
+    ],
+    new Set(["."]),
+  );
+  expect(plan.refusal).toBeNull();
+  expect(plan.repos).toEqual([{ path: ".", tickets: ["01-api.md", "02-web.md"] }]);
+});
+
+test("tickets build in an order that respects Blocked by, and plan order otherwise", () => {
+  const ticket = (file: string, blocked: string, title = "a thing") => ({
+    file,
+    text: `# ${title}\n\n**Blocked by:** ${blocked}\n**Repo:** .\n`,
+  });
+
+  const order = orderedTickets([
+    ticket("01-api.md", "None", "the API"),
+    ticket("02-web.md", "03", "the web client"),
+    ticket("03-schema.md", "01", "the schema"),
+    ticket("04-docs.md", "None", "the docs"),
+  ]);
+
+  expect(order.map((s) => s.file)).toEqual([
+    // 01 and 04 wait for nothing, in plan order; 03 waits for 01; 02 waits for 03.
+    "01-api.md",
+    "04-docs.md",
+    "03-schema.md",
+    "02-web.md",
+  ]);
+  expect(order.map((s) => s.title)).toEqual([
+    "the API",
+    "the docs",
+    "the schema",
+    "the web client",
+  ]);
+  expect(order.map((s) => s.number)).toEqual(["1", "4", "3", "2"]);
+  expect(order[2]!.blockedBy).toEqual(["1"]);
+});
+
+test("only this repository's tickets are sliced, and every ticket is returned exactly once", () => {
+  const tickets = [
+    { file: "01-api.md", text: "# API\n\n**Blocked by:** None\n**Repo:** cego/api\n" },
+    { file: "02-web.md", text: "# Web\n\n**Blocked by:** 01\n**Repo:** cego/web\n" },
+    { file: "03-more.md", text: "# More\n\n**Blocked by:** None\n**Repo:** cego/api\n" },
+  ];
+  expect(orderedTickets(tickets, "cego/api").map((s) => s.file)).toEqual([
+    "01-api.md",
+    "03-more.md",
+  ]);
+  // An edge onto a ticket that is not in this slice's repo does not hold it back: that
+  // ordering is the fan-out's, between Runs, and it has already been settled.
+  expect(orderedTickets(tickets, "cego/web").map((s) => s.file)).toEqual(["02-web.md"]);
+  expect(orderedTickets(tickets).map((s) => s.file)).toHaveLength(3);
+});
+
+test("a cycle nothing refused still yields every ticket rather than losing one", () => {
+  // `readPlanRepos` refuses this before a build ever gets here; if one did, losing a
+  // ticket silently would be worse than building them in the order they were written.
+  const order = orderedTickets([
+    { file: "01-a.md", text: "# A\n\n**Blocked by:** 02\n" },
+    { file: "02-b.md", text: "# B\n\n**Blocked by:** 01\n" },
+  ]);
+  expect(order.map((s) => s.file)).toEqual(["01-a.md", "02-b.md"]);
+});
+
+test("a ticket with no heading is still called something a hand-off can print", () => {
+  const order = orderedTickets([{ file: "07-fix-the-picker.md", text: "**Blocked by:** None\n" }]);
+  expect(order[0]!.title).toBe("fix the picker");
+});
+
+test("a ticket's Checks line names the verifications that will prove it", () => {
+  expect(checksIn("# 01\n\n**Checks:** tests, typecheck\n")).toEqual(["tests", "typecheck"]);
+  expect(checksIn("**Checks:** `tests`, `docs-install`")).toEqual(["tests", "docs-install"]);
+  expect(checksIn("**Checks:** None\n")).toEqual([]);
+  expect(checksIn("# 01\n\nno such line\n")).toEqual([]);
+  const [slice] = orderedTickets([
+    { file: "01-a.md", text: "# 01: a\n\n**Blocked by:** None\n\n**Checks:** tests\n" },
+  ]);
+  expect(slice!.checks).toEqual(["tests"]);
 });

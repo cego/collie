@@ -48,6 +48,7 @@ const verification = (over: Partial<Verification> = {}): Verification => ({
   end: { head_sha: "abc", fingerprint: "f1" },
   exit: 0,
   seconds: 1,
+  expect: "pass",
   tail: { stdout: "", stderr: "" },
   result: "pass",
   at: "2026-09-09T10:00:00Z",

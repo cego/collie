@@ -14,6 +14,7 @@ import {
   scopeFor,
 } from "../src/registry";
 import {
+  NO_OUTCOME,
   buildView,
   buildWideView,
   renderRedirect,
@@ -21,6 +22,7 @@ import {
   type WorkspaceView,
 } from "../src/workspace";
 import { NO_MARKS } from "../src/lines";
+import { recordDisposition } from "../src/disposition";
 import { originPath, readOrigin } from "../src/home";
 import { herdOf } from "../src/steering";
 import { appState, boardFlow, type ControlSession } from "../src/flows";
@@ -1347,6 +1349,7 @@ test("the text view carries the marks and the live lines the app draws", () => {
         fixable: false,
         choice: null,
         needsYou: false,
+        ...NO_OUTCOME,
       },
     ],
     recent: [],
@@ -1360,6 +1363,7 @@ test("the text view carries the marks and the live lines the app draws", () => {
       drift: [],
       deliveries: [],
       conversation: [],
+      runConversation: [],
       proposals: [],
       pending: [],
       ownership: { why: "two workspaces carry this Herd's token", candidates: ["w1", "w2"] },
@@ -1376,3 +1380,108 @@ test("a legacy pane says Collie moved, and nothing else", () => {
   expect(text).toContain("Collie moved to the Home");
   expect(text.split("\n").filter((line) => line.trim() !== "")).toHaveLength(2);
 });
+
+test("a row says what its Run is for, what it has not proved, and what to do about it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const store = new RunStore(rig.stateDir);
+      const run = yield* store.create({
+        workflow: "implement",
+        cwd: rig.projectDir,
+        session: rig.pluginEnv().socketPath,
+        workspace: "1",
+        workspaceLabel: "test",
+        inputs: { plan: "fix the picker", outcome: "bug" },
+        inputSources: { plan: "asked" },
+        stepIds: ["build", "mr"],
+        maxIterations: 1,
+        namedAfter: "fix the picker",
+      });
+      run.record.status = "blocked";
+      run.record.finished_at = "2026-09-11T12:00:00.000Z";
+      run.record.halt = "evidence_missing";
+      run.record.evidence_gaps = ["tests failed", "regression was never run"];
+      run.record.obstacle = "tests has failed 3 times in a row the same way (exit 1).";
+      run.step("mr").status = "blocked";
+      run.step("mr").note = "evidence missing for outcome bug";
+      yield* run.save();
+
+      const view = yield* board([]);
+
+      const row = view.recent.find((r) => r.id === run.id)!;
+      expect(row.outcome).toBe("bug");
+      expect(row.gaps).toBe(2);
+      expect(row.obstacle).toContain("failed 3 times in a row");
+      // A stopped Run is one a human can pick up; the row says the command that does it.
+      expect(row.next).toBe("resume");
+      expect(row.delivered).toBeNull();
+
+      // And the text view a narrow pane falls back to says the same four things.
+      const text = renderWorkspace(view);
+      expect(text).toContain("bug · 2 evidence gap(s)");
+      expect(text).toContain("failed 3 times in a row");
+      expect(text).toContain(`run resume ${run.id}`);
+    }),
+  ));
+
+test("a Run whose work shipped by hand says so, without its status being edited", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const store = new RunStore(rig.stateDir);
+      const run = yield* store.create({
+        workflow: "implement",
+        cwd: rig.projectDir,
+        session: rig.pluginEnv().socketPath,
+        workspace: "1",
+        workspaceLabel: "test",
+        inputs: { plan: "add a picker" },
+        inputSources: { plan: "asked" },
+        stepIds: ["build"],
+        maxIterations: 1,
+        namedAfter: "add a picker",
+      });
+      run.record.status = "failed";
+      run.record.finished_at = "2026-09-11T12:00:00.000Z";
+      yield* run.save();
+      yield* recordDisposition(run.dir, {
+        at: "2026-09-11T13:00:00.000Z",
+        by: "mk",
+        kind: "merged",
+        ref: "cego/collie!43",
+        note: null,
+      });
+
+      const view = yield* board([]);
+
+      const row = view.recent.find((r) => r.id === run.id)!;
+      // Both facts, on the row a person is actually looking at: how execution ended,
+      // and what became of the work. Neither is edited to tidy the other away.
+      expect(row.delivered).toBe("merged cego/collie!43");
+      expect(row.glyph).toBe("✗");
+      expect(row.detail).toContain("failed");
+      expect(renderWorkspace(view)).toContain("merged cego/collie!43");
+    }),
+  ));
+
+test("a filter narrows the rows that are drawn and never what is supervised", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* inWorkspace({ workflow: "implement", namedAfter: "one", workspaceId: "1" });
+      yield* inWorkspace({ workflow: "review", namedAfter: "two", workspaceId: "2" });
+
+      const view = yield* wide([workspace("1", "one"), workspace("2", "two")]);
+
+      // Every workspace is walked, whatever any view is filtered down to: a board that
+      // supervised only what it happened to be drawing would hide what it is not
+      // looking at, which is the one thing a board may not do.
+      expect(view.groups.map((g) => g.label).sort()).toEqual(["one", "two"]);
+      expect(view.groups.flatMap((g) => g.active)).toHaveLength(2);
+
+      // And every row it walked carries the outcome fields, so filtering the list can
+      // never be what decides whether a Run's gaps are visible.
+      for (const row of view.groups.flatMap((g) => g.active)) {
+        expect(row).toHaveProperty("gaps");
+        expect(row).toHaveProperty("obstacle");
+      }
+    }),
+  ));

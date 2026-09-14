@@ -3,6 +3,7 @@
 // through `InputPrompts`, so the same flow draws in a popup pane and inline in the tab.
 
 import { Cause, Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
+import { currentReports, readDrift } from "./drift";
 import { nowIso } from "./time";
 import {
   isQuestionMode,
@@ -17,6 +18,7 @@ import type { PlatformError } from "effect/PlatformError";
 import type { SchemaError } from "effect/Schema";
 import { COMPACTION_OFF, validThreshold } from "./compaction";
 import { herdDir, herdOf, HerdrUnreachable } from "./steering";
+import { eventsIn, nextEvent, readSaid, remember } from "./proactive";
 import {
   ensureHomeFor,
   homePath,
@@ -54,6 +56,7 @@ import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { notify } from "./notify";
 import { COLLIE_TAB, reason, runLabel, shellQuote, tabLabelsFor } from "./naming";
 import { markedFrom, RunStore, type Run } from "./run";
+import { readSnapshot, stepDifference, stepsDiffer } from "./snapshot";
 import { pruneWorktrees } from "./worktree";
 import { sendReview, sendReviewToImplementer, type Session } from "./handoff";
 import {
@@ -653,7 +656,28 @@ export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, e
     return yield* Effect.gen(function* () {
       const defs = yield* loadDefinitions(yield* layers({ ...env, cwd: run.record.cwd }));
       const defaults = yield* loadDefaults(env.configDir);
-      const wf = resolveWorkflow(run.record.workflow, defs, defaults);
+      // The definition this Run was started with, not the one the files say now: a
+      // Driver is resuming a piece of work somebody authorised, and a workflow edited
+      // since would silently change what it does — or crash it, where the record has no
+      // step by the new name. A Run recorded before snapshots existed has none, and
+      // resolves from the layers as it always did, under the guard below.
+      const frozen = yield* readSnapshot(run.dir, run.record.definition);
+      const wf = frozen ?? resolveWorkflow(run.record.workflow, defs, defaults);
+      if (frozen === null) {
+        const recorded = run.record.steps.map((step) => step.id);
+        const now = wf.steps.map((step) => step.id);
+        if (stepsDiffer(recorded, now)) {
+          const note = `definition_changed: ${wf.path} ${stepDifference(recorded, now)}; this Run has no frozen definition, so its steps cannot be matched to it`;
+          yield* run.log(note);
+          yield* out(note);
+          run.record.halt = "definition_changed";
+          run.record.status = "blocked";
+          run.record.finished_at = yield* nowIso();
+          yield* run.save();
+          return 1;
+        }
+        yield* run.log(`no snapshot recorded; resolved ${wf.name} from the ${wf.layer} layer`);
+      }
       yield* out(`${wf.title}`);
       const prompts = filePrompts({
         dir: run.dir,
@@ -898,6 +922,58 @@ function remembersAgents(herdr: Herdr): AsksAgents {
  * Runs must make no `glab` call to draw, one selection makes exactly one, and
  * re-selecting the same Run inside the TTL makes none.
  */
+/**
+ * The next meaningful thing that happened, asked about once. One turn per tick at most,
+ * and one per event ever: several Runs ending together is one thing that happened, and a
+ * board that fired five turns at once would be the notification storm this replaces.
+ *
+ * Read-only where it can be: the turn is a question about a Run, and what may then be
+ * *done* about it goes through the same `validate` path a typed message does. Who started
+ * the turn is not an input to what is permitted.
+ */
+/**
+ * The Runs still going whose drift was escalated to the human, by constraint. Only the
+ * unfinished ones are read: a finished Run's drift is history, and its ending is the event.
+ */
+const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: ReadonlyArray<Run>) {
+  const drifting = new Map<string, string>();
+  for (const run of runs) {
+    if (run.record.status === "done" || run.record.status === "failed") continue;
+    const lines = yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
+    const stuck = currentReports(lines).find((report) => report.resolution === "escalated");
+    if (stuck) drifting.set(run.id, stuck.constraint);
+  }
+  return drifting;
+});
+
+const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
+  env: PluginEnv,
+  runs: ReadonlyArray<Run>,
+) {
+  if (!(yield* loadDefaults(env.configDir)).proactive) return;
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (key === null) return;
+  const dir = yield* herdDir(env.stateDir, key);
+  const said = yield* readSaid(dir);
+  const event = nextEvent(
+    eventsIn(
+      runs.map((run) => run.record),
+      yield* escalatedDrift(runs),
+    ),
+    said,
+  );
+  if (event === null) return;
+  // Remembered before it is asked, not after: a call that fails or times out must not
+  // leave the same event to be asked again on the next tick, three seconds later.
+  yield* remember(dir, event.key, yield* nowIso());
+  yield* steer(env, yield* evaluationDeps(env), {
+    text: event.text,
+    target: event.run,
+    requestId: yield* newRequestId(),
+    asked: "event",
+  }).pipe(Effect.ignore);
+});
+
 export function appState(
   session: ControlSession,
   env: PluginEnv,
@@ -946,6 +1022,12 @@ export function appState(
 
   /** The board from the last read, for whatever `rereads` says may be taken from it. */
   let last: { focus: Focus; state: AppState } | null = null;
+  /**
+   * Whether a turn Collie started is still being answered. At most one in flight: the
+   * next tick does not start a second while the evaluator is still thinking about the
+   * first, and — the reason it is a flag and not an await — the board never waits for it.
+   */
+  let speaking = false;
 
   /** One row per Run: a Run on the local board is on the wide one too. */
   const dedupe = (rows: ReadonlyArray<{ id: string; dir: string }>) => [
@@ -961,6 +1043,24 @@ export function appState(
     // One read of the register and the workspace list for both boards: a wide tick
     // costs the local board's calls plus nothing, and the two boards cannot reconcile
     // a tab label from two different answers about the same agent.
+    // A meaningful change in what this read already looked at, said out loud. Never a
+    // second scan and never a timer: the board recomputes this to draw it, and a
+    // transition in it is the whole trigger. Best effort — a Herd nobody can talk to
+    // still has a board. Detached: a model call takes seconds, and a board tick that
+    // waited for it would freeze the Home every time something happened.
+    if (runs !== undefined && !speaking) {
+      speaking = true;
+      yield* Effect.forkDetach(
+        sayWhatHappened(env, runs).pipe(
+          Effect.ignore,
+          Effect.ensuring(
+            Effect.sync(() => {
+              speaking = false;
+            }),
+          ),
+        ),
+      );
+    }
     const live = reuse ? undefined : yield* liveOf(session);
     const board = reuse ? reuse.state.board : yield* boardOf(session, runs, live);
     // Read only while the Runs view is showing it: a local board, and every other View,
@@ -1048,6 +1148,7 @@ export function appState(
           : null,
       marks: found?.marks ?? reuse?.state.marks ?? {},
       steerDraft: focus.steerDraft,
+      steerAimed: focus.steerAimed,
       previewing: focus.previewing,
       live: found?.live ?? null,
       // Always re-read: this is the one thing a moved Selection actually changes.
@@ -1189,13 +1290,17 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     }
 
     /**
-     * A steer from the board. The target is whatever the row named, and the board is a
-     * human's own front door — so its actor is `board`, and the proposal it gets back is
-     * the one it will later confirm by id and hash.
+     * A message to Collie from the board. With no target it is a question about the
+     * flock: read-only, answered about every Run, and never quietly aimed at whichever
+     * row the board had selected. With one it is a proposal about that Run, which the
+     * board will later confirm by id and hash — the board is a human's own front door,
+     * so its actor is `board`.
      */
     case "Steer": {
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
+      if (command.runId !== null) {
+        const run = yield* runOf(command.runId);
+        if (!run) return `${command.runId} has gone`;
+      }
       const said = yield* steer(env, yield* evaluationDeps(env), {
         text: command.text,
         target: command.runId,

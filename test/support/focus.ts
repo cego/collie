@@ -11,6 +11,7 @@ export function focus(over: Partial<Focus> = {}): Focus {
     filter: { kind: "workspace", id: "w1" },
     origin: "w1",
     steerDraft: null,
+    steerAimed: false,
     previewing: null,
     shown: ["runs"],
     selected: null,

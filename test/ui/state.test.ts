@@ -34,6 +34,7 @@ import { DateTime } from "effect";
 import { ago, agoShort, took } from "../../src/time";
 import type { PendingChoice } from "../../src/driver";
 import type { WideGroup, WideView, WorkspaceView } from "../../src/workspace";
+import { NO_OUTCOME } from "../../src/workspace";
 import { focus } from "../support/focus";
 
 /** A fixed clock: relative times are the point, so they must not depend on the wall. */
@@ -69,6 +70,7 @@ function run(id: string, over: Partial<WorkspaceView["active"][number]> = {}) {
     fixable: false,
     choice: null,
     needsYou: false,
+    ...NO_OUTCOME,
     ...over,
   };
 }
@@ -519,6 +521,7 @@ test("a History row is not somewhere to jump: its run is a record, not a pane", 
     marks: {},
     live: null,
     steerDraft: null,
+    steerAimed: false,
     previewing: null,
   });
 
@@ -1076,6 +1079,7 @@ function state(): AppState {
     marks: {},
     live: null,
     steerDraft: null,
+    steerAimed: false,
     previewing: null,
   };
 }
@@ -1499,30 +1503,93 @@ test("a workspace row inherits the worst mark of the runs under it", () => {
   expect(rows.find((r) => r.id === "group:w1")!.marks).toBe("↯");
 });
 
-test(": opens the Steer box, and the box then owns every key", () => {
+test(": focuses the composer, and it then owns every key", () => {
   const row = { ...ROW, kind: "active" as const, runId: "r1" };
-  expect(keyIntent(keys({ row }), press(":"))).toEqual({ _tag: "Steering", draft: "" });
+  expect(keyIntent(keys({ row }), press(":"))).toEqual({
+    _tag: "Steering",
+    draft: "",
+    aimed: false,
+  });
 
-  const typing = keys({ row, on: { _tag: "Steering", draft: "slow" } });
-  expect(keyIntent(typing, press("k"))).toEqual({ _tag: "Steering", draft: "slowk" });
+  const typing = keys({ row, on: { _tag: "Steering", draft: "slow", aimed: false } });
+  expect(keyIntent(typing, press("k"))).toEqual({
+    _tag: "Steering",
+    draft: "slowk",
+    aimed: false,
+  });
   // `k` stops a run on the board, and `n` jumps to the next question; inside the box
   // both are characters, which is what a field owning the keyboard means.
-  expect(keyIntent(typing, press("n"))).toEqual({ _tag: "Steering", draft: "slown" });
+  expect(keyIntent(typing, press("n"))).toEqual({
+    _tag: "Steering",
+    draft: "slown",
+    aimed: false,
+  });
   expect(keyIntent(typing, press("\x7f", { name: "backspace" }))).toEqual({
     _tag: "Steering",
     draft: "slo",
-  });
-  expect(keyIntent(typing, press("\r", { name: "return" }))).toEqual({
-    _tag: "Submitted",
-    command: { _tag: "Steer", text: "slow", runId: "r1" },
+    aimed: false,
   });
   expect(keyIntent(typing, press("\x1b", { name: "escape" }))).toEqual({
     _tag: "Steering",
     draft: null,
+    aimed: false,
   });
-  // Nothing to steer: the box says what to select rather than sending to a guess.
-  const nowhere = keys({ row: null, on: { _tag: "Steering", draft: "slow" } });
-  expect(keyIntent(nowhere, press("\r", { name: "return" }))).toBeNull();
+});
+
+test("Enter with nothing aimed asks about the flock, whatever row is selected", () => {
+  // The selected Run is an old one the human happens to be looking at. The question is
+  // about the flock, and aiming it at that Run would be acting on a coincidence.
+  const looking = keys({
+    row: { ...ROW, kind: "active" as const, runId: "old-run" },
+    on: { _tag: "Steering", draft: "how is the flock", aimed: false },
+  });
+  expect(keyIntent(looking, press("\r", { name: "return" }))).toEqual({
+    _tag: "Submitted",
+    command: { _tag: "Steer", text: "how is the flock", runId: null },
+  });
+
+  // And with no row at all it is the same question, not a dropped keystroke. This used
+  // to return null: the message was silently never sent.
+  const nothing = keys({ row: null, on: { _tag: "Steering", draft: "how is it", aimed: false } });
+  expect(keyIntent(nothing, press("\r", { name: "return" }))).toEqual({
+    _tag: "Submitted",
+    command: { _tag: "Steer", text: "how is it", runId: null },
+  });
+
+  // An empty message is not a question.
+  const blank = keys({ row: null, on: { _tag: "Steering", draft: "  ", aimed: false } });
+  expect(keyIntent(blank, press("\r", { name: "return" }))).toBeNull();
+});
+
+test("aiming is explicit, and only at a row there is", () => {
+  const row = { ...ROW, kind: "active" as const, runId: "r1" };
+  const typing = keys({ row, on: { _tag: "Steering", draft: "slow down", aimed: false } });
+
+  // Tab aims it, and Enter then proposes about that Run by name.
+  expect(keyIntent(typing, press("\t", { name: "tab" }))).toEqual({
+    _tag: "Steering",
+    draft: "slow down",
+    aimed: true,
+  });
+  const aimed = keys({ row, on: { _tag: "Steering", draft: "slow down", aimed: true } });
+  expect(keyIntent(aimed, press("\r", { name: "return" }))).toEqual({
+    _tag: "Submitted",
+    command: { _tag: "Steer", text: "slow down", runId: "r1" },
+  });
+  // And Tab again stops aiming it.
+  expect(keyIntent(aimed, press("\t", { name: "tab" }))).toEqual({
+    _tag: "Steering",
+    draft: "slow down",
+    aimed: false,
+  });
+
+  // Nothing to aim at: it stays a question about the flock rather than aiming at null.
+  const nowhere = keys({ row: null, on: { _tag: "Steering", draft: "slow down", aimed: false } });
+  expect(keyIntent(nowhere, press("\t", { name: "tab" }))).toEqual({
+    _tag: "Steering",
+    draft: "slow down",
+    aimed: false,
+  });
 });
 
 test("a proposal on screen takes Enter and Esc, and nothing else", () => {

@@ -3,6 +3,10 @@ import { nowIso } from "./time";
 import { currentPid, withLock } from "./lock";
 import { unsafePathComponent } from "./naming";
 import { FindingSchema, type Finding } from "./output";
+import { writeSnapshot } from "./snapshot";
+import { VerifySpecSchema } from "./verify-spec";
+import type { ResolvedWorkflow } from "./definitions";
+import type { VerifySpec } from "./verify-spec";
 import { slugify } from "./template";
 
 /** A collection a Run may predate: absent reads as empty, so old is not corrupt. */
@@ -96,6 +100,25 @@ const WorktreeRecordSchema = Schema.Struct({
 }).mapFields(Struct.map(Schema.mutableKey));
 export type WorktreeRecord = Schema.Schema.Type<typeof WorktreeRecordSchema>;
 
+/** One ticket's build within a step that slices: what it was, and how it went. */
+const SliceRecordSchema = Schema.Struct({
+  ticket: Schema.String,
+  title: Schema.String,
+  status: StepStatusSchema,
+  output: Schema.NullOr(Schema.String),
+  started_at: Schema.NullOr(Schema.String),
+  finished_at: Schema.NullOr(Schema.String),
+  /**
+   * What this slice committed, by subject, and the HEAD it left behind. Recorded once
+   * when the slice ends so the hand-off to the next one is a few lines of fact rather
+   * than a git call per render — and never the transcript.
+   */
+  commits: optionalList(Schema.String),
+  head: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /** What was verified while it ran, as `name: result` — the evidence half of the hand-off. */
+  verifications: optionalList(Schema.String),
+}).mapFields(Struct.map(Schema.mutableKey));
+
 const StepRecordSchema = Schema.Struct({
   id: Schema.String,
   status: StepStatusSchema,
@@ -114,7 +137,14 @@ const StepRecordSchema = Schema.Struct({
     Schema.withDecodingDefaultKey(Effect.succeed(null)),
   ),
   variants: optionalList(VariantRecordSchema),
+  /**
+   * One entry per ticket for a step that builds a plan in slices. A resumed Run skips
+   * the slices that are `done` and picks up at the first that is not, so a build that
+   * stopped at ticket 3 of 5 does not build tickets 1 and 2 again.
+   */
+  slices: optionalList(SliceRecordSchema),
 }).mapFields(Struct.map(Schema.mutableKey));
+export type SliceRecord = Schema.Schema.Type<typeof SliceRecordSchema>;
 export type VariantRecord = Schema.Schema.Type<typeof VariantRecordSchema>;
 export type HandoffRecord = Schema.Schema.Type<typeof HandoffRecordSchema>;
 export type ChoiceRecord = Schema.Schema.Type<typeof ChoiceRecordSchema>;
@@ -256,9 +286,51 @@ const RunSchema = Schema.Struct({
   unpushed: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** How many of the previous review's findings this one found fixed. */
   fixed: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
+  /**
+   * The workflow this Run is running, frozen in its own directory at creation. A Run
+   * recorded before this existed has `null` and resolves from the layers as it always
+   * did — under a step-id guard, because what those layers say may have moved since.
+   */
+  definition: Schema.NullOr(
+    Schema.Struct({
+      hash: Schema.String,
+      layer: Schema.Literals(["baseline", "user", "project"]),
+      path: Schema.String,
+      snapshot: Schema.String,
+    }),
+  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /**
+   * The commands Collie may run itself for this Run, copied from the layers when it
+   * started. Recorded rather than read live so that editing the file changes the next Run
+   * and never a running one — a permission that moved under a Run is not a permission.
+   */
+  approved_verifications: Schema.Array(VerifySpecSchema).pipe(
+    Schema.mutable,
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
+  /**
+   * The kind of result this Run has to prove. Null for a Run recorded before outcomes
+   * existed, and for one nobody classified — which is read as `unspecified` rather than
+   * as `feature`, so a docs or investigation Run is never asked for a feature's evidence.
+   */
+  outcome: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /** What the evidence gate found missing, as it last ran. Empty when nothing is. */
+  evidence_gaps: optionalList(Schema.String),
+  /**
+   * What is in this Run's way, in one sentence, when something identifiable is: a command
+   * failing the same way over and over. It is shown to the human and given to the next
+   * prompt so the approach can change. It stops nothing — a counter is not a verdict.
+   */
+  obstacle: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** Why a converging loop stopped for the human, as `attention` reports it. */
   halt: Schema.NullOr(
-    Schema.Literals(["no_progress", "dispute_unresolved", "fix_unverified"]),
+    Schema.Literals([
+      "no_progress",
+      "dispute_unresolved",
+      "fix_unverified",
+      "definition_changed",
+      "evidence_missing",
+    ]),
   ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** The blocking findings the last review raised, so the next can say nothing moved. */
   blocking_seen: Schema.NullOr(
@@ -459,6 +531,15 @@ export function withRunLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>
   });
 }
 
+/**
+ * The kinds nobody chooses: a `plan` proves it wrote tickets and a `review` proves it wrote
+ * a review a human can read. Recorded at creation, like a chosen one, so the board, `run
+ * show` and the finish read one field for every Run.
+ */
+function fixedOutcome(workflow: string): string | null {
+  return workflow === "plan" || workflow === "review" ? workflow : null;
+}
+
 export interface CreateRunOptions {
   workflow: string;
   cwd: string;
@@ -466,6 +547,15 @@ export interface CreateRunOptions {
   inputSources: Record<string, string>;
   /** What the human answered at launch for the Choice steps this Run will reach. */
   decisions?: Record<string, string>;
+  /**
+   * The resolved workflow this Run will execute. Given it, `create` freezes it in the
+   * run directory and takes the step ids from it, so a Run can never record the steps of
+   * one definition beside a snapshot of another. Omitted only by callers that have no
+   * workflow to freeze — a fixture standing a Run up to be read, never one to be driven.
+   */
+  definition?: ResolvedWorkflow;
+  /** What Collie may run itself for this Run; seeded from the layers, then fixed. */
+  approvedVerifications?: ReadonlyArray<VerifySpec>;
   stepIds: string[];
   maxIterations: number;
   /**
@@ -564,6 +654,7 @@ export class RunStore {
           started_at: null,
           finished_at: null,
           variants: [],
+          slices: [],
         })),
         parent: opts.parent ?? null,
         children: [],
@@ -579,6 +670,17 @@ export class RunStore {
         synthesis: null,
         unpushed: null,
         fixed: 0,
+        definition: null,
+        // The Run's own Input, read once here: every front door and every chain settles
+        // Inputs before creating the Run, and a second place to read this from is a
+        // second place for it to disagree with what the Run was started with.
+        outcome: fixedOutcome(opts.workflow) ?? (opts.inputs.outcome?.trim() || null),
+        evidence_gaps: [],
+        obstacle: null,
+        approved_verifications: (opts.approvedVerifications ?? []).map((spec) => ({
+          ...spec,
+          argv: [...spec.argv],
+        })),
         halt: null,
         blocking_seen: null,
         unreviewed: null,
@@ -589,6 +691,9 @@ export class RunStore {
         summary: null,
       };
       const run = new Run(path.join(root, id), record);
+      // Before the first save, so a Run is never on disk without the definition it
+      // records — a reader that found one would have to guess which way round they are.
+      if (opts.definition) record.definition = yield* writeSnapshot(run.dir, opts.definition);
       yield* run.save();
       return run;
     }).pipe(Effect.withSpan("RunStore.create"));

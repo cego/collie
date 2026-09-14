@@ -78,6 +78,9 @@ test("plan is one agent through grill, spec and tickets, then a menu", () =>
       const choices = wf.steps[3]!.choices!;
       expect(choices.map((c) => c.title)).toEqual([
         "Implement now",
+        // Architecture left the implement loop, so this is where a plan that needs
+        // architectural decisions gets them: the human chooses it, nothing infers it.
+        "Architecture first",
         "Second opinion",
         "Offload to Linear",
         "Refine",
@@ -89,19 +92,24 @@ test("plan is one agent through grill, spec and tickets, then a menu", () =>
         plan: "{{run.dir}}/plan",
         // The short name `grill` settled on, which is what the child's branch is called.
         task: "{{outputs.grill.slug}}",
+        // And what kind of result it is, settled in the interview rather than asked for
+        // again when the build starts.
+        outcome: "{{outputs.grill.outcome}}",
         workspace: "{{inputs.workspace}}",
       });
-      expect(choices[1]).toMatchObject({
+      expect(choices[1]!.run).toBe("architecture");
+      expect(choices[1]!.inputs).toEqual({ workspace: "{{inputs.workspace}}" });
+      expect(choices[2]).toMatchObject({
         max: 2,
         round: { persona: "reviewer", model: "opus", effort: "xhigh", fresh: true },
         followUp: { agent: "grill" },
       });
-      expect(choices[2]!.config).toEqual({
+      expect(choices[3]!.config).toEqual({
         key: "linear.team",
         question: "Which Linear team do new issues go to",
       });
-      expect(choices[3]!.round!.agent).toBe("grill");
-      expect(choices[3]!.max).toBeUndefined();
+      expect(choices[4]!.round!.agent).toBe("grill");
+      expect(choices[4]!.max).toBeUndefined();
     }),
   ));
 
@@ -251,7 +259,12 @@ test(
         const { run, status } = yield* runWorkflowEffect(rig, "plan", { goal: "g" }, { prompts });
 
         expect(status).toBe("done");
-        expect(prompts.offered.at(-1)).toEqual(["Implement now", "Offload to Linear", "Refine"]);
+        expect(prompts.offered.at(-1)).toEqual([
+          "Implement now",
+          "Architecture first",
+          "Offload to Linear",
+          "Refine",
+        ]);
 
         const path = yield* Path.Path;
         const calls = yield* rig.calls();
@@ -311,7 +324,11 @@ test(
         const { run, status } = yield* runWorkflowEffect(rig, "plan", { goal: "g" }, { prompts });
 
         expect(status).toBe("done");
-        expect(prompts.asked).toEqual(["Which Linear team do new issues go to"]);
+        // The key is in the question: what is on screen has to say it is a setting and
+        // not a menu, or a Choice title gets typed into it.
+        expect(prompts.asked).toEqual([
+          "Which Linear team do new issues go to? (saved as linear.team)",
+        ]);
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         expect(yield* fs.readFileString(path.join(rig.configDir, "config.json"))).toContain(
@@ -368,11 +385,139 @@ steps:
       expect(wf.steps[3]!.choices!.map((c) => c.round?.agent)).toEqual([
         undefined,
         undefined,
+        undefined,
         "plan.grill",
         "plan.grill",
       ]);
-      expect(wf.steps[3]!.choices![1]!.followUp!.agent).toBe("plan.grill");
+      expect(wf.steps[3]!.choices![2]!.followUp!.agent).toBe("plan.grill");
       expect(wf.steps[0]!.prompt).toContain("Linear issue id");
       expect(yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS)).toEqual([]);
+    }),
+  ));
+
+test(
+  "tickets nobody could hand out block the step, and the planner is asked once to fix them",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* rig.queueOutputs([
+          CLEAN,
+          { __write: { "plan/SPEC.md": "# Add a version flag\n" }, output: CLEAN },
+          // A "Blocked by" line naming a ticket that is not in the plan: the order it
+          // describes cannot be built, so nobody can hand these out.
+          {
+            __write: {
+              "plan/issues/01-api.md": "**Blocked by:** None\n**Repo:** .\n",
+              "plan/issues/02-web.md": "**Blocked by:** 09\n**Repo:** .\n",
+            },
+            output: { ...CLEAN, issues_dir: "plan/issues", tickets: 2 },
+          },
+          // The repair: the planner fixes the edge and writes the Output again.
+          {
+            __write: {
+              "plan/issues/02-web.md": "**Blocked by:** 01\n**Repo:** .\n",
+            },
+            output: { ...CLEAN, issues_dir: "plan/issues", tickets: 2 },
+          },
+        ]);
+
+        const { run, status } = yield* runWorkflowEffect(
+          rig,
+          "plan",
+          { goal: "Add a version flag" },
+          { prompts: scriptedPrompts([null]) },
+        );
+
+        // The repair fixed it, so the run reached its menu rather than stopping at
+        // `tickets`; the scripted `null` dismisses that menu.
+        expect(run.step("tickets").status).toBe("done");
+        expect(status).toBe("blocked");
+
+        const repaired = run.step("tickets").variants[0]!.repairs;
+        expect(repaired).toHaveLength(1);
+        expect(repaired[0]).toContain("not a ticket of this plan");
+        expect(repaired[0]).toContain("02-web.md (blocked by 9)");
+
+        // The refusal reached the planner in its own words, not as "not usable".
+        const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
+        expect(log).toContain("names the numbers of the tickets it waits for");
+        expect(
+          yield* fs.readFileString(path.join(run.dir, "plan", "issues", "02-web.md")),
+        ).toContain("**Blocked by:** 01");
+      }),
+    ),
+  20_000,
+);
+
+test(
+  "a plan whose tickets stay unrunnable stops at the tickets step rather than finishing done",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const unrunnable = {
+          __write: {
+            "plan/issues/01-api.md": "**Blocked by:** None\n**Repo:** .\n",
+            "plan/issues/02-web.md": "**Blocked by:** 09\n**Repo:** .\n",
+          },
+          output: { ...CLEAN, issues_dir: "plan/issues", tickets: 2 },
+        };
+        yield* rig.queueOutputs([
+          CLEAN,
+          { __write: { "plan/SPEC.md": "# Add a version flag\n" }, output: CLEAN },
+          unrunnable,
+          unrunnable,
+        ]);
+
+        const { run, status } = yield* runWorkflowEffect(
+          rig,
+          "plan",
+          { goal: "Add a version flag" },
+          { prompts: scriptedPrompts([]) },
+        );
+
+        // One repair, then it blocks: a plan Run used to end `done` here, and the human
+        // found out a workflow later from a hand-off that would not start.
+        expect(status).toBe("blocked");
+        expect(run.step("tickets").status).toBe("blocked");
+        expect(run.step("next").status).toBe("pending");
+        expect(run.step("tickets").variants[0]!.error).toContain("not a ticket of this plan");
+      }),
+    ),
+  20_000,
+);
+
+test("a chained implement is asked nothing: its outcome and its task come with it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        // The planner settles what kind of result this is during the interview.
+        { verdict: "clean", findings: [], slug: "add-a-picker", outcome: "bug" },
+        { __write: { "plan/SPEC.md": "# Add a picker\n" }, output: CLEAN },
+        { ...CLEAN, issues_dir: "plan/issues", tickets: 1 },
+      ]);
+      const prompts = scriptedPrompts(["Implement now"]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "plan",
+        { goal: "the picker is wrong" },
+        { prompts },
+      );
+
+      expect(status).toBe("done");
+      // The plan's own outcome is the fixed kind, whatever it settled for its child, and
+      // it proved it: the tickets step named the directory it wrote.
+      expect(run.record.outcome).toBe("plan");
+      expect(run.record.evidence_gaps).toEqual([]);
+      const child = yield* new RunStore(rig.stateDir).load(run.record.children[0]!);
+      expect(child.record.workflow).toBe("implement");
+      // Forwarded, not asked for again — and it is what the child is held to.
+      expect(child.record.inputs.outcome).toBe("bug");
+      expect(child.record.outcome).toBe("bug");
+      expect(child.record.inputs.task).toBe("add-a-picker");
+      // Nothing was typed into anything during the chain.
+      expect(prompts.asked).toEqual([]);
     }),
   ));

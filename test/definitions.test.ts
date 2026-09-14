@@ -348,7 +348,7 @@ a prompt
         ["mr-target"],
       ]);
       expect(yield* validateWorkflow(wf, defs, defaults)).toEqual([
-        'workflow "w" step "a": unknown requires "moonlight" (known: gitlab, mr-target)',
+        'workflow "w" step "a": unknown requires "moonlight" (known: gitlab, mr-target, someone-elses-mr)',
         'workflow "w" step "a": fan_in "later" is not an earlier step',
         'workflow "w" step "a": fan_in needs an output, so the synthesis can be read',
         'workflow "w" step "b" choice "Both": needs exactly one of run, prompt, post, handoff or stop',
@@ -525,6 +525,7 @@ test("user defaults come from config.json in the config layer", () =>
         permissions: "bypass",
         scope: "local",
         questions: "focus",
+        proactive: true,
       });
     }),
   ));
@@ -1416,5 +1417,72 @@ test("variant keys stay unique even when encoding makes different models collide
           { harness: "pi", model: "p/foo-bar-2" },
         ]),
       ).toEqual(["pi-p-foo-bar", "pi-p-foo-bar-2", "pi-p-foo-bar-2-2"]);
+    }),
+  ));
+
+test("each: tickets needs a plan to take them from, an output, and nothing to race with", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A persona every step of the fixture can name; the subject here is `each`.
+      yield* writeDef(join(rig.projectDir, ".herdr"), "personas", "implementer", IMPLEMENTER);
+      const problems = (frontmatter: string) =>
+        Effect.gen(function* () {
+          yield* writeDef(
+            join(rig.projectDir, ".herdr"),
+            "workflows",
+            "sliced",
+            `---\nname: sliced\ntitle: sliced\n${frontmatter}---\n\n## build\n\nBuild it.\n\n## other\n\nOther.\n`,
+          );
+          const defs = yield* loadDefinitions(ls());
+          const wf = resolveWorkflow("sliced", defs, FALLBACK_DEFAULTS);
+          return yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS);
+        });
+
+      // The shape that works: a work source to take the tickets from, and an Output.
+      expect(
+        yield* problems(
+          "inputs:\n  plan: work-source\nsteps:\n  - id: build\n    persona: implementer\n    each: tickets\n    output: build.json\n",
+        ),
+      ).toEqual([]);
+
+      // Nothing to slice.
+      expect(
+        (yield* problems(
+          "steps:\n  - id: build\n    persona: implementer\n    each: tickets\n    output: build.json\n",
+        )).join("\n"),
+      ).toContain("needs a work-source input");
+
+      // Every slice records one, or a resume cannot tell which ones are done.
+      expect(
+        (yield* problems(
+          "inputs:\n  plan: work-source\nsteps:\n  - id: build\n    persona: implementer\n    each: tickets\n",
+        )).join("\n"),
+      ).toContain("each needs an output");
+
+      // Slices are one at a time on one agent; these are the two shapes that are not.
+      expect(
+        (yield* problems(
+          "inputs:\n  plan: work-source\nsteps:\n  - id: build\n    persona: implementer\n    each: tickets\n    output: build.json\n    parallel:\n      - { harness: claude, model: opus }\n      - { harness: claude, model: sonnet }\n",
+        )).join("\n"),
+      ).toContain("each and parallel cannot both be set");
+      // One entry is still a parallel step: the docs say the two are exclusive, and a
+      // single entry is the shape a second one is added to tomorrow.
+      expect(
+        (yield* problems(
+          "inputs:\n  plan: work-source\nsteps:\n  - id: build\n    persona: implementer\n    each: tickets\n    output: build.json\n    parallel:\n      - { harness: claude, model: opus }\n",
+        )).join("\n"),
+      ).toContain("each and parallel cannot both be set");
+      expect(
+        (yield* problems(
+          "inputs:\n  plan: work-source\nsteps:\n  - id: other\n    persona: implementer\n    output: a.json\n  - id: build\n    persona: implementer\n    each: tickets\n    fan_in: other\n    output: build.json\n",
+        )).join("\n"),
+      ).toContain("each and fan_in cannot both be set");
+
+      // A value nobody implements is named rather than ignored.
+      expect(
+        (yield* problems(
+          "inputs:\n  plan: work-source\nsteps:\n  - id: build\n    persona: implementer\n    each: commits\n    output: build.json\n",
+        )).join("\n"),
+      ).toContain('each must be "tickets"');
     }),
   ));

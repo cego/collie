@@ -8,8 +8,11 @@ import { StoppedDrawing } from "../../src/ui/bridge";
 import { ALL_KEYS, type AppState, type Command } from "../../src/ui/state";
 import type { MrDetails } from "../../src/mr";
 import type { DefinitionRow, RunDetail, SettingsView } from "../../src/views";
+import { NO_RUN_OUTCOME } from "../../src/views";
 import type { PendingChoice } from "../../src/driver";
 import type { WideView, WorkspaceView } from "../../src/workspace";
+import { NO_OUTCOME } from "../../src/workspace";
+import type { Live } from "../../src/live";
 
 /** A fixed clock, so a row's relative time does not depend on the wall. */
 const NOW = Date.parse("2026-09-02T12:00:00.000Z");
@@ -44,6 +47,7 @@ function run(id: string, title: string, over: Partial<WorkspaceView["active"][nu
     fixable: false,
     choice: null,
     needsYou: false,
+    ...NO_OUTCOME,
     ...over,
   };
 }
@@ -86,6 +90,7 @@ function appState(over: Partial<AppState> = {}): AppState {
     marks: {},
     live: null,
     steerDraft: null,
+    steerAimed: false,
     previewing: null,
     ...over,
   };
@@ -195,7 +200,7 @@ test("an installation behind its remote says so in the nav, and only when it is"
 test("the board's agents, running runs and finished runs all reach the screen", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
       const frame = app.frame();
 
       expect(frame).toContain("Implementer");
@@ -223,7 +228,7 @@ test("the board's agents, running runs and finished runs all reach the screen", 
 test("clicking a row selects it and points its actions at that run", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
       // Nothing was clicked yet, so the first row is the Selection.
       expect(app.frame()).toContain("❯");
 
@@ -245,7 +250,7 @@ test("selecting or hovering a row leaves every other row where it was", () =>
       // The list has to stay still. A row that grew when it was selected pushed every
       // row under it down a line, so the row a human was aiming at moved out from
       // under the cursor as soon as the one above it was touched.
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
       const titles = [
         "Implementer",
         "Implement · add-a-picker",
@@ -272,7 +277,7 @@ test("a field that has the keys takes the footer's buttons with them", () =>
       // Every key belongs to the field being typed into, so a button that still acted on
       // the Selection disagreed with the key printed on it: `k` typed a `k` into the
       // filter while `[k stop]` stopped the run.
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
       expect(app.frame()).toContain("[k stop]");
 
       app.mockInput.pressKey("/");
@@ -293,7 +298,7 @@ test("a field that has the keys takes the footer's buttons with them", () =>
 test("clicking a row's stop button stops that run and nothing else", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
 
       yield* app.click(4, app.lineOf("Review · worktree"));
       // The buttons sit in the footer, so that is where the click lands.
@@ -306,7 +311,7 @@ test("clicking a row's stop button stops that run and nothing else", () =>
 test("a run that finishes under the cursor leaves its neighbour selected", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
       yield* app.click(4, app.lineOf("Review · worktree"));
 
       // r2 is gone; the row that took its place is the one now selected.
@@ -348,7 +353,7 @@ test("arrow keys keep the Selection on screen in a list longer than the region",
 test("every key the board offered still does what it did, against the Selection", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
 
       for (const key of ["1", "p", "u", "f", "s"]) app.mockInput.pressKey(key);
       yield* app.flush;
@@ -618,13 +623,13 @@ test("below the column threshold the detail is a full-width overlay", () =>
   runEffect(
     Effect.gen(function* () {
       // Side by side: one screen row carries both region titles.
-      const wide = yield* mount(appState({ board: BOARD }), 100, 26);
+      const wide = yield* mount(appState({ board: BOARD, live: QUIET }), 100, 26);
       const wideTop = wide.frame().split("\n")[1]!;
       expect(wideTop).toContain("Runs");
       expect(wideTop).toContain("Detail");
 
       // Stacked: the Detail box opens on a row of its own, under the whole list.
-      const narrow = yield* mount(appState({ board: BOARD }), 60, 26);
+      const narrow = yield* mount(appState({ board: BOARD, live: QUIET }), 60, 26);
       const narrowLines = narrow.frame().split("\n");
       expect(narrowLines[1]!).toContain("Runs");
       expect(narrowLines[1]!).not.toContain("Detail");
@@ -635,7 +640,7 @@ test("below the column threshold the detail is a full-width overlay", () =>
 test("filtering narrows the list, and survives the keyboard leaving it", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
 
       app.mockInput.pressKey("/");
       yield* Effect.promise(() => app.mockInput.typeText("worktree"));
@@ -664,6 +669,7 @@ test("filtering narrows the list, and survives the keyboard leaving it", () =>
 
 const MR: MrDetails = {
   _tag: "Details",
+  assignees: [],
   iid: "42",
   project: "gitlab.example.com/g/p",
   title: "Make the tab an application",
@@ -682,6 +688,7 @@ const MR: MrDetails = {
 
 function runDetail(over: Partial<RunDetail> = {}): RunDetail {
   return {
+    outcome: NO_RUN_OUTCOME,
     id: "r2",
     dir: "/state/runs/r2",
     title: "Review · !42",
@@ -765,6 +772,7 @@ test("the nav switches views, and each view lists its own rows", () =>
           fixable: true,
           choice: null,
           needsYou: false,
+          ...NO_OUTCOME,
         },
       ];
       const app = yield* mount(appState({ board: BOARD, history }));
@@ -1168,7 +1176,7 @@ test("a filter that matches an agent keeps the run it works for above it", () =>
     Effect.gen(function* () {
       // Filtering the nested rows one by one dropped the run and left its agent under
       // nothing, and an agent row no longer names its own run.
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
 
       app.mockInput.pressKey("/");
       yield* Effect.promise(() => app.mockInput.typeText("Implementer"));
@@ -1237,7 +1245,7 @@ function wideView(over: Partial<WideView> = {}): WideView {
 test("g widens the board to the whole session, and the nav says which scope it is", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
 
       expect(app.frame()).toContain("local");
       // The key names where it goes, not where it is.
@@ -1369,7 +1377,7 @@ test("Esc clears the filter from the board, not only while typing in it", () =>
       // being in it, and Esc used to reach it only from inside: from the board you had
       // to press `/` again first. Harmless here; on a wide board a forgotten filter
       // hides whole workspaces.
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
 
       app.mockInput.pressKey("/");
       yield* Effect.promise(() => app.mockInput.typeText("worktree"));
@@ -1393,7 +1401,7 @@ test("Esc clears the filter from the board, not only while typing in it", () =>
 test("filtering says how much is left, and a re-read can be asked for", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
 
       app.mockInput.pressKey("/");
       yield* Effect.promise(() => app.mockInput.typeText("Review"));
@@ -1476,7 +1484,7 @@ test("a paste reaches whichever field owns the keyboard, and never submits it", 
     Effect.gen(function* () {
       // Every field the tab types into, in the order the keyboard handler gives them
       // the keys: a paste that only worked in one of them would be the same bug again.
-      const filtering = yield* mount(appState({ board: BOARD }));
+      const filtering = yield* mount(appState({ board: BOARD, live: QUIET }));
       filtering.mockInput.pressKey("/");
       yield* Effect.promise(() => filtering.mockInput.pasteBracketedText("worktree\n"));
       yield* filtering.flush;
@@ -1634,7 +1642,7 @@ test("a run with a plan shows it in the panel, and one without shows no Plan sec
 test("? opens a list of every key, and any key closes it", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }), 100, 34);
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }), 100, 34);
 
       app.mockInput.pressKey("?");
       yield* app.flush;
@@ -1660,7 +1668,7 @@ test("? opens a list of every key, and any key closes it", () =>
 test("the footer is one line of keys plus the status line", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
       const lines = app.frame().split("\n");
 
       // The keys the Selection can be asked for, then the three globals and no more.
@@ -1677,7 +1685,9 @@ test("the detail panel scrolls by key, resets on a new Selection, and shows a sc
   runEffect(
     Effect.gen(function* () {
       const detail = longDetail();
-      const app = yield* mount(appState({ board: BOARD, detail }), 120, 24);
+      // Tall enough that the panel has room for a scrollbar at all: the composer sits
+      // under the board, and a pane one row from the minimum has nowhere to draw one.
+      const app = yield* mount(appState({ board: BOARD, detail }), 120, 30);
       yield* app.click(4, app.lineOf("Review · worktree"));
       expect(app.said()).toContain("line 0");
 
@@ -1702,7 +1712,7 @@ test("the detail panel scrolls by key, resets on a new Selection, and shows a sc
       // Asserted against a board with nothing to scroll rather than on a glyph list:
       // `│` is drawn by every bordered region, so matching it proved nothing at all.
       const bar = (frame: string) => (frame.match(/[▲▼█▄▀▌▐]/g) ?? []).length;
-      const flat = yield* mount(appState({ board: BOARD, detail: runDetail() }), 120, 24);
+      const flat = yield* mount(appState({ board: BOARD, detail: runDetail() }), 120, 30);
       yield* flat.click(4, flat.lineOf("Review · worktree"));
       expect(bar(app.frame())).toBeGreaterThan(bar(flat.frame()));
 
@@ -1763,7 +1773,7 @@ test("the help overlay lists every key in a pane the size of a real one", () =>
     Effect.gen(function* () {
       // 24 rows is a standard terminal and the floor for a split; the list is longer
       // than that, so a single column of one key per row could not show them all.
-      const app = yield* mount(appState({ board: BOARD }), 100, 24);
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }), 100, 24);
       app.mockInput.pressKey("?");
       yield* app.flush;
 
@@ -1782,7 +1792,7 @@ test("the help overlay lists every key in a pane the size of a real one", () =>
 
       // A pane split beside an editor is about sixty columns, and every key has to be
       // on screen there too — the meanings clip, the keys do not.
-      const narrow = yield* mount(appState({ board: BOARD }), 60, 24);
+      const narrow = yield* mount(appState({ board: BOARD, live: QUIET }), 60, 24);
       narrow.mockInput.pressKey("?");
       yield* narrow.flush;
       const tight = narrow.frame();
@@ -2044,27 +2054,94 @@ test("the detail panel says why a Run stopped and which actions are safe", () =>
     }),
   ));
 
-test(": opens the Steer box, and what it sends names the selected run", () =>
+/** Collie reading the Herd and having nothing to say yet, which is the ordinary case. */
+const QUIET: Live = {
+  run: null,
+  cards: [],
+  drift: [],
+  deliveries: [],
+  conversation: [],
+  runConversation: [],
+  proposals: [],
+  pending: [],
+  ownership: null,
+};
+
+test("the composer is on the Home before anyone finds a key, and says what it is for", () =>
   runEffect(
     Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD }));
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
 
+      // Visible with nothing typed and nothing selected: a composer a human has to know
+      // about is one nobody uses, and this board is for talking to Collie.
+      expect(app.frame()).toContain("Ask Collie about the flock");
+      expect(app.frame()).toContain(": to ask");
+    }),
+  ));
+
+test("board keys keep working while the composer is on screen but not focused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
+
+      // `j` moves the Selection rather than typing a `j`: visible is not focused, and a
+      // field that captured the board's keys would make the board unusable.
+      app.mockInput.pressKey("j");
+      yield* app.flush;
+      // `j` is the board's own key, so nothing was typed into the composer by it.
+      expect(app.acted()).not.toContainEqual({ _tag: "DraftSteer", text: "j", aimed: false });
+
+      // `:` puts the keyboard in it, and then `j` is a character.
       app.mockInput.pressKey(":");
       yield* app.flush;
-      expect(app.acted()).toEqual([{ _tag: "DraftSteer", text: "" }]);
+      expect(app.acted()).toContainEqual({ _tag: "DraftSteer", text: "", aimed: false });
 
-      // The draft is state, so the box draws whatever the bridge has: the board asks
-      // for each character and redraws with what came back.
-      yield* app.setState(appState({ board: BOARD, steerDraft: "slow down" }));
-      expect(app.frame()).toContain("slow down");
-      expect(app.frame()).toContain("r1");
+      yield* app.setState(appState({ board: BOARD, live: QUIET, steerDraft: "" }));
+      app.mockInput.pressKey("j");
+      yield* app.flush;
+      expect(app.acted().at(-1)).toEqual({ _tag: "DraftSteer", text: "j", aimed: false });
+    }),
+  ));
+
+test("Enter asks about the flock, and never aims at whichever row is selected", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // A row *is* selected — the first one — which is the case that used to swallow the
+      // message or aim it somewhere nobody named.
+      const app = yield* mount(
+        appState({ board: BOARD, live: QUIET, steerDraft: "how is the flock" }),
+      );
+      expect(app.frame()).toContain("how is the flock");
+      expect(app.frame()).toContain("flock >");
 
       app.mockInput.pressEnter();
       yield* app.flush;
-      // Sent, and the box closed behind it: a field left open is one the board's own
-      // keys type into.
-      expect(app.acted()).toContainEqual({ _tag: "Steer", text: "slow down", runId: "r1" });
+
+      // Sent, with no target: a question about every Run, whatever the board shows.
+      expect(app.acted()).toContainEqual({
+        _tag: "Steer",
+        text: "how is the flock",
+        runId: null,
+      });
+      // And the field is cleared behind it, so the board's keys work again.
       expect(app.acted().at(-1)).toEqual({ _tag: "DraftSteer", text: null });
+    }),
+  ));
+
+test("a message aimed at a Run says so before it is sent, and names that Run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const app = yield* mount(
+        appState({ board: BOARD, live: QUIET, steerDraft: "slow down", steerAimed: true }),
+      );
+
+      // Aimed: the box says which Run, and that it still has to be confirmed.
+      expect(app.frame()).toContain("r1");
+      expect(app.frame()).toContain("you confirm it");
+
+      app.mockInput.pressEnter();
+      yield* app.flush;
+      expect(app.acted()).toContainEqual({ _tag: "Steer", text: "slow down", runId: "r1" });
     }),
   ));
 
@@ -2091,6 +2168,7 @@ test("a proposal that has appeared is drawn, and Enter confirms exactly what is 
         drift: [],
         deliveries: [],
         conversation: [],
+        runConversation: [],
         proposals: [proposal],
         pending: [],
         ownership: null,

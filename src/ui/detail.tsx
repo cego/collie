@@ -205,13 +205,54 @@ function Markdown(props: { text: string }) {
   );
 }
 
+/** Whether this Run has said anything about its outcome worth a block of its own. */
+function hasOutcome(outcome: RunDetail["outcome"]): boolean {
+  return (
+    outcome.kind !== null ||
+    outcome.gaps.length > 0 ||
+    outcome.obstacle !== null ||
+    outcome.delivered !== null ||
+    outcome.metrics.verifications.pass + outcome.metrics.verifications.fail > 0
+  );
+}
+
+/** What was collected, in one line: counts, not a claim that anything is fine. */
+function evidenceLine(metrics: RunDetail["outcome"]["metrics"]): string {
+  const v = metrics.verifications;
+  if (v.pass + v.fail + v.unstable === 0) return "nothing collected";
+  return `${v.pass} passed, ${v.fail} failed, ${v.unstable} unstable (${v.byCollie} by collie)`;
+}
+
 function RunFacts(props: { detail: RunDetail }) {
   const review = () => props.detail.review;
   const tail = () => props.detail.tail;
   const stopped = () =>
     props.detail.attention.category === "interrupted" ? props.detail.attention : null;
+  const outcome = () => props.detail.outcome;
   return (
     <box style={{ flexDirection: "column" }}>
+      {/* Above everything, because it is what the Run is *for*: what it had to prove,
+          what it has not proved, what is in its way, and what became of the work. A
+          panel that opens on what a Run was doing answers a question nobody asked. */}
+      <Show when={hasOutcome(outcome())}>
+        <text fg={ACCENT}>{"Outcome"}</text>
+        <Show when={outcome().kind !== null}>
+          <text fg={DIM}>{`  proving: ${outcome().kind}`}</text>
+        </Show>
+        <Show when={outcome().delivered !== null}>
+          {/* Beside the status, never over it: a Run that failed still failed. */}
+          <text fg={DIM}>{`  delivered: ${outcome().delivered}`}</text>
+        </Show>
+        <For each={outcome().gaps}>{(gap) => <text fg={BAD}>{`  not proved: ${gap}`}</text>}</For>
+        <Show when={outcome().obstacle !== null}>
+          <text fg={BAD}>{`  in the way: ${outcome().obstacle}`}</text>
+        </Show>
+        <text fg={DIM}>{`  evidence: ${evidenceLine(outcome().metrics)}`}</text>
+        <Show when={outcome().next !== null}>
+          <text fg={DIM}>{`  next: run ${outcome().next} ${props.detail.id}`}</text>
+        </Show>
+      </Show>
+
       {/* Above the review, because a Run that stopped is a question about what to do
           next and the review is what you read once you have decided. The same facts
           `collie run show` prints, so the two cannot tell different stories. */}
