@@ -1,7 +1,7 @@
 ---
 name: implement
-title: implement — build the plan, tidy it, review it, fix until nothing blocks
-description: Builds from a plan dir, a Linear issue or a description, improves the architecture it touched, simplifies, fans out to reviewers, fixes what blocks until a review finds nothing blocking, then opens the merge request.
+title: implement — build the plan, review it, fix until nothing blocks
+description: Builds from a plan dir, a Linear issue or a description, gets one complete review, fixes what blocks until a review finds nothing blocking, then opens the merge request.
 inputs:
   plan: work-source
   # The short kebab-case name of the work, which a generated branch is named after.
@@ -12,6 +12,13 @@ inputs:
   # `new` gives the Run a herdr worktree workspace of its own; anything else or absent
   # keeps it in the workspace it was started from. See docs/using.md.
   workspace: optional
+  # What kind of result this run has to prove: feature, bug, refactor, investigation,
+  # docs or migration. Empty says nothing, and is held only to the approved
+  # verifications — a run nobody classified is not a feature by default.
+  outcome: optional
+  # Extra review axes, where this change has a risk that earns one. Forwarded to review,
+  # as `outcome` is: the embedded review reads both from this run's inputs.
+  risks: optional
 # A ceiling, not a target: at most four review rounds and four fix passes after the
 # build. The run leaves the loop at the first review with nothing blocking.
 max_iterations: 4
@@ -19,24 +26,18 @@ steps:
   - id: build
     persona: implementer
     skill: implement
+    # A plan of two tickets or more is built one ticket at a time, on this same agent,
+    # with a compact hand-off between them rather than one transcript for the whole plan.
+    each: tickets
     # One implementer agent for the whole run, so its model is named once, here.
     # `default` passes no model flag and lets the harness pick its own.
     model: default
     effort: medium
     output: build.json
-  - id: architecture
-    use: architecture
-    prompt: unattended
-    persona: implementer
-    agent: build
-  - id: simplify
-    persona: implementer
-    agent: build
-    output: simplify.json
   - id: review
     use: review
     fresh: true
-    # The reviewers name their own models and effort, so this reaches only synthesize.
+    # The reviewer names its own model and effort, so this reaches only synthesize.
     model: default
     effort: medium
   - id: fix
@@ -45,7 +46,9 @@ steps:
     output: fix.json
     repeat:
       from: review.synthesize
-      back_to: simplify
+      # Back to the review, which is the step that judges the fix. `back_to` defaults to
+      # `from`; it is written out because a reader should not have to know that.
+      back_to: review
       # Only blocking findings drive the loop; the last fix's own dispositions and
       # checks decide the run, and the merge request says it was not re-reviewed.
       converge: true
@@ -61,19 +64,29 @@ Repository (may be empty): {{inputs.repo}}
 Project root: {{cwd}}
 This run's directory: {{run.dir}}
 
+Outcome to prove (empty means unclassified): {{inputs.outcome}}
+
+The verifications this run is held to — Collie runs exactly these itself, and nothing
+else it may be told to run, before it will open the merge request:
+
+{{verify}}
+
 ## build
 
 The work source above is one of five kinds. Do the one that matches
 `{{inputs.plan_kind}}` and ignore the others.
 
-- **plan-dir** — a plan is already written. Read `{{inputs.plan}}/SPEC.md` and every
-  ticket in `{{inputs.plan}}/issues/`, and build those tickets. Where the repository
-  above is not empty, this plan spans several and you own one of them: build only the
-  tickets whose `**Repo:**` line names it, in their order, and leave the rest to their
-  own run. An empty repository means the whole plan is yours.
+- **plan-dir** — a plan is already written. `{{inputs.plan}}/SPEC.md` is the spec and
+  `{{inputs.plan}}/issues/` holds the tickets. Where the repository above is not empty,
+  this plan spans several and you own one of them: only the tickets whose `**Repo:**`
+  line names it are yours, and the rest are another run's. Which ticket you are on is
+  under **This slice** below; Collie hands them to you one at a time, in an order their
+  `Blocked by` lines allow.
 - **review** — a review of work that already exists. `{{inputs.plan}}/review.md` is the
-  spec and `{{inputs.plan}}/steps/synthesize/synthesized.json` has the same findings as
-  JSON; the tickets are those findings, worst severity first. You are fixing an existing
+  spec, and the same findings as JSON are that run's own review Output —
+  `{{inputs.plan}}/steps/review/review.json` where one reviewer wrote it, or
+  `{{inputs.plan}}/steps/synthesize/synthesized.json` where several were reconciled. The
+  tickets are those findings, worst severity first. You are fixing an existing
   change and this checkout is already on its branch, so there is no branch to pick and
   nothing to check out: the fixes land on the branch that was reviewed, and a merge
   request on it is updated rather than replaced. Write the findings you are working from
@@ -84,25 +97,46 @@ The work source above is one of five kinds. Do the one that matches
 - **linear** — a Linear issue id. Fetch it with the Linear MCP (`get_issue`) and treat
   its description as the spec. Before building, write that spec to
   `{{run.dir}}/plan/SPEC.md` and a short task list to `{{run.dir}}/plan/issues/NN-*.md`,
-  one file per slice, so the run records what you decided to build.
+  one file per slice, so the run records what you decided to build. Every ticket you write
+  carries a `**Checks:**` line naming the `collie verify` commands that will prove it —
+  from the approved list above. Clear work states its acceptance checks before it starts;
+  deciding afterwards what would have counted is not a check.
 - **followup** — a finished run's outcome needs more work. `{{inputs.plan}}` names it as
   `followup:<run id>`; that run's `steering/drift.jsonl` open reports and the text in
   `{{run.dir}}/plan/SPEC.md` are the spec. Write one ticket per open report under
   `{{run.dir}}/plan/issues/`. This checkout is already on the branch that run built, and
   its merge request is updated rather than replaced — the parent run is finished and
   immutable, so nothing you do belongs in it.
-- **text** — the work in the human's own words. Same as `linear` without the fetch:
-  write `{{run.dir}}/plan/SPEC.md` and the task list from the text, then build. If the
-  text does not say enough to build from, stop and say what you need — do not guess.
+- **text** — the work in the human's own words. Same as `linear` without the fetch: write
+  `{{run.dir}}/plan/SPEC.md` and the task list from the text, with the same `**Checks:**`
+  line on every ticket, then build. If the text does not say enough to build from, stop and
+  say what you need — do not guess.
 
 This run has a checkout of its own, on the branch it is building: Collie resolved the
 branch and opened the worktree before you started, so never create a branch or switch
 one. It is a fresh checkout, so install the project's dependencies before you run its
 tests for the first time.
 
-You were started with {{skill:implement}}, so build the tickets in their order, one at a
-time: {{skill:tdd}} at the seams the spec names, the project's tests green, and
-one commit per ticket. There is no separate commit step.
+### This slice
+
+Ticket: {{ticket.file}} — {{ticket.title}}
+
+Where a ticket is named above, **build that one ticket and no other**. The tickets before
+it are already built and committed on this branch; do not re-survey the repository and do
+not redo their work. What they left:
+
+{{progress}}
+
+Where no ticket is named, the work source is not a plan of several tickets and the whole
+of it is yours.
+
+You were started with {{skill:implement}}, so build what this step is for, with
+{{skill:tdd}} at the seams the spec names and the project's tests green. Commit as you
+go — one commit per ticket. There is no separate commit step.
+
+Apply your persona's **Code comment hygiene** rules to comments this branch added or
+changed: make the code self-explanatory, delete unnecessary comments, and reduce each
+essential comment to the fewest words that preserve its meaning.
 
 Build the complete approved scope before you report the step done. A ticket or a
 required behaviour you did not build is not an optional follow-up, and the size of the
@@ -124,44 +158,46 @@ Run every test, lint and typecheck command through
 against the tree it ran on, and only that is a verification — an Output that says the
 tests pass is a claim. Say in your Output which verifications you ran, by name.
 
-When you start each ticket and when you finish it, write
-`{{run.dir}}/steering/progress/<ticket-slug>.json` as `{"ticket":"<file>","status":
-"started"|"done","claims":["<what you believe is done>"],"at":"<iso>"}`. These are your
+When you finish a ticket, write `{{run.dir}}/steering/progress/<ticket file without
+.md>.json` as `{"ticket":"<file>","status":"done","claims":["<what you believe is
+done>"],"at":"<iso>"}`. Collie writes the same file when it hands you the ticket and when
+the slice ends; yours is what puts your own words on the card before that. These are your
 claims, and Collie labels them as such.
+
+{{obstacle}}
+
+### What this run has to prove
+
+`{{inputs.outcome}}` above decides what closes this run. Do the one that matches and
+ignore the others; an empty outcome means only the approved verifications have to pass.
+
+- **feature** — every ticket you were given is built and named in `tickets_done`, and the
+  review has to be able to say the agreed scope was met.
+- **bug** — reproduce it first. Write the failing test, record it as a verification that is
+  _supposed_ to fail — `collie verify --run {{run.id}} --cwd {{cwd}} --name regression
+--expect fail -- <command>` — and only then fix it. When it is fixed, record `regression`
+  again, without `--expect`, so there is a fail and then a pass on two different trees.
+  Name it in your Output as `"reproduced": "regression"`.
+- **refactor** — behaviour is identical. Say what you ran; the review has to be able to say
+  behaviour was preserved.
+- **investigation** — the answer is the deliverable, and there may be no patch at all.
+  Write the report to `{{run.dir}}/plan/INVESTIGATION.md`, and in your Output give
+  `"conclusion"`, `"evidence"` as a list of paths inside this run or its checkout, and
+  `"patch": true | false`. `false` is a real outcome: no merge request is opened, and
+  nothing is invented to have something to merge.
+- **docs** — run the commands you documented, as written, each through
+  `collie verify --run {{run.id}} --cwd {{cwd}} --name docs-<what> -- <command>`, and list
+  their names in `"documented_commands"`. Instructions nobody ran are not documentation.
+- **migration** — prove it goes both ways: a `migrate-up` verification and a
+  `migrate-down` (or `rollback`) one, both passing on the final tree.
 
 {{session.ask}}
 
 Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what is not
 built or not passing, as findings>], "branch": "<branch>", "pushed": true, "tickets_done":
 ["ticket title", ...], "commits": ["<subject>", ...], "tests": "what you ran and what it
-said"}`. `clean` means the whole scope is built and the tests pass; anything else is
+said"}`, plus whichever of the outcome fields above applies. `clean` means the whole scope is built and the tests pass; anything else is
 `findings`, with one entry per thing that is not.
-
-## simplify
-
-Iteration {{iteration}} of at most {{max_iterations}}. The maximum is a ceiling the run
-never aims for.
-
-Run {{skill:code-simplification}} over what this branch changed. Behaviour stays identical:
-the tests you ran in `build` still pass, and you say what you ran. Do not touch code
-this branch did not.
-
-Apply your persona's **Code comment hygiene** rules to comments this branch added or
-changed: make the code self-explanatory, delete unnecessary comments, and reduce each
-essential comment to the fewest words that preserve its meaning.
-
-Run every test, lint and typecheck command through
-`collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`; Collie records the result
-against the tree it ran on, and only that is a verification — an Output that says the
-tests pass is a claim. Say in your Output which verifications you ran, by name.
-
-If you committed anything, push it the same way `build` did — `git push -u origin HEAD
--o ci.skip` — so the reviewers read what you simplified rather than what you replaced. A
-push that fails is reported, not fatal.
-
-Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [], "simplified":
-["what you collapsed and why", ...], "pushed": true, "tests": "what you ran and what it
-said"}`. `clean` only when the tests still pass.
 
 ## fix
 
@@ -181,6 +217,9 @@ under `disputed` with your reason, and the human sees it at the end. A reason yo
 once settles that finding: the reviewers are told about it and the loop stops raising it.
 Re-run the tests.
 
+Apply your persona's **Code comment hygiene** rules to comments this fix added or changed,
+the same way `build` does.
+
 A finding that arrives with `answers your dispute:` is one you rejected before and a
 reviewer has now answered. Deal with it: apply it, or dispute it again with a reason that
 answers what they said.
@@ -199,8 +238,9 @@ Never defer a blocking finding to a follow-up or leave it out of your Output: ev
 never neither. Disputing every blocking finding stops the run for the human at once. On
 iteration {{max_iterations}} there is no review after you: Collie reads your `fixed`,
 `disputed` and `checks` against the findings above and the merge request says the last
-fix was implementer-reported, not re-reviewed — so report exactly what you did and what
-your checks actually said.
+fix was implementer-reported, not re-reviewed — so report exactly what you did. What your
+checks said is not read from you: each `checks` entry names a verification, and Collie
+reads its result from the journal, on the tree as it stands.
 
 Push the fixups before you finish — `git push -u origin HEAD -o ci.skip` — every
 iteration: the next round reviews the remote, and a fix it cannot see is a finding it
@@ -209,16 +249,25 @@ raises again. A push that fails is reported as `"pushed": false`, not fatal.
 Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what you
 could not finish>], "fixed": [{"file": "path", "title": "the finding", "note": "what you
 changed"}], "disputed": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
-"title": "the finding", "detail": "why I disagree"}], "checks": [{"name": "the command you
-ran", "passed": true, "note": "what it said"}], "pushed": true}`. `file` and `title` in
+"title": "the finding", "detail": "why I disagree"}], "checks": [{"name": "the verification
+name you ran it under", "note": "what it said"}], "pushed": true}`. `file` and `title` in
 `fixed` and `disputed` are exactly as the finding above gives them, so Collie can match
-them; `checks` lists every test and lint command you ran, one entry each, with `passed`
-as it actually came out.
+them; `checks` names every test and lint command you ran, one entry each, by the name
+`collie verify` recorded it under (the command's first word, unless you gave `--name`). A
+check with no record on this tree is not a passing check, whatever the note says.
 
 ## mr
 
 The branch is reviewed and the loop found nothing blocking. Push it and open the merge
 request.
+
+What was actually verified, and by whom — `by collie` is a command Collie ran itself,
+`by agent` is one an agent ran through the collector:
+
+{{evidence}}
+
+Say that in the description, in one line: which verifications passed on the branch as it
+stands. An Output that says the tests pass is a claim; these are not.
 
 {{unreviewed}}
 

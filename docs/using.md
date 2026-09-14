@@ -631,6 +631,62 @@ for as long as the tab is open, so moving between waiting runs costs nobody thei
 It is dropped when that question is answered or replaced by a new one, and never written to
 a run directory: an unsent answer is yours, not the run's.
 
+## Talking to Collie about the flock
+
+The Home opens on the conversation. It is one line at rest saying what Collie can be
+asked; `:` puts the keyboard in it and Esc gives the board back. The board's own keys keep
+working while it is on screen — visible is not focused.
+
+**Enter asks about the flock.** That is the ordinary case: a question about every run,
+read-only, whatever the board happens to be showing or filtered to. The run your cursor
+happens to be on is never the target — a question typed while looking at an old run is a
+question about the flock, and aiming it there would be acting on a coincidence.
+
+**Tab aims it at the selected run.** Then Enter proposes something about that run, and you
+confirm it by id and hash as you always did. A message that would change something names
+its run explicitly.
+
+The conversation is one per herdr session and it outlives the tab: close the Home and
+reopen it, and it is still there. A follow-up is answered with the earlier turns in
+context, so "what about the second one" resolves to something.
+
+**Collie also speaks first.** When a run ends or blocks, asks you something, drifts from
+its Intent past what Collie may correct, starts repeating itself, or claims to be finished
+without being able to show it, Collie starts a turn about it — once per thing that
+happened, one at a time. A conversation you have to start every
+time is polling by hand. Turn it off with `"proactive": false` in `config.json`. Such a turn
+shows as `noticed:` with what changed, then Collie's answer; it is never written down as
+something you typed.
+
+Speaking first buys it nothing: a proposal from a turn Collie started goes through exactly
+the same authority path as one you typed. Who started the turn is not an input to what is
+permitted.
+
+## What a run is for, and whether it got there
+
+Every row carries a second line when it has something to say on it: what the run has to
+prove (its [outcome](cli.md#outcomes)), how many pieces of evidence are still missing,
+what is identifiably in its way, what became of its work, and the one command that moves
+it on. The detail panel opens on the same four, above why the run stopped.
+
+That ordering is the point. A board that says what a run is _doing_ answers a question
+nobody has; what a human wants to know is what it is for and whether it got there.
+
+The pane clock is **liveness** — an agent that has written nothing for a while gets a
+nudge. The journal is **progress**: `collie run metrics <id>` reads what was actually
+produced, and a changing pane is not on that list. The one number a harness reports about
+an agent, its context size, is read at each work boundary for the compaction decision and
+written to the same journal then — so the "largest context sample" in `run metrics` is what
+the harness said at a boundary, not an estimate from the pane.
+
+A run that failed and whose work someone then finished by hand says both things at once —
+`failed · merged cego/collie!43 by mk`. The status is not edited to tidy the row: what
+happened and what came of it are two facts, and losing either is worse than a row that
+carries both.
+
+A filter narrows what is drawn and never what is supervised. Every workspace is walked on
+every tick, whatever the board is showing.
+
 ## Actions
 
 | Action               | What it does                                                           |
@@ -751,6 +807,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "board_quiet_ms": 300000,
   "compact_at_tokens": 372000,
   "notifications": { "run-done": false },
+  "proactive": true,
   "models": { "opencode": ["mycorp/local-model"] },
   "trust": "ask",
   "permissions": "bypass",
@@ -998,7 +1055,11 @@ touches — if a binding you expect is missing, `setup.sh` is the one to run.
 every prerequisite at once — herdr and its minimum version, the plugin link, the runner and
 the shim's directory on PATH, a Node runtime, the skills and harnesses your workflows name,
 whether this checkout is behind its remote, and whether `glab` is logged in — and prints the
-command that fixes each. It exits non-zero when any check fails.
+command that fixes each. It exits non-zero when any check fails. It also says what
+`implement` and `review` resolve to here: a user or project override wins over the bundled
+definition, so one that still carries `architecture` and `simplify` steps or two reviewers is
+what a run in this project would actually do. That is reported with the exact edit and
+never edited — the override is yours.
 
 **A keybinding does nothing over SSH.** The three bindings use plain letters after the
 prefix on purpose, because `alt` chords are not delivered reliably over SSH or through some

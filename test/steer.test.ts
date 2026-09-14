@@ -190,6 +190,33 @@ test("a question with no target is answered, and cannot be a proposal", () =>
     }),
   ));
 
+test("a turn the board starts is journaled as the board's, never as the human's", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* aRun();
+      yield* setReply(
+        envelope({
+          result: {
+            text: "it stopped because nothing was verified",
+            evidence_refs: [],
+            targets: [],
+          },
+        }),
+      );
+
+      const result = yield* steer(env, deps(stateDir), {
+        text: "Run r1 stopped with evidence_missing. What is going on?",
+        requestId: "req-event",
+        asked: "event",
+      });
+      expect(result.ok).toBe(true);
+
+      const turns = yield* readConversation(yield* conversationPath(stateDir, "herd-1"));
+      expect(turns.map((turn) => turn.role)).toEqual(["event", "collie"]);
+      expect(turns[0]!.text).toContain("stopped with evidence_missing");
+    }),
+  ));
+
 test("a Run nobody named is not one Collie will guess at", () =>
   runEffect(
     Effect.gen(function* () {
@@ -334,5 +361,98 @@ test("the pack names the runs and the target's own intent, and no pane text", ()
       // What an agent is doing reaches this as herdr's own status, and no further: there
       // is no pane read anywhere in the pack's construction.
       expect(pack).not.toContain("paneRead");
+    }),
+  ));
+
+test("a follow-up is answered with the earlier turns of the same conversation", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const run = yield* aRun();
+      const packFile = path.join(stateDir, "pack.txt");
+      yield* fs.writeFileString(
+        path.join(stateDir, "bin", "claude"),
+        `#!/bin/sh\ncat > ${packFile}\ncat ${path.join(stateDir, "reply.json")}\n`,
+      );
+      yield* fs.chmod(path.join(stateDir, "bin", "claude"), 0o755);
+      yield* setReply(
+        envelope({ result: { text: "Two are running.", evidence_refs: [], targets: [] } }),
+      );
+
+      yield* steer(env, deps(stateDir), { text: "how is the flock?", requestId: "req-a" });
+      yield* steer(env, deps(stateDir), { text: "what about the second one?", requestId: "req-b" });
+
+      const pack = yield* fs.readFileString(packFile);
+      // Without this the second question is asked with no memory of the first, so
+      // "the second one" refers to nothing and the global Collie cannot hold a
+      // conversation at all.
+      expect(pack).toContain("## This conversation so far");
+      expect(pack).toContain("- human: how is the flock?");
+      expect(pack).toContain("- collie: Two are running.");
+      expect(pack).toContain("what about the second one?");
+      // And it still says what the flock is, since that is what it is being asked about.
+      expect(pack).toContain(run.id);
+    }),
+  ));
+
+test("a question with a Run selected elsewhere is still answered about the whole flock", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const one = yield* aRun();
+      const two = yield* aRun();
+      const packFile = path.join(stateDir, "pack.txt");
+      yield* fs.writeFileString(
+        path.join(stateDir, "bin", "claude"),
+        `#!/bin/sh\ncat > ${packFile}\ncat ${path.join(stateDir, "reply.json")}\n`,
+      );
+      yield* fs.chmod(path.join(stateDir, "bin", "claude"), 0o755);
+      yield* setReply(
+        envelope({ result: { text: "Both are fine.", evidence_refs: [], targets: [] } }),
+      );
+
+      // No target: whatever the board happens to have selected, this is a question about
+      // the flock, and it is answered about every Run.
+      const answered = yield* steer(env, deps(stateDir), {
+        text: "how is the flock?",
+        requestId: "req-c",
+      });
+      expect(answered.ok).toBe(true);
+
+      const pack = yield* fs.readFileString(packFile);
+      expect(pack).toContain(one.id);
+      expect(pack).toContain(two.id);
+      // And nothing was aimed at either of them.
+      expect(readProposals).toBeDefined();
+      const proposals = yield* readProposals(yield* proposalsPath(stateDir, "herd-1")).pipe(
+        Effect.catch(() => Effect.succeed([])),
+      );
+      expect(proposals).toEqual([]);
+    }),
+  ));
+
+test("the pack says when it is not listing the whole Herd", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // More Runs than the pack carries, so the cap is doing something.
+      for (let n = 0; n < 42; n++) yield* aRun();
+      const packFile = path.join(stateDir, "pack.txt");
+      yield* fs.writeFileString(
+        path.join(stateDir, "bin", "claude"),
+        `#!/bin/sh\ncat > ${packFile}\ncat ${path.join(stateDir, "reply.json")}\n`,
+      );
+      yield* fs.chmod(path.join(stateDir, "bin", "claude"), 0o755);
+      yield* setReply(envelope({ result: { text: "Busy.", evidence_refs: [], targets: [] } }));
+
+      yield* steer(env, deps(stateDir), { text: "how is the flock?", requestId: "req-d" });
+
+      const pack = yield* fs.readFileString(packFile);
+      // A model told about forty of forty-two and not told so would answer "that is all
+      // of them" in good faith.
+      expect(pack).toMatch(/\(\d+ more Run\(s\) not listed here\)/);
     }),
   ));

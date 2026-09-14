@@ -85,6 +85,29 @@ export function addMrRole<R>(
   );
 }
 
+/**
+ * Whether this merge request is already `who`'s to get merged.
+ *
+ * GitLab keeps assignee and reviewer apart because they are two jobs: one person owns
+ * landing the change, another says whether it should land. The same name in both roles is
+ * a review nobody independent is doing — so where the answer here is yes, Collie reviews
+ * for the human rather than at them: the findings are fixed here and nothing is posted.
+ *
+ * An unreadable merge request answers no. The costly mistake is the other one: staying
+ * quiet about someone else's change because glab had a bad minute.
+ */
+export function assignedTo<R>(
+  mr: MrRef,
+  who: string,
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<boolean, never, R> {
+  return Effect.gen(function* () {
+    const panel = yield* mrDetails(mr, cwd, run);
+    return panel._tag === "Details" && panel.assignees.includes(who);
+  });
+}
+
 export function mrTarget(project: string | null, iid: string): string {
   return project ? `mr:${project}!${iid}` : `mr:${iid}`;
 }
@@ -202,6 +225,9 @@ const MrDetailsJson = Schema.fromJsonString(
     draft: optionalFlag,
     work_in_progress: optionalFlag,
     author: Schema.optionalKey(Schema.NullOr(Schema.Struct({ username: optionalText }))),
+    assignees: Schema.optionalKey(
+      Schema.NullOr(Schema.Array(Schema.Struct({ username: optionalText }))),
+    ),
     source_branch: optionalText,
     target_branch: optionalText,
     sha: optionalText,
@@ -230,6 +256,11 @@ export interface MrDetails {
   /** `opened`, `merged`, `closed`, or `draft` where the MR says it is one. */
   state: string;
   author: string;
+  /**
+   * Who has to get this merged, by username. Empty where GitLab named nobody — which is
+   * a merge request waiting for someone, not one that is mine.
+   */
+  assignees: readonly string[];
   sourceBranch: string;
   targetBranch: string;
   /** The head pipeline's status, or `""` when there is no pipeline to report. */
@@ -300,6 +331,9 @@ export function mrDetails<R>(
       title: mr.title ?? "",
       state: draft ? "draft" : (mr.state ?? ""),
       author: mr.author?.username ?? "",
+      assignees: (mr.assignees ?? [])
+        .map((one) => one.username ?? "")
+        .filter((name) => name !== ""),
       sourceBranch: mr.source_branch ?? "",
       targetBranch: mr.target_branch ?? "",
       pipeline: mr.head_pipeline?.status ?? mr.pipeline?.status ?? "",

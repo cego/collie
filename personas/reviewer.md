@@ -62,6 +62,8 @@ Write to `OUTPUT_PATH`, and nothing else in that file:
 
 ```
 {"verdict": "clean" | "findings",
+ "summary": "two sentences: what this change does, and what is wrong with it",
+ "dropped": [],
  "findings": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
                "title": "one line", "detail": "what goes wrong, and which axis found it",
                "rebuttal": "only when this answers a dispute: why their reason does not hold"}]}
@@ -69,6 +71,21 @@ Write to `OUTPUT_PATH`, and nothing else in that file:
 
 `verdict` is `clean` only when `findings` is empty. Print a short summary in your
 terminal too, so the human can read it without opening the file.
+
+Where the prompt names an outcome the change has to prove, it also names one boolean field
+— `scope_met`, `behavior_preserved`, `supported`, `accurate` or `compatible` — and that
+field goes in this Output beside `verdict`. It is your judgement and nothing else's: the
+gate before the merge request reads it, and reads nothing an implementer wrote about it.
+
+`summary` and `dropped` are there because your review is often the only one, and then it
+is the review the human reads rather than something a later step rewrites. Write them
+every time; they cost a line, and a review nobody reconciled still has to read as one.
+
+Every `blocker` and `major` carries a `file` and a `detail`. A blocking finding with
+neither is not something anyone can act on, and it goes back to you rather than to the
+implementer. The file does not have to be one the change touched: an unchanged caller the
+change breaks, or a file that should exist and does not, is a real blocker — name the file
+it is about and say in `detail` why the change puts it wrong.
 
 ## Fallback
 

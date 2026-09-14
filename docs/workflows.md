@@ -69,12 +69,18 @@ the reviewed branch, else the `<name>` of a `branch:<base>...<name>` target you 
 a new `<your GitLab login>/<task>` from `--input task=`, the plan directory's own name, or
 the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
 
-**What happens:** one implementer agent builds (a commit per ticket), then improves the
-architecture it touched, then simplifies. It embeds `review` — two models in parallel, one
-synthesized review — and loops on the findings up to `max_iterations` (5 by default). Every
+**What happens:** one implementer agent builds, a commit per ticket. It embeds `review` —
+one complete review — and loops on the findings up to `max_iterations` (5 by default). Every
 step that commits pushes what it committed, so the reviewers read the change rather than
 the state before it. The last step opens or updates the merge request, and is skipped where
 there is no GitLab to open one on.
+
+**Outcome.** `--input outcome=bug|refactor|investigation|docs|migration|feature` says what
+kind of result this run has to prove, and so what evidence closes it — see
+[Outcomes](cli.md#outcomes). `plan` settles it during the interview and forwards it, so a
+chained build is never asked again. Left empty, a run is held to this project's approved
+verifications and nothing more: unclassified work is not a feature by default, and asking
+documentation for a feature's evidence would ask for tickets that do not exist.
 
 **Ends:** with the merge request, or with the reason the `mr` step was skipped. There is no
 menu.
@@ -140,17 +146,31 @@ Control Plane the children [nest under it](using.md#the-control-plane).
 
 ## `review`
 
-**For:** getting one reconciled review of a change you did not necessarily write.
+**For:** getting one complete review of a change you did not necessarily write.
 
 **Inputs:** `target` — a merge request (anyone's, from any directory), a branch diff, or
-the working tree, chosen from a menu. `plan` and `previous` are optional: a spec to hold
-the change to, and an earlier review run to compare against.
+the working tree, chosen from a menu. `plan`, `previous` and `risks` are optional: a spec
+to hold the change to, an earlier review run to compare against, and extra axes to apply
+on top of the complete review (`--input risks=security`) where this change has a risk that
+earns one. `outcome` is optional too, and `implement` forwards its own: it names the one
+judgement field the reviewer is asked for — `scope_met` for a feature, `behavior_preserved`
+for a refactor, `supported`, `accurate` or `compatible` — which is the field the gate before
+the merge request reads ([Outcomes](cli.md#outcomes)).
 
-**What happens:** two reviewers look at the same target in parallel, then a fan-in step
-reconciles them into one review — findings deduplicated across models, disagreements
-settled against the diff, and anything neither can defend from the diff listed under
-`dropped` with a reason. The engine renders that to `review.md` in the run directory, which
-is what you read and what a menu choice can post.
+**What happens:** one reviewer reads the target and writes the review — the whole spec, the
+whole change, and the code around it. The engine renders it to `review.md` in the run
+directory, which is what you read and what a menu choice can post.
+
+There is a `synthesize` step after it, and with one review it is skipped: reconciling one
+file into one file is a model call that adds no judgement. A layer that puts two or more
+reviewers back in `parallel` gets the fan-in exactly as it was — findings deduplicated
+across models, disagreements settled against the diff, and anything neither can defend
+listed under `dropped` with a reason.
+
+Every `blocker` and `major` has to say **where** and **why**: a `file` it is about and a
+`detail`. One that says neither goes back to its own reviewer once, rather than to the
+implementer. The file does not have to be one the change touched — an unchanged caller the
+change breaks is exactly the blocker worth raising. Minor findings are exempt.
 
 **Ends with a menu:**
 
@@ -190,8 +210,11 @@ Definition: [`workflows/architecture.md`](../workflows/architecture.md).
 - `architecture` → `implement`, the same way.
 - `implement` embeds `review` with `use:`, so the review a build gets is the same review
   you would run standalone — override `review` in your layer and `implement` changes too.
-- `implement` also embeds the unattended half of `architecture`, which is why that
-  workflow's menu step is marked `standalone:` and does not run when embedded.
+- `plan` → `architecture`, for a plan whose tickets need architectural decisions. It is a
+  Choice a human takes, not a pass every build makes: `architecture` and `simplify` used to
+  run after every build and after every fix whether or not the work needed them, and they
+  cost a quarter of a run's wall time. `architecture` is still embeddable with `use:`, and
+  its menu step is marked `standalone:` so it does not run when it is.
 - `review` → `implement`, or a hand-off to a live implementer. See
   [Hand-offs](using.md#hand-offs-between-runs).
 

@@ -81,6 +81,13 @@ export interface Focus {
    * to survive the redraw every board tick causes.
    */
   steerDraft: string | null;
+  /**
+   * Whether what is being typed is aimed at the selected Run. False is the ordinary
+   * case and means the flock: a question, read-only, about every Run. Aiming is explicit
+   * because a mutation has to name its target, and the row a human is sitting on is not
+   * consent to act on it.
+   */
+  steerAimed: boolean;
   /** The proposal whose actions are on screen for a yes or no, or null. */
   previewing: string | null;
   /**
@@ -140,6 +147,7 @@ export interface AppState {
    */
   live: Live | null;
   steerDraft: string | null;
+  steerAimed: boolean;
   previewing: string | null;
 }
 
@@ -244,11 +252,15 @@ export type Command =
   | { _tag: "OpenMr"; target: string; runId: string | null }
   | { _tag: "RunWorkflow"; workflow: string }
   /**
-   * Say something to Collie about one Run. The target is named rather than taken from
-   * the Selection: a steer is about a specific piece of work, and a board whose filter
-   * moved between reading a row and typing about it would otherwise steer another one.
+   * Say something to Collie. `runId` null is a question about the flock: read-only, and
+   * answered about every Run whatever the board has selected or filtered to.
+   *
+   * A targeted message names its Run rather than taking it from the Selection. Two
+   * reasons, and both have bitten: a board whose filter moved between reading a row and
+   * typing about it would steer another one, and the row a human happens to be sitting
+   * on is not consent to act on it.
    */
-  | { _tag: "Steer"; text: string; runId: string; from?: string }
+  | { _tag: "Steer"; text: string; runId: string | null; from?: string }
   /**
    * Carry out a proposal. The hash travels with the id because that is what makes this
    * consent to a payload rather than to a summary — the board passes back exactly what
@@ -283,7 +295,7 @@ export type Command =
   | { _tag: "ToggleFilter" }
   /** Which of the Herd's work the board shows: a group row narrows, Esc widens. */
   | { _tag: "SetFilter"; filter: Filter }
-  | { _tag: "DraftSteer"; text: string | null }
+  | { _tag: "DraftSteer"; text: string | null; aimed?: boolean }
   /** Put one proposal's actions on screen for a yes or no, or take them off. */
   | { _tag: "Preview"; id: string | null }
   | { _tag: "Refresh" }
@@ -337,7 +349,13 @@ export function retarget(at: Focus, command: FocusCommand): Focus {
     // Neither is a change in the world: the Steer box is a field, and a preview is what
     // was already read, drawn. `rereads` is where that costs nothing.
     case "DraftSteer":
-      return { ...at, steerDraft: command.text };
+      // Closing the composer stops it being aimed too: the next thing typed is a
+      // question about the flock unless somebody says otherwise again.
+      return {
+        ...at,
+        steerDraft: command.text,
+        steerAimed: command.text === null ? false : (command.aimed ?? at.steerAimed),
+      };
     case "Preview":
       return { ...at, previewing: command.id };
     case "MoreReview":
@@ -394,6 +412,7 @@ export function rereads(last: Focus | null, next: Focus): Rereads {
     // Neither is required to move the Selection, so they reuse whether it moved or not.
     (last.selected !== next.selected ||
       last.steerDraft !== next.steerDraft ||
+      last.steerAimed !== next.steerAimed ||
       last.previewing !== next.previewing);
   return { reuse: !asked && movedOnly, forceMr: asked };
 }
@@ -1012,7 +1031,7 @@ export type Keyboarding =
   | { _tag: "Choice"; choice: PendingChoice }
   | { _tag: "Filter" }
   | { _tag: "Setting"; setting: { key: string; value: string } }
-  | { _tag: "Steering"; draft: string }
+  | { _tag: "Steering"; draft: string; aimed: boolean }
   | { _tag: "Board" };
 
 /** Where the keyboard is, from what the tab has open. Pure, and the order is the point. */
@@ -1032,6 +1051,8 @@ export function keyboardOn(at: {
   /** A Settings row being given a new value. */
   setting: { key: string; value: string } | null;
   steering?: string | null;
+  /** Whether the composer is aimed at the selected Run rather than at the flock. */
+  steerAimed?: boolean;
 }): Keyboarding {
   if (at.flow) return { _tag: "Flow" };
   if (at.proposal) return { _tag: "Proposal", proposal: at.proposal };
@@ -1039,7 +1060,7 @@ export function keyboardOn(at: {
   if (at.filtering) return { _tag: "Filter" };
   if (at.setting) return { _tag: "Setting", setting: at.setting };
   if (at.steering !== null && at.steering !== undefined) {
-    return { _tag: "Steering", draft: at.steering };
+    return { _tag: "Steering", draft: at.steering, aimed: at.steerAimed === true };
   }
   return { _tag: "Board" };
 }
@@ -1189,7 +1210,11 @@ export function footerKeys(opts: {
   // The filter has the keys too, so the board's own are as much a lie here as the
   // Selection's buttons were: `k` typed a `k` while `[k stop]` stopped the run.
   if (opts.on._tag === "Filter") return "type to narrow · Enter keep it · Esc drop it";
-  if (opts.on._tag === "Steering") return "type · Enter send it to Collie · Esc leave it";
+  if (opts.on._tag === "Steering") {
+    return opts.on.aimed
+      ? "type · Tab stops aiming · Enter proposes · Esc back to the board"
+      : "type · Tab aims at the selected run · Enter asks about the flock · Esc back";
+  }
   if (opts.on._tag === "Proposal") return "Enter carry it out · Esc decline it";
   return [...opts.panel, ...globalKeys(opts.filter)].join(" · ");
 }
@@ -1258,7 +1283,7 @@ export type KeyIntent =
   | { _tag: "Answered"; asking: Asking; value: string | null }
   | { _tag: "Filtering"; filter: string; typing: boolean }
   /** What is in the Steer box now, or `null` for a box the human has closed. */
-  | { _tag: "Steering"; draft: string | null }
+  | { _tag: "Steering"; draft: string | null; aimed: boolean }
   | { _tag: "Editing"; editing: { key: string; value: string } | null }
   /**
    * The value being edited, sent: dispatch it and close the editor. One intent for one
@@ -1387,19 +1412,28 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
     }
     return null;
   }
-  // The Steer box. Enter names the Run rather than sending to whichever one the board
-  // decides later: a steer is about a specific piece of work, and with nothing selected
-  // there is nothing to send it about — so the box says so and sends nothing.
+  // The composer. Enter with nothing aimed is a question about the flock — read-only,
+  // answered about every Run — and that is the ordinary case. A message aimed at one Run
+  // names it explicitly, and the target is never taken from whichever row the board
+  // happens to have selected: a question typed while looking at an old Run used to be
+  // dropped on the floor, and aiming it at that Run instead would be worse.
   if (at.on._tag === "Steering") {
     const draft = at.on.draft;
-    if (key.name === "escape") return { _tag: "Steering", draft: null };
+    if (key.name === "escape") return { _tag: "Steering", draft: null, aimed: false };
     if (key.name === "return") {
-      const runId = at.row?.runId ?? null;
-      if (runId === null || draft.trim() === "") return null;
+      if (draft.trim() === "") return null;
+      const runId = at.on.aimed ? (at.row?.runId ?? null) : null;
       return { _tag: "Submitted", command: { _tag: "Steer", text: draft, runId } };
     }
-    if (key.name === "backspace") return { _tag: "Steering", draft: draft.slice(0, -1) };
-    if (PRINTABLE.test(key.sequence)) return { _tag: "Steering", draft: draft + key.sequence };
+    // Aim it, or stop aiming it. Explicit, and only where there is a row to aim at: a
+    // mutation has to name its target, and this is where a human says which.
+    if (key.name === "tab") {
+      return { _tag: "Steering", draft, aimed: !at.on.aimed && at.row?.runId !== undefined };
+    }
+    if (key.name === "backspace")
+      return { _tag: "Steering", draft: draft.slice(0, -1), aimed: at.on.aimed };
+    if (PRINTABLE.test(key.sequence))
+      return { _tag: "Steering", draft: draft + key.sequence, aimed: at.on.aimed };
     return null;
   }
   // A filter kept so a row can be acted on outlives the keyboard being in it, so Esc
@@ -1433,7 +1467,7 @@ export function keyIntent(at: KeyContext, key: Keypress): KeyIntent | null {
   if (key.sequence === "/") return { _tag: "Filtering", filter: at.query, typing: true };
   // `:` and not `s`: `s` is the hand-off, and a key that sometimes sends a review and
   // sometimes opens a text box is a key nobody can press with confidence.
-  if (key.sequence === ":") return { _tag: "Steering", draft: "" };
+  if (key.sequence === ":") return { _tag: "Steering", draft: "", aimed: false };
   // Re-reading what is on screen, and the one merge request behind it: a cached read is
   // what makes selecting cheap, so there has to be a way to say "ask again".
   if (key.sequence === "R") return doing({ _tag: "Refresh" });

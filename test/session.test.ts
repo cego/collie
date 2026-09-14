@@ -174,7 +174,7 @@ test("with an implementer live, the review hands it the findings and both runs r
         (yield* new RunStore(rig.stateDir).list()).at(0),
         "expected implement run",
       );
-      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+      yield* rig.queueOutputs([FOUND]);
       // One decision, two implementations: with an implementer live, "Fix findings"
       // is the hand-off.
       const prompts = scriptedPrompts(["Fix findings"]);
@@ -196,7 +196,9 @@ test("with an implementer live, the review hands it the findings and both runs r
       expect(queued.agent).toBe(implementer.name);
       expect(queued.mode).toBe("boundary");
       expect(queued.text).toContain(path.join(run.dir, REVIEW_FILE));
-      expect(queued.text).toContain(path.join(run.dir, "steps", "synthesize", "synthesized.json"));
+      // The review's own Output: with one reviewer there is no synthesis file, and the
+      // hand-off points at whatever the Run recorded as its review rather than guessing.
+      expect(queued.text).toContain(path.join(run.dir, "steps", "review", "review.json"));
       expect(queued.text).toContain("disagree with a finding say so with a reason");
       expect(
         (yield* rig.calls()).some(
@@ -226,7 +228,7 @@ test("with an implementer live, the review hands it the findings and both runs r
 test("with no implementer live, the review offers to start one on the reviewed target", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+      yield* rig.queueOutputs([FOUND]);
       const prompts = scriptedPrompts(["Fix findings in a full implement run"]);
 
       const { run, status } = yield* runWorkflow(rig, "review", {}, { prompts });
@@ -254,7 +256,7 @@ test("the implement run chained from a review lands in the reviewed branch's own
       // The branch under review already has a checkout, from whoever built it.
       const existing = featureWorktree(path);
       yield* rig.addWorktree("feature", existing, null);
-      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+      yield* rig.queueOutputs([FOUND]);
 
       const { run } = yield* runWorkflow(
         rig,
@@ -296,7 +298,7 @@ test("a review of a merge request chains onto that merge request's own branch", 
       // merge request rather than from whatever branch the caller happens to be on —
       // the fake git here answers `feature` for that, and it must not be used.
       yield* bin.add("glab", `echo '{"source_branch": "fix-the-parser", "iid": 42}'`);
-      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+      yield* rig.queueOutputs([FOUND]);
 
       const { run } = yield* runWorkflow(
         rig,
@@ -317,7 +319,7 @@ test("the build prompt for a review work source checks out what was reviewed", (
   runEffect(
     Effect.gen(function* () {
       const path = yield* Path.Path;
-      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+      yield* rig.queueOutputs([FOUND]);
       const { run } = yield* runWorkflow(
         rig,
         "review",
@@ -464,7 +466,7 @@ test("an implementer that herdr no longer has is not offered, and its entry goes
       rig.dropAgent("gone-1");
       // The last output is the fix round's: with nothing live, "Fix findings" is the
       // round this run does itself.
-      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND, CLEAN]);
+      yield* rig.queueOutputs([FOUND, CLEAN]);
       const prompts = scriptedPrompts(["Fix findings", "Don't post"]);
 
       const { status } = yield* runWorkflow(rig, "review", {}, { prompts });
@@ -592,7 +594,7 @@ test("a run registers its long-lived agent, and a reviewer is not one", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      yield* rig.queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* rig.queueOutputs([SYNTH]);
 
       yield* runWorkflow(rig, "review", {}, { prompts: scriptedPrompts(["Don't post"]) });
 
@@ -893,7 +895,7 @@ test("a hand-off is queued for the receiving Driver, whatever that agent is doin
       // the same check every other piece of work for that agent goes through.
       const port = scriptedPort({ usage: [400_000] });
       yield* installedControls(implementer.name, port);
-      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+      yield* rig.queueOutputs([FOUND]);
       const prompts = scriptedPrompts(["Fix findings"]);
 
       const { run, status } = yield* runWorkflow(
@@ -932,7 +934,7 @@ test("a hand-off to a Run nobody is driving is refused rather than typed into a 
       // nothing to hold it behind a compaction, and nothing to record whether it landed.
       const fs = yield* FileSystem.FileSystem;
       yield* fs.remove(path.join(planned.dir, RUNNER_PID), { force: true });
-      yield* rig.queueOutputs([CLEAN, CLEAN, FOUND]);
+      yield* rig.queueOutputs([FOUND]);
       const prompts = scriptedPrompts(["Fix findings", null]);
 
       const { run, status } = yield* runWorkflow(rig, "review", {}, { prompts });

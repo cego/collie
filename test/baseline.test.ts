@@ -198,7 +198,7 @@ test("every step of implement that commits pushes what the next reader will read
       const prompt = (id: string) => wf.steps.find((step) => step.id === id)!.prompt;
 
       // The reviewers read the merge request, and a merge request shows the remote.
-      for (const id of ["build", "simplify", "fix"]) {
+      for (const id of ["build", "fix"]) {
         expect(prompt(id)).toContain("git push");
         // Five loop iterations must not be five pipelines on unapproved code.
         expect(prompt(id)).toContain("ci.skip");

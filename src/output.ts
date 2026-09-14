@@ -2,7 +2,8 @@
 // never terminal text (CONTEXT.md, Output).
 
 import { Schema } from "effect";
-import { isBoolean, isNumber, isString } from "./schema";
+import { isNumber, isString } from "./schema";
+import { staleAgainst, type Snapshot, type Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
 
 export const FindingSchema = Schema.Struct({
@@ -176,10 +177,13 @@ export function parseFixed(value: YamlValue | undefined, where: string): Parsed<
   return { ok: true, value: out };
 }
 
-/** One check the implementer ran: a command, and whether it passed. */
+/**
+ * One check the implementer says it ran, by the name it was recorded under. Whether it
+ * passed is not here: that is read from the verification journal, bound to the tree it
+ * ran on. A `passed` the Output carries is a claim, and is ignored as one.
+ */
 export interface Check {
   name: string;
-  passed: boolean;
   note?: string;
 }
 
@@ -234,14 +238,41 @@ function parseChecks(value: YamlValue | undefined, where: string): Parsed<Check[
     if (!isString(item.name) || item.name.trim() === "") {
       return { ok: false, error: `${where}[${i}]: name is required` };
     }
-    if (!isBoolean(item.passed)) {
-      return { ok: false, error: `${where}[${i}]: passed must be true or false` };
-    }
-    const check: Check = { name: item.name.trim(), passed: item.passed };
+    const check: Check = { name: item.name.trim() };
     if (isString(item.note)) check.note = item.note;
     out.push(check);
   }
   return { ok: true, value: out };
+}
+
+/**
+ * Whether a blocking finding says enough to act on: where it is, and what goes wrong.
+ * A `blocker` with no file and no detail is a reviewer's impression, and the implementer
+ * it lands on can only guess at it or dispute it — both of which cost a round.
+ *
+ * Deliberately **not** "the file is in the diff". An unchanged caller this change breaks,
+ * and a file that should exist and does not, are exactly the blockers worth having; a
+ * changed-file whitelist would throw them away to catch the vaguer ones. What is required
+ * is that the reviewer named a place and gave a reason.
+ *
+ * Minor findings are exempt: they do not drive the loop, and holding a passing remark to
+ * the standard of a blocker would cost a repair round for a note nobody has to act on.
+ */
+export function substantiated(finding: Finding): boolean {
+  if (!isBlocking(finding)) return true;
+  return (finding.file ?? "").trim() !== "" && (finding.detail ?? "").trim() !== "";
+}
+
+/** What to tell a reviewer whose blocking findings cannot be acted on, naming them. */
+export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null {
+  const bad = findings.filter((f) => !substantiated(f));
+  if (bad.length === 0) return null;
+  const named = bad.map((f) => `"${f.title}"`).join(", ");
+  return (
+    `${bad.length} blocking finding(s) say neither where nor why: ${named}. ` +
+    `Every blocker and major needs a "file" it is about and a "detail" of one or two ` +
+    `sentences. The file need not be one the change touched.`
+  );
 }
 
 /** Minor is the one severity not worth blocking on; anything unrecognised fails closed. */
@@ -250,20 +281,47 @@ export function isBlocking(finding: Finding): boolean {
 }
 
 /** Why a converging loop stopped for the human; `attention` reports it as `reason`. */
-export type Halt = "no_progress" | "dispute_unresolved" | "fix_unverified";
+export type Halt =
+  | "no_progress"
+  | "dispute_unresolved"
+  | "fix_unverified"
+  | "definition_changed"
+  | "evidence_missing";
 
 export type FinalFix =
   | { ok: true; attestation: string; outstanding: Finding[] }
   | { ok: false; halt: Halt; reasons: string[]; outstanding: Finding[] };
 
+/** What the journal holds, and the tree in front of us, for the checks to be read against. */
+export interface CheckEvidence {
+  readonly verifications: ReadonlyArray<Verification>;
+  readonly final: Snapshot;
+}
+
+/**
+ * Why a named check is not proof on this tree, or null where it is. A record by an agent
+ * counts: what binds it is the collector, not who called it.
+ */
+function checkGap(name: string, evidence: CheckEvidence): string | null {
+  const records = evidence.verifications.filter((v) => v.name === name);
+  if (records.length === 0)
+    return `check "${name}" has no verification record — run it through collie verify`;
+  if (records.some((v) => v.result === "pass" && !staleAgainst(v, evidence.final))) return null;
+  const last = records[records.length - 1]!;
+  if (last.result === "fail") return `check failed: ${name}`;
+  if (last.result === "unstable") return `check "${name}" ran on a tree that moved under it`;
+  return `check "${name}" last passed on an earlier tree`;
+}
+
 /**
  * The last fix of a loop has no review after it, so its own report is what decides:
  * every blocking finding the review raised is fixed by key, nothing is disputed, and
- * at least one check ran and passed. The review before it is history, not evidence
- * that the fixed code still has its findings — and the fix's word is not a review
- * either, which is what the attestation says.
+ * every check it names has a passing verification on the tree as it stands. The review
+ * before it is history, not evidence that the fixed code still has its findings — and
+ * the fix's word is not a review either, which is what the attestation says. Nor is it
+ * evidence that the checks passed: the journal is.
  */
-export function settleFinalFix(live: Finding[], fix: FixOutput): FinalFix {
+export function settleFinalFix(live: Finding[], fix: FixOutput, evidence: CheckEvidence): FinalFix {
   const fixed = new Set(fix.fixed.map(findingKey));
   const disputed = new Set(fix.disputed.map(findingKey));
   const disputes: string[] = [];
@@ -300,8 +358,9 @@ export function settleFinalFix(live: Finding[], fix: FixOutput): FinalFix {
   const standing = fix.disputed.filter((d) => isBlocking(d) && !raised.has(findingKey(d)));
   for (const d of standing) disputes.push(`disputed blocking finding: ${oneLine(d)}`);
   if (fix.checks.length === 0) unverified.push("no checks reported");
-  for (const check of fix.checks.filter((c) => !c.passed)) {
-    unverified.push(`check failed: ${check.name}${check.note ? ` (${check.note})` : ""}`);
+  for (const check of fix.checks) {
+    const gap = checkGap(check.name, evidence);
+    if (gap !== null) unverified.push(`${gap}${check.note ? ` (${check.note})` : ""}`);
   }
   // A fix that does not hold up verifies nothing: everything the review raised stays open.
   const unresolved = [...live, ...fix.findings, ...standing];
@@ -321,7 +380,7 @@ export function settleFinalFix(live: Finding[], fix: FixOutput): FinalFix {
   const blocking = live.filter(isBlocking).length;
   return {
     ok: true,
-    attestation: `last fix: ${blocking} blocking finding(s) reported fixed, ${fix.checks.length} check(s) passed — implementer-reported, not re-reviewed`,
+    attestation: `last fix: ${blocking} blocking finding(s) reported fixed, ${fix.checks.length} check(s) verified on this tree — implementer-reported, not re-reviewed`,
     outstanding,
   };
 }

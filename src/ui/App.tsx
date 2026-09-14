@@ -118,6 +118,18 @@ export interface AppProps {
   dispatch: (command: Command) => void;
 }
 
+/**
+ * Why there is nothing to talk to, where there is nothing. A blank region is the one
+ * thing this must not be: it would say the same as a Herd with nothing to report, and a
+ * human would have no way to tell "quiet" from "broken".
+ */
+function collieUnavailable(state: AppState): string | null {
+  if (state.live === null) return "Collie is not reading this Herd yet.";
+  if (state.live.ownership !== null)
+    return `Collie has not settled which workspace is Home: ${state.live.ownership.why}`;
+  return null;
+}
+
 export function App(props: AppProps) {
   const renderer = useRenderer();
   const dimensions = useTerminalDimensions();
@@ -353,6 +365,7 @@ export function App(props: AppProps) {
       filtering: typing(),
       setting: editingKey(),
       steering: props.state().steerDraft,
+      steerAimed: props.state().steerAimed,
     }),
   );
 
@@ -404,7 +417,7 @@ export function App(props: AppProps) {
         setFilter(intent.filter);
         return setTyping(intent.typing);
       case "Steering":
-        return tell({ _tag: "DraftSteer", text: intent.draft });
+        return tell({ _tag: "DraftSteer", text: intent.draft, aimed: intent.aimed });
       case "Editing":
         return setEditing(intent.editing);
       case "Submitted":
@@ -499,16 +512,28 @@ export function App(props: AppProps) {
       <Show when={previewing() && !helping()}>
         <ProposalPreview proposal={previewing()!} />
       </Show>
-      {/* The Steer box, at the bottom of the Runs view and only while it is open: a
-          field that is always on screen is a field the board's own keys type into. */}
-      <Show when={props.state().steerDraft !== null && !helping() && !previewing()}>
+      {/* Always on the Runs view, and not only once somebody has found the key: the
+          conversation with Collie about the flock is what this board is for, and a
+          composer you have to know about is one nobody uses.
+
+          Visible is not focused. The board's own keys keep working while it is on
+          screen — a field that captured them would make the board unusable — and one
+          key puts the keyboard in it, with Esc to give the board back. */}
+      <Show when={props.state().view === "runs" && !helping() && !previewing()}>
         <SteerBox
-          draft={props.state().steerDraft!}
-          target={current()?.runId ?? null}
+          draft={props.state().steerDraft ?? ""}
+          // Aimed only where a human said so. The selected row is never the implicit
+          // target: a question typed while looking at an old Run is a question about
+          // the flock, and aiming it at that Run would be acting on a coincidence.
+          target={props.state().steerAimed ? (current()?.runId ?? null) : null}
           turns={props.state().live?.conversation ?? []}
           pending={props.state().live?.proposals.length ?? 0}
+          focused={props.state().steerDraft !== null}
+          focusKey=":"
+          unavailable={collieUnavailable(props.state())}
         />
       </Show>
+
       <Show when={!helping()}>
         <Footer
           row={current()}

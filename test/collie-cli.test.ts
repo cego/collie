@@ -3,6 +3,7 @@ import { Effect, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
+import { appendMetric } from "../src/metrics";
 import { RunStore } from "../src/run";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -390,7 +391,8 @@ test("workflow show prints what a run actually gets, not what was authored", () 
       expect(shown.stdout).toContain("Inherited from an embedded workflow: target");
       expect(shown.stdout).toContain("review.synthesize");
       const steps = shown.stdout.split("Steps:")[1]!.split("Defined in:")[0]!.trim().split("\n");
-      expect(steps).toHaveLength(7);
+      // build, review, review.synthesize, fix, mr — the resolved shape, `use:` flattened.
+      expect(steps).toHaveLength(5);
     }),
   ));
 
@@ -514,6 +516,59 @@ test("intent defaults round trip, and a Run's Intent is amended through the enve
       expect(intent?.version).toBe(2);
       expect(intent?.history).toHaveLength(1);
       expect(intent?.constraints[0]?.severity).toBe("block");
+
+      yield* fs.remove(home, { recursive: true, force: true });
+    }),
+  ));
+
+test("run metrics reports what a Run produced, and says so when it has produced nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      // One state directory the Run and the command both see: `cli` makes its own per
+      // call, and a Run written into one of those would not be there for the next.
+      const home = yield* fs.makeTempDirectory({ prefix: "collie-metrics-" });
+      const stateDir = join(home, "state");
+      const env = { HERDR_PLUGIN_STATE_DIR: stateDir };
+
+      const run = yield* new RunStore(stateDir).create({
+        workflow: "implement",
+        cwd: root,
+        inputs: { plan: "add a picker", outcome: "bug" },
+        inputSources: { plan: "asked" },
+        stepIds: ["build"],
+        maxIterations: 1,
+        namedAfter: "add a picker",
+      });
+
+      const empty = yield* cli(["--json", "run", "metrics", run.id], env);
+      expect(empty.exit).toBe(0);
+      const bare = yield* parseEnvelope(empty.stdout);
+      expect(bare.ok).toBe(true);
+      // SAFETY: the envelope decoded `ok: true` above, and `run metrics` puts exactly
+      // these fields in `data` — asserted immediately below, so a shape that changed
+      // fails here rather than passing silently.
+      const data = bare.data as {
+        metrics: { timeToFirstEvidence: number | null };
+        outcome: string;
+      };
+      // Null rather than zero: "nothing yet" and "immediately" are different facts.
+      expect(data.metrics.timeToFirstEvidence).toBeNull();
+      expect(data.outcome).toBe("bug");
+
+      yield* appendMetric(run.dir, {
+        at: run.record.created_at,
+        kind: "verification",
+        subject: "v1",
+        value: 1,
+        note: "pass",
+      });
+
+      const shown = yield* cli(["run", "metrics", run.id], env);
+      expect(shown.exit).toBe(0);
+      expect(shown.stdout).toContain("time to first evidence: 0s");
+      expect(shown.stdout).toContain("1 pass, 0 fail, 0 unstable (1 by collie)");
+      expect(shown.stdout).toContain("rework: 0");
 
       yield* fs.remove(home, { recursive: true, force: true });
     }),

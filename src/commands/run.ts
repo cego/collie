@@ -55,6 +55,7 @@ import { scopeFor, scopeKey } from "../registry";
 import { runDeliveries } from "./steer";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
+import { metricsOf, readMetrics } from "../metrics";
 import { latest, readDispositions, recordDisposition, statusLine } from "../disposition";
 import { nowIso } from "../time";
 import type { Run } from "../run";
@@ -302,7 +303,16 @@ const runShow = Command.make(
           const attention = yield* attentionFor(run, new Herdr(resolved.env));
           return {
             ok: true,
-            data: { run: snapshot, attention, disposition },
+            data: {
+              run: snapshot,
+              attention,
+              disposition,
+              outcome: run.record.outcome,
+              evidence_gaps: run.record.evidence_gaps,
+              obstacle: run.record.obstacle,
+              definition: run.record.definition,
+              next_action: attention.actions[0] ?? null,
+            },
             human: [
               head,
               attention.explanation,
@@ -315,6 +325,56 @@ const runShow = Command.make(
     }),
 ).pipe(
   Command.withDescription("Show one Run: its state, its Inputs, its Steps and any pending Choice"),
+);
+
+const runMetrics = Command.make(
+  "metrics",
+  {
+    runId: runIdArg,
+  },
+  ({ runId }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* resolveCommandRun(global, runId);
+          if (resolved._tag === "RunFailure") return resolved.result;
+          const run = resolved.run;
+          const metrics = metricsOf(yield* readMetrics(run.dir), run.record.created_at);
+          const said = (value: number | null) =>
+            value === null ? "not yet" : `${Math.round(value)}s`;
+          const human = [
+            `${run.id}\t${run.record.workflow}\t${run.record.outcome ?? "unspecified"}`,
+            `time to first evidence: ${said(metrics.timeToFirstEvidence)}`,
+            `verifications: ${metrics.verifications.pass} pass, ${metrics.verifications.fail} fail, ${metrics.verifications.unstable} unstable (${metrics.verifications.byCollie} by collie)`,
+            `slices: ${metrics.slices.done} of ${metrics.slices.total} done`,
+            `rework: ${metrics.rework} (fix rounds and halts)`,
+            metrics.peakContext === null
+              ? "context: nothing sampled"
+              : `context: ${metrics.peakContext.tokens} tokens at most, on ${metrics.peakContext.agent}`,
+            ...(run.record.evidence_gaps.length > 0
+              ? [`evidence gaps: ${run.record.evidence_gaps.join("; ")}`]
+              : []),
+            ...(run.record.obstacle === null ? [] : [`obstacle: ${run.record.obstacle}`]),
+          ].join("\n");
+          return {
+            ok: true,
+            data: {
+              metrics,
+              outcome: run.record.outcome,
+              evidence_gaps: run.record.evidence_gaps,
+              obstacle: run.record.obstacle,
+            },
+            human,
+          };
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "What a Run actually did: evidence, slices, rework and context — not pane activity",
+  ),
 );
 
 const runLogs = Command.make(
@@ -1249,6 +1309,7 @@ export const run = Command.make("run").pipe(
     runClearOverride,
     runDeliveries,
     runDisposition,
+    runMetrics,
     runDrift,
     runCards,
     runFollowUp,

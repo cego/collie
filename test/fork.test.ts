@@ -97,7 +97,14 @@ test("a full copy is the whole file, and records what it copied", () =>
       expect(result.ok).toBe(true);
       expect(result.message).toContain("no longer follows the original");
       const text = yield* readText(result.path);
-      expect(text).toContain(`forked_from_hash: ${yield* contentHash(before)}`);
+      const hash = yield* contentHash(before);
+      // Quoted where the hash happens to be all digits, which YAML would otherwise
+      // decode as a number — and a numeric hash is one `parseWorkflow` drops.
+      expect(text).toMatch(new RegExp(`^forked_from_hash: "?${hash}"?$`, "m"));
+      // Whichever it is, it survives a round trip as the string it is.
+      expect(
+        (yield* loadDefinitions(yield* layers(env))).workflows.get("review")!.forkedFromHash,
+      ).toBe(hash);
       // Everything else is the file, byte for byte, after that one line.
       expect(text.replace(/^forked_from_hash: .*\n/m, "")).toBe(before);
 

@@ -36,6 +36,12 @@ actions, and the `collie` CLI.
   `src/live.ts` (what the Live region is given) and `src/ui/live.tsx` (how it is drawn).
   One board per Herd, in the Home ([ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md));
   a workspace is a filter over it, never a board of its own.
+- **Changing what a Run must prove, or what counts as proof** →
+  [`docs/cli.md`](docs/cli.md#outcomes) and
+  [ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md), alongside `src/outcome.ts` (the
+  table), `src/verify.ts` and `src/verify-spec.ts` (collection and what Collie may run),
+  and `src/metrics.ts` (what a Run produced). Evidence is collected at a revision; an
+  Output field is a claim.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →
@@ -63,7 +69,10 @@ binary still starts.
 5. Definition merge semantics (`extends:`, `use:`, layers) are canonical in
    `src/definitions.ts` and `docs/authoring.md` — change both together.
 6. Docs change in the same merge request as the behavior they describe.
-7. Steering's design decisions are [ADR-0008](docs/adr/0008-collie-steers-through-the-driver.md)
+7. A Run proves its outcome ([ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md)): the
+   definition is frozen per Run, evidence is collected against a revision, and no gate is
+   satisfied by an Output field. Usage is recorded and never enforced.
+8. Steering's design decisions are [ADR-0008](docs/adr/0008-collie-steers-through-the-driver.md)
    (the Driver is the only actor over agents) and
    [ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md) (one board per Herd, in the
    Home). ADR-0009 supersedes only ADR-0006's sentence about where the Collie tab is

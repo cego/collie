@@ -49,6 +49,7 @@ function live(over: Partial<Live> = {}): Live {
     drift: [],
     deliveries: [],
     conversation: [],
+    runConversation: [],
     proposals: [],
     pending: [],
     ownership: null,
@@ -186,19 +187,94 @@ test("an undelivered report says so, and the ownership question names its remedy
     }),
   ));
 
-test("the Steer box names what a steer would be about, and refuses without one", () =>
+test("the composer says what a message would do, and is honest when unfocused", () =>
   runEffect(
     Effect.gen(function* () {
+      // Unfocused and with nothing said yet: the empty state has to say what this is
+      // for, or a blank region reads the same as a Herd with nothing to report.
+      const resting = yield* shown(() => (
+        <SteerBox draft="" target={null} turns={[]} pending={0} focused={false} focusKey=":" />
+      ));
+      expect(resting).toContain("Ask Collie about the flock");
+      expect(resting).toContain(": to ask");
+      // With a Run selected, the hint names the key that aims at it — Tab, the same key
+      // the composer's own footer and the docs name; `::` never did anything.
+      // With something said already, so the hint line draws rather than the empty state.
+      const said = { id: "t1", at: "2026-09-11T10:00:00.000Z", role: "human" as const, text: "hi" };
+      const selected = yield* shown(() => (
+        <SteerBox draft="" target="r1" turns={[said]} pending={0} focused={false} focusKey=":" />
+      ));
+      expect(selected).toContain(": to ask · Tab aims at r1");
+      expect(selected).not.toContain("::");
+
+      // Focused and aimed at nothing: a question about the flock, which changes nothing.
+      const asking = yield* shown(() => (
+        <SteerBox
+          draft="how is it going"
+          target={null}
+          turns={[]}
+          pending={0}
+          focused
+          focusKey=":"
+        />
+      ));
+      expect(asking).toContain("how is it going");
+      expect(asking).toContain("flock >");
+      expect(asking).toContain("changes nothing");
+
+      // Aimed at a Run: a proposal, and it says that it still has to be confirmed.
       const aimed = yield* shown(() => (
-        <SteerBox draft="slow down" target="r1" turns={[]} pending={0} />
+        <SteerBox draft="slow down" target="r1" turns={[]} pending={0} focused focusKey=":" />
       ));
       expect(aimed).toContain("r1");
       expect(aimed).toContain("slow down");
+      expect(aimed).toContain("you confirm it");
 
-      const nowhere = yield* shown(() => (
-        <SteerBox draft="slow down" target={null} turns={[]} pending={0} />
+      // Who said what: a turn the board started is drawn as noticed, never as "you".
+      const turn = (role: "human" | "collie" | "event", text: string) => ({
+        id: `t-${text.length}`,
+        at: "2026-09-11T10:00:00.000Z",
+        role,
+        text,
+      });
+      const spoken = yield* shown(() => (
+        <SteerBox
+          draft=""
+          target={null}
+          turns={[
+            turn("event", "Run r1 stopped with evidence_missing."),
+            turn("collie", "Nothing was verified on the final tree."),
+            turn("human", "what about r2?"),
+          ]}
+          pending={0}
+          focused={false}
+          focusKey=":"
+        />
       ));
-      expect(nowhere).toContain("select the run this is about");
+      expect(spoken).toContain("noticed: Run r1 stopped with evidence_missing.");
+      expect(spoken).toContain("Collie: Nothing was verified");
+      expect(spoken).toContain("you: what about r2?");
+      expect(spoken).not.toContain("you: Run r1 stopped");
+    }),
+  ));
+
+test("the composer says why there is nothing to talk to, rather than going blank", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const broken = yield* shown(() => (
+        <SteerBox
+          draft=""
+          target={null}
+          turns={[]}
+          pending={0}
+          focused={false}
+          focusKey=":"
+          unavailable="Collie is not reading this Herd yet."
+        />
+      ));
+      expect(broken).toContain("not reading this Herd");
+      // And not the ordinary invitation, which would say everything is fine.
+      expect(broken).not.toContain("Ask Collie about the flock");
     }),
   ));
 

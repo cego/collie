@@ -44,6 +44,15 @@ const VerificationSchema = Schema.Struct({
   exit: Schema.Int,
   seconds: Schema.Number,
   tail: Schema.Struct({ stdout: Schema.String, stderr: Schema.String }),
+  /**
+   * What a pass looks like for this command. `fail` is how a bug is proved to exist: a
+   * regression test that exits non-zero on the tree before the fix is the evidence, and
+   * calling that a failure would make reproducing a bug indistinguishable from not
+   * having fixed it. Records written before this decode as `pass`, which is what they were.
+   */
+  expect: Schema.Literals(["pass", "fail"]).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed("pass" as const)),
+  ),
   result: Schema.Literals(["pass", "fail", "unstable"]),
   at: Schema.String,
   /** Who collected it. An agent may run one; only Collie may run an approved spec. */
@@ -98,10 +107,27 @@ export const fingerprint = Effect.fn("Verify.fingerprint")(function* (cwd: strin
  * about it. The sentinel is the case worth spelling out: two unmeasured trees are not one
  * tree, so a repository over the cap can never produce a `pass`.
  */
-export function resultOf(start: Snapshot, end: Snapshot, exit: number): Verification["result"] {
+export function resultOf(
+  start: Snapshot,
+  end: Snapshot,
+  exit: number,
+  expect: Verification["expect"] = "pass",
+): Verification["result"] {
   if (start.fingerprint === TOO_LARGE || end.fingerprint === TOO_LARGE) return "unstable";
   if (start.head_sha !== end.head_sha || start.fingerprint !== end.fingerprint) return "unstable";
-  return exit === 0 ? "pass" : "fail";
+  // Never `(exit === 0) === wanted` on its own: an unstable tree says nothing about
+  // either expectation, and the rules above have to come first for both.
+  return (exit === 0) === (expect === "pass") ? "pass" : "fail";
+}
+
+/**
+ * Whether this verification still says anything about the tree in front of us. A result
+ * is bound to the tree it ran on, so a commit or an edit since makes it history — no time
+ * component, because a verification does not go off, it is superseded.
+ */
+export function staleAgainst(record: Verification, now: Snapshot): boolean {
+  if (record.end.fingerprint === TOO_LARGE || now.fingerprint === TOO_LARGE) return true;
+  return record.end.head_sha !== now.head_sha || record.end.fingerprint !== now.fingerprint;
 }
 
 export const verificationsPath = Effect.fn("Verify.verificationsPath")(function* (runDir: string) {
@@ -165,6 +191,7 @@ export interface Collected {
   readonly argv: ReadonlyArray<string>;
   readonly cwd: string;
   readonly by: "agent" | "collie";
+  readonly expect?: "pass" | "fail";
 }
 
 /**
@@ -223,7 +250,8 @@ export const collect = Effect.fn("Verify.collect")(function* (
     exit: Number(exit),
     seconds: Math.max(0, (Date.parse(at) - Date.parse(began)) / 1000),
     tail: { stdout, stderr },
-    result: resultOf(start, end, Number(exit)),
+    expect: what.expect ?? "pass",
+    result: resultOf(start, end, Number(exit), what.expect ?? "pass"),
     at,
     by: what.by,
   };
@@ -241,6 +269,7 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
   run: { readonly id: string; readonly cwd: string; readonly worktree: string | null },
   approved: ReadonlyArray<VerifySpec>,
   spec: VerifySpec,
+  expect: "pass" | "fail" = "pass",
 ): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const match = approved.find(
     (entry) =>
@@ -265,5 +294,6 @@ export const runApproved = Effect.fn("Verify.runApproved")(function* (
     argv: spec.argv,
     cwd,
     by: "collie",
+    expect,
   });
 });

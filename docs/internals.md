@@ -37,9 +37,28 @@ is recorded in a finaliser: a run still `running` when its Driver is interrupted
 Driver killed outright leaves neither, which is what the Control Plane reports as abandoned.
 
 Every run is recorded under the Collie state directory: `runs/<id>/run.json` with the
-inputs and where each came from, `steps/<step>[/<variant>]/` with the exact prompt sent and
-the output written, `personas/` with the persona as injected, `review.md` where the run
-produced one, and `log.txt`. That is the audit trail and what `resume` reads.
+inputs and where each came from, `workflow/<name>.json` with the
+[definition snapshot](../CONTEXT.md),
+`steps/<step>[/<variant>]/` with the exact prompt sent and the output written, `personas/`
+with the persona as injected, `review.md` where the run produced one, and `log.txt`. That is
+the audit trail and what `resume` reads.
+
+The definition snapshot is what `CONTEXT.md` defines it as: the workflow a run is actually
+running, frozen when the run is created. Without it a Driver re-resolves from whatever the layers say
+_now_ every time it starts, so editing a workflow changes what a run started yesterday does
+on resume — or crashes it, because a record has no step by the new name. What is frozen is
+the **resolved** workflow, after `extends:` and `use:`: rebased step ids, merged variant
+settings and each step's prompt text as it was resolved. It is written as JSON rather than
+re-emitted Markdown precisely because reading Markdown back would resolve it again against
+today's files, which is the thing being prevented. The snapshot is a copy inside the run
+directory; nothing under the user's or the project's config is ever written.
+
+A run recorded before snapshots existed has `definition: null` and resolves from the layers
+as it always did — but only while the steps still match. Where the workflow has since gained,
+lost or reordered a step, `resume` refuses with `definition_changed` and writes nothing, and
+a Driver that finds the same mismatch stops the run `blocked` with that halt rather than
+running a workflow the run never started. Reverting the workflow edit makes it resumable
+again.
 
 <!-- prettier-ignore -->
 > [!IMPORTANT]
@@ -70,6 +89,22 @@ and architecture reports go into the run's `plan/` directory and never into the 
 ([ADR-0002](adr/0002-plan-artefacts-live-in-the-run-directory.md)). Glossary and ADR changes
 made while planning _are_ written into the repository — those are domain knowledge, not
 plans.
+
+## A plan proves it can be handed out
+
+The refusals that stop a fan-out — a ticket with no `Repo:` line, a repository nobody
+checked out, a number claimed twice, a `Blocked by` line naming something that is not a
+ticket, repositories that block each other in a cycle — are read at the step that writes
+the tickets, not only when someone picks "Implement now". A `plan` run could otherwise end
+`done` with tickets nobody can run, and the human would find out a workflow later from a
+hand-off that would not start. A refusal makes the Output unusable, so the planner is asked
+once to fix the tickets in the refusal's own words; a second unrunnable set blocks the step.
+
+Two of those rules — a number claimed twice, and a blocker naming no ticket of the plan —
+are about the tickets rather than the repositories, so they are checked whatever the plan's
+layout. They used to be read only past the single-repository shortcut, which judged the same
+plan one way as one repository and another as two, and the order those lines describe is
+what a build is sliced along.
 
 ## A parent run that fans out
 

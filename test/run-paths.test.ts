@@ -351,3 +351,22 @@ test("a Run recorded before step timings were kept still loads", () =>
       expect(loaded.record.steps[0]!.finished_at).toBeNull();
     }),
   ));
+
+test("a Run recorded before definitions were frozen still loads, with none", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const file = path.join(run.dir, "run.json");
+      // SAFETY: RunStore wrote this file in `beforeEach`.
+      const raw = decodeJson(yield* fs.readFileString(file)) as { definition?: unknown };
+      delete raw.definition;
+      yield* fs.writeFileString(file, encodeJson(raw));
+
+      const loaded = yield* new RunStore(stateDir).load(run.id);
+
+      // Absent reads as "this Run froze nothing", which is what sends it down the
+      // step-id guard rather than being a decode failure. Old is not corrupt.
+      expect(loaded.record.definition).toBeNull();
+    }),
+  ));

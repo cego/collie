@@ -16,6 +16,10 @@ import {
   targetKind,
 } from "../../src/inputs";
 import { primaryName } from "../../src/operations";
+import { approvedFrom, VerifySpecSchema } from "../../src/verify-spec";
+import { Schema } from "effect";
+
+const encodeSpecs = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
 import { RunStore, type Run, type WorktreeRecord } from "../../src/run";
 import type { EnginePrompts } from "../../src/engine";
 import type { CompactionPorts } from "../../src/compaction";
@@ -93,6 +97,27 @@ export function scriptedPrompts(
       return Effect.succeed(answers.shift() ?? null);
     },
   };
+}
+
+/**
+ * What a project that has written down its verifications looks like: one approved command
+ * that passes. The engine's evidence gate runs it itself, so the Run's proof is collected
+ * rather than scripted — which is the whole point of the gate.
+ */
+export function approveVerification(
+  rig: Rig,
+  spec: { name: string; executable: string; argv?: string[]; cwd?: string } = {
+    name: "tests",
+    executable: "true",
+  },
+) {
+  return Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const file = path.join(rig.projectDir, ".herdr", "verify.json");
+    yield* fs.makeDirectory(path.dirname(file), { recursive: true });
+    yield* fs.writeFileString(file, encodeSpecs([{ argv: [], cwd: ".", ...spec }]));
+  });
 }
 
 /** A finished `plan` Run with a SPEC, i.e. what `plan-dir` inference looks for. */
@@ -201,6 +226,11 @@ export function runWorkflow(
       inputs: merged,
       inputSources: sources,
       decisions: opts.decisions,
+      definition: wf,
+      approvedVerifications: yield* approvedFrom({
+        cwd: opts.worktree?.path ?? env.cwd,
+        configDir: env.configDir,
+      }),
       stepIds: wf.steps.map((s) => s.id),
       maxIterations: wf.maxIterations,
       ...named(inferred, merged),

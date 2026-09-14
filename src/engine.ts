@@ -61,6 +61,7 @@ import {
   parseFixOutput,
   parseReviewOutput,
   parseSynthesis,
+  unsubstantiated,
   renderReview,
   REVIEW_FILE,
   settleFinalFix,
@@ -101,6 +102,7 @@ import {
   type InputPrompts,
 } from "./inputs";
 import { fanoutRepos, fanoutUnfinished, RunStore, type FanoutRecord } from "./run";
+
 import { propagate, readIntent, seedIntent, writeIntent, type Intent } from "./intent";
 import { withLock } from "./lock";
 import {
@@ -135,8 +137,32 @@ import {
   staleSince,
 } from "./drift";
 import { capabilitiesOf } from "./steering-caps";
-import { fingerprint, readVerifications, runApproved } from "./verify";
-import { appendCard, buildCard, inspectFor, readCards, readCheckpoints, type Card } from "./cards";
+import {
+  fingerprint,
+  readVerifications,
+  runApproved,
+  staleAgainst,
+  type Verification,
+} from "./verify";
+import { approvedFrom, approvedFor, renderApproved, type VerifySpec } from "./verify-spec";
+import { appendMetric, obstacleOf, readMetrics, repeatedFailure } from "./metrics";
+import {
+  endsWithoutPatch,
+  evidenceGaps,
+  isOutcome,
+  renderEvidence,
+  type Collected,
+  type Outcome,
+} from "./outcome";
+import {
+  appendCard,
+  buildCard,
+  encodeCheckpoint,
+  inspectFor,
+  readCards,
+  readCheckpoints,
+  type Card,
+} from "./cards";
 import { ensureHomeFor } from "./home";
 import { shell } from "./mr";
 import { readChoice, readInboxMidStep, type InboxCommandValue } from "./driver";
@@ -172,13 +198,15 @@ import {
   runSettled,
   runStatus,
 } from "./operations";
-import { isSingleRepo, planReposOf, type PlanRepos } from "./plan";
+import { isSingleRepo, orderedTicketsOf, planReposOf, type PlanRepos, type Slice } from "./plan";
 import { notify as notifyRun, type NotificationKind } from "./notify";
 import {
   gitlabForProject,
   gitlabReadiness,
   mrFacts,
   addMrRole,
+  assignedTo,
+  glabLogin,
   parseMrUrl,
   resolveAssignee,
   type MrRef,
@@ -198,7 +226,7 @@ import {
 } from "./handoff";
 import { renderTemplate, skillMention } from "./template";
 import { resolveWorkflow, skillDirs, skillMentions } from "./definitions";
-import type { Run, RunRecord, RunStatus, StepStatus, VariantRecord } from "./run";
+import type { Run, RunRecord, RunStatus, SliceRecord, StepStatus, VariantRecord } from "./run";
 import { isString } from "./schema";
 
 export const VIEW_SOURCE_PREFIX = "cego.collie:";
@@ -286,6 +314,18 @@ function compactionDeps(o: EngineOptions) {
     configDir: o.env.configDir,
     log: (line) => o.run.log(line),
     warn: (line) => o.out(line).pipe(Effect.andThen(o.run.log(line.trim()))),
+    // The one moment a harness says how big an agent's context is, kept as a fact with
+    // a time on it: `run metrics` and the detail panel read their peak from here.
+    sample: (at, tokens) =>
+      Effect.gen(function* () {
+        yield* appendMetric(o.run.dir, {
+          at: yield* nowIso(),
+          kind: "context",
+          subject: at.agent,
+          value: tokens,
+          note: at.step,
+        });
+      }),
     pollMs: o.outputPollMs,
     known: compactionSettings(o),
   });
@@ -348,6 +388,12 @@ interface RunCtx {
    * the same one.
    */
   tabLabels: Map<string, string>;
+  /**
+   * The ticket a sliced step is on, and what the slices before it left behind. Null for
+   * every step that is not sliced, which is every step of every workflow that has no
+   * `each:`.
+   */
+  slice: { ticket: Slice; progress: string } | null;
   /** A lone default shell pane the workflow was launched from, consumed at most once. */
   launchPane: { paneId: string; tabId: string } | null;
   /** Whether the last pane read failed, so the next failure is not logged twice. */
@@ -400,6 +446,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     boardTabId: null,
     orderAnchorTabId: null,
     tabLabels: new Map(),
+    slice: null,
     launchPane: null,
     paneReadFailed: false,
     steering: {
@@ -501,6 +548,18 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     let extras: YamlMap | undefined;
     if ((step.requires?.length ?? 0) > 0) {
       const unmet = yield* unmetRequirement(o, step.requires!);
+      if (step.requires!.includes("gitlab")) {
+        // The merge request is the claim, so this is where the claim is checked. Where
+        // there is no GitLab the step is skipped and nothing is claimed — the gaps are
+        // still recorded, because a human looking at the board should see what this Run
+        // did and did not prove, but they stop nothing.
+        const gated = yield* evidenceGate(o, ctx, viewSource, repeats, index, unmet === null);
+        if (gated !== null) {
+          if (gated.kind === "finish") return gated.status;
+          index = gated.index;
+          continue;
+        }
+      }
       if (unmet) {
         yield* run.mark(step.id, "done");
         record.note = `skipped: ${unmet}`;
@@ -561,6 +620,32 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       continue;
     }
 
+    // Nothing to fan in: the one review that was written is already the review, and
+    // `collect` held it to a synthesis's shape and wrote `review.md` from it. Starting a
+    // model here to turn one file into one file is the pass this replaces.
+    if (step.fanIn) {
+      const source = ctx.outputs.get(step.fanIn) ?? [];
+      if (source.length === 1) {
+        const note = "skipped: one review, nothing to reconcile";
+        yield* run.mark(step.id, "done");
+        record.note = note;
+        record.iteration = run.record.iteration;
+        record.variants = [];
+        ctx.outputs.set(step.id, source);
+        yield* run.save();
+        yield* out(`◦ ${step.id} — ${note}`);
+        // Everything the fan-in step did besides run an agent still has to happen: the
+        // review is printed where the human is looking, and asking for a review of a
+        // merge request still makes whoever asked its reviewer.
+        yield* printReview(o);
+        yield* claimMrRole(o, parseMrTarget(run.record.inputs.target ?? ""), "reviewer");
+        const next = yield* afterStep(o, ctx, viewSource, repeats, index, source);
+        if (next.kind === "finish") return next.status;
+        index = next.index;
+        continue;
+      }
+    }
+
     const variants = stepVariants(step, o.defaults);
     const keys = variantKeys(variants);
     yield* run.mark(step.id, "running");
@@ -572,6 +657,30 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
       `▶ ${step.id}${variants.length > 1 ? ` (${variants.length} in parallel)` : ""} — iteration ${run.record.iteration}`,
     );
 
+    // A step that builds a plan builds it a ticket at a time, on the same agent, with a
+    // few lines of fact between slices rather than one transcript that grows all run.
+    if (step.each === "tickets") {
+      const sliced = yield* runSlices(o, step, variants, ctx, extras);
+      if (sliced !== null) {
+        ctx.outputs.set(step.id, sliced.outcomes);
+        ctx.ran.add(step.id);
+        yield* run.mark(step.id, sliced.blocked ? "blocked" : "done");
+        yield* run.save();
+        if (sliced.blocked) {
+          const why = `${step.id}: ${sliced.blocked}`;
+          const announced = yield* notify(o, "output-unusable", why, {
+            step: step.id,
+            subject: step.id,
+          });
+          return yield* finish(o, ctx, "blocked", viewSource, why, announced);
+        }
+        const next = yield* afterStep(o, ctx, viewSource, repeats, index, sliced.outcomes);
+        if (next.kind === "finish") return next.status;
+        index = next.index;
+        continue;
+      }
+    }
+
     const stepResult = yield* runStep(o, step, variants, keys, ctx, extras).pipe(Effect.result);
     if (Result.isFailure(stepResult)) {
       yield* run.mark(step.id, "failed");
@@ -582,6 +691,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     }
     const outcomes: VariantOutcome[] = stepResult.success;
     ctx.ran.add(step.id);
+    yield* noteEvidence(o, step.id);
 
     record.variants = outcomes.map((v) => v.record);
     ctx.outputs.set(step.id, outcomes);
@@ -832,10 +942,11 @@ const afterStep = Effect.fn("Engine.afterStep")(function* (
         // A dispute standing from an earlier round is still a dispute of this fix.
         const own = new Set(fix.value.disputed.map(findingKey));
         const standing = run.record.disputed.filter((d) => !own.has(findingKey(d)));
-        const settled = settleFinalFix(raised, {
-          ...fix.value,
-          disputed: [...fix.value.disputed, ...standing],
-        });
+        const settled = settleFinalFix(
+          raised,
+          { ...fix.value, disputed: [...fix.value.disputed, ...standing] },
+          yield* checkEvidence(o, fix.value.checks),
+        );
         if (!settled.ok) {
           return finished(
             yield* halt(
@@ -866,6 +977,13 @@ const afterStep = Effect.fn("Engine.afterStep")(function* (
         run.step(s.id).note = null;
       }
       yield* run.save();
+      yield* appendMetric(run.dir, {
+        at: yield* nowIso(),
+        kind: "round",
+        subject: wf.steps[mine.back]!.id,
+        value: run.record.iteration,
+        note: "looping back",
+      });
       yield* out(
         `  looping back to ${wf.steps[mine.back]!.id} (iteration ${run.record.iteration})`,
       );
@@ -900,6 +1018,13 @@ const halt = Effect.fn("Engine.halt")(function* (
   outstanding: Finding[],
 ) {
   const id = o.wf.steps[loop.at]!.id;
+  yield* appendMetric(o.run.dir, {
+    at: yield* nowIso(),
+    kind: "halt",
+    subject: id,
+    value: o.run.record.iteration,
+    note: why,
+  });
   yield* o.run.mark(id, "blocked");
   o.run.step(id).note = note;
   o.run.record.halt = why;
@@ -915,6 +1040,299 @@ const halt = Effect.fn("Engine.halt")(function* (
  * needs — the parsed verdict — with none of `collect`'s side effects; null when any
  * variant's Output is gone or no longer parses.
  */
+/** The set this Run may run itself: the Intent's grant, else what was seeded at start. */
+const approvedOf = Effect.fn("Engine.approvedOf")(function* (o: EngineOptions) {
+  return approvedFor(o.run.record.approved_verifications, yield* intentOf(o));
+});
+
+/**
+ * Collie's own run of approved commands, now, on this tree. A refusal is recorded as
+ * what it is rather than swallowed: a spec that cannot be run is a gap.
+ */
+const collectApproved = Effect.fn("Engine.collectApproved")(function* (
+  o: EngineOptions,
+  approved: ReadonlyArray<VerifySpec>,
+  specs: ReadonlyArray<VerifySpec> = approved,
+) {
+  const { run, out } = o;
+  for (const spec of specs) {
+    const collected = yield* runApproved(
+      run.dir,
+      { id: run.id, cwd: run.record.cwd, worktree: run.record.worktree?.path ?? null },
+      approved,
+      spec,
+    ).pipe(
+      Effect.catchTag("VerifyRefused", (cause) =>
+        run.log(`evidence: ${spec.name} refused: ${cause.why}`).pipe(Effect.as(null)),
+      ),
+      Effect.orDie,
+    );
+    if (collected !== null) yield* out(`  ${spec.name}: ${collected.result}`);
+  }
+});
+
+/**
+ * What the last fix's checks are read against. A check Collie is allowed to run and that
+ * has no passing record on this tree is run now, once, rather than taken on the fix's
+ * word — and one it may not run is whatever the agent recorded through the collector.
+ */
+const checkEvidence = Effect.fn("Engine.checkEvidence")(function* (
+  o: EngineOptions,
+  checks: ReadonlyArray<{ name: string }>,
+) {
+  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
+  const approved = yield* approvedOf(o);
+  const before = yield* verificationsOf(o);
+  const now = yield* fingerprint(cwd);
+  const fresh = (name: string) =>
+    before.some((v) => v.name === name && v.result === "pass" && !staleAgainst(v, now));
+  const wanted = new Set(checks.map((check) => check.name));
+  const due = approved.filter((spec) => wanted.has(spec.name) && !fresh(spec.name));
+  yield* collectApproved(o, approved, due);
+  return { verifications: yield* verificationsOf(o), final: yield* fingerprint(cwd) };
+});
+
+/**
+ * What the Run has proved, checked before the merge request is opened, by the engine and
+ * not by an agent. Collie runs the Run's own approved set itself at the tree as it stands
+ * — nothing else, and nothing a prompt suggested — then the outcome table says what is
+ * still missing.
+ *
+ * Null means carry on and open it. Otherwise the Run stops with `evidence_missing` and the
+ * gaps on the record, or skips the merge request where an investigation legitimately has
+ * no patch to open one for.
+ */
+const evidenceGate = Effect.fn("Engine.evidenceGate")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  viewSource: string,
+  repeats: Repeat[],
+  index: number,
+  /** False where the step will be skipped anyway: record the gaps, stop nothing. */
+  blocking: boolean,
+) {
+  const { run, wf, out } = o;
+  const step = wf.steps[index]!;
+  const carryOn = (at: number): Next => ({ kind: "next", index: at });
+  const stop = (status: RunStatus): Next => ({ kind: "finish", status });
+  // Only a workflow that declares an outcome is held to one. A fork with its own last
+  // step is not silently given a gate it never asked for.
+  if (wf.inputs.outcome === undefined) return null;
+
+  const kind = outcomeOf(run.record.outcome);
+  const approved = yield* approvedOf(o);
+  const cwd = run.record.worktree?.path ?? run.record.cwd;
+
+  // Collie's own run of every approved command, now, on this tree.
+  yield* collectApproved(o, approved);
+
+  // The gate has just collected results of its own, so this is a moment the journal
+  // grew: record them, and say whether anything is identifiably in the way.
+  yield* noteEvidence(o, step.id);
+
+  const final = yield* fingerprint(cwd);
+  const { outputs, reviewed } = outputsOf(o, ctx);
+  const got: Collected = {
+    verifications: yield* verificationsOf(o),
+    final,
+    approved,
+    outputs,
+    reviewed,
+    insideRun: (ref) => refInside(o, ref),
+    tickets: yield* ticketsOf(o),
+  };
+
+  const gaps = evidenceGaps(kind, got);
+  run.record.evidence_gaps = gaps;
+  yield* run.save();
+  yield* appendMetric(run.dir, {
+    at: yield* nowIso(),
+    kind: "evidence",
+    subject: kind,
+    value: gaps.length,
+    note: gaps.join("; "),
+  });
+  if (gaps.length > 0 && !blocking) {
+    yield* run.log(`evidence gaps (${step.id} will be skipped anyway): ${gaps.join("; ")}`);
+    return null;
+  }
+
+  if (gaps.length === 0) {
+    // An investigation that concluded there is nothing to change has finished, and a
+    // merge request would be an invention. Recorded as a skip, not as a failure.
+    if (endsWithoutPatch(kind, got)) {
+      const note = "skipped: investigation, no patch";
+      yield* run.mark(step.id, "done");
+      run.step(step.id).note = note;
+      yield* run.save();
+      yield* out(`◦ ${step.id} — ${note}`);
+      return carryOn(index + 1);
+    }
+    return null;
+  }
+
+  const loop = repeats.find((r) => r.at < index) ?? repeats[repeats.length - 1];
+  const note = `evidence missing for outcome ${kind}: ${gaps.join("; ")}`;
+  if (loop) {
+    return stop(
+      yield* halt(o, ctx, viewSource, loop, "evidence_missing", note, run.record.outstanding),
+    );
+  }
+  yield* run.mark(step.id, "blocked");
+  run.step(step.id).note = note;
+  run.record.halt = "evidence_missing";
+  yield* run.save();
+  yield* out(`  ${note}`);
+  return stop(yield* finish(o, ctx, "blocked", viewSource, note));
+});
+
+/**
+ * The first Output each step produced, and which of those a reviewer wrote.
+ *
+ * First rather than last because a step's variants are one answer to one question; a
+ * later variant is another reviewer's take, not a correction of the first. "A reviewer
+ * wrote it" is the same test the engine already uses to decide what a review is: the
+ * synthesis, or the sole reviewer whose Output a fan-in would have reconciled.
+ */
+function outputsOf(o: EngineOptions, ctx: RunCtx) {
+  const outputs = new Map<string, YamlValue>();
+  const reviewed = new Set<string>();
+  for (const [id, variants] of ctx.outputs) {
+    for (const variant of variants) {
+      if (variant.output !== null && !outputs.has(id)) outputs.set(id, variant.output);
+    }
+    const step = o.wf.steps.find((other) => other.id === id);
+    if (step && (step.fanIn || soleReview(o, step))) reviewed.add(id);
+  }
+  return { outputs, reviewed };
+}
+
+/**
+ * Every verification this Run has collected since the last time this looked, written to
+ * the metrics journal, and the obstacle a repeated identical failure is.
+ *
+ * Called where a step has just produced something, because that is when the journal has
+ * grown. It records; it never stops the Run. A command failing three times the same way
+ * is a Run going round, and what that earns is a sentence the next prompt gets — not a
+ * halt, which would be a limit nobody asked for.
+ */
+const noteEvidence = Effect.fn("Engine.noteEvidence")(function* (o: EngineOptions, step: string) {
+  const records = yield* verificationsOf(o);
+  const seen = yield* readMetrics(o.run.dir);
+  const already = new Set(
+    seen.filter((line) => line.kind === "verification").map((line) => line.subject),
+  );
+  for (const record of records) {
+    if (already.has(record.id)) continue;
+    yield* appendMetric(o.run.dir, {
+      at: record.at,
+      kind: "verification",
+      subject: record.id,
+      value: record.by === "collie" ? 1 : 0,
+      note: record.result,
+    });
+  }
+
+  const found = repeatedFailure(records, REPEATED_FAILURE);
+  const obstacle = found === null ? null : obstacleOf(found);
+  if (obstacle !== null && obstacle !== o.run.record.obstacle) {
+    o.run.record.obstacle = obstacle;
+    yield* o.run.save();
+    yield* appendMetric(o.run.dir, {
+      at: yield* nowIso(),
+      kind: "checkpoint",
+      subject: step,
+      value: found!.times,
+      note: obstacle,
+    });
+    yield* o.out(`  ⚠ ${obstacle}`);
+  }
+  // Cleared the moment it stops repeating: an obstacle that outlived its cause would
+  // send the next prompt after a problem that is already gone.
+  if (obstacle === null && o.run.record.obstacle !== null) {
+    o.run.record.obstacle = null;
+    yield* o.run.save();
+  }
+});
+
+/**
+ * How many identical failures of one command count as going round rather than working
+ * through it. A proposal, not a user decision — and what it produces is a sentence, so
+ * being wrong about the number costs a paragraph in a prompt rather than a stopped Run.
+ */
+const REPEATED_FAILURE = 3;
+
+/**
+ * A `plan` or `review` Run has an outcome it never chose and no merge request to gate, so
+ * its row of the table is read here, once, when it has finished: what it left undone is
+ * on the record for the board and `run show`, as a gated Run's gaps are. Recorded, not
+ * halted — the human's Choice already closed the Run, and a plan that wrote no tickets is
+ * a fact about it rather than a reason to stop it again.
+ */
+const recordFixedKindEvidence = Effect.fn("Engine.recordFixedKindEvidence")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+) {
+  const kind = outcomeOf(o.run.record.outcome);
+  if (kind !== "plan" && kind !== "review") return;
+  const { outputs, reviewed } = outputsOf(o, ctx);
+  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
+  const gaps = evidenceGaps(kind, {
+    verifications: yield* verificationsOf(o),
+    final: yield* fingerprint(cwd),
+    approved: [],
+    outputs,
+    reviewed,
+    insideRun: (ref) => refInside(o, ref),
+    tickets: [],
+  });
+  o.run.record.evidence_gaps = gaps;
+  yield* appendMetric(o.run.dir, {
+    at: yield* nowIso(),
+    kind: "evidence",
+    subject: kind,
+    value: gaps.length,
+    note: gaps.join("; "),
+  });
+  if (gaps.length > 0) yield* o.run.log(`evidence gaps: ${gaps.join("; ")}`);
+});
+
+/**
+ * The tickets this Run built from: the plan directory it was given, or the one its agent
+ * wrote under the Run for a text, Linear, review or follow-up source. A source with no
+ * tickets is no tickets, not a failure.
+ */
+const ticketsOf = Effect.fn("Engine.ticketsOf")(function* (o: EngineOptions) {
+  const path = yield* Path.Path;
+  const { inputs } = o.run.record;
+  const planDir =
+    (inputs.plan_kind ?? "") === "plan-dir" && (inputs.plan ?? "") !== ""
+      ? inputs.plan!
+      : path.join(o.run.dir, "plan");
+  return yield* orderedTicketsOf(planDir, inputs.repo ?? "").pipe(
+    Effect.catch(() => Effect.succeed([])),
+  );
+});
+
+/** A Run's outcome kind, with an unrecorded or unknown one read as `unspecified`. */
+function outcomeOf(recorded: string | null): Outcome {
+  const value = (recorded ?? "").trim();
+  return value !== "" && isOutcome(value) ? value : "unspecified";
+}
+
+/**
+ * Whether a reference an agent wrote points inside this Run's own directory or checkout.
+ * Lexical, and deliberately so: this decides whether a conclusion's evidence is evidence,
+ * and a path that escapes with `..` is refused rather than resolved for it.
+ */
+function refInside(o: EngineOptions, ref: string): boolean {
+  const value = ref.trim();
+  if (value === "" || value.includes("..")) return false;
+  if (!value.startsWith("/")) return true;
+  const roots = [o.run.dir, o.run.record.cwd, o.run.record.worktree?.path ?? ""];
+  return roots.some((root) => root !== "" && (value === root || value.startsWith(`${root}/`)));
+}
+
 const reloadOutcomes = Effect.fn("Engine.reloadOutcomes")(function* (
   o: EngineOptions,
   step: ResolvedStep,
@@ -922,7 +1340,12 @@ const reloadOutcomes = Effect.fn("Engine.reloadOutcomes")(function* (
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
   const outcomes: VariantOutcome[] = [];
-  for (const record of o.run.step(step.id).variants) {
+  // A fan-in that was skipped because there was only one review ran no agent of its own,
+  // so its verdict is the review's Output. Without this a resumed Run would find the gate
+  // step with no variants to reload and stop as if the evidence were gone.
+  const own = o.run.step(step.id).variants;
+  const variants = step.fanIn && own.length === 0 ? o.run.step(step.fanIn).variants : own;
+  for (const record of variants) {
     if (!record.output) return null;
     const text = yield* fs
       .readFileString(pathService.join(o.run.dir, record.output))
@@ -947,6 +1370,235 @@ const reloadOutcomes = Effect.fn("Engine.reloadOutcomes")(function* (
     outcomes.push({ record, output, review });
   }
   return outcomes.length > 0 ? outcomes : null;
+});
+
+/**
+ * One ticket at a time, on one agent, in an order the plan's own `Blocked by` lines allow.
+ *
+ * The point is the hand-off, not the parallelism: one prompt that carries a whole plan
+ * grows a transcript for the length of the run (the steering Run reached 552k tokens
+ * before its first compaction), and every later ticket is built by an agent re-reading
+ * work it did hours ago. A slice gets its ticket, and a few lines of fact about the ones
+ * before it — their commits and their verifications, never their prompts.
+ *
+ * Null where this Run has no plan to slice: one ticket, or a work source that is a
+ * sentence rather than a directory. Then the step runs once, exactly as it always did.
+ */
+const runSlices = Effect.fn("Engine.runSlices")(function* (
+  o: EngineOptions,
+  step: ResolvedStep,
+  variants: Variant[],
+  ctx: RunCtx,
+  extras: YamlMap | undefined,
+) {
+  const { run, out } = o;
+  const source = run.record.inputs.plan ?? "";
+  if ((run.record.inputs.plan_kind ?? "") !== "plan-dir" || source === "") return null;
+  const tickets = yield* orderedTicketsOf(source, run.record.inputs.repo ?? "").pipe(
+    Effect.catch(() => Effect.succeed([])),
+  );
+  // One ticket is not a plan to slice: the hand-off would be empty and the loop would be
+  // a longer way of writing what the step already does.
+  if (tickets.length < 2) return null;
+
+  const record = run.step(step.id);
+  const outcomes: VariantOutcome[] = [];
+  let blocked: string | null = null;
+
+  yield* out(`  ${tickets.length} tickets, one at a time`);
+  for (const ticket of tickets) {
+    const already = record.slices.find((entry) => entry.ticket === ticket.file);
+    if (already?.status === "done") {
+      yield* out(`  ✓ ${ticket.file} — already done, skipped`);
+      continue;
+    }
+    const slice: SliceRecord = already ?? {
+      ticket: ticket.file,
+      title: ticket.title,
+      status: "pending",
+      output: null,
+      started_at: null,
+      finished_at: null,
+      commits: [],
+      head: null,
+      verifications: [],
+    };
+    if (!already) record.slices.push(slice);
+    slice.status = "running";
+    slice.started_at = yield* nowIso();
+    yield* run.save();
+    yield* writeCheckpoint(o, slice, []);
+
+    ctx.slice = { ticket, progress: renderProgress(record.slices, ticket.file) };
+    yield* out(`  ▶ ${ticket.file} — ${ticket.title}`);
+    // The slice's number keys its directory, so every slice keeps its own prompt and
+    // Output under the step rather than overwriting the one before it.
+    const result = yield* runStep(o, step, variants, [ticket.number], ctx, extras).pipe(
+      Effect.result,
+    );
+    ctx.slice = null;
+    slice.finished_at = yield* nowIso();
+
+    if (Result.isFailure(result)) {
+      slice.status = "failed";
+      blocked = `${ticket.file}: ${herdrFailureReason(result.failure)}`;
+      yield* run.save();
+      break;
+    }
+    const [outcome] = result.success;
+    if (outcome === undefined) {
+      slice.status = "failed";
+      blocked = `${ticket.file}: the slice produced no Outcome`;
+      yield* run.save();
+      break;
+    }
+    outcomes.push(outcome);
+    // One agent for the whole plan: the next slice continues this one rather than
+    // starting a process that has to read its way back in. `runStep` reuses the step's
+    // recorded variant once the step counts as having run in this process.
+    record.variants = [outcome.record];
+    ctx.ran.add(step.id);
+    slice.output = outcome.record.output;
+    slice.status = outcome.record.status === "done" ? "done" : "blocked";
+    const since = lastHead(record.slices, ticket.file);
+    slice.head = yield* headOf(o);
+    slice.commits = yield* commitsSince(o, since, slice.head);
+    slice.verifications = verifiedDuring(yield* verificationsOf(o), slice);
+    yield* run.save();
+    yield* writeCheckpoint(o, slice, claimsOf(outcome.output, ticket.title));
+    yield* appendMetric(run.dir, {
+      at: slice.finished_at,
+      kind: "slice",
+      subject: slice.ticket,
+      value: slice.commits.length,
+      note: slice.status,
+    });
+    yield* noteEvidence(o, step.id);
+
+    if (slice.status !== "done") {
+      // A ticket that did not land stops the plan here: the next one is written against
+      // work that is not there, and building it would be building on nothing.
+      blocked = `${ticket.file}: ${outcome.record.error ?? "the slice needs a human"}`;
+      break;
+    }
+  }
+  return { outcomes, blocked };
+});
+
+/**
+ * The slice's checkpoint under `steering/progress/`, in the shape an agent writes its own
+ * and the cards read: `started` when the ticket is handed over, its status when it ends.
+ * Collie writes it so a slice landing is a card whether or not the agent remembered to;
+ * the same file name as the prompt asks the agent for, so the two are one checkpoint.
+ */
+const writeCheckpoint = Effect.fn("Engine.writeCheckpoint")(function* (
+  o: EngineOptions,
+  slice: SliceRecord,
+  claims: ReadonlyArray<string>,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = path.join(o.run.dir, "steering", "progress");
+  yield* fs.makeDirectory(dir, { recursive: true });
+  const file = path.join(dir, `${slice.ticket.replace(/\.md$/, "")}.json`);
+  // A slice that did not land is not a checkpoint anyone should read as one: the record
+  // says it is blocked or failed, and a `done` that is not done would be a card.
+  if (slice.status !== "done" && slice.status !== "running") return;
+  yield* fs.writeFileString(
+    file,
+    encodeCheckpoint({
+      ticket: slice.ticket,
+      status: slice.status === "done" ? "done" : "started",
+      claims: [...claims],
+      at: yield* nowIso(),
+    }),
+  );
+});
+
+/** What the slice's Output claims it built, or the ticket's own name where it named nothing. */
+function claimsOf(output: YamlValue | null, title: string): string[] {
+  const done = isYamlMap(output) ? output.tickets_done : undefined;
+  const named = Array.isArray(done) ? done.filter(isString) : [];
+  return named.length > 0 ? named : [title];
+}
+
+/** What the slices before this one left behind: their tickets, commits and evidence. */
+function renderProgress(slices: ReadonlyArray<SliceRecord>, upTo: string): string {
+  const before = slices.slice(
+    0,
+    slices.findIndex((entry) => entry.ticket === upTo),
+  );
+  const done = before.filter((entry) => entry.status === "done");
+  if (done.length === 0) return "(this is the first ticket)";
+  return done
+    .map((entry) => {
+      const commits =
+        entry.commits.length === 0
+          ? "    (no commit)"
+          : entry.commits.map((subject) => `    ${subject}`).join("\n");
+      const verified =
+        entry.verifications.length === 0
+          ? "    verified: nothing"
+          : `    verified: ${entry.verifications.join(", ")}`;
+      return `- ${entry.ticket} — ${entry.title}\n${commits}\n${verified}`;
+    })
+    .join("\n");
+}
+
+/**
+ * What was collected while a slice ran, by name and result, newest result per name. The
+ * facts a hand-off carries about evidence: not the records, and never the output.
+ */
+function verifiedDuring(
+  verifications: ReadonlyArray<Verification>,
+  slice: { started_at: string | null; finished_at: string | null },
+): string[] {
+  const from = slice.started_at === null ? Number.NEGATIVE_INFINITY : Date.parse(slice.started_at);
+  const to = slice.finished_at === null ? Number.POSITIVE_INFINITY : Date.parse(slice.finished_at);
+  const latest = new Map<string, string>();
+  for (const v of verifications) {
+    const at = Date.parse(v.at);
+    if (Number.isNaN(at) || at < from || at > to) continue;
+    latest.set(v.name, v.result);
+  }
+  return [...latest].map(([name, result]) => `${name}: ${result}`);
+}
+
+/** The HEAD the slice before this one left, or empty where this is the first. */
+function lastHead(slices: ReadonlyArray<SliceRecord>, upTo: string): string {
+  const at = slices.findIndex((entry) => entry.ticket === upTo);
+  for (let i = at - 1; i >= 0; i--) {
+    const head = slices[i]!.head;
+    if (head) return head;
+  }
+  return "";
+}
+
+const headOf = Effect.fn("Engine.headOf")(function* (o: EngineOptions) {
+  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
+  const done = yield* shellRun("git", ["rev-parse", "HEAD"], cwd).pipe(
+    Effect.catch(() => Effect.succeed({ code: 1, stdout: "", stderr: "" })),
+  );
+  return done.code === 0 ? done.stdout.trim() : null;
+});
+
+/** Subjects only. A hand-off says what was done, not how much was written to do it. */
+const commitsSince = Effect.fn("Engine.commitsSince")(function* (
+  o: EngineOptions,
+  since: string,
+  head: string | null,
+) {
+  if (since === "" || head === null) return [];
+  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
+  const done = yield* shellRun("git", ["log", "--format=%s", `${since}..${head}`], cwd).pipe(
+    Effect.catch(() => Effect.succeed({ code: 1, stdout: "", stderr: "" })),
+  );
+  if (done.code !== 0) return [];
+  return done.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "")
+    .slice(0, 20);
 });
 
 const runStep = Effect.fn("Engine.runStep")(function* (
@@ -1598,7 +2250,10 @@ const inheritIntent = Effect.fn("Engine.inheritIntent")(function* (parent: Run, 
     ),
   );
   if (!intent) return;
-  const { intent: seeded } = propagate(intent, seedIntent(child.id, {}));
+  const { intent: seeded } = propagate(
+    intent,
+    seedIntent(child.id, { runVerification: child.record.approved_verifications }),
+  );
   yield* writeIntent(child.dir, seeded).pipe(
     Effect.matchEffect({
       onFailure: (cause) => child.log(`intent v1 not written: ${String(cause)}`),
@@ -1709,6 +2364,8 @@ const chain = Effect.fn("Engine.chain")(function* (
     workspaceWorktree: run.record.workspace_worktree,
     inputs,
     inputSources: sources,
+    definition: child,
+    approvedVerifications: yield* approvedFrom({ cwd, configDir: o.env.configDir }),
     stepIds: child.steps.map((s) => s.id),
     maxIterations: child.maxIterations,
     ...runNames(checkout, { value: tail, short: tail }),
@@ -2086,7 +2743,10 @@ const ensureConfig = Effect.fn("Engine.ensureConfig")(function* (
   cfg: { key: string; question: string },
 ) {
   if (configValue(yield* readConfig(o.env.configDir), cfg.key) !== undefined) return;
-  const answer = yield* prompts.ask(cfg.question);
+  // The key is in the question, so what is on screen says it is a setting rather than a
+  // menu — a question that reads like one is how a Choice title came to be saved as a
+  // Linear team name.
+  const answer = yield* prompts.ask(`${cfg.question}? (saved as ${cfg.key})`);
   if (answer === null || answer.trim() === "") return;
   yield* writeConfigValue(o.env.configDir, cfg.key, answer.trim());
   yield* o.out(`  saved ${cfg.key} in config.json`);
@@ -3974,6 +4634,50 @@ const paneTail = Effect.fn("Engine.paneTail")(function* (
   return tail;
 });
 
+/**
+ * Whether the tickets this Output points at could actually be handed out, or the reason
+ * they could not. Keyed on `issues_dir` rather than on a step id, because what makes this
+ * check apply is that the step wrote a plan — a fork that renames the step still gets it,
+ * and one that writes no plan is never asked.
+ *
+ * The same reading the fan-out does, and deliberately not a second copy of it: a plan the
+ * planner is told is fine here and refused there would be worse than no check at all.
+ */
+/**
+ * Whether this step is the only review of the change: one variant, and a later step that
+ * fans in on it. Then there is nothing to reconcile, and the fan-in step is skipped — a
+ * model rewriting one file into one file adds no judgement, and every Run was paying for
+ * it. A layer that keeps two reviewers keeps the fan-in exactly as it was.
+ */
+function soleReview(o: EngineOptions, step: ResolvedStep): boolean {
+  if (step.fanIn) return false;
+  if (!feedsFanIn(o, step)) return false;
+  return stepVariants(step, o.defaults).length === 1;
+}
+
+/** Whether a later step reconciles this one's Outputs — i.e. whether this step reviews. */
+function feedsFanIn(o: EngineOptions, step: ResolvedStep): boolean {
+  return o.wf.steps.some((other) => other.fanIn === step.id);
+}
+
+const planRefusal = Effect.fn("Engine.planRefusal")(function* (
+  o: EngineOptions,
+  parsed: YamlValue,
+) {
+  const pathService = yield* Path.Path;
+  if (!isYamlMap(parsed)) return null;
+  const dir = parsed.issues_dir;
+  if (!isString(dir) || dir.trim() === "") return null;
+  // The prompt asks for `{{run.dir}}/plan/issues`; a planner that wrote it relative
+  // meant the same place, and refusing to look would be reading the Output pedantically
+  // rather than reading the plan.
+  const issues = pathService.resolve(o.run.dir, dir.trim());
+  const plan = yield* planReposOf(pathService.dirname(issues), o.run.record.cwd).pipe(
+    Effect.catch(() => Effect.succeed(null)),
+  );
+  return plan?.refusal?.message ?? null;
+});
+
 const collect = Effect.fn("Engine.collect")(function* (
   o: EngineOptions,
   step: ResolvedStep,
@@ -4010,6 +4714,17 @@ const collect = Effect.fn("Engine.collect")(function* (
     return { record, output: null, review: null, problem: record.error };
   }
 
+  // A plan whose tickets nobody can run is not a finished plan. These refusals used to
+  // run only when someone picked "Implement now", so a `plan` Run could end `done` with
+  // tickets that name a repository nobody checked out, or block each other in a cycle —
+  // and the human found out a workflow later, from a hand-off that would not start.
+  const refusal = yield* planRefusal(o, parsed);
+  if (refusal !== null) {
+    record.status = "failed";
+    record.error = refusal;
+    return { record, output: parsed, review: null, problem: refusal };
+  }
+
   const hasVerdict = isYamlMap(parsed) && "verdict" in parsed;
   if (step.fanIn && !hasVerdict) {
     record.status = "failed";
@@ -4017,13 +4732,25 @@ const collect = Effect.fn("Engine.collect")(function* (
     return { record, output: parsed, review: null, problem: record.error };
   }
 
+  // A review nobody else is reviewing beside is already the review the human reads, so
+  // it is held to the shape of one — a `summary`, and nothing dropped silently. Asking
+  // for that here rather than at the fan-in is what lets the reviewer itself be sent
+  // back to fix its Output; a model rewriting the file afterwards is the ceremony this
+  // is replacing, not a way of getting a summary.
+  const sole = soleReview(o, step);
   let review: ReviewOutput | null = null;
-  if (hasVerdict && step.fanIn) {
+  if (hasVerdict && (step.fanIn || sole)) {
     const result = parseSynthesis(text, record.output);
     if (!result.ok) {
       record.status = "failed";
       record.error = result.error;
       return { record, output: parsed, review: null, problem: result.error };
+    }
+    const vague = unsubstantiated(result.value.findings);
+    if (vague !== null) {
+      record.status = "failed";
+      record.error = `${record.output}: ${vague}`;
+      return { record, output: parsed, review: null, problem: record.error };
     }
     review = result.value;
     yield* fs.writeFileString(pathService.join(o.run.dir, REVIEW_FILE), renderReview(result.value));
@@ -4057,6 +4784,18 @@ const collect = Effect.fn("Engine.collect")(function* (
       record.status = "failed";
       record.error = result.error;
       return { record, output: parsed, review: null, problem: result.error };
+    }
+    // Only a step that reviews: these are the findings that drive a fix loop and land in
+    // front of an implementer. A build's Output has a verdict too, and so does a plan
+    // round's — holding those to a reviewer's standard would refuse work for the wrong
+    // reason, and a plan finding has no file to point at.
+    if (feedsFanIn(o, step)) {
+      const vague = unsubstantiated(result.value.findings);
+      if (vague !== null) {
+        record.status = "failed";
+        record.error = `${record.output}: ${vague}`;
+        return { record, output: parsed, review: null, problem: record.error };
+      }
     }
     review = result.value;
   }
@@ -4177,6 +4916,10 @@ function collectMr(o: EngineOptions, parsed: YamlValue): void {
  * The human on the merge request in that role: `gitlab.assignee` from config for the
  * assignee, else whoever glab is logged in as. Nothing to do where glab or the login is
  * missing — the step that got this far said what it could not do already.
+ *
+ * A merge request already assigned to that person is left alone. One name in both roles
+ * is one person reviewing their own change, and GitLab shows it as a review that has
+ * happened; what actually happened is that Collie read it and the human has the findings.
  */
 const claimMrRole = Effect.fn("Engine.claimMrRole")(function* (
   o: EngineOptions,
@@ -4191,6 +4934,10 @@ const claimMrRole = Effect.fn("Engine.claimMrRole")(function* (
       : undefined;
   const who = yield* resolveAssignee(cwd, configured, runShell);
   if (!who) return;
+  if (role === "reviewer" && (yield* assignedTo(mr, who, cwd, runShell))) {
+    yield* o.out(`  ▸ ${who} already has ${mr.project ? `${mr.project}!` : "!"}${mr.iid}`);
+    return;
+  }
   const res = yield* addMrRole(mr, role, who, cwd, runShell);
   const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
   yield* o.out(
@@ -4247,6 +4994,13 @@ export const unmetRequirementFor = Effect.fn("Engine.unmetRequirementFor")(funct
     }
     if (need === "mr-target" && where.inputs.target_kind !== "mr") {
       return `${target || "this run"} is not a merge request`;
+    }
+    if (need === "someone-elses-mr") {
+      const mr = parseMrTarget(target);
+      const me = mr ? yield* glabLogin(where.cwd, runShell) : null;
+      if (mr && me && (yield* assignedTo(mr, me, where.cwd, runShell))) {
+        return `${target} is assigned to you, so its findings are yours to fix rather than to post`;
+      }
     }
   }
   return null;
@@ -4392,7 +5146,25 @@ export const ENGINE_SUPPLIED: ReadonlySet<string> = new Set([
   "output_path",
   "target_repo",
   "unreviewed",
+  "verify",
+  "risks",
+  "evidence",
+  "ticket",
+  "progress",
+  "obstacle",
 ]);
+
+/** The extra axes a human asked for, as a paragraph, or nothing where they asked for none. */
+function riskLine(risks: string): string {
+  const asked = risks.trim();
+  if (asked === "") return "";
+  return (
+    `Additional axes requested for this change: ${asked}. Apply the matching skill where ` +
+    `one is installed (\`security-and-hardening\`, \`performance-optimization\`) and say in ` +
+    `your review which of them you applied. These are on top of the complete review, not ` +
+    `instead of it.`
+  );
+}
 
 const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
   o: EngineOptions,
@@ -4422,6 +5194,31 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
     max_iterations: String(o.run.record.max_iterations),
     // Empty until a last fix went unreviewed; the mr prompt says it where it is not.
     unreviewed: o.run.record.unreviewed ?? "",
+    // What Collie will run itself at the gate, named so an agent knows what its work is
+    // going to be held to rather than guessing which commands count.
+    verify: renderApproved(approvedFor(o.run.record.approved_verifications, yield* intentOf(o))),
+    // Empty unless the human asked for an extra axis, so an ordinary review renders
+    // nothing at all rather than a paragraph saying no specialist was wanted.
+    risks: riskLine(o.run.record.inputs.risks ?? ""),
+    // The one ticket this slice is for, and what the slices before it left behind. Empty
+    // for every step that is not sliced, so a prompt that names them renders nothing.
+    ticket: ctx.slice
+      ? {
+          file: ctx.slice.ticket.file,
+          number: ctx.slice.ticket.number,
+          title: ctx.slice.ticket.title,
+        }
+      : { file: "", number: "", title: "" },
+    progress: ctx.slice?.progress ?? "",
+    // Empty until something is identifiably in the way, so an ordinary prompt says
+    // nothing about obstacles at all.
+    obstacle: o.run.record.obstacle ?? "",
+    // What was actually collected, so the merge request says what was proved rather than
+    // what an Output claimed. Rendered from the journal, never from a step's own words.
+    evidence: renderEvidence({
+      verifications: yield* verificationsOf(o),
+      final: yield* fingerprint(o.run.record.worktree?.path ?? o.run.record.cwd),
+    }),
     cwd: o.run.record.cwd,
     step: step.id,
     harness: variant.harness,
@@ -4536,6 +5333,7 @@ const finish = Effect.fn("Engine.finish")(function* (
   yield* checkDrift(o, ctx, "finish", "finish");
   yield* standForElection(o, "finish", true);
   yield* settleAtFinish(o, ctx);
+  if (status === "done") yield* recordFixedKindEvidence(o, ctx);
   const final = yield* writeCard(o, ctx, { kind: "final", step: "finish", claims: [] });
   // Once, here: the finish is the only moment at which nobody is left to make it, which
   // is what turns an owed evaluation into something a human has to know about (§9.6).
@@ -4615,7 +5413,17 @@ export function summarise(o: EngineOptions, status: RunStatus): string {
       .filter((v) => v.error)
       .map((v) => `\n    ${v.label}: ${v.error}`)
       .join("");
-    lines.push(`  ${marks[step.status]} ${step.id}${detail}${errors}`);
+    // One line per ticket for a sliced step: which landed, and what each left.
+    const slices = step.slices
+      .map(
+        (slice) =>
+          `\n    ${marks[slice.status]} ${slice.ticket} — ${slice.title}` +
+          (slice.status === "done"
+            ? ` (${slice.commits.length} commit(s), verified: ${slice.verifications.join(", ") || "nothing"})`
+            : ""),
+      )
+      .join("");
+    lines.push(`  ${marks[step.status]} ${step.id}${detail}${errors}${slices}`);
   }
   if (run.record.unreviewed) {
     lines.push("", `Not re-reviewed: ${run.record.unreviewed}`);

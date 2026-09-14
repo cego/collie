@@ -952,12 +952,14 @@ export const compactionFor = Effect.fn("Compactors.compactionFor")(function* (op
   /** The Run's own channel, which the CLI and the board read. A hand-off has none, so
    * its warnings go to the audit trail the sending Run keeps. */
   warn?: CompactionDeps["warn"];
+  /** Where a context sample is recorded; a hand-off, with no Run to record it on, has none. */
+  sample?: CompactionDeps["sample"];
   pollMs?: number;
   known?: CompactionSettings;
 }) {
   const configured =
     opts.known?.configured ?? (yield* loadDefaults(opts.configDir)).compactAtTokens;
-  return {
+  const deps: CompactionDeps = {
     ports: opts.known?.ports ?? COMPACTION_PORTS,
     stateDir: opts.stateDir,
     configured,
@@ -966,7 +968,9 @@ export const compactionFor = Effect.fn("Compactors.compactionFor")(function* (op
     warn: opts.warn ?? opts.log,
     waitMs: opts.known?.waitMs ?? COMPACTION_WAIT_MS,
     pollMs: opts.pollMs ?? 2000,
-  } satisfies CompactionDeps;
+  };
+  if (opts.sample) deps.sample = opts.sample;
+  return deps;
 });
 
 /**

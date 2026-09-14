@@ -7,7 +7,10 @@ import { layerSet, writeDef } from "./support/defs";
 import { FALLBACK_DEFAULTS } from "../src/config";
 import { loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
 import { RunStore } from "../src/run";
-import { filePrompts, readChoice } from "../src/driver";
+import { CHOICE, filePrompts, readChoice } from "../src/driver";
+import { answerRun } from "../src/operations";
+import { layers } from "../src/definitions";
+import { testDefaults } from "./support/compaction";
 import { runEffect } from "./support/effect";
 
 const Json = Schema.fromJsonString(Schema.Any);
@@ -273,7 +276,9 @@ test("a config key a choice needs is asked once and remembered in config.json", 
       const { run, status } = yield* runWorkflowEffect(rig, "choose", { goal: "g" }, { prompts });
 
       expect(status).toBe("done");
-      expect(prompts.asked).toEqual(["Linear team key"]);
+      // The key is in the question, so what is on screen says it is a setting rather
+      // than a menu — which is how a Choice title came to be saved as a team name.
+      expect(prompts.asked).toEqual(["Linear team key? (saved as linear.team)"]);
       expect(
         decodeJson(yield* fs.readFileString(path.join(rig.configDir, "config.json"))).linear,
       ).toEqual({
@@ -607,5 +612,55 @@ test("notify-only questions still toast and still say `asks you`, without taking
         .map((c) => c.argv!.at(-1));
       expect(labels).toContain("⚠ Choose · quiet · asks you");
       expect(run.record.choices.map((c) => c.title)).toEqual(["Stop here"]);
+    }),
+  ));
+
+test("a menu title is never taken as the answer to a settings question", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const env = rig.pluginEnv();
+      const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
+      const wf = resolveWorkflow("plan", defs, yield* testDefaults(env.configDir));
+      const run = yield* new RunStore(env.stateDir).create({
+        workflow: "plan",
+        cwd: env.cwd,
+        inputs: { goal: "add a picker" },
+        inputSources: { goal: "asked" },
+        definition: wf,
+        stepIds: wf.steps.map((s) => s.id),
+        maxIterations: wf.maxIterations,
+        namedAfter: "add a picker",
+      });
+
+      // The Run is asking which Linear team new issues go to. The human is still looking
+      // at the menu that was on screen a moment ago, and answers that instead.
+      yield* fs.writeFileString(
+        path.join(run.dir, CHOICE),
+        encodeJson({
+          id: "c1",
+          kind: "ask",
+          run: run.id,
+          step: "next",
+          header: "Which Linear team do new issues go to? (saved as linear.team)",
+          footer: "",
+          items: [],
+        }),
+      );
+
+      const refused = yield* answerRun(run, "Implement now", "req-1");
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) {
+        expect(refused.error.code).toBe("invalid_answer");
+        expect(refused.error.message).toContain("is a menu choice");
+        expect(refused.error.message).toContain("Linear team");
+      }
+      // Nothing was written: this is how `linear.team` came to be "Implement now".
+      expect(yield* fs.exists(path.join(env.configDir, "config.json"))).toBe(false);
+
+      // A real team name is not refused for resembling one.
+      const accepted = yield* answerRun(run, "Frontend", "req-2");
+      expect(accepted.ok).toBe(true);
     }),
   ));

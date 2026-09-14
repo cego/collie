@@ -145,8 +145,6 @@ test(
 
         expect((yield* store.resumable()).map((r) => r.id)).toEqual([run.id]);
         expect((yield* store.resumable())[0]!.unfinished().map((s) => s.id)).toEqual([
-          "architecture",
-          "simplify",
           "review",
           "review.synthesize",
           "fix",
@@ -169,7 +167,7 @@ test(
       Effect.gen(function* () {
         const run = yield* interruptedRun();
 
-        const { status, lines } = yield* resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+        const { status, lines } = yield* resume(run, [SYNTH]);
 
         expect(status).toBe("done");
         expect(lines[0]).toBe("✓ build — already done, skipped");
@@ -179,7 +177,10 @@ test(
           .filter((c) => c.cmd === "agent prompt")
           .map((c) => c.argv![2]);
         expect(prompted).not.toContain("dead-build-agent");
-        expect((yield* rig.calls()).filter((c) => c.cmd === "agent prompt")).toHaveLength(5);
+        // The one review, and then nothing: the loop is clean, so `fix` is skipped, and
+        // the synthesiser is never prompted because there is nothing to reconcile. The
+        // `mr` step is skipped too — this rig has no glab.
+        expect((yield* rig.calls()).filter((c) => c.cmd === "agent prompt")).toHaveLength(1);
 
         // No herdr call may touch the dead pane either.
         expect((yield* rig.calls()).flatMap((c) => c.argv ?? [])).not.toContain("9-9");
@@ -196,34 +197,28 @@ test(
         const run = yield* interruptedRun();
         const FINDING = {
           verdict: "findings",
-          findings: [{ file: "cli.js", severity: "major", title: "no exit code" }],
+          findings: [
+            {
+              file: "cli.js",
+              severity: "major",
+              title: "no exit code",
+              detail: "It returns 1 on success, so a caller cannot tell it worked.",
+            },
+          ],
         };
 
-        // architecture, simplify and fix all declare `agent: build`, which is gone.
+        // `fix` and `mr` both declare `agent: build`, which is gone.
         const synthesized = { ...FINDING, summary: "A small change to the CLI. It exits wrong." };
-        yield* resume(run, [
-          CLEAN,
-          CLEAN,
-          FINDING,
-          FINDING,
-          synthesized,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          CLEAN,
-          SYNTH,
-        ]);
+        yield* resume(run, [synthesized, CLEAN, SYNTH]);
 
-        const architect = run.step("architecture").variants[0]!;
-        expect(architect.agent).toBe("implement-add-pi-architecture-r2");
-        expect(architect.paneId).not.toBe("9-9");
-        for (const step of ["simplify", "fix"]) {
-          expect(run.step(step).variants[0]!.agent).toBe(architect.agent);
-        }
+        const fixer = run.step("fix").variants[0]!;
+        expect(fixer.paneId).not.toBe("9-9");
+        expect(fixer.agent).not.toBe("dead-build-agent");
         const starts = (yield* rig.calls())
           .filter((c) => c.cmd === "agent start")
           .map((c) => c.argv![2]);
-        expect(starts.filter((a) => a === architect.agent)).toHaveLength(1);
+        // One new agent for every step that borrowed the dead one, not one each.
+        expect(starts.filter((a) => a === fixer.agent)).toHaveLength(1);
         expect(starts).not.toContain("dead-build-agent");
       }),
     ),
@@ -242,13 +237,24 @@ test(
         run.step("build").variants[0]!.permissions = "harness";
         yield* run.save();
 
-        yield* resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+        // A findings review, so the `fix` step runs and continues the dead agent's chain.
+        yield* resume(run, [
+          {
+            verdict: "findings",
+            summary: "A small change to the CLI. It exits wrong.",
+            dropped: [],
+            findings: [
+              { file: "cli.js", severity: "major", title: "no exit code", detail: "returns 1" },
+            ],
+          },
+          { ...CLEAN, checks: [{ name: "tests" }] },
+        ]);
 
-        const architect = run.step("architecture").variants[0]!;
-        expect(architect.permissions).toBe("harness");
+        const fixer = run.step("fix").variants[0]!;
+        expect(fixer.permissions).toBe("harness");
         const started = (yield* rig.calls())
           .filter((c) => c.cmd === "agent start")
-          .find((c) => c.argv![2] === architect.agent)!.argv!;
+          .find((c) => c.argv![2] === fixer.agent)!.argv!;
         expect(started).not.toContain("--permission-mode");
 
         // A step that starts an agent of its own is untouched by the chain: `review` is
@@ -272,14 +278,14 @@ test(
       Effect.gen(function* () {
         const run = yield* interruptedRun();
 
-        yield* resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+        yield* resume(run, [SYNTH]);
 
         // A resumed run is driven headlessly like any other: it opens a tab for the first
         // unfinished step's agent, and nothing for itself.
         expect((yield* rig.cmds()).filter((c) => c === "tab create").length).toBeGreaterThan(0);
         for (const cmd of ["pane move", "pane swap", "pane zoom"])
           expect(yield* rig.cmds()).not.toContain(cmd);
-        expect(run.step("architecture").variants[0]!.paneId).not.toBeNull();
+        expect(run.step("review").variants[0]!.paneId).not.toBeNull();
       }),
     ),
   20_000,
@@ -294,7 +300,7 @@ test(
         const path = yield* Path.Path;
         const run = yield* interruptedRun();
 
-        yield* resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+        yield* resume(run, [SYNTH]);
 
         const record = decodeJson(yield* fs.readFileString(path.join(run.dir, "run.json")));
         expect(record.status).toBe("done");
@@ -320,7 +326,7 @@ test(
         review.note = "herdr agent start failed (exit 1): blocked during startup";
         yield* run.save();
 
-        yield* resume(run, [CLEAN, CLEAN, CLEAN, CLEAN, SYNTH]);
+        yield* resume(run, [SYNTH]);
 
         expect(run.step("review").status).toBe("done");
         expect(run.step("review").note).toBeNull();

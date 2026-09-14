@@ -50,7 +50,7 @@ import { driverCommand, spawnDriver } from "../src/operations";
 import type { HerdrError } from "../src/herdr";
 import { processStartTime } from "../src/lock";
 import type { Asking, RunRow } from "../src/workspace";
-import { askingRun, buildView, renderWorkspace } from "../src/workspace";
+import { NO_OUTCOME, askingRun, buildView, renderWorkspace } from "../src/workspace";
 import { scopeFor } from "../src/registry";
 import { RunStore } from "../src/run";
 import { runEffect } from "./support/effect";
@@ -146,7 +146,7 @@ const currentPid = Effect.sync(() => globalThis.process.pid);
 const fakeHerdrFail = '{"agent start":"no such pane"}';
 
 effectTest("a review is one run tab of agent panes, and the plugin keeps one pane", function* () {
-  yield* rig.queueOutputs([CLEAN, CLEAN, { ...CLEAN, summary: "nothing to fix", dropped: [] }]);
+  yield* rig.queueOutputs([{ ...CLEAN, summary: "nothing to fix", dropped: [] }]);
 
   const { run, status } = yield* runWorkflow(
     rig,
@@ -166,15 +166,17 @@ effectTest("a review is one run tab of agent panes, and the plugin keeps one pan
   expect(cmds.filter((c) => c === "tab create")).toHaveLength(1);
   for (const cmd of ["pane move", "pane swap"]) expect(cmds).not.toContain(cmd);
   expect(calls.filter((c) => c.cmd === "plugin pane")).toHaveLength(1);
+  // One reviewer, so no pane is labelled to tell it from another and no synthesiser
+  // pane is opened at all.
   const panes = calls.filter((c) => c.cmd === "pane rename").map((c) => c.argv?.at(-1));
-  expect(panes).toEqual(["Opus", "Sonnet", "Synthesize"]);
-  expect(run.step("review").variants).toHaveLength(2);
+  expect(panes).toEqual([]);
+  expect(run.step("review").variants).toHaveLength(1);
 });
 
 effectTest("a workflow reuses the untouched numbered tab it was launched from", function* () {
   const herdr = new FakeHerdr(rig.pluginEnv());
   expect(yield* herdr.tabCreate({})).toEqual({ tabId: "1:1", paneId: "1-1" });
-  yield* rig.queueOutputs([CLEAN, CLEAN, { ...CLEAN, summary: "done", dropped: [] }]);
+  yield* rig.queueOutputs([{ ...CLEAN, summary: "done", dropped: [] }]);
 
   yield* runWorkflow(rig, "review", {}, { prompts: scriptedPrompts(["Don't post"]) });
 
@@ -387,6 +389,7 @@ effectTest("the board's keys answer the question, and Esc leaves the run open", 
     fixable: false,
     choice: menu,
     needsYou: false,
+    ...NO_OUTCOME,
   };
   const start: Asking = { index: 0, typed: "" };
 

@@ -6,6 +6,21 @@ import { Effect, FileSystem, Path } from "effect";
 
 const REPO_LINE = /^\s*\*\*Repo:\*\*\s*(.*?)\s*$/m;
 const BLOCKED_LINE = /^\s*\*\*Blocked by:\*\*\s*(.*?)\s*$/m;
+const CHECKS_LINE = /^\s*\*\*Checks:\*\*\s*(.*?)\s*$/m;
+
+/**
+ * The verification names a ticket's `**Checks:**` line promises, `[]` where it has none
+ * or says `None`. Written as names — `tests, typecheck` — or as the commands in backticks;
+ * either way what is kept is the name a `collie verify` record carries.
+ */
+export function checksIn(text: string): string[] {
+  const line = CHECKS_LINE.exec(text)?.[1]?.trim() ?? "";
+  if (line === "" || /^none\b/i.test(line)) return [];
+  return line
+    .split(",")
+    .map((part) => part.trim().replace(/^`|`$/g, "").trim())
+    .filter((part) => part !== "");
+}
 
 /** One repository the plan changes, and the tickets that change it, in plan order. */
 export interface PlanRepo {
@@ -166,6 +181,38 @@ export function readPlanRepos(
     );
   }
 
+  // Two rules about the tickets themselves, before anything about repositories: a number
+  // claimed twice and a "Blocked by" line naming something that is not a ticket here are
+  // wrong however many repositories the plan spans. They used to be checked only past the
+  // single-repository shortcut below, so the same plan was judged one way as one repo and
+  // another as two — and the order those lines describe is what a build is sliced along.
+  const claiming = new Map<string, string[]>();
+  for (const ticket of parsed) indexBy(claiming, ticket.id, ticket.file);
+  const twice = [...claiming.values()].filter((files) => files.length > 1);
+  if (twice.length > 0) {
+    return refuse(
+      "duplicate-ticket",
+      `These tickets are numbered the same, so a "Blocked by" line cannot say which it means: ${twice
+        .map((files) => files.join(" and "))
+        .join(", ")}. Number every ticket of a plan once.`,
+    );
+  }
+
+  const unreadable = parsed.flatMap((ticket) =>
+    ticket.blockedBy === null
+      ? [`${ticket.file} (blocked by "${ticket.blockedText}")`]
+      : ticket.blockedBy
+          .filter((id) => !claiming.has(id))
+          .map((id) => `${ticket.file} (blocked by ${id})`),
+  );
+  if (unreadable.length > 0) {
+    return refuse(
+      "unknown-blocker",
+      `These tickets are blocked by something that is not a ticket of this plan: ${unreadable.join(", ")}. ` +
+        `A "Blocked by" line names the numbers of the tickets it waits for, or "None".`,
+    );
+  }
+
   // Every ticket in one repository, whether it says so or not: today's plans, and the
   // ones written inside a repo, where `.` is the only answer there is.
   if (parsed.every((ticket) => ticket.repo === null || ticket.repo === ".")) {
@@ -190,46 +237,11 @@ export function readPlanRepos(
   // the blocking edges, and which files claim it, for the two that claim one twice.
   const ticketsOf = new Map<string, string[]>();
   const repoOfId = new Map<string, string>();
-  const sharing = new Map<string, string[]>();
   for (const ticket of placed) {
     repoOfId.set(ticket.id, ticket.repo);
-    indexBy(sharing, ticket.id, ticket.file);
     indexBy(ticketsOf, ticket.repo, ticket.file);
   }
   const paths = [...ticketsOf.keys()];
-
-  // Two tickets numbered the same are two answers to "which ticket is 01", and a
-  // "Blocked by" line naming that number cannot say which it means: whichever was read
-  // last would win, so `01-api.md` and `01-web.md` in two repositories quietly lose the
-  // edge onto one of them. Refused for the same reason an unreadable blocker is.
-  const shared = [...sharing.values()].filter((files) => files.length > 1);
-  if (shared.length > 0) {
-    return refuse(
-      "duplicate-ticket",
-      `These tickets are numbered the same, so a "Blocked by" line cannot say which it means: ${shared
-        .map((files) => files.join(" and "))
-        .join(", ")}. Number every ticket of a plan once.`,
-    );
-  }
-
-  // A blocker naming no ticket of this plan is refused rather than dropped: the waves
-  // are built from these lines, and an edge nobody records is a frontend run starting
-  // beside the backend run it depends on, with nothing anywhere saying why. A line that
-  // names no ticket at all — prose where a number belongs — is the same failure.
-  const dangling = placed.flatMap((ticket) =>
-    ticket.blockedBy === null
-      ? [`${ticket.file} (blocked by "${ticket.blockedText}")`]
-      : ticket.blockedBy
-          .filter((id) => !repoOfId.has(id))
-          .map((id) => `${ticket.file} (blocked by ${id})`),
-  );
-  if (dangling.length > 0) {
-    return refuse(
-      "unknown-blocker",
-      `These tickets are blocked by something that is not a ticket of this plan: ${dangling.join(", ")}. ` +
-        `A "Blocked by" line names the numbers of the tickets it waits for, or "None".`,
-    );
-  }
 
   // Cross-repo blocking edges only: an edge inside a repo orders that run's tickets,
   // which is the implementer's business rather than the fan-out's.
@@ -326,4 +338,96 @@ export const planReposOf = Effect.fn("Plan.planReposOf")(function* (planDir: str
   }
 
   return readPlanRepos(tickets, checkouts);
+});
+
+/** One ticket as a build slice needs it: where it is, what it is called, what it waits for. */
+export interface Slice {
+  file: string;
+  /** The number its file is prefixed with, which a "Blocked by" line names it by. */
+  number: string;
+  title: string;
+  blockedBy: ReadonlyArray<string>;
+  /** The verification names its `**Checks:**` line promised will prove it. */
+  checks: ReadonlyArray<string>;
+}
+
+/** The first heading, else the file name without its number — what a hand-off calls it. */
+function titleOf(file: string, text: string): string {
+  const heading = /^#+\s+(.+?)\s*$/m.exec(text)?.[1];
+  if (heading) return heading.replace(/^\d+[\s:.-]+/, "").trim();
+  return file
+    .replace(/\.md$/, "")
+    .replace(/^\d+[-_]?/, "")
+    .replaceAll("-", " ");
+}
+
+/**
+ * The plan's tickets in an order they can actually be built in: `Blocked by` before
+ * blocked, and plan order among tickets that do not wait for each other. This is the
+ * intra-repository ordering `readPlanRepos` deliberately leaves alone — it orders
+ * *repositories*, and says an edge inside one is the implementer's business. Slicing a
+ * build is that business.
+ *
+ * Refuses nothing on its own: `readPlanRepos` has already refused a plan with a cycle, a
+ * number claimed twice or an edge pointing at nothing, and a second opinion here that
+ * disagreed with it would be worse than none. A cycle that reached this anyway keeps plan
+ * order for whatever is left, so a caller still gets every ticket exactly once.
+ */
+export function orderedTickets(
+  tickets: ReadonlyArray<{ file: string; text: string }>,
+  repo?: string,
+): Slice[] {
+  const mine = tickets.filter((ticket) => {
+    if (repo === undefined || repo === "") return true;
+    const written = repoUnderRoot(REPO_LINE.exec(ticket.text)?.[1] ?? "");
+    return written === repo || (written === null && repo === ".");
+  });
+  const slices: Slice[] = mine.map((ticket) => ({
+    file: ticket.file,
+    number: ticketId(ticket.file),
+    title: titleOf(ticket.file, ticket.text),
+    blockedBy: blockersIn(BLOCKED_LINE.exec(ticket.text)?.[1]?.trim() ?? "") ?? [],
+    checks: checksIn(ticket.text),
+  }));
+
+  const here = new Set(slices.map((slice) => slice.number));
+  const done = new Set<string>();
+  const out: Slice[] = [];
+  let left = slices;
+  while (left.length > 0) {
+    // Plan order among the ready ones: the planner numbered them for a reason, and two
+    // tickets that wait for nothing should build in the order they were written.
+    const ready = left.filter((slice) =>
+      slice.blockedBy.every((id) => !here.has(id) || done.has(id)),
+    );
+    // A cycle nothing refused: take what is left in plan order rather than lose it.
+    const taking = ready.length > 0 ? ready : left;
+    for (const slice of taking) {
+      out.push(slice);
+      done.add(slice.number);
+    }
+    left = left.filter((slice) => !done.has(slice.number));
+  }
+  return out;
+}
+
+/** The same, against a plan directory on disk. */
+export const orderedTicketsOf = Effect.fn("Plan.orderedTicketsOf")(function* (
+  planDir: string,
+  repo?: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const issues = path.join(planDir, "issues");
+  const files = (yield* fs.readDirectory(issues).pipe(Effect.catch(() => Effect.succeed([]))))
+    .filter((name) => name.endsWith(".md"))
+    .sort();
+  const tickets: Array<{ file: string; text: string }> = [];
+  for (const file of files) {
+    const text = yield* fs
+      .readFileString(path.join(issues, file))
+      .pipe(Effect.catch(() => Effect.succeed("")));
+    tickets.push({ file, text });
+  }
+  return orderedTickets(tickets, repo);
 });

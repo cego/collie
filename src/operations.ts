@@ -19,6 +19,9 @@ import {
   validateWorkflow,
   type ResolvedWorkflow,
 } from "./definitions";
+import { readSnapshot, stepDifference, stepsDiffer } from "./snapshot";
+import { approvedFrom } from "./verify-spec";
+import { REQUESTABLE } from "./outcome";
 import {
   CHOICE,
   driverAlive,
@@ -123,6 +126,8 @@ const ErrorCode = Schema.Literals([
   "needs_input",
   "timeout",
   "invalid_state",
+  /** The workflow a Run recorded is not the workflow its layers resolve to now. */
+  "definition_changed",
   "operation_failed",
   "invalid_input",
 ]);
@@ -458,6 +463,16 @@ export const settleGiven = Effect.fn("operations.settleGiven")(function* (
     }
   }
 
+  // A value outside the table would make the Run promise evidence nothing can produce,
+  // and it would not find that out until the gate before its merge request.
+  const outcome = given.inputs.outcome?.trim();
+  if (outcome !== undefined && outcome !== "" && !REQUESTABLE.includes(outcome)) {
+    return err(
+      "invalid_input",
+      `"${outcome}" is not an outcome (one of: ${REQUESTABLE.join(", ")}), or leave it empty.`,
+    );
+  }
+
   yield* settleExplicit(env, resolutions, given.inputs);
 
   // Nobody is here to be asked; an unsettled Input is the caller's to give. A value
@@ -668,6 +683,8 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     inputs: inputValues(resolutions),
     inputSources: inputSources(resolutions),
     decisions: options.decisions,
+    definition: workflow,
+    approvedVerifications: yield* approvedFrom({ cwd: checkout.cwd, configDir: env.configDir }),
     stepIds: workflow.steps.map((step) => step.id),
     maxIterations: workflow.maxIterations,
     ...runNames(checkout, named),
@@ -719,6 +736,7 @@ const seedRunIntent = Effect.fn("operations.seedRunIntent")(function* (
     defaults,
     goal: named.goal ?? work.goal,
     constraints: [...work.constraints, ...(named.constraints ?? [])],
+    runVerification: run.record.approved_verifications,
   });
   yield* writeIntent(run.dir, intent).pipe(
     Effect.matchEffect({
@@ -781,6 +799,24 @@ const answeredChoices = Effect.fn("operations.answeredChoices")(function* (dir: 
  * Answers the Run's current Choice. Only the owning Driver moves the Run on; this
  * checks that there is something to answer and that the answer is one of its own.
  */
+/**
+ * Every Choice title this Run can offer, from the definition it froze at creation — not
+ * from whatever the layers say now, and not from a re-resolution that could disagree with
+ * what the Run is actually running. Empty for a Run with no snapshot, which simply means
+ * the guard below has nothing to compare against and lets the answer through.
+ */
+const choiceTitlesOf = Effect.fn("operations.choiceTitlesOf")(function* (run: Run) {
+  const frozen = yield* readSnapshot(run.dir, run.record.definition).pipe(
+    Effect.catch(() => Effect.succeed(null)),
+  );
+  if (frozen === null) return new Set<string>();
+  return new Set(
+    frozen.steps.flatMap((step) =>
+      (step.choices ?? []).map((choice) => choice.title.trim().toLowerCase()),
+    ),
+  );
+});
+
 export const answerRun = Effect.fn("operations.answerRun")(function* (
   run: { readonly id: string; readonly dir: string },
   answer: string,
@@ -789,6 +825,11 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
   expected: string | null = null,
 ) {
   const fs = yield* FileSystem.FileSystem;
+  // What this Run can offer from a menu, where the caller handed over a whole Run to ask.
+  // SAFETY: `record` is the field that distinguishes a loaded Run from the id-and-dir
+  // shape the board passes, and `Run` is the only type here that has one.
+  const whole = "record" in run ? (run as Run) : null;
+  const titles = whole === null ? new Set<string>() : yield* choiceTitlesOf(whole);
   const choice = yield* readChoice(run.dir);
   if (!choice) return err("run_not_waiting", `Run "${run.id}" is not waiting for a Choice.`);
   // Checked here rather than in the caller: this is the boundary the Driver reads
@@ -805,6 +846,18 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
     return err("invalid_answer", `"${answer}" is not a valid answer.`, {
       answers: choice.items.map((item) => item.id),
     });
+  }
+  // A settings question is typed into, not picked from — and a Choice title typed into
+  // one is somebody answering the menu they were looking at a moment ago. It used to be
+  // taken literally and written to `config.json`, which is how a Linear team came to be
+  // called "Implement now". The question says what it is asking for; this refuses the one
+  // answer it certainly is not.
+  if (choice.kind === "ask" && titles.has(answer.trim().toLowerCase())) {
+    return err(
+      "invalid_answer",
+      `"${answer}" is a menu choice, and this Run is asking a settings question: ${choice.header}`,
+      { question: choice.header },
+    );
   }
   const entry = yield* writeInbox(run.dir, {
     type: "answer",
@@ -1105,6 +1158,12 @@ export const steer = Effect.fn("operations.steer")(function* (
     readonly from?: string | null;
     readonly dryRun?: boolean;
     readonly requestId: string;
+    /**
+     * Who is asking. `event` is the board speaking first about something that changed;
+     * the question is journaled as that, never as the human's words. It changes what the
+     * conversation shows and nothing about what the answer may do.
+     */
+    readonly asked?: "human" | "event";
   },
 ) {
   const store = new RunStore(env.stateDir);
@@ -1118,7 +1177,7 @@ export const steer = Effect.fn("operations.steer")(function* (
 
   const journal = yield* conversationPath(env.stateDir, deps.herdKey);
   const roots = (yield* store.list()).map((r) => r.dir);
-  const said: NewTurn = { role: "human", text: options.text };
+  const said: NewTurn = { role: options.asked ?? "human", text: options.text };
   yield* append(journal, target === null ? said : { ...said, target }, roots);
 
   const from = options.from ?? null;
@@ -1259,6 +1318,14 @@ function previewOf(interpretation: string, checked: ReadonlyArray<Validated>): s
  * never a worker's terminal transcript: what an agent is doing reaches this as herdr's
  * own status and title, and no further.
  */
+/**
+ * How much of the Herd and of the conversation one question carries. Both are caps on a
+ * prompt, not policy: a Herd with two hundred Runs must not produce a two-hundred-Run
+ * prompt, and a conversation that has run all week must not be re-sent whole.
+ */
+const HERD_LINES = 40;
+const TURNS_IN_CONTEXT = 20;
+
 const evidencePack = Effect.fn("operations.evidencePack")(function* (
   env: PluginEnv,
   question: string,
@@ -1268,6 +1335,7 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
 ) {
   const store = new RunStore(env.stateDir);
   const runs = yield* store.list();
+  const listed = runs.slice(0, HERD_LINES);
   const lines = [
     "## The question",
     "",
@@ -1275,13 +1343,45 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
     "",
     "## Runs in this Herd",
     "",
-    ...(yield* Effect.forEach(runs.slice(0, 40), (item) =>
+    ...(yield* Effect.forEach(listed, (item) =>
       Effect.gen(function* () {
         const status = yield* runStatus(item);
-        return `- run ${item.id}: ${item.record.workflow}, ${status}, agents ${runningAgents(item.record).join(", ") || "none"}`;
+        const record = item.record;
+        // The same facts the board shows, so Collie and the row a human is looking at
+        // cannot tell different stories about one Run.
+        const said = [
+          `- run ${item.id}: ${record.workflow}, ${status}`,
+          `agents ${runningAgents(record).join(", ") || "none"}`,
+          `outcome ${record.outcome ?? "unspecified"}`,
+        ];
+        if (record.evidence_gaps.length > 0)
+          said.push(`not proved: ${record.evidence_gaps.join("; ")}`);
+        if (record.obstacle !== null) said.push(`in the way: ${record.obstacle}`);
+        return said.join(", ");
       }),
     )),
+    // Never silently a partial world: a model told about 40 of 200 Runs and not told so
+    // would answer "that is all of them" in good faith.
+    ...(runs.length > listed.length
+      ? [`- (${runs.length - listed.length} more Run(s) not listed here)`]
+      : []),
   ];
+
+  // Everything said in this Herd, whatever it was about. Without this an untargeted
+  // question is asked with no memory of the conversation it belongs to, so a follow-up
+  // like "what about the second one" has nothing to resolve — which is why the global
+  // Collie could not hold a conversation at all.
+  const said = yield* tail(journal, TURNS_IN_CONTEXT);
+  if (said.length > 0) {
+    lines.push(
+      "",
+      "## This conversation so far",
+      "",
+      ...said.map(
+        (turn) => `- ${turn.role}${turn.target ? ` (about ${turn.target})` : ""}: ${turn.text}`,
+      ),
+    );
+  }
   if (run !== null) {
     const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
     lines.push(
@@ -1326,7 +1426,7 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
           : `Bound to this card's revision: ${bound.revision.head_sha} (${bound.readiness}).`,
       );
     }
-    const turns = yield* tail(journal, 20, run.id);
+    const turns = yield* tail(journal, TURNS_IN_CONTEXT, run.id);
     if (turns.length > 0)
       lines.push(
         "",
@@ -1465,6 +1565,37 @@ export const stopRun = Effect.fn("operations.stopRun")(function* (
  * off the command and records it, which is what gives the Run's own audit trail a
  * resume as well as a stop.
  */
+/**
+ * Whether the workflow this Run recorded and the one its layers resolve to now are the
+ * same shape, for a Run that has no frozen definition to compare against. A failure to
+ * resolve at all is the same answer: a Run cannot be resumed into a definition that is
+ * not there.
+ */
+const definitionMoved = Effect.fn("operations.definitionMoved")(function* (
+  env: PluginEnv,
+  run: Run,
+) {
+  const defs = yield* loadDefinitions(yield* layers({ ...env, cwd: run.record.cwd }));
+  const defaults = yield* loadDefaults(env.configDir);
+  let wf: ResolvedWorkflow;
+  try {
+    wf = resolveWorkflow(run.record.workflow, defs, defaults);
+  } catch (cause) {
+    if (cause instanceof DefinitionError)
+      return err("definition_changed", `Run "${run.id}" cannot be resumed: ${cause.message}`);
+    throw cause;
+  }
+  const recorded = run.record.steps.map((step) => step.id);
+  const now = wf.steps.map((step) => step.id);
+  if (!stepsDiffer(recorded, now)) return null;
+  return err(
+    "definition_changed",
+    `Run "${run.id}" recorded steps ${recorded.join(", ")}, and ${wf.path} ${stepDifference(recorded, now)}. ` +
+      `This Run predates frozen definitions, so resuming it would run a workflow it never started. Nothing was changed.`,
+    { workflow: wf.name, path: wf.path, recorded: recorded.join(", "), now: now.join(", ") },
+  );
+});
+
 export const resumeRun = Effect.fn("operations.resumeRun")(function* (
   env: PluginEnv,
   run: Run,
@@ -1508,6 +1639,14 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
         );
       if ((yield* runStatus(run)) === "succeeded" && !stillFanningOut(run))
         return err("invalid_state", `Run "${run.id}" has already succeeded.`);
+      // A Run with no frozen definition resolves from whatever the layers say now, and a
+      // resume resets its unfinished steps against that. Where the two no longer agree,
+      // resuming would run a workflow this Run never started — so it is refused, and
+      // nothing is written: the record is left exactly as the human found it.
+      if (run.record.definition === null) {
+        const changed = yield* definitionMoved(env, run);
+        if (changed !== null) return changed;
+      }
       yield* fs.remove(path.join(run.dir, STOPPED), { force: true });
       for (const step of run.record.steps) if (step.status !== "done") step.status = "pending";
       run.record.status = "running";
@@ -1612,6 +1751,8 @@ export const followUp = Effect.fn("operations.followUp")(function* (
     worktree,
     inputs: { plan: `followup:${parent.id}`, plan_kind: "followup" },
     inputSources: { plan: `follow-up of ${parent.id}` },
+    definition: prepared.workflow,
+    approvedVerifications: yield* approvedFrom({ cwd: env.cwd, configDir: env.configDir }),
     stepIds: prepared.workflow.steps.map((step) => step.id),
     maxIterations: parent.record.max_iterations,
     namedAfter: parent.record.named_after ?? parent.record.slug,
@@ -1646,7 +1787,13 @@ export const followUp = Effect.fn("operations.followUp")(function* (
 
   const intent = yield* readIntent(parent.dir).pipe(Effect.catch(() => Effect.succeed(null)));
   if (intent !== null)
-    yield* writeIntent(child.dir, propagate(intent, seedIntent(child.id, {})).intent);
+    yield* writeIntent(
+      child.dir,
+      propagate(
+        intent,
+        seedIntent(child.id, { runVerification: child.record.approved_verifications }),
+      ).intent,
+    );
 
   // The one write to a finished Run: without it the follow-up is invisible from the thing
   // it follows up, which is where anybody looking for it would start.

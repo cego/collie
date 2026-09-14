@@ -61,6 +61,24 @@ const SYNTH = {
   summary: "A one-file change to the CLI. Nothing wrong with it.",
 } satisfies Schema.JsonObject;
 
+/**
+ * The shape the baseline had until one complete review became the default, installed as
+ * a user-layer override — which is exactly what a user who keeps two reviewers has. Every
+ * test below that is about the fan-in itself asks for it.
+ */
+const twoReviewers = Effect.fn("test.twoReviewers")(function* () {
+  const baseline = yield* fs.readFileString(path.join(rig.baselineDir, "workflows", "review.md"));
+  yield* writeDef(
+    rig.configDir,
+    "workflows",
+    "review",
+    baseline.replace(
+      "      - { harness: claude, model: opus, effort: medium }",
+      "      - { harness: claude, model: opus, effort: medium }\n      - { harness: claude, model: sonnet, effort: xhigh }",
+    ),
+  );
+});
+
 /** review fans out to opus and sonnet, so a prompt lives under its variant. */
 const readText = Effect.fn("test.readText")(function* (file: string) {
   return yield* fs.readFileString(file);
@@ -224,20 +242,28 @@ function runWorkflowEffect(
   return program;
 }
 
-function promptOf(run: { dir: string }, variant = "claude-opus") {
-  return readText(path.join(run.dir, "steps", "review", variant, "prompt-1.md"));
+/**
+ * The review prompt. One reviewer has no variant directory of its own — a key is what
+ * keeps several apart — so the default path is the step's, and a test that installs two
+ * reviewers names the one it means.
+ */
+function promptOf(run: { dir: string }, variant: string | null = null) {
+  const dir =
+    variant === null ? [run.dir, "steps", "review"] : [run.dir, "steps", "review", variant];
+  return readText(path.join(...dir, "prompt-1.md"));
 }
 
 /** A glab that answers `mr view` and appends every note it is asked to post. */
-function fakeGlab(iid: number) {
+function fakeGlab(iid: number, assignees: readonly string[] = []) {
   return Effect.gen(function* () {
     const notes = path.join(rig.root, "bin", "notes.txt");
+    const assigned = assignees.map((who) => `{"username": "${who}"}`).join(", ");
     yield* bin.add(
       "glab",
       `case "$1 $2" in
       "--version ") echo "glab 1.40.0" ;;
       "auth status") echo "logged in" ;;
-      "mr view") echo '{"iid": ${iid}, "state": "opened"}' ;;
+      "mr view") echo '{"iid": ${iid}, "state": "opened", "assignees": [${assigned}]}' ;;
       "mr note") shift 2; printf '%s\\n' "$@" >> ${notes} ;;
       "api user") echo '{"username": "mk"}' ;;
       "mr update") shift 2; printf '%s\\n' "$*" >> ${path.join(rig.root, "bin", "updates.txt")} ;;
@@ -260,32 +286,41 @@ test("review runs standalone on the inferred target, and post is no longer an in
   runEffect(
     Effect.gen(function* () {
       yield* bin.add("glab", `echo '{"iid": 12, "state": "opened"}'`);
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const prompts = scriptedPrompts(["Don't post"]);
 
       const { run, status } = yield* runWorkflowEffect("review", {}, { prompts });
       expect(status).toBe("done");
+      // A review's outcome is fixed, and its one requirement — a summary a human can
+      // read — was met, so nothing is left on the record as missing.
+      expect(run.record.outcome).toBe("review");
+      expect(run.record.evidence_gaps).toEqual([]);
       // The kind is recorded next to the value, so a prompt can branch on it.
       expect(run.record.inputs).toEqual({
         target: "mr:12",
         target_kind: "mr",
         plan: "",
         previous: "",
+        risks: "",
+        outcome: "",
       });
       expect(run.record.input_sources).toEqual({
         target: "open merge request !12",
         plan: "default",
         previous: "default",
+        risks: "default",
+        outcome: "default",
       });
 
       const prompt = yield* promptOf(run);
       expect(prompt).toContain("Review target: mr:12");
       expect(prompt).not.toContain("Post to GitLab");
       expect(prompt).toContain(
-        `OUTPUT_PATH: ${path.join(run.dir, "steps", "review", "claude-opus", "review.json")}`,
+        `OUTPUT_PATH: ${path.join(run.dir, "steps", "review", "review.json")}`,
       );
 
-      // Same persona, two models: that is the whole difference between the variants.
+      // One agent for the whole review: no second reviewer, and no model started to
+      // reconcile one file into one file.
       const starts = (yield* rig.calls()).filter((c) => c.cmd === "agent start");
       expect(starts.map((c) => c.argv!.slice(8))).toEqual([
         [
@@ -298,25 +333,16 @@ test("review runs standalone on the inferred target, and post is no longer an in
           "--permission-mode",
           "bypassPermissions",
         ],
-        [
-          "--model",
-          "sonnet",
-          "--effort",
-          "xhigh",
-          "--append-system-prompt-file",
-          path.join(run.dir, "personas", "reviewer.claude.md"),
-          "--permission-mode",
-          "bypassPermissions",
-        ],
-        [
-          "--model",
-          "opus",
-          "--append-system-prompt-file",
-          path.join(run.dir, "personas", "reviewer.claude.md"),
-          "--permission-mode",
-          "bypassPermissions",
-        ],
       ]);
+      expect(run.step("synthesize").status).toBe("done");
+      expect(run.step("synthesize").note).toBe("skipped: one review, nothing to reconcile");
+      expect(run.step("synthesize").variants).toEqual([]);
+      // The one review that was written is the review a human reads, and the record
+      // points at it as the synthesis.
+      expect(yield* readText(path.join(run.dir, REVIEW_FILE))).toContain(
+        "A one-file change to the CLI.",
+      );
+      expect(run.record.synthesis).toBe(path.join("steps", "review", "review.json"));
       expect(yield* readText(path.join(run.dir, "personas", "reviewer.claude.md"))).toContain(
         "You are a reviewer",
       );
@@ -366,6 +392,7 @@ test("the synthesiser is handed every reviewer's Output and writes one review", 
           },
         ],
       };
+      yield* twoReviewers();
       yield* queueOutputs([opus, sonnet, synthesized]);
 
       const { run, status, lines } = yield* runWorkflowEffect(
@@ -420,6 +447,7 @@ test("the synthesis pane opens under the reviewers, in their tab", () =>
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
+      yield* twoReviewers();
       yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
 
       const { run } = yield* runWorkflowEffect("review", {});
@@ -447,6 +475,7 @@ test("a synthesis without a summary, or a dropped finding without a reason, fail
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
+      yield* twoReviewers();
       yield* queueOutputs([CLEAN, CLEAN, CLEAN]);
 
       const { run, status } = yield* runWorkflowEffect("review", {});
@@ -463,7 +492,7 @@ test("an MR target offers the post choice, and Post sends review.md as one note"
   runEffect(
     Effect.gen(function* () {
       yield* fakeGlab(12);
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const prompts = scriptedPrompts(["Post to MR"]);
 
       const { run, status, lines } = yield* runWorkflowEffect("review", {}, { prompts });
@@ -490,13 +519,40 @@ test("an MR target offers the post choice, and Post sends review.md as one note"
     }),
   ));
 
+test("a merge request already assigned to me is reviewed for me, not at me", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The same merge request as above, with one difference: it is mine to land.
+      yield* fakeGlab(12, ["mk"]);
+      yield* queueOutputs([SYNTH]);
+      const prompts = scriptedPrompts(["Don't post"]);
+
+      const { run, status, lines } = yield* runWorkflowEffect("review", {}, { prompts });
+
+      expect(status).toBe("done");
+      // Posting is not on the menu: the findings are the author's own to fix, and a note
+      // would be the author writing to the author.
+      expect(prompts.offered).toEqual([
+        ["Fix findings", "Fix findings in a full implement run", "Don't post"],
+      ]);
+      const where = "gitlab.cego.dk/cego/herdr-plugin!12";
+      expect(lines).toContain(`  ▸ mk already has ${where}`);
+      expect(lines).not.toContain(`  ▸ mk is reviewer on ${where}`);
+      // Nobody was added in either role, so GitLab does not show a review that is really
+      // one person reading their own change.
+      expect(yield* exists(path.join(rig.root, "bin", "updates.txt"))).toBe(false);
+      expect(yield* exists(path.join(rig.root, "bin", "notes.txt"))).toBe(false);
+      expect(run.step("post").note).toContain("Don't post");
+    }),
+  ));
+
 test("an explicit MR can be reviewed and posted", () =>
   runEffect(
     Effect.gen(function* () {
       yield* fakeGlab(7);
       const notes = path.join(rig.root, "bin", "notes.txt");
 
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const prompts = scriptedPrompts(["Post to MR"]);
 
       const { run, status } = yield* runWorkflowEffect("review", {}, { prompts });
@@ -514,9 +570,7 @@ test("an explicit MR can be reviewed and posted", () =>
       );
 
       // The reviewers were told how to read it without a checkout.
-      const prompt = yield* readText(
-        path.join(run.dir, "steps", "review", "claude-opus", "prompt-1.md"),
-      );
+      const prompt = yield* readText(path.join(run.dir, "steps", "review", "prompt-1.md"));
       expect(prompt).toContain("glab mr diff <iid>");
       expect(prompt).not.toContain("{{target_repo}}");
     }),
@@ -526,7 +580,7 @@ test("Don't post leaves the merge request alone", () =>
   runEffect(
     Effect.gen(function* () {
       yield* fakeGlab(12);
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const prompts = scriptedPrompts(["Don't post"]);
 
       const { run, status } = yield* runWorkflowEffect("review", {}, { prompts });
@@ -548,7 +602,7 @@ test("a note that will not send re-offers the menu instead of ending the step", 
         "git",
         `case "$1 $2" in "remote -v") echo "origin\tgit@gitlab.cego.dk:cego/x.git (fetch)" ;; *) echo main ;; esac`,
       );
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const prompts = scriptedPrompts(["Post to MR", "Don't post"]);
 
       const { status, lines } = yield* runWorkflowEffect("review", {}, { prompts });
@@ -567,7 +621,7 @@ test("a branch target cannot be posted to, so the menu offers what it can", () =
         "git",
         `case "$1 $2" in "rev-parse --abbrev-ref") echo feature ;; *) echo main ;; esac`,
       );
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const prompts = scriptedPrompts(["Don't post"]);
 
       const { run, status, lines } = yield* runWorkflowEffect("review", {}, { prompts });
@@ -642,7 +696,7 @@ test("a review.json that breaks the Output schema fails the step with the schema
       const broken = { verdict: "findings", findings: [] };
       // The reviewers are prompted first and collected after, so the repair's write
       // is the third in the queue.
-      yield* queueOutputs([broken, CLEAN, broken]);
+      yield* queueOutputs([broken, broken]);
 
       const { run, status } = yield* runWorkflowEffect("review", {});
 
@@ -650,7 +704,7 @@ test("a review.json that breaks the Output schema fails the step with the schema
       expect(run.record.steps[0]!.variants[0]!.status).toBe("failed");
       expect(run.record.steps[0]!.variants[0]!.repairs).toHaveLength(1);
       expect(run.record.steps[0]!.variants[0]!.error).toBe(
-        'steps/review/claude-opus/review.json: verdict "findings" with an empty findings list',
+        'steps/review/review.json: verdict "findings" with an empty findings list',
       );
     }),
   ));
@@ -660,7 +714,7 @@ test("the working tree is the last resort target", () =>
     Effect.gen(function* () {
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
 
       const { run } = yield* runWorkflowEffect("review", {});
 
@@ -676,6 +730,7 @@ test("a synthesis written as one newline is repaired, not thrown away", () =>
       yield* bin.add("git", `echo main`);
       // This is the failure that found the bug: the fan-in Output was one newline,
       // and the whole round — two reviewers — was discarded over a write.
+      yield* twoReviewers();
       yield* queueOutputs([CLEAN, CLEAN, "\n", SYNTH]);
 
       const { run, status } = yield* runWorkflowEffect(
@@ -699,13 +754,13 @@ test("a second review of the same target is given the first one", () =>
       // A branch, not the working tree: `worktree` names no change, so it is never
       // matched against an earlier review (that would be another branch's findings).
       const target = { target: "branch:main...feature" };
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const first = yield* runWorkflowEffect("review", target, {
         prompts: scriptedPrompts(["Don't post"]),
       });
       expect(first.status).toBe("done");
 
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const second = yield* runWorkflowEffect("review", target, {
         prompts: scriptedPrompts(["Don't post"]),
       });
@@ -730,8 +785,6 @@ test("a re-review narrows the previous run's outstanding to its own verdict", ()
       yield* bin.add("git", `echo main`);
       const target = { target: "branch:main...feature" };
       yield* queueOutputs([
-        CLEAN,
-        CLEAN,
         {
           verdict: "findings",
           summary: "It exits wrong.",
@@ -746,7 +799,7 @@ test("a re-review narrows the previous run's outstanding to its own verdict", ()
       });
       expect(first.run.record.outstanding).toHaveLength(1);
 
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const second = yield* runWorkflowEffect("review", target, {
         prompts: scriptedPrompts(["Don't post"]),
       });
@@ -766,7 +819,7 @@ test("the working tree is never matched against an earlier review of it", () =>
       yield* bin.add("git", `echo main`);
       // Every review of this checkout's working tree carries the same target, so a
       // second one would otherwise be handed a different branch's findings.
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       yield* runWorkflowEffect(
         "review",
         { target: "worktree" },
@@ -775,7 +828,7 @@ test("the working tree is never matched against an earlier review of it", () =>
         },
       );
 
-      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+      yield* queueOutputs([SYNTH]);
       const second = yield* runWorkflowEffect(
         "review",
         { target: "worktree" },
@@ -795,8 +848,6 @@ test("a review that ends with findings does not announce itself as clean", () =>
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
       yield* queueOutputs([
-        CLEAN,
-        CLEAN,
         {
           verdict: "findings",
           summary: "Adds a flag. It exits wrong.",
@@ -830,8 +881,6 @@ test("a review that found the last round's findings gone says how many", () =>
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", `echo main`);
       yield* queueOutputs([
-        CLEAN,
-        CLEAN,
         {
           verdict: "clean",
           summary: "The blocker is gone. Nothing else came back.",
@@ -866,8 +915,6 @@ test("a fix round that did not push says so, rather than reading as landed", () 
       // The fix round works on someone else's branch and is told not to push; a result
       // that looks like it landed and did not is worse than either outcome.
       yield* queueOutputs([
-        CLEAN,
-        CLEAN,
         {
           verdict: "findings",
           summary: "One blocker.",
@@ -900,5 +947,160 @@ test("a fix round that did not push says so, rather than reading as landed", () 
       // thing the ending says, and local-only work must not read as shipped under it.
       run.record.mr_url = "https://gitlab.example.com/acme/app/-/merge_requests/7";
       expect(outcomeLine(run.record, "done")).toContain("commits on feature/x are not pushed");
+    }),
+  ));
+
+test("a user who keeps two reviewers keeps the synthesis exactly as it was", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* twoReviewers();
+      yield* queueOutputs([CLEAN, CLEAN, SYNTH]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Don't post"]) },
+      );
+
+      expect(status).toBe("done");
+      // Three agents: two reviewers and the model that reconciles them. Changing the
+      // baseline default must not reach into a layer that says otherwise.
+      expect((yield* rig.calls()).filter((c) => c.cmd === "agent start")).toHaveLength(3);
+      expect(run.step("synthesize").note).toBeNull();
+      expect(run.step("synthesize").variants).toHaveLength(1);
+      expect(run.record.synthesis).toBe(path.join("steps", "synthesize", "synthesized.json"));
+    }),
+  ));
+
+test("a blocking finding that says neither where nor why goes back to the reviewer once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      const vague = {
+        verdict: "findings",
+        summary: "Adds a flag. Something is wrong with it.",
+        dropped: [],
+        findings: [{ severity: "blocker", title: "this feels wrong" }],
+      };
+      const substantiated = {
+        verdict: "findings",
+        summary: "Adds a flag. It breaks a caller.",
+        dropped: [],
+        findings: [
+          {
+            // Deliberately a file this change never touched: an unchanged caller the
+            // change breaks is a real blocker, and must not be refused for that.
+            file: "src/other-caller.ts",
+            line: 12,
+            severity: "blocker",
+            title: "the caller still passes two arguments",
+            detail: "It calls the renamed function with the old arity and will throw.",
+          },
+        ],
+      };
+      yield* queueOutputs([vague, substantiated]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Don't post"]) },
+      );
+
+      expect(status).toBe("done");
+      const repairs = run.step("review").variants[0]!.repairs;
+      expect(repairs).toHaveLength(1);
+      expect(repairs[0]).toContain("say neither where nor why");
+      expect(repairs[0]).toContain('"this feels wrong"');
+      expect(repairs[0]).toContain("need not be one the change touched");
+
+      // The second Output stands, unchanged file and all.
+      expect(run.record.outstanding).toHaveLength(1);
+      expect(run.record.outstanding[0]!.file).toBe("src/other-caller.ts");
+    }),
+  ));
+
+test("a minor finding is not held to a blocker's standard", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* queueOutputs([
+        {
+          verdict: "findings",
+          summary: "Adds a flag. One passing remark.",
+          dropped: [],
+          findings: [{ severity: "minor", title: "could be shorter" }],
+        },
+      ]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Don't post"]) },
+      );
+
+      expect(status).toBe("done");
+      // A note nobody has to act on must not cost a repair round.
+      expect(run.step("review").variants[0]!.repairs).toEqual([]);
+    }),
+  ));
+
+test("a risk axis is asked for or it is not there at all", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      yield* queueOutputs([SYNTH]);
+      const plain = yield* runWorkflowEffect(
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Don't post"]) },
+      );
+      const ordinary = yield* promptOf(plain.run);
+      expect(ordinary).not.toContain("Additional axes requested");
+      expect(ordinary).toContain("need not be one the change touched");
+      // A review on its own has no outcome to judge, and says so rather than guessing one.
+      expect(ordinary).toContain("Outcome the change has to prove (empty means unclassified): \n");
+
+      yield* queueOutputs([SYNTH]);
+      const asked = yield* runWorkflowEffect(
+        "review",
+        { risks: "security", outcome: "refactor" },
+        { prompts: scriptedPrompts(["Don't post"]) },
+      );
+      const specialist = yield* promptOf(asked.run);
+      expect(specialist).toContain(
+        "Outcome the change has to prove (empty means unclassified): refactor",
+      );
+      expect(specialist).toContain('"behavior_preserved": true');
+      expect(specialist).toContain("Additional axes requested for this change: security");
+      expect(specialist).toContain("security-and-hardening");
+      expect(specialist).toContain("on top of the complete review, not instead of it");
+    }),
+  ));
+
+test("a lone review that does not read as a review is sent back to its own reviewer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* bin.add("glab", `exit 1`);
+      yield* bin.add("git", `echo main`);
+      // No summary: with nobody reconciling it, this Output is the review a human reads,
+      // so it is held to that shape rather than quietly published without one.
+      yield* queueOutputs([CLEAN, SYNTH]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        "review",
+        {},
+        { prompts: scriptedPrompts(["Don't post"]) },
+      );
+
+      expect(status).toBe("done");
+      const repairs = run.step("review").variants[0]!.repairs;
+      expect(repairs).toHaveLength(1);
+      expect(repairs[0]).toContain("summary is required");
+      expect(yield* readText(path.join(run.dir, REVIEW_FILE))).toContain("A one-file change");
     }),
   ));

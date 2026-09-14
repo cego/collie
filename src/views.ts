@@ -30,7 +30,9 @@ import { isString } from "./schema";
 import { stepDuration, took } from "./time";
 import { claudeTrust } from "./trust";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
-import { fixableRun, type RunRow } from "./workspace";
+import { NO_OUTCOME, fixableRun, type RunRow } from "./workspace";
+import { latest, readDispositions, type Disposition } from "./disposition";
+import { metricsOf, readMetrics, type Metrics } from "./metrics";
 import { branchListed } from "./worktree";
 
 /** Long enough to answer "what did I do here", short enough to stay one read. */
@@ -94,6 +96,9 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
       fixable: yield* fixableRun(run),
       choice: null,
       needsYou: false,
+      // History is what happened, not what to do about it: these rows are read, never
+      // acted on, and a next action on one of them would point at a Run that has ended.
+      ...NO_OUTCOME,
     });
   }
   return rows;
@@ -404,6 +409,19 @@ export interface RunDetail {
    * agent driving the CLI cannot tell a human two different stories about one Run.
    */
   attention: Attention;
+  /**
+   * What this Run has to prove, what it has not proved yet, what is in its way, what to
+   * do next, and what became of its work. The panel used to say only why a Run stopped;
+   * these say what it was for and whether it got there.
+   */
+  outcome: {
+    kind: string | null;
+    gaps: ReadonlyArray<string>;
+    obstacle: string | null;
+    next: string | null;
+    delivered: string | null;
+    metrics: Metrics;
+  };
   /** When this Run finished, so the merge-request panel can say what moved since. */
   finishedAt: number;
   /** Filled by the bridge for a Run whose target is a merge request; never here. */
@@ -418,6 +436,22 @@ export interface RunDetail {
  * The merge request is passed in rather than fetched: it is cached per ref with a TTL by
  * the caller, because a list must never fetch and a re-selection must cost nothing.
  */
+/** A detail with nothing to say about its outcome: fixtures, and a Run that proved none. */
+export const NO_RUN_OUTCOME: RunDetail["outcome"] = {
+  kind: null,
+  gaps: [],
+  obstacle: null,
+  next: null,
+  delivered: null,
+  metrics: metricsOf([], ""),
+};
+
+/** What became of the work, as one phrase, or nothing where nobody has said. */
+function dispositionOf(line: Disposition | null): string | null {
+  if (line === null) return null;
+  return line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
+}
+
 export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts: {
   stateDir: string;
   runId: string;
@@ -474,6 +508,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     }
   }
 
+  const attention = yield* attentionFor(run, opts.agents);
   return {
     id: run.id,
     dir: run.dir,
@@ -497,7 +532,17 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     review,
     plan: yield* plannedFor(run, cap, opts.plans),
     outputs,
-    attention: yield* attentionFor(run, opts.agents),
+    attention,
+    outcome: {
+      kind: record.outcome,
+      gaps: record.evidence_gaps,
+      obstacle: record.obstacle,
+      // The first of the actions `attention` already worked out, rather than a second
+      // opinion about what to do — one classification, however it is asked for.
+      next: attention.actions[0] ?? null,
+      delivered: dispositionOf(latest(yield* readDispositions(run.dir))),
+      metrics: metricsOf(yield* readMetrics(run.dir), record.created_at),
+    },
     tail: opts.tail
       ? ((yield* tailed(path.join(run.dir, RUNNER_LOG), TAIL_CAP)) ??
         ({ _tag: "None", reason: `this run wrote no ${RUNNER_LOG}` } satisfies Panel))

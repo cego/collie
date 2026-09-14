@@ -1,20 +1,27 @@
 ---
 name: review
 title: review — an MR, a branch diff, or the working tree
-description: You pick the target — an MR, a branch diff or the working tree — two models review it, one review comes out, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to the merge request.
+description: You pick the target — an MR, a branch diff or the working tree — one complete review comes out, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to somebody else's merge request.
 inputs:
   target: diff-target
   # Empty unless a workflow embedding this one has a spec to hold the change to.
   plan: optional
   # A run id, when you want a particular earlier review as the one to compare against.
   previous: optional
+  # Extra axes to apply on top of the complete review, when this change has a risk that
+  # earns one — `security`, `performance`. Empty is the ordinary case.
+  risks: optional
+  # What kind of result the change under review has to prove — forwarded by `implement`,
+  # empty for a review started on its own. Decides which one judgement field is asked for.
+  outcome: optional
 steps:
   - id: review
     persona: reviewer
     output: review.json
+    # One complete review. A second reviewer and the model that reconciles them are what
+    # a specialist axis or a layer override is for, not what every change gets.
     parallel:
       - { harness: claude, model: opus, effort: medium }
-      - { harness: claude, model: sonnet, effort: xhigh }
   - id: synthesize
     persona: reviewer
     fan_in: review
@@ -38,9 +45,12 @@ steps:
         inputs:
           plan: "{{run.dir}}"
           target: "{{inputs.target}}"
+      # Offered for somebody else's merge request, where the findings are feedback they
+      # need. On your own, fixing them here is the whole job and a note would be you
+      # writing to yourself.
       - title: Post to MR
         post: true
-        requires: [mr-target, gitlab]
+        requires: [mr-target, gitlab, someone-elses-mr]
       - title: Don't post
         stop: true
 ---
@@ -48,6 +58,7 @@ steps:
 Review target: {{inputs.target}}
 Project root: {{cwd}}
 Spec: {{inputs.plan}}
+Outcome the change has to prove (empty means unclassified): {{inputs.outcome}}
 
 Read the target first:
 
@@ -85,6 +96,20 @@ is the same finding: keep its file and title unless the code moved under it.
 Review against the project's own standards too — `CLAUDE.md`, `CONTEXT.md`, `README.md`
 and the code around the change.
 
+{{risks}}
+
+Every `blocker` and `major` says **where** and **why**: a `file` it is at, and a `detail`
+of one or two sentences saying what goes wrong and what it costs. A blocking finding
+without both is not actionable, and Collie will send it back rather than put it in front
+of the implementer. The file need not be one the change touched — an unchanged caller this
+change breaks, or a file that should exist and does not, is exactly the kind of blocker
+worth raising; name the file it is about and say why the change puts it wrong.
+
+You may be the only reviewer of this change, in which case your review is the review the
+human reads: write `summary` — two sentences, what this change does and what is wrong with
+it — and `dropped: []`, alongside the fields below. Write them whether or not anyone else
+is reviewing; they cost a line and they are what makes your review readable on its own.
+
 Already disputed — the implementer looked at these and did not apply them, with reasons:
 
 {{disputed}}
@@ -98,6 +123,29 @@ Where you run something to check a finding, run it through the collector so the 
 is bound to the tree you checked it on: `collie verify --run {{run.id}} --cwd {{cwd}} -- <command>`; Collie records the result
 against the tree it ran on, and only that is a verification — an Output that says the
 tests pass is a claim. Say in your Output which verifications you ran, by name.
+
+### Your judgement on the outcome
+
+The outcome above decides one extra field in your Output, a boolean that only a reviewer
+can honestly give. Write the one that applies and none of the others; an unclassified
+change (empty outcome) or a `bug` needs none — its proof is a verification, not your word.
+
+- **feature** — `"scope_met": true` when every ticket in the spec is built, as the spec
+  describes it, and nothing the spec asked for is missing or left to a follow-up.
+- **refactor** — `"behavior_preserved": true` when the observable behaviour is identical:
+  same inputs, same outputs, same errors, and the tests that pinned it are unchanged.
+- **investigation** — `"supported": true` when the conclusion in the run's
+  `plan/INVESTIGATION.md` follows from the evidence it cites, and that evidence is in the run.
+- **docs** — `"accurate": true` when the instructions match what the code does, and the
+  commands they show were run and passed as verifications.
+- **migration** — `"compatible": true` when it goes both ways and the code on either side
+  of it still reads the data.
+
+`true` is a judgement you can defend from the diff. Where you cannot, write `false` and
+say why in a finding: the run will not open its merge request until it is settled, and
+that is the point of the field. Never omit it to be kind.
+
+{{obstacle}}
 
 Change nothing outside your Output file.
 
@@ -135,6 +183,10 @@ The human is watching a rally, not a new list every time.
   dispute the implementer has already made, and dropping it would end that argument
   without anyone deciding it.
 - Do not edit files, commit, push, or comment anywhere. This Output is the whole job.
+- The outcome field: where the outcome above names one (`scope_met`, `behavior_preserved`,
+  `supported`, `accurate` or `compatible`, as the review step's own section lists them),
+  carry it as `true` only when every reviewer that wrote it wrote `true` and you can defend
+  it from the diff yourself. Otherwise `false`, with the finding that says why.
 
 Then write the Output JSON: `{"verdict": "clean" | "findings", "summary": "two
 sentences", "findings": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
@@ -142,13 +194,15 @@ sentences", "findings": [{"file": "path", "line": 12, "severity": "blocker|major
 from the reviewer that wrote it"}], "dropped": [{"file": "path", "severity": "minor",
 "title": "what one reviewer raised", "reason": "why it did not survive"}],
 "fixed": [{"file": "path", "title": "what the last review raised", "note": "how it was
-fixed"}]}`.
+fixed"}]}`, plus the one outcome field where the outcome names one.
 
 ## fix
 
 The review is written and you are fixing it, in this run, on this target. The findings
-are `{{run.dir}}/review.md`, and the same findings as JSON are at
-`{{run.dir}}/steps/synthesize/synthesized.json`. Worst severity first.
+are `{{run.dir}}/review.md`, and the same findings as JSON are the review's own Output —
+`{{run.dir}}/steps/review/review.json` where one reviewer wrote it, or
+`{{run.dir}}/steps/synthesize/synthesized.json` where several were reconciled. Worst
+severity first.
 
 Work where the review was pointed — `target_kind` is `{{inputs.target_kind}}`:
 

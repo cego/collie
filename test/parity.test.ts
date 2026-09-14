@@ -35,6 +35,7 @@ import { prepareWorkflow, resumeRun, startRun } from "../src/operations";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
 import { RunStore } from "../src/run";
 import type { RunRow } from "../src/workspace";
+import { NO_OUTCOME } from "../src/workspace";
 import { layers, loadDefinitions } from "../src/definitions";
 import { forkResolvedDefinition } from "../src/fork";
 
@@ -370,6 +371,7 @@ effectTest("answering through the board and through the CLI leave the same trace
     fixable: false,
     choice: menu,
     needsYou: false,
+    ...NO_OUTCOME,
   };
   yield* answerKey(row, { index: 0, typed: "" }, "\r");
   expect((yield* cli(["run", "answer", command.id, "yes"])).exit).toBe(0);

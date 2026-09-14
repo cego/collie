@@ -262,6 +262,15 @@ export interface CompactionDeps {
   log: (line: string) => Effect.Effect<void, PortError, PortServices>;
   /** The Run's own channel, so a warning reaches the CLI and the board, not just a log. */
   warn: (line: string) => Effect.Effect<void, PortError, PortServices>;
+  /**
+   * Every usable context sample, as it is read. What the Run's metrics journal is fed
+   * from; a hand-off has no Run of its own and leaves it out. The policy itself keeps no
+   * record of samples, so this is the only place a number the harness reported survives.
+   */
+  sample?: (
+    at: { readonly agent: string; readonly run: string; readonly step: string },
+    tokens: number,
+  ) => Effect.Effect<void, PortError, PortServices>;
   waitMs: number;
   pollMs: number;
 }
@@ -449,6 +458,7 @@ export const atBoundary = Effect.fn("Compaction.atBoundary")(function* (
     yield* deps.log(`${at.agent}: no usable context sample; sending the work`);
     return DISPATCH;
   }
+  if (deps.sample) yield* deps.sample(at, sample);
   if (sample < limit.tokens) {
     yield* deps.log(`${at.agent}: ${sample} tokens in context, under ${limit.tokens}`);
     return DISPATCH;

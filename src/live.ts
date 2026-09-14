@@ -41,7 +41,16 @@ export interface Live {
   cards: Card[];
   drift: DriftReport[];
   deliveries: Delivery[];
+  /**
+   * What this Herd has said, whole — never narrowed to whatever row is selected. The
+   * conversation is with Collie about the flock; a Selection changes what is *drawn*
+   * beside it, and must not change what there is to draw. Before this, selecting any Run
+   * replaced the conversation with that Run's turns, which on a board where a row is
+   * almost always selected meant there was no global conversation at all.
+   */
   conversation: Turn[];
+  /** The Selection's own turns, for a panel that is about that one Run. */
+  runConversation: Turn[];
   proposals: ProposalRecord[];
   /**
    * Reports about a Run that had already finished when they were judged. Never written
@@ -167,6 +176,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
         drift: [],
         deliveries: [],
         conversation: conversationFile === null ? [] : yield* tail(conversationFile, TURNS),
+        runConversation: [],
         proposals: [],
         pending: [],
         ownership: opts.ownership,
@@ -179,7 +189,11 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
         cards: newest(own).slice(-CARDS).reverse(),
         drift: openReports(yield* readDrift(one.dir)),
         deliveries: (yield* deliveriesOf(opts.stateDir, one.id)).map((found) => found.delivery),
-        conversation: conversationFile === null ? [] : yield* tail(conversationFile, TURNS, one.id),
+        // Both: the Herd's conversation is what the composer is part of, and the
+        // Selection's own turns are what its panel adds beside it.
+        conversation: conversationFile === null ? [] : yield* tail(conversationFile, TURNS),
+        runConversation:
+          conversationFile === null ? [] : yield* tail(conversationFile, TURNS, one.id),
         proposals: pendingFor(lines, one.id, now),
         pending: key === null ? [] : yield* readPendingReports(opts.stateDir, key, one.id),
         ownership: opts.ownership,

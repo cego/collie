@@ -20,6 +20,7 @@ import {
   type Marks,
 } from "./lines";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
+import { latest, readDispositions } from "./disposition";
 import { REVIEW_FILE } from "./output";
 import {
   fanoutRepos,
@@ -119,6 +120,24 @@ export interface RunRow {
    * as needing you: a gate the run recorded itself as awaiting has nothing to answer.
    */
   needsYou: boolean;
+  /**
+   * What this run is for, what it has not proved, what is in its way and what to do
+   * about it. The board used to say what a run was *doing*; these say what it is *for*
+   * and whether it got there, which is the question a human actually has.
+   *
+   * All four come from `run.json`, which the row already has: the board must not read a
+   * file per row, and a supervision line nobody can afford to draw is not supervision.
+   */
+  outcome: string | null;
+  gaps: number;
+  obstacle: string | null;
+  next: string | null;
+  /**
+   * What became of the work, where a human recorded it: `merged`, `abandoned` or
+   * `superseded`. Beside the status, never over it — a Run that failed still failed, and
+   * a red row against work that shipped is the thing a person is actually looking at.
+   */
+  delivered: string | null;
 }
 
 export interface WorkspaceView {
@@ -393,6 +412,61 @@ function repoRunsOf(record: RunRecord): string[] {
   return fan === null ? [] : fanoutRepos(fan).flatMap((entry) => entry.run ?? []);
 }
 
+/** A row with nothing to say about its outcome: the History view, and every fixture. */
+export const NO_OUTCOME = {
+  outcome: null,
+  gaps: 0,
+  obstacle: null,
+  next: null,
+  delivered: null,
+} as const;
+
+/**
+ * What a Run is for, what it has not proved, what is in its way, and the one thing to do
+ * about it — from `run.json` alone. The board draws every row on every tick, so a field
+ * that cost a file read per row would be a supervision line nobody can afford to draw.
+ */
+function outcomeOf(record: RunRecord): Pick<RunRow, "outcome" | "gaps" | "obstacle" | "next"> {
+  const blocked = record.steps.find((step) => step.status === "blocked");
+  return {
+    // Null where nobody classified it: `unspecified` is a real answer and the row says
+    // nothing rather than inventing `feature`.
+    outcome: record.outcome,
+    gaps: record.evidence_gaps.length,
+    // What is identifiably in the way: a command going round, else why it stopped.
+    obstacle: record.obstacle ?? (record.halt === null ? null : (blocked?.note ?? record.halt)),
+    next: nextAction(record),
+  };
+}
+
+/**
+ * The one thing to do next, named as the `run` subcommand that does it. Worked out from
+ * the record rather than from `attentionFor`, which may ask herdr whether an agent is
+ * still there — a question worth asking about one Run and not about every row of a board.
+ */
+function nextAction(record: RunRecord): string | null {
+  if (record.awaiting !== null) return "answer";
+  if (record.status === "running") return null;
+  if (record.halt !== null) return "resume";
+  if (record.status === "blocked" || record.status === "failed") return "resume";
+  return null;
+}
+
+/**
+ * What became of a finished Run's work, where someone recorded it. Read only for Runs
+ * that did not succeed, and only for the few rows a finished list keeps: those are the
+ * rows where a red glyph is standing against work that may well have shipped, and they
+ * are the only ones this can change. An active Run has nothing to have become of yet.
+ */
+const deliveredOf = Effect.fn("deliveredOf")(function* (run: Run) {
+  if (run.record.status !== "failed" && run.record.status !== "blocked") return null;
+  const line = latest(
+    yield* readDispositions(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
+  );
+  if (line === null) return null;
+  return line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
+});
+
 function recentDetail(record: RunRecord, abandoned: boolean): string {
   const fan = record.fanout;
   const outcome = fan && fanoutOutcome(fan);
@@ -563,19 +637,15 @@ export const buildView = Effect.fn("buildView")(function* (
       // A pending Choice and nothing else: a count that sends a human to a row with
       // nothing under it to answer is worse than no count.
       needsYou: choice !== null,
+      ...outcomeOf(r.record),
+      // A Run still going has not become anything yet.
+      delivered: null,
     });
   }
 
-  return {
-    repo: path.basename(opts.cwd),
-    cwd: opts.cwd,
-    worktrees: opts.worktrees ?? [],
-    behind: opts.pluginRoot ? yield* behindRemote(opts.pluginRoot, undefined, now) : null,
-    now,
-    agents,
-    extraAgents: rows.length - agents.length,
-    active,
-    recent: stopped.slice(0, RECENT).map((r) => ({
+  const recent: RunRow[] = [];
+  for (const r of stopped.slice(0, RECENT)) {
+    recent.push({
       id: r.id,
       dir: r.dir,
       glyph: glyphFor(r.record, abandoned.has(r.id)),
@@ -590,7 +660,21 @@ export const buildView = Effect.fn("buildView")(function* (
       choice: null,
       // A finished run is waiting on nobody, whatever it was awaiting when it stopped.
       needsYou: false,
-    })),
+      ...outcomeOf(r.record),
+      delivered: yield* deliveredOf(r),
+    });
+  }
+
+  return {
+    repo: path.basename(opts.cwd),
+    cwd: opts.cwd,
+    worktrees: opts.worktrees ?? [],
+    behind: opts.pluginRoot ? yield* behindRemote(opts.pluginRoot, undefined, now) : null,
+    now,
+    agents,
+    extraAgents: rows.length - agents.length,
+    active,
+    recent,
   };
 });
 
@@ -782,9 +866,29 @@ function runRows(rows: RunRow[], asking: Asking, waiting: string | null, marks?:
     // narrow for the app shows, and it must not say less about a Run than the app does.
     const mark = marksOf(markFor(marks, r.id));
     out.push(`  ${r.glyph} ${r.title.padEnd(30)}${mark === "" ? "" : `${mark}  `}${r.detail}`);
+    // What the Run is for and whether it got there, under the row that says what it did.
+    // The app draws the same four; a pane too narrow for the app must not be shown a
+    // shorter, more reassuring version of a Run.
+    const said = outcomeRow(r);
+    if (said !== "") out.push(`    ${said}`);
     if (r.choice && r.id === waiting) out.push(...askingRows(r.choice, asking));
   }
   return out;
+}
+
+/**
+ * The outcome line under a row: what this Run is for, what it has not proved, what is in
+ * its way, what to do about it, and what became of its work. Empty where a Run has
+ * nothing to say on any of them, so an ordinary running row is still one line.
+ */
+export function outcomeRow(r: RunRow): string {
+  const parts: string[] = [];
+  if (r.outcome !== null) parts.push(r.outcome);
+  if (r.gaps > 0) parts.push(`${r.gaps} evidence gap(s)`);
+  if (r.obstacle !== null) parts.push(r.obstacle);
+  if (r.delivered !== null) parts.push(r.delivered);
+  if (r.next !== null) parts.push(`run ${r.next} ${r.id}`);
+  return parts.join(" · ");
 }
 
 /**

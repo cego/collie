@@ -79,7 +79,12 @@ const FRONT_DOOR: readonly Check[] = [
       "Opening the Home with nothing selected shows the conversation and a composer, and the empty state says what Collie can be asked.",
     owner: REDESIGN,
     needs: "ui",
-    proof: { kind: "none" },
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/ui/app.test.tsx",
+      name: "the composer is on the Home before anyone finds a key, and says what it is for",
+    },
   },
   {
     id: "front-door/board-keys-keep-working",
@@ -87,7 +92,12 @@ const FRONT_DOOR: readonly Check[] = [
       "With the composer visible but unfocused, board keys still drive the board; one key focuses the composer and Esc gives the board back.",
     owner: REDESIGN,
     needs: "ui",
-    proof: { kind: "none" },
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/ui/app.test.tsx",
+      name: "board keys keep working while the composer is on screen but not focused",
+    },
   },
   {
     id: "front-door/untargeted-message-is-sent",
@@ -95,7 +105,12 @@ const FRONT_DOOR: readonly Check[] = [
       "A message typed on the Home with no row selected reaches Collie. In 0.8.0 the Steering key handler returns null for it, so it is silently not sent — the backend never hears the question it is known to answer well.",
     owner: REDESIGN,
     needs: "ui",
-    proof: { kind: "none" },
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/ui/app.test.tsx",
+      name: "Enter asks about the flock, and never aims at whichever row is selected",
+    },
   },
   {
     id: "front-door/selection-is-never-the-implicit-target",
@@ -103,7 +118,12 @@ const FRONT_DOOR: readonly Check[] = [
       "A global message typed while an old Run happens to be selected is still global: no delivery appears in that Run's ledger.",
     owner: REDESIGN,
     needs: "ui",
-    proof: { kind: "none" },
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/ui/state.test.ts",
+      name: "Enter with nothing aimed asks about the flock, whatever row is selected",
+    },
   },
   {
     id: "front-door/selection-does-not-narrow-oversight",
@@ -111,31 +131,45 @@ const FRONT_DOOR: readonly Check[] = [
       "Selecting a Run adds its turns to the detail; it does not replace the global conversation, and a board filter narrows the view, not what Collie oversees.",
     owner: REDESIGN,
     needs: "ui",
-    proof: { kind: "none" },
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/workspace-tab.test.ts",
+      name: "a filter narrows the rows that are drawn and never what is supervised",
+    },
   },
   {
     id: "front-door/continuity",
     statement:
       "A follow-up question is answered with the earlier turns of the same conversation in context.",
-    owner: REDESIGN,
-    needs: "ui",
-    proof: { kind: "none" },
+    owner: OPERATOR,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "Ask a question about the flock in the Home, then a follow-up that only resolves against the first. Record both turns and the revision. test/steer.test.ts proves the earlier turns reach the pack; only a real answer proves they were used.",
+    },
   },
   {
     id: "front-door/proactive-turn-on-a-meaningful-event",
     statement:
       "A Run halting produces one turn in the conversation naming the Run and the reason, without anyone asking, and re-rendering does not repeat it.",
-    owner: REDESIGN,
-    needs: "ui",
-    proof: { kind: "none" },
+    owner: OPERATOR,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "Make a Run halt, leave the Home open and touch nothing. Record the turn that appears, the Run it names, the reason, and that it appears once. test/proactive.test.ts proves which transitions qualify and that each is said once; only a running Home proves one arrives.",
+    },
   },
   {
     id: "front-door/proactive-proposal-uses-the-existing-authority-path",
     statement:
-      "A proposal Collie raises unprompted is admitted by the same `validate` path as a typed one: what the human already granted this Run — automatic correction included — stays granted and may be carried out, and what was never granted still waits for a human. A proactive turn is not blanket confirmation-only, and it grants nothing new.",
-    owner: REDESIGN,
-    needs: "ui",
-    proof: { kind: "none" },
+      "A proposal Collie raises unprompted is admitted by the same `validate` path as a typed one and no other: it waits for the human exactly as a typed proposal does, and declining leaves the Run untouched. The automatic correction the Run granted its Driver keeps running inside that grant — a proactive turn grants nothing new and revokes nothing.",
+    owner: OPERATOR,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "Grant a Run an authority, make it halt, and read the proposal the proactive turn carries: it waits for you, as a typed one does. Record that declining leaves the Run untouched, and that the Driver went on correcting inside the grant while the proposal sat there.",
+    },
   },
   {
     id: "front-door/honest-when-there-is-no-herdr",
@@ -143,7 +177,12 @@ const FRONT_DOOR: readonly Check[] = [
       "With no herdr or no model, the conversation region says so and the board still works.",
     owner: REDESIGN,
     needs: "ui",
-    proof: { kind: "none" },
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/ui/live.test.tsx",
+      name: "the composer says why there is nothing to talk to, rather than going blank",
+    },
   },
   {
     id: "front-door/conversation-survives-home-restart",
@@ -159,10 +198,15 @@ const FRONT_DOOR: readonly Check[] = [
   {
     id: "front-door/disposition-visible-where-the-stale-row-is",
     statement:
-      "A Run whose work was delivered by hand stops reading as a plain failure on the board. `run disposition` records the fact and `run show` says it; the board and Live region do not yet, so the stale row a person actually looks at is not fixed.",
+      "A Run whose work was delivered by hand stops reading as a plain failure on the board: the row a person actually looks at carries both facts, `failed \u00b7 merged <ref> by <who>`, and the execution status is not edited to tidy it.",
     owner: REDESIGN,
     needs: "ui",
-    proof: { kind: "none" },
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/workspace-tab.test.ts",
+      name: "a Run whose work shipped by hand says so, without its status being edited",
+    },
   },
 ];
 

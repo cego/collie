@@ -286,6 +286,8 @@ const CheckpointSchema = Schema.Struct({
 });
 export type Checkpoint = Schema.Schema.Type<typeof CheckpointSchema>;
 const CheckpointJson = Schema.fromJsonString(CheckpointSchema);
+/** The file as the engine writes one for a slice, in the shape an agent's own is read in. */
+export const encodeCheckpoint = Schema.encodeSync(CheckpointJson);
 
 export const readCheckpoints = Effect.fn("Cards.readCheckpoints")(function* (runDir: string) {
   const fs = yield* FileSystem.FileSystem;

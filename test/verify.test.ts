@@ -13,6 +13,7 @@ import {
   resolveExecutable,
   resultOf,
   runApproved,
+  staleAgainst,
 } from "../src/verify";
 import type { VerifySpec } from "../src/intent";
 import { runEffect } from "./support/effect";
@@ -241,5 +242,109 @@ test("an executable nothing on PATH provides is refused before anything runs", (
         by: "agent",
       }).pipe(Effect.flip);
       expect(refused.why).toContain("nothing on PATH");
+    }),
+  ));
+
+test("an expected failure passes when it fails, and fails when it does not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const runDir = path.join(repo, ".run-expect");
+
+      // A reproduction: the point of it is the non-zero exit, so that is its pass.
+      const reproduced = yield* collect(runDir, {
+        run: "r1",
+        name: "regression",
+        executable: "false",
+        argv: [],
+        cwd: repo,
+        by: "agent",
+        expect: "fail",
+      });
+      expect(reproduced.result).toBe("pass");
+      expect(reproduced.exit).toBe(1);
+      expect(reproduced.expect).toBe("fail");
+
+      // The same command succeeding is the bug not reproducing, which is a failure of
+      // the reproduction — not evidence that anything was fixed.
+      const didNot = yield* collect(runDir, {
+        run: "r1",
+        name: "regression",
+        executable: "true",
+        argv: [],
+        cwd: repo,
+        by: "agent",
+        expect: "fail",
+      });
+      expect(didNot.result).toBe("fail");
+      expect(didNot.exit).toBe(0);
+
+      // Unstable beats the expectation both ways: a tree that moved says nothing about
+      // either, and an expected failure on a moving tree is not a reproduction.
+      const moved = yield* collect(runDir, {
+        run: "r1",
+        name: "regression",
+        executable: "sh",
+        argv: ["-c", "touch moved-under-it.txt; exit 1"],
+        cwd: repo,
+        by: "agent",
+        expect: "fail",
+      });
+      expect(moved.result).toBe("unstable");
+    }),
+  ));
+
+test("expectation is applied only after the stability rules", () => {
+  const same = { head_sha: "a", fingerprint: "f" };
+  const other = { head_sha: "a", fingerprint: "g" };
+  expect(resultOf(same, same, 1, "fail")).toBe("pass");
+  expect(resultOf(same, same, 0, "fail")).toBe("fail");
+  expect(resultOf(same, same, 0, "pass")).toBe("pass");
+  expect(resultOf(same, other, 1, "fail")).toBe("unstable");
+  expect(resultOf({ head_sha: "a", fingerprint: TOO_LARGE }, same, 1, "fail")).toBe("unstable");
+  // The default is what every record written before `--expect` existed meant.
+  expect(resultOf(same, same, 0)).toBe("pass");
+});
+
+test("a verification is stale the moment the tree it ran on moves", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // Outside the repository, as a real run directory is: a journal written inside the
+      // tree would move the fingerprint of the very tree it is recording.
+      const runDir = yield* fs.makeTempDirectory({ prefix: "hw-verify-run-" });
+      const record = yield* collect(runDir, {
+        run: "r1",
+        name: "tests",
+        executable: "true",
+        argv: [],
+        cwd: repo,
+        by: "agent",
+      });
+      expect(record.result).toBe("pass");
+      expect(staleAgainst(record, yield* fingerprint(repo))).toBe(false);
+
+      yield* fs.writeFileString(path.join(repo, "tracked.txt"), "two\n");
+      expect(staleAgainst(record, yield* fingerprint(repo))).toBe(true);
+
+      // A tree nobody could measure is never a tree a result still speaks for.
+      expect(staleAgainst(record, { head_sha: record.end.head_sha, fingerprint: TOO_LARGE })).toBe(
+        true,
+      );
+    }),
+  ));
+
+test("Collie's own run carries the expectation it was approved with", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const runDir = path.join(repo, ".run-approved");
+      const spec: VerifySpec = { name: "regression", executable: "false", argv: [], cwd: "." };
+      const run = { id: "r1", cwd: repo, worktree: null };
+      const record = yield* runApproved(runDir, run, [spec], spec, "fail");
+      expect(record.result).toBe("pass");
+      expect(record.by).toBe("collie");
+      expect(record.expect).toBe("fail");
     }),
   ));
