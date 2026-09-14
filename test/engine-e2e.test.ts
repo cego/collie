@@ -57,15 +57,25 @@ Interview me about {{inputs.goal}}, then write the plan.
 
 const BUILDER = `---
 name: builder
-title: builder — one step that builds from a plan
+title: builder — a fresh look, then the agent that builds
 inputs:
   plan: work-source
 steps:
+  - id: look
+    persona: reviewer
+    fresh: true
+    output: look.json
   - id: build
     persona: implementer
     output: build.json
 ---
-Build the tickets in {{inputs.plan}} ({{inputs.plan_kind}}).
+## look
+
+Read the tickets in {{inputs.plan}} ({{inputs.plan_kind}}).
+
+## build
+
+Build them.
 `;
 
 beforeEach(() =>
@@ -1181,7 +1191,10 @@ test("a ticket rewritten under a building step is sent to it as a change to reco
       const planDir = yield* plannedRun(rig, "add-picker");
       const ticket = path.join(planDir, "issues", "01-first.md");
       yield* fs.writeFileString(ticket, "# 01: first\n\n- [ ] keep the existing layout\n");
-      yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
+      yield* rig.queueOutputs([
+        { verdict: "clean", findings: [] },
+        { verdict: "clean", findings: [] },
+      ]);
 
       // The live planner, answering a question by rewriting the ticket instead of
       // only saying so — which is the case nothing used to notice.
@@ -1202,7 +1215,13 @@ test("a ticket rewritten under a building step is sent to it as a change to reco
         { plan: planDir },
         {
           env: {
-            FAKE_HERDR_AGENT_STATUS: [...Array(60).fill("working"), "idle"].join(","),
+            // Each step polls until its own `idle`, so the edit lands during `look`.
+            FAKE_HERDR_AGENT_STATUS: [
+              ...Array(40).fill("working"),
+              "idle",
+              ...Array(40).fill("working"),
+              "idle",
+            ].join(","),
             FAKE_HERDR_PANE_TEXT: "changing",
           },
           defaults: { quietMs: 3000 },
@@ -1211,11 +1230,14 @@ test("a ticket rewritten under a building step is sent to it as a change to reco
       );
 
       expect(status).toBe("done");
-      const told = (yield* rig.calls())
-        .filter((c) => c.cmd === "agent prompt")
-        .map((c) => c.argv![3]!)
-        .filter((text) => text.includes("changed on disk"));
-      expect(told).toHaveLength(1);
+      const changed = (yield* rig.calls()).filter(
+        (c) => c.cmd === "agent prompt" && c.argv![3]!.includes("changed on disk"),
+      );
+      // Once, and to the agent that is going to build it — never to the fresh reader,
+      // which started after the edit and read the new ticket in the first place.
+      expect(changed).toHaveLength(1);
+      expect(changed[0]!.argv![2]).toContain("build");
+      const told = changed.map((c) => c.argv![3]!);
       // The checkboxes, both ways: what the ticket now demands and what it dropped.
       expect(told[0]).toContain("01-first.md changed:");
       expect(told[0]).toContain("+ - [ ] a destination-keyed lock");
