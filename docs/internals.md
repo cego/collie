@@ -90,6 +90,16 @@ and architecture reports go into the run's `plan/` directory and never into the 
 made while planning _are_ written into the repository — those are domain knowledge, not
 plans.
 
+A plan can also move while it is being built. A `plan` Step's own rewrite is diffed and
+handed to the implementer, but a planner answering a question in its pane and writing the
+answer into a ticket is outside any Step of ours. So a Step waiting on an agent re-reads
+the plan's `issues/` at the same beat it samples the pane, and sends the acceptance
+checkboxes that came and went. The baseline is the Run's, read before the first Step and
+moved on only once an agent has actually been told: a `fresh` agent is not told — it
+started after the edit and read the new ticket already — so a change during a review is
+still news to the `fix` that follows. An unreadable ticket yields nothing rather than an
+empty one, since empty would read as requirements deleted.
+
 ## A plan proves it can be handed out
 
 The refusals that stop a fan-out — a ticket with no `Repo:` line, a repository nobody
