@@ -80,7 +80,7 @@ export interface Channel {
 
 export interface DispatcherDeps {
   readonly stateDir: string;
-  readonly herdr: Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys">;
+  readonly herdr: Pick<Herdr, "agentPrompt" | "agentList" | "agentSendKeys" | "restoreAgentName">;
   /** The Run's audit trail, so a refusal is explained where the Run is read. */
   readonly log: (
     line: string,
@@ -166,7 +166,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   return yield* withLedgerLock(
     file,
     Effect.gen(function* () {
-      let listing = yield* agentsNow(deps);
+      let listing = yield* agentsNow(deps, entry);
       let listedAt = yield* Clock.currentTimeMillis;
 
       const identified = verifyIncarnation(entry, listing);
@@ -200,7 +200,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
             // can happen inside one. Anything older than a few seconds is re-read before
             // it is trusted with a send.
             if ((yield* Clock.currentTimeMillis) - listedAt > LISTING_MAX_AGE_MS) {
-              listing = yield* agentsNow(deps);
+              listing = yield* agentsNow(deps, entry);
               listedAt = yield* Clock.currentTimeMillis;
               const again = verifyIncarnation(entry, listing);
               if (!again.ok) {
@@ -234,9 +234,23 @@ function refuse(
   return { ok: false, id, reason, detail };
 }
 
-/** What herdr has now, or nothing: an unanswerable listing identifies no agent. */
-const agentsNow = (deps: DispatcherDeps) =>
-  deps.herdr.agentList().pipe(Effect.catch(() => Effect.succeed<AgentInfo[]>([])));
+/** Recover a missing name only with an existing binding, then revalidate the fresh list. */
+const agentsNow = Effect.fn("Dispatcher.agentsNow")(function* (
+  deps: DispatcherDeps,
+  entry?: AgentEntry,
+) {
+  const read = () =>
+    deps.herdr.agentList().pipe(Effect.catch(() => Effect.succeed<AgentInfo[]>([])));
+  let listing = yield* read();
+  if (
+    entry?.incarnation &&
+    !listing.some((agent) => agent.name === entry.agent) &&
+    (yield* deps.herdr.restoreAgentName(entry).pipe(Effect.catch(() => Effect.succeed(false))))
+  ) {
+    listing = yield* read();
+  }
+  return listing;
+});
 
 /**
  * One message: reserved, sent, settled. The reservation is appended **before** herdr is

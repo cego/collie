@@ -94,6 +94,7 @@ function fake(
     deps: {
       stateDir,
       herdr: {
+        restoreAgentName: () => Effect.succeed(false),
         agentList: () =>
           Effect.sync(() => {
             calls.push("agentList");
@@ -126,6 +127,32 @@ const states = Effect.fn("test.states")(function* () {
     .filter((line): line is Delivery => "state" in line)
     .map((line) => `${line.id} ${line.state}`);
 });
+
+test("a continuation recovers a lost name using its recorded incarnation", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const h = fake();
+      let restored = false;
+      const deps = {
+        ...h.deps,
+        herdr: {
+          ...h.deps.herdr,
+          agentList: () => Effect.succeed(restored ? [alive] : []),
+          restoreAgentName: (target: AgentEntry) =>
+            Effect.sync(() => {
+              expect(target).toEqual(entry);
+              restored = true;
+              return true;
+            }),
+        },
+      };
+      const outcome = yield* transaction(deps, entry, (channel) =>
+        channel.submit("continue with the spec", draft),
+      );
+      expect(outcome.ok).toBe(true);
+      expect(h.calls).toContain("agentPrompt impl-1 continue with the spec");
+    }),
+  ));
 
 test("the record is written before herdr is called, and settled after", () =>
   runEffect(

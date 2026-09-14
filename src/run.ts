@@ -1,6 +1,7 @@
 import { Data, Schema, Effect, FileSystem, Path, Struct } from "effect";
 import { nowIso } from "./time";
 import { currentPid, withLock } from "./lock";
+import { IncarnationSchema } from "./registry";
 import { unsafePathComponent } from "./naming";
 import { FindingSchema, type Finding } from "./output";
 import { writeSnapshot } from "./snapshot";
@@ -35,6 +36,8 @@ const VariantRecordSchema = Schema.Struct({
   label: Schema.String,
   tabId: Schema.NullOr(Schema.String),
   paneId: Schema.NullOr(Schema.String),
+  /** Saved per variant: the role registry can be replaced by another live Run. */
+  incarnation: Schema.optionalKey(IncarnationSchema),
   status: StepStatusSchema,
   output: Schema.NullOr(Schema.String),
   error: Schema.NullOr(Schema.String),

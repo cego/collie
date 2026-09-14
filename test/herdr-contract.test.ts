@@ -43,6 +43,7 @@ const replies = {
   PaneSplitReply: { of: replySchemas.PaneSplitReply, at: { envelope: "pane_info" } },
   AgentListReply: { of: replySchemas.AgentListReply, at: { envelope: "agent_list" } },
   AgentStatusReply: { of: replySchemas.AgentStatusReply, at: { envelope: "agent_info" } },
+  AgentIdentityReply: { of: replySchemas.AgentIdentityReply, at: { envelope: "agent_info" } },
   WorktreeListReply: { of: replySchemas.WorktreeListReply, at: { envelope: "worktree_list" } },
   WorktreeOpenReply: { of: replySchemas.WorktreeOpenReply, at: { envelope: "worktree_opened" } },
   PluginPaneReply: { of: replySchemas.PluginPaneReply, at: { envelope: "plugin_pane_opened" } },
