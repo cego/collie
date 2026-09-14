@@ -1659,6 +1659,7 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       repairs: [],
       nudges: 0,
     };
+    if (reuse && prior?.incarnation) record.incarnation = prior.incarnation;
 
     // A pane says only what its tab cannot; a lone pane in its own tab says nothing.
     const paneName = paneLabel(variant, step.id, variants.length, !!step.fanIn);
@@ -2783,8 +2784,10 @@ const register = Effect.fn("Engine.register")(function* (
       workflow: o.run.record.workflow,
       at: yield* nowIso(),
     };
-    if (info?.terminalId)
+    if (info?.terminalId) {
       entry.incarnation = { terminalId: info.terminalId, agentSession: info.agentSession };
+      record.incarnation = entry.incarnation;
+    }
     yield* registerAgent(path, entry);
     yield* o.run.log(
       info?.terminalId
@@ -4193,9 +4196,9 @@ function dispatcherDeps(o: EngineOptions): dispatch.DispatcherDeps {
 }
 
 /**
- * The registry entry for one of this Run's agents. A registered incarnation wins: it is
- * what the agent was at start, and one rederived from the current listing is compared
- * with itself, so a restarted agent would always pass.
+ * The saved binding for one of this Run's agents wins over the role registry, which
+ * another Run can replace. Without either, capture the initial named incarnation:
+ * rederiving it on every delivery would compare a restarted agent with itself.
  *
  * An entry with no incarnation is not an answer — herdr had not named a `terminal_id`
  * yet when the agent started, and taking that as final would make a moment's gap in one
@@ -4208,6 +4211,22 @@ const agentEntry = Effect.fn("Engine.agentEntry")(function* (
   record: VariantRecord,
   role = record.label,
 ) {
+  // A different Run can replace this role's registry entry while this agent is working.
+  if (record.incarnation && record.paneId) {
+    return {
+      entry: {
+        role,
+        agent: record.agent,
+        paneId: record.paneId,
+        workspaceId: o.env.workspaceId,
+        runId: o.run.id,
+        workflow: o.run.record.workflow,
+        at: yield* nowIso(),
+        incarnation: record.incarnation,
+      } satisfies AgentEntry,
+      reason: null,
+    };
+  }
   const file = yield* registryPath(o.env.stateDir, scopeFor(o.env, o.run.record.cwd)).pipe(
     Effect.catch(() => Effect.succeed(null)),
   );
@@ -4218,7 +4237,11 @@ const agentEntry = Effect.fn("Engine.agentEntry")(function* (
           Effect.map((entries) => entries.find((entry) => entry.agent === record.agent) ?? null),
           Effect.catch(() => Effect.succeed(null)),
         );
-  if (registered !== null && deliverable(registered)) return { entry: registered, reason: null };
+  if (registered !== null && deliverable(registered)) {
+    record.incarnation = registered.incarnation;
+    yield* o.run.save();
+    return { entry: registered, reason: null };
+  }
 
   const live = yield* dispatch.entryFromLive(dispatcherDeps(o), {
     role,
@@ -4228,6 +4251,10 @@ const agentEntry = Effect.fn("Engine.agentEntry")(function* (
     runId: o.run.id,
     workflow: o.run.record.workflow,
   });
+  if (live.entry?.incarnation) {
+    record.incarnation = live.entry.incarnation;
+    yield* o.run.save();
+  }
   // Healed on the register, so the incarnation this delivery goes to is the one the next
   // one is checked against.
   if (registered !== null && live.entry !== null && file !== null)

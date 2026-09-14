@@ -158,6 +158,7 @@ export function runWorkflow(
   name: string,
   inputs: Record<string, string>,
   opts: {
+    herdr?: Herdr;
     defaults?: Partial<Defaults>;
     handoffTimeoutMs?: number;
     outputPollMs?: number;
@@ -185,7 +186,7 @@ export function runWorkflow(
   return Effect.gen(function* () {
     const configEnv = rig.env(opts.env);
     const env = rig.pluginEnv(opts.env);
-    const herdr = new EffectFakeHerdr(env, configEnv);
+    const herdr = opts.herdr ?? new EffectFakeHerdr(env, configEnv);
     const defs = yield* layers(env).pipe(Effect.flatMap(loadDefinitions));
     const defaults = Object.assign(
       yield* testDefaults(env.configDir),

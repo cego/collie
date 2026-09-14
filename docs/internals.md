@@ -395,6 +395,14 @@ names a process — which is why a delivery is checked against the incarnation a
 against the name. `verifyIncarnation` requires name, pane and workspace to match as
 before, and `terminal_id` (and the recorded `agent_session`) on top.
 
+Each Run also saves that binding on its agent variant and carries it into continuation
+steps. Another Run taking the same role must not erase the first Run's identity proof.
+If herdr loses the managed name, the Dispatcher can restore it through `agent rename`
+only when the pane is unnamed and both the saved terminal and session still match.
+It then re-reads the agent list and applies the normal incarnation checks before sending.
+Missing session proof, changed identities, and deliberate renames are not recovered by
+guessing. A genuinely missing agent still follows the existing fresh-agent resume policy.
+
 An entry from before incarnations decodes as one without the field, and that is
 **fail-closed**: it can still be stopped and pruned, but nothing is ever sent to it —
 `deliverable` is false and `liveRole` returns null with `no_incarnation`. The alternative

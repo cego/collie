@@ -31,7 +31,7 @@ export interface RegistryScope {
   cwd: string;
 }
 
-const IncarnationSchema = Schema.Struct({
+export const IncarnationSchema = Schema.Struct({
   terminalId: Schema.String,
   agentSession: Schema.NullOr(Schema.Struct({ kind: Schema.String, value: Schema.String })),
 });

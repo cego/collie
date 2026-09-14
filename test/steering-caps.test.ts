@@ -62,6 +62,7 @@ function fake() {
     deps: {
       stateDir,
       herdr: {
+        restoreAgentName: () => Effect.succeed(false),
         agentList: () => Effect.succeed([alive]),
         agentPrompt: (target: string) =>
           Effect.sync(() => {

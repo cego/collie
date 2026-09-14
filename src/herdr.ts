@@ -13,6 +13,7 @@ import type { PluginEnv } from "./env";
 import { isString } from "./schema";
 import { PLUGIN_ID } from "./env";
 import { reason } from "./naming";
+import { verifyIncarnation, type AgentEntry } from "./registry";
 
 export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 
@@ -153,6 +154,9 @@ const AgentListReply = Schema.Struct({
 const AgentStatusReply = Schema.Struct({
   result: Schema.Struct({ agent: Schema.Struct({ agent_status: Schema.String }) }),
 });
+const AgentIdentityReply = Schema.Struct({
+  result: Schema.Struct({ agent: AgentReply }),
+});
 const WorktreeReply = Schema.Struct({
   path: Schema.String,
   // A detached checkout has no branch, and herdr says so by leaving it out.
@@ -256,6 +260,7 @@ export const replySchemas = {
   PaneSplitReply,
   AgentListReply,
   AgentStatusReply,
+  AgentIdentityReply,
   WorktreeListReply,
   WorktreeOpenReply,
   PluginPaneReply,
@@ -919,6 +924,37 @@ export class Herdr {
 
   agentList(): HerdrEffect<AgentInfo[]> {
     return this.cli(["agent", "list"]).pipe(Effect.flatMap(decodeAgentList));
+  }
+
+  /** Restore only a lost alias, never a human rename or another session in this pane. */
+  restoreAgentName(entry: AgentEntry): HerdrEffect<boolean> {
+    if (!entry.incarnation?.agentSession) return Effect.succeed(false);
+    const inspect = this.cli(["agent", "get", entry.paneId]).pipe(
+      Effect.flatMap((res) => decodeOrNamed("herdr agent get", AgentIdentityReply, res)),
+    );
+    const rename = this.cli(["agent", "rename", entry.paneId, entry.agent]);
+    return Effect.gen(function* () {
+      const {
+        result: { agent },
+      } = yield* inspect;
+      if (agent.name) return false;
+      const candidate: AgentInfo = {
+        name: entry.agent,
+        paneId: agent.pane_id,
+        workspaceId: agent.workspace_id ?? null,
+        status: agentStatus(agent.agent_status),
+        title: null,
+        terminalId: agent.terminal_id ?? null,
+        agentSession: agent.agent_session
+          ? { kind: agent.agent_session.kind, value: agent.agent_session.value }
+          : null,
+      };
+      if (!verifyIncarnation(entry, [candidate]).ok) return false;
+      const renamed = yield* rename;
+      const failure = envelopeError("herdr agent rename", renamed);
+      if (failure) return yield* Effect.fail(failure);
+      return true;
+    });
   }
 
   agentFocus(target: string): HerdrEffect<void> {
