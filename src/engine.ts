@@ -412,6 +412,8 @@ interface RunCtx {
    * and judged with them; cleared once that fix has run.
    */
   reopened: Finding[];
+  /** The plan's tickets as this run last read them; only a told step moves it on. */
+  tickets: Map<string, string> | null;
 }
 
 /**
@@ -458,7 +460,12 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     },
     judged: NOT_JUDGED,
     reopened: [],
+    tickets: null,
   };
+
+  // Read before any step runs, so an edit during an unwatched one is still a change.
+  const issues = yield* planTickets(o);
+  if (issues) ctx.tickets = yield* readTickets(issues);
 
   run.record.status = "running";
   run.record.finished_at = null;
@@ -1922,7 +1929,7 @@ const runStep = Effect.fn("Engine.runStep")(function* (
     records,
     (record, i) =>
       // An agent that was never prompted has nothing to go quiet about.
-      withheld[i] ? Effect.succeed(null) : awaitAgent(o, ctx, record),
+      withheld[i] ? Effect.succeed(null) : awaitAgent(o, ctx, step, record),
     { concurrency: "unbounded" },
   );
 
@@ -2659,6 +2666,81 @@ export function choiceHint(choice: ChoiceDef): string {
 }
 
 const PLAN_DIR = "plan";
+const PLAN_ISSUES = "issues";
+
+/** The tickets a Run builds from, when its work source is a plan directory. */
+const planTickets = Effect.fn("Engine.planTickets")(function* (o: EngineOptions) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const plan = o.run.record.inputs.plan ?? "";
+  if (o.run.record.inputs.plan_kind !== "plan-dir" || plan === "") return null;
+  const dir = pathService.join(plan, PLAN_ISSUES);
+  const there = yield* fs.exists(dir).pipe(Effect.catch(() => Effect.succeed(false)));
+  return there ? dir : null;
+});
+
+/**
+ * Every ticket by file name; null when any of it could not be read — unreadable is
+ * not empty, and empty would read as requirements deleted.
+ */
+const readTickets = Effect.fn("Engine.readTickets")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (names === null) return null;
+  const tickets = new Map<string, string>();
+  for (const name of names.filter((n) => n.endsWith(".md"))) {
+    const text = yield* fs
+      .readFileString(pathService.join(dir, name))
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (text === null) return null;
+    tickets.set(name, text);
+  }
+  return tickets;
+});
+
+const CHECKBOX = /^[-*] \[[ xX]\]/;
+
+/** A ticket's acceptance criteria: its checkbox lines, as written. */
+function checkboxes(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => CHECKBOX.test(line));
+}
+
+/** Which ticket moved, and the acceptance criteria that came and went. */
+function ticketChangeNote(before: Map<string, string>, after: Map<string, string>): string | null {
+  const parts: string[] = [];
+  for (const [name, text] of after) {
+    const old = before.get(name);
+    if (old === text) continue;
+    const was = checkboxes(old ?? "");
+    const now = checkboxes(text);
+    parts.push(
+      [
+        `${name} ${old === undefined ? "is new" : "changed"}:`,
+        ...now.filter((line) => !was.includes(line)).map((line) => `  + ${line}`),
+        ...was.filter((line) => !now.includes(line)).map((line) => `  - ${line}`),
+      ].join("\n"),
+    );
+  }
+  for (const name of before.keys()) if (!after.has(name)) parts.push(`${name} is gone.`);
+  if (parts.length === 0) return null;
+  return [
+    [
+      "The tickets you are building from have changed on disk. The files are the authority:",
+      "an answer you were given in a pane is not, and may be narrower than what was written.",
+      "Re-read the ones below.",
+    ].join(" "),
+    parts.join("\n"),
+    [
+      "Reconcile rather than restart: finish what the change does not affect, adjust what it",
+      "does, and where it conflicts with work you have already committed or pushed, say so in",
+      "your Output instead of quietly undoing either side.",
+    ].join(" "),
+  ].join("\n\n");
+}
 
 /**
  * A copy of the plan directory before a round touches it, so a change can be shown
@@ -3176,7 +3258,7 @@ const repairOutput = Effect.fn("Engine.repairOutput")(function* (
   record.error = null;
   // An agent that goes quiet writing one file is as stuck as one that goes quiet
   // doing the work, and the Driver holds it to the same bound.
-  const stuck = yield* awaitAgent(o, ctx, record);
+  const stuck = yield* awaitAgent(o, ctx, step, record);
   return yield* collectWatched(o, ctx, step, record, variantKey, stuck);
 });
 
@@ -4511,14 +4593,23 @@ const holdUntilReleased = Effect.fn("Engine.holdUntilReleased")(function* (
 const awaitAgent = Effect.fn("Engine.awaitAgent")(function* (
   o: EngineOptions,
   ctx: RunCtx,
+  step: ResolvedStep,
   record: VariantRecord,
 ) {
   const over: AgentStatus[] = ["idle", "done", "blocked"];
-  const quiet = o.defaults.quietMs;
-  if (quiet <= 0) {
+  // ponytail: the whole `issues/` dir, not the one ticket this step is on — knowing
+  // which would need the implementer to say so. A fresh agent is skipped: it started
+  // after the edit and read the new ticket already.
+  const tickets = step.fresh ? null : yield* planTickets(o);
+  const budget = o.defaults.quietMs;
+  // Nothing to give up on and nothing to watch: wait, rather than poll for nothing.
+  if (budget <= 0 && !tickets) {
     yield* o.herdr.agentWait(record.agent, { until: over });
     return null;
   }
+  // No budget is no nudge and no giving up, but a step with tickets still has to poll,
+  // so the deadlines go out of reach rather than away.
+  const quiet = budget > 0 ? budget : Infinity;
 
   // Liveness is sampled against a budget measured in minutes, so there is nothing to
   // learn every two seconds — and each sample costs two herdr subprocesses per agent.
@@ -4577,6 +4668,31 @@ const awaitAgent = Effect.fn("Engine.awaitAgent")(function* (
     if (now - sampled >= beat) {
       sampled = now;
       tail = yield* paneTail(o, ctx, record);
+      if (tickets) {
+        const current = yield* readTickets(tickets);
+        const note = current && ctx.tickets ? ticketChangeNote(ctx.tickets, current) : null;
+        // A change nobody was told about is not one to move the baseline past. The hash
+        // is the cause's own name: two different edits are two pieces of work, and the
+        // same edit re-read is not.
+        const told =
+          note === null ||
+          (yield* sendTo(o, record, {
+            text: note,
+            cause: { kind: "steer", ref: `tickets#${textHash(note)}` },
+            requestId: `${o.run.id}-tickets-${record.agent}-${textHash(note)}`,
+            attempt: 1,
+            intentVersion: ctx.steering.intentVersion,
+          }));
+        if (current && told) ctx.tickets = current;
+        if (note !== null && told) {
+          // Re-baselined on our own writing, as a nudge is: only the agent's next
+          // output counts as it having stirred.
+          tail = yield* paneTail(o, ctx, record);
+          sample = `${status}\n${tail}`;
+          yield* o.out(`  ▸ ${record.label} — the plan's tickets changed, told it to reconcile`);
+          yield* o.run.log(`${record.label}: the plan's tickets changed under it`);
+        }
+      }
     }
     const next = `${status}\n${tail}`;
     if (next !== sample) {
