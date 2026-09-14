@@ -1303,6 +1303,87 @@ export function choiceHint(choice: ChoiceDef): string {
 }
 
 const PLAN_DIR = "plan";
+const PLAN_ISSUES = "issues";
+
+/**
+ * The tickets a Run builds from, when it builds from a plan directory someone else
+ * wrote. A live planner can rewrite one while the implementer is on it, and an edit
+ * made outside a plan Step raises nothing anywhere — so the Step watches them.
+ */
+const planTickets = Effect.fn("Engine.planTickets")(function* (o: EngineOptions) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const plan = o.run.record.inputs.plan ?? "";
+  if (o.run.record.inputs.plan_kind !== "plan-dir" || plan === "") return null;
+  const dir = pathService.join(plan, PLAN_ISSUES);
+  const there = yield* fs.exists(dir).pipe(Effect.catch(() => Effect.succeed(false)));
+  return there ? dir : null;
+});
+
+/** Every ticket in a plan's `issues/`, by file name. */
+const readTickets = Effect.fn("Engine.readTickets")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const pathService = yield* Path.Path;
+  const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed<string[]>([])));
+  const tickets = new Map<string, string>();
+  for (const name of names.filter((n) => n.endsWith(".md"))) {
+    const text = yield* fs
+      .readFileString(pathService.join(dir, name))
+      .pipe(Effect.catch(() => Effect.succeed("")));
+    tickets.set(name, text);
+  }
+  return tickets;
+});
+
+const CHECKBOX = /^[-*] \[[ xX]\]/;
+
+/** A ticket's acceptance criteria: its checkbox lines, as written. */
+function checkboxes(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => CHECKBOX.test(line));
+}
+
+/**
+ * What an implementer is told when the tickets move under it: which ticket, and which
+ * acceptance criteria came and went — the part an answer given in a pane is most
+ * likely to have left out. Null when nothing changed.
+ */
+function ticketChangeNote(
+  before: Map<string, string>,
+  after: Map<string, string>,
+): string | null {
+  const parts: string[] = [];
+  for (const [name, text] of after) {
+    const old = before.get(name);
+    if (old === text) continue;
+    const was = checkboxes(old ?? "");
+    const now = checkboxes(text);
+    parts.push(
+      [
+        `${name} ${old === undefined ? "is new" : "changed"}:`,
+        ...now.filter((line) => !was.includes(line)).map((line) => `  + ${line}`),
+        ...was.filter((line) => !now.includes(line)).map((line) => `  - ${line}`),
+      ].join("\n"),
+    );
+  }
+  for (const name of before.keys()) if (!after.has(name)) parts.push(`${name} is gone.`);
+  if (parts.length === 0) return null;
+  return [
+    [
+      "The tickets you are building from have changed on disk. The files are the authority:",
+      "an answer you were given in a pane is not, and may be narrower than what was written.",
+      "Re-read the ones below.",
+    ].join(" "),
+    parts.join("\n"),
+    [
+      "Reconcile rather than restart: finish what the change does not affect, adjust what it",
+      "does, and where it conflicts with work you have already committed or pushed, say so in",
+      "your Output instead of quietly undoing either side.",
+    ].join(" "),
+  ].join("\n\n");
+}
 
 /**
  * A copy of the plan directory before a round touches it, so a change can be shown
@@ -1922,6 +2003,11 @@ const awaitAgent = Effect.fn("Engine.awaitAgent")(function* (
   const poll = o.outputPollMs ?? 2000;
   const beat = Math.max(poll, Math.min(quiet / 10, 30_000));
   const minutes = (ms: number) => Math.round(ms / 60_000);
+  // ponytail: the whole `issues/` dir, not just the ticket this step is on — knowing
+  // which one that is would need the implementer to say so. Sampled at the pane's
+  // cadence, so only a step with a quiet budget to poll against is watched.
+  const tickets = yield* planTickets(o);
+  let seen: Map<string, string> | null = null;
   let sample = "";
   let quietSince = yield* Clock.currentTimeMillis;
   // Nudges within the current quiet spell; `record.nudges` counts them for the whole
@@ -1966,6 +2052,19 @@ const awaitAgent = Effect.fn("Engine.awaitAgent")(function* (
     if (now - sampled >= beat) {
       sampled = now;
       tail = yield* paneTail(o, ctx, record);
+      if (tickets) {
+        const current = yield* readTickets(tickets);
+        const note = seen ? ticketChangeNote(seen, current) : null;
+        seen = current;
+        if (note) {
+          yield* Effect.ignore(o.herdr.agentPrompt(record.agent, note));
+          // Typed into the agent's own pane, so re-baseline on our own writing the way
+          // a nudge does; only the agent's next output counts as it having stirred.
+          tail = yield* paneTail(o, ctx, record);
+          yield* o.out(`  ▸ ${record.label} — the plan's tickets changed, told it to reconcile`);
+          yield* o.run.log(`${record.label}: the plan's tickets changed under it`);
+        }
+      }
     }
     const next = `${status}\n${tail}`;
     if (next !== sample) {

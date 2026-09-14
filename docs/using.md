@@ -571,9 +571,18 @@ ends. If you refine the plan, take a second opinion, or just talk to the planner
 implementer is building from that plan, the Driver sends it the diff of `plan/` and the
 planner's own `changelog` — once per change — and asks it to reconcile.
 
+That covers a plan Step rewriting the plan. A planner can also edit a ticket outside any
+Step of its own — answering a question in its pane and writing the answer into the file —
+so a building Step watches the `issues/` directory it was given as well. When a ticket
+changes there, the Step's own agent is told, with the acceptance checkboxes that came and
+went, and asked to reconcile rather than restart.
+
 **A decision the plan does not cover.** The implementer's prompt names the live planner's
 agent and pane and tells it to ask there rather than stopping. With no planner live, the
-same prompt tells it to stop and ask you.
+same prompt tells it to stop and ask you. It asks for one authority: an answer in the
+pane, or the answer written into the ticket and the pane saying only that — because an
+implementer that builds a pane answer while the file says something wider believes it is
+done.
 
 ## Reviewing someone else's merge request
 
