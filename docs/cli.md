@@ -115,7 +115,10 @@ collie --json run start review --task task-1a2b3c4d --input target=worktree
 ```
 
 `task list` gives each Task's id, its label, its workspace and the Runs it owns. The label
-is display only: renaming a task workspace by hand changes nothing about what belongs to it.
+is inferred when the Task is made — `<Project or theme> | <what this work is>`, from the
+work and from the names already live in your herdr session — and is display only:
+renaming a task workspace by hand changes nothing about what belongs to it, and Collie
+does not rename it back. See [Using Collie](using.md#what-a-task-workspace-is-called).
 
 Runs are scoped by Task, not by workspace. `collie run list` inside a task workspace lists
 that Task's Runs; anywhere else it lists every Run, and a Run is reachable by id from the

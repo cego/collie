@@ -143,7 +143,10 @@ puts new work in an existing one.
 
 **Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
 Task, made and focused when the Task is started, and kept when the work is finished until
-the human closes it. It is where Collie scopes a Run lookup: a workspace that is not a
+the human closes it. Its label is inferred once, at creation — `<Project or theme> | <what
+this work is>`, from the work and from the names already live in the session — and is
+display only: a label never decides membership, and a label a human changed is theirs,
+never written again. It is where Collie scopes a Run lookup: a workspace that is not a
 Task's narrows nothing. It gives no file or branch isolation — that is the Worktree's job.
 
 **Session** — One herdr session and one workspace, taken together. It is the

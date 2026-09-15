@@ -456,6 +456,39 @@ const OPERATOR_CHECKS: readonly Check[] = [
       how: "Submit the goal, then read the agent's own state for it — the goal/Stop-hook record naming this goal, not the pane's status. `herdr agent prompt --wait` does not track turns and must not be used as the evidence. Record the pane, the agent-side state that names the goal, and the revision.",
     },
   },
+  {
+    id: "tasks/a-fresh-start-opens-and-focuses-its-own-workspace",
+    statement:
+      "Starting a Run from the CLI and starting one from the herdr action each open a workspace of their own in the live sidebar and focus it, rather than leaving the Run in the workspace it was launched from; continuing either Task from the picker lands back in that same workspace and opens no second one.",
+    owner: OPERATOR,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "In disposable herdr workspaces, start one Task through each front door and record, for each: the workspace id the sidebar shows, that it took focus, and that `collie task list` names it. Then continue each Task and record that no workspace was added.",
+    },
+  },
+  {
+    id: "tasks/a-name-is-inferred-from-the-live-sidebar",
+    statement:
+      "A new task workspace is named `<Project or theme> | <short task title>` without anybody being asked, reusing the project prefix the person already has on their own live workspaces — and does the same for a second project's vocabulary, with no name hard-coded for either.",
+    owner: OPERATOR,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "With live workspaces carrying one project's prefix, start a Task and record the label it was given. Repeat in a second repository whose live labels carry a different project's prefix, and record that label too.",
+    },
+  },
+  {
+    id: "tasks/a-renamed-workspace-tab-or-pane-is-left-alone",
+    statement:
+      "A workspace, tab or pane a person has renamed is never written again by a Run that goes on working in it.",
+    owner: OPERATOR,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "Rename the task workspace and one of its tabs by hand while a Run is working, let the Run reach its next step, and record that both names are still the ones typed.",
+    },
+  },
 ];
 
 export const CHECKS: readonly Check[] = [...FRONT_DOOR, ...BACKEND, ...OPERATOR_CHECKS];

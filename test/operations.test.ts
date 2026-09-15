@@ -19,6 +19,7 @@ import {
 } from "../src/operations";
 import { REVIEW_FILE } from "../src/output";
 import { RunStore } from "../src/run";
+import { listTasks } from "../src/task";
 
 let rig: Rig;
 let bin: FakeBin;
@@ -547,5 +548,36 @@ test("a workflow that still needs an answer settles nothing and says so", () =>
       if (settled.ok) return;
       expect(settled.error.code).toBe("needs_input");
       expect(yield* new RunStore(env.stateDir).list()).toHaveLength(0);
+    }),
+  ));
+
+test("a checkout herdr opens a workspace for gets the Task's own name, and no second workspace", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* gitThatCheckouts();
+      const ready = yield* prepared("implement");
+      const settled = yield* settleGiven(rig.pluginEnv(), ready, {
+        inputs: { plan: "ENG-1", workspace: "new" },
+        decide: [],
+      });
+      if (!settled.ok) throw new Error(`expected implement to settle: ${settled.error.code}`);
+
+      yield* startRun(rig.pluginEnv(), {
+        workflow: ready.workflow,
+        resolutions: ready.resolutions,
+        decisions: settled.decisions,
+        workspace: null,
+      });
+
+      const [made] = yield* new RunStore(rig.stateDir).list();
+      const [task] = yield* listTasks(rig.stateDir);
+      // The workspace herdr opened on the checkout, under the Task's own name: this
+      // path opens no second workspace, and names neither after the branch under it
+      // nor after the workspace the Run was launched from.
+      expect(made!.record.workspace).toBe(task!.workspace);
+      expect(task!.label).toMatch(/^.+ \| .+$/);
+      expect(task!.label).not.toContain(made!.record.worktree!.branch);
+      expect(made!.record.workspace_label).toBe(task!.label);
+      expect(yield* rig.cmds()).not.toContain("workspace create");
     }),
   ));

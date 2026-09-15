@@ -816,8 +816,10 @@ export class RunStore {
         (run) =>
           run.record.cwd === cwd &&
           run.record.status === "done" &&
-          // A repository match alone is not membership: without a Task to ask about,
-          // nothing here is this caller's, because every Run on disk shares the repo.
+          // A repository match alone is not membership. A fresh start asks about no
+          // Task and so sees the Runs recorded before Tasks existed — transition
+          // compatibility, deliberate: an upgraded installation's earlier plans stay
+          // findable until they have a Task of their own.
           run.record.task === (task ?? null),
       );
     }).pipe(Effect.withSpan("RunStore.finished"));

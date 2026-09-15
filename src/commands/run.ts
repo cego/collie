@@ -224,7 +224,8 @@ const runStart = Command.make(
               const resolved = yield* context(global, (yield* selected(global)) !== null);
               if (resolved._tag === "ContextFailure") return resolved.result;
               // Which Task, before the Workflow is prepared: inference is task-local,
-              // so a continuation sees its own Task's plans and a fresh start sees none.
+              // so a continuation sees its own Task's plans and a fresh start sees only
+              // the Runs recorded before Tasks existed.
               const task = yield* chosenTask(resolved.env, taskId, continueTask);
               if (!task.ok) return task.error;
               const prepared = yield* prepareWorkflow(

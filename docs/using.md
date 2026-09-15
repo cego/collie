@@ -195,6 +195,39 @@ before this existed stay exactly where they are and belong to no task.
 A task workspace groups work. It gives no file or branch isolation — that is what the
 worktree below is for, and it is unchanged.
 
+### What a task workspace is called
+
+The name is worked out, not asked for: `<Project or theme> | <what this work is>`, for
+example `Collie | Per-task workspaces`. Collie reads the names you already have on your
+own workspaces, tabs and panes, and where several of them already share a prefix for this
+repository it uses that prefix, spelled the way you spell it — so a second task for the
+same project reads as a sibling of the first. Where nothing matches, the project is named
+from the repository and the title from the work itself. There is no naming prompt, no
+alias list to maintain, and nothing remembered between herdr sessions: your live labels
+are the vocabulary, read each time.
+
+Those labels are data. They go to the namer as a list of what things are called, under a
+prompt that says so, and what comes back is two short strings that can only become a
+label — never a path, an agent name or a command.
+
+With `--input workspace=new` herdr opens the workspace itself, on the checkout, and it is
+opened under this name — so a task reads the same on that path as on any other. A
+workspace herdr reopens rather than creates keeps whatever it is already called.
+
+A name is decided once, when the task is made. Continuing a task never renames it, and
+neither does a replayed start. **Rename anything and Collie leaves it alone from then
+on** — a task workspace, a run's tab, an agent's pane: once the label is not one Collie
+wrote, Collie stops writing it, through every later update and every continuation.
+
+Tabs and panes inside a task workspace do not repeat the task: the workspace already
+says what the work is, so the tab spends its width on the workflow and the step —
+`⚙ Implement · fix 3/5` — and a pane says only what its tab cannot. One repository of a
+fan-out keeps its own name, because several of them share one task workspace.
+
+Where the namer cannot be asked — no herdr session to account the call against, or no
+`claude` that takes the flags the isolation depends on — the task is still named, from
+your live prefix and the work's own short name. Starting work never waits on a name.
+
 ## What a run does to your repository
 
 A run that changes code never works in the checkout you started it from. `implement` — and

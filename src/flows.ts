@@ -56,7 +56,7 @@ import { confirmLine, resolveCandidates, settle, type InputPrompts, type PickIte
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { notify } from "./notify";
-import { COLLIE_TAB, reason, runLabel, shellQuote, tabLabelsFor } from "./naming";
+import { COLLIE_TAB, collieOwns, reason, runLabel, shellQuote, tabLabelsFor } from "./naming";
 import { markedFrom, RunStore, type Run } from "./run";
 import { readSnapshot, stepDifference, stepsDiffer } from "./snapshot";
 import { pruneWorktrees } from "./worktree";
@@ -1835,6 +1835,14 @@ const reconcileTabs = Effect.fn("Flows.reconcileTabs")(function* (
 ) {
   const live = new Map(alive.map((agent) => [agent.name, agent.status]));
   const written = (session.tabLabels ??= new Map());
+  // What herdr calls each of these tabs now, so a tab a human renamed keeps their name
+  // rather than being put back by the next board tick.
+  const now = new Map(
+    (yield* session.herdr.tabList().pipe(Effect.catch(() => Effect.succeed([])))).map((tab) => [
+      tab.tabId,
+      tab.label,
+    ]),
+  );
   for (const row of rows) {
     const run = runs.find((r) => r.id === row.id);
     if (!run) continue;
@@ -1847,6 +1855,7 @@ const reconcileTabs = Effect.fn("Flows.reconcileTabs")(function* (
     const labels = tabLabelsFor(run.record, (agent) => live.get(agent), row.choice !== null);
     for (const [tabId, label] of labels) {
       if (!inhabited.has(tabId) || written.get(tabId) === label) continue;
+      if (!collieOwns(now.get(tabId), run.record)) continue;
       written.set(tabId, label);
       // A tab that will not rename — closed since the read — is not worth a note, and
       // not worth trying again on every tick either.

@@ -306,3 +306,92 @@ test("resuming a Run keeps it in its Task rather than starting a fresh one", () 
       expect((yield* workspaceCalls()).created).toBe(before.created);
     }),
   ));
+
+/** The label herdr was asked to put on the workspace it created, in order. */
+const createdLabels = Effect.fn("taskTest.createdLabels")(function* () {
+  return (yield* rig.calls())
+    .filter((call) => call.cmd === "workspace create")
+    .map((call) => call.argv?.[call.argv.indexOf("--label") + 1] ?? "");
+});
+
+test("a task workspace is named for its project and what the work is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // What this person already calls this repository's work. Their own spelling, which
+      // is not the directory's: reusing it is the whole point.
+      yield* rig.addWorkspace("w9", "Project Mercury | Steering ledger", rig.projectDir);
+
+      yield* startedRun(rig.pluginEnv(), "give each task its own workspace");
+
+      expect(yield* createdLabels()).toEqual([
+        "Project Mercury | Give each task its own workspace",
+      ]);
+    }),
+  ));
+
+test("naming follows the person's own vocabulary, not one fitted to a project", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Somebody else's project, established for a repository that is not this one.
+      yield* rig.addWorkspace("w9", "Ledger API | Refund webhooks", rig.projectDir);
+
+      yield* startedRun(rig.pluginEnv(), "payout retries");
+
+      // Not borrowed: a prefix belongs to the repository it names, and this one is
+      // named from the repository itself rather than from the neighbour that looked handy.
+      expect(yield* createdLabels()).toEqual(["Project | Payout retries"]);
+    }),
+  ));
+
+test("a continuation keeps the Task's name, including one a human changed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const first = yield* startedRun(rig.pluginEnv(), "one");
+      const task = yield* readTask(rig.stateDir, first.record.task!);
+      if (!task) throw new Error("the first start recorded no Task");
+      const second = yield* startedRun(rig.pluginEnv(), "two", { mode: "continue", task });
+
+      expect(second.record.task).toBe(task.id);
+      expect(second.record.workspace).toBe(task.workspace);
+      // Nothing was created and nothing renamed: a continuation names nothing, so a
+      // workspace the human has since renamed keeps whatever they called it.
+      expect(yield* createdLabels()).toHaveLength(1);
+      expect((yield* rig.calls()).some((call) => call.cmd.startsWith("workspace rename"))).toBe(
+        false,
+      );
+      expect(yield* readTask(rig.stateDir, task.id)).toMatchObject({ label: task.label });
+    }),
+  ));
+
+test("where a namer can be asked, its answer is what the workspace is called", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // The frozen prompt this build asks with, and a `claude` that answers in the
+      // schema. Both have to be there: without the prompt nothing is asked at all.
+      yield* fs.makeDirectory(path.join(rig.baselineDir, "prompts"), { recursive: true });
+      yield* fs.writeFileString(
+        path.join(rig.baselineDir, "prompts", "namer.md"),
+        "Name one workspace.\n",
+      );
+      const packFile = path.join(rig.root, "namer-pack.txt");
+      yield* bin.add(
+        "claude",
+        `if [ "$1" = "--help" ]; then\n` +
+          `  printf '%s\\n' '--print --output-format --json-schema --tools --restricted --strict-mcp-config --setting-sources --no-session-persistence --append-system-prompt-file'\n` +
+          `  exit 0\nfi\n` +
+          `cat > "${packFile}"\n` +
+          `printf '%s\\n' '{"result":"{\\"project\\":\\"Collie\\",\\"title\\":\\"Per-task workspaces\\"}"}'`,
+      );
+      yield* rig.addWorkspace("w9", "Collie | Steering ledger", rig.projectDir);
+
+      yield* startedRun(rig.pluginEnv(), "give each task its own workspace");
+
+      expect(yield* createdLabels()).toEqual(["Collie | Per-task workspaces"]);
+      // The task and the person's own live names both reached the namer, as data.
+      const pack = yield* fs.readFileString(packFile);
+      expect(pack).toContain("give each task its own workspace");
+      expect(pack).toContain("Collie | Steering ledger");
+    }),
+  ));

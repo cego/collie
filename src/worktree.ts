@@ -118,6 +118,8 @@ export interface CheckoutAsk extends BranchAsk {
   /** The workspace the Run was activated from, and stays in. */
   workspaceId?: string | null;
   workspaceLabel?: string | null;
+  /** What to call a workspace herdr opens for this checkout, where it opens one. */
+  openLabel?: string | null;
   /** Where the Run records live, which is what says who already holds a checkout. */
   stateDir: string;
 }
@@ -925,7 +927,10 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   // it the same way: `startRun` settles it from `--input`, and the Choice that chains
   // `implement` forwards the parent's answer.
   if (opts.inputs.workspace?.trim() === SEPARATE_WORKSPACE) {
-    const label = tabLabel(GLYPH.running, disambiguate(opts.workflow, plan.branch));
+    // The Task's own name where the caller worked one out, so the workspace herdr opens
+    // reads like every other task workspace rather than like the branch under it.
+    const label =
+      opts.openLabel ?? tabLabel(GLYPH.running, disambiguate(opts.workflow, plan.branch));
     const found = yield* Effect.result(
       worktreeFor(herdr, { cwd: opts.cwd, branch: plan.branch, base: plan.base, label }),
     );
@@ -937,7 +942,9 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       // The workspace herdr just opened on the checkout, which is the whole point of
       // asking it: this is the one path where the Run does not stay where it started.
       workspaceId: worktree.workspace_id,
-      workspaceLabel: workspaceLabel ?? opts.workspaceLabel ?? null,
+      // Its own name or none: the workspace the Run was launched from is a different
+      // row, and naming this one after it points at a label it does not have.
+      workspaceLabel: workspaceLabel ?? opts.openLabel ?? null,
       worktree,
       note: `${worktree.created_by_collie ? "created" : "opened"} worktree ${worktree.path} on ${plan.branch}`,
     } satisfies Checkout;
