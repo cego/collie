@@ -52,6 +52,7 @@ import {
   type Intent,
 } from "../intent";
 import { scopeFor, scopeKey } from "../registry";
+import { readTask, taskOfWorkspace, type TaskChoice } from "../task";
 import { runDeliveries } from "./steer";
 import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
@@ -83,6 +84,7 @@ import {
   root,
   runData,
   selected,
+  selectedTask,
   unreadableRuns,
   type Global,
 } from "./shared";
@@ -107,6 +109,41 @@ function namedConstraints(texts: ReadonlyArray<string>, severities: ReadonlyArra
   }
   return { error: null, constraints };
 }
+
+/**
+ * Which Task this start belongs to. Fresh unless the caller said otherwise: neither the
+ * Workflow's name nor the workspace this happens to be in continues anything, because a
+ * continuation that was never asked for is how two pieces of work become one.
+ *
+ * The programmatic front door never waits for a prompt. Outside a Task's workspace,
+ * `--continue-task` is missing input and says which flag would supply it.
+ */
+const chosenTask = Effect.fn("collie.chosenTask")(function* (
+  env: PluginEnv,
+  named: Option.Option<string>,
+  current: boolean,
+) {
+  const refuse = (error: Result) => ({ ok: false as const, error });
+  const taken = (choice: TaskChoice) => ({ ok: true as const, choice });
+  if (Option.isSome(named)) {
+    const task = yield* readTask(env.stateDir, named.value);
+    if (!task)
+      return refuse(
+        err("task_not_found", `Task "${named.value}" was not found.`, { task: named.value }),
+      );
+    return taken({ mode: "continue", task });
+  }
+  if (!current) return taken({ mode: "new" });
+  const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
+  if (!here)
+    return refuse(
+      err(
+        "needs_input",
+        "This workspace is not a task workspace; name the Task with --task, as `task list` prints it.",
+      ),
+    );
+  return taken({ mode: "continue", task: here });
+});
 
 const runStart = Command.make(
   "start",
@@ -146,9 +183,28 @@ const runStart = Command.make(
       ),
       Flag.atLeast(0),
     ),
+    task: Flag.string("task").pipe(
+      Flag.withDescription("Continue this Task instead of starting a new one, by its id"),
+      Flag.optional,
+    ),
+    continueTask: Flag.boolean("continue-task").pipe(
+      Flag.withDescription("Continue the Task whose workspace this is; fails outside one"),
+      Flag.withDefault(false),
+    ),
     requestId: requestIdFlag,
   },
-  ({ workflow, input, inputsJson, decide, goal, constraint, severity, requestId: request }) =>
+  ({
+    workflow,
+    input,
+    inputsJson,
+    decide,
+    goal,
+    constraint,
+    severity,
+    task: taskId,
+    continueTask,
+    requestId: request,
+  }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
@@ -166,7 +222,15 @@ const runStart = Command.make(
               // to still be open. Only a start that is actually happening needs it.
               const resolved = yield* context(global, (yield* selected(global)) !== null);
               if (resolved._tag === "ContextFailure") return resolved.result;
-              const prepared = yield* prepareWorkflow(resolved.env, workflow);
+              // Which Task, before the Workflow is prepared: inference is task-local,
+              // so a continuation sees its own Task's plans and a fresh start sees none.
+              const task = yield* chosenTask(resolved.env, taskId, continueTask);
+              if (!task.ok) return task.error;
+              const prepared = yield* prepareWorkflow(
+                resolved.env,
+                workflow,
+                task.choice.mode === "continue" ? task.choice.task : null,
+              );
               if (!prepared.ok) return prepared;
               const settled = yield* settleGiven(resolved.env, prepared, {
                 inputs: explicit.inputs,
@@ -183,6 +247,7 @@ const runStart = Command.make(
                 // Input, so it travels with the rest of them.)
                 branch: explicit.inputs.branch,
                 intent: { goal: Option.getOrNull(goal), constraints: named.constraints },
+                task: task.choice,
               });
               if (started._tag === "Rejected") return started.result;
               return {
@@ -218,10 +283,12 @@ const runList = Command.make("list", {}, () =>
       Effect.gen(function* () {
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
-        const workspace = yield* selected(global);
+        // Scoped to the Task whose workspace this is, where it is one: Runs belong to
+        // Tasks now, and a workspace that is not a Task's narrows nothing.
+        const task = yield* selectedTask(global);
         const store = new RunStore(resolved.env.stateDir);
         const readable = yield* store.list();
-        const runs = readable.filter((item) => !workspace || item.record.workspace === workspace);
+        const runs = readable.filter((item) => !task || item.record.task === task);
         const data = yield* Effect.all(runs.map(runData));
         // A listing hides a Run it cannot read, and `run list` is the one place that
         // has to say so, or an agent never learns it exists. Reported alongside the
@@ -251,7 +318,7 @@ const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
   const resolved = yield* context(global, false);
   if (resolved._tag === "ContextFailure")
     return { _tag: "RunFailure" as const, result: resolved.result };
-  const found = yield* readRun(resolved.env, runId, yield* selected(global));
+  const found = yield* readRun(resolved.env, runId, yield* selectedTask(global));
   // The environment travels with the Run: `show` reads the Run's children out of the
   // same state directory, and resolving the context twice is two answers to one question.
   return found._tag === "RunFailure" ? found : { ...found, env: resolved.env };
@@ -553,8 +620,8 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
 ) {
   const resolved = yield* context(global, false);
   if (resolved._tag === "ContextFailure") return yield* printResult(resolved.result, global.json);
-  const workspace = yield* selected(global);
-  const found = yield* readRun(resolved.env, runId, workspace);
+  const task = yield* selectedTask(global);
+  const found = yield* readRun(resolved.env, runId, task);
   if (found._tag === "RunFailure") return yield* printResult(found.result, global.json);
   const watchedRun = found.run;
   const timeoutResult = parseTimeout(timeout);
@@ -585,7 +652,7 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
 
   /** Reports what has happened since the last call, and whether waiting is over. */
   const emit = Effect.fn("collie.runWait.emit")(function* () {
-    const fresh = yield* readRun(resolved.env, runId, workspace);
+    const fresh = yield* readRun(resolved.env, runId, task);
     if (fresh._tag === "RunFailure") {
       // Deleted or no longer decoding, mid-wait. That is the typed failure the
       // caller is owed, not a terminal state to be reported as a success.
@@ -668,7 +735,7 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
       { ok: true, data: seen, human: seen.attention.explanation },
       global.json,
     );
-  const terminal = yield* readRun(resolved.env, runId, workspace);
+  const terminal = yield* readRun(resolved.env, runId, task);
   if (terminal._tag === "RunFailure") return yield* printResult(terminal.result, global.json);
   // The snapshot carries the status, so it is not worked out a second time here.
   const snapshot = yield* runData(terminal.run);
@@ -696,10 +763,10 @@ function runMutationCommand(
       Effect.gen(function* () {
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
-        const workspace = yield* selected(global);
+        const task = yield* selectedTask(global);
         return yield* mutation(resolved.env, operation, requestId, (id) =>
           Effect.gen(function* () {
-            const found = yield* readRun(resolved.env, runId, workspace);
+            const found = yield* readRun(resolved.env, runId, task);
             if (found._tag === "RunFailure") return found.result;
             return yield* apply(resolved.env, found.run, id);
           }),

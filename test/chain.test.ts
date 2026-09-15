@@ -275,6 +275,28 @@ test("the task a parent settled is what its child's branch is named after", () =
     }),
   ));
 
+test("a chained run stays in its parent's task, wherever the focus has moved to", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([CLEAN]);
+      const prompts = scriptedPrompts(["Build it now"]);
+
+      const { run } = yield* runWorkflowEffect(
+        rig,
+        "parent",
+        { goal: "Add a picker" },
+        // The parent is in its Task's workspace; the environment is focused elsewhere.
+        // The child belongs to the Task, not to whatever herdr is showing now.
+        { prompts, task: "task-abc", workspace: "task-ws" },
+      );
+
+      const child = yield* new RunStore(rig.stateDir).load(run.record.children[0]!);
+      expect(child.record.task).toBe("task-abc");
+      expect(child.record.workspace).toBe(run.record.workspace);
+      expect(child.record.workspace).toBe("task-ws");
+    }),
+  ));
+
 test("a run: choice starts a child run with the forwarded inputs and the parent finishes", () =>
   runEffect(
     Effect.gen(function* () {

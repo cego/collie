@@ -114,6 +114,11 @@ Build {{inputs.plan}}.
         `#!/bin/sh
 if [ "$1 $2" = "workspace list" ]; then
   printf '%s\n' '{"result":{"workspaces":[{"workspace_id":"w1","label":"One","cwd":"${workspace}","worktree":{"path":"${workspace}"}},{"workspace_id":"w2","label":"Two","cwd":"${workspace}"}]}}'
+elif [ "$1 $2" = "workspace create" ]; then
+  n=$(cat "${path.join(dir, "workspaces")}" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  printf '%s' "$n" > "${path.join(dir, "workspaces")}"
+  printf '{"result":{"workspace":{"workspace_id":"task-ws-%s"}}}\n' "$n"
 fi
 `,
         { mode: 0o755 },
@@ -227,18 +232,19 @@ effectTest(
     expect((yield* fs.readFileString(path.join(dir, "drivers"))).trim().split("\n")).toHaveLength(
       1,
     );
+    // And one task workspace: a replayed receipt opens nothing a second time.
+    expect((yield* fs.readFileString(path.join(dir, "workspaces"))).trim()).toBe("1");
 
     const runId: string = first.body.data.runId;
     const shown = (yield* cli(["--workspace", "w1", "run", "show", runId])).body.data.run;
+    // A fresh start is its own Task, in a workspace of its own — not the w1 it was
+    // launched from, whose directory still roots it.
     expect(shown).toMatchObject({
-      workspace: "w1",
-      workspace_label: "One",
+      workspace: "task-ws-1",
+      workspace_label: "ship",
       workspace_worktree: path.join(dir, "workspace"),
       cwd: path.join(dir, "workspace"),
     });
-    expect((yield* cli(["--workspace", "w2", "run", "show", runId])).body.error.code).toBe(
-      "run_not_found",
-    );
 
     const runDir = path.join(dir, "state", "runs", runId);
     const snapshotPath = path.join(runDir, "run.json");
@@ -356,6 +362,25 @@ effectTest(
     expect(
       (yield* cli(["--workspace", "w1", "run", "show", runId])).body.data.run.steps[0].status,
     ).toBe("done");
+
+    // Scoping is by Task now: this Run is reachable from the workspace it was started
+    // in and from its own Task's, and not from another Task's.
+    expect((yield* cli(["--workspace", "task-ws-1", "run", "show", runId])).body.ok).toBe(true);
+    const other = yield* cli([
+      "--workspace",
+      "w1",
+      "run",
+      "start",
+      "demo",
+      "--input",
+      "goal=elsewhere",
+      "--request-id",
+      "start-2",
+    ]);
+    expect(Number(other.exit)).toBe(0);
+    expect((yield* cli(["--workspace", "task-ws-2", "run", "show", runId])).body.error.code).toBe(
+      "run_not_found",
+    );
   },
   // Nine CLI subprocesses, each a cold Bun start; ten seconds was a coin toss on a
   // loaded machine. The budget is here to catch a hang, not to time the hardware.

@@ -97,6 +97,12 @@ export interface InferContext<R = ChildProcessSpawner.ChildProcessSpawner> {
   cwd: string;
   /** The plugin state dir, so earlier Runs can be searched for a plan. */
   stateDir?: string;
+  /**
+   * The Task this inference is for. Only that Task's own finished Runs are offered:
+   * a repository match alone must not hand one Task another's plan or review. Absent
+   * — a fresh start — is a Task with nothing behind it yet, so nothing is inferred.
+   */
+  task?: string | null;
   run?: Runner<R>;
 }
 
@@ -127,7 +133,9 @@ export function inferInput(
         };
 
       case "plan-dir": {
-        const plan = ctx.stateDir ? (yield* planDirs(ctx.stateDir, ctx.cwd, 1))[0] : undefined;
+        const plan = ctx.stateDir
+          ? (yield* planDirs(ctx.stateDir, ctx.cwd, 1, ctx.task))[0]
+          : undefined;
         if (plan) {
           return { ...base, value: plan.value, source: plan.source, label: plan.label };
         }
@@ -259,12 +267,13 @@ export function planDirs(
   stateDir: string,
   cwd: string,
   limit: number,
+  task?: string | null,
 ): Effect.Effect<WorkSourceCandidate[], PlatformError, FileSystem.FileSystem | Path.Path> {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const found: WorkSourceCandidate[] = [];
-    for (const run of yield* new RunStore(stateDir).finished(cwd)) {
+    for (const run of yield* new RunStore(stateDir).finished(cwd, task)) {
       if (found.length >= limit) break;
       const dir = path.join(run.dir, "plan");
       if (!(yield* fs.exists(path.join(dir, "SPEC.md")))) continue;
@@ -289,12 +298,13 @@ export function reviewedTargets(
   stateDir: string,
   cwd: string,
   limit: number,
+  task?: string | null,
 ): Effect.Effect<Candidate[], PlatformError, FileSystem.FileSystem | Path.Path> {
   return Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
     const found: Candidate[] = [];
     const seen = new Set<string>();
-    for (const run of yield* new RunStore(stateDir).finished(cwd)) {
+    for (const run of yield* new RunStore(stateDir).finished(cwd, task)) {
       if (found.length >= limit) break;
       const target = run.record.inputs.target;
       if (!target) continue;
@@ -326,7 +336,7 @@ export function workSourceCandidates(
 > {
   return Effect.gen(function* () {
     const candidates = ctx.stateDir
-      ? yield* planDirs(ctx.stateDir, ctx.cwd, PLAN_DIR_CANDIDATES)
+      ? yield* planDirs(ctx.stateDir, ctx.cwd, PLAN_DIR_CANDIDATES, ctx.task)
       : [];
     const ticket = yield* ticketFromBranch(ctx.run ?? shell, ctx.cwd);
     if (ticket) candidates.push({ kind: "linear", value: ticket.value, source: ticket.source });
@@ -400,7 +410,12 @@ export function targetCandidates(
     // has reviewed before, for the second review of the same thing.
     if (ctx.stateDir) {
       const offered = new Set(out.map((c) => c.value));
-      for (const remembered of yield* reviewedTargets(ctx.stateDir, ctx.cwd, REVIEWED_TARGETS)) {
+      for (const remembered of yield* reviewedTargets(
+        ctx.stateDir,
+        ctx.cwd,
+        REVIEWED_TARGETS,
+        ctx.task,
+      )) {
         if (!offered.has(remembered.value)) out.push(remembered);
       }
     }

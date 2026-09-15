@@ -15,6 +15,12 @@ contexts = ["global", "workspace", "pane"]
 command = ["bin/collie", "herdr", "pick"]
 
 [[actions]]
+id = "continue"
+title = "Continue a task"
+contexts = ["global", "workspace", "pane"]
+command = ["bin/collie", "herdr", "continue"]
+
+[[actions]]
 id = "resume"
 title = "Resume a workflow run"
 contexts = ["global", "workspace"]

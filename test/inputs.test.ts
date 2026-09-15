@@ -516,6 +516,7 @@ function makePlanRun(
       cwd,
       session: null,
       workspace: null,
+      task: null,
       workspace_label: null,
       workspace_worktree: null,
       activated_cwd: null,

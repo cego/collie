@@ -6,6 +6,7 @@ import { currentEnv, type PluginEnv } from "./env";
 import { Herdr, herdrFailureReason } from "./herdr";
 import {
   boardFlow,
+  continueFlow,
   driveFlow,
   forkFlow,
   openPicker,
@@ -34,6 +35,7 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
     const code = yield* (() => {
       switch (command) {
         case "pick":
+        case "continue":
         case "resume":
         case "fork":
           return openPicker(client, env, command);
@@ -66,11 +68,13 @@ const popup = Effect.fn("main.popup")(function* (
   return yield* runFlow((prompts) =>
     mode === "pick"
       ? pickFlow(client, env, prompts)
-      : mode === "resume"
-        ? resumeFlow(client, env, prompts)
-        : mode === "fork"
-          ? forkFlow(client, env, prompts)
-          : Effect.succeed(2),
+      : mode === "continue"
+        ? continueFlow(client, env, prompts)
+        : mode === "resume"
+          ? resumeFlow(client, env, prompts)
+          : mode === "fork"
+            ? forkFlow(client, env, prompts)
+            : Effect.succeed(2),
   );
 });
 

@@ -32,8 +32,9 @@ import { readEnv, type PluginEnv } from "../src/env";
 import { answerKey, stopRun as boardStop, type ControlSession } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { prepareWorkflow, resumeRun, startRun } from "../src/operations";
-import { registerAgent, registryPath, scopeFor } from "../src/registry";
+import { registerAgent, registryPath, scopeFor, scopeOfRun } from "../src/registry";
 import { RunStore } from "../src/run";
+import { listTasks } from "../src/task";
 import type { RunRow } from "../src/workspace";
 import { NO_OUTCOME } from "../src/workspace";
 import { layers, loadDefinitions } from "../src/definitions";
@@ -103,6 +104,11 @@ Help.
 printf '%s\\n' "$*" >> "${path.join(dir, "herdr-calls")}"
 if [ "$1 $2" = "workspace list" ]; then
   printf '%s\\n' '{"result":{"workspaces":[{"workspace_id":"w1","label":"One","cwd":"${workspace}"}]}}'
+elif [ "$1 $2" = "workspace create" ]; then
+  n=$(cat "${path.join(dir, "workspaces")}" 2>/dev/null || echo 0)
+  n=$((n + 1))
+  printf '%s' "$n" > "${path.join(dir, "workspaces")}"
+  printf '{"result":{"workspace":{"workspace_id":"task-ws-%s"}}}\\n' "$n"
 else
   printf '%s\\n' '{"result":{}}'
 fi
@@ -184,6 +190,7 @@ const RecordJson = Schema.fromJsonString(
     slug: Schema.String,
     workflow: Schema.String,
     workspace: Schema.NullOr(Schema.String),
+    task: Schema.NullOr(Schema.String),
     workspace_label: Schema.NullOr(Schema.String),
     inputs: Schema.Record(Schema.String, Schema.String),
     input_sources: Schema.Record(Schema.String, Schema.String),
@@ -284,6 +291,16 @@ const observed = Effect.fn("parity.observed")(function* (runDir: string) {
     ...record,
     commands: commands.toSorted((a, b) => a.type.localeCompare(b.type)),
   };
+});
+
+/**
+ * The same Run without what is its alone: two Runs started side by side are two Tasks,
+ * in two workspaces, and neither says anything about whether the two front doors agree.
+ */
+const ownName = <T extends { task: string | null; workspace: string | null }>(observation: T) => ({
+  ...observation,
+  task: "",
+  workspace: "",
 });
 
 const herdrCalls = Effect.fn("parity.herdrCalls")(function* () {
@@ -394,16 +411,17 @@ effectTest("stopping through the board and through the CLI leave the same trace"
   const board = yield* makeRun();
   const command = yield* makeRun();
   const scope = scopeFor(pluginEnv(), env.COLLIE_CWD);
-  const registry = yield* registryPath(pluginEnv().stateDir, scope);
+  // A Run's agents register under the Run's own scope — its Task's workspace — which
+  // is where both halves of a stop go looking for them.
   for (const [run, pane] of [
     [board, "pane-board"],
     [command, "pane-cli"],
   ] as const) {
-    yield* registerAgent(registry, {
+    yield* registerAgent(yield* registryPath(pluginEnv().stateDir, scopeOfRun(run.record)), {
       role: run.id,
       agent: `agent-${pane}`,
       paneId: pane,
-      workspaceId: "w1",
+      workspaceId: run.record.workspace,
       runId: run.id,
       workflow: "demo",
       at: yield* nowIso(),
@@ -424,7 +442,7 @@ effectTest("stopping through the board and through the CLI leave the same trace"
   const fromBoard = yield* observed(board.dir);
   const fromCli = yield* observed(command.dir);
   expect(fromBoard.stopped).toBe(true);
-  expect(fromCli).toEqual(fromBoard);
+  expect(ownName(fromCli)).toEqual(ownName(fromBoard));
 
   // Each closed its own Run's pane, and only that one.
   const calls = yield* herdrCalls();
@@ -448,7 +466,7 @@ effectTest("resuming through the operation and through the CLI leave the same tr
   const fromBoard = yield* observed(board.dir);
   const fromCli = yield* observed(command.dir);
   expect(fromBoard.status).toBe("running");
-  expect(fromCli).toEqual(fromBoard);
+  expect(ownName(fromCli)).toEqual(ownName(fromBoard));
 });
 
 effectTest("starting through the operation and through the CLI record the same Run", function* () {
@@ -460,10 +478,26 @@ effectTest("starting through the operation and through the CLI record the same R
   const runId = started.body.data?.runId ?? "";
   const fromCli = yield* observed(path.join(env.HERDR_PLUGIN_STATE_DIR, "runs", runId));
 
-  // The slug carries the Run's own id, and only that differs.
-  expect({ ...fromCli, slug: "" }).toEqual({ ...fromOperation, slug: "" });
+  // The slug carries the Run's own id, and the Task and its workspace are each start's
+  // own — everything else is the same Run either way.
+  const same = { slug: "", workspace: "", workspace_label: "", task: "" };
+  expect({ ...fromCli, ...same }).toEqual({ ...fromOperation, ...same });
   expect(fromCli.slug.startsWith("demo-ship")).toBe(true);
   expect(fromOperation.slug.startsWith("demo-ship")).toBe(true);
+
+  // Each front door opened a task workspace of its own and put its Run in it.
+  expect(fromCli.task).not.toBeNull();
+  expect(fromCli.task).not.toBe(fromOperation.task);
+  expect(fromCli.workspace).not.toBe("w1");
+  expect(fromCli.workspace).not.toBe(fromOperation.workspace);
+  const tasks = yield* listTasks(env.HERDR_PLUGIN_STATE_DIR);
+  const byName = (a: string, b: string) => a.localeCompare(b);
+  expect(tasks.map((task) => task.workspace).toSorted(byName)).toEqual(
+    [String(fromCli.workspace), String(fromOperation.workspace)].toSorted(byName),
+  );
+  expect((yield* herdrCalls()).filter((line) => line.startsWith("workspace create"))).toHaveLength(
+    2,
+  );
 
   // Both handed the Run to a detached driver, and to exactly one.
   const launched = (yield* fs.readFileString(path.join(dir, "drivers"))).trim().split("\n");

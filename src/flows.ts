@@ -71,6 +71,7 @@ import {
   STOPPED,
 } from "./driver";
 import { scopeFor } from "./registry";
+import { listTasks, taskOfWorkspace, type TaskChoice } from "./task";
 import {
   answerRun,
   newRequestId,
@@ -150,7 +151,7 @@ export interface ControlSession extends Omit<Session, "herdr"> {
   pruned?: Pruned;
 }
 
-export type Mode = "pick" | "resume" | "fork";
+export type Mode = "pick" | "continue" | "resume" | "fork";
 
 /**
  * Where a launch flow is being drawn. Only a popup can close itself, and the tab's
@@ -304,11 +305,47 @@ function banner(defs: Definitions): string | undefined {
  */
 export type FlowPrompts = InputPrompts;
 
+/**
+ * Continue a Task: another Workflow, or another go at the same one, inside the Task
+ * that work already belongs to. Explicit, because a fresh start is what everything
+ * else is — inside a Task's own workspace that Task is meant, and from anywhere else
+ * the human says which, because no label can say it for them.
+ */
+export const continueFlow = Effect.fn("Flows.continueFlow")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  placement: Placement = "popup",
+) {
+  const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
+  const task = here ?? (yield* pickTask(env, prompts));
+  if (task === null) return 0;
+  return yield* pickFlow(herdr, env, prompts, placement, { mode: "continue", task });
+});
+
+/** Which Task, when this is not one's workspace. Null is the human backing out. */
+const pickTask = Effect.fn("Flows.pickTask")(function* (env: PluginEnv, prompts: FlowPrompts) {
+  const tasks = yield* listTasks(env.stateDir);
+  if (tasks.length === 0) {
+    yield* bail(prompts, "No tasks yet: starting a workflow makes one.");
+    return null;
+  }
+  const chosen = yield* prompts.menu(
+    tasks.map((task) => ({ id: task.id, title: task.label, subtitle: task.cwd })),
+    {
+      header: "Which task?",
+      footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
+    },
+  );
+  return tasks.find((task) => task.id === chosen?.id) ?? null;
+});
+
 export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
   prompts: FlowPrompts,
   placement: Placement = "popup",
+  task: TaskChoice = { mode: "new" },
 ) {
   const layerList = yield* layers(env);
   const defs = yield* loadDefinitions(layerList);
@@ -331,7 +368,7 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
   });
   if (!chosen) return 0;
 
-  yield* startChosen(herdr, env, prompts, { workflow: chosen.id, placement });
+  yield* startChosen(herdr, env, prompts, { workflow: chosen.id, placement, task });
   return 0;
 });
 
@@ -354,6 +391,8 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     /** Inputs the caller has already settled, which are not asked for again. */
     given?: Record<string, string>;
     parent?: Run;
+    /** The Task this start belongs to; a fresh one unless the caller named it. */
+    task?: TaskChoice;
   },
 ) {
   // A run starts in a checkout, and the Home has none: it is Collie's own namespace
@@ -361,8 +400,13 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   // anything else, because every Input after it is resolved against the answer.
   const at = yield* rootedWhere(herdr, env, prompts);
   if (at === null) return null;
+  const task = opts.task ?? { mode: "new" };
   // Resolving, validating and inferring is what `collie run start` does too.
-  const prepared = yield* prepareWorkflow(at, opts.workflow);
+  const prepared = yield* prepareWorkflow(
+    at,
+    opts.workflow,
+    task.mode === "continue" ? task.task : null,
+  );
   if (!prepared.ok) {
     yield* bail(prompts, whyNotRunnable(opts.workflow, prepared.error));
     return null;
@@ -407,6 +451,7 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     workspace: yield* resolveWorkspace(herdr, at).pipe(Effect.catch(() => Effect.succeed(null))),
     note: line,
     parent: opts.parent?.id,
+    task,
   };
   const started = yield* startRun(at, start);
   if (started._tag === "Rejected") {
@@ -1391,6 +1436,8 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       switch (command.mode) {
         case "pick":
           return yield* pickFlow(session.herdr, env, prompts, "inline").pipe(Effect.as(null));
+        case "continue":
+          return yield* continueFlow(session.herdr, env, prompts, "inline").pipe(Effect.as(null));
         case "resume":
           return yield* resumeFlow(session.herdr, env, prompts, "inline").pipe(Effect.as(null));
         case "fork":
@@ -1605,7 +1652,16 @@ const act = Effect.fn("Flows.act")(function* (
       Effect.catch((cause) => Effect.succeed(`${agent.agent}: ${reason(cause)}`)),
     );
   }
-  const mode = key === "p" ? "pick" : key === "u" ? "resume" : key === "f" ? "fork" : null;
+  const mode =
+    key === "p"
+      ? "pick"
+      : key === "C"
+        ? "continue"
+        : key === "u"
+          ? "resume"
+          : key === "f"
+            ? "fork"
+            : null;
   if (mode) {
     return yield* open(mode).pipe(
       Effect.as(null),

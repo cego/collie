@@ -5,6 +5,7 @@ import manifest from "../herdr-plugin.toml";
 import { CliConfig, CliError, Command, GlobalFlag } from "effect/unstable/cli";
 import { persona } from "./commands/persona";
 import { run } from "./commands/run";
+import { task } from "./commands/task";
 import { root } from "./commands/shared";
 import { doctor } from "./commands/doctor";
 import { upgrade } from "./commands/upgrade";
@@ -20,6 +21,7 @@ export const app = root.pipe(
     workflow,
     persona,
     run,
+    task,
     steer,
     confirm,
     decline,

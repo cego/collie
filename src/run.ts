@@ -248,6 +248,12 @@ const RunSchema = Schema.Struct({
   cwd: Schema.String,
   session: Schema.NullOr(Schema.String),
   workspace: Schema.NullOr(Schema.String),
+  /**
+   * The Task this Run belongs to, recorded at creation and carried by every Run the
+   * work chains into. Null for a Run started before Tasks existed, which is read as
+   * belonging to none rather than assigned to one.
+   */
+  task: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   workspace_label: Schema.NullOr(Schema.String),
   workspace_worktree: Schema.NullOr(Schema.String),
   /** Where the Run was started from, before it was given a checkout of its own. */
@@ -585,6 +591,8 @@ export interface CreateRunOptions {
   parent?: string;
   session?: string | null;
   workspace?: string | null;
+  /** The Task this Run belongs to; a chained or resumed Run inherits its parent's. */
+  task?: string | null;
   workspaceLabel?: string | null;
   workspaceWorktree?: string | null;
   activatedCwd?: string | null;
@@ -646,6 +654,7 @@ export class RunStore {
         cwd: opts.cwd,
         session: opts.session ?? null,
         workspace: opts.workspace ?? null,
+        task: opts.task ?? null,
         workspace_label: opts.workspaceLabel ?? null,
         workspace_worktree: opts.workspaceWorktree ?? null,
         activated_cwd: opts.activatedCwd ?? null,
@@ -800,10 +809,17 @@ export class RunStore {
    * reviewed, the review to compare a second one against. What counts as finished,
    * and as this repo, is decided once, here.
    */
-  finished(cwd: string) {
+  finished(cwd: string, task?: string | null) {
     const list = this.list();
     return Effect.gen(function* () {
-      return (yield* list).filter((run) => run.record.cwd === cwd && run.record.status === "done");
+      return (yield* list).filter(
+        (run) =>
+          run.record.cwd === cwd &&
+          run.record.status === "done" &&
+          // A repository match alone is not membership: without a Task to ask about,
+          // nothing here is this caller's, because every Run on disk shares the repo.
+          run.record.task === (task ?? null),
+      );
     }).pipe(Effect.withSpan("RunStore.finished"));
   }
 
@@ -811,8 +827,8 @@ export class RunStore {
    * The newest finished Run of this repo that reviewed this exact target and wrote a
    * review. `before` is the asking Run's own id, so a Run never finds itself.
    */
-  previousReview(cwd: string, target: string, before?: string) {
-    const finished = this.finished(cwd);
+  previousReview(cwd: string, target: string, before?: string, task?: string | null) {
+    const finished = this.finished(cwd, task);
     return Effect.gen(function* () {
       if (target === "") return null;
       for (const run of yield* finished) {

@@ -8,7 +8,13 @@ import { Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { nowIso } from "./time";
 import type { PluginEnv } from "./env";
-import { Herdr, type AgentInfo, type PaneInfo, type WorkspaceInfo } from "./herdr";
+import {
+  Herdr,
+  herdrFailureReason,
+  type AgentInfo,
+  type PaneInfo,
+  type WorkspaceInfo,
+} from "./herdr";
 import { loadDefaults } from "./config";
 import {
   DefinitionError,
@@ -44,6 +50,7 @@ import {
   type Resolution,
 } from "./inputs";
 import { readRegistry, registryPath, scopeKey, scopeOfRun } from "./registry";
+import { newTask, writeTask, type TaskChoice, type TaskRecord } from "./task";
 import {
   amend as amendIntent,
   constraintId,
@@ -114,6 +121,7 @@ import { YamlMapSchema, type YamlMap } from "./yaml";
 const ErrorCode = Schema.Literals([
   "workspace_required",
   "workspace_not_found",
+  "task_not_found",
   "workflow_not_found",
   "persona_not_found",
   "run_not_found",
@@ -331,6 +339,12 @@ export function workspaceCwdFromPanes(
 export const prepareWorkflow = Effect.fn("operations.prepareWorkflow")(function* (
   env: PluginEnv,
   name: string,
+  /**
+   * The Task this start continues, where it continues one. Inference is task-local:
+   * a fresh start has no earlier Runs of its own, so it asks rather than reaching for
+   * whatever the repository last produced.
+   */
+  task?: TaskRecord | null,
 ) {
   const definitions = yield* loadDefinitions(yield* layers(env));
   const defaults = yield* loadDefaults(env.configDir);
@@ -352,6 +366,7 @@ export const prepareWorkflow = Effect.fn("operations.prepareWorkflow")(function*
   const resolutions = yield* inferInputs(workflow.inputs, {
     cwd: env.cwd,
     stateDir: env.stateDir,
+    task: task?.id ?? null,
   });
   return { ok: true, workflow, resolutions } as const;
 });
@@ -609,6 +624,68 @@ export function primaryName(resolutions: Resolution[]) {
 }
 
 /**
+ * The Task a start belongs to, and the herdr workspace its Runs and agents live in.
+ *
+ * A fresh start gets a workspace of its own, whatever workspace it was launched from:
+ * that is what keeps one human's several pieces of work from accumulating beside each
+ * other. The exception is a checkout herdr already opened a workspace for, which is the
+ * same thing by another route and is taken rather than duplicated.
+ *
+ * A continuation is given its Task, and goes where that Task already is. Membership is
+ * the record, never the label: two Tasks may be called much the same thing, and a
+ * workspace a human renamed is still the Task's.
+ */
+const taskFor = Effect.fn("operations.taskFor")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  choice: TaskChoice,
+  opts: {
+    readonly label: string;
+    /** The workspace herdr opened for this Run's checkout, where it opened one. */
+    readonly opened: string | null;
+  },
+) {
+  const kept = (task: TaskRecord) => ({ _tag: "Ok" as const, task });
+  const refuse = (message: string, cause: string) => ({
+    _tag: "Rejected" as const,
+    result: err("operation_failed", message, { cause }),
+  });
+  if (choice.mode === "continue") {
+    // The Task's workspace has to still be there. Continuing into one herdr has closed
+    // would put the Run's tabs and agents nowhere, which is worse than not starting.
+    const open = yield* Effect.result(herdr.workspaceList());
+    if (open._tag === "Failure")
+      return refuse(
+        `Task "${choice.task.id}" could not be checked: ${herdrFailureReason(open.failure)}`,
+        herdrFailureReason(open.failure),
+      );
+    if (!open.success.some((workspace) => workspace.workspaceId === choice.task.workspace))
+      return refuse(
+        `Task "${choice.task.id}" has no workspace any more; start fresh or continue another.`,
+        "workspace_closed",
+      );
+    yield* Effect.ignore(herdr.workspaceFocus(choice.task.workspace));
+    return kept(choice.task);
+  }
+  let id = opts.opened;
+  if (id === null) {
+    const made = yield* Effect.result(herdr.workspaceCreate({ cwd: env.cwd, label: opts.label }));
+    if (made._tag === "Failure") {
+      const cause = herdrFailureReason(made.failure);
+      return refuse(`No workspace could be opened for this task: ${cause}`, cause);
+    }
+    id = made.success;
+  }
+  const task = yield* writeTask(
+    env.stateDir,
+    yield* newTask({ workspace: id, label: opts.label, cwd: env.cwd }),
+  );
+  // Focused, not just created: a human who started work is taken to it.
+  yield* Effect.ignore(herdr.workspaceFocus(id));
+  return kept(task);
+});
+
+/**
  * Creates the Run and hands it to a detached Driver. Inputs are already settled.
  * Returns an explicit started/rejected outcome so adapters cannot mistake a failure for a Run.
  */
@@ -630,6 +707,12 @@ export const startRun = Effect.fn("operations.startRun")(function* (
       readonly goal?: string | null;
       readonly constraints?: ReadonlyArray<Omit<Constraint, "since">>;
     };
+    /**
+     * Which Task this Run belongs to. A fresh start — the default — gets a task
+     * workspace of its own, whatever workspace it was launched from; a continuation
+     * goes to the workspace the named Task already has.
+     */
+    readonly task?: TaskChoice;
   },
 ) {
   const { workflow, resolutions, workspace } = options;
@@ -645,6 +728,11 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     // This Run is about to work here, so nothing may take it out from under it.
     keep: env.cwd,
   });
+  const choice = options.task ?? { mode: "new" };
+  // A continuation works where its Task already is; a fresh start is still in the
+  // workspace it was launched from until its own has been made.
+  const from = choice.mode === "continue" ? choice.task : null;
+  const launchedIn = from?.workspace ?? workspace?.workspaceId ?? env.workspaceId;
   // A mutating Workflow owns its checkout, keyed by the branch it is about to build,
   // so two of them never share a working tree — or a stash stack.
   const checkout = yield* checkoutFor(herdr, {
@@ -654,8 +742,8 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     name: named.short,
     inputs: inputValues(resolutions),
     sources: inputSources(resolutions),
-    workspaceId: workspace?.workspaceId ?? env.workspaceId,
-    workspaceLabel: workspace?.label ?? null,
+    workspaceId: launchedIn,
+    workspaceLabel: from?.label ?? workspace?.label ?? null,
     explicit: options.branch,
     login: env.gitlabLogin,
   });
@@ -672,12 +760,21 @@ export const startRun = Effect.fn("operations.startRun")(function* (
       ),
     };
   }
+  // Still before anything is created, so a workspace herdr would not open is a Run that
+  // was never started rather than one launched into the workspace it came from.
+  const resolved = yield* taskFor(herdr, env, choice, {
+    label: named.short || workflow.name,
+    opened: checkout.workspaceId === launchedIn ? null : checkout.workspaceId,
+  });
+  if (resolved._tag === "Rejected") return resolved;
+  const task = resolved.task;
   const run = yield* new RunStore(env.stateDir).create({
     workflow: workflow.name,
     cwd: checkout.cwd,
     session: env.socketPath,
-    workspace: checkout.workspaceId,
-    workspaceLabel: checkout.workspaceLabel,
+    workspace: task.workspace,
+    task: task.id,
+    workspaceLabel: task.label,
     workspaceWorktree: checkout.worktree?.path ?? workspace?.worktree ?? null,
     activatedCwd: env.cwd,
     worktree: checkout.worktree,
@@ -1747,6 +1844,7 @@ export const followUp = Effect.fn("operations.followUp")(function* (
     cwd,
     session: env.socketPath,
     workspace: parent.record.workspace,
+    task: parent.record.task,
     workspaceLabel: parent.record.workspace_label,
     workspaceWorktree: parent.record.workspace_worktree,
     worktree,

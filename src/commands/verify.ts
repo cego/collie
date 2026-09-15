@@ -1,6 +1,7 @@
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { err } from "../operations";
+import { taskOfWorkspace } from "../task";
 import { collect, insideRun } from "../verify";
 import { printResult } from "../envelope";
 import { answering, readRun } from "./shared";
@@ -50,7 +51,8 @@ export const verify = Command.make(
       );
     return answering((env) =>
       Effect.gen(function* () {
-        const found = yield* readRun(env, runId, env.workspaceId);
+        const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
+        const found = yield* readRun(env, runId, here?.id ?? null);
         if (found._tag === "RunFailure") return found.result;
         const run = found.run;
         const where = Option.getOrElse(cwd, () => run.record.worktree?.path ?? run.record.cwd);
