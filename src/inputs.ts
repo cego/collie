@@ -195,6 +195,14 @@ export function inferInput(
       // one passes a value of its own. Never asked for.
       case "optional":
         return { ...base, value: "", source: "default" };
+      case "gitlab-repository":
+        return {
+          ...base,
+          value: "",
+          source: "ask",
+          needsAsking: true,
+          question: "GitLab repository URL or local checkout",
+        };
       default:
         return { ...base, value: "", source: "ask", needsAsking: true };
     }

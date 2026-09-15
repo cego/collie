@@ -303,7 +303,7 @@ c prompt
       const errors = yield* validateWorkflow(resolveWorkflow("w", defs, defaults), defs, defaults);
 
       expect(errors).toEqual([
-        'workflow "w" input "goal": unknown strategy "interview" (known: goal, plan-dir, work-source, diff-target, ticket, flag, optional)',
+        'workflow "w" input "goal": unknown strategy "interview" (known: goal, plan-dir, work-source, diff-target, ticket, flag, optional, gitlab-repository)',
         'workflow "w" step "a": unknown persona "ghost" (known: reviewer)',
         'workflow "w" step "b": no prompt (add a "## b" section to w.md)',
         'workflow "w" step "b": agent "nowhere" is not an earlier step',

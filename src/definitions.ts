@@ -33,6 +33,7 @@ export const INPUT_STRATEGIES = [
   "ticket",
   "flag",
   "optional",
+  "gitlab-repository",
 ] as const;
 
 /** What a step may declare it needs before it is worth starting. */
