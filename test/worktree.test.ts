@@ -1372,6 +1372,38 @@ test("the repository input says which local checkout the Renovate worktree is cu
     }),
   ));
 
+test("a GitLab URL is cloned before the Renovate worktree is cut", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const url = "https://gitlab.example.com/acme/spilnu.git";
+      const source = join(rig.stateDir, "renovate-repositories", Bun.hash(url).toString(16));
+      yield* fakeGitAnswering(
+        {
+          ...gitAnswers(),
+          "worktree list --porcelain": porcelain([{ path: source, branch: "master" }]),
+        },
+        {},
+        {
+          clone: 'mkdir -p "$5" && printf "gitdir: $5/.gitdir\\n" > "$5/.git"',
+          "worktree add":
+            'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done',
+        },
+      );
+
+      const checkout = yield* renovateCheckout({ repository: url });
+
+      expect(yield* askedIn()).toContainEqual({
+        cwd: rig.stateDir,
+        command: `clone --quiet -- ${url} ${source}`,
+      });
+      expect(yield* askedIn()).toContainEqual({
+        cwd: source,
+        command: `worktree add --detach ${checkout.cwd} origin/master`,
+      });
+      expect(checkout.refused).toBeNull();
+    }),
+  ));
+
 test("two Renovate Runs on different repositories do not collide on a checkout path", () =>
   runEffect(
     Effect.gen(function* () {
