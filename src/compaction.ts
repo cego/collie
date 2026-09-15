@@ -9,6 +9,7 @@ import { Clock, Data, Effect, FileSystem, Path, PlatformError, Result, Schema } 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import type { Channel } from "./dispatcher";
 import type { Herdr, Submission } from "./herdr";
+import { ensureLockDir, withLock } from "./lock";
 import { reason } from "./naming";
 
 /**
@@ -221,6 +222,24 @@ export const controlDir = Effect.fn("Compaction.controlDir")(function* (
   return path.join(stateDir, CONTROL_DIR, agent);
 });
 
+/** Protect installation through agent startup, and use the same claim when pruning. */
+export const withControlLock = <A, E, R>(
+  stateDir: string,
+  agent: string,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    // Outside the directory being pruned: removing controls must not remove the lock.
+    const lock = path.join(stateDir, "compaction-locks", `${agent}.lock`);
+    yield* ensureLockDir(lock);
+    return yield* withLock(
+      lock,
+      Effect.fail(new Error(`${agent}: compaction controls are in use`)),
+      effect,
+    );
+  });
+
 /**
  * This agent's controls, or null where it has none — an agent launched before the
  * feature existed, one on a harness Collie does not manage, or one launched while
@@ -314,11 +333,8 @@ export const installControls = Effect.fn("Compaction.installControls")(function*
     yield* deps.log(`${agent.agent}: ${agent.harness} has no compaction controls in Collie`);
     return [];
   }
-  // Before this agent's own controls exist: every launch puts down what the last ones
-  // left behind. Controls live as long as their agent, which is longer than the Run
-  // that started it — but not for ever, and an endpoint nothing will connect to again
-  // is a process and a directory leaking. First, because the agent being launched is
-  // not in `agent list` yet, and a tidy-up after the install would put down its own.
+  // The engine holds withControlLock through installation and agent startup. A parallel
+  // launch must not prune these controls before herdr can list their agent.
   yield* Effect.ignore(putDownStaleControls(deps, agent.agent));
   const dir = yield* controlDir(deps.stateDir, agent.agent);
   const fs = yield* FileSystem.FileSystem;
@@ -354,12 +370,21 @@ const putDownStaleControls = Effect.fn("Compaction.putDownStaleControls")(functi
   const live = new Set((yield* deps.herdr.agentList()).map((agent) => agent.name));
   for (const name of yield* fs.readDirectory(root)) {
     if (name === launching || live.has(name)) continue;
-    const pid = yield* endpointPid(yield* readControl(deps.stateDir, name));
-    if (pid !== null) {
-      yield* Effect.ignore(Effect.sync(() => process.kill(pid, "SIGTERM")));
-      yield* deps.log(`${name}: stopped its compaction endpoint (pid ${pid})`);
-    }
-    yield* Effect.ignore(fs.remove(path.join(root, name), { recursive: true }));
+    yield* withControlLock(
+      deps.stateDir,
+      name,
+      Effect.gen(function* () {
+        // A launch may have finished while we waited for its lock. The earlier list
+        // cannot prove this agent is still absent.
+        if ((yield* deps.herdr.agentList()).some((agent) => agent.name === name)) return;
+        const pid = yield* endpointPid(yield* readControl(deps.stateDir, name));
+        if (pid !== null) {
+          yield* Effect.ignore(Effect.sync(() => process.kill(pid, "SIGTERM")));
+          yield* deps.log(`${name}: stopped its compaction endpoint (pid ${pid})`);
+        }
+        yield* fs.remove(path.join(root, name), { recursive: true });
+      }),
+    ).pipe(Effect.ignore);
   }
 });
 

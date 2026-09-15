@@ -264,6 +264,11 @@ test("renovate never lets a merge request end unaccounted for, and never takes a
       expect(prompt("merge")).toContain("git worktree list");
       expect(prompt("merge")).toContain("remote-tracking ref");
       expect(prompt("merge")).toContain("HEAD:<branch>");
+      // Approval is bound to the final reviewed head, after rebases and fixes, and
+      // precedes every merge attempt rather than being discovered from a merge error.
+      expect(prompt("merge")).toContain("glab mr approve <iid> --sha <head-sha>");
+      expect(prompt("merge")).toContain("before attempting to merge");
+      expect(prompt("merge")).toContain("Recheck approvals after every push or rebase");
       // Exactly one outcome each, and a deferral only with the operator's approval.
       for (const outcome of ["merged", "closed", "deferred"]) {
         expect(prompt("merge")).toContain(outcome);
