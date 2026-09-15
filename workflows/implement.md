@@ -31,8 +31,9 @@ steps:
     each: tickets
     # One implementer agent for the whole run, so its model is named once, here.
     # `default` passes no model flag and lets the harness pick its own.
-    model: default
-    effort: medium
+    harness: claude
+    model: opus
+    effort: xhigh
     output: build.json
   - id: review
     use: review
