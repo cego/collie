@@ -210,10 +210,38 @@ does not start and says which branch it could not be given one for, in git's own
 working in the directory you started it from is what two runs sharing a checkout — and a
 stash stack — looks like, which is the thing this exists to prevent.
 
+### A run that roams across branches
+
+`renovate` changes the repository too, but it does not build one branch — it moves across
+every Renovate Bot branch it merges. So it gets a checkout of its own that is **detached**
+at the repository's default branch as the remote has it, at
+`~/.herdr/worktrees/<repo>/renovate`, and no branch is created or claimed for the run.
+There is no `--input branch=` for it, and nothing it does binds a branch to its worktree:
+it fetches and checks out each Renovate branch inside that one checkout and pushes with an
+explicit refspec, so a Renovate branch that already has a checkout of yours is left where
+it is and reported, never taken over.
+
+`--input repository=<path>` says which local checkout to cut that worktree from; without it, the
+one the run was started in. The repository has to be checked out locally already — cloning
+from a URL is not something a run does. Two renovate runs on two repositories get two
+checkouts, one per repository. A second one on the _same_ repository is refused rather
+than handed the first's working tree. So are two repositories that share a name — the
+path is `<repo>` as the directory is called, so two `api`s want the same one — and so is
+anything else in the way, rather than being built over.
+
+A refusal says only what is known: which repository git says owns the path, and which
+run recorded it where a run record proves one did. Nothing is guessed, and neither the
+checkout nor either repository is touched. Looking and creating happen under one lock
+keyed by that path, so two runs starting at the same moment cannot both find it free.
+The path is yours again once that run's checkout is removed or pruned; a resumed run
+reuses only the checkout it recorded itself, and never claims a new one.
+
 The worktree outlives the merge request: it is still there when the run ends, so you can
 look at what it built. It is removed only once **settled** — the tree is clean, it holds
 no commit that is not on the remote already, nothing is working in it or could be resumed
-in it, and its merge request is merged or closed (or its remote branch is gone). Pruning happens when Collie is already awake: at every run start —
+in it, and its merge request is merged or closed (or its remote branch is gone). A
+`renovate` checkout has no branch to ask either question about, so a clean one nothing is
+working in is settled, and there is no branch to delete with it. Pruning happens when Collie is already awake: at every run start —
 which never touches the checkout that run is about to work in — and every few minutes
 while a Control Plane is open, including for the worktree whose own board you are looking
 at, which closes with it. The board says both what went and what is being held on to, with
@@ -1031,10 +1059,10 @@ start it the same way.)
 | `harness` | No switch. A harness that prompts does so in its own pane, and the Run waits.          |
 
 Know what `bypass` buys: the agents run commands, edit files and install things without
-asking, inside the checkout the Run is working in. There is no sandbox. `implement` is the
-only workflow Collie gives a checkout of its own, so its agents work in a worktree, on a
-branch, and everything they do is reviewed before it becomes a merge request. Every other
-workflow — `plan`, `review`, a standalone `architecture` — runs its agents **in the
+asking, inside the checkout the Run is working in. There is no sandbox. `implement` and
+`renovate` are the workflows Collie gives a checkout of their own, so their agents work in
+a worktree rather than in yours, and what `implement` does is reviewed before it becomes a
+merge request. Every other workflow — `plan`, `review`, a standalone `architecture` — runs its agents **in the
 checkout you started them from**, with your uncommitted work in it and neither of those
 fences in the way. That is the case to weigh before leaving the default on.
 

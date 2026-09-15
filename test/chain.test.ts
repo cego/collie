@@ -499,7 +499,7 @@ menu
       );
 
       expect(errors).toEqual([
-        'workflow "broken-chain" step "next" choice "Nowhere": unknown workflow "nope" (known: architecture, asker, broken-chain, child, implement, parent, plan, review)',
+        'workflow "broken-chain" step "next" choice "Nowhere": unknown workflow "nope" (known: architecture, asker, broken-chain, child, implement, parent, plan, renovate, review)',
         'workflow "broken-chain" step "next" choice "Wrong input": workflow "child" has no input(s) spec (known: plan, post)',
       ]);
     }),

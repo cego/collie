@@ -649,6 +649,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   // so two of them never share a working tree — or a stash stack.
   const checkout = yield* checkoutFor(herdr, {
     cwd: env.cwd,
+    stateDir: env.stateDir,
     workflow: workflow.name,
     name: named.short,
     inputs: inputValues(resolutions),

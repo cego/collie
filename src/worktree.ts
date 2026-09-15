@@ -38,11 +38,43 @@ import { slugify } from "./template";
  * `plan` and `architecture` get one where they chain into `implement` — the chained
  * Run resolves it — and `review` reads a diff or the caller's own tree.
  */
-const MUTATING = new Set(["implement"]);
+const MUTATING = new Set(["implement", "renovate"]);
+
+/**
+ * The mutating workflows whose checkout roams rather than owning one branch. A
+ * Renovate Run moves across every Renovate Bot branch it merges, so its checkout is
+ * detached at the repository's default branch and no branch is bound to its record:
+ * a branch bound to the Run's worktree is a branch no other checkout may have, and
+ * these are branches the operator's own checkouts are entitled to.
+ */
+const ROAMING = new Set(["renovate"]);
 
 export function mutates(workflow: string): boolean {
   return MUTATING.has(workflow);
 }
+
+export function roams(workflow: string): boolean {
+  return ROAMING.has(workflow);
+}
+
+/**
+ * The Input naming which local checkout a roaming Run is cut from; empty is the cwd.
+ * Not `repo`, which `implement` already declares for a plan's own `Repo:` value.
+ */
+export const REPOSITORY_INPUT = "repository";
+
+/** What a roaming Run's checkout is called under the repository's worktrees directory. */
+const ROAMING_DIR = "renovate";
+
+/**
+ * The lock two Runs racing for one destination contend on. Keyed by the destination
+ * rather than by the repository, because two repositories of the same name want the
+ * same directory and must contend with each other too. Hashed, not slugged: a path is
+ * not a filename, and a slug of one is clipped — two destinations that clip to the
+ * same name would share a lock, which is the collision this is here to prevent.
+ */
+export const destinationLock = (stateDir: string, at: string) =>
+  `${stateDir}/worktree-${Bun.hash(at).toString(16)}.lock`;
 
 const MrViewJson = Schema.fromJsonString(
   Schema.Struct({ source_branch: Schema.optionalKey(Schema.String) }),
@@ -81,6 +113,8 @@ export interface CheckoutAsk extends BranchAsk {
   /** The workspace the Run was activated from, and stays in. */
   workspaceId?: string | null;
   workspaceLabel?: string | null;
+  /** Where the Run records live, which is what says who already holds a checkout. */
+  stateDir: string;
 }
 
 /** Where a branch came from, for the line that tells the operator what was decided. */
@@ -130,7 +164,8 @@ export function branchListed(
   workflow: string,
   inputs: Record<string, string>,
 ): Record<string, string> {
-  return mutates(workflow) ? { ...inputs, [BRANCH_INPUT]: "optional" } : inputs;
+  // Not for a roaming Workflow: it has no branch of its own to be given one.
+  return mutates(workflow) && !roams(workflow) ? { ...inputs, [BRANCH_INPUT]: "optional" } : inputs;
 }
 
 /**
@@ -505,6 +540,21 @@ const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
 });
 
 /**
+ * The repository a checkout belongs to, by name — git's own main worktree, not the
+ * directory the Run happens to be standing in. A mutating Run's cwd is named after its
+ * branch, and a roaming one's is the literal `renovate`, so neither basename is the
+ * repository's. Null where git will not say.
+ */
+export const repositoryName = Effect.fn("worktree.repositoryName")(function* (
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
+  cwd: string,
+) {
+  const path = yield* Path.Path;
+  const listing = yield* gitWorktrees(run, cwd);
+  return listing === null ? null : path.basename(listing.repo);
+});
+
+/**
  * The checkout for a branch, made with git. The one the branch already has where it has
  * one — git allows no second worktree on a checked-out branch, and a fix round has to
  * land where the reviewed work already is — and otherwise a new one at the path herdr
@@ -598,6 +648,117 @@ const madeAt = Effect.fn("worktree.madeAt")(function* (worktreePath: string) {
   return Option.isSome(mtime) ? mtime.value.getTime() : null;
 });
 
+/**
+ * Whether anything is at this path, and which repository git says owns it. The path is
+ * named after the repository's directory, so two repositories of the same name — two
+ * `api`s in two places — want the same one, and a Run has to be told which is holding
+ * it rather than handed another repository's working tree. git writes the owner into a
+ * linked worktree's `.git` file as `gitdir: <repo>/.git/worktrees/<name>`.
+ *
+ * Fails closed and never guesses: a path that exists is occupied, and an owner it does
+ * not name is `null` rather than assumed, because "we cannot tell" and "nobody" must
+ * not come out the same way when the answer decides whether to build over it.
+ */
+const occupant = Effect.fn("worktree.occupant")(function* (at: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const there = yield* fs.exists(at).pipe(Effect.catch(() => Effect.succeed(true)));
+  if (!there) return null;
+  const marker = yield* fs
+    .readFileString(`${at}/.git`)
+    .pipe(Effect.catch(() => Effect.succeed("")));
+  return { owner: /gitdir:\s*(.+?)\/\.git\/worktrees\//.exec(marker)?.[1] ?? null };
+});
+
+/** The Run that recorded this checkout, where one did. Proof, not inference. */
+const recordedBy = Effect.fn("worktree.recordedBy")(function* (stateDir: string, at: string) {
+  for (const run of yield* new RunStore(stateDir).list()) {
+    if (run.record.worktree?.path === at) return run.record.id;
+  }
+  return null;
+});
+
+/**
+ * Why this destination cannot be used, from what is actually known about it: which
+ * repository git says owns it, and which Run — if any — recorded it. Neither is
+ * guessed, and a checkout nothing accounts for is still a refusal.
+ */
+const occupiedBy = Effect.fn("worktree.occupiedBy")(function* (opts: {
+  at: string;
+  stateDir: string;
+}) {
+  const taken = yield* occupant(opts.at);
+  if (!taken) return null;
+  const owner =
+    taken.owner === null
+      ? "a checkout that does not say which repository it belongs to"
+      : `a checkout of ${taken.owner}`;
+  const run = yield* recordedBy(opts.stateDir, opts.at);
+  return `${opts.at} is ${owner}${run === null ? "" : `, recorded by Run ${run}`}`;
+});
+
+/**
+ * The checkout a roaming Run works in: detached at the repository's default branch as
+ * the remote has it, so the Run owns a working tree without owning a branch. Every
+ * Renovate branch is then fetched and checked out inside this one and pushed with an
+ * explicit refspec, which is what keeps the operator's own checkouts untouched.
+ *
+ * Its path is the repository's, not a branch's, so two Runs on two repositories never
+ * collide. Two Runs on one repository would, and that is a refusal rather than a
+ * shared checkout: two Runs in one working tree share an index and a stash stack.
+ */
+const roamingCheckout = Effect.fn("worktree.roamingCheckout")(function* (opts: {
+  cwd: string;
+  worktrees: string;
+  stateDir: string;
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+}) {
+  const path = yield* Path.Path;
+  const { run } = opts;
+  const listing = yield* gitWorktrees(run, opts.cwd);
+  if (!listing) return { refused: `${opts.cwd} is not a git checkout` };
+
+  const at = path.join(opts.worktrees, path.basename(listing.repo), ROAMING_DIR);
+  // Looking and creating are one claim, under a lock keyed by the destination: two Runs
+  // starting at once — on this repository or on another of the same name — would
+  // otherwise both look, both find it free, and one would be handed the other's tree.
+  return yield* withLock(
+    destinationLock(opts.stateDir, at),
+    Effect.succeed({ refused: `${at} is being claimed by another Run starting now` }),
+    claimRoaming({ ...opts, at, repo: listing.repo }),
+  );
+});
+
+/** The claim itself, which runs only while this process holds the destination's lock. */
+const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
+  at: string;
+  repo: string;
+  stateDir: string;
+  run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
+}) {
+  const { at, run } = opts;
+  // Never a shared working tree, and never a takeover: whatever is there — this
+  // repository's earlier Run, another repository of the same name, or something that
+  // will not say — is a refusal that reports what is known about it.
+  const occupied = yield* occupiedBy({ at, stateDir: opts.stateDir });
+  if (occupied !== null) return { refused: occupied };
+
+  // "As the remote has it" is a fetch, not this checkout's memory of the last one: a
+  // repository nobody has fetched for a week would otherwise start the Run on a stale
+  // base and merge the month's updates onto it.
+  yield* run("git", ["fetch", "--quiet", "origin"], opts.repo);
+  const head = (yield* defaultBase(run, opts.repo)) ?? "master";
+  // Where there is no remote-tracking ref there is no remote, and the local branch is
+  // all there is — the same guard `baseFor` makes for a branch-owning checkout.
+  const tracked =
+    (yield* run("git", ["rev-parse", "--verify", `origin/${head}`], opts.repo)).code === 0;
+  const base = tracked ? `origin/${head}` : head;
+  const added = yield* run("git", ["worktree", "add", "--detach", at, base], opts.repo);
+  if (added.code !== 0) {
+    return { refused: added.stdout.trim() || `git would not add a worktree at ${at}` };
+  }
+  return { path: at, base };
+});
+
 /** Where a Run works, and what it records and logs about how it got there. */
 export interface Checkout {
   /** Its own checkout, or the directory it was started from. */
@@ -668,6 +829,37 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     branchSource: null,
   };
   if (!mutates(opts.workflow)) return here;
+
+  if (roams(opts.workflow)) {
+    const from = opts.inputs[REPOSITORY_INPUT]?.trim() || opts.cwd;
+    const made = yield* roamingCheckout({
+      cwd: from,
+      worktrees: yield* herdr.worktreesDirectory(),
+      stateDir: opts.stateDir,
+      run: (cmd, args, cwd) => shell(cmd, args, cwd, "say"),
+    });
+    if (made.refused !== undefined) {
+      return { ...here, refused: `no worktree for ${from}: ${made.refused}` };
+    }
+    const worktree = {
+      path: made.path,
+      // No branch: this checkout roams across the Renovate branches it merges, and a
+      // branch in the record is one git would bind to this worktree alone.
+      branch: "",
+      managed_by: "git",
+      workspace_id: null,
+      created_by_collie: true,
+      made_at: yield* madeAt(made.path),
+      root_tab_id: null,
+      root_pane_id: null,
+    } satisfies WorktreeRecord;
+    return {
+      ...here,
+      cwd: worktree.path,
+      worktree,
+      note: `created worktree ${worktree.path} detached at ${made.base}`,
+    } satisfies Checkout;
+  }
 
   const plan = yield* branchFor(opts);
   if (plan.refused) return { ...here, refused: plan.refused } satisfies Checkout;
@@ -880,6 +1072,11 @@ const settled = Effect.fn("worktree.settled")(function* (
   const held = heldBy(opts.use, worktree);
   if (held) return keepIt(held);
 
+  // A roaming checkout has no branch to ask a merge request or the remote about: it
+  // holds nothing of its own once it is clean and nothing is working in it, because
+  // everything it did was pushed to the Renovate branches it moved across.
+  if (worktree.branch === "") return settledBecause("its Run is over and it holds nothing");
+
   // Its merge request settles it where there is one: merged or closed means the work
   // has landed somewhere that is not this checkout.
   const view = yield* run("glab", ["mr", "view", worktree.branch, "--output", "json"], repo);
@@ -995,8 +1192,10 @@ const prune = Effect.fn("worktree.prune")(function* (opts: {
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const statePath = path.join(opts.stateDir, PRUNE_FILE);
   // What a board line calls a checkout: the branch it is for. Not the last part of its
-  // path — a branch with a `/` in it nests, so `feature/foo` would read as "foo".
-  const nameOf = (worktree: { branch: string }) => worktree.branch;
+  // path — a branch with a `/` in it nests, so `feature/foo` would read as "foo". A
+  // roaming checkout has no branch, so its own directory is the only name it has.
+  const nameOf = (worktree: { path: string; branch: string }) =>
+    worktree.branch || path.basename(worktree.path);
   const state = yield* fs.readFileString(statePath).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(PruneStateJson)),
     Effect.catch(() => Effect.succeed<PruneState>({})),
@@ -1013,13 +1212,15 @@ const prune = Effect.fn("worktree.prune")(function* (opts: {
   // Path, branch and the moment git wrote the checkout, all from the record that made
   // it: a Collie worktree removed by hand and a human's worktree later made at the
   // same path on the same branch would otherwise be the same candidate, and a
-  // hand-made checkout is never touched. A candidate therefore always has a branch,
-  // which is what everything below it is allowed to assume.
+  // hand-made checkout is never touched.
   const candidates: Array<WorktreeInfo & { branch: string }> = [];
   for (const worktree of listing?.worktrees ?? []) {
-    const branch = worktree.branch;
-    const record = branch === null ? undefined : mine.get(worktree.path);
-    if (branch === null || !record || record.branch !== branch || record.made_at === null) continue;
+    // A detached checkout has no branch, which herdr reports as null or as empty; the
+    // record of a roaming Run's checkout is empty for the same reason. Matching them
+    // is what lets a Renovate Run's checkout be pruned like any other.
+    const branch = worktree.branch ?? "";
+    const record = mine.get(worktree.path);
+    if (!record || record.branch !== branch || record.made_at === null) continue;
     if ((yield* madeAt(worktree.path)) !== record.made_at) continue;
     candidates.push({ ...worktree, branch });
   }
@@ -1185,7 +1386,11 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
   // The checkout has gone, so this is a removal whatever happens to the branch — a
   // branch git will not delete is what is left to look at, and an entry that says it
   // was kept would be forgotten on the next sweep, when the path is no longer listed.
-  const deleted = yield* opts.run("git", ["branch", "-d", worktree.branch], opts.repo);
+  // A roaming checkout owned no branch, so there is none to delete.
+  const deleted =
+    worktree.branch === ""
+      ? { code: 0, stdout: "" }
+      : yield* opts.run("git", ["branch", "-d", worktree.branch], opts.repo);
   const why =
     deleted.code === 0
       ? opts.why

@@ -349,6 +349,14 @@ const RunSchema = Schema.Struct({
   ),
   mr_url: Schema.NullOr(Schema.String),
   linear_issues: optionalList(Schema.String),
+  /**
+   * The Helle claim this Run is holding, and whether it queued for it or took over one
+   * the operator already had. Null means there is none to give back — which is what
+   * keeps a resumed Run from releasing a claim it never acquired.
+   */
+  helle: Schema.NullOr(
+    Schema.Struct({ slug: Schema.String, claim: Schema.Literals(["mine", "adopted"]) }),
+  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   summary: Schema.NullOr(Schema.String),
 }).mapFields(Struct.map(Schema.mutableKey));
 export type RunRecord = Schema.Schema.Type<typeof RunSchema>;
@@ -691,6 +699,7 @@ export class RunStore {
         previous_review: null,
         mr_url: null,
         linear_issues: [],
+        helle: null,
         summary: null,
       };
       const run = new Run(path.join(root, id), record);
