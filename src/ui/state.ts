@@ -1157,6 +1157,7 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "Tab", what: "Move between views" },
   { key: "1-9", what: "Focus that agent's pane" },
   { key: "p", what: "Run a workflow" },
+  { key: "C", what: "Continue a task with another workflow" },
   { key: "u", what: "Resume an unfinished run" },
   { key: "f", what: "Fork a workflow or persona" },
   { key: "s", what: "Send the review to an implementer" },
@@ -1340,6 +1341,7 @@ export function nextQuestionId(rows: readonly Row[], selected: string | null): s
 /** The keys that start something in this Session, and what each opens. */
 const SESSION_MODES = new Map<string, Mode>([
   ["p", "pick"],
+  ["C", "continue"],
   ["u", "resume"],
   ["f", "fork"],
 ]);

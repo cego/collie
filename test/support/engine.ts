@@ -176,6 +176,10 @@ export function runWorkflow(
     decisions?: Record<string, string>;
     /** The checkout the Run owns, as `startRun` would have recorded it. */
     worktree?: WorktreeRecord | null;
+    /** The Task this Run belongs to, as a real start would have recorded it. */
+    task?: string | null;
+    /** The Task's workspace, where it is not the one this environment is focused on. */
+    workspace?: string | null;
     /**
      * Run a Workflow the way a chained Run and a resumed Driver do: resolved, but never
      * validated. Only for testing what the engine still refuses on its own.
@@ -221,7 +225,8 @@ export function runWorkflow(
       workflow: wf.name,
       cwd: opts.worktree?.path ?? env.cwd,
       session: env.socketPath,
-      workspace: env.workspaceId,
+      workspace: opts.workspace ?? env.workspaceId,
+      task: opts.task,
       workspaceLabel: opts.workspaceLabel ?? "test",
       worktree: opts.worktree,
       inputs: merged,

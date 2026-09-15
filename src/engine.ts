@@ -2321,6 +2321,7 @@ const chain = Effect.fn("Engine.chain")(function* (
   for (const r of yield* inferInputs(child.inputs, {
     cwd,
     stateDir: o.env.stateDir,
+    task: run.record.task,
   })) {
     if (forwarded[r.name] !== undefined) {
       inputs[r.name] = forwarded[r.name]!;
@@ -2372,7 +2373,8 @@ const chain = Effect.fn("Engine.chain")(function* (
     name: tail,
     inputs,
     sources,
-    workspaceId: o.env.workspaceId,
+    // The Task's workspace, as the parent recorded it — not whatever is focused now.
+    workspaceId: run.record.workspace ?? o.env.workspaceId,
     workspaceLabel: run.record.workspace_label,
     login: o.env.gitlabLogin,
   };
@@ -2388,6 +2390,9 @@ const chain = Effect.fn("Engine.chain")(function* (
     cwd: checkout.cwd,
     session: o.env.socketPath,
     workspace: checkout.workspaceId,
+    // A chain is the same Task going on: a plan into its implementation, that into its
+    // review. Inherited rather than resolved again, so no child opens a Task of its own.
+    task: run.record.task,
     worktree: checkout.worktree,
     // A child starts where its parent is, so it inherits the workspace it recorded.
     workspaceLabel: checkout.workspaceLabel,
@@ -3337,7 +3342,7 @@ const previousReviewVars = Effect.fn("Engine.previousReviewVars")(function* (o: 
   if (!named && target === "worktree") return none;
   const previous = named
     ? yield* store.load(named).pipe(Effect.catch(() => Effect.succeed(null)))
-    : yield* store.previousReview(o.run.record.cwd, target, o.run.id);
+    : yield* store.previousReview(o.run.record.cwd, target, o.run.id, o.run.record.task);
   if (!previous) return none;
   const file = pathService.join(previous.dir, REVIEW_FILE);
   const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));

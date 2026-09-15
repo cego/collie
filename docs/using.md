@@ -137,6 +137,7 @@ same.
 | ---------------- | --------------------------------------------------------------- |
 | `prefix+f`       | `cego.collie.pick` — run a workflow                             |
 | `prefix+u`       | `cego.collie.resume` — resume a run with unfinished steps       |
+| —                | `cego.collie.continue` — continue a task with another workflow  |
 | `prefix+shift+f` | `cego.collie.fork` — copy a workflow or persona into your layer |
 | `prefix+shift+c` | `cego.collie.board` — open this workspace's Control Plane       |
 
@@ -172,6 +173,28 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
 The same operations are available without opening UI, which is how an agent drives Collie:
 see [CLI](cli.md).
 
+### Tasks: one workspace per piece of work
+
+Starting a workflow starts a **task**, and a task gets a herdr workspace of its own —
+created and focused, so you land on the work. Everything the task takes stays there: the
+plan's tabs, the implementation it chains into, the review of that, and any follow-up.
+Starting fresh from inside a task workspace makes another one, because a fresh start is
+always new work; unrelated tasks never accumulate beside each other.
+
+To put more work into a task you already have, continue it rather than starting fresh:
+the `cego.collie.continue` action, or `C` on the Control Plane. Inside the task's own
+workspace that task is meant and nothing is asked. From anywhere else you pick from a list
+of tasks. Nothing continues a task by accident — not a workflow with the same name, not a
+workspace whose label looks similar, and renaming a task workspace by hand changes nothing
+about what belongs to it.
+
+Finished tasks keep their workspace, with their conversations and reviews in it, until you
+close it yourself. Nothing is moved, renamed or cleaned up: workspaces and runs from
+before this existed stay exactly where they are and belong to no task.
+
+A task workspace groups work. It gives no file or branch isolation — that is what the
+worktree below is for, and it is unchanged.
+
 ## What a run does to your repository
 
 A run that changes code never works in the checkout you started it from. `implement` — and
@@ -179,11 +202,11 @@ A run that changes code never works in the checkout you started it from. `implem
 to build and gets a **worktree** of its own on that branch. Two runs can therefore build
 two branches at once without sharing a working tree, an index, or a stash stack.
 
-Only the run's directory moves. Its tabs open in the workspace you started it from, so
-everything about the task stays in one place — including when that workspace's own
-directory is not a checkout of the repository at all, which is what `COLLIE_CWD` or
-`collie --workspace <id>` is for. `--input workspace=new` asks herdr for the checkout
-instead, which gives the run a workspace of its own the way it used to (ADR-0006).
+Only the run's directory moves. Its tabs open in its task's workspace, so everything about
+the task stays in one place — including when the directory it was started in is not a
+checkout of the repository at all, which is what `COLLIE_CWD` or `collie --workspace <id>`
+is for. `--input workspace=new` asks herdr for the checkout, and the workspace herdr opens
+on it is the task's (ADR-0006).
 
 Which branch it is:
 
@@ -606,6 +629,7 @@ that field's keys do instead, and the Selection's own buttons go: `k` typed a `k
 | `g`           | Filter, in the Runs view: this workspace ⇄ every workspace of this Herd         |
 | `:`           | Steer the selected run — say something to Collie about it                       |
 | `p`           | Run a workflow — the same launch flow as `prefix+f`, inline in this tab         |
+| `C`           | Continue a task with another workflow, rather than starting a new task          |
 | `u`           | Resume a run with unfinished steps                                              |
 | `f`           | Fork a workflow or persona                                                      |
 | `s`           | Hand the **selected** run's review to a live implementer                        |

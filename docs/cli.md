@@ -36,8 +36,8 @@ pick one of:
 - Pass `--workspace <id>`, which re-roots the run at that workspace's directory as well as
   scoping to it.
 
-`collie run list` without `--workspace` lists runs everywhere; with one, only that
-workspace's.
+`collie run list` lists every run, unless the selected workspace is a task workspace — then
+it lists that Task's. See [Tasks](#tasks).
 
 ## Discover what is available
 
@@ -89,12 +89,40 @@ collie --json run start <workflow> --input k=v [--input k=v …]
 collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 ```
 
-| Flag            | What it does                                                                            |
-| --------------- | --------------------------------------------------------------------------------------- |
-| `--input k=v`   | Repeatable. The names come from `workflow show`, plus `branch` (below).                 |
-| `--inputs-json` | Every input at once, as one JSON object.                                                |
-| `--decide s=t`  | Repeatable. Answers Choice step `s` with title `t` now, so the run does not stop there. |
-| `--request-id`  | Idempotency key — see [Retrying safely](#retrying-safely).                              |
+| Flag              | What it does                                                                            |
+| ----------------- | --------------------------------------------------------------------------------------- |
+| `--input k=v`     | Repeatable. The names come from `workflow show`, plus `branch` (below).                 |
+| `--inputs-json`   | Every input at once, as one JSON object.                                                |
+| `--decide s=t`    | Repeatable. Answers Choice step `s` with title `t` now, so the run does not stop there. |
+| `--task <id>`     | Continue that Task instead of starting a new one, as `task list` prints it.             |
+| `--continue-task` | Continue the Task whose workspace this is; `needs_input` outside one.                   |
+| `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                              |
+
+### Tasks
+
+A **Task** is the work itself, and the Runs it takes: a plan, the implementation it chains
+into, the review of that. Every fresh start is a new Task, and gets a herdr workspace of
+its own, created and focused — including when it is started from inside another Task's
+workspace. Chains, follow-ups and resumes stay in the Task they came from.
+
+Continuing is explicit. `--task <id>` names one; `--continue-task` means the Task whose
+workspace this command was run in, and is `needs_input` anywhere else rather than a
+prompt. Neither the workflow's name nor a similar label ever continues a Task on its own.
+
+```sh
+collie --json task list
+collie --json run start review --task task-1a2b3c4d --input target=worktree
+```
+
+`task list` gives each Task's id, its label, its workspace and the Runs it owns. The label
+is display only: renaming a task workspace by hand changes nothing about what belongs to it.
+
+Runs are scoped by Task, not by workspace. `collie run list` inside a task workspace lists
+that Task's Runs; anywhere else it lists every Run, and a Run is reachable by id from the
+workspace it was started in. `--workspace <id>` picks which workspace that is.
+
+Checkouts are unchanged: a mutating run still gets a worktree of its own, keyed by its
+branch. A task workspace groups the work; it does not isolate files or branches.
 
 `--input branch=<name>` is the one input no workflow declares, and `workflow show` lists it
 for every mutating workflow. It names the branch the run works on, and so which worktree it
@@ -761,7 +789,8 @@ human line and a failure prints `error.message`.
 | `workspace_not_found`     | The `--workspace` id is not a workspace herdr has.                                                    |
 | `workflow_not_found`      | No layer defines that workflow.                                                                       |
 | `persona_not_found`       | No layer defines that persona.                                                                        |
-| `run_not_found`           | No run with that id.                                                                                  |
+| `run_not_found`           | No run with that id, or none by that id in the Task this command is scoped to.                        |
+| `task_not_found`          | `--task` named a Task that does not exist.                                                            |
 | `run_already_active`      | A Driver still owns that run; stop it before resuming.                                                |
 | `run_not_waiting`         | The run is not at a question.                                                                         |
 | `invalid_answer`          | That title is not one of the choices on offer, or a menu title was typed into a settings question.    |

@@ -97,6 +97,18 @@ its worktree under guards. A finished Run is immutable; there is no mode that re
 
 **Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents. Its **slug** — `<workflow>-<what it is named after>` — names its agents, its tab and its row on the board, and for a mutating Run it is named after the task half of the Worktree's branch — the branch without the login it is namespaced under — so two Runs on different work can never read as the same row.
 
+**Task** — One piece of work a human is doing, and the Runs it takes: a plan, the
+implementation it chains into, the review of that. Recorded on every Run at creation and
+inherited by chains, follow-ups and resumes, so membership is a fact rather than a reading
+of a label — two Tasks may share a project prefix, and a workspace renamed by hand is
+still its Task's. A Run started fresh is a new Task; only an explicit **Continue task**
+puts new work in an existing one.
+
+**Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
+Task, made and focused when the Task is started, and kept when the work is finished until
+the human closes it. It is where Collie scopes a Run lookup: a workspace that is not a
+Task's narrows nothing. It gives no file or branch isolation — that is the Worktree's job.
+
 **Session** — One herdr session and one workspace, taken together. It is the
 scope of a Control Plane tab and of the register of live agents, so only Runs in the same
 Session can hand work to each other. There is only ever one agent per role in a Session.

@@ -11,6 +11,7 @@ import { reason, unsafePathComponent } from "../naming";
 import { err, resolveWorkspace, runStatus, type Failure } from "../operations";
 import { actorName, type Actor } from "../proposals";
 import { InvalidRunState, Run, RunStore } from "../run";
+import { taskOfWorkspace } from "../task";
 import { branchListed } from "../worktree";
 import { attempt, mutation, type CollieError, type Result } from "../envelope";
 import type { YamlMap } from "../yaml";
@@ -35,6 +36,17 @@ export type Global = { readonly workspace: Option.Option<string>; readonly json:
 export const selected = Effect.fn("collie.selected")(function* (global: Global) {
   if (Option.isSome(global.workspace)) return global.workspace.value;
   return (yield* currentEnv).workspaceId;
+});
+
+/**
+ * What a Run lookup is scoped to. Runs belong to Tasks, not to whichever workspace a
+ * command was typed in, so the scope is the Task whose workspace is selected — and
+ * nothing at all where that workspace is not a Task's. A human who starts a Run from
+ * their project workspace can still wait on it from there.
+ */
+export const selectedTask = Effect.fn("collie.selectedTask")(function* (global: Global) {
+  const env = yield* currentEnv;
+  return (yield* taskOfWorkspace(env.stateDir, yield* selected(global)))?.id ?? null;
 });
 
 export type ContextResolution =
@@ -153,7 +165,8 @@ const runFailure = (result: Failure): RunResolution => ({ _tag: "RunFailure", re
 export const readRun = Effect.fn("collie.readRun")(function* (
   env: PluginEnv,
   id: string,
-  workspace: string | null,
+  /** The Task this lookup is scoped to; null scopes to nothing, as `selectedTask` says. */
+  task: string | null,
 ): Effect.fn.Return<RunResolution, never, FileSystem.FileSystem | Path.Path> {
   if (unsafePathComponent(id))
     return runFailure(err("run_not_found", `Run "${id}" was not found.`, { run: id }));
@@ -162,12 +175,9 @@ export const readRun = Effect.fn("collie.readRun")(function* (
     Effect.catch((cause) => Effect.succeed(runFailure(notLoaded(id, cause)))),
   );
   if (loaded._tag === "RunFailure") return loaded;
-  if (workspace && loaded.run.record.workspace !== workspace) {
+  if (task && loaded.run.record.task !== task) {
     return runFailure(
-      err("run_not_found", `Run "${id}" was not found in workspace "${workspace}".`, {
-        run: id,
-        workspace,
-      }),
+      err("run_not_found", `Run "${id}" is not part of task "${task}".`, { run: id, task }),
     );
   }
   return loaded;
