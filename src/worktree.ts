@@ -838,7 +838,9 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   if (roams(opts.workflow)) {
     const repository = opts.inputs[REPOSITORY_INPUT]?.trim() || "";
     let from = repository || opts.cwd;
-    const project = remoteRepository(repository) ? projectFromRemote(repository) : null;
+    const project = remoteRepository(repository)
+      ? (projectFromRemote(repository)?.split("/-/")[0] ?? null)
+      : null;
     if (project !== null) {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -846,16 +848,35 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       if (!(yield* fs.exists(path.join(from, ".git")))) {
         yield* fs.makeDirectory(path.dirname(from), { recursive: true });
         const host = hostOf(project)!;
+        const token = (yield* shell(
+          "glab",
+          ["config", "get", "token", "--host", host],
+          opts.stateDir,
+          "say",
+        )).stdout.trim();
+        if (token === "") {
+          return { ...here, refused: `could not authenticate to ${host}` };
+        }
+        const credentials = Buffer.from(`oauth2:${token}`).toString("base64");
         const cloned = yield* shell(
           "env",
-          ["GITLAB_HOST=" + host, "glab", "repo", "clone", project.slice(host.length + 1), from],
+          [
+            "GIT_CONFIG_COUNT=1",
+            "GIT_CONFIG_KEY_0=http.extraHeader",
+            `GIT_CONFIG_VALUE_0=Authorization: Basic ${credentials}`,
+            "git",
+            "clone",
+            "--quiet",
+            `https://${project}.git`,
+            from,
+          ],
           opts.stateDir,
           "say",
         );
         if (cloned.code !== 0) {
           return {
             ...here,
-            refused: `could not clone ${repository}: ${cloned.stdout.trim() || "glab repo clone failed"}`,
+            refused: `could not clone ${repository}: ${cloned.stdout.trim() || "git clone failed"}`,
           };
         }
       }

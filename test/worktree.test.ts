@@ -1375,7 +1375,7 @@ test("the repository input says which local checkout the Renovate worktree is cu
 test("a GitLab URL is cloned before the Renovate worktree is cut", () =>
   runEffect(
     Effect.gen(function* () {
-      const url = "https://gitlab.example.com/acme/spilnu.git";
+      const url = "https://gitlab.example.com/acme/spilnu/-/merge_requests";
       const source = join(rig.stateDir, "renovate-repositories", Bun.hash(url).toString(16));
       yield* fakeGitAnswering(
         {
@@ -1384,20 +1384,18 @@ test("a GitLab URL is cloned before the Renovate worktree is cut", () =>
         },
         {},
         {
+          clone: 'mkdir -p "$4" && printf "gitdir: $4/.gitdir\\n" > "$4/.git"',
           "worktree add":
             'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done',
         },
       );
-      yield* bin.add(
-        "glab",
-        `printf '%s\\t%s\\n' "$PWD" "$*" >> "${gitLog()}"; mkdir -p "$4" && printf 'gitdir: %s/.gitdir\\n' "$4" > "$4/.git"`,
-      );
+      yield* bin.add("glab", 'case "$1 $2" in "config get") printf token ;; *) exit 1 ;; esac');
 
       const checkout = yield* renovateCheckout({ repository: url });
 
       expect(yield* askedIn()).toContainEqual({
         cwd: rig.stateDir,
-        command: `repo clone acme/spilnu ${source}`,
+        command: `clone --quiet https://gitlab.example.com/acme/spilnu.git ${source}`,
       });
       expect(yield* askedIn()).toContainEqual({
         cwd: source,
