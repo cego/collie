@@ -100,8 +100,17 @@ conflicts.
 
 For each one: rebase it on the default branch, fix what the bump broke on **that merge
 request's own branch**, push with `git push origin HEAD:<branch>`, wait for its required
-checks, and merge it. A conflict or a routine dependency-related code or test failure is
-yours to fix. Anything larger is a consultation.
+checks, approve the reviewed head in GitLab, and only then merge it. A conflict or a
+routine dependency-related code or test failure is yours to fix. Anything larger is a
+consultation.
+
+GitLab approval is required **before attempting to merge**. Read the merge request's
+current head SHA and approve it with `glab mr approve <iid> --sha <head-sha>`. Verify the
+approval was recorded and all required approval rules are satisfied before the merge
+command. Recheck approvals after every push or rebase, because either can reset them;
+review and approve the new head before retrying a merge. If approval is refused or needs
+another eligible reviewer, consult me — never bypass approval rules or try merging first
+to discover that approval is missing.
 
 Before you check a branch out, ask git who holds it — `git worktree list` names every
 registered worktree and the branch each has checked out. A Renovate branch another

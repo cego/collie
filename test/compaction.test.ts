@@ -2,13 +2,14 @@
 // herdr, and a scripted harness port standing in for one harness's official interface.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, Effect, FileSystem, Path } from "effect";
+import { Clock, Deferred, Effect, Fiber, FileSystem, Path } from "effect";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
-import { installBaseline, runWorkflow } from "./support/engine";
+import { EffectFakeHerdr, installBaseline, runWorkflow } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
-import { atBoundary, controlDir, type CompactionPorts } from "../src/compaction";
+import { atBoundary, controlDir, installControls, type CompactionPorts } from "../src/compaction";
+import { HerdrError } from "../src/herdr";
 import { metricsOf, readMetrics } from "../src/metrics";
 import { Schema } from "effect";
 
@@ -84,6 +85,115 @@ afterEach(() =>
 );
 
 const ran = (opts: Parameters<typeof runWorkflow>[3]) => runWorkflow(rig, "reuse", {}, opts);
+
+test.each(["install", "start"])(
+  "parallel runs keep launch settings while another agent is paused at %s",
+  (pauseAt) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const ready = yield* Deferred.make<void>();
+        const proceed = yield* Deferred.make<void>();
+        const pause = Deferred.succeed(ready, undefined).pipe(
+          Effect.andThen(Deferred.await(proceed)),
+        );
+        let first: string | null = null;
+        const settings: string[] = [];
+        const port = scriptedPort({ usage: [1_000, 1_000] });
+        const compaction: CompactionPorts = {
+          claude: {
+            ...port.ports.claude!,
+            install: (ctx) =>
+              Effect.gen(function* () {
+                first ??= ctx.agent;
+                const file = path.join(ctx.dir, "settings.json");
+                settings.push(file);
+                yield* fs.writeFileString(file, "{}");
+                if (ctx.agent === first && pauseAt === "install") yield* pause;
+                return { args: ["--settings", file] };
+              }),
+          },
+        };
+        class PausedHerdr extends EffectFakeHerdr {
+          override agentStart(opts: Parameters<EffectFakeHerdr["agentStart"]>[0]) {
+            const start = super.agentStart(opts);
+            return opts.name === first && pauseAt === "start"
+              ? pause.pipe(Effect.andThen(start))
+              : start;
+          }
+        }
+        const herdr = new PausedHerdr(rig.pluginEnv(), rig.env());
+        yield* rig.queueOutputs(Array.from({ length: 4 }, () => ({ verdict: "clean" })));
+        const options = { compaction, herdr, outputPollMs: 20 };
+
+        const launching = yield* ran(options).pipe(Effect.forkScoped);
+        yield* Deferred.await(ready);
+        // The first agent is deliberately not in herdr's list when the next Run
+        // sweeps old controls. Both installation and agent startup need protection.
+        const secondRun = yield* ran(options);
+        yield* Deferred.succeed(proceed, undefined);
+        const firstRun = yield* Fiber.join(launching);
+
+        expect(firstRun.status).toBe("done");
+        expect(secondRun.status).toBe("done");
+        expect(settings).toHaveLength(2);
+        for (const file of settings) expect(yield* fs.exists(file)).toBe(true);
+      }).pipe(Effect.scoped),
+    ),
+);
+
+test("cleanup rechecks agents that became visible after its first list", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
+      const port = scriptedPort({ usage: [1_000] });
+      const { run } = yield* ran({ compaction: port.ports, outputPollMs: 20 });
+      const live = yield* new EffectFakeHerdr(rig.pluginEnv(), rig.env()).agentList();
+      const dir = yield* controlDir(rig.pluginEnv().stateDir, run.step("one").variants[0]!.agent);
+      let reads = 0;
+
+      yield* installControls(
+        {
+          ports: port.ports,
+          stateDir: rig.pluginEnv().stateDir,
+          configured: 372_000,
+          herdr: { agentList: () => Effect.succeed(reads++ === 0 ? [] : live) },
+          log: () => Effect.void,
+        },
+        { agent: "next-launch", harness: "claude", cwd: rig.projectDir },
+      );
+
+      expect(yield* fs.exists(dir)).toBe(true);
+    }),
+  ));
+
+test("a failed agent startup releases its controls for the next launch to clean up", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const port = scriptedPort({ usage: [1_000] });
+      class RefusingHerdr extends EffectFakeHerdr {
+        override agentStart() {
+          return Effect.fail(new HerdrError({ message: "startup failed", detail: "refused" }));
+        }
+      }
+      const failed = yield* ran({
+        compaction: port.ports,
+        herdr: new RefusingHerdr(rig.pluginEnv(), rig.env()),
+        outputPollMs: 20,
+      });
+      const abandoned = yield* controlDir(rig.pluginEnv().stateDir, port.installs[0]!);
+      expect(failed.status).toBe("failed");
+      expect(yield* fs.exists(abandoned)).toBe(true);
+
+      yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
+      const next = yield* ran({ compaction: port.ports, outputPollMs: 20 });
+
+      expect(next.status).toBe("done");
+      expect(yield* fs.exists(abandoned)).toBe(false);
+    }),
+  ));
 
 test("a reused agent over the threshold is compacted before it is given the next work", () =>
   runEffect(

@@ -49,6 +49,7 @@ import {
   controlDir,
   gateHarnesses,
   installControls,
+  withControlLock,
   type CompactionPorts,
   type CompactionSettings,
 } from "./compaction";
@@ -1701,92 +1702,99 @@ const runStep = Effect.fn("Engine.runStep")(function* (
       // fails the step rather than leaving an agent unmanaged — and an endpoint that
       // never came up would otherwise fail it with an empty tab already open in the
       // human's session, which is the thing the gate exists to avoid.
-      const controls = yield* installControls(yield* compactionDeps(o), {
-        agent: record.agent,
-        harness: variant.harness,
-        cwd: run.record.cwd,
-      });
-      if (prior?.paneId) {
-        // fresh: replace the pane so `agent start` sees a shell prompt again. The
-        // replacement inherits the slot, so the step keeps its tab across iterations.
-        const replacement = yield* herdr.paneSplit({
-          paneId: prior.paneId,
-          direction: "right",
-          cwd: run.record.cwd,
-        });
-        yield* herdr.paneClose(prior.paneId);
-        record.paneId = replacement;
-        record.tabId = prior.tabId;
-      } else if (i === 0 && fanIn) {
-        // A fan-in step belongs with the Outputs it reconciles: under the last of
-        // them, in their tab. A third column would only make all three unreadable.
-        const source = fanIn;
-        record.paneId = yield* herdr.paneSplit({
-          paneId: source.paneId!,
-          direction: "down",
-          ratio: 0.5,
-          cwd: run.record.cwd,
-        });
-        record.tabId = source.tabId;
-      } else if (i > 0) {
-        // Variants of one step sit side by side in that step's tab, evenly.
-        record.paneId = yield* herdr.paneSplit({
-          paneId: records[i - 1]!.paneId!,
-          direction: "right",
-          ratio: evenRatio(i, variants.length),
-          cwd: run.record.cwd,
-        });
-        record.tabId = records[i - 1]!.tabId;
-      } else if (ctx.launchPane) {
-        record.paneId = ctx.launchPane.paneId;
-        record.tabId = ctx.launchPane.tabId;
-        ctx.launchPane = null;
-      } else {
-        const label = runTab(o, GLYPH.running);
-        const tab = yield* herdr.tabCreate({ label, cwd: run.record.cwd });
-        record.tabId = tab.tabId;
-        record.paneId = tab.paneId;
-        ctx.tabLabels.set(tab.tabId, label);
-        yield* placeTab(o, ctx, tab.tabId);
-      }
-      if (record.tabId) yield* renameTab(o, ctx, record.tabId, runTab(o, GLYPH.running));
-      if (paneName && record.paneId) yield* herdr.paneRename(record.paneId, paneName);
+      yield* withControlLock(
+        o.env.stateDir,
+        record.agent,
+        Effect.gen(function* () {
+          const controls = yield* installControls(yield* compactionDeps(o), {
+            agent: record.agent,
+            harness: variant.harness,
+            cwd: run.record.cwd,
+          });
+          if (prior?.paneId) {
+            // fresh: replace the pane so `agent start` sees a shell prompt again. The
+            // replacement inherits the slot, so the step keeps its tab across iterations.
+            const replacement = yield* herdr.paneSplit({
+              paneId: prior.paneId,
+              direction: "right",
+              cwd: run.record.cwd,
+            });
+            yield* herdr.paneClose(prior.paneId);
+            record.paneId = replacement;
+            record.tabId = prior.tabId;
+          } else if (i === 0 && fanIn) {
+            // A fan-in step belongs with the Outputs it reconciles: under the last of
+            // them, in their tab. A third column would only make all three unreadable.
+            const source = fanIn;
+            record.paneId = yield* herdr.paneSplit({
+              paneId: source.paneId!,
+              direction: "down",
+              ratio: 0.5,
+              cwd: run.record.cwd,
+            });
+            record.tabId = source.tabId;
+          } else if (i > 0) {
+            // Variants of one step sit side by side in that step's tab, evenly.
+            record.paneId = yield* herdr.paneSplit({
+              paneId: records[i - 1]!.paneId!,
+              direction: "right",
+              ratio: evenRatio(i, variants.length),
+              cwd: run.record.cwd,
+            });
+            record.tabId = records[i - 1]!.tabId;
+          } else if (ctx.launchPane) {
+            record.paneId = ctx.launchPane.paneId;
+            record.tabId = ctx.launchPane.tabId;
+            ctx.launchPane = null;
+          } else {
+            const label = runTab(o, GLYPH.running);
+            const tab = yield* herdr.tabCreate({ label, cwd: run.record.cwd });
+            record.tabId = tab.tabId;
+            record.paneId = tab.paneId;
+            ctx.tabLabels.set(tab.tabId, label);
+            yield* placeTab(o, ctx, tab.tabId);
+          }
+          if (record.tabId) yield* renameTab(o, ctx, record.tabId, runTab(o, GLYPH.running));
+          if (paneName && record.paneId) yield* herdr.paneRename(record.paneId, paneName);
 
-      // herdr 0.7.5 ignores --cwd on tab create and pane split, so cd explicitly.
-      if (record.paneId) yield* herdr.paneRun(record.paneId, `cd ${shellQuote(run.record.cwd)}`);
+          // herdr 0.7.5 ignores --cwd on tab create and pane split, so cd explicitly.
+          if (record.paneId)
+            yield* herdr.paneRun(record.paneId, `cd ${shellQuote(run.record.cwd)}`);
 
-      const adapter = HARNESSES[variant.harness]!;
-      // The recorded mode wins where there is one — that is the chain's — and anything a
-      // record cannot vouch for falls back to the mode resolved for this step.
-      const recorded = record.permissions ?? undefined;
-      const permissions = isPermissionMode(recorded) ? recorded : modes[i]!;
-      // The controls are extra arguments to the same launch, so the agent keeps the
-      // ordinary interactive interface in its pane.
-      yield* startAgent(o, step, {
-        name: record.agent,
-        kind: adapter.kind,
-        paneId: record.paneId!,
-        args: [
-          ...startArgs(
-            adapter,
-            variant.model,
-            yield* personaFile(o, step, variant.harness, ctx.skills),
-            variant.effort,
-            permissions,
-          ),
-          ...controls,
-        ],
-      });
-      // Recorded so a transcript full of prompts — or free of them — can be explained.
-      yield* run.log(`${record.agent}: permissions ${permissions}`);
-      if (record.paneId) {
-        ctx.panes.push(record.paneId);
-        yield* setView(o, ctx.viewSource, ctx.panes);
-        // A group's first agent outlives its step, so the Session may hand it work.
-        if (groupHead(o.wf, step.id)) yield* register(o, step, record);
-      }
-      // The first step of an `agent:` group lends its agent to the rest of it.
-      if (step.agent && !ctx.groups.has(step.agent)) ctx.groups.set(step.agent, record);
+          const adapter = HARNESSES[variant.harness]!;
+          // The recorded mode wins where there is one — that is the chain's — and anything a
+          // record cannot vouch for falls back to the mode resolved for this step.
+          const recorded = record.permissions ?? undefined;
+          const permissions = isPermissionMode(recorded) ? recorded : modes[i]!;
+          // The controls are extra arguments to the same launch, so the agent keeps the
+          // ordinary interactive interface in its pane.
+          yield* startAgent(o, step, {
+            name: record.agent,
+            kind: adapter.kind,
+            paneId: record.paneId!,
+            args: [
+              ...startArgs(
+                adapter,
+                variant.model,
+                yield* personaFile(o, step, variant.harness, ctx.skills),
+                variant.effort,
+                permissions,
+              ),
+              ...controls,
+            ],
+          });
+          // Recorded so a transcript full of prompts — or free of them — can be explained.
+          yield* run.log(`${record.agent}: permissions ${permissions}`);
+          if (record.paneId) {
+            ctx.panes.push(record.paneId);
+            yield* setView(o, ctx.viewSource, ctx.panes);
+            // A group's first agent outlives its step, so the Session may hand it work.
+            if (groupHead(o.wf, step.id)) yield* register(o, step, record);
+          }
+          // The first step of an `agent:` group lends its agent to the rest of it.
+          if (step.agent && !ctx.groups.has(step.agent)) ctx.groups.set(step.agent, record);
+        }),
+      );
     }
 
     records.push(record);
