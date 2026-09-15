@@ -15,13 +15,13 @@ default:
 
 test:
   stage: test
+  cache:
+    key: test-timings
+    paths: [.scratch/test-timings.json]
   script:
     - bun install --frozen-lockfile
-    - bun run format:check
-    - bun run lint
-    - bun test
     # The same script contributors run, so the local gate and CI cannot drift.
-    - bun run typecheck
+    - bun run check
     # `bun test` runs the sources; this runs the thing that actually ships, so a
     # broken compiled entrypoint or JSON envelope cannot pass CI.
     - bun run build
