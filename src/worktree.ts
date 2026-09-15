@@ -23,6 +23,7 @@ import { disambiguate, GLYPH, tabLabel } from "./naming";
 import {
   branchTargetHead,
   glabLogin,
+  hostOf,
   parseMrTarget,
   projectFromRemote,
   projectHere,
@@ -837,22 +838,24 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   if (roams(opts.workflow)) {
     const repository = opts.inputs[REPOSITORY_INPUT]?.trim() || "";
     let from = repository || opts.cwd;
-    if (remoteRepository(repository)) {
+    const project = remoteRepository(repository) ? projectFromRemote(repository) : null;
+    if (project !== null) {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       from = path.join(opts.stateDir, "renovate-repositories", Bun.hash(repository).toString(16));
       if (!(yield* fs.exists(path.join(from, ".git")))) {
         yield* fs.makeDirectory(path.dirname(from), { recursive: true });
+        const host = hostOf(project)!;
         const cloned = yield* shell(
-          "git",
-          ["clone", "--quiet", "--", repository, from],
+          "env",
+          ["GITLAB_HOST=" + host, "glab", "repo", "clone", project.slice(host.length + 1), from],
           opts.stateDir,
           "say",
         );
         if (cloned.code !== 0) {
           return {
             ...here,
-            refused: `could not clone ${repository}: ${cloned.stdout.trim() || "git clone failed"}`,
+            refused: `could not clone ${repository}: ${cloned.stdout.trim() || "glab repo clone failed"}`,
           };
         }
       }
