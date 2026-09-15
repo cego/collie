@@ -115,8 +115,9 @@ to it, and new work is generated as `<GitLab login>/<task>` rather than asked fo
 Runs on different work can never key the same checkout
 ([the order it is resolved in](docs/cli.md#start-a-run)). Only the Run's cwd moves; its tabs stay in
 the workspace it was activated from and are `cd`-ed into the checkout, because a Run
-belongs where it was started (ADR-0006). `implement` gets one, and `plan`/`architecture`
-get one where they chain into it; `review` reads the diff or the caller's own tree.
+belongs where it was started (ADR-0006). `implement` and `renovate` get one, and
+`plan`/`architecture` get one where they chain into `implement`; `review` reads the diff or
+the caller's own tree. A Renovate Run's is the one that holds no branch — see Renovate Run.
 
 Two managers, and a Run records which: Collie makes the checkout with `git worktree add`
 by default, and `--input workspace=new` asks herdr for it instead, which opens it as a
@@ -144,6 +145,25 @@ judgement can fail to clean but never delete work. Removal is never forced which
 manager does it. The conditions and their order are canonical in `src/worktree.ts` and
 `docs/internals.md`.
 
+**Renovate Run** — One execution of the `renovate` Workflow: one repository, from claiming
+it in Helle to checking it off in Linear. Its Worktree is detached and roams — it holds no
+branch of its own and moves across the Renovate Bot branches it merges, pushing each with
+an explicit refspec — so the operator's own checkout is never touched. A Renovate branch
+another registered Worktree holds is reported and left alone, never taken and never reached
+around with a detached remote-tracking ref.
+
+**Renovate issue** — The one Linear issue a team renovates against: a checklist with one
+entry per repository, unchecked when that repository's Renovate Run starts and checked off
+when it ends, with that Run's merge request links and outcomes. A Run binds to it at
+startup and writes to that issue for the rest of its life, however long it waits in Helle
+and whatever cycle it rolls into. Updates are read-modify-write and never rewrite a line
+the Run did not add, because several Runs append to one description.
+
+**Renovated with exceptions** — How a Renovate Run ends when every merge request is
+accounted for and the release succeeded, but one or more updates were deferred with the
+operator's approval. The exceptions are named in the checklist entry. An unresolved
+blocker is not an exception: it leaves the entry unchecked and the Run open.
+
 **Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking takes a baseline definition into a Layer.
 
 **Definition snapshot** — The resolved Workflow a Run is actually running — after `extends:` and `use:`, with rebased step ids, merged variant settings and each Step's prompt text — frozen as JSON in the Run directory when the Run is created and never rewritten. A Driver resolves from it, so editing a Layer changes the next Run and not a running or resumed one. A Run recorded before snapshots is resumed only while the Layers still resolve to the steps it recorded; otherwise `definition_changed`.
@@ -164,6 +184,7 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 - `implement` — builds from a work source, embeds `review`, loops on the findings, and ends at `mr`, the only step that opens or updates the merge request. No architecture or simplification pass: those are work the change asks for, not work every Run does.
 - `review` — standalone; you pick the target; one complete review, and a fan-in that reconciles several where a layer asks for several.
 - `architecture` — runs the architect over the project and reports into its Run's plan directory.
+- `renovate` — claims the repository in Helle, merges or accounts for every Renovate Bot merge request, tags and watches the release, and records the result on the team's Renovate issue.
 
 **Outcome** — The kind of result a Run has to prove, and the evidence that closes it: a feature names what it built, a bug reproduces before it is fixed, a refactor preserves behaviour, an investigation reaches a supported conclusion and may have no patch, docs run what they document, a migration proves it can go back. A Run nobody classified is `unspecified` and proves only its approved verifications — never a feature by default.
 

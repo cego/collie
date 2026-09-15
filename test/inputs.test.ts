@@ -540,6 +540,7 @@ function makePlanRun(
       synthesis: null,
       mr_url: null,
       linear_issues: [],
+      helle: null,
       summary: null,
       ...extra,
     };

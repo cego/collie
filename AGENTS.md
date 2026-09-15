@@ -1,8 +1,8 @@
 # Collie
 
-Collie codifies agent workflows for herdr — `plan`, `implement`, `review`, `architecture` —
-as markdown definitions executed by one Effect v4 program with two front doors: herdr
-actions, and the `collie` CLI.
+Collie codifies agent workflows for herdr — `plan`, `implement`, `review`, `architecture`,
+`renovate` — as markdown definitions executed by one Effect v4 program with two front
+doors: herdr actions, and the `collie` CLI.
 
 ## Where to look
 

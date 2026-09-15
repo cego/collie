@@ -11,7 +11,7 @@ import {
 import { CHAIN_SUPPLIED, ENGINE_SUPPLIED } from "../engine";
 import { KINDED_STRATEGIES } from "../inputs";
 import { reason } from "../naming";
-import { branchListed, mutates } from "../worktree";
+import { branchListed, mutates, roams } from "../worktree";
 import { renderTemplate } from "../template";
 import { err } from "../operations";
 import { attempt, mutation } from "../envelope";
@@ -253,7 +253,7 @@ const workflowShow = Command.make(
               wf.title,
               wf.description,
               `Inputs: ${Schema.encodeSync(UnknownJson)(inputs)}`,
-              ...(mutates(wf.name) ? [BRANCH_HELP] : []),
+              ...(mutates(wf.name) && !roams(wf.name) ? [BRANCH_HELP] : []),
               ...(wf.embeddedInputs.length > 0
                 ? [`Inherited from an embedded workflow: ${[...inherited].join(", ")}`]
                 : []),

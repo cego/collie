@@ -33,7 +33,7 @@ import { configValue, readConfig, writeConfigValue } from "./config";
 import type { PluginEnv } from "./env";
 import type { PickItem } from "./inputs";
 import { slugify } from "./template";
-import { checkoutFor, runNames } from "./worktree";
+import { checkoutFor, repositoryName, runNames } from "./worktree";
 import {
   isYamlMap,
   YamlMapSchema,
@@ -214,8 +214,10 @@ import {
   parseMrTarget,
   repoArgs,
   type MrFacts,
+  projectHere,
   type Runner,
 } from "./mr";
+import { credentials, releaseClaim, waitForHelle } from "./helle";
 import {
   askRoute,
   liveRole,
@@ -585,6 +587,25 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
           runShell,
         );
         extras = mrVars(facts);
+      }
+    }
+
+    // Not a skip: a gate blocks, in the runner, until the Run may have what it asked
+    // for — so a queue of hours costs wall clock and no model tokens at all.
+    if (step.waits?.includes("helle")) {
+      const gated = yield* helleGate(o).pipe(Effect.result);
+      if (Result.isFailure(gated)) {
+        yield* run.mark(step.id, "failed");
+        // A gate that fails after it has claimed leaves the Run holding the project,
+        // and a failed Run never releases. Name the slug, or the operator is left
+        // holding a claim nothing ever told them about.
+        const held = run.record.helle;
+        record.note = held
+          ? `${gated.failure.message} — still holding ${held.slug} in helle`
+          : gated.failure.message;
+        yield* run.save();
+        yield* out(`✗ ${step.id} — ${record.note}`);
+        return yield* finish(o, ctx, "failed", viewSource);
       }
     }
 
@@ -2346,6 +2367,7 @@ const chain = Effect.fn("Engine.chain")(function* (
   // reviewed branch already has.
   const where = {
     cwd,
+    stateDir: o.env.stateDir,
     workflow: child.name,
     name: tail,
     inputs,
@@ -5152,6 +5174,61 @@ export const unmetRequirementFor = Effect.fn("Engine.unmetRequirementFor")(funct
 const unmetRequirement = (o: EngineOptions, requires: StepRequirement[]) =>
   unmetRequirementFor({ cwd: o.run.record.cwd, inputs: o.run.record.inputs }, requires);
 
+/** Where Helle's credentials are read from, when a machine keeps them off the default. */
+const helleEnvFile = (o: EngineOptions) => o.env.raw.HELLE_ENV_FILE ?? null;
+
+/**
+ * Blocks until this Run holds the Helle project of the repository it is working in.
+ * A repository with no Helle project is not a gate at all; anything that stops Helle
+ * from answering fails, and the step that declared the wait says so.
+ */
+const helleGate = Effect.fn("Engine.helleGate")(function* (o: EngineOptions) {
+  const { run } = o;
+  const pathService = yield* Path.Path;
+  const gitlabPath = yield* projectHere(run.record.cwd, runShell);
+  return yield* waitForHelle({
+    home: o.env.home,
+    envFile: helleEnvFile(o),
+    gitlabPath,
+    // git's repository, never the cwd's basename: a Run's checkout is named after its
+    // branch, and a roaming one after nothing but `renovate`, so the fallback slug
+    // match would look for a Helle project called "renovate" and find none — which
+    // reads as "no Helle project" for a repository that has one.
+    repoName:
+      gitlabPath?.split("/").at(-1) ??
+      (yield* repositoryName(runShell, run.record.cwd)) ??
+      pathService.basename(run.record.cwd),
+    claimed: run.record.helle,
+    record: (claim) =>
+      Effect.gen(function* () {
+        run.record.helle = claim;
+        yield* run.save();
+      }),
+    out: o.out,
+    ask: (question) => (o.prompts ? o.prompts.ask(question) : Effect.succeed(null)),
+  });
+});
+
+/**
+ * Gives the Helle claim back, once and only once the Run has succeeded. A Run that
+ * failed or is waiting on the operator keeps it: that is the whole point of holding it
+ * across a consultation, and nobody may deploy on top of a half-finished renovation.
+ */
+const releaseHelle = Effect.fn("Engine.releaseHelle")(function* (o: EngineOptions) {
+  const claim = o.run.record.helle;
+  if (!claim) return;
+  const released = yield* credentials({ home: o.env.home, envFile: helleEnvFile(o) }).pipe(
+    Effect.flatMap((creds) => releaseClaim(creds, claim.slug)),
+    Effect.result,
+  );
+  if (Result.isFailure(released)) {
+    yield* o.out(`  helle: ${claim.slug} could not be released — ${released.failure.message}`);
+    return;
+  }
+  o.run.record.helle = null;
+  yield* o.out(`  helle: released ${claim.slug}`);
+});
+
 /** The pane a fan-in step splits from: the last of the Outputs it reconciles. */
 function fanInPane(step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
   if (!step.fanIn) return null;
@@ -5484,6 +5561,9 @@ const finish = Effect.fn("Engine.finish")(function* (
     yield* notify(o, "drift-unresolved", "cross_run_pending", { step: "cross_run" }).pipe(
       Effect.ignore,
     );
+  // Last, and only on success: the claim is what stops anyone deploying on top of a
+  // half-finished renovation, so it outlives every check above it.
+  if (status === "done") yield* releaseHelle(o);
   run.record.status = status;
   run.record.finished_at = yield* nowIso();
   run.record.awaiting = null;

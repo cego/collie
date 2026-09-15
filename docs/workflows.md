@@ -1,6 +1,6 @@
 # Workflows
 
-Collie ships four workflows. This page is the "which one do I want" level: what each is
+Collie ships five workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The definition files under
 [`workflows/`](../workflows) are canonical for step-by-step behavior, and
 `collie workflow show <name>` prints the resolved version — inputs and steps included,
@@ -184,6 +184,42 @@ change breaks is exactly the blocker worth raising. Minor findings are exempt.
 - **Don't post** — ends the run.
 
 Definition: [`workflows/review.md`](../workflows/review.md).
+
+## `renovate`
+
+**For:** the month's dependency chore on one repository, end to end: every Renovate Bot
+merge request merged or accounted for, a version tag whose pipeline published or deployed,
+and the repository checked off the team's shared Renovate issue.
+
+**Inputs:** `repository`, an existing local checkout — empty means the workspace the run
+was started from, and cloning from a URL is out of scope. `team`, the Linear team whose
+Renovate issue this run records itself on — empty falls back to `linear.team` in your
+`config.json`, and the run asks once when neither is set.
+
+**Checkout:** its own, and unlike `implement`'s it is **detached** at the repository's
+default branch with no branch bound to it, because the run moves across every Renovate
+branch it merges. Your own checkout is never touched or switched. See
+[A run that roams across branches](using.md#a-run-that-roams-across-branches).
+
+**What happens:** the run binds the team's Renovate issue and appends the repository to its
+checklist unchecked, then blocks — in the runner, at no token cost — until it holds the
+repository in [Helle](authoring.md#waits). It assesses the whole batch of Renovate merge
+requests before merging any of them, merges them one at a time fixing conflicts and routine
+dependency fallout on each merge request's own branch, chooses a version from the whole
+diff since the previous tag, tags annotated with notes (and creates a GitLab release only
+where the repository is a package), waits for the tag pipeline to publish or deploy, and
+checks the repository off with its merge request links and outcomes. Helle is released when
+the run finishes successfully.
+
+**It asks you** at the points where asking is the work: a breaking or substantial
+migration, an update that cannot be merged safely, a bounded retry that made no progress,
+several matching Linear issues, a failing tag pipeline. The Helle claim is held through
+every one of them. A run with no open Renovate merge requests reports the repository up to
+date, creates no tag, and still leaves the checklist correct.
+
+**Ends:** with the repository checked off, or with what stopped it. There is no menu.
+
+Definition: [`workflows/renovate.md`](../workflows/renovate.md).
 
 ## `architecture`
 

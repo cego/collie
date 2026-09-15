@@ -6,6 +6,7 @@ import { FALLBACK_DEFAULTS } from "../src/config";
 import { skillsIn } from "../src/template";
 import { layerSet } from "./support/defs";
 import { loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
+import { REPOSITORY_INPUT, mutates, roams } from "../src/worktree";
 
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -56,7 +57,7 @@ test("no baseline definition mentions tasks/ or .scratch/ — plans live in the 
     }),
   ));
 
-test("the baseline personas are the four the design names, and each names its skills", () =>
+test("the baseline personas are the five the design names, and each names its skills", () =>
   runEffect(
     Effect.gen(function* () {
       const defs = yield* baseline();
@@ -65,6 +66,7 @@ test("the baseline personas are the four the design names, and each names its sk
         "architect",
         "implementer",
         "planner",
+        "renovate",
         "reviewer",
       ]);
       for (const persona of defs.personas.values()) {
@@ -119,6 +121,8 @@ test("no definition spells a skill in one harness's syntax", () =>
         "code-review-and-quality",
         "code-simplification",
         "improve-codebase-architecture",
+        "resolving-merge-conflicts",
+        "git-workflow-and-versioning",
       ];
       const offenders: string[] = [];
       for (const [what, body] of bodies) {
@@ -172,7 +176,11 @@ test("every mutating workflow declares the workspace opt-in, so both front doors
       // Declared rather than intercepted by one adapter: `startRun` settles it from
       // `--input` and a chaining Choice forwards it, so the CLI, the herdr actions and
       // a chained Run all reach the same opt-in through the same Input.
-      for (const name of ["implement", "plan", "architecture"]) {
+      const branchOwning = [...defs.workflows.keys()].filter(
+        (name) => mutates(name) && !roams(name),
+      );
+      expect(branchOwning).toContain("implement");
+      for (const name of [...branchOwning, "plan", "architecture"]) {
         const wf = resolveWorkflow(name, defs, FALLBACK_DEFAULTS);
         expect(wf.inputs.workspace).toBe("optional");
       }
@@ -210,5 +218,66 @@ test("every step of implement that commits pushes what the next reader will read
       expect(mr).toContain("Never merge");
       // A push to an auto-merge branch is a merge, and Collie never merges.
       expect(mr).toContain("auto-merge");
+    }),
+  ));
+
+test("renovate names the checkout it roams in and waits for Helle before it touches it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const defs = yield* baseline();
+      const wf = resolveWorkflow("renovate", defs, FALLBACK_DEFAULTS);
+
+      // The checkout is cut from this input; ticket 02's allocation reads the same name.
+      expect(wf.inputs[REPOSITORY_INPUT]).toBe("optional");
+      // A roaming checkout has no branch to name, so it is offered no branch input.
+      expect(roams("renovate")).toBe(true);
+      expect(mutates("renovate")).toBe(true);
+      // The team is an input, so nothing team-specific is baked into the baseline.
+      expect(wf.inputs.team).toBe("optional");
+      expect(wf.steps.some((step) => /Frontend/.test(step.preamble + step.prompt))).toBe(false);
+
+      // `implement`'s differently purposed input is left alone.
+      const implement = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
+      expect(implement.inputs.repo).toBe("optional");
+      expect(implement.inputs[REPOSITORY_INPUT]).toBeUndefined();
+
+      // One gate, on the first step that touches the repository — never on the Linear
+      // bookkeeping, which has to happen before a queue of hours begins.
+      const waiting = wf.steps.filter((step) => step.waits?.includes("helle"));
+      expect(waiting.map((step) => step.id)).toEqual(["assess"]);
+      expect(wf.steps[0]!.id).toBe("track");
+      expect(wf.steps.every((step) => step.persona === "renovate")).toBe(true);
+    }),
+  ));
+
+test("renovate never lets a merge request end unaccounted for, and never takes a held branch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const defs = yield* baseline();
+      const wf = resolveWorkflow("renovate", defs, FALLBACK_DEFAULTS);
+      const prompt = (id: string) => wf.steps.find((step) => step.id === id)!.prompt;
+
+      // The batch is assessed whole before the first merge, so a migration is heard
+      // about before half of it is on the default branch.
+      expect(prompt("assess")).toContain("before merging any of them");
+      // A branch another worktree holds is reported, not taken, and not reached around.
+      expect(prompt("merge")).toContain("git worktree list");
+      expect(prompt("merge")).toContain("remote-tracking ref");
+      expect(prompt("merge")).toContain("HEAD:<branch>");
+      // Exactly one outcome each, and a deferral only with the operator's approval.
+      for (const outcome of ["merged", "closed", "deferred"]) {
+        expect(prompt("merge")).toContain(outcome);
+      }
+      // The list is re-read on the way out of merging and again before tagging.
+      expect(prompt("merge")).toContain("Re-read the merge request list");
+      expect(prompt("release")).toContain("Read the merge request list once more");
+      // Nothing merged means nothing released.
+      expect(prompt("release")).toContain("create no tag");
+      // The claim is still held while a failed pipeline is discussed.
+      expect(prompt("release")).toContain("Helle claim still held");
+      // Every other repository's entry survives this Run's update.
+      expect(prompt("record")).toContain("write it back");
+      expect(prompt("track")).toContain("rewrite a line you did not add");
+      expect(prompt("record")).toContain("renovated with exceptions");
     }),
   ));

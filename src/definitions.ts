@@ -37,10 +37,13 @@ export const INPUT_STRATEGIES = [
 
 /** What a step may declare it needs before it is worth starting. */
 export const STEP_REQUIREMENTS = ["gitlab", "mr-target", "someone-elses-mr"] as const;
+/** What a step may declare it waits for, rather than be skipped without. */
+export const STEP_WAITS = ["helle"] as const;
 export type StepRequirement = string;
 export type InputStrategy = string;
 
 const STEP_REQUIREMENT_SET: ReadonlySet<string> = new Set(STEP_REQUIREMENTS);
+const STEP_WAIT_SET: ReadonlySet<string> = new Set(STEP_WAITS);
 const INPUT_STRATEGY_SET: ReadonlySet<string> = new Set(INPUT_STRATEGIES);
 
 export interface Variant {
@@ -118,6 +121,8 @@ export interface StepDef {
   standalone?: boolean;
   /** Skipped, with a note, when this run cannot give the step what it asks for. */
   requires?: StepRequirement[];
+  /** Blocked, before any agent starts, until this is the Run's to take. */
+  waits?: StepRequirement[];
   /** This step reconciles that earlier step's parallel Outputs into one. */
   fanIn?: string;
   /**
@@ -264,8 +269,10 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
     }
     if (isString(stepData.prompt)) step.promptSection = stepData.prompt;
     if (stepData.standalone === true) step.standalone = true;
-    const requires = parseRequires(stepData.requires);
+    const requires = parseNames(stepData.requires);
     if (requires) step.requires = requires;
+    const waits = parseNames(stepData.waits);
+    if (waits) step.waits = waits;
     if (isString(stepData.fan_in)) step.fanIn = stepData.fan_in;
     if (isString(stepData.each)) step.each = stepData.each;
     if (Array.isArray(stepData.choices)) step.choices = stepData.choices.map(parseChoice);
@@ -315,8 +322,8 @@ function parseRound(raw: YamlMap): RoundDef | undefined {
   return round;
 }
 
-/** `requires: gitlab` and `requires: [mr-target, gitlab]` are the same thing. */
-function parseRequires(raw: YamlValue | undefined): StepRequirement[] | undefined {
+/** One name and a list of them are the same thing: `requires: gitlab`, `waits: helle`. */
+function parseNames(raw: YamlValue | undefined): StepRequirement[] | undefined {
   if (raw !== undefined && isString(raw)) return [raw];
   if (Array.isArray(raw)) return raw.filter(isString);
   return undefined;
@@ -330,7 +337,7 @@ function parseChoice(raw: YamlValue): ChoiceDef {
   if (choiceData.post === true) choice.post = true;
   if (isString(choiceData.handoff)) choice.handoff = choiceData.handoff;
   if (isString(choiceData.unless)) choice.unless = choiceData.unless;
-  const requires = parseRequires(choiceData.requires);
+  const requires = parseNames(choiceData.requires);
   if (requires) choice.requires = requires;
   if (isNumber(choiceData.max)) choice.max = choiceData.max;
   const round = parseRound(choiceData);
@@ -876,6 +883,11 @@ export const validateWorkflow = Effect.fn("Definitions.validateWorkflow")(functi
         errors.push(
           `${where(step.id)}: unknown requires "${need}" (known: ${STEP_REQUIREMENTS.join(", ")})`,
         );
+      }
+    }
+    for (const gate of step.waits ?? []) {
+      if (!STEP_WAIT_SET.has(gate)) {
+        errors.push(`${where(step.id)}: unknown waits "${gate}" (known: ${STEP_WAITS.join(", ")})`);
       }
     }
   }

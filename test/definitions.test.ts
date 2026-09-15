@@ -9,6 +9,7 @@ import {
   stepVariants,
   validateWorkflow,
   variantKeys,
+  STEP_WAITS,
   DefinitionError,
 } from "../src/definitions";
 import { FALLBACK_DEFAULTS, loadDefaults } from "../src/config";
@@ -354,6 +355,55 @@ a prompt
         'workflow "w" step "b" choice "Both": needs exactly one of run, prompt, post, handoff or stop',
         'workflow "w" step "b" choice "Neither": needs exactly one of run, prompt, post, handoff or stop',
       ]);
+    }),
+  ));
+
+test("waits: is validated like requires:, and a misspelling names the workflow and step", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "w",
+        `---
+name: w
+steps:
+  - id: a
+    persona: reviewer
+    waits: helle
+  - id: b
+    persona: reviewer
+    waits: [helle, hell]
+---
+## a
+a prompt
+
+## b
+b prompt
+`,
+      );
+      yield* writeDef(rig.baselineDir, "personas", "reviewer", REVIEWER);
+
+      const defs = yield* loadDefinitions(ls());
+      const wf = resolveWorkflow("w", defs, defaults);
+
+      expect(wf.steps.map((s) => s.waits ?? [])).toEqual([["helle"], ["helle", "hell"]]);
+      expect(yield* validateWorkflow(wf, defs, defaults)).toEqual([
+        'workflow "w" step "b": unknown waits "hell" (known: helle)',
+      ]);
+    }),
+  ));
+
+test("every wait the parser accepts is documented in the authoring docs", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const docs = yield* fs.readFileString(
+        new URL("../docs/authoring.md", import.meta.url).pathname,
+      );
+
+      for (const name of STEP_WAITS) expect(docs).toContain(`\`${name}\``);
+      expect(docs).toContain("`waits`");
     }),
   ));
 

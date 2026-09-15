@@ -114,6 +114,7 @@ declares it the same way and reads `{{inputs.repo}}`; see
 | `prompt`      | string         | Send a body section other than the step's own id.                                                    |
 | `standalone`  | boolean        | Run only when this workflow is the one being run, not when it is embedded.                           |
 | `requires`    | string or list | What the environment must provide — see [Requirements](#requirements).                               |
+| `waits`       | string or list | What the step blocks for before it starts — see [Waits](#waits).                                     |
 | `fan_in`      | string         | Reconcile that earlier step's parallel outputs into one — see [Fan-in](#fan-in).                     |
 | `choices`     | list           | Ask instead of running an agent — see [Choice steps](#choice-steps).                                 |
 | `repeat`      | map            | `{from, back_to, max, converge}` — the fix loop; see [Loops](#loops).                                |
@@ -134,6 +135,23 @@ declares it the same way and reads `{{inputs.repo}}`; see
 
 A requirement this machine or this run cannot meet is a skip with a note naming the gap,
 never a failed run.
+
+### Waits
+
+`waits:` is the other half of `requires:`. Where `requires:` _skips_ a step whose
+environment is not there, `waits:` _blocks_ until the environment is this run's to use.
+The wait happens in the runner, before the step's agent starts, so a queue of hours
+costs wall clock and no model tokens.
+
+- `helle` — this run holds the Helle project of the repository it is working in. Collie
+  resolves that project from the repository's GitLab path, claims it, and reports its
+  queue position as it moves. A repository with no Helle project carries straight on. A
+  Helle that cannot answer — an unreachable API, a missing or rejected token, several
+  matching projects — fails the step and stops the run, because "we could not ask" must
+  never be mistaken for "there is nothing to ask about".
+
+The claim is held for the rest of the run, across every pause the operator is asked
+about, and given back only when the run finishes successfully.
 
 ### Fan-in
 

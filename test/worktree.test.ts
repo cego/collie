@@ -5,13 +5,18 @@ import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import {
   branchFor,
+  branchListed,
   checkoutFor,
+  destinationLock,
   mutates,
   pruneWorktrees,
+  repositoryName,
+  roams,
   worktreeFor,
   type BranchAsk,
 } from "../src/worktree";
 import { RunStore, type VariantRecord } from "../src/run";
+import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 
 let rig: Rig;
@@ -137,7 +142,10 @@ const fakeGitWithCheckouts = (
     },
     opts.refusals ?? {},
     {
-      "worktree add": 'mkdir -p "$3" && printf "gitdir: $3/.gitdir\\n" > "$3/.git"',
+      // The path is the first absolute argument, which is what makes this answer both
+      // `worktree add <at> -b <branch>` and `worktree add --detach <at> <ref>`.
+      "worktree add":
+        'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done',
       "worktree remove": 'rm -rf "$3"',
     },
   );
@@ -159,8 +167,21 @@ const plan = (inputs: Record<string, string>, explicit?: string, extra: Partial<
 
 test("only the workflows that change the repository get a checkout of their own", () => {
   expect(mutates("implement")).toBe(true);
+  expect(mutates("renovate")).toBe(true);
   expect(mutates("review")).toBe(false);
   expect(mutates("plan")).toBe(false);
+});
+
+test("a roaming workflow owns a checkout but no branch, so none is asked for", () => {
+  expect(roams("renovate")).toBe(true);
+  expect(roams("implement")).toBe(false);
+
+  expect(Object.keys(branchListed("implement", { plan: "work-source" }))).toEqual([
+    "plan",
+    "branch",
+  ]);
+  // Nothing to ask: a Renovate Run moves across every branch it merges and owns none.
+  expect(Object.keys(branchListed("renovate", { repository: "optional" }))).toEqual(["repository"]);
 });
 
 test("a run described in words branches off the default branch, under the operator's login", () =>
@@ -585,19 +606,23 @@ const collieWorktree = (
     managedBy?: "git" | "herdr";
     /** The tabs the run left behind, which a removal is what closes. */
     tabs?: ReadonlyArray<string>;
+    /** The workflow that made it; a roaming one records no branch. */
+    workflow?: string;
+    /** Where it sits, for a checkout whose path is not named after a branch. */
+    at?: string;
   } = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     // Not `??`: null is an answer here — a checkout herdr has no workspace open on.
     const workspaceId = opts.workspaceId === undefined ? "w7" : opts.workspaceId;
-    const worktreePath = join(rig.root, "worktrees", branch);
+    const worktreePath = opts.at ?? join(rig.root, "worktrees", branch);
     yield* rig.addWorktree(branch, worktreePath, workspaceId);
     // What the run recorded when it made this checkout, which is how pruning knows it
     // is still the same one.
     const madeAt = yield* fs.stat(`${worktreePath}/.git`);
     const run = yield* new RunStore(rig.stateDir).create({
-      workflow: "implement",
+      workflow: opts.workflow ?? "implement",
       cwd: worktreePath,
       inputs: {},
       inputSources: {},
@@ -662,6 +687,39 @@ test("a settled worktree is removed, and the board says why", () =>
       // Through herdr, so the workspace goes with the checkout, and never forced.
       const calls = (yield* rig.calls()).filter((c) => c.cmd === "worktree remove");
       expect(calls.at(0)?.argv).toEqual(["worktree", "remove", "--workspace", "w7"]);
+    }),
+  ));
+
+test("a Renovate Run's detached checkout is pruned by the same sweep, with no branch to delete", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = join(rig.root, "worktrees", "project", "renovate");
+      // No branch, in the record and in herdr's listing alike: that is what a detached
+      // checkout is, and it must still be a candidate.
+      yield* collieWorktree("", { workflow: "renovate", at, managedBy: "git", workspaceId: null });
+      // A detached checkout has no upstream, so what settles it is holding no commits
+      // the default branch does not already have.
+      yield* settledGit({
+        "rev-parse --abbrev-ref --symbolic-full-name @{u}": "",
+        "rev-list origin/master..HEAD": "",
+      });
+
+      expect(yield* prune()).toEqual(["♻ removed renovate · its Run is over and it holds nothing"]);
+      expect(yield* asked()).toContain(`worktree remove ${at}`);
+      // Nothing was ever bound to it, so nothing is deleted with it.
+      expect((yield* asked()).some((command) => command.startsWith("branch -d"))).toBe(false);
+    }),
+  ));
+
+test("a Renovate checkout with work still in it is kept, like any other", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const at = join(rig.root, "worktrees", "project", "renovate");
+      yield* collieWorktree("", { workflow: "renovate", at, managedBy: "git", workspaceId: null });
+      yield* settledGit({ "status --porcelain": " M package.json" });
+
+      expect(yield* prune()).toEqual(["kept renovate · uncommitted changes"]);
+      expect((yield* asked()).some((command) => command.startsWith("worktree remove"))).toBe(false);
     }),
   ));
 
@@ -1021,6 +1079,7 @@ test("a mutating run makes its checkout with git and stays in the workspace it s
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
 
       const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
         name: "Add a picker",
@@ -1069,6 +1128,7 @@ test("a workspace whose own directory is not a checkout still gets its run a wor
       expect(env.cwd).toBe(rig.projectDir);
 
       const checkout = yield* checkoutFor(new Herdr(env), {
+        stateDir: rig.stateDir,
         cwd: env.cwd,
         workflow: "implement",
         name: "Add a picker",
@@ -1093,6 +1153,7 @@ test("a branch with a slash in it nests, and never collides with the dashed name
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
       const ask = (branch: string) =>
         checkoutFor(new Herdr(rig.pluginEnv()), {
+          stateDir: rig.stateDir,
           cwd: rig.projectDir,
           workflow: "implement",
           name: "Add a picker",
@@ -1125,6 +1186,7 @@ test("the checkout goes where herdr's own config says worktrees go", () =>
       );
 
       const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
         name: "Add a picker",
@@ -1146,6 +1208,7 @@ test("the checkout a branch already has is reused, never added twice", () =>
       ]);
 
       const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
         name: "Add a picker",
@@ -1166,6 +1229,7 @@ test("workspace=new asks herdr for the checkout and takes the workspace it opens
       yield* fakeGit();
 
       const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
         name: "Add a picker",
@@ -1194,6 +1258,7 @@ test("a checkout git will not add is a run that does not start", () =>
       });
 
       const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
         name: "Add a picker",
@@ -1220,6 +1285,7 @@ test("a checkout Collie cannot be given is a run that does not start", () =>
       );
 
       const checkout = yield* checkoutFor(herdr, {
+        stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
         name: "Add a picker",
@@ -1235,10 +1301,337 @@ test("a checkout Collie cannot be given is a run that does not start", () =>
     }),
   ));
 
+const renovateCheckout = (inputs: Record<string, string> = {}, cwd = rig.projectDir) =>
+  checkoutFor(new Herdr(rig.pluginEnv()), {
+    cwd,
+    stateDir: rig.stateDir,
+    workflow: "renovate",
+    name: "Renovate spilnu",
+    inputs,
+    workspaceId: "wTasks",
+    workspaceLabel: "Tasks",
+  });
+
+test("a Renovate Run gets a detached checkout at the default branch, bound to no branch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+
+      const checkout = yield* renovateCheckout();
+
+      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      expect(checkout).toMatchObject({
+        cwd: at,
+        workspaceId: "wTasks",
+        refused: null,
+        // No branch of its own, so nothing to name or to have come from.
+        branch: null,
+        branchSource: null,
+      });
+      expect(checkout.worktree).toEqual({
+        path: at,
+        branch: "",
+        managed_by: "git",
+        workspace_id: null,
+        created_by_collie: true,
+        made_at: expect.any(Number),
+        root_tab_id: null,
+        root_pane_id: null,
+      });
+      // Detached at the default branch as the remote has it, from the repository's own
+      // checkout, and no branch is ever created or claimed for the Run.
+      expect(yield* askedIn()).toContainEqual({
+        cwd: rig.projectDir,
+        command: `worktree add --detach ${at} origin/master`,
+      });
+      const commands = yield* asked();
+      expect(commands.some((c) => c.startsWith("worktree add") && !c.includes("--detach"))).toBe(
+        false,
+      );
+      expect(commands.some((c) => /^(checkout|switch|stash|commit)\b/.test(c))).toBe(false);
+    }),
+  ));
+
+test("the repository input says which local checkout the Renovate worktree is cut from", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const elsewhere = join(rig.root, "work", "spilnu");
+      yield* fs.makeDirectory(elsewhere, { recursive: true });
+      yield* fakeGitWithCheckouts([{ path: elsewhere, branch: "master" }]);
+
+      // Started in one directory, pointed at another: the input wins, and the worktree
+      // is cut from the repository it names.
+      const checkout = yield* renovateCheckout({ repository: elsewhere });
+
+      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "spilnu", "renovate"));
+      expect(yield* askedIn()).toContainEqual({
+        cwd: elsewhere,
+        command: `worktree add --detach ${checkout.cwd} origin/master`,
+      });
+    }),
+  ));
+
+test("two Renovate Runs on different repositories do not collide on a checkout path", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const other = join(rig.root, "work", "happytiger");
+      yield* fs.makeDirectory(other, { recursive: true });
+      // Each repository lists only itself, which is what a real `worktree list`
+      // answers in either of them.
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+      const here = yield* renovateCheckout();
+
+      yield* fakeGitWithCheckouts([{ path: other, branch: "master" }]);
+      const there = yield* renovateCheckout({ repository: other });
+
+      expect(here.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "renovate"));
+      expect(there.cwd).toBe(join(rig.root, ".herdr", "worktrees", "happytiger", "renovate"));
+      expect(here.cwd).not.toBe(there.cwd);
+    }),
+  ));
+
+test("the repository a checkout belongs to is git's, never the directory's own name", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      // The two cases whose basename lies: a Renovate Run's checkout, always called
+      // `renovate`, and a branch-owning one, called after its branch.
+      const roaming = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const owned = join(rig.root, ".herdr", "worktrees", "project", "add-picker");
+      for (const at of [roaming, owned]) yield* fs.makeDirectory(at, { recursive: true });
+      yield* fakeGitWithCheckouts([
+        { path: rig.projectDir, branch: "master" },
+        { path: owned, branch: "add-picker" },
+      ]);
+
+      expect(yield* repositoryName(shell, roaming)).toBe("project");
+      expect(yield* repositoryName(shell, owned)).toBe("project");
+    }),
+  ));
+
+test("a linked worktree of a repository picks the same destination the repository does", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      // A checkout of the same repository, one branch along. `worktree list` answers
+      // the same in either of them, and git lists the repository itself first.
+      const linked = join(rig.root, "worktrees", "some-feature");
+      yield* fs.makeDirectory(linked, { recursive: true });
+      yield* fakeGitWithCheckouts([
+        { path: rig.projectDir, branch: "master" },
+        { path: linked, branch: "some-feature" },
+      ]);
+
+      // Pointed at the linked worktree, not the repository: the destination is still
+      // the repository's, or one repository would get two Renovate checkouts.
+      const checkout = yield* renovateCheckout({ repository: linked });
+
+      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "renovate"));
+      expect(checkout.cwd).not.toContain("some-feature");
+    }),
+  ));
+
+test("the roaming checkout fetches first, and falls back to a local default branch", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+
+      yield* renovateCheckout();
+
+      // "As the remote has it" means asking the remote, not this checkout's memory.
+      const commands = yield* asked();
+      expect(commands.some((c) => c.startsWith("fetch"))).toBe(true);
+      expect(commands.indexOf(commands.find((c) => c.startsWith("fetch"))!)).toBeLessThan(
+        commands.indexOf(commands.find((c) => c.startsWith("worktree add"))!),
+      );
+    }),
+  ));
+
+test("a repository with no remote-tracking default branch is detached at the local one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // No `origin/master` to verify: the same case `implement` already handles by
+      // taking the local branch rather than refusing.
+      yield* fakeGitAnswering(
+        {
+          "remote get-url origin": "git@gitlab.example.com:acme/app.git",
+          "rev-parse --abbrev-ref HEAD": "master",
+          "worktree list --porcelain": porcelain([{ path: rig.projectDir, branch: "master" }]),
+        },
+        {},
+        {
+          "worktree add":
+            'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\n" > "$a/.git"; break ;; esac; done',
+        },
+      );
+
+      const checkout = yield* renovateCheckout();
+
+      expect(checkout.refused).toBe(null);
+      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      expect(yield* asked()).toContainEqual(`worktree add --detach ${at} master`);
+    }),
+  ));
+
+/** A linked worktree at `at`, as git leaves one: the `.git` file naming its owner. */
+const worktreeOwnedBy = Effect.fn("worktreeTest.worktreeOwnedBy")(function* (
+  at: string,
+  repo: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(at, { recursive: true });
+  yield* fs.writeFileString(`${at}/.git`, `gitdir: ${repo}/.git/worktrees/renovate\n`);
+});
+
+/** A Renovate Run that recorded this checkout, as one that is still running would. */
+const renovateRunAt = Effect.fn("worktreeTest.renovateRunAt")(function* (at: string) {
+  const run = yield* new RunStore(rig.stateDir).create({
+    workflow: "renovate",
+    cwd: at,
+    inputs: {},
+    inputSources: {},
+    stepIds: ["merge"],
+    maxIterations: 1,
+    namedAfter: "renovate",
+    worktree: {
+      path: at,
+      branch: "",
+      created_by_collie: true,
+      managed_by: "git",
+      workspace_id: null,
+      made_at: null,
+      root_tab_id: null,
+      root_pane_id: null,
+    },
+  });
+  return run.record.id;
+});
+
+test("a second Renovate Run on one repository is refused, never handed the first's tree", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const taken = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      yield* worktreeOwnedBy(taken, rig.projectDir);
+      // The earlier Run's own record, which is the only proof that this checkout is a
+      // Renovate Run's rather than something that merely looks like one.
+      const runId = yield* renovateRunAt(taken);
+      yield* fakeGitWithCheckouts([
+        { path: rig.projectDir, branch: "master" },
+        { path: taken, branch: "master" },
+      ]);
+
+      const checkout = yield* renovateCheckout();
+
+      // What is known, and only that: which repository git says owns it, and the Run
+      // whose record proves it is a Renovate Run's rather than anyone's guess.
+      expect(checkout.refused).toBe(
+        `no worktree for ${rig.projectDir}: ${taken} is a checkout of ${rig.projectDir}, recorded by Run ${runId}`,
+      );
+      expect(checkout.worktree).toBe(null);
+      // Never the caller's own checkout: sharing one is the bug this exists to stop.
+      expect(checkout.cwd).toBe(rig.projectDir);
+      expect(yield* asked()).not.toContain(`worktree add --detach ${taken} origin/master`);
+      // Neither checkout nor repository is touched: no add, no remove, nothing moved.
+      const commands = yield* asked();
+      expect(commands.some((c) => c.startsWith("worktree add"))).toBe(false);
+      expect(commands.some((c) => c.startsWith("worktree remove"))).toBe(false);
+      expect(yield* (yield* FileSystem.FileSystem).readFileString(`${taken}/.git`)).toContain(
+        `gitdir: ${rig.projectDir}/.git/worktrees/renovate`,
+      );
+    }),
+  ));
+
+test("two repositories of the same name never share one Renovate checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      // Two `project`s in two directories want the same path under the worktrees
+      // directory, because the path is named after the repository, not its location.
+      const other = join(rig.root, "elsewhere", "project");
+      yield* fs.makeDirectory(other, { recursive: true });
+      const taken = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      yield* worktreeOwnedBy(taken, rig.projectDir);
+      yield* fakeGitWithCheckouts([{ path: other, branch: "master" }]);
+
+      const checkout = yield* renovateCheckout({ repository: other });
+
+      // Named, so the operator knows which repository is holding it.
+      expect(checkout.refused).toBe(
+        `no worktree for ${other}: ${taken} is a checkout of ${rig.projectDir}`,
+      );
+      expect(checkout.worktree).toBe(null);
+      // Refused, so the Run stays where it was started rather than in either repository.
+      expect(checkout.cwd).toBe(rig.projectDir);
+    }),
+  ));
+
+test("a path in the way that will not say whose it is refuses, rather than being built over", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      // Something is there and nothing says what: the answer is a refusal naming it,
+      // never a worktree added on top of whatever it is.
+      yield* fs.makeDirectory(at, { recursive: true });
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+
+      const checkout = yield* renovateCheckout();
+
+      expect(checkout.refused).toBe(
+        `no worktree for ${rig.projectDir}: ${at} is a checkout that does not say which repository it belongs to`,
+      );
+      expect(checkout.worktree).toBe(null);
+      expect((yield* asked()).some((command) => command.startsWith("worktree add"))).toBe(false);
+    }),
+  ));
+
+test("a destination another Run is claiming right now is refused, not looked at twice", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
+      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      // A live claim on the destination, as a Run starting at the same moment holds it.
+      // Looking and creating happen under it, so the loser never finds the path free.
+      yield* fs.writeFileString(
+        destinationLock(rig.stateDir, at),
+        `{"pid":${process.pid},"start":null}\n`,
+      );
+
+      const checkout = yield* renovateCheckout();
+
+      expect(checkout.refused).toBe(
+        `no worktree for ${rig.projectDir}: ${at} is being claimed by another Run starting now`,
+      );
+      expect(checkout.worktree).toBe(null);
+      expect((yield* asked()).some((command) => command.startsWith("worktree add"))).toBe(false);
+    }),
+  ));
+
+test("a repository git will not add a detached worktree in is a Run that does not start", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }], {
+        refusals: { "worktree add": "fatal: could not create leading directories" },
+      });
+
+      const checkout = yield* renovateCheckout();
+
+      expect(checkout.refused).toBe(
+        `no worktree for ${rig.projectDir}: fatal: could not create leading directories`,
+      );
+      expect(checkout.worktree).toBe(null);
+      expect(checkout.cwd).toBe(rig.projectDir);
+    }),
+  ));
+
 test("a workflow that changes nothing works where it was started, and is not refused", () =>
   runEffect(
     Effect.gen(function* () {
       const checkout = yield* checkoutFor(new Herdr(rig.pluginEnv()), {
+        stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "review",
         name: "!42",
