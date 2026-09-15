@@ -582,6 +582,33 @@ effectTest("an open board keeps the tab glyph true after the Driver has gone", f
   ).toHaveLength(1);
 });
 
+effectTest("a board leaves a tab its human has renamed alone", function* () {
+  // The board is the second writer of these labels, so it is the second place a manual
+  // rename could be undone — on the next tick, minutes after the human typed it.
+  const run = yield* seed({
+    workflow: "implement",
+    namedAfter: "add-a-picker",
+    stepIds: ["build"],
+    maxIterations: 5,
+  });
+  run.record.target_label = "add-a-picker";
+  run.record.status = "done";
+  run.step("build").status = "done";
+  run.step("build").variants.push(variant("impl-1", "1-4", "implement-add-a-picker/build"));
+  yield* run.save();
+  yield* rig.addAgent("impl-1", "1-4");
+  // The run's tab is 1:2, and it is called what the human called it.
+  yield* rig.addTab("first", "shell");
+  expect((yield* rig.addTab("Exporter work", "shell")).tabId).toBe("1:2");
+
+  const env = rig.pluginEnv({ FAKE_HERDR_AGENT_STATUS: "working" });
+  yield* appState(controlSession(env), env).load(focus());
+
+  expect(
+    (yield* rig.calls()).filter((c) => c.cmd === "tab rename" && c.argv![2] === "1:2"),
+  ).toEqual([]);
+});
+
 effectTest("a wide board asks herdr no more than the local board it is built beside", function* () {
   yield* rig.addWorkspace("1", "test", rig.projectDir);
   yield* rig.addWorkspace("w9", "Env", rig.projectDir);

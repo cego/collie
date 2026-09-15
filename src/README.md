@@ -54,6 +54,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `plan.ts`          | A plan directory as repositories and waves, and the refusals that stop a fan-out         |
 | `lock.ts`          | The pid-lock discipline shared by the run persistence lock and the Driver takeover lock  |
 | `task.ts`          | A Task: the work, its herdr workspace, and which Runs belong to it                       |
+| `tasknames.ts`     | What a task workspace is called, from the work and the session's own live labels         |
 | `naming.ts`        | herdr-legal agent names vs readable tab and pane labels                                  |
 | `keys.ts`          | Raw keypresses, for the text board a pane falls back to when the renderer will not start |
 | `fork.ts`          | Take a definition into a later layer: an `extends:` stub, or a full copy                 |

@@ -31,6 +31,11 @@ doors: herdr actions, and the `collie` CLI.
   alongside `src/intent.ts`, `src/dispatcher.ts`, `src/steering.ts` and
   `src/steering-caps.ts`. A capability moves to `proven` only from a recorded live result
   in the Run's `CAPABILITIES.md`.
+- **Changing how a Task is named, or what a tab or pane label says** →
+  [`docs/using.md`](docs/using.md#what-a-task-workspace-is-called), alongside
+  `src/tasknames.ts` (the inference and its stand-in), `prompts/namer.md` (what the model
+  is asked, and the rule that live labels are data) and `src/naming.ts` (the labels
+  themselves, and which of them are still Collie's to write).
 - **Changing what the board draws, what it is a board of, or which workspace owns it** →
   [`docs/using.md`](docs/using.md#the-control-plane), alongside `src/home.ts` (ownership),
   `src/live.ts` (what the Live region is given) and `src/ui/live.tsx` (how it is drawn).
@@ -80,4 +85,6 @@ binary still starts.
    (the Driver is the only actor over agents) and
    [ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md) (one board per Herd, in the
    Home). ADR-0009 supersedes only ADR-0006's sentence about where the Collie tab is
-   created; a Run still stays in the workspace it was started from.
+   created. A Run no longer stays in the workspace it was started from: it belongs to its
+   Task, and a fresh start opens one of its own ([`CONTEXT.md`](CONTEXT.md), Task
+   workspace).

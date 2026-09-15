@@ -13,6 +13,7 @@ import {
   herdrFailureReason,
   type AgentInfo,
   type PaneInfo,
+  type TabInfo,
   type WorkspaceInfo,
 } from "./herdr";
 import { loadDefaults } from "./config";
@@ -51,6 +52,7 @@ import {
 } from "./inputs";
 import { readRegistry, registryPath, scopeKey, scopeOfRun } from "./registry";
 import { newTask, writeTask, type TaskChoice, type TaskRecord } from "./task";
+import { nameTask, type LiveNames, type NamingDeps, type TaskContext } from "./tasknames";
 import {
   amend as amendIntent,
   constraintId,
@@ -122,6 +124,7 @@ import {
   withRunLock,
   type WorktreeRecord,
 } from "./run";
+import { taskWorkspaceLabel } from "./naming";
 import { branchListed, checkoutFor, pruneWorktrees, runNames } from "./worktree";
 import { closable } from "./home";
 import { forkResolvedDefinition } from "./fork";
@@ -672,12 +675,78 @@ export function primaryName(resolutions: Resolution[]) {
 }
 
 /**
+ * The names this person already has on their own workspaces, tabs and panes. Read-only,
+ * and best effort: a herdr that will not answer costs the namer its vocabulary, not the
+ * Run its start.
+ */
+const liveNames = Effect.fn("operations.liveNames")(function* (herdr: Herdr, everything: boolean) {
+  const workspaces = yield* herdr
+    .workspaceList()
+    .pipe(Effect.catch(() => Effect.succeed<WorkspaceInfo[]>([])));
+  // Tabs and panes are vocabulary for the namer alone. Without one to ask, they are two
+  // herdr calls whose answer nothing would read.
+  const [tabs, panes] = everything
+    ? yield* Effect.all([
+        herdr.tabList().pipe(Effect.catch(() => Effect.succeed<TabInfo[]>([]))),
+        herdr.paneList().pipe(Effect.catch(() => Effect.succeed<PaneInfo[]>([]))),
+      ])
+    : [[], []];
+  return {
+    workspaces: workspaces.map((workspace) => workspace.label),
+    tabs: tabs.map((tab) => tab.label),
+    panes: panes.flatMap((pane) => (pane.label === null ? [] : [pane.label])),
+  } satisfies LiveNames;
+});
+
+/**
+ * What naming one Task may cost, or null where it cannot be asked at all: no Herd to
+ * account the call against, or no frozen prompt in this build to ask with. The prompt is
+ * the whole of what keeps the person's own labels data rather than instructions, so its
+ * absence is a reason not to call rather than a reason to improvise one.
+ *
+ * A tighter clock than a steer's: somebody is waiting on this to see their workspace
+ * open, and the stand-in name is already to hand.
+ */
+const namingDeps = Effect.fn("operations.namingDeps")(function* (env: PluginEnv) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const herd = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (herd === null) return null;
+  const systemPromptFile = path.join(env.pluginRoot, "prompts", "namer.md");
+  if (!(yield* fs.exists(systemPromptFile).pipe(Effect.catch(() => Effect.succeed(false)))))
+    return null;
+  const evaluation = yield* evaluationDeps(env);
+  const limits = { ...evaluation.limits, maxSeconds: 30, maxOutputBytes: 4 * 1024 };
+  return {
+    evaluator: { ...evaluation.evaluator, systemPromptFile, limits },
+    budget: yield* budgetPath(env.stateDir, herd),
+  } satisfies NamingDeps;
+});
+
+/**
+ * What a fresh Task is called, worked out before its checkout: `workspace=new` has herdr
+ * open the workspace itself, and a workspace can only be opened under a name that
+ * already exists.
+ */
+const freshTaskLabel = Effect.fn("operations.freshTaskLabel")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  context: TaskContext,
+) {
+  const naming = yield* namingDeps(env);
+  return taskWorkspaceLabel(
+    yield* nameTask(naming, context, yield* liveNames(herdr, naming !== null)),
+  );
+});
+
+/**
  * The Task a start belongs to, and the herdr workspace its Runs and agents live in.
  *
  * A fresh start gets a workspace of its own, whatever workspace it was launched from:
  * that is what keeps one human's several pieces of work from accumulating beside each
  * other. The exception is a checkout herdr already opened a workspace for, which is the
- * same thing by another route and is taken rather than duplicated.
+ * same thing by another route and is taken rather than duplicated — under the name herdr
+ * reports for it, so the Task is called what that sidebar row is actually called.
  *
  * A continuation is given its Task, and goes where that Task already is. Membership is
  * the record, never the label: two Tasks may be called much the same thing, and a
@@ -688,9 +757,10 @@ const taskFor = Effect.fn("operations.taskFor")(function* (
   env: PluginEnv,
   choice: TaskChoice,
   opts: {
+    /** What a fresh Task is called, worked out before the checkout that may use it. */
     readonly label: string;
     /** The workspace herdr opened for this Run's checkout, where it opened one. */
-    readonly opened: string | null;
+    readonly opened: { readonly id: string; readonly label: string | null } | null;
   },
 ) {
   const kept = (task: TaskRecord) => ({ _tag: "Ok" as const, task });
@@ -715,9 +785,12 @@ const taskFor = Effect.fn("operations.taskFor")(function* (
     yield* Effect.ignore(herdr.workspaceFocus(choice.task.workspace));
     return kept(choice.task);
   }
-  let id = opts.opened;
+  // What herdr says the workspace is called wins over what it was asked to call it: a
+  // workspace it opened rather than created keeps the name it already had.
+  const label = opts.opened?.label ?? opts.label;
+  let id = opts.opened?.id ?? null;
   if (id === null) {
-    const made = yield* Effect.result(herdr.workspaceCreate({ cwd: env.cwd, label: opts.label }));
+    const made = yield* Effect.result(herdr.workspaceCreate({ cwd: env.cwd, label }));
     if (made._tag === "Failure") {
       const cause = herdrFailureReason(made.failure);
       return refuse(`No workspace could be opened for this task: ${cause}`, cause);
@@ -726,7 +799,7 @@ const taskFor = Effect.fn("operations.taskFor")(function* (
   }
   const task = yield* writeTask(
     env.stateDir,
-    yield* newTask({ workspace: id, label: opts.label, cwd: env.cwd }),
+    yield* newTask({ workspace: id, label, cwd: env.cwd }),
   );
   // Focused, not just created: a human who started work is taken to it.
   yield* Effect.ignore(herdr.workspaceFocus(id));
@@ -781,6 +854,18 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   // workspace it was launched from until its own has been made.
   const from = choice.mode === "continue" ? choice.task : null;
   const launchedIn = from?.workspace ?? workspace?.workspaceId ?? env.workspaceId;
+  // Named before the checkout, because `workspace=new` has herdr open this Task's
+  // workspace as part of making the checkout and needs the name to open it under.
+  const label =
+    from === null
+      ? yield* freshTaskLabel(herdr, env, {
+          workflow: workflow.name,
+          named: named.value,
+          short: named.short,
+          goal: options.intent?.goal ?? null,
+          cwd: env.cwd,
+        })
+      : from.label;
   // A mutating Workflow owns its checkout, keyed by the branch it is about to build,
   // so two of them never share a working tree — or a stash stack.
   const checkout = yield* checkoutFor(herdr, {
@@ -792,6 +877,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     sources: inputSources(resolutions),
     workspaceId: launchedIn,
     workspaceLabel: from?.label ?? workspace?.label ?? null,
+    openLabel: label,
     explicit: options.branch,
     login: env.gitlabLogin,
   });
@@ -811,8 +897,11 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   // Still before anything is created, so a workspace herdr would not open is a Run that
   // was never started rather than one launched into the workspace it came from.
   const resolved = yield* taskFor(herdr, env, choice, {
-    label: named.short || workflow.name,
-    opened: checkout.workspaceId === launchedIn ? null : checkout.workspaceId,
+    label,
+    opened:
+      checkout.workspaceId === null || checkout.workspaceId === launchedIn
+        ? null
+        : { id: checkout.workspaceId, label: checkout.workspaceLabel },
   });
   if (resolved._tag === "Rejected") return resolved;
   const task = resolved.task;

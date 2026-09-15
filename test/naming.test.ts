@@ -13,8 +13,10 @@ import {
   tabLabel,
   tabNameOf,
   targetLabel,
+  collieOwns,
   runTabLabel,
   tabGlyph,
+  taskWorkspaceLabel,
   tabLabelsFor,
   type LabelledRun,
 } from "../src/naming";
@@ -189,6 +191,7 @@ function labelled(over: Partial<LabelledRun> = {}): LabelledRun {
     inputs: { target: "branch:master...control-plane-glass" },
     target_label: "control-plane-glass",
     status: "running",
+    task: null,
     max_iterations: 5,
     steps: [{ id: "fix", status: "running", iteration: 3, variants: [] }],
     ...over,
@@ -301,4 +304,56 @@ test("every tab of a run wears the run's sentence and its own glyph", () => {
       false,
     ).size,
   ).toBe(0);
+});
+
+test("a tab inside a task workspace does not repeat what the workspace already says", () => {
+  // The task workspace is called after the task, so the tab spends its width on the
+  // things the workspace cannot say: which workflow, and which step it is on.
+  const inTask = labelled({ task: "task-1a2b3c4d" });
+  expect(runTabLabel(GLYPH.running, inTask, false)).toBe("⚙ Implement · fix 3/5");
+  expect(runTabLabel(GLYPH.waiting, inTask, true)).toBe("⚠ Implement · asks you");
+  expect(runTabLabel(GLYPH.done, labelled({ task: "task-1a2b3c4d", status: "done" }), false)).toBe(
+    "✓ Implement",
+  );
+  // One repository of a fan-out is still worth telling from its siblings: several of
+  // them run in one task workspace and are otherwise the same sentence.
+  expect(
+    runTabLabel(
+      GLYPH.running,
+      labelled({ task: "task-1a2b3c4d", inputs: { repo: "services/api" } }),
+      false,
+    ),
+  ).toBe("⚙ Implement · services/api · fix 3/5");
+  // A Run belonging to no task is unchanged: nothing else names its work.
+  expect(runTabLabel(GLYPH.running, labelled(), false)).toBe(
+    "⚙ Implement · control-plane-glass · fix 3/5",
+  );
+});
+
+test("a tab a human renamed stops being Collie's to rename", () => {
+  const run = labelled({ task: "task-1a2b3c4d" });
+  // A tab Collie has not seen a label for is one it just made.
+  expect(collieOwns(undefined, run)).toBe(true);
+  expect(collieOwns("⚙ Implement · fix 3/5", run)).toBe(true);
+  // Another glyph is still Collie's: the tab's state moved on between two polls.
+  expect(collieOwns("✓ Implement", run)).toBe(true);
+  // A label a human typed is theirs, whatever it says.
+  expect(collieOwns("Exporter work", run)).toBe(false);
+  expect(collieOwns("⚙ Something else", run)).toBe(false);
+  // And an empty label is nobody's, so Collie may name it.
+  expect(collieOwns("", run)).toBe(true);
+});
+
+test("a task workspace is named for its project and what the task is", () => {
+  expect(taskWorkspaceLabel({ project: "Collie", title: "Task workspaces" })).toBe(
+    "Collie | Task workspaces",
+  );
+  // Whitespace and control characters are display data, not layout: a label herdr is
+  // given never carries a newline into a sidebar row.
+  expect(taskWorkspaceLabel({ project: " Collie \n", title: "Task\tworkspaces " })).toBe(
+    "Collie | Task workspaces",
+  );
+  // A half-answer still names something rather than reading as a stray separator.
+  expect(taskWorkspaceLabel({ project: "", title: "Task workspaces" })).toBe("Task workspaces");
+  expect(taskWorkspaceLabel({ project: "Collie", title: "" })).toBe("Collie");
 });

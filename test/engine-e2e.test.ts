@@ -271,8 +271,11 @@ test("plan runs one step in a tab of its own and records the run", () =>
         // The step is watched, not waited on: one status poll, and it is already idle.
         "agent get",
         // Its step over, and then the run: the tab drops the step it was on, and
-        // then says the run is done.
+        // then says the run is done. Each rename asks what the tab is called first, so
+        // a tab the human has renamed keeps their name instead of this one.
+        "tab list",
         "tab rename",
+        "tab list",
         "tab rename",
         "agent.view.clear",
         "notification show",

@@ -145,9 +145,21 @@ export const ProposalSchema = Schema.Struct({
 });
 export type Proposal = Schema.Schema.Type<typeof ProposalSchema>;
 
+/**
+ * What a new Task's workspace is called: the project or theme it belongs to, and what
+ * this piece of work is. Two short strings and nothing else — a name is display data,
+ * and there is no field here for the model to say anything that acts.
+ */
+export const TaskNameSchema = Schema.Struct({
+  project: Schema.String,
+  title: Schema.String,
+});
+export type TaskName = Schema.Schema.Type<typeof TaskNameSchema>;
+
 const SCHEMAS = {
   judgement: JudgementSchema,
   proposal: ProposalSchema,
+  naming: TaskNameSchema,
 } as const;
 
 export type EvaluationKind = keyof typeof SCHEMAS;
@@ -416,7 +428,9 @@ export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
   const decoded =
     kind === "judgement"
       ? structuredFrom(ran.stdout, JudgementSchema)
-      : structuredFrom(ran.stdout, ProposalSchema);
+      : kind === "naming"
+        ? structuredFrom(ran.stdout, TaskNameSchema)
+        : structuredFrom(ran.stdout, ProposalSchema);
   if ("error" in decoded)
     return { spent: ran, value: null, error: `evaluator_invalid_output: ${decoded.error}` };
   return { spent: ran, value: decoded, error: null };

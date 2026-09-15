@@ -82,6 +82,8 @@ import {
   runTabLabel,
   shellQuote,
   stepLabel,
+  collieOwns,
+  displayName,
   tabLabelsFor,
   targetLabel,
   reason,
@@ -391,6 +393,8 @@ interface RunCtx {
    * the same one.
    */
   tabLabels: Map<string, string>;
+  /** Tabs a human has renamed, which this run never names again. */
+  manualTabs: Set<string>;
   /**
    * The ticket a sliced step is on, and what the slices before it left behind. Null for
    * every step that is not sliced, which is every step of every workflow that has no
@@ -451,6 +455,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     boardTabId: null,
     orderAnchorTabId: null,
     tabLabels: new Map(),
+    manualTabs: new Set(),
     slice: null,
     launchPane: null,
     paneReadFailed: false,
@@ -1695,7 +1700,8 @@ const runStep = Effect.fn("Engine.runStep")(function* (
     if (reuse) {
       // An `agent:` step opens nothing, and renames nothing: the pane it inherited
       // is alone in its tab, and the tab already names the run.
-      if (paneName && record.paneId) yield* herdr.paneRename(record.paneId, paneName);
+      if (paneName && record.paneId && (yield* paneIsOurs(o, record.paneId)))
+        yield* herdr.paneRename(record.paneId, paneName);
       if (record.tabId) yield* renameTab(o, ctx, record.tabId, runTab(o, GLYPH.running));
     } else {
       // Before any pane exists, because a harness Collie manages but cannot talk to
@@ -5012,6 +5018,30 @@ function runTab(o: EngineOptions, glyph: string): string {
 }
 
 /**
+ * Every name Collie could have put on one of this Run's panes: the step each pane is
+ * for, and the model or harness a parallel variant is named by.
+ */
+function ourPaneNames(record: RunRecord): Set<string> {
+  const names = new Set<string>();
+  for (const step of record.steps) {
+    names.add(displayName(step.id.slice(step.id.lastIndexOf(".") + 1)));
+    for (const variant of step.variants) names.add(paneLabel(variant, step.id, 2, true)!);
+  }
+  return names;
+}
+
+/**
+ * Whether a pane is still Collie's to rename. A pane nobody has named is, and so is one
+ * wearing a name Collie itself wrote — a step that continues an agent renames its pane
+ * from `Build` to `Simplify`. Anything else was typed by a human and stays theirs.
+ */
+const paneIsOurs = Effect.fn("Engine.paneIsOurs")(function* (o: EngineOptions, paneId: string) {
+  const current = (yield* o.herdr.paneList()).find((pane) => pane.paneId === paneId)?.label ?? null;
+  if (current === null || current.trim() === "") return true;
+  return ourPaneNames(o.run.record).has(current);
+});
+
+/**
  * One tab renamed, and remembered. Nothing is sent for a label herdr already has: the
  * reconcile below runs on every status poll, and a rename per poll per tab would be
  * herdr redrawing its sidebar a few times a second for no news at all.
@@ -5022,7 +5052,14 @@ const renameTab = Effect.fn("Engine.renameTab")(function* (
   tabId: string,
   label: string,
 ) {
-  if (ctx.tabLabels.get(tabId) === label) return;
+  if (ctx.tabLabels.get(tabId) === label || ctx.manualTabs.has(tabId)) return;
+  // Asked only when the label has actually moved on, which is rare: a human who renamed
+  // this tab keeps their name, through every later update and every continuation.
+  const current = (yield* o.herdr.tabList()).find((tab) => tab.tabId === tabId)?.label;
+  if (!collieOwns(current, o.run.record)) {
+    ctx.manualTabs.add(tabId);
+    return;
+  }
   // Remembered before the call, not after it: the variants of a parallel step poll at
   // the same time, and two fibers that both read an empty memo before either wrote it
   // sent the same rename twice. A rename that fails is not retried — a tab that will

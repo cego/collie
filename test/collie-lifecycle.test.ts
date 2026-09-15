@@ -238,10 +238,11 @@ effectTest(
     const runId: string = first.body.data.runId;
     const shown = (yield* cli(["--workspace", "w1", "run", "show", runId])).body.data.run;
     // A fresh start is its own Task, in a workspace of its own — not the w1 it was
-    // launched from, whose directory still roots it.
+    // launched from, whose directory still roots it — named for that directory's own
+    // project and what the work is.
     expect(shown).toMatchObject({
       workspace: "task-ws-1",
-      workspace_label: "ship",
+      workspace_label: "Workspace | Ship",
       workspace_worktree: path.join(dir, "workspace"),
       cwd: path.join(dir, "workspace"),
     });

@@ -233,6 +233,8 @@ export interface LabelledRun {
   inputs: Record<string, string>;
   /** What the Run recorded itself as pointed at; derived again for an older record. */
   target_label: string | null;
+  /** The Task this Run belongs to, whose workspace label already names the work. */
+  task: string | null;
   status: "running" | "done" | "blocked" | "failed";
   max_iterations: number;
   steps: ReadonlyArray<{
@@ -282,7 +284,7 @@ export function stepNow(run: LabelledRun): { id: string; round: string | null } 
  * A run that is over is what it was — the step it stopped on is the log's business.
  */
 export function runTabLabel(glyph: string, run: LabelledRun, asking: boolean): string {
-  const parts = [runLabel(run)];
+  const parts = [tabbedName(run)];
   if (run.status === "running") {
     const step = stepNow(run);
     // A question is worth saying instead of the step it is asked from: it is the one
@@ -291,6 +293,52 @@ export function runTabLabel(glyph: string, run: LabelledRun, asking: boolean): s
     else if (step) parts.push([step.id, step.round].filter((part) => part !== null).join(" "));
   }
   return `${glyph} ${parts.join(" · ")}`;
+}
+
+/**
+ * What a tab calls its Run. Inside a task workspace the workspace label already says
+ * what the work is, so repeating it costs the width the step needs — the workflow is
+ * what the tab adds. One repository of a fan-out keeps its own name: several of them
+ * run in one task workspace and are otherwise the same sentence.
+ */
+function tabbedName(run: LabelledRun): string {
+  if (run.task === null) return runLabel(run);
+  return disambiguate(displayName(run.workflow), run.inputs.repo ?? "");
+}
+
+/**
+ * Whether a tab's current label is still one Collie wrote for this Run, and so whether
+ * renaming it would overwrite a human's own choice. Collie's labels are a status glyph
+ * and this Run's own name; anything else on the tab was typed by somebody, and a tab
+ * Collie has no label for at all is one it has just made.
+ *
+ * Stateless on purpose: the Driver and the board both rename these tabs, and a memo
+ * only one of them kept would let the other undo a rename the human had made.
+ */
+export function collieOwns(current: string | undefined, run: LabelledRun): boolean {
+  if (current === undefined || current.trim() === "") return true;
+  if (current === tabNameOf(current)) return false;
+  return tabNameOf(current).startsWith(tabbedName(run));
+}
+
+/** `Collie | Task workspaces`: a task workspace's own label, from its two halves. */
+export function taskWorkspaceLabel(name: { project: string; title: string }): string {
+  return [name.project, name.title]
+    .map(oneLine)
+    .filter((part) => part !== "")
+    .join(" | ");
+}
+
+/**
+ * A label as herdr may be given it: one line, no control characters, no runs of space.
+ * Names reach here from the model and from the user's own live labels, and both are
+ * display data — a newline in one would break the sidebar row it is drawn in.
+ */
+export function oneLine(text: string): string {
+  return text
+    .replace(/\p{Cc}/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /**
