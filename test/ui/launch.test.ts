@@ -140,6 +140,37 @@ Do {{inputs.goal}}.
   expect(runs[0]!.record.decisions).toEqual({});
 });
 
+effectTest("the picker asks visibly for a GitLab repository URL", function* () {
+  yield* writeDef(
+    rig.baselineDir,
+    "workflows",
+    "accept-url",
+    `---
+name: accept-url
+title: accept-url — update dependencies
+inputs:
+  repository: gitlab-repository
+steps:
+  - id: update
+    persona: implementer
+    output: update.json
+---
+## update
+
+Update dependencies.
+`,
+  );
+
+  const url = "https://gitlab.example.com/acme/app";
+  const { asked } = yield* answering(["accept-url", url], (prompts) =>
+    pickFlow(new Herdr(env()), env(), prompts),
+  );
+
+  expect(asked).toEqual(["Workflows — " + env().cwd, "GitLab repository URL or local checkout"]);
+  const [run] = yield* new RunStore(env().stateDir).list();
+  expect(run?.record.inputs.repository).toBe(url);
+});
+
 effectTest("a branch nothing names is worked out, and the picker never asks for one", function* () {
   // `implement` by name: that is the workflow Collie knows changes the repository, and
   // so the one that needs a branch before it can start.
