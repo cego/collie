@@ -24,6 +24,7 @@ import {
   branchTargetHead,
   glabLogin,
   parseMrTarget,
+  projectFromRemote,
   projectHere,
   repoArgs,
   shell,
@@ -65,6 +66,9 @@ export const REPOSITORY_INPUT = "repository";
 
 /** What a roaming Run's checkout is called under the repository's worktrees directory. */
 const ROAMING_DIR = "renovate";
+
+const remoteRepository = (value: string) =>
+  /^(?:https?:\/\/|ssh:\/\/|[^@\s]+@)/.test(value) && projectFromRemote(value) !== null;
 
 /**
  * The lock two Runs racing for one destination contend on. Keyed by the destination
@@ -831,7 +835,28 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   if (!mutates(opts.workflow)) return here;
 
   if (roams(opts.workflow)) {
-    const from = opts.inputs[REPOSITORY_INPUT]?.trim() || opts.cwd;
+    const repository = opts.inputs[REPOSITORY_INPUT]?.trim() || "";
+    let from = repository || opts.cwd;
+    if (remoteRepository(repository)) {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      from = path.join(opts.stateDir, "renovate-repositories", Bun.hash(repository).toString(16));
+      if (!(yield* fs.exists(path.join(from, ".git")))) {
+        yield* fs.makeDirectory(path.dirname(from), { recursive: true });
+        const cloned = yield* shell(
+          "git",
+          ["clone", "--quiet", "--", repository, from],
+          opts.stateDir,
+          "say",
+        );
+        if (cloned.code !== 0) {
+          return {
+            ...here,
+            refused: `could not clone ${repository}: ${cloned.stdout.trim() || "git clone failed"}`,
+          };
+        }
+      }
+    }
     const made = yield* roamingCheckout({
       cwd: from,
       worktrees: yield* herdr.worktreesDirectory(),
