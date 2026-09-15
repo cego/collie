@@ -566,10 +566,7 @@ prerequisite rather than a preference.
 
 ```sh
 bun install
-bun run format:check
-bun run lint
-bun test
-bun run typecheck
+bun run check          # formatting, lint, types, then the full test suite
 bun run build          # bin/collie for this platform
 bun run smoke          # bin/collie answers --help and returns typed envelopes
 ```
@@ -580,6 +577,28 @@ release or install path: the build alone does not prove the compiled binary stil
 Tests live in `test/`, with a fake herdr and shared fixtures under `test/support/`. Because
 `herdr.ts` is the only boundary, an end-to-end test drives the real engine against that
 fake.
+
+`check` runs formatting, lint, and type checking in parallel, then tests after all three
+pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
+The individual scripts in `package.json` still work for focused feedback.
+
+`bun run test` uses [Bun's process-parallel runner](https://bun.com/docs/test/parallel)
+with four workers and a fresh global per file. Tests within each file stay sequential:
+fixtures change environment variables and prototypes, so `--concurrent` is not safe here.
+For debugging, `bun test ./test/engine-e2e.test.ts` runs one file without workers.
+
+Bun records file durations in `.scratch/test-timings.json` and uses them to schedule slow
+files first next time. CI caches only that scheduling data, never test results. Missing or
+stale timings cannot skip a test; delete the file to reset the schedule. Quiet-agent tests
+use a controlled Effect clock so machine load cannot consume their nudge windows.
+
+On the initial 377-test baseline (`fb2d018`), with Linux and Bun 1.4.2, the original checks
+took about 96 seconds (90 in tests); the new
+gate took about 51 seconds without timing history. Four-worker tests with history took
+about 39 seconds, or 43 seconds for the whole gate. Eight workers and running static checks
+alongside tests were rejected:
+both caused subprocess tests to exceed their existing timeouts. Limiting Oxlint/Oxfmt
+threads did not show a consistent improvement, so their defaults and rules stay unchanged.
 
 Documentation changes in the same merge request as the behavior it describes. There is no
 docs lint to catch a page that fell behind — a stale page is a defect like any other.

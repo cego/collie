@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { ConfigProvider, Effect, FileSystem, Path, Schema } from "effect";
+import { Clock, ConfigProvider, Effect, FileSystem, Path, Schema } from "effect";
+import { TestClock } from "effect/testing";
 import { FakeHerdr, Rig } from "./support/recorder";
 import {} from "../src/naming";
 import { fakeHerdr } from "./support/fake-herdr-core";
@@ -108,6 +109,17 @@ afterEach(() => runEffect(rig.close()));
 
 function runWorkflowEffect(...args: Parameters<typeof runWorkflow>) {
   return runWorkflow(...args).pipe(Effect.orDie);
+}
+
+function runQuietWorkflowEffect(...args: Parameters<typeof runWorkflow>) {
+  return Effect.gen(function* () {
+    const clock = yield* TestClock.make();
+    // ponytail: these workflows have one polling fiber. Advance only at its sleeps,
+    // not during I/O; concurrent polling would need explicit TestClock coordination.
+    return yield* runWorkflowEffect(...args).pipe(
+      Effect.provideService(Clock.Clock, { ...clock, sleep: clock.adjust }),
+    );
+  }).pipe(Effect.scoped);
 }
 
 test("agents start unattended by default, and with the harness's prompts under `harness`", () =>
@@ -906,7 +918,7 @@ test("a blocked agent is not asked to repair — it has nothing left to give", (
 test("an agent that goes quiet is nudged twice and then given up on", () =>
   runEffect(
     Effect.gen(function* () {
-      const { run, status } = yield* runWorkflowEffect(
+      const { run, status } = yield* runQuietWorkflowEffect(
         rig,
         "solo",
         { goal: "Add a picker", ticket: "" },
@@ -946,7 +958,7 @@ test("a step that is still producing output is never nudged, however slow", () =
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
-      const { run, status } = yield* runWorkflowEffect(
+      const { run, status } = yield* runQuietWorkflowEffect(
         rig,
         "solo",
         { goal: "Add a picker", ticket: "" },
@@ -976,7 +988,7 @@ test("quiet_ms 0 waits for as long as it takes and never nudges", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
-      const { run, status } = yield* runWorkflowEffect(
+      const { run, status } = yield* runQuietWorkflowEffect(
         rig,
         "solo",
         { goal: "Add a picker", ticket: "" },
@@ -1024,7 +1036,7 @@ test("a give-up keeps an Output the agent had already written", () =>
       // The work is done; only the background process it is sitting on is stuck.
       yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
 
-      const { run, status } = yield* runWorkflowEffect(
+      const { run, status } = yield* runQuietWorkflowEffect(
         rig,
         "solo",
         { goal: "Add a picker", ticket: "" },
@@ -1051,7 +1063,7 @@ test("the nudge itself does not count as the agent waking up", () =>
       // The nudge is typed into the agent's own pane, so a pane that only changes when
       // something is typed into it is the case that used to reset the deadline and
       // nudge forever.
-      const { run, status } = yield* runWorkflowEffect(
+      const { run, status } = yield* runQuietWorkflowEffect(
         rig,
         "solo",
         { goal: "Add a picker", ticket: "" },
@@ -1136,7 +1148,7 @@ test("an agent that answers each nudge and stalls again is still given up on", (
       // The pane changes one poll after every prompt and never otherwise: an agent
       // that says "ok, continuing" to each nudge while remaining stuck. Two nudges is
       // what a step gets for its whole turn, however often it stirs in between.
-      const { run, status } = yield* runWorkflowEffect(
+      const { run, status } = yield* runQuietWorkflowEffect(
         rig,
         "solo",
         { goal: "Add a picker", ticket: "" },

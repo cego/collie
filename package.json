@@ -8,11 +8,12 @@
     "lint:fix": "oxlint --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "test": "bun test",
+    "test": "bun test --parallel=4 --timings=.scratch/test-timings.json --update-timings",
     "acceptance": "bun run tools/acceptance.ts",
     "contract:check": "bun run tools/herdr-schema.ts pinned --check",
     "contract:regen": "bun run tools/herdr-schema.ts pinned --write",
     "typecheck": "tsc --noEmit",
+    "check": "bun run --parallel --no-exit-on-error format:check lint typecheck && bun run test",
     "build": "bun run tools/build.ts",
     "smoke": "sh tools/smoke.sh bin/collie"
   },
