@@ -1384,17 +1384,20 @@ test("a GitLab URL is cloned before the Renovate worktree is cut", () =>
         },
         {},
         {
-          clone: 'mkdir -p "$5" && printf "gitdir: $5/.gitdir\\n" > "$5/.git"',
           "worktree add":
             'for a in "$@"; do case "$a" in /*) mkdir -p "$a" && printf "gitdir: $a/.gitdir\\n" > "$a/.git"; break ;; esac; done',
         },
+      );
+      yield* bin.add(
+        "glab",
+        `printf '%s\\t%s\\n' "$PWD" "$*" >> "${gitLog()}"; mkdir -p "$4" && printf 'gitdir: %s/.gitdir\\n' "$4" > "$4/.git"`,
       );
 
       const checkout = yield* renovateCheckout({ repository: url });
 
       expect(yield* askedIn()).toContainEqual({
         cwd: rig.stateDir,
-        command: `clone --quiet -- ${url} ${source}`,
+        command: `repo clone acme/spilnu ${source}`,
       });
       expect(yield* askedIn()).toContainEqual({
         cwd: source,
