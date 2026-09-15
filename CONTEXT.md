@@ -29,13 +29,47 @@ workspace — and is not the Herd.
 
 **Home** — The Herd's dedicated Collie workspace, owned by a record plus proof: a live
 `collie_home` token, or the recorded pane still carrying its recorded `terminal_id`. A
-label is never proof. Anything uncertain is `ownership_unknown` and waits for a human.
+label is never proof. Anything uncertain is `ownership_unknown` and waits for a human. It
+holds one tab of two panes: the board on the left at four sevenths, **Native chat** on the
+right at three. Only a pane that has gone is reopened, so a layout a human resized stays
+where they put it.
+
+**Native chat** — The Herd's conversation, held in an ordinary Claude Code or Pi session in
+the Home's right-hand pane. The harness owns the editor, the streaming, the history and the
+compaction; Collie owns which harness, which session, and what the model may reach. It is
+bound to a session id Collie mints per Herd and harness, never to whichever session ran
+last in a directory. Its whole reach is **Collie tools**.
+
+**Chat harness** — Which native chat Collie opens with, `claude` (the default, on an
+existing installation as much as a new one) or `pi`, from `chat_harness` in `config.json`.
+It is a launch preference: changing it never stops, replaces or summarises a running
+conversation, and never touches the harnesses Runs use. Each harness keeps its own native
+history; nothing is carried between them.
+
+**News** — What Collie noticed and the conversation has not been told: the approved
+triggers only — terminal outcomes, halts, pending Choices, evidence gaps, repeated-failure
+obstacles and unresolved drift. Written from the Run's own record with no model in the
+path, so an unchanged Herd costs nothing; deduplicated by causal key, bounded into one
+batch that says what it left out. **Sent** is a transport having accepted it and **read**
+is the conversation having taken it — only the second settles an item, and a send nobody
+can account for stays `uncertain` for a human rather than being retried.
+
+**Collie tools** — The whole of what native chat may reach, over Collie's own shared
+operations. Five read — `collie_herd`, `collie_run`, `collie_workspaces`,
+`collie_receipts`, `collie_news` — Herd-wide, and never narrowed by the board's Filter or its Selection,
+which are what a human is looking at rather than what supervision may see. One asks:
+`collie_propose` records a Proposal over the same closed action set, the same validation
+and the same executors the CLI and the board use, and carries nothing out. Reached over a
+local MCP server by Claude and a generated extension by Pi, and by `collie tools call` from
+a terminal: one implementation, three ways in.
 
 **Redirect notice** — What a per-workspace Collie pane from an older release shows on its
 next launch: one line and "Open Collie". No board, no chat.
 
-**Steer** — One free-form human message with a named target. A question: it records what
-was said, asks, and prints what came back. Targets are never inferred from the words.
+**Steer** — One free-form human message about a named Run. A question: it records what was
+said, asks, and prints what came back. A target is required and never inferred from the
+words. Questions about the flock are Native chat's, which reads rather than paying for a
+model to be asked one.
 
 **Proposal** — A durable, hash-bound set of closed actions Collie suggests. Nothing in it
 runs until confirmed, except an action the target's own Authority already grants — and a
@@ -43,7 +77,10 @@ proposal that came out of a conversation is never that.
 
 **Confirmation** — A human command naming a Proposal's id **and** its content hash. A yes
 to a summary is not consent to a payload nobody read. Who is human is derived by the front
-door — a controlling terminal or the board — never claimed by a caller.
+door — a controlling terminal or the board — never claimed by a caller. Native chat's
+bridge is `chat`, stamped by the entrypoint that serves Collie tools rather than derived:
+it runs inside a harness's pane and so has a controlling terminal, which the CLI would
+otherwise read as a person. It is not human, so it confirms nothing.
 
 **Delivery** — One message to one live agent incarnation, with states `reserved`,
 `submitted`, `acknowledged`, `verified` and the terminal `failed`, `unknown`, `superseded`,

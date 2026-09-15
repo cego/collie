@@ -42,6 +42,10 @@ doors: herdr actions, and the `collie` CLI.
   table), `src/verify.ts` and `src/verify-spec.ts` (collection and what Collie may run),
   and `src/metrics.ts` (what a Run produced). Evidence is collected at a revision; an
   Output field is a claim.
+- **Changing the Home's panes, the chat harness, or what native chat may read** →
+  [`docs/using.md`](docs/using.md#talking-to-collie-about-the-flock), alongside
+  `src/chat.ts` (the harness and the session), `src/tools.ts` (the read contract) and
+  [ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md).
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

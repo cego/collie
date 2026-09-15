@@ -12,6 +12,8 @@ import { appendLine, ledgerPath } from "./support/live-paths";
 import { liveFor, pendingReportsPath, readPendingReports } from "../src/live";
 import { DEFAULT_AUTHORITY, seedIntent, writeIntent } from "../src/intent";
 import { marksOf } from "../src/lines";
+import { proposalsPath, record as recordProposal } from "../src/proposals";
+import { herdOf } from "../src/steering";
 import { runEffect } from "./support/effect";
 
 const encodeReport = Schema.encodeSync(Schema.fromJsonString(DriftReportSchema));
@@ -84,8 +86,7 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
 
       expect(live!.cards.map((c) => c.id)).toEqual(["c1"]);
       expect(live!.drift.map((d) => d.id)).toEqual(["d1"]);
-      // No Herd — no socket — is no conversation and no proposals, not a failed read.
-      expect(live!.conversation).toEqual([]);
+      // No Herd — no socket — is no proposals, not a failed read.
       expect(live!.proposals).toEqual([]);
     }),
   ));
@@ -281,5 +282,43 @@ test("an undelivered report is read for its Run and never delivered by reading i
       expect(reports.map((r) => r.constraint)).toEqual(["the sibling repo's API must not change"]);
       // Reading it changed nothing: the file is still there, with the entry still in it.
       expect(yield* fs.exists(file)).toBe(true);
+    }),
+  ));
+
+test("a proposal about the installation is drawn whatever row is selected", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { stateDir, runDir } = yield* rig();
+      // A socket path is what names a Herd, so the proposal is filed under the key this
+      // state directory resolves to rather than one the test picked.
+      const socketPath = path.join(stateDir, "herdr.sock");
+      yield* fs.writeFileString(socketPath, "");
+      const herdWide = yield* recordProposal(
+        yield* proposalsPath(stateDir, yield* herdOf(socketPath)),
+        {
+          interpretation: "bring this installation up to date",
+          targets: [],
+          actions: [{ kind: "upgrade" }],
+          allowedNow: [],
+          intentVersions: {},
+          by: "chat:c-1",
+        },
+      );
+
+      // It names no Run, so no row would carry it — and `collie_propose` tells the model,
+      // and the prompt tells the human, that the board is where it is confirmed.
+      for (const selected of [null, { id: "r1", dir: runDir }]) {
+        const { live } = yield* liveFor({
+          stateDir,
+          socketPath,
+          run: selected,
+          runs: [{ id: "r1", dir: runDir, awaiting: null, harnesses: [] }],
+          ownership: null,
+          region: true,
+        });
+        expect(live!.proposals.map((p) => p.id)).toEqual([herdWide.id]);
+      }
     }),
   ));

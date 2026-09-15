@@ -43,7 +43,11 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `cards.ts`         | One slice of work as a human wants it handed over, with its readiness and significance   |
 | `disposition.ts`   | What became of a Run's work, recorded beside its status and never over it                |
 | `conversation.ts`  | What the human and Collie have said about this Herd, redacted and reference-checked      |
+| `chat.ts`          | The Home's native conversation: which harness, which session, and how it is launched     |
+| `tools.ts`         | The bounded Herd-wide reads native chat may make, and nothing else                       |
+| `mcp.ts`           | Those same reads over MCP on stdio, which is how Claude Code reaches them                |
 | `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                 |
+| `news.ts`          | What it noticed and nobody has read: deduped, batched, and sent is never read            |
 | `home.ts`          | Which workspace is this Herd's Home, decided by proof and never by a label               |
 | `live.ts`          | The board's Live region and every row's marks, from one pass. Read-only                  |
 | `lines.ts`         | A card, a report, a delivery, a row's marks and an action, as the same words everywhere  |

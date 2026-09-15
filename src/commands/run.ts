@@ -38,6 +38,7 @@ import {
   EMPTY_DEFAULTS,
   amend,
   defaultsPath,
+  describeDefaults,
   authorityPatch,
   parseConstraint,
   propagate,
@@ -1269,13 +1270,6 @@ function defaultsCommand(
       return { ok: true, data: { defaults: next }, human: describeDefaults(next) };
     }),
   );
-}
-
-function describeDefaults(defaults: Defaults): string {
-  return [
-    ...defaults.constraints.map((c) => `${c.id}\t${c.severity}\t${c.kind}\t${c.text}`),
-    ...Object.entries(defaults.authority).map(([k, v]) => `authority ${k}=${JSON.stringify(v)}`),
-  ].join("\n");
 }
 
 const defaultsShow = Command.make("show", {}, () =>

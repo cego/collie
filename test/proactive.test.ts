@@ -4,8 +4,15 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
-import { eventsIn, nextEvent, readSaid, remember, type Event } from "../src/proactive";
+import { eventsIn, readSaid, remember, type Event } from "../src/proactive";
+import {
+  append as appendNews,
+  newsPath,
+  pending as pendingNews,
+  read as readNews,
+} from "../src/news";
 import { RunStore, type RunRecord } from "../src/run";
+import { runRecord } from "./support/records";
 
 let stateDir: string;
 
@@ -118,17 +125,21 @@ test("the things worth saying are the things a human would want to know", () => 
   expect(said({ halt: "no_progress" })!.run).toBe("r1");
 });
 
+/** What `sayWhatHappened` keeps: every event this Herd has not already said. */
+const unsaid = (events: ReadonlyArray<Event>, said: ReadonlySet<string>) =>
+  events.filter((event) => !said.has(event.key));
+
 test("a Run that stopped says so once, and says so again only for a different reason", () => {
   const halted = eventsIn([record({ id: "r1", halt: "evidence_missing" })]);
   const said = new Set(halted.map((e) => e.key));
 
   // The board redraws every few seconds: the same halt must not be reported every time.
-  expect(nextEvent(halted, said)).toBeNull();
-  expect(nextEvent(eventsIn([record({ id: "r1", halt: "evidence_missing" })]), said)).toBeNull();
+  expect(unsaid(halted, said)).toHaveLength(0);
+  expect(unsaid(eventsIn([record({ id: "r1", halt: "evidence_missing" })]), said)).toHaveLength(0);
 
   // Resumed, and halted again for something else: that is new, and is said.
   const other = eventsIn([record({ id: "r1", halt: "no_progress", iteration: 2 })]);
-  expect(nextEvent(other, said)).not.toBeNull();
+  expect(unsaid(other, said)).toHaveLength(1);
 
   // And proving one of three gaps is progress worth saying, so the gap list is the key.
   const three = eventsIn([record({ id: "r2", evidence_gaps: ["a", "b", "c"] })]);
@@ -136,20 +147,17 @@ test("a Run that stopped says so once, and says so again only for a different re
   expect(three[0]!.key).not.toBe(two[0]!.key);
 });
 
-test("one thing at a time: several Runs ending together is one thing that happened", () => {
+test("several Runs ending together is every one of them, kept for one batch", () => {
   const events = eventsIn([
     record({ id: "r1", status: "done" }),
     record({ id: "r2", status: "failed" }),
     record({ id: "r3", halt: "no_progress" }),
   ]);
-  expect(events).toHaveLength(3);
 
-  // The next one, not all of them: a board that fired three turns at once would be the
-  // notification storm this exists to replace.
-  const first = nextEvent(events, new Set())!;
-  expect(first.run).toBe("r1");
-  const second = nextEvent(events, new Set([first.key]))!;
-  expect(second.run).toBe("r2");
+  // All three, not the first: none of them is dropped because the others happened at the
+  // same moment. What stops three turns is that they go into one bounded batch, which is
+  // `news.ts`'s job — not this one's.
+  expect(unsaid(events, new Set()).map((event) => event.run)).toEqual(["r1", "r2", "r3"]);
 });
 
 test("a Run says the most pressing thing about it, not every true thing", () => {
@@ -176,7 +184,7 @@ test("what has been said survives the Home being closed and reopened", () =>
       const said = yield* readSaid(dir);
       expect(said.has("r1:halt:no_progress:1")).toBe(true);
       const events = eventsIn([record({ id: "r1", halt: "no_progress" })]);
-      expect(nextEvent(events, said)).toBeNull();
+      expect(unsaid(events, said)).toHaveLength(0);
     }),
   ));
 
@@ -210,5 +218,27 @@ test("RunStore records and these events agree about what a Run is", () =>
       });
       run.record.status = "failed";
       expect(eventsIn([run.record])[0]!.text).toContain("ended failed");
+    }),
+  ));
+
+test("noticing something costs a file append, and noticing nothing costs nothing", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const file = yield* newsPath(stateDir, "herd-abc");
+      // A Run getting on with it. The board may redraw all day.
+      const quiet = [runRecord({ id: "r1" })];
+      for (let tick = 0; tick < 50; tick++)
+        for (const event of eventsIn(quiet)) yield* appendNews(file, event);
+      // Nothing was written, so there is nothing to deliver and nothing to pay for. This
+      // is the whole of the "unchanged state wakes no model" promise: there is no model
+      // on this path at all any more, and no file either until something happens.
+      expect(yield* fs.exists(file)).toBe(false);
+
+      // And when something does happen, it is one append — not one per tick.
+      const halted: RunRecord[] = [runRecord({ id: "r1", halt: "evidence_missing" })];
+      for (let tick = 0; tick < 50; tick++)
+        for (const event of eventsIn(halted)) yield* appendNews(file, event);
+      expect(pendingNews(yield* readNews(file)).items).toHaveLength(1);
     }),
   ));

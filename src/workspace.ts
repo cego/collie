@@ -15,6 +15,7 @@ import {
   driftLines,
   markFor,
   marksOf,
+  newsLines,
   ownershipLines,
   type Line,
   type Marks,
@@ -901,6 +902,7 @@ function liveLines(live: Live): string[] {
     ...(live.ownership === null
       ? []
       : ownershipLines(live.ownership.why, live.ownership.candidates)),
+    ...newsLines(live.news),
     ...live.cards.flatMap(cardLines),
     ...live.drift.flatMap((report) => driftLines(report)),
     ...live.pending.flatMap((report) => driftLines(report, true)),

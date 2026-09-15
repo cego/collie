@@ -54,3 +54,13 @@ export function executorFor(kind: ActionKind): AnyExecutor | undefined {
 export function registeredKinds(): ActionKind[] {
   return [...registry.keys()].sort();
 }
+
+/**
+ * Empty it. Registration is once per process and the first caller's environment is the
+ * one every executor closes over, which is exactly right for a front door — a process is
+ * one front door — and exactly wrong for a test file that shares a process with another
+ * one. A test that registers puts this back so the next file registers its own.
+ */
+export function resetExecutors(): void {
+  registry.clear();
+}

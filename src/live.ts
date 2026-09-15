@@ -1,6 +1,6 @@
 // What the Home board's Live region shows, and what a row's marks say: cards, drift,
-// deliveries, the conversation and the proposals waiting on an answer, read from the
-// journals the rest of steering writes.
+// deliveries and the proposals waiting on an answer, read from the journals the rest of
+// steering writes.
 //
 // Read-only, and that is the discipline. Nothing here writes, delivers, resolves or
 // focuses anything: a card arriving must never move a human off what they are doing, and
@@ -11,13 +11,24 @@
 import { Clock, Effect, Path, Schema } from "effect";
 import { newest, readCards, type Card } from "./cards";
 import type { Marks, RunMarks } from "./lines";
-import { conversationPath, tail, type Turn } from "./conversation";
 import { openReports, readDrift } from "./drift";
 import { capabilitiesOf } from "./steering-caps";
 import { DriftReportSchema, type DriftReport } from "./evaluator";
 import { readIntent } from "./intent";
 import { readJournal } from "./journal";
-import { pendingFor, proposalsPath, read as readProposals, type ProposalRecord } from "./proposals";
+import {
+  newsPath,
+  pending as pendingNews,
+  read as readNews,
+  uncertain as uncertainNews,
+} from "./news";
+import {
+  pendingFor,
+  pendingHerdWide,
+  proposalsPath,
+  read as readProposals,
+  type ProposalRecord,
+} from "./proposals";
 import {
   deliveriesOf,
   herdOf,
@@ -31,9 +42,6 @@ import {
 
 /** How many cards the region draws. Newest first, and a screen's worth is the point. */
 const CARDS = 5;
-/** How many turns of the conversation sit above the Steer box. */
-export const TURNS = 5;
-
 /** Everything the Live region draws, for whatever the board is looking at. */
 export interface Live {
   /** The Run this is about, or null for the Herd's newest cards. */
@@ -41,16 +49,7 @@ export interface Live {
   cards: Card[];
   drift: DriftReport[];
   deliveries: Delivery[];
-  /**
-   * What this Herd has said, whole — never narrowed to whatever row is selected. The
-   * conversation is with Collie about the flock; a Selection changes what is *drawn*
-   * beside it, and must not change what there is to draw. Before this, selecting any Run
-   * replaced the conversation with that Run's turns, which on a board where a row is
-   * almost always selected meant there was no global conversation at all.
-   */
-  conversation: Turn[];
-  /** The Selection's own turns, for a panel that is about that one Run. */
-  runConversation: Turn[];
+  /** Waiting on the human: the Selection's own, and the Herd's, which are about no Run. */
   proposals: ProposalRecord[];
   /**
    * Reports about a Run that had already finished when they were judged. Never written
@@ -63,6 +62,14 @@ export interface Live {
    * rather than read here: it is a herdr answer, not a journal.
    */
   ownership: { readonly why: string; readonly candidates: ReadonlyArray<string> } | null;
+  /**
+   * What Collie has noticed that has not reached the conversation: how many items are
+   * waiting, and how many of those nobody can account for having sent. Drawn because a
+   * chat that cannot be pushed to — Claude, on an installation without channels — leaves
+   * news waiting for its next turn, and a human should be able to see that it is waiting
+   * rather than discover it by asking.
+   */
+  news: { readonly waiting: number; readonly uncertain: number };
 }
 
 /** A Run, as little of it as the reads below need. */
@@ -165,19 +172,26 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
   // a View that will not look at it is not worth the Herd's journals.
   let live: Live | null = null;
   if (opts.region) {
-    const conversationFile = key === null ? null : yield* conversationPath(opts.stateDir, key);
+    const newsLines = key === null ? [] : yield* readNews(yield* newsPath(opts.stateDir, key));
+    const news = {
+      waiting: pendingNews(newsLines).items.length,
+      uncertain: uncertainNews(newsLines).length,
+    };
+    // Waiting on the human and about no Run: an upgrade, a cleanup, a fork, a change to a
+    // workspace's defaults. Drawn whatever the Selection is, because there is no row they
+    // would otherwise appear under, and a proposal nothing draws expires unseen.
+    const herdWide = pendingHerdWide(lines, now);
     const one = opts.run;
     if (one === null) {
       const cards: Card[] = [];
       for (const run of opts.runs) cards.push(...(cardsOf.get(run.id) ?? []));
       live = {
+        news,
         run: null,
         cards: newest(cards).slice(-CARDS).reverse(),
         drift: [],
         deliveries: [],
-        conversation: conversationFile === null ? [] : yield* tail(conversationFile, TURNS),
-        runConversation: [],
-        proposals: [],
+        proposals: herdWide,
         pending: [],
         ownership: opts.ownership,
       };
@@ -185,16 +199,12 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
       // The Selection may be a History row, off the board and so without marks of its own.
       const own = cardsOf.get(one.id) ?? (yield* readCards(one.dir));
       live = {
+        news,
         run: one.id,
         cards: newest(own).slice(-CARDS).reverse(),
         drift: openReports(yield* readDrift(one.dir)),
         deliveries: (yield* deliveriesOf(opts.stateDir, one.id)).map((found) => found.delivery),
-        // Both: the Herd's conversation is what the composer is part of, and the
-        // Selection's own turns are what its panel adds beside it.
-        conversation: conversationFile === null ? [] : yield* tail(conversationFile, TURNS),
-        runConversation:
-          conversationFile === null ? [] : yield* tail(conversationFile, TURNS, one.id),
-        proposals: pendingFor(lines, one.id, now),
+        proposals: [...pendingFor(lines, one.id, now), ...herdWide],
         pending: key === null ? [] : yield* readPendingReports(opts.stateDir, key, one.id),
         ownership: opts.ownership,
       };

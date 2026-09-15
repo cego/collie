@@ -24,19 +24,6 @@ const RefSchema = Schema.Struct({
 });
 export type Ref = Schema.Schema.Type<typeof RefSchema>;
 
-const TargetSchema = Schema.Struct({
-  run: Schema.String,
-  agent: Schema.optionalKey(Schema.String),
-});
-
-/** A read-only reply. No proposal, no confirmation, nothing to run. */
-export const AnswerSchema = Schema.Struct({
-  text: Schema.String,
-  evidence_refs: Schema.Array(RefSchema),
-  targets: Schema.Array(TargetSchema),
-});
-export type Answer = Schema.Schema.Type<typeof AnswerSchema>;
-
 export const DriftReportSchema = Schema.Struct({
   id: Schema.String,
   at: Schema.String,
@@ -70,6 +57,8 @@ export const ActionSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("update_intent"),
     run: Schema.String,
+    /** Which amendment this is. `patch` is the goal, the constraint, or its id. */
+    change: Schema.Literals(["set-goal", "add-constraint", "remove-constraint"]),
     patch: Schema.String,
     base_version: Schema.Int,
   }),
@@ -94,6 +83,13 @@ export const ActionSchema = Schema.Union([
     workflow: Schema.String,
     inputs: Schema.Record(Schema.String, Schema.String),
     decisions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+    /**
+     * Which workspace's checkout the Run is for. Absent means the caller's own, which is
+     * what a `collie run start` in a repository means. Named, because a launch asked for
+     * from the Home would otherwise root in Collie's own namespace directory — a Run
+     * about a repository nobody named.
+     */
+    workspace: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({ kind: Schema.Literal("resume"), run: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("followup"), run: Schema.String, text: Schema.String }),
@@ -107,6 +103,34 @@ export const ActionSchema = Schema.Union([
     run: Schema.String,
     agent: Schema.String,
   }),
+  /**
+   * The standing constraints every Run started in one workspace afterwards is held to.
+   * Setting the standing *authority* is not here: widening what Runs may do without
+   * asking is a grant, and a model that could ask for one would be authorising itself.
+   */
+  Schema.Struct({
+    kind: Schema.Literal("update_defaults"),
+    change: Schema.Literals(["add-constraint", "remove-constraint"]),
+    /**
+     * Whose new Runs this changes. Named rather than inherited, for the reason `start`
+     * names one: defaults are filed per workspace, and a confirmation carried out by the
+     * board would otherwise write the Home's — a file no Run ever reads.
+     */
+    workspace: Schema.String,
+    /** The constraint in the human's words to add, or the id of the one to remove. */
+    text: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("fork_definition"),
+    what: Schema.Literals(["workflow", "persona"]),
+    name: Schema.String,
+    /** What the fork is called. */
+    as: Schema.String,
+    layer: Schema.optionalKey(Schema.Literals(["user", "project"])),
+    mode: Schema.optionalKey(Schema.Literals(["extends", "copy"])),
+  }),
+  Schema.Struct({ kind: Schema.Literal("home_cleanup") }),
+  Schema.Struct({ kind: Schema.Literal("upgrade") }),
   Schema.Struct({ kind: Schema.Literal("ask_human"), question: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("none"), why: Schema.String }),
 ]);
@@ -122,7 +146,6 @@ export const ProposalSchema = Schema.Struct({
 export type Proposal = Schema.Schema.Type<typeof ProposalSchema>;
 
 const SCHEMAS = {
-  answer: AnswerSchema,
   judgement: JudgementSchema,
   proposal: ProposalSchema,
 } as const;
@@ -389,13 +412,11 @@ export const evaluate = Effect.fn("Evaluator.evaluate")(function* (
       error: ran.stderr === "" ? ran.outcome : `${ran.outcome}: ${ran.stderr.trim()}`,
     };
   // Per kind rather than from `SCHEMAS`: inference over that union picks one member's
-  // type, and callers narrow the union of all three.
+  // type, and callers narrow the union of both.
   const decoded =
-    kind === "answer"
-      ? structuredFrom(ran.stdout, AnswerSchema)
-      : kind === "judgement"
-        ? structuredFrom(ran.stdout, JudgementSchema)
-        : structuredFrom(ran.stdout, ProposalSchema);
+    kind === "judgement"
+      ? structuredFrom(ran.stdout, JudgementSchema)
+      : structuredFrom(ran.stdout, ProposalSchema);
   if ("error" in decoded)
     return { spent: ran, value: null, error: `evaluator_invalid_output: ${decoded.error}` };
   return { spent: ran, value: decoded, error: null };

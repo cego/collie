@@ -133,8 +133,34 @@ export function ownershipLines(why: string, candidates: ReadonlyArray<string>): 
   ];
 }
 
+/**
+ * What Collie has noticed that the conversation has not been told. Drawn because a chat
+ * that cannot be pushed to leaves this waiting for its next turn, and a human should see
+ * it waiting rather than find out by asking. An item nobody can account for having sent
+ * is said separately: it is not the same as one that has not gone yet.
+ */
+export function newsLines(news: { waiting: number; uncertain: number }): Line[] {
+  if (news.waiting === 0) return [];
+  return [
+    line(
+      `${news.waiting} development(s) Collie has noticed and not yet told the conversation.`,
+      "accent",
+    ),
+    ...(news.uncertain === 0
+      ? []
+      : [line(`${news.uncertain} of them nobody can account for having sent.`, "bad", 1)]),
+  ];
+}
+
 /** One line as text, indented. What the one-screen view draws and what a test reads. */
 export const asText = (entry: Line) => `${"  ".repeat(entry.depth)}${entry.text}`;
+
+function everyNewRunIn(workspace: string): string {
+  return `what every new Run in workspace ${workspace} begins with`;
+}
+
+const named = (fields: Record<string, string>) =>
+  Object.entries(fields).map(([name, value]) => `${name}=${value}`);
 
 /**
  * One proposed action in a sentence. Here rather than beside the CLI that first needed
@@ -146,13 +172,40 @@ export function describeAction(action: Action): string {
     case "deliver":
       return `deliver to ${action.agent} (${action.mode}): ${action.text}`;
     case "update_intent":
-      return `update ${action.run}'s intent: ${action.patch}`;
+      return `${action.change} on ${action.run}'s intent: ${action.patch}`;
+    // Which workspace, always: this writes the file that workspace's next Runs begin
+    // with, and a line that left it out asked for a yes to a change nobody could see.
+    case "update_defaults":
+      return action.change === "remove-constraint"
+        ? `remove the constraint ${action.text} from ${everyNewRunIn(action.workspace)}`
+        : `add to ${everyNewRunIn(action.workspace)}: ${action.text}`;
+    case "fork_definition":
+      return `fork ${action.what} ${action.name} as ${action.as} in the ${action.layer ?? "user"} layer`;
+    case "home_cleanup":
+      return "close the Collie panes an older release left";
+    case "upgrade":
+      return "upgrade this installation of Collie";
     case "ask_human":
       return `ask you: ${action.question}`;
     case "none":
       return `do nothing: ${action.why}`;
-    case "start":
-      return `start ${action.workflow}`;
+    case "start": {
+      // A launch that named none roots wherever the confirmation is carried out, which
+      // from the board is the Home and nobody's repository. Said rather than left silent.
+      const where =
+        action.workspace === undefined
+          ? "no workspace named — wherever this is confirmed"
+          : `workspace ${action.workspace}`;
+      // And the inputs, because they are what the Run does: a yes to a workflow name
+      // alone is a yes to a plan nobody read.
+      const on = named(action.inputs);
+      const decided = named(action.decisions ?? {});
+      return [
+        `start ${action.workflow} in ${where}`,
+        ...(on.length === 0 ? [] : [`on ${on.join(", ")}`]),
+        ...(decided.length === 0 ? [] : [`with ${decided.join(", ")} already decided`]),
+      ].join(" ");
+    }
     default:
       return `${action.kind} ${"run" in action ? action.run : ""}`.trim();
   }

@@ -10,7 +10,7 @@
 //
 // Four things, in order:
 //   1. one call, whose raw envelope is saved to test/fixtures/claude-print-envelope.json
-//   2. N answer calls, every one of which must decode against the schema it was given
+//   2. N judgement calls, every one of which must decode against the schema it was given
 //   3. one call from a scratch directory that declares a hook and an MCP server, with a
 //      stream-json transcript asserted to contain no tool_use, hook or MCP event
 //   4. p95 latency and what it cost
@@ -22,7 +22,7 @@
 import { BunServices } from "@effect/platform-bun";
 import { Clock, Duration, Effect, FileSystem, ManagedRuntime, Option, Path } from "effect";
 import {
-  AnswerSchema,
+  JudgementSchema,
   REQUIRED_FLAGS,
   argvFor,
   jsonSchemaFor,
@@ -146,7 +146,7 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
     return 1;
   }
 
-  const schema = jsonSchemaFor("answer");
+  const schema = jsonSchemaFor("judgement");
 
   // (1) The envelope, saved whole so the decoder has something real to be tested against.
   const first = yield* one(schema);
@@ -156,7 +156,7 @@ const probe = Effect.fn("probe.run")(function* (calls: number) {
   yield* Effect.log(`saved the envelope to ${fixture}`);
 
   // (2) Every call has to answer in the schema it was given.
-  const decoded = (raw: string) => !("error" in structuredFrom(raw, AnswerSchema));
+  const decoded = (raw: string) => !("error" in structuredFrom(raw, JudgementSchema));
   const latencies: number[] = [first.ms];
   let good = decoded(first.stdout) ? 1 : 0;
   for (let i = 1; i < calls; i++) {

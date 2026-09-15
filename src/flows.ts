@@ -18,7 +18,9 @@ import type { PlatformError } from "effect/PlatformError";
 import type { SchemaError } from "effect/Schema";
 import { COMPACTION_OFF, validThreshold } from "./compaction";
 import { herdDir, herdOf, HerdrUnreachable } from "./steering";
-import { eventsIn, nextEvent, readSaid, remember } from "./proactive";
+import { chatHarnessOf, ensureChatFor } from "./chat";
+import { append as appendNews, newsPath } from "./news";
+import { eventsIn, readSaid, remember } from "./proactive";
 import {
   ensureHomeFor,
   homePath,
@@ -81,14 +83,11 @@ import {
   type ExpectedError,
   postReview,
   resumeRun,
-  err,
   startRun,
   carryOutProposal,
   declineProposal,
-  evaluationDeps,
   registerRunExecutors,
   workspaceCwdFromPanes,
-  steer,
   stopRun as stopRunOperation,
 } from "./operations";
 import {
@@ -214,11 +213,28 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
     cwd: env.cwd,
     filter: inHome ? "all" : null,
   });
+  // The conversation beside the board, started or found. Reported and never fatal: a
+  // harness that will not open costs the human their chat, not their control plane.
+  const chat = yield* ensureChatFor(
+    herdr,
+    env,
+    yield* herdOf(env.socketPath),
+    home,
+    yield* chatHarnessOf(env.configDir),
+    (line) => Console.error(line),
+  ).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (chat?.kind === "unavailable")
+    yield* Console.error(`Collie has no native chat: ${chat.why}. The board is unaffected.`);
+
   // The Home may be another workspace entirely: one Herd has one board (ADR-0009), so
   // reaching it is a workspace switch as well as a tab focus. Neither is what the exit
   // status turns on — a tab that will not focus is still a tab the human can reach.
   yield* Effect.ignore(herdr.workspaceFocus(home.workspaceId));
   if (home.tabId !== null) yield* Effect.ignore(herdr.tabFocus(home.tabId));
+  // Focused, so the next thing typed is a question: no mode to enter and no composer to
+  // find. The board is reached with ordinary pane controls, as any other pane is.
+  if (chat !== null && chat.kind !== "unavailable")
+    yield* Effect.ignore(herdr.agentFocus(chat.record.agent));
   return 0;
 });
 
@@ -991,6 +1007,17 @@ const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: Readon
   return drifting;
 });
 
+/**
+ * What the board noticed, written down for the conversation to pick up.
+ *
+ * No model is called here, and that is the whole change: a meaningful transition becomes
+ * a **fact** in this Herd's news, built from the Run's own record. An unchanged Herd
+ * produces no events, so nothing is appended and nothing wakes anything — the board
+ * redrawing every three seconds costs nothing at all.
+ *
+ * Every event the board finds is written, not just the first: a burst becomes a batch the
+ * conversation is given together, rather than one turn per Run ending.
+ */
 const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   env: PluginEnv,
   runs: ReadonlyArray<Run>,
@@ -1000,23 +1027,22 @@ const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   if (key === null) return;
   const dir = yield* herdDir(env.stateDir, key);
   const said = yield* readSaid(dir);
-  const event = nextEvent(
-    eventsIn(
-      runs.map((run) => run.record),
-      yield* escalatedDrift(runs),
-    ),
-    said,
-  );
-  if (event === null) return;
-  // Remembered before it is asked, not after: a call that fails or times out must not
-  // leave the same event to be asked again on the next tick, three seconds later.
-  yield* remember(dir, event.key, yield* nowIso());
-  yield* steer(env, yield* evaluationDeps(env), {
-    text: event.text,
-    target: event.run,
-    requestId: yield* newRequestId(),
-    asked: "event",
-  }).pipe(Effect.ignore);
+  const file = yield* newsPath(env.stateDir, key);
+  for (const event of eventsIn(
+    runs.map((run) => run.record),
+    yield* escalatedDrift(runs),
+  )) {
+    if (said.has(event.key)) continue;
+    // Remembered only once it is in the journal. The journal deduplicates by unread key,
+    // so a failed write costs a retry on the next tick — where remembering first would
+    // cost the news itself, and nobody would be told that Run halted.
+    const queued = yield* appendNews(file, {
+      key: event.key,
+      run: event.run,
+      text: event.text,
+    }).pipe(Effect.catchCause(() => Effect.succeed(null)));
+    if (queued !== null) yield* remember(dir, event.key, yield* nowIso());
+  }
 });
 
 export function appState(
@@ -1091,8 +1117,8 @@ export function appState(
     // A meaningful change in what this read already looked at, said out loud. Never a
     // second scan and never a timer: the board recomputes this to draw it, and a
     // transition in it is the whole trigger. Best effort — a Herd nobody can talk to
-    // still has a board. Detached: a model call takes seconds, and a board tick that
-    // waited for it would freeze the Home every time something happened.
+    // still has a board. No model is called: what this does is write a fact down, so a
+    // board that redraws over unchanged state finds no events and does nothing at all.
     if (runs !== undefined && !speaking) {
       speaking = true;
       yield* Effect.forkDetach(
@@ -1192,8 +1218,6 @@ export function appState(
           ? yield* buildSettings(env)
           : null,
       marks: found?.marks ?? reuse?.state.marks ?? {},
-      steerDraft: focus.steerDraft,
-      steerAimed: focus.steerAimed,
       previewing: focus.previewing,
       live: found?.live ?? null,
       // Always re-read: this is the one thing a moved Selection actually changes.
@@ -1334,27 +1358,6 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       return (yield* postReview(run)).message;
     }
 
-    /**
-     * A message to Collie from the board. With no target it is a question about the
-     * flock: read-only, answered about every Run, and never quietly aimed at whichever
-     * row the board had selected. With one it is a proposal about that Run, which the
-     * board will later confirm by id and hash — the board is a human's own front door,
-     * so its actor is `board`.
-     */
-    case "Steer": {
-      if (command.runId !== null) {
-        const run = yield* runOf(command.runId);
-        if (!run) return `${command.runId} has gone`;
-      }
-      const said = yield* steer(env, yield* evaluationDeps(env), {
-        text: command.text,
-        target: command.runId,
-        from: command.from ?? null,
-        requestId: yield* newRequestId(),
-      }).pipe(Effect.catch((cause) => Effect.succeed(err("operation_failed", reason(cause)))));
-      return said.ok ? said.human : said.error.message;
-    }
-
     case "ConfirmProposal":
       return yield* fromBoard(env, (actor) =>
         carryOutProposal(env, command.id, command.hash, actor).pipe(
@@ -1449,7 +1452,6 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "ShowView":
     case "ToggleFilter":
     case "SetFilter":
-    case "DraftSteer":
     case "Preview":
     case "ToggleTail":
     case "MoreReview":
