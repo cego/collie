@@ -149,12 +149,3 @@ export const remember = Effect.fn("Proactive.remember")(function* (
 ) {
   yield* appendJournal(yield* saidPath(herdDir), SaidJson, { at, key }).pipe(Effect.orDie);
 });
-
-/**
- * The next thing to say, or nothing. One at a time on purpose: several Runs ending
- * together is one thing that happened, and a board that fired five turns at once would
- * be the notification storm this is meant to replace.
- */
-export function nextEvent(events: ReadonlyArray<Event>, said: ReadonlySet<string>): Event | null {
-  return events.find((event) => !said.has(event.key)) ?? null;
-}

@@ -12,6 +12,7 @@ import {
 import { scriptedPort, testDefaults } from "./support/compaction";
 import type { CompactionPorts } from "../src/compaction";
 import { writeDef } from "./support/defs";
+import { BOARD_RATIO } from "../src/chat";
 import { runEffect } from "./support/effect";
 import { FALLBACK_DEFAULTS, type Defaults } from "../src/config";
 import { skillsIn } from "../src/template";
@@ -507,7 +508,11 @@ test(
         // The second variant sits beside the first, each taking half the tab. A restart
         // splits without a ratio and closes the old pane, so it lands in the same slot.
         const rightSplits = (yield* rig.calls()).filter(
-          (c) => c.cmd === "pane split" && c.argv!.includes("right"),
+          (c) =>
+            c.cmd === "pane split" &&
+            c.argv!.includes("right") &&
+            // The Home's own split — the board beside native chat — is not a step's.
+            !c.argv!.includes(String(BOARD_RATIO)),
         );
         const sideBySide = rightSplits.filter((c) => c.argv!.includes("--ratio"));
         // One reviewer, so nothing is put side by side with a second one.

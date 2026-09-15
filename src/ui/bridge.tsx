@@ -175,8 +175,6 @@ export function driveBridge<E, R>(
       // whole Herd otherwise — and the workspace `g` narrows back to.
       filter: bridge.filter,
       origin: bridge.origin,
-      steerDraft: null,
-      steerAimed: false,
       previewing: null,
       shown: ["runs"],
       selected: null,

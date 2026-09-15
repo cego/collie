@@ -153,9 +153,9 @@ test("a mode the engine cannot resolve fails the step instead of starting it una
       expect(status).toBe("failed");
       expect(run.step("solo").note).toContain('unknown permissions "bypas"');
       // Before a tab opens, which is the contract — not after one is created, named and
-      // cd'd into and then abandoned.
-      for (const cmd of ["agent start", "tab create", "pane split"])
-        expect(yield* rig.cmds()).not.toContain(cmd);
+      // cd'd into and then abandoned. The Home's own split is not the step's.
+      for (const cmd of ["agent start", "tab create"]) expect(yield* rig.cmds()).not.toContain(cmd);
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "pane split")).toHaveLength(1);
     }),
   ));
 
@@ -229,8 +229,15 @@ test("plan runs one step in a tab of its own and records the run", () =>
         // Tokened before its pane is opened, so a pane herdr refuses still leaves a
         // workspace that says whose it is.
         "workspace.report_metadata",
+        // What herdr put in the new workspace, noted before Collie's own pane exists so
+        // the shell it comes with can be closed rather than left as a second tab.
+        "pane list",
         "plugin pane",
         "pane list",
+        // The board's pane, then the tab split beside it for native chat.
+        "pane split",
+        "pane list",
+        "pane.report_metadata",
         "pane.report_metadata",
         "tab list",
         "pane list",
@@ -259,10 +266,10 @@ test("plan runs one step in a tab of its own and records the run", () =>
         "notification show",
       ]);
 
-      // No pane is split, moved or swapped for the run itself: the Control Plane's is
-      // the only pane this plugin keeps, and the step's tab holds the agent.
-      for (const cmd of ["pane split", "pane move", "pane swap"])
-        expect(yield* rig.cmds()).not.toContain(cmd);
+      // No pane is moved or swapped for the run itself, and the one split is the Home's
+      // own — the board beside native chat. The step's tab holds the agent.
+      for (const cmd of ["pane move", "pane swap"]) expect(yield* rig.cmds()).not.toContain(cmd);
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "pane split")).toHaveLength(1);
       // No pane rename in the whole run. The board's pane is the Home's and is owned by
       // a token rather than by a name, and the agent's pane is alone in its tab — so the
       // tab says `Solo` and the pane says nothing.
@@ -284,7 +291,7 @@ test("plan runs one step in a tab of its own and records the run", () =>
         "--kind",
         "claude",
         "--pane",
-        "1-2",
+        "1-3",
         "--",
       ]);
       expect(start.slice(8, 10)).toEqual(["--model", "opus"]);
@@ -373,7 +380,7 @@ test("the sidebar filter is set to the run's panes and cleared at the end", () =
       expect(set.params).toEqual({
         source: `cego.collie:${run.id}`,
         label: run.record.slug,
-        filter: { op: "in", field: "pane_id", values: ["1-2"] },
+        filter: { op: "in", field: "pane_id", values: ["1-3"] },
       });
       expect((yield* rig.calls()).find((c) => c.cmd === "agent.view.clear")!.params).toEqual({
         source: `cego.collie:${run.id}`,

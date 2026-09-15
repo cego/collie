@@ -1362,11 +1362,10 @@ test("the text view carries the marks and the live lines the app draws", () => {
       cards: [],
       drift: [],
       deliveries: [],
-      conversation: [],
-      runConversation: [],
       proposals: [],
       pending: [],
       ownership: { why: "two workspaces carry this Herd's token", candidates: ["w1", "w2"] },
+      news: { waiting: 0, uncertain: 0 },
     },
   });
 

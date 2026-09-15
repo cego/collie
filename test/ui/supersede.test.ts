@@ -49,8 +49,6 @@ function stateFor(selected: string | null): AppState {
     detail: null,
     marks: {},
     live: null,
-    steerDraft: null,
-    steerAimed: false,
     previewing: null,
   };
 }

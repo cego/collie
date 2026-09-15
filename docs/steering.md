@@ -141,17 +141,17 @@ labelled as such.
 
 ## Talking to Collie
 
-A **steer** is one free-form message with a named target:
-`collie steer "<text>" --target run:<id>` ([CLI](cli.md#talk-to-collie)), or `:` on the
-Home board, which names the selected Run
-([the Steer box](using.md#steering-from-the-board)). It is a question.
+A **steer** is one free-form message about a named Run:
+`collie steer "<text>" --target run:<id>` ([CLI](cli.md#talk-to-collie)). It is a question.
 It writes what you said into the Herd's conversation, asks the evaluator, records what
 came back, and prints it — and that is all it does.
 
-Targets are **named, never inferred**. Without `--target` the call is a question about the
-board and gets a read-only answer; anything that would change something is refused with
-`target_required` rather than having a run guessed for it from your words. Collie has no
-grammar of its own, and a sentence that happens to name a branch is not a target.
+Targets are **named, never inferred**. `--target` is required: without one the call is
+refused with `target_required` rather than having a run guessed for it from your words.
+Collie has no grammar of its own, and a sentence that happens to name a branch is not a
+target. Questions about the flock are the Home's
+[native chat](using.md#talking-to-collie-about-the-flock), which reads the Herd rather than
+paying for a model to be asked one here.
 
 The conversation is one per Herd — one herdr session, every workspace in it — and lives on
 disk, so closing the board loses nothing. Two things are done to a turn before it is

@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@effect/platform-bun": "4.0.0-rc.112",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@opentui/core": "^0.5.10",
     "@opentui/solid": "^0.5.10",
     "effect": "4.0.0-rc.112",

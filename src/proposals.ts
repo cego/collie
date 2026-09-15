@@ -8,7 +8,7 @@
 // them is `executors.ts` and the front door's business.
 
 import { Data, DateTime, Duration, Effect, Path, Schema } from "effect";
-import type { Action } from "./evaluator";
+import type { Action, ActionKind } from "./evaluator";
 import { ActionSchema } from "./evaluator";
 import { appendJournal, readJournal } from "./journal";
 import { ensureLockDir, withLock } from "./lock";
@@ -132,7 +132,7 @@ export interface Recorded {
   readonly card?: { readonly id: string; readonly revision: string };
   /** Which live process each named agent was, by agent name. */
   readonly incarnations?: Record<string, string>;
-  /** `evaluator:<call id>` — never a human, because a proposal is not a decision. */
+  /** `evaluator:<call id>` or `chat:<request id>` — never a human: a proposal is not a decision. */
   readonly by: string;
 }
 
@@ -164,9 +164,15 @@ export const record = Effect.fn("Proposals.record")(function* (file: string, wha
 /**
  * Who is asking. Never a string a caller supplies: the front door derives it — a terminal
  * or the board — and stamps its own request id.
+ *
+ * `chat` is native chat's bridge, and it is stamped by the entrypoint that serves the
+ * tools rather than worked out from anything about the process. That matters here more
+ * than anywhere else: the bridge runs as a child of a harness inside a pane, so it
+ * inherits a controlling terminal, and the `cli-tty` heuristic would read a model as a
+ * person. It is not human, so it cannot confirm, amend or reconcile anything.
  */
 export interface Actor {
-  readonly origin: "cli-tty" | "board" | "driver" | "evaluator";
+  readonly origin: "cli-tty" | "board" | "driver" | "evaluator" | "chat";
   readonly requestId: string;
 }
 
@@ -215,6 +221,19 @@ function unsettled(lines: ReadonlyArray<ProposalLine>, id: string): number[] {
 }
 
 /**
+ * Proposals about the installation rather than about any Run — an upgrade, a cleanup, a
+ * fork, a change to a workspace's defaults. They name no Run, so they carry no targets,
+ * and a board that only asked `pendingFor` would let them expire unseen at the one front
+ * door that is meant to confirm them.
+ */
+export function pendingHerdWide(
+  lines: ReadonlyArray<ProposalLine>,
+  nowMs: number,
+): ProposalRecord[] {
+  return unanswered(lines, nowMs).filter((line) => line.targets.length === 0);
+}
+
+/**
  * Proposals about this Run that a human has neither answered nor let expire. What makes
  * a card `decision` rather than something to read: somebody is being waited on.
  */
@@ -223,6 +242,13 @@ export function pendingFor(
   run: string,
   nowMs: number,
 ): ProposalRecord[] {
+  return unanswered(lines, nowMs).filter((line) =>
+    line.targets.some((target) => target.run === run),
+  );
+}
+
+/** Proposals nobody has answered and nothing has expired, whatever they are about. */
+function unanswered(lines: ReadonlyArray<ProposalLine>, nowMs: number): ProposalRecord[] {
   const answered = new Set(
     lines.flatMap((line) =>
       line.kind === "confirmed" || line.kind === "declined" ? [line.id] : [],
@@ -230,10 +256,7 @@ export function pendingFor(
   );
   return lines.filter(
     (line): line is ProposalRecord =>
-      line.kind === "proposal" &&
-      !answered.has(line.id) &&
-      Date.parse(line.expires_at) > nowMs &&
-      line.targets.some((target) => target.run === run),
+      line.kind === "proposal" && !answered.has(line.id) && Date.parse(line.expires_at) > nowMs,
   );
 }
 
@@ -448,13 +471,24 @@ export interface AdmissionContext {
 
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set(["succeeded", "failed", "stopped"]);
 
+/** Kinds that are about the installation or a definition, and so about no Run. */
+const NOT_ABOUT_A_RUN: ReadonlySet<ActionKind> = new Set([
+  "ask_human",
+  "none",
+  "start",
+  "update_defaults",
+  "fork_definition",
+  "home_cleanup",
+  "upgrade",
+]);
+
 /**
  * The last check, immediately before an action runs: everything the proposal assumed,
  * asked again. Time passes between a human reading a proposal and confirming it, and an
  * action that was right then can be wrong now.
  */
 export function admit(action: Action, ctx: AdmissionContext): string | null {
-  if (action.kind === "ask_human" || action.kind === "none" || action.kind === "start") return null;
+  if (NOT_ABOUT_A_RUN.has(action.kind)) return null;
   if (!ctx.run) return "the run is gone";
 
   const terminal = TERMINAL_STATUSES.has(ctx.run.status);

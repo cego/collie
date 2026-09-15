@@ -473,23 +473,90 @@ Defaults are per workspace: every run started there begins with them.
 
 ## Talk to Collie
 
+The Home's right-hand pane is an ordinary Claude Code (or Pi) session with Collie's role
+and Collie's tools — that is where questions about the flock are asked, and it is
+[docs/using.md](using.md#talking-to-collie-about-the-flock). From a terminal:
+
+```sh
+collie --json chat status
+collie --json chat harness pi
+collie --json tools list
+collie --json tools call collie_herd
+collie --json tools call collie_run --input '{"run":"<run-id>"}'
+```
+
+`chat status` says what is **running** and, separately, what is chosen for **next** time.
+`chat harness` sets that preference: it never stops, replaces or summarises a conversation
+already running, and it changes nothing about the harnesses your runs use. Claude Code is
+the default, on an existing installation as much as a new one.
+
+`tools` is the same contract native chat is given, and it is the whole of what chat can
+reach. Claude gets it over a local MCP server (`collie mcp`, which you never type) and Pi
+through a generated extension; this is the third way in.
+
+| tool                  | What it does                                                                             |
+| --------------------- | ---------------------------------------------------------------------------------------- |
+| `collie_herd`         | Every run in the Herd, bounded, saying how many it left out                              |
+| `collie_run`          | One run: its goal, constraints, steps, cards and open drift                              |
+| `collie_workspaces`   | The workspaces this session has, and the workflows that can be started                   |
+| `collie_receipts`     | One run's pending proposals, and what state each message to its agents actually reached  |
+| `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body    |
+| `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults |
+| `collie_news`         | What has happened that nobody has been told, and reading it settles those items          |
+| `collie_propose`      | Ask for actions about named runs. Records a proposal; carries nothing out                |
+
+The reads are Herd-wide and are never narrowed by the board's filter or its selection.
+`collie_installation` is the one read that is not read-only: the installation checks
+include a bounded `git fetch`, and it says so rather than letting a client assume.
+
+`collie_propose` takes the same closed action set a steer produces — `stop`, `resume`,
+`hold`, `release`, `answer`, `deliver`, `start`, `followup`, `update_intent`,
+`clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
+`upgrade` — through the same `validate`, the same proposals journal and
+the same executors. Everything it records is **pending**, whatever authority a run granted
+its Driver, and the human confirms it with `confirm` below. There is no action that runs a
+command, and none that confirms anything.
+
+`update_defaults` names the workspace whose new runs it changes, for the reason `start`
+names one: defaults are filed per workspace, and the board carrying out a confirmation is
+in the Home. Its `text` adds a constraint in your own words, or names the id of the one to
+remove — prose there matches no id, and is refused rather than reported as applied. A
+proposal about the installation names no run, so the board draws it whichever row is
+selected.
+
+What is deliberately not in that set: confirming, declining, reconciling, verifying, and
+setting a Run's or the Herd's **authority**. Those are decisions, and a model that could
+ask for one would be authorising itself. Everything else a human can type — including
+forking a Workflow or a Persona, changing what every new Run begins with, closing the
+panes an older release left, and upgrading this installation — chat may ask for, and you
+confirm. `test/chat-parity.test.ts` walks the command tree itself and fails on a command
+with no route, so this list cannot quietly fall behind.
+
+A run it names that does not exist is refused rather than retargeted; an agent the run
+does not have comes back as a question for you rather than being dropped. `start` takes a
+`workspace`, so a launch asked for from the Home lands in the repository it is about
+rather than in Collie's own namespace directory — and it needs no existing run.
+
+**Chat is never a person.** Its requests are recorded as `chat:<id>`, and `confirm`,
+`decline` and every `reconcile` refuse anything that is not `human`. That matters more
+here than anywhere else: the bridge runs as a child of the harness inside a pane, so it
+inherits a controlling terminal — and a terminal is what this CLI reads as a person. The
+origin is stamped by the entrypoint that serves the tools, never worked out from the
+process and never read out of the request.
+
 ```sh
 collie --json steer "why is this on main?" --target run:<run-id>
-collie --json steer "what is going on?"
 collie --json steer "hold it and look at the branch" --target run:<id> --dry-run
 ```
 
-A steer is a **question**. It writes down what you said, asks Collie, records what comes
-back, and prints it — it never does anything. What comes back depends on whether you named
-a target:
+A steer is a **question** about one run. It writes down what you said, asks Collie, records
+what comes back, and prints it — it never does anything. What comes back is a **proposal**
+about that run: what Collie understood, and a list of actions. Every one of them is
+`pending`, even where that run granted Collie authority to correct its own drift. The grant
+was for the Driver's own checks; "we were talking about it" is not "you asked for it".
 
-- **No `--target`** — a question about the board. You get an answer, read-only, with
-  nothing to confirm. Anything that would change something is refused with
-  `target_required`: Collie does not guess which run you meant from what you typed.
-- **`--target run:<id>`** — a **proposal** about that run: what Collie understood, and a
-  list of actions. Every one of them is `pending`, even where that run granted Collie
-  authority to correct its own drift. The grant was for the Driver's own checks; "we were
-  talking about it" is not "you asked for it".
+`--target` is required. Without one the call is refused with `target_required`: Collie does
+not guess which run you meant from what you typed.
 
 `--from <card>` binds the proposal to that card's revision, so confirming it after the
 tree moved is refused rather than applied to different work. `--dry-run` prints what

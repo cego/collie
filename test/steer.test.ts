@@ -157,55 +157,39 @@ test("asking about a Run records both turns and a pending proposal, and sends no
     }),
   ));
 
-test("a question with no target is answered, and cannot be a proposal", () =>
+test("a steer with no target is refused before anything is spent", () =>
   runEffect(
     Effect.gen(function* () {
       yield* aRun();
-      yield* setReply(
-        envelope({
-          result: {
-            text: "two runs are going; neither is blocked",
-            evidence_refs: [],
-            targets: [],
-          },
-        }),
-      );
-
       const result = yield* steer(env, deps(stateDir), {
         text: "what is going on?",
         requestId: "req-2",
       });
-      expect(result.ok).toBe(true);
-      if (result.ok) expect(result.human).toContain("two runs are going");
-
-      // Charged to the Herd rather than to a Run, because it was about neither.
-      const budget = yield* readBudget(yield* budgetPath(stateDir, "herd-1"));
-      const reserved = budget.filter((line) => line.kind === "reserve");
-      expect(reserved).toHaveLength(1);
-      expect(reserved[0]).toMatchObject({ run: null });
-
-      // And nothing was recorded as a proposal, because there is nothing to confirm.
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, "herd-1"));
-      expect(proposals.filter((line) => line.kind === "proposal")).toEqual([]);
+      // A question about the flock is native chat's, which reads the Herd. Refused here
+      // rather than answered by a model, and refused before the call rather than after.
+      expect(result).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+      expect(yield* readBudget(yield* budgetPath(stateDir, "herd-1"))).toEqual([]);
     }),
   ));
 
 test("a turn the board starts is journaled as the board's, never as the human's", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* aRun();
+      const run = yield* aRun();
       yield* setReply(
         envelope({
           result: {
-            text: "it stopped because nothing was verified",
-            evidence_refs: [],
-            targets: [],
+            interpretation: "it stopped because nothing was verified",
+            targets: [{ run: run.id }],
+            actions: [{ kind: "none", why: "nothing needs doing" }],
+            confidence: 0.9,
           },
         }),
       );
 
       const result = yield* steer(env, deps(stateDir), {
-        text: "Run r1 stopped with evidence_missing. What is going on?",
+        text: `Run ${run.id} stopped with evidence_missing. What is going on?`,
+        target: run.id,
         requestId: "req-event",
         asked: "event",
       });
@@ -377,11 +361,26 @@ test("a follow-up is answered with the earlier turns of the same conversation", 
       );
       yield* fs.chmod(path.join(stateDir, "bin", "claude"), 0o755);
       yield* setReply(
-        envelope({ result: { text: "Two are running.", evidence_refs: [], targets: [] } }),
+        envelope({
+          result: {
+            interpretation: "Two are running.",
+            targets: [{ run: run.id }],
+            actions: [],
+            confidence: 0.9,
+          },
+        }),
       );
 
-      yield* steer(env, deps(stateDir), { text: "how is the flock?", requestId: "req-a" });
-      yield* steer(env, deps(stateDir), { text: "what about the second one?", requestId: "req-b" });
+      yield* steer(env, deps(stateDir), {
+        text: "how is the flock?",
+        target: run.id,
+        requestId: "req-a",
+      });
+      yield* steer(env, deps(stateDir), {
+        text: "what about the second one?",
+        target: run.id,
+        requestId: "req-b",
+      });
 
       const pack = yield* fs.readFileString(packFile);
       // Without this the second question is asked with no memory of the first, so
@@ -396,49 +395,13 @@ test("a follow-up is answered with the earlier turns of the same conversation", 
     }),
   ));
 
-test("a question with a Run selected elsewhere is still answered about the whole flock", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const one = yield* aRun();
-      const two = yield* aRun();
-      const packFile = path.join(stateDir, "pack.txt");
-      yield* fs.writeFileString(
-        path.join(stateDir, "bin", "claude"),
-        `#!/bin/sh\ncat > ${packFile}\ncat ${path.join(stateDir, "reply.json")}\n`,
-      );
-      yield* fs.chmod(path.join(stateDir, "bin", "claude"), 0o755);
-      yield* setReply(
-        envelope({ result: { text: "Both are fine.", evidence_refs: [], targets: [] } }),
-      );
-
-      // No target: whatever the board happens to have selected, this is a question about
-      // the flock, and it is answered about every Run.
-      const answered = yield* steer(env, deps(stateDir), {
-        text: "how is the flock?",
-        requestId: "req-c",
-      });
-      expect(answered.ok).toBe(true);
-
-      const pack = yield* fs.readFileString(packFile);
-      expect(pack).toContain(one.id);
-      expect(pack).toContain(two.id);
-      // And nothing was aimed at either of them.
-      expect(readProposals).toBeDefined();
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, "herd-1")).pipe(
-        Effect.catch(() => Effect.succeed([])),
-      );
-      expect(proposals).toEqual([]);
-    }),
-  ));
-
 test("the pack says when it is not listing the whole Herd", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       // More Runs than the pack carries, so the cap is doing something.
+      const run = yield* aRun();
       for (let n = 0; n < 42; n++) yield* aRun();
       const packFile = path.join(stateDir, "pack.txt");
       yield* fs.writeFileString(
@@ -446,9 +409,22 @@ test("the pack says when it is not listing the whole Herd", () =>
         `#!/bin/sh\ncat > ${packFile}\ncat ${path.join(stateDir, "reply.json")}\n`,
       );
       yield* fs.chmod(path.join(stateDir, "bin", "claude"), 0o755);
-      yield* setReply(envelope({ result: { text: "Busy.", evidence_refs: [], targets: [] } }));
+      yield* setReply(
+        envelope({
+          result: {
+            interpretation: "Busy.",
+            targets: [{ run: run.id }],
+            actions: [],
+            confidence: 0.9,
+          },
+        }),
+      );
 
-      yield* steer(env, deps(stateDir), { text: "how is the flock?", requestId: "req-d" });
+      yield* steer(env, deps(stateDir), {
+        text: "how is the flock?",
+        target: run.id,
+        requestId: "req-d",
+      });
 
       const pack = yield* fs.readFileString(packFile);
       // A model told about forty of forty-two and not told so would answer "that is all

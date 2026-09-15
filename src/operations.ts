@@ -56,12 +56,17 @@ import {
   constraintId,
   propagate,
   defaultsPath,
+  describeDefaults,
+  EMPTY_DEFAULTS,
   fromWorkSource,
+  parseConstraint,
   readDefaults,
+  writeDefaults,
   readIntent,
   seedIntent,
   writeIntent,
   writeIntentHeld,
+  type Authority,
   type Constraint,
   type Intent,
 } from "./intent";
@@ -80,6 +85,7 @@ import { append, conversationPath, tail, type NewTurn } from "./conversation";
 import {
   evaluate,
   validate,
+  type Action,
   type CallLimits as EvaluatorLimits,
   type EvaluatorDeps,
   type Validated,
@@ -88,6 +94,7 @@ import {
   actorName,
   admit,
   confirm as confirmProposal,
+  isHuman,
   decline,
   proposalsPath,
   read as readProposals,
@@ -116,6 +123,8 @@ import {
   type WorktreeRecord,
 } from "./run";
 import { branchListed, checkoutFor, pruneWorktrees, runNames } from "./worktree";
+import { closable } from "./home";
+import { forkResolvedDefinition } from "./fork";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
 const ErrorCode = Schema.Literals([
@@ -322,6 +331,45 @@ export const resolveWorkspace = Effect.fn("operations.resolveWorkspace")(functio
   const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
   return { ...workspace, cwd: workspaceCwdFromPanes(env.workspaceId, panes) };
 });
+
+/**
+ * The workspace a request named, resolved to one this herdr actually has — by id, or by
+ * the label a human would say. `null` is a request that named none. An error is a name
+ * that matches nothing or more than one thing: a launch aimed at a guess is a Run in a
+ * repository nobody asked for.
+ */
+export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
+  env: PluginEnv,
+  named: string | undefined,
+): Effect.fn.Return<WorkspaceNamed, never, BunServices> {
+  if (named === undefined || named.trim() === "") return null;
+  const herdr = new Herdr(env);
+  const all = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
+  const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
+  const wanted = named.trim();
+  const byId = all.filter((workspace) => workspace.workspaceId === wanted);
+  const matched =
+    byId.length > 0
+      ? byId
+      : all.filter((workspace) => workspace.label.toLowerCase() === wanted.toLowerCase());
+  const refused = (error: string): WorkspaceNamed => ({ error });
+  if (matched.length === 0)
+    return refused(`no workspace "${named}"; ${all.map((w) => w.label).join(", ") || "none"}`);
+  if (matched.length > 1)
+    return refused(
+      `"${named}" names ${matched.length} workspaces (${matched
+        .map((w) => w.workspaceId)
+        .join(", ")}); say which`,
+    );
+  const workspace = matched[0]!;
+  const cwd =
+    workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
+  if (cwd === "") return refused(`workspace "${named}" has no directory to run in`);
+  return { found: { ...workspace, cwd } };
+});
+
+/** A workspace a request named: the one it is, why it is not one, or none named. */
+export type WorkspaceNamed = { found: WorkspaceInfo } | { error: string } | null;
 
 /** The directory a workspace stands for: where its first pane was started. */
 export function workspaceCwdFromPanes(
@@ -1169,6 +1217,116 @@ function emptyAdmission(): Parameters<typeof admit>[1] {
  * Which live process each agent a delivery names is now. Recorded with the proposal so a
  * confirmation can refuse rather than deliver to whatever took that agent's name since.
  */
+/**
+ * A structured request from native chat, recorded as a proposal nobody has acted on.
+ *
+ * This is the whole of what chat may *do*, and it is deliberately the same path a steer
+ * takes from the point the actions exist: the closed `ActionSchema`, `validate`, and the
+ * proposals journal. What it does not do is ask a second model what the first one meant —
+ * the native agent already expressed this structurally, and paying a model to re-read it
+ * would be two interpretations of one request.
+ *
+ * Everything comes back `pending`, always. The origin is `steer` rather than `driver`
+ * for that reason: a Run's own grant of `auto_correct` was for its Driver's drift checks,
+ * and a conversation is not a Driver. The human confirms on the board, by id and hash.
+ */
+export const request = Effect.fn("operations.request")(function* (
+  env: PluginEnv,
+  herdKey: string,
+  options: {
+    readonly interpretation: string;
+    readonly actions: ReadonlyArray<Action>;
+    /** Who asked. Stamped by the entrypoint, never read out of the request. */
+    readonly actor: Actor;
+  },
+) {
+  if (options.actions.length === 0)
+    return err("invalid_input", "A request with no actions changes nothing; say what to do.");
+  // Never a human, whatever the process looks like. The bridge runs inside a harness's
+  // pane and inherits its terminal, so the `cli-tty` shortcut would read a model as a
+  // person — see `Actor`.
+  if (isHuman(options.actor))
+    return err(
+      "invalid_state",
+      "A request is not a confirmation; the human confirms on the board.",
+    );
+
+  const store = new RunStore(env.stateDir);
+  const named = [...new Set(options.actions.flatMap((a) => ("run" in a ? [a.run] : [])))];
+  const runs = new Map<string, Run>();
+  for (const id of named) {
+    const run = yield* store.load(id).pipe(Effect.catch(() => Effect.succeed(null)));
+    // Refused, not retargeted. A Run nobody has is a request about nothing, and guessing
+    // which one was meant is how an action lands on somebody else's work.
+    if (run === null) return err("run_not_found", `No Run "${id}".`, { run: id });
+    runs.set(id, run);
+  }
+
+  const intents = new Map<string, { version: number; authority: Authority }>();
+  for (const [id, run] of runs) {
+    const intent = yield* readIntent(run.dir).pipe(
+      Effect.catch(() => Effect.succeed<Intent | "unreadable">("unreadable")),
+    );
+    if (intent === "unreadable")
+      return err("invalid_state", `${id}'s Intent cannot be read; nothing was proposed.`);
+    if (intent !== null) intents.set(id, { version: intent.version, authority: intent.authority });
+  }
+
+  const checked = validate(
+    {
+      interpretation: options.interpretation,
+      targets: named.map((run) => ({ run })),
+      actions: [...options.actions],
+      confidence: 1,
+    },
+    {
+      runs: new Set(runs.keys()),
+      agents: new Map([...runs].map(([id, run]) => [id, new Set(runningAgents(run.record))])),
+      intents,
+      origin: "steer",
+      maxDeliveryBytes: MAX_DELIVERY_BYTES,
+    },
+  );
+
+  const file = yield* proposalsPath(env.stateDir, herdKey);
+  const addressed = yield* incarnationsFor(env, checked);
+  const proposal: Recorded = {
+    interpretation: options.interpretation,
+    targets: named.map((run) => ({ run })),
+    actions: checked.map((entry) => entry.action),
+    // Nothing a conversation produced runs without the human.
+    allowedNow: [],
+    intentVersions: Object.fromEntries([...intents].map(([id, at]) => [id, at.version])),
+    by: actorName(options.actor),
+  };
+  const recorded = yield* recordProposal(
+    file,
+    Object.keys(addressed).length === 0 ? proposal : { ...proposal, incarnations: addressed },
+  );
+  const driverless: string[] = [];
+  for (const [id, run] of runs)
+    if ((yield* driverOwnership(run.dir)) !== "live") driverless.push(id);
+  return ok(
+    {
+      proposal: {
+        id: recorded.id,
+        hash: recorded.content_hash,
+        expires_at: recorded.expires_at,
+        actions: checked.map((entry) => ({ ...entry.action, status: entry.state })),
+      },
+      no_driver: driverless,
+    },
+    [
+      previewOf(options.interpretation, checked),
+      `Waiting for the human: they confirm it on the board, or with`,
+      `  collie confirm ${recorded.id} --hash ${recorded.content_hash}`,
+      ...(driverless.length === 0
+        ? []
+        : [`No Driver owns ${driverless.join(", ")}: a delivery would be queued in the inbox.`]),
+    ].join("\n"),
+  );
+});
+
 const incarnationsFor = Effect.fn("operations.incarnationsFor")(function* (
   env: PluginEnv,
   checked: ReadonlyArray<Validated>,
@@ -1270,13 +1428,19 @@ export const steer = Effect.fn("operations.steer")(function* (
     target === null
       ? null
       : yield* store.load(target).pipe(Effect.catch(() => Effect.succeed(null)));
-  if (target !== null && run === null)
-    return err("run_not_found", `No Run "${target}".`, { run: target });
+  // A steer is about one Run. A question about the flock is native chat's, which reads
+  // the Herd rather than having a model asked one here — and a Run is never guessed at
+  // from the words, so there is nothing to fall back to.
+  if (target === null)
+    return err("invalid_input", "Name the Run this is about with --target.", {
+      code: "target_required",
+    });
+  if (run === null) return err("run_not_found", `No Run "${target}".`, { run: target });
 
   const journal = yield* conversationPath(env.stateDir, deps.herdKey);
   const roots = (yield* store.list()).map((r) => r.dir);
   const said: NewTurn = { role: options.asked ?? "human", text: options.text };
-  yield* append(journal, target === null ? said : { ...said, target }, roots);
+  yield* append(journal, { ...said, target }, roots);
 
   const from = options.from ?? null;
   const pack = yield* evidencePack(env, options.text, run, from, journal);
@@ -1285,22 +1449,19 @@ export const steer = Effect.fn("operations.steer")(function* (
   // proposal would skip the version gate at every later confirmation (SPEC §7.1). Read
   // before the call rather than after it: a Run whose Intent cannot be read is one no
   // proposal can be made about, and finding that out afterwards spends the money first.
-  const intent =
-    run === null
-      ? null
-      : yield* readIntent(run.dir).pipe(
-          Effect.catch(() => Effect.succeed<Intent | "unreadable">("unreadable")),
-        );
+  const intent = yield* readIntent(run.dir).pipe(
+    Effect.catch(() => Effect.succeed<Intent | "unreadable">("unreadable")),
+  );
   if (intent === "unreadable")
-    return err("invalid_state", `${run?.id}'s Intent cannot be read; nothing was proposed.`);
+    return err("invalid_state", `${run.id}'s Intent cannot be read; nothing was proposed.`);
 
   // Written down as usage — the Herd's, and the Run's where there is one — before the
   // call and after it. Never refused over a count: usage is data, not a quota.
   const budget = yield* budgetPath(env.stateDir, deps.herdKey);
   const callId = yield* newRequestId();
-  yield* reserve(budget, { id: callId, run: run?.id ?? null }, deps.limits);
+  yield* reserve(budget, { id: callId, run: run.id }, deps.limits);
 
-  const asked = yield* evaluate(deps.evaluator, target === null ? "answer" : "proposal", pack);
+  const asked = yield* evaluate(deps.evaluator, "proposal", pack);
   // What the call did: a timeout and an output cap are their own facts, and this is the
   // only place either is written down. An unusable answer is `failed` — the call was not ok.
   yield* settleBudget(budget, callId, {
@@ -1311,19 +1472,6 @@ export const steer = Effect.fn("operations.steer")(function* (
   });
   if (asked.value === null)
     return err("operation_failed", `Collie could not answer: ${asked.error ?? "no answer"}.`);
-
-  // Without a target this was a question, and a question gets an answer: read-only, no
-  // proposal, nothing to confirm. A model that proposed a change anyway is refused rather
-  // than having a target inferred for it from what the human typed.
-  if (target === null || run === null) {
-    const answer = asked.value;
-    if (!("text" in answer))
-      return err("invalid_input", "That would change something; name the Run with --target.", {
-        code: "target_required",
-      });
-    yield* append(journal, { role: "collie", text: answer.text, evaluatorCall: callId }, roots);
-    return ok({ answer, requestId: options.requestId }, answer.text);
-  }
 
   const proposed = asked.value;
   if (!("actions" in proposed))
@@ -1423,6 +1571,92 @@ function previewOf(interpretation: string, checked: ReadonlyArray<Validated>): s
  */
 const HERD_LINES = 40;
 const TURNS_IN_CONTEXT = 20;
+/** How many of a Run's newest cards a detail read carries. */
+const CARDS_IN_CONTEXT = 3;
+
+/**
+ * Every Run in the Herd, bounded, with what was left out named.
+ *
+ * The Herd's, never a workspace's and never the Selection's: a board filter is what a
+ * human is looking at, and a filter that decided what could be *read* would hide work by
+ * hiding a row. Bounded and saying so, because a model told about forty of two hundred
+ * Runs and not told so answers "that is all of them" in good faith.
+ *
+ * Shared: the evidence pack below and the tools native chat calls both read this, so
+ * Collie and the row a human is looking at cannot tell different stories about one Run.
+ */
+export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: PluginEnv) {
+  const runs = yield* new RunStore(env.stateDir).list();
+  const listed = runs.slice(0, HERD_LINES);
+  const lines = yield* Effect.forEach(listed, (item) =>
+    Effect.gen(function* () {
+      const status = yield* runStatus(item);
+      const record = item.record;
+      const said = [
+        `- run ${item.id}: ${record.workflow}, ${status}`,
+        `agents ${runningAgents(record).join(", ") || "none"}`,
+        `outcome ${record.outcome ?? "unspecified"}`,
+      ];
+      if (record.evidence_gaps.length > 0)
+        said.push(`not proved: ${record.evidence_gaps.join("; ")}`);
+      if (record.obstacle !== null) said.push(`in the way: ${record.obstacle}`);
+      return said.join(", ");
+    }),
+  );
+  // An empty answer is not an answer: a Herd with no Runs says so, rather than handing
+  // the model nothing to read.
+  if (lines.length === 0) return "- (no Runs in this Herd)";
+  return [
+    ...lines,
+    ...(runs.length > listed.length
+      ? [`- (${runs.length - listed.length} more Run(s) not listed here)`]
+      : []),
+  ].join("\n");
+});
+
+/**
+ * One Run in the detail a next action turns on: what it is for, what bounds it, what it
+ * has got through, what it handed over, and where it has drifted. The same read the
+ * evidence pack embeds, so a detail asked for in chat is the detail a proposal was made
+ * from.
+ */
+export const runFacts = Effect.fn("operations.runFacts")(function* (run: Run) {
+  const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
+  const lines = [
+    `Goal: ${intent?.goal ?? "(none recorded)"}`,
+    `Intent version: ${intent?.version ?? "(none)"}`,
+    ...(intent?.constraints ?? []).map(
+      (c) => `- constraint ${c.id} (${c.severity}, ${c.source}): ${c.text}`,
+    ),
+    "",
+    "### Steps",
+    "",
+    ...run.record.steps.map((step) => `- ${step.id}: ${step.status}`),
+  ];
+  const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
+  for (const entry of cards.slice(-CARDS_IN_CONTEXT)) {
+    if (lines.at(-1) !== "") lines.push("", "### Cards", "");
+    lines.push(
+      `- card ${entry.id} (${entry.kind}, ${entry.readiness}, ${entry.significance}) at ${entry.revision.head_sha.slice(0, 8)}${entry.revision.dirty ? " +dirty" : ""}`,
+      `  aligned ${entry.aligned}; cross-run ${entry.cross_run}`,
+      ...entry.claims.map((claim) => `  claim: ${claim.text}`),
+      ...entry.verifications.map(
+        (verification) => `  verification ${verification.name}: ${verification.result}`,
+      ),
+      ...entry.missing.map((what) => `  missing: ${what}`),
+      ...(entry.drift.length > 0 ? [`  open drift: ${entry.drift.join(", ")}`] : []),
+    );
+  }
+  const drift = openReports(yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([]))));
+  if (drift.length > 0) {
+    lines.push("", "### Open drift", "");
+    for (const report of drift)
+      lines.push(
+        `- ${report.constraint} (${report.severity}, ${report.kind}): ${report.correction ?? "no correction recorded"}`,
+      );
+  }
+  return lines.join("\n");
+});
 
 const evidencePack = Effect.fn("operations.evidencePack")(function* (
   env: PluginEnv,
@@ -1431,9 +1665,6 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
   card: string | null,
   journal: string,
 ) {
-  const store = new RunStore(env.stateDir);
-  const runs = yield* store.list();
-  const listed = runs.slice(0, HERD_LINES);
   const lines = [
     "## The question",
     "",
@@ -1441,28 +1672,7 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
     "",
     "## Runs in this Herd",
     "",
-    ...(yield* Effect.forEach(listed, (item) =>
-      Effect.gen(function* () {
-        const status = yield* runStatus(item);
-        const record = item.record;
-        // The same facts the board shows, so Collie and the row a human is looking at
-        // cannot tell different stories about one Run.
-        const said = [
-          `- run ${item.id}: ${record.workflow}, ${status}`,
-          `agents ${runningAgents(record).join(", ") || "none"}`,
-          `outcome ${record.outcome ?? "unspecified"}`,
-        ];
-        if (record.evidence_gaps.length > 0)
-          said.push(`not proved: ${record.evidence_gaps.join("; ")}`);
-        if (record.obstacle !== null) said.push(`in the way: ${record.obstacle}`);
-        return said.join(", ");
-      }),
-    )),
-    // Never silently a partial world: a model told about 40 of 200 Runs and not told so
-    // would answer "that is all of them" in good faith.
-    ...(runs.length > listed.length
-      ? [`- (${runs.length - listed.length} more Run(s) not listed here)`]
-      : []),
+    yield* herdFacts(env),
   ];
 
   // Everything said in this Herd, whatever it was about. Without this an untargeted
@@ -1481,39 +1691,9 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
     );
   }
   if (run !== null) {
-    const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
-    lines.push(
-      "",
-      `## Run ${run.id}`,
-      "",
-      `Goal: ${intent?.goal ?? "(none recorded)"}`,
-      `Intent version: ${intent?.version ?? "(none)"}`,
-      ...(intent?.constraints ?? []).map(
-        (c) => `- constraint ${c.id} (${c.severity}, ${c.source}): ${c.text}`,
-      ),
-      "",
-      "### Steps",
-      "",
-      ...run.record.steps.map((step) => `- ${step.id}: ${step.status}`),
-    );
-    const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
-    const recent = cards.slice(-3);
-    if (recent.length > 0) {
-      lines.push("", "### Cards", "");
-      for (const entry of recent) {
-        lines.push(
-          `- card ${entry.id} (${entry.kind}, ${entry.readiness}, ${entry.significance}) at ${entry.revision.head_sha.slice(0, 8)}${entry.revision.dirty ? " +dirty" : ""}`,
-          `  aligned ${entry.aligned}; cross-run ${entry.cross_run}`,
-          ...entry.claims.map((claim) => `  claim: ${claim.text}`),
-          ...entry.verifications.map(
-            (verification) => `  verification ${verification.name}: ${verification.result}`,
-          ),
-          ...entry.missing.map((what) => `  missing: ${what}`),
-          ...(entry.drift.length > 0 ? [`  open drift: ${entry.drift.join(", ")}`] : []),
-        );
-      }
-    }
+    lines.push("", `## Run ${run.id}`, "", yield* runFacts(run));
     if (card !== null) {
+      const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
       const bound = cards.find((entry) => entry.id === card);
       lines.push(
         "",
@@ -2043,20 +2223,25 @@ export const registerRunExecutors = Effect.fn("operations.registerRunExecutors")
               ok: false,
               why: `the Intent is v${intent.version}, not v${action.base_version}`,
             } as const;
-          // The patch is a constraint in the human's own words — a `semantic` one,
-          // because nothing the evaluator writes is a rule Collie can check by itself.
+          // A constraint is taken in the human's own words — a `semantic` one, because
+          // nothing a model writes is a rule Collie can check by itself. The other two
+          // amendments take the patch as the goal, and as the constraint's id.
           const amended = amendIntent(
             intent,
-            {
-              kind: "add-constraint",
-              constraint: {
-                id: constraintId(action.patch),
-                kind: "semantic",
-                text: action.patch,
-                severity: "warn",
-                source: "human",
-              },
-            },
+            action.change === "set-goal"
+              ? { kind: "set-goal", goal: action.patch }
+              : action.change === "remove-constraint"
+                ? { kind: "remove-constraint", id: action.patch }
+                : {
+                    kind: "add-constraint",
+                    constraint: {
+                      id: constraintId(action.patch),
+                      kind: "semantic",
+                      text: action.patch,
+                      severity: "warn",
+                      source: "human",
+                    },
+                  },
             by,
             yield* nowIso(),
           );
@@ -2079,18 +2264,27 @@ export const registerRunExecutors = Effect.fn("operations.registerRunExecutors")
   // work source is a Run about something the human never said.
   registerExecutor("start", (action) =>
     Effect.gen(function* () {
-      const prepared = yield* prepareWorkflow(env, action.workflow);
+      // Where the work is. A launch that named a workspace roots in that workspace's
+      // checkout; one that named none roots where the caller is, as `run start` does.
+      // Never the Home's directory, which is Collie's namespace and nobody's repository.
+      const where = yield* workspaceNamed(env, action.workspace);
+      if (where !== null && "error" in where) return failed(where.error);
+      const rooted =
+        where === null
+          ? env
+          : { ...env, cwd: where.found.cwd, workspaceId: where.found.workspaceId };
+      const prepared = yield* prepareWorkflow(rooted, action.workflow);
       if (!prepared.ok) return failed(prepared.error.message);
-      const given = yield* settleGiven(env, prepared, {
+      const given = yield* settleGiven(rooted, prepared, {
         inputs: action.inputs,
         decide: Object.entries(action.decisions ?? {}).map(([step, title]) => `${step}=${title}`),
       });
       if (!given.ok) return failed(given.error.message);
-      const started = yield* startRun(env, {
+      const started = yield* startRun(rooted, {
         workflow: prepared.workflow,
         resolutions: prepared.resolutions,
         decisions: given.decisions,
-        workspace: null,
+        workspace: where === null ? null : where.found,
         note: "started by a confirmed proposal",
       });
       if (started._tag === "Rejected") return failed(started.result.error.message);
@@ -2099,6 +2293,97 @@ export const registerRunExecutors = Effect.fn("operations.registerRunExecutors")
         note: `${started.run.id} on ${started.checkout.branch ?? started.run.record.cwd}`,
       };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+  );
+  // One workspace's standing constraints. Every Run started there afterwards begins with
+  // them, which is why a confirmation is what writes one: a model that could change what
+  // future Runs are held to would be writing its own brief.
+  registerExecutor("update_defaults", (action) =>
+    Effect.gen(function* () {
+      // The named workspace's scope, never this process's. A Run reads its defaults under
+      // the workspace it was started in; the board confirming a proposal is in the Home,
+      // and writing there would be writing a file no Run opens.
+      const where = yield* workspaceNamed(env, action.workspace);
+      if (where === null) return failed("update_defaults has to name a workspace");
+      if ("error" in where) return failed(where.error);
+      const scope = {
+        session: env.socketPath,
+        workspaceId: where.found.workspaceId,
+        cwd: where.found.cwd,
+      };
+      const file = yield* defaultsPath(env.stateDir, scopeKey(scope));
+      const current = (yield* readDefaults(file)) ?? EMPTY_DEFAULTS;
+      if (action.change === "remove-constraint") {
+        // By id, and refused when nothing has it: ids are a hash of the text, so a
+        // constraint named in prose matches none — and reporting that as applied would
+        // tell the human a standing constraint was dropped that is still there.
+        if (!current.constraints.some((c) => c.id === action.text))
+          return failed(
+            `no default constraint "${action.text}" in ${where.found.workspaceId}; remove one by the id \`collie_installation\` lists`,
+          );
+        const next = {
+          ...current,
+          constraints: current.constraints.filter((c) => c.id !== action.text),
+        };
+        yield* writeDefaults(file, next);
+        return { state: "applied" as const, note: describeDefaults(next) };
+      }
+      const parsed = parseConstraint(action.text, "warn");
+      if ("error" in parsed) return failed(parsed.error);
+      // Filed as what it is: a default, not something a human typed for one Run.
+      const constraint = { ...parsed, source: "workspace-default" as const, since: 1 };
+      const next = {
+        ...current,
+        constraints: [...current.constraints.filter((c) => c.id !== constraint.id), constraint],
+      };
+      yield* writeDefaults(file, next);
+      return { state: "applied" as const, note: describeDefaults(next) };
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+  );
+  registerExecutor("fork_definition", (action) =>
+    Effect.gen(function* () {
+      const layer = action.layer ?? "user";
+      const available = yield* layers(env);
+      const defs = yield* loadDefinitions(available);
+      const wf = action.what === "workflow" ? defs.workflows.get(action.name) : undefined;
+      const found = wf ?? (action.what === "persona" ? defs.personas.get(action.name) : undefined);
+      if (!found) return failed(`No ${action.what} "${action.name}".`);
+      const result = yield* forkResolvedDefinition(
+        {
+          path: found.path,
+          kind: action.what === "workflow" ? "workflows" : "personas",
+          steps: wf?.steps.map((step) => step.id) ?? [],
+          body: found.body,
+        },
+        available[layer].dir,
+        // A persona is one body, so it is always taken whole; a workflow follows its
+        // parent unless the request said to copy it.
+        { name: action.as, full: action.what === "persona" || action.mode === "copy" },
+      );
+      return result.ok
+        ? { state: "applied" as const, note: `forked to ${result.path}` }
+        : failed(result.message);
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+  );
+  registerExecutor("home_cleanup", () =>
+    Effect.gen(function* () {
+      const herdr = new Herdr(env);
+      const panes = yield* herdr.paneList();
+      // Only the panes that are Collie's alone: a legacy pane sharing a tab with
+      // something else is left, because taking somebody's window away is not cleanup.
+      const { close, listed } = closable(panes);
+      for (const paneId of close)
+        yield* herdr.paneClose(paneId).pipe(Effect.catch(() => Effect.void));
+      return {
+        state: "applied" as const,
+        note: `closed ${close.length}, left ${listed.length} sharing a tab`,
+      };
+    }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
+  );
+  registerExecutor("upgrade", () =>
+    upgrade(env).pipe(
+      Effect.map(settled),
+      Effect.catch((cause) => Effect.succeed(failed(String(cause)))),
+    ),
   );
   yield* Effect.void;
 });

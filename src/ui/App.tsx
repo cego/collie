@@ -37,7 +37,7 @@ import {
 import { commitsBehind } from "../workspace";
 import { truncated } from "../views";
 import { Detail } from "./detail";
-import { ProposalPreview, SteerBox } from "./live";
+import { ProposalPreview } from "./live";
 import { usePasteInto } from "./paste";
 import { Flow } from "./Flow";
 import type { Pending } from "./prompts";
@@ -116,18 +116,6 @@ export interface AppProps {
    */
   pending?: () => Pending | null;
   dispatch: (command: Command) => void;
-}
-
-/**
- * Why there is nothing to talk to, where there is nothing. A blank region is the one
- * thing this must not be: it would say the same as a Herd with nothing to report, and a
- * human would have no way to tell "quiet" from "broken".
- */
-function collieUnavailable(state: AppState): string | null {
-  if (state.live === null) return "Collie is not reading this Herd yet.";
-  if (state.live.ownership !== null)
-    return `Collie has not settled which workspace is Home: ${state.live.ownership.why}`;
-  return null;
 }
 
 export function App(props: AppProps) {
@@ -321,10 +309,9 @@ export function App(props: AppProps) {
     return found === null ? null : { id: found.id, hash: found.content_hash };
   };
   /**
-   * A proposal that has just appeared is put on screen. That is what makes `:` a
-   * conversation — the steer goes out and what came back is drawn — and it is the one
-   * thing the board does about a proposal on its own. It takes no pane focus: nothing
-   * but a pending question does.
+   * A proposal that has just appeared is put on screen. It is the one thing the board
+   * does about a proposal on its own, and it takes no pane focus: nothing but a pending
+   * question does.
    */
   let answered = new Set<string>();
   createEffect(() => {
@@ -364,8 +351,6 @@ export function App(props: AppProps) {
       choice: question(),
       filtering: typing(),
       setting: editingKey(),
-      steering: props.state().steerDraft,
-      steerAimed: props.state().steerAimed,
     }),
   );
 
@@ -377,7 +362,6 @@ export function App(props: AppProps) {
       return setAsking({ ...was, typed: append(was.typed) });
     }
     if (at._tag === "Filter") return setFilter(append);
-    if (at._tag === "Steering") return tell({ _tag: "DraftSteer", text: append(at.draft) });
     if (at._tag === "Setting") setEditing({ ...at.setting, value: append(at.setting.value) });
   });
 
@@ -416,16 +400,13 @@ export function App(props: AppProps) {
       case "Filtering":
         setFilter(intent.filter);
         return setTyping(intent.typing);
-      case "Steering":
-        return tell({ _tag: "DraftSteer", text: intent.draft, aimed: intent.aimed });
       case "Editing":
         return setEditing(intent.editing);
       case "Submitted":
         act(intent.command);
-        // Both fields the key can submit are closed by submitting them: the Steer box
-        // has said what it had to say, and the value is written.
+        // The one field the key can submit is closed by submitting it: the value is
+        // written, so there is nothing left being typed.
         setEditing(null);
-        if (intent.command._tag === "Steer") tell({ _tag: "DraftSteer", text: null });
         return;
       case "NextQuestion":
         return goToQuestion();
@@ -512,28 +493,6 @@ export function App(props: AppProps) {
       <Show when={previewing() && !helping()}>
         <ProposalPreview proposal={previewing()!} />
       </Show>
-      {/* Always on the Runs view, and not only once somebody has found the key: the
-          conversation with Collie about the flock is what this board is for, and a
-          composer you have to know about is one nobody uses.
-
-          Visible is not focused. The board's own keys keep working while it is on
-          screen — a field that captured them would make the board unusable — and one
-          key puts the keyboard in it, with Esc to give the board back. */}
-      <Show when={props.state().view === "runs" && !helping() && !previewing()}>
-        <SteerBox
-          draft={props.state().steerDraft ?? ""}
-          // Aimed only where a human said so. The selected row is never the implicit
-          // target: a question typed while looking at an old Run is a question about
-          // the flock, and aiming it at that Run would be acting on a coincidence.
-          target={props.state().steerAimed ? (current()?.runId ?? null) : null}
-          turns={props.state().live?.conversation ?? []}
-          pending={props.state().live?.proposals.length ?? 0}
-          focused={props.state().steerDraft !== null}
-          focusKey=":"
-          unavailable={collieUnavailable(props.state())}
-        />
-      </Show>
-
       <Show when={!helping()}>
         <Footer
           row={current()}

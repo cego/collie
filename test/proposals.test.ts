@@ -15,6 +15,7 @@ import {
   proposalsPath,
   read,
   pendingFor,
+  pendingHerdWide,
   reconcileStep,
   record,
   stepSettled,
@@ -167,13 +168,18 @@ test("every refusal is its own fact, and says which one it was", () =>
     }),
   ));
 
-test("only a person confirms; a Driver and the evaluator cannot", () =>
+test("only a person confirms; a Driver, the evaluator and native chat cannot", () =>
   runEffect(
     Effect.gen(function* () {
       const proposal = yield* written();
       // SAFETY: the literal is exactly an Actor; the annotation only picks the origin.
       const evaluator: Actor = { origin: "evaluator", requestId: "e-1" };
-      for (const actor of [driver, evaluator]) {
+      // Native chat's bridge. It runs as a child of a harness inside a pane, so it has a
+      // controlling terminal — and a terminal is what the CLI reads as a person. Its
+      // origin is stamped by the entrypoint for exactly this reason, and it is not human
+      // however much of a TTY the process has.
+      const chat: Actor = { origin: "chat", requestId: "c-1" };
+      for (const actor of [driver, evaluator, chat]) {
         expect(
           yield* confirm(file, proposal.id, proposal.content_hash, actor, versions),
         ).toMatchObject({ refused: "not_human" });
@@ -468,3 +474,30 @@ test("a proposal is pending until it is answered or it expires", () => {
   expect(pendingFor([proposal, { ...settled, kind: "declined" }], "r1", now)).toEqual([]);
   expect(pendingFor([proposal], "r1", Date.parse("2026-09-09T12:00:00Z"))).toEqual([]);
 });
+
+test("a proposal about the installation is waiting on the Herd, not on any Run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // `upgrade`, `home_cleanup`, `update_defaults` and `fork_definition` name no Run, so
+      // they record no targets — and a board that only asked `pendingFor(run)` would never
+      // draw them, leaving them to expire at the one front door that is meant to confirm
+      // them.
+      const herdWide = yield* record(file, {
+        interpretation: "bring this installation up to date",
+        targets: [],
+        actions: [{ kind: "upgrade" }],
+        allowedNow: [],
+        intentVersions: {},
+        by: "chat:c-1",
+      });
+      const lines = yield* read(file);
+      const now = Date.parse(herdWide.expires_at) - 1;
+      expect(pendingHerdWide(lines, now).map((p) => p.id)).toEqual([herdWide.id]);
+      // And a proposal about a Run is that Run's, never the Herd's: the two lists do not
+      // overlap, so confirming one is never confirming the other.
+      yield* written();
+      const both = yield* read(file);
+      expect(pendingHerdWide(both, now).map((p) => p.id)).toEqual([herdWide.id]);
+      expect(pendingFor(both, "r1", now).map((p) => p.id)).not.toContain(herdWide.id);
+    }),
+  ));

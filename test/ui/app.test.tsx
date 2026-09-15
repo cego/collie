@@ -89,8 +89,6 @@ function appState(over: Partial<AppState> = {}): AppState {
     detail: null,
     marks: {},
     live: null,
-    steerDraft: null,
-    steerAimed: false,
     previewing: null,
     ...over,
   };
@@ -2060,88 +2058,22 @@ const QUIET: Live = {
   cards: [],
   drift: [],
   deliveries: [],
-  conversation: [],
-  runConversation: [],
   proposals: [],
   pending: [],
   ownership: null,
+  news: { waiting: 0, uncertain: 0 },
 };
 
-test("the composer is on the Home before anyone finds a key, and says what it is for", () =>
+test("there is no composer to find: typing goes to the board, and `:` is not a mode", () =>
   runEffect(
     Effect.gen(function* () {
+      // The conversation is the native pane beside this one. The board is a board.
       const app = yield* mount(appState({ board: BOARD, live: QUIET }));
+      expect(app.frame()).not.toContain("to ask");
 
-      // Visible with nothing typed and nothing selected: a composer a human has to know
-      // about is one nobody uses, and this board is for talking to Collie.
-      expect(app.frame()).toContain("Ask Collie about the flock");
-      expect(app.frame()).toContain(": to ask");
-    }),
-  ));
-
-test("board keys keep working while the composer is on screen but not focused", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const app = yield* mount(appState({ board: BOARD, live: QUIET }));
-
-      // `j` moves the Selection rather than typing a `j`: visible is not focused, and a
-      // field that captured the board's keys would make the board unusable.
-      app.mockInput.pressKey("j");
-      yield* app.flush;
-      // `j` is the board's own key, so nothing was typed into the composer by it.
-      expect(app.acted()).not.toContainEqual({ _tag: "DraftSteer", text: "j", aimed: false });
-
-      // `:` puts the keyboard in it, and then `j` is a character.
       app.mockInput.pressKey(":");
       yield* app.flush;
-      expect(app.acted()).toContainEqual({ _tag: "DraftSteer", text: "", aimed: false });
-
-      yield* app.setState(appState({ board: BOARD, live: QUIET, steerDraft: "" }));
-      app.mockInput.pressKey("j");
-      yield* app.flush;
-      expect(app.acted().at(-1)).toEqual({ _tag: "DraftSteer", text: "j", aimed: false });
-    }),
-  ));
-
-test("Enter asks about the flock, and never aims at whichever row is selected", () =>
-  runEffect(
-    Effect.gen(function* () {
-      // A row *is* selected — the first one — which is the case that used to swallow the
-      // message or aim it somewhere nobody named.
-      const app = yield* mount(
-        appState({ board: BOARD, live: QUIET, steerDraft: "how is the flock" }),
-      );
-      expect(app.frame()).toContain("how is the flock");
-      expect(app.frame()).toContain("flock >");
-
-      app.mockInput.pressEnter();
-      yield* app.flush;
-
-      // Sent, with no target: a question about every Run, whatever the board shows.
-      expect(app.acted()).toContainEqual({
-        _tag: "Steer",
-        text: "how is the flock",
-        runId: null,
-      });
-      // And the field is cleared behind it, so the board's keys work again.
-      expect(app.acted().at(-1)).toEqual({ _tag: "DraftSteer", text: null });
-    }),
-  ));
-
-test("a message aimed at a Run says so before it is sent, and names that Run", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const app = yield* mount(
-        appState({ board: BOARD, live: QUIET, steerDraft: "slow down", steerAimed: true }),
-      );
-
-      // Aimed: the box says which Run, and that it still has to be confirmed.
-      expect(app.frame()).toContain("r1");
-      expect(app.frame()).toContain("you confirm it");
-
-      app.mockInput.pressEnter();
-      yield* app.flush;
-      expect(app.acted()).toContainEqual({ _tag: "Steer", text: "slow down", runId: "r1" });
+      expect(app.acted()).toEqual([]);
     }),
   ));
 
@@ -2167,11 +2099,10 @@ test("a proposal that has appeared is drawn, and Enter confirms exactly what is 
         cards: [],
         drift: [],
         deliveries: [],
-        conversation: [],
-        runConversation: [],
         proposals: [proposal],
         pending: [],
         ownership: null,
+        news: { waiting: 0, uncertain: 0 },
       };
       const app = yield* mount(appState({ board: BOARD, live }));
 

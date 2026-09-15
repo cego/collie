@@ -305,10 +305,15 @@ refuses to answer for you: the board says so and `collie home reconcile` is how 
 it. Nothing is created because a token expired, and nothing is adopted because it looks
 right.
 
+The Home is **one tab with two panes**: the board on the left at four sevenths of the
+width, and [native chat](#talking-to-collie-about-the-flock) on the right at three. Both
+are ordinary panes — herdr's own keys move between them and resize them, and reopening the
+Home reopens only a pane that has actually gone, so a divider you dragged stays where you
+put it.
+
 It is a board, not an engine: it watches the run directories, the register of live agents
 and the steering journals and draws what it finds, so closing it loses nothing — the next
-run opens it again. It is the only pane Collie keeps open; the run itself is driven by a
-Driver with no pane at all.
+run opens it again. The run itself is driven by a Driver with no pane at all.
 
 `prefix+shift+c` reaches it from any pane in any workspace, making the Home first when
 this Herd has none yet, and taking you there — a workspace switch as well as a tab focus.
@@ -580,21 +585,19 @@ as `pending report (undelivered)`. It was never written to that Run's inbox: the
 over, and there is nothing there to act on it. A [follow-up run](workflows.md) is how you
 act on one.
 
-### Steering from the board
+### Confirming a proposal on the board
 
-`:` opens the **Steer box** at the bottom of the Runs view: a target chip naming the
-selected Run, the last few turns of the conversation above it, and a field. Enter sends it
-and closes the box; Esc leaves it. With no Run selected the box says to select one rather
-than sending your words at a guess — a steer is about a specific piece of work.
-
-What comes back is a **proposal**, drawn as soon as it arrives: what Collie understood, and
+There is no composer here and no mode to enter: talking to Collie is the pane beside this
+one. What the board is for is the other half — **confirming**. A **proposal** is drawn as
+soon as it arrives: what Collie understood, and
 every action it would take, each marked `allowed now` where that Run's own authority already
 grants it or `needs your yes` where it does not, with the proposal's id and hash. Enter
 carries it out; Esc declines it. Those two keys are the only ones the proposal takes — a
 human reading what they are being asked to consent to cannot stop a run by pressing `k` at
 it. The yes names the id and the hash, so it is consent to that payload rather than to a
 summary of it. `collie steer`, `collie confirm` and `collie decline` are the same thing on
-the command line ([docs/cli.md](cli.md)).
+the command line ([docs/cli.md](cli.md)). Nothing else can answer for you: chat's tools
+are reads, and a model cannot confirm its own proposal however it asks.
 
 ### Keys
 
@@ -627,7 +630,6 @@ that field's keys do instead, and the Selection's own buttons go: `k` typed a `k
 | `1`–`9`       | Focus that agent's pane                                                         |
 | `Enter`       | Go to what the row points at — a workspace, a run's agent tab, an agent's pane  |
 | `g`           | Filter, in the Runs view: this workspace ⇄ every workspace of this Herd         |
-| `:`           | Steer the selected run — say something to Collie about it                       |
 | `p`           | Run a workflow — the same launch flow as `prefix+f`, inline in this tab         |
 | `C`           | Continue a task with another workflow, rather than starting a new task          |
 | `u`           | Resume a run with unfinished steps                                              |
@@ -685,30 +687,103 @@ a run directory: an unsent answer is yours, not the run's.
 
 ## Talking to Collie about the flock
 
-The Home opens on the conversation. It is one line at rest saying what Collie can be
-asked; `:` puts the keyboard in it and Esc gives the board back. The board's own keys keep
-working while it is on screen — visible is not focused.
+The Home's right-hand pane is an ordinary **Claude Code** session — or **Pi**, if you
+choose it — with Collie's role and Collie's tools. It is focused when the Home opens, so
+the next thing you type is a question: no mode to enter, no composer to find, and paste,
+history, streaming and compaction are the harness's own, because they always were better
+than anything Collie would have written.
 
-**Enter asks about the flock.** That is the ordinary case: a question about every run,
-read-only, whatever the board happens to be showing or filtered to. The run your cursor
-happens to be on is never the target — a question typed while looking at an old run is a
-question about the flock, and aiming it there would be acting on a coincidence.
+Ask about the flock and you get an answer about the flock. Chat reads the whole Herd,
+always: what the board is filtered to and whichever row your cursor is on change what
+**you** are looking at and never what Collie may see. Where there are more Runs than one
+answer carries, it says how many it left out rather than answering as though that was all
+of them. A follow-up is understood — the conversation is the harness's own session, and it
+is still there when you reopen the Home.
 
-**Tab aims it at the selected run.** Then Enter proposes something about that run, and you
-confirm it by id and hash as you always did. A message that would change something names
-its run explicitly.
+**Choosing a harness.** `claude` is the default, on an installation you have had for
+months as much as a new one, and independently of the harness your Runs are on.
 
-The conversation is one per herdr session and it outlives the tab: close the Home and
-reopen it, and it is still there. A follow-up is answered with the earlier turns in
-context, so "what about the second one" resolves to something.
+```sh
+collie chat status
+collie chat harness pi
+```
+
+`chat harness` is a **launch preference**. It never stops, replaces or summarises a
+conversation that is running: `chat status` shows what is running and, separately, what is
+chosen for next time. When Pi does open it opens on Pi's own history and fresh Herd state —
+there is no handoff, no generated switch summary and no transcript conversion, and your
+Claude conversation is still there when you choose Claude again.
+
+**What chat can do.** Ask it to hold a run, answer a Choice, steer an agent, stop or resume
+one, follow up a finished run, amend an Intent, start a workflow, fork a Workflow or a
+Persona, change what every new Run begins with, close the panes an older release left, or
+upgrade this installation — it has the same set the CLI and the board have, through the
+same validation and the same executors. What it does with any of them is **propose**: the
+board draws the proposal, and you confirm it against its id and the hash of exactly those
+actions, or decline it and nothing changed. A proposal about the installation rather than
+about a run — an upgrade, a cleanup, a fork, a change to a workspace's defaults — names no
+run, so it is drawn whichever row you have selected rather than waiting under one.
+
+What it cannot ask for at all: confirming, declining, reconciling, verifying, and setting
+what a Run — or every Run — may do without asking. Those are decisions, and a model that
+could ask for one would be authorising itself. That the rest is really there is a gate:
+`test/chat-parity.test.ts` walks the CLI's own command tree and fails on a command with no
+conversational route, so the list cannot quietly fall behind the CLI.
+
+It cannot confirm. Its requests are recorded as `chat:` and every confirmation path
+refuses anything that is not you — which matters because the bridge runs inside the
+harness's pane and so has a terminal, and a terminal is what the CLI reads as a person.
+The origin is stamped by the entrypoint, not inferred.
+
+There is no shell there, no file access and no way to write a record. A run it names that
+does not exist is refused rather than retargeted, and a run you did not name is not one it
+may assume — if it is unsure which you meant, it asks. Starting a workflow names the
+workspace it is for, so a launch asked for in the Home lands in the repository it is about,
+and it needs no existing run.
+
+`collie tools list` and `collie tools call` are the same contract from a terminal, and
+the list says which of the eight only read. Three of them do not: reading the news settles
+the items it hands over, the installation checks fetch this checkout's refs, and proposing
+appends to the journal. None of the three changes a run, but none is a read either, and a
+harness that decides for itself what to run without asking is told the difference rather
+than left to assume.
+
+If the harness you chose is not installed, chat says so and stops there: the board and
+every Run are untouched, and Collie does not quietly open the other one instead.
 
 **Collie also speaks first.** When a run ends or blocks, asks you something, drifts from
 its Intent past what Collie may correct, starts repeating itself, or claims to be finished
-without being able to show it, Collie starts a turn about it — once per thing that
-happened, one at a time. A conversation you have to start every
-time is polling by hand. Turn it off with `"proactive": false` in `config.json`. Such a turn
-shows as `noticed:` with what changed, then Collie's answer; it is never written down as
-something you typed.
+without being able to show it, Collie writes that down as news. Turn it off with
+`"proactive": false` in `config.json`.
+
+What it does **not** do is call a model to find that out. The board already recomputes
+this to draw it, and a transition in it is the whole trigger; noticing nothing writes
+nothing, so a board redrawing over unchanged state costs exactly nothing. Output arriving,
+a commit, a step starting, a pane changing and time passing are not on the list, and never
+were — a changing pane is not progress.
+
+Several things happening at once is one batch, not one interruption each. It says how many
+older items it left out, and those stay waiting rather than being replaced by a single
+latest-status line.
+
+**How it reaches the conversation depends on the harness, and `collie chat status` says
+which:**
+
+- **Pi** is pushed to — attempted, and not yet proven here. Collie's extension hands the
+  batch to Pi's own queue as a custom message, delivered between turns, so it cannot
+  overwrite a half-typed draft, interrupt a running turn, or be attributed to you. Whether
+  that message actually surfaces has not been observed on this installation, so nothing is
+  marked delivered because of it and Pi is still told on its next turn. Collie has no way
+  to type into your editor and would not use one.
+- **Claude** is told on its **next turn**, through the `collie_news` tool. Claude's custom
+  channels are an organization opt-in; Collie will not auto-confirm that consent, will not
+  fake a push, and will not switch you to Pi behind your back. That nothing reaches an
+  idle Claude pane unasked is a row of the live probe, watched on both harnesses rather
+  than inferred from a help page. The board shows what is waiting in the meantime.
+
+**Sent is not read.** An item stays waiting until the conversation has actually taken it,
+and one whose send nobody can account for stays visibly uncertain rather than being
+retried or quietly marked delivered. The board says how many of each.
 
 Speaking first buys it nothing: a proposal from a turn Collie started goes through exactly
 the same authority path as one you typed. Who started the turn is not an input to what is
@@ -873,9 +948,15 @@ checkout there is no branch and no working tree to review, so the target menu is
   "trust": "ask",
   "permissions": "bypass",
   "scope": "local",
-  "questions": "focus"
+  "questions": "focus",
+  "chat_harness": "claude"
 }
 ```
+
+`chat_harness` is which native chat the Home opens with, `claude` or `pi`. It is
+independent of `harness`, which is what runs your work, and it is a preference for the
+**next** launch rather than a switch: see
+[Talking to Collie](#talking-to-collie-about-the-flock).
 
 `scope` is which board a Control Plane opens on — `local`, this workspace, or `all`, every
 workspace of this herdr session Collie has work in ([Filters](#filters-which-of-the-herds-work-is-showing)).

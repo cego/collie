@@ -17,6 +17,7 @@ import { Clock, Data, Effect, FileSystem, Path, Schema } from "effect";
 import { ensureLockDir, withLock } from "./lock";
 import { herdDir, herdKey } from "./steering";
 import { nowIso } from "./time";
+import { BOARD_RATIO, CHAT_PANE_TOKEN } from "./chat";
 import { Herdr, type PaneInfo, type WorkspaceInfo } from "./herdr";
 
 /** The token a workspace carries to say it is this Herd's Home. Refreshed on every ensure. */
@@ -33,6 +34,13 @@ const RecordSchema = Schema.Struct({
   tabId: Schema.NullOr(Schema.String),
   paneId: Schema.NullOr(Schema.String),
   terminalId: Schema.NullOr(Schema.String),
+  /**
+   * The native chat pane beside the board, in the same tab. Optional so a record written
+   * before the Home had one still decodes: an old record read as unreadable would make
+   * every existing installation an ownership question on upgrade.
+   */
+  chatPaneId: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  chatTerminalId: Schema.optionalKey(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
   token: Schema.String,
   /**
@@ -205,8 +213,16 @@ export function tokened(workspaces: ReadonlyArray<WorkspaceInfo>, key: string): 
 export type Decision =
   /** Nothing to do but refresh what is already true. */
   | { readonly kind: "adopt"; readonly record: HomeRecord; readonly proof: "token" | "pane" }
-  /** The pane is gone but the workspace is still ours: reopen it, do not create anything. */
-  | { readonly kind: "reopen"; readonly record: HomeRecord }
+  /**
+   * A pane is gone but the workspace is still ours: reopen the ones that are missing and
+   * nothing else. `missing` is which, so a live half-resized layout is left where the
+   * human put it rather than rebuilt because the other half went.
+   */
+  | {
+      readonly kind: "reopen";
+      readonly record: HomeRecord;
+      readonly missing: ReadonlyArray<"board" | "chat">;
+    }
   /** Nothing owns this Herd's Home yet. `orphan` names a record left mid-create. */
   | { readonly kind: "create"; readonly orphan?: string }
   /** Somebody might. Collie stops and says who, rather than guessing. */
@@ -222,6 +238,26 @@ export type Decision =
  * a workspace whose pane is still there — are a table in a test rather than a walk
  * through a function that also opens things.
  */
+/**
+ * Which of the Home's two panes herdr no longer has. The board and native chat are one
+ * tab's two halves, and either can be closed on its own: recovering the one that went is
+ * what stops a missing chat pane costing the human the board's layout, or the other way
+ * round.
+ */
+export function missingPanes(
+  record: HomeRecord,
+  panes: ReadonlyArray<PaneInfo>,
+): Array<"board" | "chat"> {
+  const there = (paneId: string | null | undefined) =>
+    paneId !== null &&
+    paneId !== undefined &&
+    panes.some((entry) => entry.paneId === paneId && entry.workspaceId === record.workspaceId);
+  const missing: Array<"board" | "chat"> = [];
+  if (!there(record.paneId)) missing.push("board");
+  if (!there(record.chatPaneId)) missing.push("chat");
+  return missing;
+}
+
 export function decide(
   record: ReadHome,
   workspaces: ReadonlyArray<WorkspaceInfo>,
@@ -270,12 +306,10 @@ export function decide(
         record.workspaceId,
         ...elsewhere,
       ]);
-    const pane =
-      record.paneId !== null &&
-      panes.some(
-        (entry) => entry.paneId === record.paneId && entry.workspaceId === record.workspaceId,
-      );
-    return pane ? { kind: "adopt", record, proof } : { kind: "reopen", record };
+    const missing = missingPanes(record, panes);
+    return missing.length === 0
+      ? { kind: "adopt", record, proof }
+      : { kind: "reopen", record, missing };
   }
 
   // A record left mid-create is an orphan candidate, not a Home: named, and a Home is
@@ -400,7 +434,18 @@ export interface HomeDeps {
     workspaceId: string,
     tokens: Readonly<Record<string, string>>,
   ) => HomeAnswer<void>;
+  /**
+   * The native chat pane, made by splitting the board's. `""` where herdr would not make
+   * one — a Home with a board and no chat is a Home a human can still work from.
+   */
+  readonly splitPane: (opts: {
+    readonly paneId: string;
+    readonly ratio: number;
+    readonly cwd: string;
+  }) => HomeAnswer<string>;
   readonly markPane: (paneId: string, tokens: Readonly<Record<string, string>>) => HomeAnswer<void>;
+  /** Only ever the shell herdr puts in a workspace Collie has just made. */
+  readonly closePane: (paneId: string) => HomeAnswer<void>;
   readonly log: (line: string) => HomeAnswer<void>;
 }
 
@@ -472,21 +517,29 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
       }
 
       if (decision.kind === "reopen") {
-        const opened = yield* deps.openPane(decision.record.workspaceId, namespaceDir);
-        // Re-read: `panes` predates this pane, and a null terminalId loses ownership
-        // proof (ii) as soon as the token expires.
-        const pane = (yield* deps.panes).find((entry) => entry.paneId === opened.paneId);
-        const next: HomeRecord = {
-          ...decision.record,
-          tabId: opened.tabId,
-          paneId: opened.paneId,
-          terminalId: pane?.terminalId ?? null,
-          state: "ready",
-        };
+        // Only what went. A live board whose chat pane was closed keeps the board and
+        // the width the human dragged it to; reopening the Home is not a rebuild.
+        let next = decision.record;
+        if (decision.missing.includes("board")) {
+          const opened = yield* deps.openPane(next.workspaceId, namespaceDir);
+          // Re-read: `panes` predates this pane, and a null terminalId loses ownership
+          // proof (ii) as soon as the token expires.
+          const pane = (yield* deps.panes).find((entry) => entry.paneId === opened.paneId);
+          next = {
+            ...next,
+            tabId: opened.tabId,
+            paneId: opened.paneId,
+            terminalId: pane?.terminalId ?? null,
+          };
+        }
+        if (decision.missing.includes("chat")) next = yield* withChat(next, namespaceDir, deps);
+        next = { ...next, state: "ready" };
         yield* writeHome(file, next);
         yield* deps.markWorkspace(next.workspaceId, { [HOME_TOKEN]: key });
         if (next.paneId !== null) yield* deps.markPane(next.paneId, { [HOME_TOKEN]: key });
-        yield* deps.log(`home: reopened the pane in ${next.workspaceId}`);
+        yield* deps.log(
+          `home: reopened the ${decision.missing.join(" and ")} pane in ${next.workspaceId}`,
+        );
         return ready(next);
       }
 
@@ -522,6 +575,13 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
       // token is what lets a later ensure adopt a record left `creating` rather than
       // list the workspace as an orphan and make a second one beside it.
       yield* deps.markWorkspace(workspaceId, { [HOME_TOKEN]: key });
+      // What herdr put in the workspace when it made it, noted before Collie's own pane
+      // exists. A normal Home is one tab, and the shell that comes with a new workspace
+      // is a second one nobody asked for — closed below, once there is something to
+      // close it in favour of. Only these: a tab a human makes later is theirs.
+      const generated = (yield* deps.panes)
+        .filter((entry) => entry.workspaceId === workspaceId)
+        .map((entry) => entry.paneId);
 
       const opened = yield* deps.openPane(workspaceId, namespaceDir);
       // No pane is not a Home. Written `ready` with null ids it would send every question
@@ -535,19 +595,54 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
       }
       const after = yield* deps.panes;
       const pane = after.find((entry) => entry.paneId === opened.paneId);
-      const settled: HomeRecord = {
-        ...creating,
-        tabId: opened.tabId,
-        paneId: opened.paneId,
-        terminalId: pane?.terminalId ?? null,
-        state: "ready",
-      };
+      const settled: HomeRecord = yield* withChat(
+        {
+          ...creating,
+          tabId: opened.tabId,
+          paneId: opened.paneId,
+          terminalId: pane?.terminalId ?? null,
+          state: "ready",
+        },
+        namespaceDir,
+        deps,
+      );
       yield* writeHome(file, settled);
       yield* deps.markPane(opened.paneId, { [HOME_TOKEN]: key });
+      for (const paneId of generated) yield* deps.closePane(paneId);
       yield* deps.log(`home: created ${workspaceId}`);
       return ready(settled);
     }),
   );
+});
+
+/**
+ * The board's pane split, with native chat on the right. The board keeps `BOARD_RATIO`,
+ * which is herdr's own meaning for the number: the share the pane being split keeps.
+ *
+ * A split herdr refuses leaves the record's chat ids null. That is a Home with a board
+ * and no conversation — reported, retried next launch, and never a reason to have no
+ * control plane.
+ */
+const withChat = Effect.fn("Home.withChat")(function* (
+  record: HomeRecord,
+  namespaceDir: string,
+  deps: HomeDeps,
+) {
+  if (record.paneId === null) return record;
+  const paneId = yield* deps.splitPane({
+    paneId: record.paneId,
+    ratio: BOARD_RATIO,
+    cwd: namespaceDir,
+  });
+  if (paneId === "") {
+    yield* deps.log("home: herdr would not split the board for native chat");
+    return { ...record, chatPaneId: null, chatTerminalId: null };
+  }
+  const pane = (yield* deps.panes).find((entry) => entry.paneId === paneId);
+  // Both tokens: the Home's, so ownership proof reads it, and chat's, so recovery can
+  // tell which of the tab's two panes went.
+  yield* deps.markPane(paneId, { [HOME_TOKEN]: record.token, [CHAT_PANE_TOKEN]: record.token });
+  return { ...record, chatPaneId: paneId, chatTerminalId: pane?.terminalId ?? null };
 });
 
 /**
@@ -619,11 +714,16 @@ export const ensureHomeFor = Effect.fn("Home.ensureFor")(function* (
       ),
   );
   if (moved !== null) yield* log(moved);
-  return yield* ensureHome(env.stateDir, key, yield* herdDir(env.stateDir, key), deps(herdr, log));
+  return yield* ensureHome(
+    env.stateDir,
+    key,
+    yield* herdDir(env.stateDir, key),
+    homeDeps(herdr, log),
+  );
 });
 
 /** What `ensureHome` needs of herdr. A failed call is "nothing there", never a crash. */
-function deps(herdr: Herdr, log: (line: string) => HomeAnswer<void>): HomeDeps {
+export function homeDeps(herdr: Herdr, log: (line: string) => HomeAnswer<void>): HomeDeps {
   const nothing = <A>(value: A) => Effect.catch(() => Effect.succeed(value));
   return {
     workspaces: herdr.workspaceList().pipe(nothing<ReadonlyArray<WorkspaceInfo>>([])),
@@ -642,10 +742,21 @@ function deps(herdr: Herdr, log: (line: string) => HomeAnswer<void>): HomeDeps {
         .pipe(
           nothing<{ tabId: string | null; paneId: string | null }>({ tabId: null, paneId: null }),
         ),
+    splitPane: (opts) =>
+      herdr
+        .paneSplit({
+          paneId: opts.paneId,
+          direction: "right",
+          ratio: opts.ratio,
+          cwd: opts.cwd,
+          focus: false,
+        })
+        .pipe(nothing("")),
     markWorkspace: (workspaceId, tokens) =>
       herdr.workspaceReportMetadata(workspaceId, tokens, TOKEN_TTL_MS).pipe(nothing(undefined)),
     markPane: (paneId, tokens) =>
       herdr.paneReportMetadata(paneId, tokens, TOKEN_TTL_MS).pipe(nothing(undefined)),
+    closePane: (paneId) => herdr.paneClose(paneId).pipe(nothing(undefined)),
     log,
   };
 }

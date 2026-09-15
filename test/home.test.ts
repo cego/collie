@@ -25,6 +25,7 @@ import {
   type HomeRecord,
 } from "../src/home";
 import type { PaneInfo, WorkspaceInfo } from "../src/herdr";
+import { BOARD_RATIO } from "../src/chat";
 import { runEffect } from "./support/effect";
 
 const KEY = "herd-abc";
@@ -51,11 +52,19 @@ const pane = (over: Partial<PaneInfo> = {}): PaneInfo => ({
   ...over,
 });
 
+/** The Home's two panes: the board, and native chat beside it. */
+const panes = (over: Partial<PaneInfo> = {}): PaneInfo[] => [
+  pane(over),
+  pane({ paneId: "1-2", terminalId: "term-2", ...over }),
+];
+
 const record = (over: Partial<HomeRecord> = {}): HomeRecord => ({
   workspaceId: "w1",
   tabId: "1",
   paneId: "1-1",
   terminalId: "term-1",
+  chatPaneId: "1-2",
+  chatTerminalId: "term-2",
   createdAt: "2026-09-09T10:00:00Z",
   token: KEY,
   state: "ready",
@@ -83,12 +92,12 @@ afterEach(() =>
 
 test("a live token proves ownership, and so does the pane that was opened", () => {
   // The ordinary case.
-  expect(ownershipProof(record(), [workspace("w1", { [HOME_TOKEN]: KEY })], [pane()], KEY)).toBe(
+  expect(ownershipProof(record(), [workspace("w1", { [HOME_TOKEN]: KEY })], panes(), KEY)).toBe(
     "token",
   );
   // The token lapsed, but the pane Collie opened is still there with its own terminal:
   // the claim was true and the TTL merely ran out. Healed, not re-decided.
-  expect(ownershipProof(record(), [workspace("w1")], [pane()], KEY)).toBe("pane");
+  expect(ownershipProof(record(), [workspace("w1")], panes(), KEY)).toBe("pane");
   // A different terminal in that pane is a different thing in the same place.
   expect(
     ownershipProof(record(), [workspace("w1")], [pane({ terminalId: "term-9" })], KEY),
@@ -136,7 +145,7 @@ test("every uncertain case stops rather than guessing", () => {
     decide(
       record(),
       [workspace("w1", { [HOME_TOKEN]: KEY }), workspace("w2", { [HOME_TOKEN]: KEY })],
-      [pane()],
+      panes(),
       KEY,
     ),
   ).toMatchObject({ kind: "ownership_unknown", candidates: ["w1", "w2"] });
@@ -154,7 +163,7 @@ test("a record that cannot be read is never read as no record", () =>
       expect(yield* readHome(file)).toBe(UNREADABLE);
       // The token has lapsed and the workspace is still there. Read as absent this would
       // create a second Home beside the first; it has to stop instead.
-      const h = fake({ workspaces: [workspace("w1")], panes: [pane()] });
+      const h = fake({ workspaces: [workspace("w1")], panes: panes() });
       const ensured = yield* ensureHome(stateDir, KEY, "/ns", h.deps);
       expect(ensured.kind).toBe("ownership_unknown");
       expect(h.calls).toEqual([]);
@@ -163,7 +172,7 @@ test("a record that cannot be read is never read as no record", () =>
 
 test("nothing is created because a token expired, and the pane is reopened rather than replaced", () => {
   // Expired token, pane still there: adopt.
-  expect(decide(record(), [workspace("w1")], [pane()], KEY)).toMatchObject({
+  expect(decide(record(), [workspace("w1")], panes(), KEY)).toMatchObject({
     kind: "adopt",
     proof: "pane",
   });
@@ -217,6 +226,12 @@ function fake(initial: { workspaces?: WorkspaceInfo[]; panes?: PaneInfo[] } = {}
       Effect.sync(() => {
         calls.push(`createWorkspace ${opts.cwd} ${opts.label}`);
         state.workspaces = [...state.workspaces, workspace("w-new")];
+        // herdr gives a new workspace a shell of its own, which is the tab a Home must
+        // not be left with beside its own.
+        state.panes = [
+          ...state.panes,
+          pane({ paneId: "9-shell", tabId: "9-shell", workspaceId: "w-new" }),
+        ];
         return "w-new";
       }),
     openPane: (workspaceId) =>
@@ -225,6 +240,19 @@ function fake(initial: { workspaces?: WorkspaceInfo[]; panes?: PaneInfo[] } = {}
         const opened = pane({ paneId: "9-1", tabId: "9", workspaceId, terminalId: "term-9" });
         state.panes = [...state.panes, opened];
         return { tabId: opened.tabId, paneId: opened.paneId };
+      }),
+    splitPane: (opts) =>
+      Effect.sync(() => {
+        calls.push(`splitPane ${opts.paneId} ${opts.ratio.toFixed(3)}`);
+        const source = state.panes.find((entry) => entry.paneId === opts.paneId);
+        const opened = pane({
+          paneId: `${opts.paneId}-chat`,
+          tabId: source?.tabId ?? "9",
+          workspaceId: source?.workspaceId ?? "w-new",
+          terminalId: `term-${opts.paneId}-chat`,
+        });
+        state.panes = [...state.panes, opened];
+        return opened.paneId;
       }),
     markWorkspace: (workspaceId, tokens) =>
       Effect.sync(() => {
@@ -237,6 +265,11 @@ function fake(initial: { workspaces?: WorkspaceInfo[]; panes?: PaneInfo[] } = {}
     markPane: (paneId) =>
       Effect.sync(() => {
         calls.push(`markPane ${paneId}`);
+      }),
+    closePane: (paneId) =>
+      Effect.sync(() => {
+        calls.push(`closePane ${paneId}`);
+        state.panes = state.panes.filter((entry) => entry.paneId !== paneId);
       }),
     log: () => Effect.void,
   } satisfies { -readonly [K in keyof HomeDeps]: HomeDeps[K] };
@@ -355,7 +388,7 @@ test("an expired token on a Home whose pane is still there refreshes it, and cre
     Effect.gen(function* () {
       yield* writeHome(yield* homePath(stateDir, KEY), record());
       // No token on the workspace: it lapsed. The pane is still what Collie opened.
-      const h = fake({ workspaces: [workspace("w1")], panes: [pane()] });
+      const h = fake({ workspaces: [workspace("w1")], panes: panes() });
 
       const ensured = yield* ensureHome(stateDir, KEY, "/ns", h.deps);
       expect(ensured.kind).toBe("ready");
@@ -469,5 +502,84 @@ test("the shortcut records where it was pressed, and forgets it a minute later",
       );
       yield* fs.writeFileString(file, old.replace(/"at":"[^"]+"/, `"at":"${long}"`));
       expect(yield* readOrigin(file)).toBeNull();
+    }),
+  ));
+
+test("the Home is one tab: the board on the left, native chat on the right", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const h = fake();
+      const ensured = yield* ensureHome(stateDir, KEY, "/ns", h.deps);
+      expect(ensured.kind).toBe("ready");
+      // One workspace, one pane opened, and the second made by splitting the first —
+      // not a second tab and not a second plugin pane.
+      expect(h.calls.filter((call) => call.startsWith("openPane"))).toHaveLength(1);
+      expect(h.calls).toContain(`splitPane 9-1 ${BOARD_RATIO.toFixed(3)}`);
+      // And the shell herdr made the workspace with is gone: a normal Home is one tab,
+      // not Collie's beside a blank one nobody asked for.
+      expect(h.calls).toContain("closePane 9-shell");
+      expect(h.state.panes.map((entry) => entry.paneId)).not.toContain("9-shell");
+      expect(yield* readHome(yield* homePath(stateDir, KEY))).toMatchObject({
+        paneId: "9-1",
+        chatPaneId: "9-1-chat",
+        chatTerminalId: "term-9-1-chat",
+        tabId: "9",
+      });
+    }),
+  ));
+
+test("a Home recorded before native chat gains the pane without losing the board", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // What an installation upgrading onto this release has: a board pane, and no chat.
+      const { chatPaneId: _pane, chatTerminalId: _terminal, ...legacy } = record();
+      yield* writeHome(yield* homePath(stateDir, KEY), legacy);
+
+      expect(decide(legacy, [workspace("w1", { [HOME_TOKEN]: KEY })], [pane()], KEY)).toMatchObject(
+        { kind: "reopen", missing: ["chat"] },
+      );
+
+      const h = fake({ workspaces: [workspace("w1", { [HOME_TOKEN]: KEY })], panes: [pane()] });
+      expect((yield* ensureHome(stateDir, KEY, "/ns", h.deps)).kind).toBe("ready");
+      // The board pane is the one that was there: reopening it would have replaced a
+      // live board to add a pane beside it.
+      expect(h.calls.filter((call) => call.startsWith("openPane"))).toEqual([]);
+      expect(h.calls).toContain(`splitPane 1-1 ${BOARD_RATIO.toFixed(3)}`);
+      expect(yield* readHome(yield* homePath(stateDir, KEY))).toMatchObject({
+        paneId: "1-1",
+        chatPaneId: "1-1-chat",
+      });
+    }),
+  ));
+
+test("opening a live Home again changes nothing about its layout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeHome(yield* homePath(stateDir, KEY), record());
+      const h = fake({ workspaces: [workspace("w1", { [HOME_TOKEN]: KEY })], panes: panes() });
+      expect((yield* ensureHome(stateDir, KEY, "/ns", h.deps)).kind).toBe("ready");
+      // Neither pane is reopened and nothing is split: a human who dragged the divider
+      // keeps where they put it.
+      expect(h.calls.some((call) => call.startsWith("openPane"))).toBe(false);
+      expect(h.calls.some((call) => call.startsWith("splitPane"))).toBe(false);
+      // And nothing is closed: only a workspace Collie has just made has a shell of
+      // herdr's to tidy, and a tab a human added later is theirs.
+      expect(h.calls.some((call) => call.startsWith("closePane"))).toBe(false);
+    }),
+  ));
+
+test("a split herdr will not do leaves a board that still works", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const h = fake();
+      const deps: HomeDeps = { ...h.deps, splitPane: () => Effect.succeed("") };
+      const ensured = yield* ensureHome(stateDir, KEY, "/ns", deps);
+      // A Home with no conversation is still a control plane. Recorded as having none,
+      // so the next launch tries again rather than adopting whatever is in that slot.
+      expect(ensured).toMatchObject({ kind: "ready" });
+      expect(yield* readHome(yield* homePath(stateDir, KEY))).toMatchObject({
+        paneId: "9-1",
+        chatPaneId: null,
+      });
     }),
   ));

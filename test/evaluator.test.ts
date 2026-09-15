@@ -7,7 +7,6 @@ import { Effect, FileSystem, Schema } from "effect";
 import { expect, test } from "bun:test";
 import {
   ActionSchema,
-  AnswerSchema,
   JudgementSchema,
   ProposalSchema,
   REQUIRED_FLAGS,
@@ -89,25 +88,25 @@ test("a CLI missing any of those flags is not one Collie will call", () =>
   ));
 
 test("the payload is found by what fits the schema, not by a field name", () => {
-  const answer = { text: "it is on the wrong branch", evidence_refs: [], targets: [] };
+  const judgement = { reports: [] };
   // Whatever the CLI calls its result field, and however deep it nests it.
-  expect(structuredFrom(JSON.stringify({ result: answer }), AnswerSchema)).toEqual(answer);
-  expect(structuredFrom(JSON.stringify({ data: { output: answer } }), AnswerSchema)).toEqual(
-    answer,
+  expect(structuredFrom(JSON.stringify({ result: judgement }), JudgementSchema)).toEqual(judgement);
+  expect(structuredFrom(JSON.stringify({ data: { output: judgement } }), JudgementSchema)).toEqual(
+    judgement,
   );
   // Including when it hands the structured output back as a JSON string.
-  expect(structuredFrom(JSON.stringify({ content: JSON.stringify(answer) }), AnswerSchema)).toEqual(
-    answer,
-  );
+  expect(
+    structuredFrom(JSON.stringify({ content: JSON.stringify(judgement) }), JudgementSchema),
+  ).toEqual(judgement);
 
-  expect(structuredFrom("not json at all", AnswerSchema)).toEqual({
+  expect(structuredFrom("not json at all", JudgementSchema)).toEqual({
     error: "the CLI did not print JSON",
   });
-  expect(structuredFrom(JSON.stringify({ result: "just prose" }), AnswerSchema)).toEqual({
+  expect(structuredFrom(JSON.stringify({ result: "just prose" }), JudgementSchema)).toEqual({
     error: "nothing in the CLI's envelope matched the schema it was given",
   });
   // An answer of the wrong kind is not this kind's answer.
-  expect(structuredFrom(JSON.stringify({ result: answer }), JudgementSchema)).toMatchObject({
+  expect(structuredFrom(JSON.stringify({ result: judgement }), ProposalSchema)).toMatchObject({
     error: expect.any(String),
   });
 });
@@ -115,7 +114,13 @@ test("the payload is found by what fits the schema, not by a field name", () => 
 test("every action the model may propose decodes, and nothing else does", () => {
   const decode = Schema.decodeUnknownOption(ActionSchema);
   const valid = [
-    { kind: "update_intent", run: "r1", patch: "stay in src", base_version: 2 },
+    {
+      kind: "update_intent",
+      run: "r1",
+      change: "add-constraint",
+      patch: "stay in src",
+      base_version: 2,
+    },
     { kind: "deliver", run: "r1", agent: "impl-1", text: "stay in src", mode: "boundary" },
     { kind: "hold", run: "r1" },
     { kind: "release", run: "r1" },
@@ -141,7 +146,7 @@ test("every action the model may propose decodes, and nothing else does", () => 
 });
 
 test("the schema handed to the model is real JSON Schema for each kind", () => {
-  for (const kind of ["answer", "judgement", "proposal"] as const) {
+  for (const kind of ["judgement", "proposal"] as const) {
     const parsed: unknown = JSON.parse(jsonSchemaFor(kind));
     expect(parsed).toMatchObject({ type: "object" });
   }
@@ -203,7 +208,7 @@ test("a decision is never granted, however much authority a Run has", () => {
     run_verification: [],
   };
   const decisions = proposal([
-    { kind: "update_intent", run: "r1", patch: "new goal", base_version: 2 },
+    { kind: "update_intent", run: "r1", change: "set-goal", patch: "new goal", base_version: 2 },
     { kind: "answer", run: "r1", choiceId: "c1", answer: "Build it now" },
     { kind: "resume", run: "r1" },
     { kind: "clear_override", run: "r1", agent: "impl-1" },
@@ -239,7 +244,9 @@ test("an action about something the model was not shown becomes a question, not 
   ]);
   expect(validate(tooLong, ctx())[0]?.action).toMatchObject({ kind: "ask_human" });
 
-  const stale = proposal([{ kind: "update_intent", run: "r1", patch: "p", base_version: 1 }]);
+  const stale = proposal([
+    { kind: "update_intent", run: "r1", change: "add-constraint", patch: "p", base_version: 1 },
+  ]);
   expect(validate(stale, ctx())[0]?.action).toMatchObject({
     kind: "ask_human",
     question: expect.stringContaining("v1"),

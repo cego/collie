@@ -371,6 +371,14 @@ export const writeDefaults = Effect.fn("Intent.writeDefaults")(function* (
 
 export const EMPTY_DEFAULTS: Defaults = { constraints: [], authority: DEFAULT_AUTHORITY };
 
+/** The defaults as a human reads them: what every Run started here begins with. */
+export function describeDefaults(defaults: Defaults): string {
+  return [
+    ...defaults.constraints.map((c) => `${c.id}\t${c.severity}\t${c.kind}\t${c.text}`),
+    ...Object.entries(defaults.authority).map(([k, v]) => `authority ${k}=${JSON.stringify(v)}`),
+  ].join("\n");
+}
+
 /**
  * What the work source itself asks for. A `plan-dir` is read: its `SPEC.md` headings
  * are matched literally by `extractRequirements`, so the constraints are evidence a

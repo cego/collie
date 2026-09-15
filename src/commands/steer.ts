@@ -1,9 +1,12 @@
-// Talking to Collie, and answering it.
+// Saying something to Collie about one Run, and answering what it proposes.
 //
-// `steer` is a question. It never does anything: it writes down what was said, asks the
-// evaluator, records what came back as a proposal, and prints it. `confirm` is the
-// separate act that makes a specific proposal happen, and it names that proposal and its
-// exact contents — a yes to a summary is not consent to a payload nobody read.
+// `steer` never does anything: it writes down what was said, asks the evaluator, records
+// what came back as a proposal, and prints it. `confirm` is the separate act that makes a
+// specific proposal happen, and it names that proposal and its exact contents — a yes to
+// a summary is not consent to a payload nobody read.
+//
+// It is about a Run, always. Questions about the flock are the Home's native chat, which
+// reads through `collie tools` rather than paying for a model to be asked one here.
 
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
@@ -33,10 +36,7 @@ export const steer = Command.make(
     text: Argument.string("text").pipe(
       Argument.withDescription("What you want to say, in your own words"),
     ),
-    target: Flag.string("target").pipe(
-      Flag.withDescription("`run:<id>`; required for anything that would change something"),
-      Flag.optional,
-    ),
+    target: Flag.string("target").pipe(Flag.withDescription("`run:<id>`: which Run this is about")),
     from: Flag.string("from").pipe(
       Flag.withDescription("The card this is about, so the proposal is bound to its revision"),
       Flag.optional,
@@ -50,9 +50,8 @@ export const steer = Command.make(
   ({ text, target, from, dryRun, requestId }) =>
     answering((env) =>
       Effect.gen(function* () {
-        const named = Option.getOrNull(target);
-        const run = named === null ? null : named.replace(/^run:/, "");
-        if (named !== null && run === "") return err("invalid_input", "--target is `run:<id>`.");
+        const run = target.replace(/^run:/, "");
+        if (run === "") return err("invalid_input", "--target is `run:<id>`.");
         return yield* mutation(env, "steer", requestId, (id) =>
           Effect.gen(function* () {
             const deps = yield* evaluationDeps(env);

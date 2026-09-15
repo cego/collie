@@ -69,60 +69,44 @@ export interface Check {
 const REDESIGN = "collie-workflow-redesign (mk/productive-execution)";
 const SHIPPED = "shipped in 0.8.0";
 const RETRO = "collie-retro-fixes (this MR)";
+const NATIVE = "native-collie-control-panel (this MR)";
 const OPERATOR = "operator";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
   {
-    id: "front-door/composer-visible",
+    id: "front-door/native-chat-takes-what-is-typed",
     statement:
-      "Opening the Home with nothing selected shows the conversation and a composer, and the empty state says what Collie can be asked.",
-    owner: REDESIGN,
-    needs: "ui",
+      "The Home opens as one tab of two panes — the board and a native harness — with chat focused, and what a person types into it is answered. No mode, no composer of Collie's, and a process that started is not an editor that took a keystroke.",
+    owner: NATIVE,
+    needs: "operator",
     proof: {
-      kind: "test",
-      layer: "ui",
-      file: "test/ui/app.test.tsx",
-      name: "the composer is on the Home before anyone finds a key, and says what it is for",
+      kind: "operator",
+      how: "`bun run tools/chat-live.ts --harness claude` and `--harness pi`, which make a disposable Herd of their own, type a question into the real pane and wait for the answer to appear on it. Record the rows, both harness versions and the revision. ADR-0011 carries the pass they were accepted on.",
+    },
+  },
+  {
+    id: "front-door/chat-proposes-and-the-human-confirms",
+    statement:
+      "Asked in native chat to do something, Collie proposes it: the board draws the proposal, the Run is untouched until the human confirms it by id and hash, and declining leaves it untouched. Chat cannot confirm its own proposal, whatever terminal its process has.",
+    owner: NATIVE,
+    needs: "operator",
+    proof: {
+      kind: "operator",
+      how: "`bun run tools/chat-live.ts --harness claude` and `--harness pi`, whose last four rows type a request into the real pane, then read the Run's own record before and after a human confirmation, and try the same confirmation as chat. Record the rows, both harness versions and the revision.",
     },
   },
   {
     id: "front-door/board-keys-keep-working",
     statement:
-      "With the composer visible but unfocused, board keys still drive the board; one key focuses the composer and Esc gives the board back.",
-    owner: REDESIGN,
+      "The board has no field of its own to lose its keys to: `:` is not a mode, and every board key means what the footer says it means.",
+    owner: NATIVE,
     needs: "ui",
     proof: {
       kind: "test",
       layer: "ui",
       file: "test/ui/app.test.tsx",
-      name: "board keys keep working while the composer is on screen but not focused",
-    },
-  },
-  {
-    id: "front-door/untargeted-message-is-sent",
-    statement:
-      "A message typed on the Home with no row selected reaches Collie. In 0.8.0 the Steering key handler returns null for it, so it is silently not sent — the backend never hears the question it is known to answer well.",
-    owner: REDESIGN,
-    needs: "ui",
-    proof: {
-      kind: "test",
-      layer: "ui",
-      file: "test/ui/app.test.tsx",
-      name: "Enter asks about the flock, and never aims at whichever row is selected",
-    },
-  },
-  {
-    id: "front-door/selection-is-never-the-implicit-target",
-    statement:
-      "A global message typed while an old Run happens to be selected is still global: no delivery appears in that Run's ledger.",
-    owner: REDESIGN,
-    needs: "ui",
-    proof: {
-      kind: "test",
-      layer: "ui",
-      file: "test/ui/state.test.ts",
-      name: "Enter with nothing aimed asks about the flock, whatever row is selected",
+      name: "there is no composer to find: typing goes to the board, and `:` is not a mode",
     },
   },
   {
@@ -152,12 +136,38 @@ const FRONT_DOOR: readonly Check[] = [
   {
     id: "front-door/proactive-turn-on-a-meaningful-event",
     statement:
-      "A Run halting produces one turn in the conversation naming the Run and the reason, without anyone asking, and re-rendering does not repeat it.",
+      "A Run halting reaches the conversation without anyone asking — pushed into Pi's own queue between turns, or waiting for Claude's next turn where there is no channel to push through — and re-rendering the board does not repeat it or send it again.",
     owner: OPERATOR,
     needs: "operator",
     proof: {
       kind: "operator",
-      how: "Make a Run halt, leave the Home open and touch nothing. Record the turn that appears, the Run it names, the reason, and that it appears once. test/proactive.test.ts proves which transitions qualify and that each is said once; only a running Home proves one arrives.",
+      how: "Make a Run halt, leave the Home open and touch nothing. Record what reached the conversation, the Run it names, that it arrived once, and — on Claude — that `collie chat status` says delivery waits for the next turn and the board says how many are waiting. test/news.test.ts proves the batching, deduplication and receipts; only a running Home proves one arrives.",
+    },
+  },
+  {
+    id: "backend/an-unchanged-herd-costs-nothing",
+    statement:
+      "A board redrawing over unchanged state produces no events, writes nothing and calls no model — there is no model on that path at all. A burst becomes one bounded batch that says what it left out, and `sent` never settles an item: only the conversation having read it does, and a send nobody can account for stays visibly uncertain.",
+    owner: NATIVE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/news.test.ts",
+      name: "submitted is not read, and only reading settles anything",
+    },
+  },
+  {
+    id: "front-door/the-board-says-what-is-waiting",
+    statement:
+      "News Collie has noticed and the conversation has not been told is visible on the board, with sends nobody can account for named separately — so a harness that cannot be pushed to leaves work visibly waiting rather than silently.",
+    owner: NATIVE,
+    needs: "ui",
+    proof: {
+      kind: "test",
+      layer: "ui",
+      file: "test/ui/live.test.tsx",
+      name: "the board says what Collie noticed and has not told the conversation",
     },
   },
   {
@@ -172,16 +182,14 @@ const FRONT_DOOR: readonly Check[] = [
     },
   },
   {
-    id: "front-door/honest-when-there-is-no-herdr",
+    id: "front-door/honest-when-there-is-no-harness",
     statement:
-      "With no herdr or no model, the conversation region says so and the board still works.",
-    owner: REDESIGN,
-    needs: "ui",
+      "With the chosen harness missing, the Home still opens on its board, every Run keeps working, and Collie never quietly opens the other harness instead \u2014 and it says which harness is missing and why when it is asked, through `collie chat status` and `collie_installation`.",
+    owner: OPERATOR,
+    needs: "operator",
     proof: {
-      kind: "test",
-      layer: "ui",
-      file: "test/ui/live.test.tsx",
-      name: "the composer says why there is nothing to talk to, rather than going blank",
+      kind: "operator",
+      how: "Take the chosen harness off PATH and open the Home. Record that the board is drawn and its Runs are still there and still driven, that nothing started the other harness, and what `collie chat status` says. The board draws no line of its own about it \u2014 the reason goes to the terminal that started the Home, and to whoever asks \u2014 so record that as what happened rather than as a fail. test/chat.test.ts proves the sentence and the refusal; only an opened Home proves the rest.",
     },
   },
   {
@@ -213,16 +221,94 @@ const FRONT_DOOR: readonly Check[] = [
 /** Facts about the code beneath the front door. True, useful, and not front-door proof. */
 const BACKEND: readonly Check[] = [
   {
-    id: "backend/untargeted-question-is-answered-and-read-only",
+    id: "backend/every-operation-has-a-conversational-route",
     statement:
-      "`operations.steer` with no target answers about the whole flock and cannot become a proposal.",
-    owner: SHIPPED,
+      "Every operation a human has through the CLI or the board either has a conversational route that is called in the test, or is named as the human's with the reason — no capability is quietly missing, and none is reduced to advice or to an action this build cannot carry out.",
+    owner: NATIVE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/chat-parity.test.ts",
+      name: "every operation a human has, native chat has a route to — or a reason it does not",
+    },
+  },
+  {
+    id: "backend/the-parity-inventory-is-the-command-tree",
+    statement:
+      "The operations parity is measured against are the CLI's own command tree, walked, rather than a list somebody kept up to date — so a command added upstream with no conversational route fails the gate instead of passing unnoticed.",
+    owner: NATIVE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/chat-parity.test.ts",
+      name: "the operations are the command tree's, not a list somebody kept up to date",
+    },
+  },
+  {
+    id: "backend/chat-cannot-authorise-itself",
+    statement:
+      "A request from native chat is recorded as `chat:`, waits for a human whatever the target Run granted its Driver, and cannot confirm, decline or reconcile anything. A Run it names that does not exist is refused rather than retargeted, and there is no action kind outside the closed set.",
+    owner: NATIVE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/tools.test.ts",
+      name: "a request is a proposal nobody has acted on, and chat is never the one who acts",
+    },
+  },
+  {
+    id: "backend/a-read-covers-the-whole-herd",
+    statement:
+      "What chat may read is the whole Herd, and it says how much it left out. A board filter and a selected row are what a person is looking at, and have never been an input to it.",
+    owner: NATIVE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/tools.test.ts",
+      name: "a read covers the whole Herd, whatever a board is filtered to",
+    },
+  },
+  {
+    id: "backend/a-steer-names-its-run-or-is-refused",
+    statement:
+      "Nothing becomes a target by being on screen: a steer names its Run or is refused before anything is spent.",
+    owner: NATIVE,
     needs: "backend",
     proof: {
       kind: "test",
       layer: "backend",
       file: "test/steer.test.ts",
-      name: "a question with no target is answered, and cannot be a proposal",
+      name: "a steer with no target is refused before anything is spent",
+    },
+  },
+  {
+    id: "backend/a-harness-preference-is-not-a-switch",
+    statement:
+      "Choosing the other harness leaves a running conversation and every worker alone; the next launch uses it, with its own native history and no handoff.",
+    owner: NATIVE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/chat.test.ts",
+      name: "a changed preference is the next launch, never a swap",
+    },
+  },
+  {
+    id: "backend/a-conversation-is-this-herds-own-session",
+    statement:
+      "A reopened chat resumes the session Collie recorded for this Herd and harness, never whichever session the harness happened to write last in that directory — and where there is none it says the conversation is new.",
+    owner: NATIVE,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/chat.test.ts",
+      name: "a conversation is this Herd's session, not whatever ran here last",
     },
   },
   {

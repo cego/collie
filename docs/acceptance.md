@@ -41,13 +41,17 @@ reproduces exactly the false confidence the gate was built to end. Three layers:
 | `ui`       | The key handler, state machine or rendered region a person touches. Reaches the backend beneath it. |
 | `operator` | What only a person at a terminal can see: a live process, a restart, an agent's own state.          |
 
-The worked example is the one that caught us. `operations.steer` with no target answers
-about the whole flock and refuses to become a proposal — a backend test proves it, and it
-is true in 0.8.0. In that same release the Home's Steering key handler returns `null` for a
-message typed with no row selected, so the question never reaches the backend that answers
-it well. A backend pass standing in for the front-door promise would have read as green
-over a feature nobody could use. So the registry carries both rows: the backend one
-passes, the front-door one is `PENDING` until a `ui` proof exists.
+The worked example is the one that caught us. `operations.steer` with no target answered
+about the whole flock and refused to become a proposal — a backend test proved it, and it
+was true in 0.8.0. In that same release the Home's composer dropped a message typed with no
+row selected, so the question never reached the backend that answered it well. A backend
+pass standing in for the front-door promise read as green over a feature nobody could use.
+
+The conversation is a native harness now ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md)),
+and the same rule decides its rows. That a harness starts is a `backend` fact. That a
+person can type into it and be answered is an `operator` one, and `tools/chat-live.ts` is
+what makes it — against the real pane, in a disposable Herd. Three defects were found that
+way that no fake adapter could have shown.
 
 The same applies to a restart. A journal that round-trips on disk is necessary for the
 conversation to survive the Home closing, and it is not proof that a restarted Home draws
