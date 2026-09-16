@@ -170,9 +170,13 @@ Write the repository off on the issue `track` bound to — that issue and no oth
 Read the description, change only this repository's own line, and write it back. Every
 other repository's entry and links stay exactly as they are.
 
-Check the entry off and give it, on the same entry: every merge request of this Run with
-its outcome and link, the version tag and release where there was one, and any deferral I
-approved named as an exception. A reader has to see at a glance what was left.
+Check the entry off and keep it to at most two lines:
+
+`- [x] <project> — <tag or "no tag">`
+`  <one short sentence summarising the dependency changes and any approved exceptions>`
+
+Do not list individual merge requests, outcomes, pipelines or release links. The checklist
+only needs the project, tag and a concise summary of what changed.
 
 Where deferrals were approved and everything else succeeded, this Run is
 **renovated with exceptions** — say so on the entry and in your Output. An unresolved
