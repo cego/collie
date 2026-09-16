@@ -194,7 +194,7 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
       layer: resolved.layer,
       provenance: provenanceOf(def),
       path: resolved.path,
-      inputs: Object.keys(branchListed(resolved.name, resolved.inputs)),
+      inputs: Object.keys(branchListed(resolved.base, resolved.inputs)),
       steps: resolved.steps.map(stepLine),
       decisions: resolved.steps
         .filter((step) => (step.choices ?? []).length > 0)

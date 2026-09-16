@@ -2383,7 +2383,7 @@ const chain = Effect.fn("Engine.chain")(function* (
   const where = {
     cwd,
     stateDir: o.env.stateDir,
-    workflow: child.name,
+    workflow: child.base,
     name: tail,
     inputs,
     sources,

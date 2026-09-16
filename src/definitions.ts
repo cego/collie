@@ -153,6 +153,13 @@ export interface Provenance {
 
 export interface WorkflowDef extends Provenance {
   name: string;
+  /**
+   * The name at the bottom of this definition's `extends` chain — what it ultimately
+   * is, rather than what this file is called. A fork of `renovate` is still a Renovate
+   * Run and still needs the roaming checkout that goes with one, so behaviour keyed on
+   * which Workflow this is keys on `base`, never on `name`.
+   */
+  base: string;
   title: string;
   description: string;
   inputs: Record<string, InputStrategy>;
@@ -288,6 +295,8 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
 
   const workflow: WorkflowDef = {
     name: str(data.name, stem),
+    // Its own name until resolution finds it a parent, whose `base` it then inherits.
+    base: str(data.name, stem),
     title: str(data.title, str(data.name, stem)),
     description: str(data.description),
     inputs,
@@ -502,6 +511,8 @@ function mergeWorkflow(parent: WorkflowDef, child: WorkflowDef): WorkflowDef {
 
   return {
     ...parent,
+    // `base` is deliberately not among the keys the child brings: inheriting the
+    // parent's carries the bottom of the chain up, however many forks deep it is.
     ...pick(child, ["name", "path", "layer", "extends", "forkedFromHash"]),
     // A file with no `title:` is parsed as titled after itself, so that is what
     // "the child did not name one" looks like here.
@@ -588,6 +599,8 @@ export interface ResolvedStep extends StepDef {
 
 export interface ResolvedWorkflow {
   name: string;
+  /** The bottom of the `extends` chain — see `WorkflowDef.base`. */
+  base: string;
   title: string;
   description: string;
   inputs: Record<string, InputStrategy>;
@@ -729,6 +742,7 @@ export function resolveWorkflow(
   }
   return {
     name: wf.name,
+    base: wf.base,
     title: wf.title,
     description: wf.description,
     inputs,
