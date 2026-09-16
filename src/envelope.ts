@@ -12,14 +12,15 @@ const ResultBoundary = Schema.Union([
     data: Schema.ObjectKeyword,
     human: Schema.String,
   }),
-  Schema.Struct({ ok: Schema.Literal(false), error: ExpectedError }),
+  // Tools can reach this module while operations is still loading.
+  Schema.Struct({ ok: Schema.Literal(false), error: Schema.suspend(() => ExpectedError) }),
 ]);
 const ResultBoundaryJson = Schema.fromJsonString(ResultBoundary);
 
 const ResultJson = Schema.fromJsonString(
   Schema.Union([
     Schema.Struct({ ok: Schema.Literal(true), data: Schema.Unknown }),
-    Schema.Struct({ ok: Schema.Literal(false), error: ExpectedError }),
+    Schema.Struct({ ok: Schema.Literal(false), error: Schema.suspend(() => ExpectedError) }),
   ]),
 );
 
@@ -141,12 +142,38 @@ export const mutation = Effect.fn("collie.mutation")(function* (
       return err("operation_failed", `Request "${id}" is already in progress.`, { requestId: id });
     }),
     Effect.gen(function* () {
-      const result = yield* apply(id);
-      const withRequest = withRequestId(result, id);
-      if (!withRequest.ok && REJECTED.includes(withRequest.error.code)) return withRequest;
+      // Another caller may have finished while this one waited for the lock.
+      if (yield* fs.exists(path)) return yield* readReceipt(path);
       const tmp = `${path}.${yield* currentPid}.tmp`;
-      yield* fs.writeFileString(tmp, `${Schema.encodeSync(ResultBoundaryJson)(withRequest)}\n`);
-      yield* fs.rename(tmp, path);
+      const save = (value: Result) =>
+        fs
+          .writeFileString(tmp, `${Schema.encodeSync(ResultBoundaryJson)(value)}\n`)
+          .pipe(Effect.andThen(fs.rename(tmp, path)));
+      // Persist before applying: a process lost after taking effect must not execute
+      // the same request again just because it never wrote the final receipt.
+      yield* save(
+        err(
+          "operation_failed",
+          `Request "${id}" is in progress or ended without a recorded result. Check its state before submitting a new request.`,
+          { requestId: id, outcome: "unknown" },
+        ),
+      );
+      const incomplete = (cause: unknown) =>
+        Effect.succeed(
+          err("operation_failed", `The request failed; its effects are unknown: ${String(cause)}`, {
+            outcome: "unknown",
+          }),
+        );
+      const result = yield* apply(id).pipe(
+        Effect.catch(incomplete),
+        Effect.catchDefect(incomplete),
+      );
+      const withRequest = withRequestId(result, id);
+      if (!withRequest.ok && REJECTED.includes(withRequest.error.code)) {
+        yield* fs.remove(path);
+        return withRequest;
+      }
+      yield* save(withRequest);
       return withRequest;
     }),
   );

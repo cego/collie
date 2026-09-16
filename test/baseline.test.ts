@@ -79,7 +79,8 @@ test("the baseline personas are the five the design names, and each names its sk
         "code-review",
         "code-review-and-quality",
       ]);
-      expect(skillsIn(defs.personas.get("planner")!.body)).toContain("wayfinder");
+      expect(skillsIn(defs.personas.get("planner")!.body)).toContain("to-spec");
+      expect(defs.personas.get("planner")!.body).toContain("A clear goal needs no");
       expect(skillsIn(defs.personas.get("architect")!.body)).toContain(
         "improve-codebase-architecture",
       );
@@ -228,7 +229,7 @@ test("renovate names the checkout it roams in and waits for Helle before it touc
       const wf = resolveWorkflow("renovate", defs, FALLBACK_DEFAULTS);
 
       // The checkout is cut from this input; ticket 02's allocation reads the same name.
-      expect(wf.inputs[REPOSITORY_INPUT]).toBe("optional");
+      expect(wf.inputs[REPOSITORY_INPUT]).toBe("gitlab-repository");
       // A roaming checkout has no branch to name, so it is offered no branch input.
       expect(roams("renovate")).toBe(true);
       expect(mutates("renovate")).toBe(true);

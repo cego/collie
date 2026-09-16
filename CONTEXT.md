@@ -6,7 +6,7 @@
 
 **Step** — One unit of agent work inside a Workflow. Runs in its own Tab. Has a Persona, a Harness, a Model, optionally the Skill it drives, and optionally a structured Output. May be `fresh` (new agent each iteration) or continue the existing agent.
 
-**Trust** — A Harness's own answer to "may I work in this directory". Asked once per directory, by the runner before any Tab opens, and recorded where that harness looks for it. `never` leaves the question to the harness; `auto` answers yes for every directory a Run starts in.
+**Trust** — A Harness's own answer to "may I work in this directory". Starting a Run grants it for the selected directory by default, without a duplicate Collie question. `never` leaves the question to the harness.
 
 **Permissions** — Who decides whether an agent's tool call runs: Collie up front (`bypass`, the default, which starts each agent with its harness's unattended switch), or the harness in the agent's own pane (`harness`). Trust is answered once per directory; this is decided per agent start, and a Step may name its own mode. Trust is about the directory, Permissions about the calls made inside it.
 
@@ -55,32 +55,25 @@ is the conversation having taken it — only the second settles an item, and a s
 can account for stays `uncertain` for a human rather than being retried.
 
 **Collie tools** — The whole of what native chat may reach, over Collie's own shared
-operations. Five read — `collie_herd`, `collie_run`, `collie_workspaces`,
-`collie_receipts`, `collie_news` — Herd-wide, and never narrowed by the board's Filter or its Selection,
-which are what a human is looking at rather than what supervision may see. One asks:
-`collie_propose` records a Proposal over the same closed action set, the same validation
-and the same executors the CLI and the board use, and carries nothing out. Reached over a
+operations. Reads cover the Herd and are never narrowed by the board's Filter or Selection.
+`collie_propose`, despite its legacy name, executes requested actions using the same
+validation and executors as the CLI and board, without a second confirmation. Reached over a
 local MCP server by Claude and a generated extension by Pi, and by `collie tools call` from
 a terminal: one implementation, three ways in.
 
 **Redirect notice** — What a per-workspace Collie pane from an older release shows on its
 next launch: one line and "Open Collie". No board, no chat.
 
-**Steer** — One free-form human message about a named Run. A question: it records what was
-said, asks, and prints what came back. A target is required and never inferred from the
-words. Questions about the flock are Native chat's, which reads rather than paying for a
-model to be asked one.
+**Steer** — One free-form request about a named Run. Requested actions execute directly;
+questions receive explanations without changes, and a dry run previews actions. A target
+is required. Questions about the flock are Native chat's.
 
-**Proposal** — A durable, hash-bound set of closed actions Collie suggests. Nothing in it
-runs until confirmed, except an action the target's own Authority already grants — and a
-proposal that came out of a conversation is never that.
+**Proposal** — A durable, hash-bound set of actions. Explicit requests execute through
+this record immediately. Unsolicited background suggestions remain pending.
 
-**Confirmation** — A human command naming a Proposal's id **and** its content hash. A yes
-to a summary is not consent to a payload nobody read. Who is human is derived by the front
-door — a controlling terminal or the board — never claimed by a caller. Native chat's
-bridge is `chat`, stamped by the entrypoint that serves Collie tools rather than derived:
-it runs inside a harness's pane and so has a controlling terminal, which the CLI would
-otherwise read as a person. It is not human, so it confirms nothing.
+**Confirmation** — Execution of a pending Proposal by id, optionally naming its exact
+content hash. Scripts and chat may execute requests without a terminal requirement.
+The actual origin is retained for attribution, not used as an approval gate.
 
 **Delivery** — One message to one live agent incarnation, with states `reserved`,
 `submitted`, `acknowledged`, `verified` and the terminal `failed`, `unknown`, `superseded`,
@@ -126,11 +119,11 @@ never a worker transcript.
 **Follow-up Run** — A child Run started from a finished one to act on its outcome, reusing
 its worktree under guards. A finished Run is immutable; there is no mode that reopens one.
 
-**Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what the human named at launch, and amended only by an explicit human act. Everything Collie says about drift is a comparison against it.
+**Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request. Everything Collie says about drift is a comparison against it.
 
 **Constraint** — One thing a Run's work must respect. `kind: rule` is checked by Collie itself; `kind: semantic` is judged. `severity: block | warn`. Its `source` says where it came from — `human`, `workspace-default`, `parent` or `plan` — and a `plan` entry carries the file, heading and line it was read from. Text is evidence: no Constraint, wherever it came from, grants Authority.
 
-**Authority** — What Collie may do to a Run without asking: correct drift, send at a work boundary or interrupt, stop the Run, and how many corrections a constraint gets. Per Run, every grant off by default, and set only by a human command — never read from a plan, a repository or a prompt. Model-call usage is recorded per Run and per Herd but is not an Authority: it is data, and never a quota that blocks work.
+**Authority** — What Collie may do to a Run without a new request: correct drift, send at a work boundary or interrupt, stop the Run, and how many corrections a constraint gets. Per Run, every grant off by default, and set by an explicit command or request — never inferred from repository content or worker output. Model-call usage is recorded per Run and per Herd but is not an Authority: it is data, and never a quota that blocks work.
 
 **Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents. Its **slug** — `<workflow>-<what it is named after>` — names its agents, its tab and its row on the board, and for a mutating Run it is named after the task half of the Worktree's branch — the branch without the login it is namespaced under — so two Runs on different work can never read as the same row.
 

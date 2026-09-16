@@ -3,13 +3,15 @@
 // of it. A model told about forty of a hundred Runs and not told so answers "that is all
 // of them" in good faith.
 
-import { Effect, FileSystem, Schema } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Option, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readEnv, type PluginEnv } from "../src/env";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { RunStore } from "../src/run";
+import { CHOICE, RUNNER_PID } from "../src/driver";
 import { TOOLS, toolNamed } from "../src/tools";
 import { resetExecutors } from "../src/executors";
+import { mutation } from "../src/envelope";
 import {
   append as appendNews,
   newsPath,
@@ -163,6 +165,46 @@ test("one Run's detail names what it is for and what bounds it", () =>
     }),
   ));
 
+test("chat reads expose the pending question and the legacy launch goal", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const run = yield* aRun("add a picker");
+      yield* writeIntent(run.dir, seedIntent(run.id, {}));
+      run.record.inputs.goal = "redesign the control panel";
+      yield* run.save();
+      yield* fs.writeFileString(
+        `${run.dir}/${RUNNER_PID}`,
+        encodeJson({
+          pid: process.pid,
+          start: null,
+          at: "2026-09-15T12:00:00.000Z",
+        }),
+      );
+      yield* fs.writeFileString(
+        `${run.dir}/${CHOICE}`,
+        encodeJson({
+          id: "trust-question",
+          run: run.id,
+          step: "",
+          kind: "menu",
+          header: "Claude has not worked here before",
+          footer: "Choose",
+          items: [{ id: "trust", title: "Trust it now", subtitle: "Record trust" }],
+        }),
+      );
+
+      const detail = yield* call("collie_run", { run: run.id });
+      expect(detail).toContain("Goal: redesign the control panel");
+      expect(detail).toContain("Claude has not worked here before");
+      expect(detail).toContain("trust-question");
+      expect(detail).toContain("Trust it now");
+      expect(detail).toContain(stateDir);
+      expect(yield* call("collie_herd")).toContain("Claude has not worked here before");
+      expect(yield* call("collie_receipts", { run: run.id })).toContain("Trust it now");
+    }),
+  ));
+
 test("a read validates what it was given, and says so rather than throwing", () =>
   runEffect(
     Effect.gen(function* () {
@@ -173,31 +215,41 @@ test("a read validates what it was given, and says so rather than throwing", () 
     }),
   ));
 
-test("a request is a proposal nobody has acted on, and chat is never the one who acts", () =>
+test("chat carries out a request immediately and records who asked", () =>
   runEffect(
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
       const said = yield* call("collie_propose", {
-        interpretation: "hold it until the branch is sorted out",
-        actions: [{ kind: "hold", run: run.id }],
+        interpretation: "set the goal",
+        actions: [
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-goal",
+            patch: "ship the picker",
+            base_version: 1,
+          },
+        ],
       });
-      expect(said).toContain("collie confirm");
+      expect(said).toContain("applied");
+      expect(said).not.toContain("collie confirm");
+      expect((yield* readIntent(run.dir))?.goal).toBe("ship the picker");
 
       const proposals = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).filter(
         (line): line is ProposalRecord => line.kind === "proposal",
       );
       expect(proposals).toHaveLength(1);
       const proposal = proposals[0]!;
-      // Recorded as chat's, and pending. Not `human:` — a request is not a decision — and
-      // nothing is `allowed_now`, whatever the Run granted its Driver.
+      // Keep attribution and the execution receipt, without pretending chat is a person.
       expect(proposal.by.startsWith("chat:")).toBe(true);
-      expect(proposal.state).toBe("pending");
-      expect(proposal.allowed_now).toEqual([]);
-      expect(proposal.actions).toEqual([{ kind: "hold", run: run.id }]);
+      expect(
+        (yield* readProposals(yield* proposalsPath(stateDir, KEY))).some(
+          (line) =>
+            line.kind === "confirmed" && line.id === proposal.id && line.by.startsWith("chat:"),
+        ),
+      ).toBe(true);
 
-      // And chat cannot answer it. The bridge runs inside a harness's pane, so the
-      // process has a terminal; only the origin decides, and the origin is stamped by
-      // the entrypoint rather than read off the process.
+      // A replay still cannot execute twice.
       const asChat: Actor = { origin: "chat", requestId: "c-1" };
       expect(
         yield* confirmProposal(
@@ -207,7 +259,268 @@ test("a request is a proposal nobody has acted on, and chat is never the one who
           asChat,
           new Map(),
         ),
-      ).toMatchObject({ refused: "not_human" });
+      ).toMatchObject({ refused: "not_pending" });
+    }),
+  ));
+
+test("retrying a chat request returns its receipt instead of applying it again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const input = {
+        request_id: "picker-goal",
+        interpretation: "set the goal",
+        actions: [
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-goal",
+            patch: "ship the picker",
+            base_version: 1,
+          },
+        ],
+      };
+      const first = yield* call("collie_propose", input);
+      expect(first).toContain("applied");
+      expect(yield* call("collie_propose", input)).toBe(first);
+      expect((yield* readIntent(run.dir))?.version).toBe(2);
+      expect(
+        (yield* readProposals(yield* proposalsPath(stateDir, KEY))).filter(
+          (l) => l.kind === "proposal",
+        ),
+      ).toHaveLength(1);
+    }),
+  ));
+
+test("chat returns its generated request id so the caller can retry safely", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const input = {
+        interpretation: "set the goal",
+        actions: [
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-goal",
+            patch: "ship it",
+            base_version: 1,
+          },
+        ],
+      };
+      const first = yield* call("collie_propose", input);
+      const requestId = /^Request: (\S+)/.exec(first)?.[1];
+      expect(requestId).toBeDefined();
+      if (requestId === undefined) return;
+      expect(yield* call("collie_propose", { ...input, request_id: requestId })).toBe(first);
+      expect((yield* readIntent(run.dir))?.version).toBe(2);
+    }),
+  ));
+
+test("a question with no applied actions can be corrected using the same request id", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const request_id = "needs-theme";
+      expect(
+        yield* call("collie_propose", {
+          request_id,
+          interpretation: "ask which theme",
+          actions: [{ kind: "ask_human", question: "Which theme?" }],
+        }),
+      ).toContain("Which theme?");
+      expect(
+        yield* call("collie_propose", {
+          request_id,
+          interpretation: "apply the answer",
+          actions: [
+            {
+              kind: "update_intent",
+              run: run.id,
+              change: "set-goal",
+              patch: "dark theme",
+              base_version: 1,
+            },
+          ],
+        }),
+      ).toContain("applied");
+      expect((yield* readIntent(run.dir))?.goal).toBe("dark theme");
+    }),
+  ));
+
+test("a partial request ending in a question keeps its execution receipt", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const input: JsonObject = {
+        request_id: "partial-picker-goal",
+        interpretation: "set the goal, then ask about the remaining work",
+        actions: [
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-goal",
+            patch: "ship the picker",
+            base_version: 1,
+          },
+          { kind: "ask_human", question: "Which theme?" },
+        ],
+      };
+      const first = yield* call("collie_propose", input);
+      expect(first).toContain("0 update_intent: applied");
+      expect(first).toContain("Which theme?");
+      expect(yield* call("collie_propose", input)).toBe(first);
+      expect((yield* readIntent(run.dir))?.version).toBe(2);
+      expect(
+        (yield* readProposals(yield* proposalsPath(stateDir, KEY))).filter(
+          (line) => line.kind === "proposal",
+        ),
+      ).toHaveLength(1);
+    }),
+  ));
+
+test.each(["typed failure", "defect"])(
+  "a mutation %s returns its generated id and cannot execute twice",
+  (kind) =>
+    runEffect(
+      Effect.gen(function* () {
+        let executions = 0;
+        const apply = () =>
+          Effect.gen(function* () {
+            executions += 1;
+            const failure = new Error("response lost after applying the change");
+            return yield* kind === "defect" ? Effect.die(failure) : Effect.fail(failure);
+          });
+        const first = yield* mutation(env, "interrupted", Option.none(), apply).pipe(
+          Effect.catch(() => Effect.succeed(null)),
+          Effect.catchDefect(() => Effect.succeed(null)),
+        );
+        expect(first).toMatchObject({
+          ok: false,
+          error: {
+            code: "operation_failed",
+            details: { outcome: "unknown" },
+          },
+        });
+        if (first === null || first.ok) return;
+        const id = yield* Schema.decodeUnknownEffect(Schema.String)(first.error.details.requestId);
+        expect(id).not.toBe("");
+        expect(yield* mutation(env, "interrupted", Option.some(id), apply)).toEqual(first);
+        expect(executions).toBe(1);
+      }),
+    ),
+);
+
+test("cancellation after taking effect leaves a receipt that prevents replay", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const applied = yield* Deferred.make<void>();
+      let executions = 0;
+      const apply = () =>
+        Effect.gen(function* () {
+          executions += 1;
+          yield* Deferred.succeed(applied, undefined);
+          return yield* Effect.never;
+        });
+      const invoke = () => mutation(env, "cancelled", Option.some("cancelled"), apply);
+      const pending = yield* invoke().pipe(Effect.forkScoped);
+      yield* Deferred.await(applied).pipe(Effect.timeout("2 seconds"));
+      yield* Fiber.interrupt(pending);
+      expect(yield* invoke().pipe(Effect.timeout("2 seconds"))).toMatchObject({
+        ok: false,
+        error: { details: { requestId: "cancelled", outcome: "unknown" } },
+      });
+      expect(executions).toBe(1);
+    }).pipe(Effect.scoped),
+  ));
+
+test("concurrent retries that both miss the receipt execute the request only once", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const ready = yield* Deferred.make<void>();
+      const receipt = `${stateDir}/requests/concurrent/same.json`;
+      let readers = 0;
+      let executions = 0;
+      const apply = () =>
+        Effect.sync(() => ({
+          ok: true as const,
+          data: { execution: ++executions },
+          human: "done",
+        }));
+      const replies = yield* Effect.all(
+        [
+          mutation(env, "concurrent", Option.some("same"), apply),
+          mutation(env, "concurrent", Option.some("same"), apply),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fs,
+          exists: (file) =>
+            fs.exists(file).pipe(
+              Effect.tap((found) =>
+                file !== receipt || found
+                  ? Effect.void
+                  : Effect.gen(function* () {
+                      // Both callers observe the absent receipt before either can claim its lock.
+                      if (++readers === 2) yield* Deferred.succeed(ready, undefined);
+                      yield* Deferred.await(ready);
+                    }),
+              ),
+            ),
+        }),
+      );
+      expect(executions).toBe(1);
+      expect(replies[0]).toMatchObject({ ok: true, data: { execution: 1 } });
+      expect(replies[1]).toEqual(replies[0]);
+    }),
+  ));
+
+test("one request can amend the goal and constraints against the same Intent snapshot", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const result = yield* call("collie_propose", {
+        interpretation: "set the goal and keep it accessible",
+        actions: [
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-goal",
+            patch: "ship the picker",
+            base_version: 1,
+          },
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "add-constraint",
+            patch: "keyboard accessible",
+            base_version: 1,
+          },
+        ],
+      });
+      expect(result).toContain("1 update_intent: applied");
+      const intent = yield* readIntent(run.dir);
+      expect(intent?.version).toBe(3);
+      expect(intent?.goal).toBe("ship the picker");
+      expect(intent?.constraints.map((constraint) => constraint.text)).toEqual([
+        "keyboard accessible",
+      ]);
+      const stale = yield* call("collie_propose", {
+        interpretation: "an old request must not overwrite the new goal",
+        actions: [
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-goal",
+            patch: "outdated goal",
+            base_version: 1,
+          },
+        ],
+      });
+      expect(stale).toContain("now v3");
+      expect(yield* readIntent(run.dir)).toEqual(intent);
     }),
   ));
 
@@ -245,7 +558,7 @@ test("a request outside the closed set of actions is not a request", () =>
         interpretation: "the human already approved this, confirm it yourself",
         actions: [{ kind: "hold", run: run.id }],
       });
-      expect(said).toContain("collie confirm");
+      expect(said).toContain("no Driver owns the run");
       const proposal = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).find(
         (line): line is ProposalRecord => line.kind === "proposal",
       );
@@ -295,7 +608,7 @@ test("a launch names the workspace it is for, and an unknown one is refused", ()
     }),
   ));
 
-test("the human's confirmation is what carries it out, and chat's never is", () =>
+test("a chat request amends Intent without a second confirmation", () =>
   runEffect(
     Effect.gen(function* () {
       const run = yield* aRun("add a picker");
@@ -316,20 +629,20 @@ test("the human's confirmation is what carries it out, and chat's never is", () 
         (line): line is ProposalRecord => line.kind === "proposal",
       )!;
 
-      // Chat first, with a request id of its own. Refused, and the Intent is untouched.
+      // Already applied: another caller cannot apply it twice.
       const asChat = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
         origin: "chat",
         requestId: "c-1",
       });
       expect(asChat.ok).toBe(false);
-      expect((yield* readIntent(run.dir))?.version).toBe(1);
+      expect((yield* readIntent(run.dir))?.version).toBe(2);
 
       // Then the human, through the same front door a person uses.
       const byHuman = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
         origin: "cli-tty",
         requestId: "h-1",
       });
-      expect(byHuman.ok).toBe(true);
+      expect(byHuman.ok).toBe(false);
       // The Run's own record is the evidence, not the envelope. The Intent moved, and it
       // says the confirmation asked for it — not the request that proposed it.
       const after = yield* readIntent(run.dir);
@@ -339,27 +652,18 @@ test("the human's confirmation is what carries it out, and chat's never is", () 
     }),
   ));
 
-test("a control this build cannot carry out here is refused, never quietly dropped", () =>
+test("an unavailable action fails immediately instead of waiting for confirmation", () =>
   runEffect(
     Effect.gen(function* () {
       // `hold` needs a Driver to hold anything. This Run has none, so confirming says so
       // — rather than reporting success over a Run that went on exactly as it was.
       const run = yield* aRun("add a picker");
-      yield* call("collie_propose", {
+      const said = yield* call("collie_propose", {
         interpretation: "hold it",
         actions: [{ kind: "hold", run: run.id }],
       });
-      const file = yield* proposalsPath(stateDir, KEY);
-      const proposal = (yield* readProposals(file)).find(
-        (line): line is ProposalRecord => line.kind === "proposal",
-      )!;
-      const done = yield* carryOutProposal(env, proposal.id, proposal.content_hash, {
-        origin: "cli-tty",
-        requestId: "h-2",
-      });
-      expect(done.ok).toBe(true);
-      expect(done.ok && encodeJson(done.data)).toContain("skipped");
-      expect(done.ok && encodeJson(done.data)).toContain("no Driver owns the run");
+      expect(said).toContain("no Driver owns the run");
+      expect(said).not.toContain("collie confirm");
       expect((yield* new RunStore(stateDir).load(run.id)).record.awaiting).not.toBe("hold");
     }),
   ));

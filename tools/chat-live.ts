@@ -9,20 +9,19 @@
 // workspace, its own chat session. It never touches the state directory your Runs are in,
 // and it closes what it opened unless you pass --keep. It costs real model calls.
 //
-// Five questions, printed as markdown to paste into the implementation Run:
+// Seven questions, printed as markdown to paste into the implementation Run:
 //   1. the Home is one tab of two panes, board left and chat right
 //   2. the chat pane holds a live agent on the harness that was asked for
 //   3. a typed question reaches the editor and produces an answer
 //   4. a follow-up naming nothing resolves against the answer before it
 //   5. a chat pane closed under it is recovered, and the relaunch resumes that same
 //      native session rather than starting a new one
+//   6. a requested action changes the Run immediately, is attributed to chat, leaves no
+//      confirmation pending, and cannot be replayed — observed in the Run's own record,
+//      never just in what the model said it did
 //   7. a development nobody asked about reaches the conversation — pushed where the
 //      harness has a queue, on the next turn where it does not — and settles only once
 //      the model has actually read it
-//   6. asked to do something, it proposes rather than acts: the proposal is pending and
-//      recorded as chat's, the Run is untouched, chat's own confirmation is refused, and
-//      the human's is what changes it — observed in the Run's own record, never in what
-//      the model said it did
 //
 // Every marker asserted here is a string the model had to find out, never one typed at
 // it: a pane shows the question as well as the answer, so a marker that appears in the
@@ -244,73 +243,65 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
       : `${again.kind}, session ${again.record.sessions[chosen] ?? "none"}`,
   );
 
-  // (6) Control. A request typed at the real pane, and then the Run's own record — before
-  // the human confirms, and after. What the model said it did is not evidence of anything.
+  // (6) Control. A request typed at the real pane, checked against the Run's own record.
+  // The expected version is not in the prompt: its echo cannot satisfy the check.
   yield* herdr
     .agentPrompt(
       again.kind === "unavailable" ? agent : again.record.agent,
-      `Use your collie_propose tool to add the constraint "stay in src" to the Intent of Run ${mine.id}, against base_version 1. Then reply with one line: PROPOSED followed by a space and the proposal id it gave you.`,
+      `Use your collie_propose tool to add the constraint "stay in src" to the Intent of Run ${mine.id}, against base_version 1, with request_id "probe-intent". Then call collie_run for that Run and reply with one line: APPLIED followed by a space and the Intent version it reports.`,
     )
     .pipe(Effect.ignore);
-  const proposedPane = homeAgain.chatPaneId ?? chat.record.paneId;
-  const proposed = yield* answers(herdr, proposedPane, "PROPOSED p-");
+  const requestedPane = homeAgain.chatPaneId ?? chat.record.paneId;
+  const applied = yield* answers(herdr, requestedPane, "APPLIED 2");
   // The key the *tools* use, which is this socket's — not the probe's own Herd identity.
   // Both are inside the disposable state directory; reading the wrong one would say
-  // nothing was proposed.
+  // nothing was requested.
   const file = yield* proposalsPath(stateDir, yield* herdOf(env.socketPath));
   const now = yield* Clock.currentTimeMillis;
-  const waiting = pendingFor(yield* readProposals(file), mine.id, now);
-  // The Intent's own version, which is what a confirmed `update_intent` moves. Read from
-  // the Run's record rather than from anything the model or the envelope said.
-  const version = () =>
-    readIntent(mine.dir).pipe(
-      Effect.map((intent) => intent?.version ?? null),
-      Effect.catch(() => Effect.succeed(null)),
-    );
+  const records = yield* readProposals(file);
+  const one = records
+    .filter((line) => line.kind === "proposal")
+    .find((line) => line.targets.some((target) => target.run === mine.id));
+  const intent = yield* readIntent(mine.dir);
   say(
-    "a request is a proposal, recorded as chat's and waiting",
-    proposed !== null && waiting.length === 1 && waiting[0]!.by.startsWith("chat:")
+    "a requested action is executed and attributed to chat",
+    applied !== null &&
+      one !== undefined &&
+      one.by.startsWith("chat:") &&
+      records.some((line) => line.kind === "confirmed" && line.id === one.id && line.by === one.by)
       ? "pass"
       : "fail",
-    `${waiting.length} pending, by ${waiting[0]?.by ?? "nobody"}`,
+    `by ${one?.by ?? "nobody"}`,
   );
-  const beforeConfirm = yield* version();
+  const constraints = (intent?.constraints ?? []).map((constraint) => constraint.text);
   say(
-    "and nothing has happened to the Run yet",
-    beforeConfirm === 1 ? "pass" : "fail",
-    `Intent v${beforeConfirm ?? "?"}`,
+    "the Intent changes without a second confirmation",
+    intent?.version === 2 && constraints.some((text) => text.includes("stay in src"))
+      ? "pass"
+      : "fail",
+    `Intent v${intent?.version ?? "?"}: ${constraints.join("; ") || "no constraints"}`,
   );
-  const one = waiting[0];
+  const waiting = pendingFor(records, mine.id, now);
+  say(
+    "no redundant confirmation is pending",
+    one !== undefined && waiting.length === 0 ? "pass" : "fail",
+    `${waiting.length} pending`,
+  );
   if (one !== undefined) {
-    // Chat's own hand on it first, terminal or no terminal.
-    const asChat = yield* carryOutProposal(env, one.id, one.content_hash, {
+    const replay = yield* carryOutProposal(env, one.id, one.content_hash, {
       origin: "chat",
-      requestId: "probe-chat",
+      requestId: "probe-replay",
     });
+    const after = yield* readIntent(mine.dir);
     say(
-      "chat cannot confirm its own proposal",
-      !asChat.ok ? "pass" : "fail",
-      asChat.ok ? "it was allowed to" : asChat.error.message,
-    );
-    // Then the human's half, through the same front door a person uses.
-    const done = yield* carryOutProposal(env, one.id, one.content_hash, {
-      origin: "cli-tty",
-      requestId: "probe-confirm",
-    });
-    const after = yield* version();
-    const constraints = yield* readIntent(mine.dir).pipe(
-      Effect.map((intent) => (intent?.constraints ?? []).map((c) => c.text)),
-      Effect.catch((): Effect.Effect<ReadonlyArray<string>> => Effect.succeed([])),
-    );
-    say(
-      "the human's confirmation is what changes the Run",
-      // The version moved and the constraint is there. Not the exact words the model
-      // chose for it: what is being proven is that a confirmation changed the record.
-      done.ok && after === 2 && constraints.some((text) => text.includes("stay in src"))
+      "a recorded execution cannot be replayed",
+      !replay.ok && replay.error.details?.reason === "not_pending" && after?.version === 2
         ? "pass"
         : "fail",
-      `Intent v${after ?? "?"}: ${constraints.join("; ") || "no constraints"}`,
+      replay.ok ? "it executed again" : replay.error.message,
     );
+  } else {
+    say("a recorded execution cannot be replayed", "fail", "no request was recorded");
   }
 
   // (7) News. A meaningful development while nobody is asking, and what reaches the

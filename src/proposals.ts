@@ -1,8 +1,7 @@
 // A proposal is what the evaluator suggested, written down before anyone can act on it.
 //
-// A human saying "yes" to a summary is not consent to a payload they did not see, so a
-// confirmation names the content hash. There is no `--yes`, and no phrasing of a steer
-// confirms anything.
+// Requests execute through this journal. Explicit proposals can also be confirmed later;
+// hashes and target versions prevent applying a different or stale payload.
 //
 // Nothing here runs an action: `confirm` returns the actions that may run, and who runs
 // them is `executors.ts` and the front door's business.
@@ -169,10 +168,10 @@ export const record = Effect.fn("Proposals.record")(function* (file: string, wha
  * tools rather than worked out from anything about the process. That matters here more
  * than anywhere else: the bridge runs as a child of a harness inside a pane, so it
  * inherits a controlling terminal, and the `cli-tty` heuristic would read a model as a
- * person. It is not human, so it cannot confirm, amend or reconcile anything.
+ * person. Attribution is recorded, not used to require a second approval.
  */
 export interface Actor {
-  readonly origin: "cli-tty" | "board" | "driver" | "evaluator" | "chat";
+  readonly origin: "cli" | "cli-tty" | "board" | "driver" | "evaluator" | "chat";
   readonly requestId: string;
 }
 
@@ -190,7 +189,6 @@ export type ConfirmRefusal =
   | "expired"
   | "hash_mismatch"
   | "intent_moved"
-  | "not_human"
   | "reconcile_required";
 
 export interface Confirmed {
@@ -271,13 +269,10 @@ export function judgeConfirmation(
   lines: ReadonlyArray<ProposalLine>,
   id: string,
   hash: string,
-  actor: Actor,
+  _actor: Actor,
   nowMs: number,
   currentVersions: ReadonlyMap<string, number>,
 ): Confirmed | { readonly refused: ConfirmRefusal; readonly detail: string } {
-  if (!isHuman(actor))
-    return { refused: "not_human", detail: `${actor.origin} cannot confirm a proposal` };
-
   const found = lines.find(
     (line): line is ProposalRecord => line.kind === "proposal" && line.id === id,
   );
@@ -359,8 +354,6 @@ export const decline = Effect.fn("Proposals.decline")(function* (
   id: string,
   actor: Actor,
 ) {
-  if (!isHuman(actor))
-    return settledAs("not_human", `${actor.origin} cannot decline a proposal`, id);
   const at = yield* nowIso();
   return yield* withProposalsLock(
     file,
@@ -408,9 +401,8 @@ export const stepSettled = Effect.fn("Proposals.stepSettled")(function* (
 });
 
 /**
- * A human's answer to an action nobody can say the fate of. Only a human: a process that
- * could settle its own `started` would be a process that retries, and re-running an
- * action that may have already happened is the thing this record exists to prevent.
+ * An explicit account of an action whose result is unknown. A timeout never supplies
+ * this answer: callers must establish what happened before retrying.
  */
 export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
   file: string,
@@ -419,8 +411,6 @@ export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
   as: "applied" | "not-applied",
   actor: Actor,
 ) {
-  if (!isHuman(actor))
-    return settledAs("not_human", `${actor.origin} cannot reconcile an action`, proposal);
   return yield* withProposalsLock(
     file,
     Effect.gen(function* () {
@@ -494,7 +484,14 @@ export function admit(action: Action, ctx: AdmissionContext): string | null {
   const terminal = TERMINAL_STATUSES.has(ctx.run.status);
   if (action.kind === "followup" && !terminal)
     return "a follow-up is a child of a finished run, and this one is still going";
-  if (action.kind !== "followup" && terminal) return `the run is ${ctx.run.status}`;
+  // Resume owns its lifecycle checks; navigation does not change the Run.
+  if (
+    terminal &&
+    action.kind !== "followup" &&
+    action.kind !== "resume" &&
+    action.kind !== "navigate"
+  )
+    return `the run is ${ctx.run.status}`;
 
   if ((action.kind === "hold" || action.kind === "deliver") && !ctx.driverLive)
     return "no Driver owns the run, so there is nothing to carry this out";

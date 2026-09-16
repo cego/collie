@@ -5,6 +5,7 @@
 import { expect, test } from "bun:test";
 import {
   CHECKS,
+  acceptanceExitCode,
   classify,
   fromEvidence,
   reaches,
@@ -13,6 +14,12 @@ import {
 } from "../tools/acceptance";
 
 const CLEAN: Tree = { revision: "a".repeat(40), dirty: false };
+
+test("unrecorded manual checks are reported, not a mandatory sign-off", () => {
+  expect(acceptanceExitCode({ pass: 10, fail: 0, pending: 3 })).toBe(0);
+  expect(acceptanceExitCode({ pass: 10, fail: 0, pending: 0 })).toBe(0);
+  expect(acceptanceExitCode({ pass: 10, fail: 1, pending: 3 })).toBe(1);
+});
 
 test("a test that does not exist yet is pending, not a failure, and never a pass", () => {
   expect(classify(1, 'error: regex "x" matched 0 tests. Searched 1 file')).toBe("pending");

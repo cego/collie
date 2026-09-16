@@ -571,7 +571,7 @@ test("user defaults come from config.json in the config layer", () =>
         compactAtTokens: FALLBACK_DEFAULTS.compactAtTokens,
         notifications: {},
         models: { opencode: ["local/foo"] },
-        trust: "ask",
+        trust: "auto",
         permissions: "bypass",
         scope: "local",
         questions: "focus",

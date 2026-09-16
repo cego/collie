@@ -17,7 +17,9 @@ bun run acceptance
 bun run acceptance --evidence operator-evidence.json
 ```
 
-It prints one row per check and exits non-zero unless every row passes. The registry is
+It prints one row per check and exits non-zero when a check fails. Missing manual
+observations stay `PENDING` without blocking development; they are not counted as passes.
+The registry is
 `CHECKS` in [`tools/acceptance.ts`](../tools/acceptance.ts) — one entry per promise, with
 its owner, the layer that can settle it, and its proof.
 
@@ -27,8 +29,8 @@ its owner, the layer that can settle it, and its proof.
 | `FAIL`    | The proof ran and failed. The promise is broken.                                                                      |
 | `PENDING` | Nothing that settles the statement ran — including a proof that only reaches a layer beneath it. The note says which. |
 
-`PENDING` is not `PASS`. The summary line says so, and so does the exit code, because the
-failure this exists to prevent is a release claiming an unrun check passed.
+`PENDING` is not `PASS`. The summary keeps that distinction. You do not need to collect
+manual sign-offs to make the command succeed, and success does not certify pending checks.
 
 ### A proof only settles a statement at its own layer
 

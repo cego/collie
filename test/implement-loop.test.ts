@@ -551,7 +551,7 @@ test(
             "--model",
             "opus",
             "--effort",
-            "medium",
+            "xhigh",
             "--append-system-prompt-file",
             path.join(run.dir, "personas", "implementer.claude.md"),
           ],
@@ -564,7 +564,7 @@ test(
         // Every step that keeps the implementer's agent records the model it is actually on.
         for (const step of ["build", "fix"]) {
           expect(run.step(step).variants[0]!.model).toBe("opus");
-          expect(run.step(step).variants[0]!.effort).toBe("medium");
+          expect(run.step(step).variants[0]!.effort).toBe("xhigh");
         }
         expect(run.step("review").variants.map((v) => [v.model, v.effort])).toEqual([
           ["opus", "medium"],

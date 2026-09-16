@@ -319,25 +319,39 @@ const enabled = Effect.fn("Compaction.enabled")(function* (configured: number) {
 
 /**
  * The controls for a newly launched agent, as extra `agent start` arguments. Nothing
- * is installed when the feature is off or the harness is one Collie does not manage;
- * a harness it manages but cannot talk to fails here, before the agent starts.
+ * is installed when the feature is off or the harness is unsupported. Native compaction
+ * remains available; missing Collie controls do not block the work.
  */
 export const installControls = Effect.fn("Compaction.installControls")(function* (
   deps: Pick<CompactionDeps, "ports" | "stateDir" | "configured" | "log" | "herdr">,
   agent: { agent: string; harness: string; cwd: string },
 ) {
   const limit = yield* enabled(deps.configured);
+  const fs = yield* FileSystem.FileSystem;
+  const dir = yield* controlDir(deps.stateDir, agent.agent);
+  // This is a new process, not a reused agent. Even a native-compaction fallback
+  // must discard its predecessor's controls and unresolved attempt.
+  const pid = yield* endpointPid(yield* readControl(deps.stateDir, agent.agent));
+  if (pid !== null) yield* Effect.ignore(Effect.sync(() => process.kill(pid, "SIGTERM")));
+  yield* fs.remove(dir, { recursive: true, force: true });
   if (!limit) return [];
   const port = deps.ports[agent.harness];
   if (!port) {
     yield* deps.log(`${agent.agent}: ${agent.harness} has no compaction controls in Collie`);
     return [];
   }
+  const supported = yield* port.gate().pipe(
+    Effect.as(true),
+    Effect.catch((cause) =>
+      deps
+        .log(`${agent.agent}: running without Collie compaction controls (${reason(cause)})`)
+        .pipe(Effect.as(false)),
+    ),
+  );
+  if (!supported) return [];
   // The engine holds withControlLock through installation and agent startup. A parallel
   // launch must not prune these controls before herdr can list their agent.
   yield* Effect.ignore(putDownStaleControls(deps, agent.agent));
-  const dir = yield* controlDir(deps.stateDir, agent.agent);
-  const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(dir, { recursive: true });
   const installed = yield* port.install({ ...agent, dir });
   yield* writeControl(deps.stateDir, {
@@ -407,23 +421,6 @@ const endpointPid = Effect.fn("Compaction.endpointPid")(function* (record: Contr
     .pipe(Effect.catch(() => Effect.succeed("")));
   // NUL-separated argv, which is not a string until the separators are.
   return cmdline.replaceAll("\0", " ").includes(record.command) ? record.pid : null;
-});
-
-/**
- * Refuses a step whose agents would launch on a harness Collie cannot manage, before
- * any tab opens. Only the harnesses about to be started fresh: a reused agent already
- * has the controls it was launched with.
- */
-export const gateHarnesses = Effect.fn("Compaction.gateHarnesses")(function* (
-  deps: Pick<CompactionDeps, "ports" | "configured">,
-  harnesses: ReadonlyArray<string>,
-) {
-  const limit = yield* enabled(deps.configured);
-  if (!limit) return;
-  for (const harness of new Set(harnesses)) {
-    const port = deps.ports[harness];
-    if (port) yield* port.gate();
-  }
 });
 
 /**

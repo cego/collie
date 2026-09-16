@@ -37,6 +37,8 @@ Done when you can name the workflow and every input it declares.
 First settle where the Run roots, because it decides which repository the work happens in:
 the current directory by default, `COLLIE_CWD=<path>` for another one, or
 `--workspace <id>` to scope to a herdr workspace and root the Run at its directory.
+Collie Home is a state directory, not a project: choose the project workspace or checkout.
+An older Run rooted in Home needs a fresh start against the project, not a resume.
 
 ```sh
 collie --json --workspace <id> run start <workflow> \
@@ -95,12 +97,12 @@ Done when the wait reports a terminal status, or a question to relay.
 
 ## Answer a question
 
-A Run at a question reports `status: "waiting"`, with the question in `awaiting` and the
-options in `choices`.
+A pending question is in `data.attention.choice`: `id`, `header`, and `items`. A Run's
+`awaiting` field can instead name an agent or step being waited on; it is not the question.
 
-1. Relay the question and every option to the user verbatim. The titles are the answer, so
-   changing their wording costs the user the ability to choose.
-2. Send their choice by its title, naming the question you are answering:
+1. Use the answer already given in the user's request. Ask only when a decision is missing;
+   when presenting options, preserve their titles so the answer matches.
+2. Send the answer by its title, naming the question you are answering:
 
    ```sh
    collie --json run answer <run-id> "<title>" \
@@ -112,7 +114,7 @@ options in `choices`.
 
 3. Confirm with `collie --json run show <run-id>`.
 
-Done when `run show` no longer reports that question in `awaiting`.
+Done when `run show` no longer reports that id in `data.attention.choice`.
 
 ## Resume or stop
 
@@ -154,3 +156,7 @@ action: Collie returns the first result instead of repeating the effect. Without
 retried `run start` is a second Run. A failure carries the id back in
 `error.details.requestId`, so there is always something to retry with. Exit statuses and
 which failures are worth retrying: `docs/cli.md`.
+
+An interrupted request with no recorded result returns `outcome: unknown` without running
+again. Inspect the Run and its recorded effects before using a new request id. Native chat
+returns its id as `Request: <id>`; reuse it as `request_id` for retries.

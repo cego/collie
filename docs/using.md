@@ -620,17 +620,15 @@ act on one.
 
 ### Confirming a proposal on the board
 
-There is no composer here and no mode to enter: talking to Collie is the pane beside this
-one. What the board is for is the other half — **confirming**. A **proposal** is drawn as
-soon as it arrives: what Collie understood, and
-every action it would take, each marked `allowed now` where that Run's own authority already
-grants it or `needs your yes` where it does not, with the proposal's id and hash. Enter
-carries it out; Esc declines it. Those two keys are the only ones the proposal takes — a
-human reading what they are being asked to consent to cannot stop a run by pressing `k` at
-it. The yes names the id and the hash, so it is consent to that payload rather than to a
-summary of it. `collie steer`, `collie confirm` and `collie decline` are the same thing on
-the command line ([docs/cli.md](cli.md)). Nothing else can answer for you: chat's tools
-are reads, and a model cannot confirm its own proposal however it asks.
+Explicit requests in chat or `collie steer` execute directly. Unsolicited suggestions
+remain **proposals**: the board shows what Collie understood and each proposed action.
+Enter carries one out; Esc declines it. Other action keys do not fire while the proposal
+has focus. The board binds its answer to the recorded payload, so a changed suggestion
+cannot silently replace the one displayed.
+
+From a terminal or script, use `collie confirm <id>` or `collie decline <id>`
+([docs/cli.md](cli.md)). `--hash` is optional when you want to name an exact payload;
+neither a TTY nor a second human confirmation is required.
 
 ### Keys
 
@@ -751,22 +749,13 @@ Claude conversation is still there when you choose Claude again.
 one, follow up a finished run, amend an Intent, start a workflow, fork a Workflow or a
 Persona, change what every new Run begins with, close the panes an older release left, or
 upgrade this installation — it has the same set the CLI and the board have, through the
-same validation and the same executors. What it does with any of them is **propose**: the
-board draws the proposal, and you confirm it against its id and the hash of exactly those
-actions, or decline it and nothing changed. A proposal about the installation rather than
-about a run — an upgrade, a cleanup, a fork, a change to a workspace's defaults — names no
-run, so it is drawn whichever row you have selected rather than waiting under one.
+same validation and the same executors. Requested actions execute directly and chat
+reports the results. You do not need to copy a hash or approve the same request again
+on the board. Unsolicited background suggestions remain optional proposals.
 
-What it cannot ask for at all: confirming, declining, reconciling, verifying, and setting
-what a Run — or every Run — may do without asking. Those are decisions, and a model that
-could ask for one would be authorising itself. That the rest is really there is a gate:
-`test/chat-parity.test.ts` walks the CLI's own command tree and fails on a command with no
-conversational route, so the list cannot quietly fall behind the CLI.
-
-It cannot confirm. Its requests are recorded as `chat:` and every confirmation path
-refuses anything that is not you — which matters because the bridge runs inside the
-harness's pane and so has a terminal, and a terminal is what the CLI reads as a person.
-The origin is stamped by the entrypoint, not inferred.
+Reconciliation, verification, authority editing, and managing older proposals remain
+available through the CLI. Scripts can use those commands without a terminal.
+Requests are recorded with their actual origin, including `chat:` and `cli:`.
 
 There is no shell there, no file access and no way to write a record. A run it names that
 does not exist is refused rather than retargeted, and a run you did not name is not one it
@@ -978,7 +967,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "notifications": { "run-done": false },
   "proactive": true,
   "models": { "opencode": ["mycorp/local-model"] },
-  "trust": "ask",
+  "trust": "auto",
   "permissions": "bypass",
   "scope": "local",
   "questions": "focus",
@@ -1063,6 +1052,10 @@ This is the harnesses' own compaction, asked for through their own official inte
 and their automatic compaction is left switched on. A harness that compacts before
 Collie's threshold has already done the job; Collie's threshold is an extra floor, not a
 replacement.
+
+If a harness is too old for Collie's compaction controls, or its version cannot be
+checked, the Run still starts without those controls and logs the reason. Native
+compaction stays enabled. Optional telemetry support is not a prerequisite for doing work.
 
 What a launch installs, per harness, into that agent's own control directory — never
 into your `~/.pi` or `~/.claude`:
@@ -1154,16 +1147,8 @@ installed releases turned out not to support:
 
 ## Trust: the first run in a repo
 
-claude asks once per directory whether it may work there, and it asks inside its own tab,
-where it is easy to miss. So the Driver asks you first, before a single tab opens:
-
-```
-claude has not worked in /home/mk/work/some-repo before
-❯ Trust it now                  records it where the harness looks
-  Let claude ask me in its tab  the run waits for you
-```
-
-**Trust it now** writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
+Starting a Run selects its directory; Collie does not ask you to approve that selection
+again. By default, it writes `hasTrustDialogAccepted` for that directory into `~/.claude.json`,
 which is where claude keeps the answer to its own dialog. The previous file is copied to
 `claude.json.bak` in the Collie state dir first, every other project and setting is carried
 over as it was, and the new file is renamed into place with the old one's permissions, so
@@ -1171,13 +1156,8 @@ no reader ever sees it half-written. It is still a read-modify-write of a file c
 if a claude session saves in the same instant, that save is the one that loses. It happens
 once per directory, so the window is opened once.
 
-`trust` in `config.json` answers the question in advance: `ask` (default), `auto`, or
-`never` (leave the dialog to claude).
-
-`auto` trusts every directory a run starts in, without asking. Be deliberate about it:
-claude's question is "is this a project you created or one you trust?", and it says plainly
-that claude will then read, edit and execute files there. `auto` is for a machine where
-every repo you run workflows in is already one you would answer yes for.
+`trust` defaults to `auto`. `never` leaves trust to Claude's own dialog. The old `ask`
+setting is accepted as `auto`; Collie's duplicate trust menu has been removed.
 
 If you do let claude ask, nothing breaks: `agent start` reports the agent blocked, which is
 not a failure, so the Driver says which pane wants you, toasts, and waits. It cannot answer

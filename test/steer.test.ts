@@ -6,10 +6,11 @@ import { Effect, FileSystem, Path, Schema } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { steer } from "../src/operations";
 import { RunStore } from "../src/run";
-import { DEFAULT_AUTHORITY, seedIntent, writeIntent } from "../src/intent";
+import { DEFAULT_AUTHORITY, readIntent, seedIntent, writeIntent } from "../src/intent";
 import { conversationPath, read as readConversation } from "../src/conversation";
 import { proposalsPath, read as readProposals } from "../src/proposals";
-import { budgetPath, readBudget } from "../src/steering";
+import { budgetPath, herdOf, readBudget } from "../src/steering";
+import { resetExecutors } from "../src/executors";
 import { currentEnv, type PluginEnv } from "../src/env";
 import type { PlatformError } from "effect/PlatformError";
 import { runEffect } from "./support/effect";
@@ -19,9 +20,10 @@ const envelope = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 let stateDir: string;
 let env: PluginEnv;
+let herdKey: string;
 
 const deps = (root: string) => ({
-  herdKey: "herd-1",
+  herdKey: herdKey,
   evaluator: {
     // Every flag present, so the gate lets the call through and the test is about what
     // comes back rather than about the gate.
@@ -83,6 +85,8 @@ beforeEach(() =>
       setReply = yield* fakeClaude(stateDir);
       yield* setReply("{}");
       env = { ...(yield* currentEnv), stateDir, socketPath: "/tmp/herd.sock" };
+      herdKey = yield* herdOf(env.socketPath);
+      resetExecutors();
     }),
   ),
 );
@@ -111,49 +115,51 @@ const aRun = Effect.fn("test.aRun")(function* (authority = DEFAULT_AUTHORITY) {
   return run;
 });
 
-test("asking about a Run records both turns and a pending proposal, and sends nothing", () =>
+test("a steer executes the requested change without a confirmation hop", () =>
   runEffect(
     Effect.gen(function* () {
       const run = yield* aRun({ ...DEFAULT_AUTHORITY, auto_correct: true, now_allowed: true });
       yield* setReply(
         envelope({
           result: {
-            interpretation: "it is building on the wrong branch",
+            interpretation: "update the goal",
             targets: [{ run: run.id }],
-            actions: [{ kind: "hold", run: run.id }],
+            actions: [
+              {
+                kind: "update_intent",
+                run: run.id,
+                change: "set-goal",
+                patch: "ship the picker",
+                base_version: 1,
+              },
+            ],
             confidence: 0.9,
           },
         }),
       );
 
       const result = yield* steer(env, deps(stateDir), {
-        text: "why is it on main?",
+        text: "make the goal ship the picker",
         target: run.id,
         requestId: "req-1",
       });
       expect(result.ok).toBe(true);
 
-      const turns = yield* readConversation(yield* conversationPath(stateDir, "herd-1"));
+      const turns = yield* readConversation(yield* conversationPath(stateDir, herdKey));
       expect(turns.map((turn) => turn.role)).toEqual(["human", "collie"]);
       expect(turns[1]?.proposal).toBeDefined();
 
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, "herd-1"));
+      const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
       const recorded = proposals.filter((line) => line.kind === "proposal");
       expect(recorded).toHaveLength(1);
 
-      // The Run granted auto_correct and now; the proposal is still pending, because the
-      // grant was for the Driver's own drift checks, not for a conversation's conclusions.
-      if (result.ok && "proposal" in result.data) {
-        // SAFETY: the envelope this operation returns names `proposal.actions` with a
-        // `status` on each; the assertion above is what proves the branch was taken.
-        const { proposal } = result.data as { proposal: { actions: Array<{ status: string }> } };
-        expect(proposal.actions.map((a) => a.status)).toEqual(["pending"]);
-      }
+      expect((yield* readIntent(run.dir))?.goal).toBe("ship the picker");
+      expect(proposals.some((line) => line.kind === "confirmed")).toBe(true);
 
-      // Nothing was queued for anybody: a question does not act.
+      // The amendment also notifies the Driver through the normal inbox.
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      expect(yield* fs.exists(path.join(run.dir, "inbox"))).toBe(false);
+      expect(yield* fs.exists(path.join(run.dir, "inbox"))).toBe(true);
     }),
   ));
 
@@ -168,7 +174,7 @@ test("a steer with no target is refused before anything is spent", () =>
       // A question about the flock is native chat's, which reads the Herd. Refused here
       // rather than answered by a model, and refused before the call rather than after.
       expect(result).toMatchObject({ ok: false, error: { code: "invalid_input" } });
-      expect(yield* readBudget(yield* budgetPath(stateDir, "herd-1"))).toEqual([]);
+      expect(yield* readBudget(yield* budgetPath(stateDir, herdKey))).toEqual([]);
     }),
   ));
 
@@ -195,7 +201,7 @@ test("a turn the board starts is journaled as the board's, never as the human's"
       });
       expect(result.ok).toBe(true);
 
-      const turns = yield* readConversation(yield* conversationPath(stateDir, "herd-1"));
+      const turns = yield* readConversation(yield* conversationPath(stateDir, herdKey));
       expect(turns.map((turn) => turn.role)).toEqual(["event", "collie"]);
       expect(turns[0]!.text).toContain("stopped with evidence_missing");
     }),
@@ -223,9 +229,9 @@ test("every call is counted and costed, and none is refused over the count", () 
       yield* setReply(
         envelope({
           result: {
-            interpretation: "slow down",
+            interpretation: "nothing needs changing",
             targets: [{ run: run.id }],
-            actions: [{ kind: "hold", run: run.id }],
+            actions: [{ kind: "none", why: "nothing needs changing" }],
             confidence: 0.5,
           },
           total_cost_usd: 0.0123,
@@ -243,7 +249,7 @@ test("every call is counted and costed, and none is refused over the count", () 
 
       // Both calls are in the record — started, then settled with what the CLI said they
       // cost — which is the telemetry that stays.
-      const lines = yield* readBudget(yield* budgetPath(stateDir, "herd-1"));
+      const lines = yield* readBudget(yield* budgetPath(stateDir, herdKey));
       expect(lines.map((line) => line.kind)).toEqual(["reserve", "settle", "reserve", "settle"]);
       expect(lines.filter((line) => line.kind === "settle").map((line) => line.usd)).toEqual([
         0.0123, 0.0123,
@@ -279,7 +285,7 @@ test("a dry run prints what it would propose and records nothing", () =>
       expect(result.ok).toBe(true);
       if (result.ok) expect(result.human).toContain("hold it while you look");
 
-      const proposals = yield* readProposals(yield* proposalsPath(stateDir, "herd-1"));
+      const proposals = yield* readProposals(yield* proposalsPath(stateDir, herdKey));
       expect(proposals.filter((line) => line.kind === "proposal")).toEqual([]);
     }),
   ));
@@ -299,7 +305,7 @@ test("a model that answers outside its schema is not acted on", () =>
       if (!result.ok) expect(result.error.message).toContain("evaluator_invalid_output");
 
       // The call still cost something, and the budget still says so.
-      const budget = yield* readBudget(yield* budgetPath(stateDir, "herd-1"));
+      const budget = yield* readBudget(yield* budgetPath(stateDir, herdKey));
       expect(budget.filter((line) => line.kind === "settle")).toMatchObject([
         { outcome: "failed" },
       ]);

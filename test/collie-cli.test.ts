@@ -262,27 +262,29 @@ test("a previous review named by hand has to exist", () =>
     }),
   ));
 
-test("workflow check validates every layer without starting a run", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      // The project layer is `<cwd>/.herdr`, and a checkout's own is a human's forked
-      // workflows — never test data. This one is a scratch directory the run is
-      // rooted at with COLLIE_CWD, so nothing outside it is written or removed.
-      const cwd = yield* fs.makeTempDirectory({ prefix: "collie-project-" });
-      const scratch = { COLLIE_CWD: cwd };
+test(
+  "workflow check validates every layer without starting a run",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        // The project layer is `<cwd>/.herdr`, and a checkout's own is a human's forked
+        // workflows — never test data. This one is a scratch directory the run is
+        // rooted at with COLLIE_CWD, so nothing outside it is written or removed.
+        const cwd = yield* fs.makeTempDirectory({ prefix: "collie-project-" });
+        const scratch = { COLLIE_CWD: cwd };
 
-      // The baseline is the acceptance test for the rule set: it must come out clean.
-      const clean = yield* cli(["workflow", "check"], scratch);
-      expect(clean.exit).toBe(0);
-      expect(clean.stdout).toContain("implement\tbaseline\tok");
-      expect(clean.stdout).toContain("review\tbaseline\tok");
+        // The baseline is the acceptance test for the rule set: it must come out clean.
+        const clean = yield* cli(["workflow", "check"], scratch);
+        expect(clean.exit).toBe(0);
+        expect(clean.stdout).toContain("implement\tbaseline\tok");
+        expect(clean.stdout).toContain("review\tbaseline\tok");
 
-      const project = join(cwd, ".herdr", "workflows");
-      yield* fs.makeDirectory(project, { recursive: true });
-      yield* fs.writeFileString(
-        join(project, "broken.md"),
-        `---
+        const project = join(cwd, ".herdr", "workflows");
+        yield* fs.makeDirectory(project, { recursive: true });
+        yield* fs.writeFileString(
+          join(project, "broken.md"),
+          `---
 name: broken
 inputs:
   goal: goal
@@ -294,13 +296,13 @@ steps:
 ---
 {{inputs.goal}} and {{inputs.nope}} and {{inputs.goal_kind}} and {{findings}} and {{skill:tdd}}
 `,
-      );
-      yield* fs.writeFileString(join(project, "unparseable.md"), "no frontmatter here\n");
-      // A Choice round drives a skill the same way a step does, and what a Choice
-      // forwards to the workflow it chains is rendered from the same variables.
-      yield* fs.writeFileString(
-        join(project, "chains.md"),
-        `---
+        );
+        yield* fs.writeFileString(join(project, "unparseable.md"), "no frontmatter here\n");
+        // A Choice round drives a skill the same way a step does, and what a Choice
+        // forwards to the workflow it chains is rendered from the same variables.
+        yield* fs.writeFileString(
+          join(project, "chains.md"),
+          `---
 name: chains
 inputs:
   goal: goal
@@ -324,60 +326,63 @@ Goal: {{inputs.goal}}
 ## grill
 Grill me.
 `,
-      );
+        );
 
-      const bad = yield* cli(["--json", "workflow", "check"], scratch);
-      const envelope = yield* parseEnvelope(bad.stdout);
+        const bad = yield* cli(["--json", "workflow", "check"], scratch);
+        const envelope = yield* parseEnvelope(bad.stdout);
 
-      expect(bad.exit).not.toBe(0);
-      const problems = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
-        envelope.error?.details ?? {},
-      );
-      expect(problems).toContain("opus-9");
-      // A placeholder no input can fill is reported; the ones the engine supplies at
-      // step time are not.
-      expect(problems).toContain("inputs.nope");
-      // A `goal` never carries a kind, so `goal_kind` is a placeholder the Run cannot
-      // fill either — only a work-source and a diff-target render one.
-      expect(problems).toContain("inputs.goal_kind");
-      // A round's `skill:` is a prerequisite like a step's...
-      expect(problems).toContain("not-a-real-skill");
-      // ...and a typo in what a Choice forwards would otherwise render empty, be
-      // treated as settled, and start the child without the Input it needed.
-      expect(problems).toContain("inputs.plna");
-      // A forwarded input is rendered with `run`, `inputs`, `cwd` and `outputs` and
-      // nothing else, so a family a step's prompt may name is still unresolvable here.
-      expect(problems).toContain("target_repo");
-      // An Output is named by the step that writes it, so a mistyped step id is caught
-      // too — it would otherwise render empty and chain the child without its task.
-      expect(problems).toContain("outputs.gril.slug");
-      expect(problems).not.toContain("findings");
-      expect(problems).not.toContain("skill:tdd");
-      // A file with nothing in it is reported rather than silently skipped by the
-      // loader, the way the picker's banner used to be the only place it showed.
-      expect(problems).toContain('"name":"unparseable"');
-      expect(problems).toContain("has no steps");
-      // And the workflows that are fine are still listed.
-      expect(problems).toContain('"name":"plan","layer":"baseline","problems":[]');
+        expect(bad.exit).not.toBe(0);
+        const problems = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
+          envelope.error?.details ?? {},
+        );
+        expect(problems).toContain("opus-9");
+        // A placeholder no input can fill is reported; the ones the engine supplies at
+        // step time are not.
+        expect(problems).toContain("inputs.nope");
+        // A `goal` never carries a kind, so `goal_kind` is a placeholder the Run cannot
+        // fill either — only a work-source and a diff-target render one.
+        expect(problems).toContain("inputs.goal_kind");
+        // A round's `skill:` is a prerequisite like a step's...
+        expect(problems).toContain("not-a-real-skill");
+        // ...and a typo in what a Choice forwards would otherwise render empty, be
+        // treated as settled, and start the child without the Input it needed.
+        expect(problems).toContain("inputs.plna");
+        // A forwarded input is rendered with `run`, `inputs`, `cwd` and `outputs` and
+        // nothing else, so a family a step's prompt may name is still unresolvable here.
+        expect(problems).toContain("target_repo");
+        // An Output is named by the step that writes it, so a mistyped step id is caught
+        // too — it would otherwise render empty and chain the child without its task.
+        expect(problems).toContain("outputs.gril.slug");
+        expect(problems).not.toContain("findings");
+        expect(problems).not.toContain("skill:tdd");
+        // A file with nothing in it is reported rather than silently skipped by the
+        // loader, the way the picker's banner used to be the only place it showed.
+        expect(problems).toContain('"name":"unparseable"');
+        expect(problems).toContain("has no steps");
+        // And the workflows that are fine are still listed.
+        expect(problems).toContain('"name":"plan","layer":"baseline","problems":[]');
 
-      // Asked about one workflow, a broken file elsewhere is not its problem — the
-      // targeted check has to stay usable while another definition is being edited.
-      const named = yield* cli(["workflow", "check", "review"], scratch);
-      expect(named.exit).toBe(0);
-      expect(named.stdout).toContain("review\tbaseline\tok");
-      expect(named.stdout).not.toContain("broken");
+        // Asked about one workflow, a broken file elsewhere is not its problem — the
+        // targeted check has to stay usable while another definition is being edited.
+        const named = yield* cli(["workflow", "check", "review"], scratch);
+        expect(named.exit).toBe(0);
+        expect(named.stdout).toContain("review\tbaseline\tok");
+        expect(named.stdout).not.toContain("broken");
 
-      // Its own broken file is its problem, though: a project-layer `review.md` that
-      // will not parse leaves the baseline answering for `review`, and an author who
-      // just broke it must not be told their workflow is fine.
-      yield* fs.writeFileString(join(project, "review.md"), "---\nname: [unclosed\n---\nbody\n");
-      const shadowed = yield* cli(["workflow", "check", "review"], scratch);
-      expect(shadowed.exit).not.toBe(0);
-      expect(shadowed.stdout).toContain("review.md");
+        // Its own broken file is its problem, though: a project-layer `review.md` that
+        // will not parse leaves the baseline answering for `review`, and an author who
+        // just broke it must not be told their workflow is fine.
+        yield* fs.writeFileString(join(project, "review.md"), "---\nname: [unclosed\n---\nbody\n");
+        const shadowed = yield* cli(["workflow", "check", "review"], scratch);
+        expect(shadowed.exit).not.toBe(0);
+        expect(shadowed.stdout).toContain("review.md");
 
-      yield* fs.remove(cwd, { recursive: true, force: true });
-    }),
-  ));
+        yield* fs.remove(cwd, { recursive: true, force: true });
+      }),
+    ),
+  // Four real CLI startups: this checks validation, not a five-second startup SLO.
+  20_000,
+);
 
 test("workflow show prints what a run actually gets, not what was authored", () =>
   runEffect(

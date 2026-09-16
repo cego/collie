@@ -8,7 +8,13 @@ import { FakeBin } from "./support/bin";
 import { EffectFakeHerdr, installBaseline, runWorkflow } from "./support/engine";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
-import { atBoundary, controlDir, installControls, type CompactionPorts } from "../src/compaction";
+import {
+  atBoundary,
+  controlDir,
+  installControls,
+  readControl,
+  type CompactionPorts,
+} from "../src/compaction";
 import { HerdrError } from "../src/herdr";
 import { metricsOf, readMetrics } from "../src/metrics";
 import { Schema } from "effect";
@@ -600,7 +606,7 @@ test("a liveness nudge is not a work boundary, and does not compact", () =>
     }),
   ));
 
-test("a harness Collie cannot manage stops the step instead of launching unmanaged", () =>
+test("unsupported optional compaction does not stop the work", () =>
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "clean" }, { verdict: "clean" }]);
@@ -614,13 +620,60 @@ test("a harness Collie cannot manage stops the step instead of launching unmanag
 
       const { run, status } = yield* ran({ compaction: refusing, outputPollMs: 20 });
 
-      expect(status).toBe("failed");
-      expect(run.step("one").note).toContain("older than the 2.1.263");
-      // No pane, no agent, no controls: refused before the launch.
+      expect(status).toBe("done");
       expect(port.installs).toEqual([]);
-      expect(run.step("one").variants).toEqual([]);
+      expect(run.step("one").variants).toHaveLength(1);
+      expect(run.step("two").status).toBe("done");
+      expect(port.requests).toEqual([]);
     }),
   ));
+
+test.each(["unsupported", "off", "unmanaged"])(
+  "a replacement agent does not inherit old compaction controls when %s",
+  (mode) =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const port = scriptedPort({ usage: [400_000] });
+        const deps = {
+          ports: port.ports,
+          stateDir: rig.stateDir,
+          configured: 372_000,
+          herdr: { agentList: () => Effect.succeed([]) },
+          log: () => Effect.void,
+          warn: () => Effect.void,
+          waitMs: 0,
+          pollMs: 20,
+        };
+        const agent = { agent: "replacement", harness: "claude", cwd: rig.projectDir };
+        const boundary = { agent: agent.agent, run: "run", step: "next" };
+        yield* installControls(deps, agent);
+        const telemetry = path.join(yield* controlDir(rig.stateDir, agent.agent), "events.jsonl");
+        yield* fs.writeFileString(telemetry, "old agent telemetry\n");
+        expect((yield* atBoundary(deps, boundary, fakeChannel([]))).dispatch).toBe(false);
+        const unsupported = {
+          claude: {
+            ...port.ports.claude!,
+            gate: () => Effect.fail(new Error("unsupported compaction interface")),
+          },
+        };
+        expect(
+          yield* installControls(
+            {
+              ...deps,
+              configured: mode === "off" ? 0 : deps.configured,
+              ports: mode === "unmanaged" ? {} : unsupported,
+            },
+            agent,
+          ),
+        ).toEqual([]);
+        expect(yield* readControl(rig.stateDir, agent.agent)).toBeNull();
+        expect(yield* fs.exists(telemetry)).toBe(false);
+        expect((yield* atBoundary(deps, boundary, fakeChannel([]))).dispatch).toBe(true);
+        expect(port.requests).toHaveLength(1);
+      }),
+    ),
+);
 
 test("a reused agent's harness is not gated again — it launched under the gate", () =>
   runEffect(

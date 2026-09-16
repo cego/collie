@@ -308,29 +308,21 @@ follow-up, and never described as delivered.
 
 ## Proposals
 
-Anything Collie might do that is not already granted arrives as a **proposal**: what the
-evaluator understood, the runs it is about, and a closed list of actions. It is written
-down before anyone can act on it, and nothing in it runs until a human confirms it.
+A **proposal** records an interpretation, its target runs, and actions. User requests
+from chat and `steer` execute through this journal immediately. Background suggestions
+remain pending; they do not turn a status update into an unsolicited action.
 
-A confirmation names the proposal **and its content hash**:
+A confirmation can execute a pending suggestion:
 
 ```sh
-collie --json confirm <proposal id> --hash <content hash>
+collie --json confirm <proposal id>
 collie --json decline <proposal id>
 ```
 
-The hash is why. A human saying "yes" to a summary is not consent to a payload they did
-not read, so a confirmation that names a different payload is refused rather than
-interpreted. So is one that arrives after the proposal expired (thirty minutes), or after
-any target run's Intent moved — because the proposal was about a run that wanted something
-else. There is no `--yes`, and no phrasing of a steer confirms anything: a steer is a
-question, and consent is a separate act naming a specific thing.
-
-**Who counts as human** is derived, never supplied. A `collie` invocation with a
-controlling terminal is one; a keypress on the board is one. A Driver, the election
-winner and the evaluator subprocess have no such front door — the evaluator has no tool
-channel at all and cannot invoke `collie` — so none of them can confirm anything,
-including its own suggestion.
+Use optional `--hash <content hash>` when pinning a particular payload. A different hash,
+an expired proposal, or a moved target is still rejected. Commands work from scripts and
+chat without a terminal check; their actual origin is recorded rather than relabeled human.
+Use `steer --dry-run` when you only want a preview.
 
 Immediately before each action runs, everything the proposal assumed is asked again:
 the run still exists and its status permits the action, an `answer` still matches the
