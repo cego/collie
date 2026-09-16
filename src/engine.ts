@@ -1475,6 +1475,11 @@ const runSlices = Effect.fn("Engine.runSlices")(function* (
     if (Result.isFailure(result)) {
       slice.status = "failed";
       blocked = `${ticket.file}: ${herdrFailureReason(result.failure)}`;
+      // On the step itself: the summary otherwise shows only the variant records, and
+      // a step that failed before it started an agent has none of its own — it would
+      // repeat whatever the previous attempt's record said.
+      record.note = blocked;
+      yield* out(`  ✗ ${blocked}`);
       yield* run.save();
       break;
     }
@@ -1482,6 +1487,8 @@ const runSlices = Effect.fn("Engine.runSlices")(function* (
     if (outcome === undefined) {
       slice.status = "failed";
       blocked = `${ticket.file}: the slice produced no Outcome`;
+      record.note = blocked;
+      yield* out(`  ✗ ${blocked}`);
       yield* run.save();
       break;
     }

@@ -397,6 +397,10 @@ test("implement takes an optional repo, and the build prompt builds only its tic
       // plan that spans repositories; an empty one is the whole plan, as it always was.
       expect(wf.steps[0]!.preamble).toContain("{{inputs.repo}}");
       expect(wf.steps[0]!.prompt).toContain("**Repo:**");
+      // A build Output is read as a review Output, where a finding without a severity is
+      // refused — so the prompt has to say so, or a build that reports one blocks the run.
+      expect(wf.steps[0]!.prompt).toContain('"severity"');
+      expect(wf.steps[0]!.prompt).toContain("blocker|major|minor");
     }),
   ));
 
@@ -2126,3 +2130,38 @@ test("a Run that never repeats itself carries no obstacle", () =>
       expect(metricsOf(metrics, run.record.created_at).timeToFirstEvidence).not.toBeNull();
     }),
   ));
+
+test(
+  "a slice whose agent cannot start says why, on the step and in the log",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const plan = yield* slicedPlan();
+
+        const { run, status, lines } = yield* runWorkflowEffect(
+          "implement",
+          { plan },
+          {
+            env: {
+              FAKE_HERDR_FAIL: encodeJson({
+                "agent start": "an agent of that name is still running",
+              }),
+            },
+          },
+        );
+
+        expect(status).toBe("blocked");
+        expect(run.step("build").slices.map((s) => [s.ticket, s.status])).toEqual([
+          ["01-schema.md", "failed"],
+        ]);
+        // The reason is the step's own, not a variant's: the step never got an agent, so
+        // there is no variant record to carry it, and the summary would otherwise say
+        // nothing about why the ticket did not start.
+        expect(run.step("build").note).toContain("01-schema.md: ");
+        expect(run.step("build").note).toContain("an agent of that name is still running");
+        expect(lines.some((line) => line.startsWith("  ✗ 01-schema.md: "))).toBe(true);
+        expect(run.record.summary).toContain("an agent of that name is still running");
+      }),
+    ),
+  40_000,
+);

@@ -195,7 +195,9 @@ ignore the others; an empty outcome means only the approved verifications have t
 {{session.ask}}
 
 Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what is not
-built or not passing, as findings>], "branch": "<branch>", "pushed": true, "tickets_done":
+built or not passing, as findings — each with a "severity" of `blocker|major|minor`, a
+"title", and the "file" and "detail" it is about; a failure that pre-dates this branch is
+`minor`>], "branch": "<branch>", "pushed": true, "tickets_done":
 ["ticket title", ...], "commits": ["<subject>", ...], "tests": "what you ran and what it
 said"}`, plus whichever of the outcome fields above applies. `clean` means the whole scope is built and the tests pass; anything else is
 `findings`, with one entry per thing that is not.

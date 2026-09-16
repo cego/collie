@@ -408,3 +408,43 @@ test("a resume is not offered while an agent the Run recorded is still there", (
       expect(gone.actions).toContain("resume");
     }),
   ));
+
+test("a slice whose Output was refused leaves its agent in its pane, and a resume asks about it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const run = yield* interruptedRun();
+      // The Output was refused, so the record calls the variant failed and the step
+      // blocked — but the agent that wrote it is still sitting idle in its pane.
+      const build = run.step("build");
+      build.status = "blocked";
+      // Its own name: an earlier test told the fake that "dead-build-agent" is gone.
+      build.variants[0]!.agent = "refused-build-agent";
+      build.variants[0]!.status = "failed";
+      build.variants[0]!.error = "steps/build/1/build.json: findings[0]: severity is required";
+      run.record.status = "blocked";
+      yield* run.save();
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* fs.writeFileString(
+        path.join(run.dir, RUNNER_PID),
+        `{"pid":2147483646,"start":null,"at":"2026-09-08T09:00:00.000Z"}\n`,
+      );
+      yield* rig.addAgent("refused-build-agent", "9-9");
+      Bun.env.FAKE_HERDR_AGENT_STATUS = "idle";
+
+      // A fresh Driver would start a second agent under the same name, in the same
+      // worktree, beside the one herdr still has.
+      const idle = yield* attentionFor(run, new Herdr(env));
+      expect(idle.agentsAlive).toBe("live");
+      expect(idle.actions).not.toContain("resume");
+      const refused = yield* resumeRun(env, run, "req-refused-output");
+      expect(refused.ok).toBe(false);
+      if (!refused.ok) expect(refused.error.code).toBe("run_already_active");
+
+      rig.dropAgent("refused-build-agent");
+      const gone = yield* attentionFor(run, new Herdr(env));
+      expect(gone.agentsAlive).toBe("absent");
+      expect(gone.actions).toContain("resume");
+    }),
+  ));

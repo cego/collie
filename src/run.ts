@@ -899,10 +899,19 @@ function runningHarnesses(record: RunRecord): ReadonlyArray<string> {
   ];
 }
 
-/** The agents a Run's record still has running, by name. */
+/**
+ * Every agent a Run's record names, whatever status it recorded for it: only herdr knows
+ * which are still in a pane. Not just the ones marked `running` — a variant whose Output
+ * was refused is recorded `failed` while its agent sits idle in its pane, and a resume
+ * that never asked about it would start a second agent under the same name.
+ */
 export function runningAgents(record: RunRecord): ReadonlyArray<string> {
-  return record.steps
-    .flatMap((step) => step.variants)
-    .filter((variant) => variant.status === "running" && variant.agent !== "")
-    .map((variant) => variant.agent);
+  return [
+    ...new Set(
+      record.steps
+        .flatMap((step) => step.variants)
+        .filter((variant) => variant.agent !== "")
+        .map((variant) => variant.agent),
+    ),
+  ];
 }
