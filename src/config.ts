@@ -60,7 +60,7 @@ export interface Defaults {
   /** Extra models to accept per harness, for models the adapter table does not list. */
   models: Readonly<Record<string, ReadonlyArray<string>>>;
   /** What to do about a directory the harness has not been trusted with yet. */
-  trust: "ask" | "auto" | "never";
+  trust: "auto" | "never";
   /**
    * Whether Collie decides an agent's tool calls up front, or the harness asks. As
    * written, like `harness` and `model`: validation names an unknown one, and the engine
@@ -93,7 +93,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   boardQuietMs: 5 * 60 * 1000,
   compactAtTokens: COMPACT_AT_TOKENS,
   models: {},
-  trust: "ask",
+  trust: "auto",
   permissions: "bypass",
   scope: "local",
   notifications: {},

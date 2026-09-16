@@ -1,9 +1,7 @@
 // Saying something to Collie about one Run, and answering what it proposes.
 //
-// `steer` never does anything: it writes down what was said, asks the evaluator, records
-// what came back as a proposal, and prints it. `confirm` is the separate act that makes a
-// specific proposal happen, and it names that proposal and its exact contents — a yes to
-// a summary is not consent to a payload nobody read.
+// `steer` carries out requested actions. `--dry-run` previews them instead; `confirm`
+// remains available for optional proposals already on the board.
 //
 // It is about a Run, always. Questions about the flock are the Home's native chat, which
 // reads through `collie tools` rather than paying for a model to be asked one here.
@@ -66,12 +64,11 @@ export const steer = Command.make(
         );
       }),
     ),
-).pipe(
-  Command.withDescription("Say something to Collie about a Run, and get back what it proposes"),
-);
+).pipe(Command.withDescription("Ask Collie to act on a Run; --dry-run previews without acting"));
 
 const hashFlag = Flag.string("hash").pipe(
-  Flag.withDescription("The proposal's content hash, as `steer` printed it"),
+  Flag.withDescription("Optionally require this exact proposal content hash"),
+  Flag.optional,
 );
 
 const proposalIdArg = Argument.string("proposal-id").pipe(
@@ -89,7 +86,7 @@ export const confirm = Command.make(
   { proposalId: proposalIdArg, hash: hashFlag, requestId: requestIdFlag },
   ({ proposalId, hash, requestId }) =>
     mutating("confirm", requestId, (env, id) =>
-      carryOutProposal(env, proposalId, hash, actorNow(id)),
+      carryOutProposal(env, proposalId, Option.getOrUndefined(hash), actorNow(id)),
     ),
 ).pipe(Command.withDescription("Carry out a proposal, naming it and its exact contents"));
 
@@ -150,8 +147,7 @@ export const runDeliveries = Command.make(
         return yield* mutation(env, "run-deliveries-reconcile", requestId, (id) =>
           Effect.gen(function* () {
             const lines = yield* readLedger(found.file);
-            // Derived, never stamped: `reconcile` is human-only, and a request id is
-            // not evidence that a person made it — a Driver has one too.
+            // Keep the actual caller in the delivery's audit trail.
             const settled = reconcileDelivery(
               lines,
               settleId,

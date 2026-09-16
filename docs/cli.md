@@ -500,13 +500,13 @@ through a generated extension; this is the third way in.
 | tool                  | What it does                                                                             |
 | --------------------- | ---------------------------------------------------------------------------------------- |
 | `collie_herd`         | Every run in the Herd, bounded, saying how many it left out                              |
-| `collie_run`          | One run: its goal, constraints, steps, cards and open drift                              |
+| `collie_run`          | One run: goal, directory, Driver, pending question and answers, steps, cards and drift   |
 | `collie_workspaces`   | The workspaces this session has, and the workflows that can be started                   |
-| `collie_receipts`     | One run's pending proposals, and what state each message to its agents actually reached  |
+| `collie_receipts`     | One run's pending question and proposals, and the state of messages sent to agents       |
 | `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body    |
 | `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults |
 | `collie_news`         | What has happened that nobody has been told, and reading it settles those items          |
-| `collie_propose`      | Ask for actions about named runs. Records a proposal; carries nothing out                |
+| `collie_propose`      | Carry out requested actions and return their results; the legacy tool name is retained   |
 
 The reads are Herd-wide and are never narrowed by the board's filter or its selection.
 `collie_installation` is the one read that is not read-only: the installation checks
@@ -516,9 +516,9 @@ include a bounded `git fetch`, and it says so rather than letting a client assum
 `hold`, `release`, `answer`, `deliver`, `start`, `followup`, `update_intent`,
 `clear_override`, `navigate`, `update_defaults`, `fork_definition`, `home_cleanup`,
 `upgrade` — through the same `validate`, the same proposals journal and
-the same executors. Everything it records is **pending**, whatever authority a run granted
-its Driver, and the human confirms it with `confirm` below. There is no action that runs a
-command, and none that confirms anything.
+the same executors. It executes the request immediately, with no separate confirmation.
+Supply `request_id` and reuse it on retries to return the original receipt rather than
+repeat the action. There is no arbitrary shell-command action.
 
 `update_defaults` names the workspace whose new runs it changes, for the reason `start`
 names one: defaults are filed per workspace, and the board carrying out a confirmation is
@@ -527,36 +527,29 @@ remove — prose there matches no id, and is refused rather than reported as app
 proposal about the installation names no run, so the board draws it whichever row is
 selected.
 
-What is deliberately not in that set: confirming, declining, reconciling, verifying, and
-setting a Run's or the Herd's **authority**. Those are decisions, and a model that could
-ask for one would be authorising itself. Everything else a human can type — including
-forking a Workflow or a Persona, changing what every new Run begins with, closing the
-panes an older release left, and upgrading this installation — chat may ask for, and you
-confirm. `test/chat-parity.test.ts` walks the command tree itself and fails on a command
-with no route, so this list cannot quietly fall behind.
+Confirming older proposals, declining, reconciling unknown results, recording verifications,
+and editing authority remain CLI commands rather than chat action kinds. They work from
+scripts too; no controlling terminal is required.
 
 A run it names that does not exist is refused rather than retargeted; an agent the run
 does not have comes back as a question for you rather than being dropped. `start` takes a
 `workspace`, so a launch asked for from the Home lands in the repository it is about
 rather than in Collie's own namespace directory — and it needs no existing run.
 
-**Chat is never a person.** Its requests are recorded as `chat:<id>`, and `confirm`,
-`decline` and every `reconcile` refuse anything that is not `human`. That matters more
-here than anywhere else: the bridge runs as a child of the harness inside a pane, so it
-inherits a controlling terminal — and a terminal is what this CLI reads as a person. The
-origin is stamped by the entrypoint that serves the tools, never worked out from the
-process and never read out of the request.
+Requests retain their origin (`chat:`, `cli:`, or the board). Attribution is an audit
+record, not an approval requirement. Launches into Collie's Home state directory return
+`needs_input`: choose the project with `--workspace` or `COLLIE_CWD` before starting work.
+Legacy Runs rooted there cannot be resumed into the state directory; start a new Run
+against the project instead.
 
 ```sh
 collie --json steer "why is this on main?" --target run:<run-id>
 collie --json steer "hold it and look at the branch" --target run:<id> --dry-run
 ```
 
-A steer is a **question** about one run. It writes down what you said, asks Collie, records
-what comes back, and prints it — it never does anything. What comes back is a **proposal**
-about that run: what Collie understood, and a list of actions. Every one of them is
-`pending`, even where that run granted Collie authority to correct its own drift. The grant
-was for the Driver's own checks; "we were talking about it" is not "you asked for it".
+A steer carries out your request about one run and returns execution results. A question
+asking for an explanation is answered without changing the run. Use `--dry-run` to preview
+actions without executing them. Suggestions triggered by background events remain proposals.
 
 `--target` is required. Without one the call is refused with `target_required`: Collie does
 not guess which run you meant from what you typed.
@@ -566,19 +559,23 @@ tree moved is refused rather than applied to different work. `--dry-run` prints 
 Collie would propose and records no proposal.
 
 ```sh
-collie --json confirm <proposal-id> --hash <content-hash>
+collie --json confirm <proposal-id>
 collie --json decline <proposal-id>
 collie --json proposal reconcile <proposal-id> <index> --as applied|not-applied
 ```
 
-`confirm` names the proposal **and its content hash**, because a yes to a summary is not
-consent to a payload you did not read. It is refused when the hash differs, when the
-proposal expired (thirty minutes), when a target run's Intent moved since, or when the
-caller is not a person — a controlling terminal or the board, derived, never claimed.
+`confirm` executes an existing proposal. Optional `--hash <content-hash>` checks that you
+are addressing those exact contents. Expired or stale-target proposals are still rejected.
+Ordinary chat requests and steers do not need this command.
 
 Actions run in order, each one re-checked immediately before it runs and journalled on
 both sides. The first failure stops the rest. An action whose kind this build cannot carry
-out is `skipped: executor_missing`. An action that started and never settled makes the next
+out is `skipped: executor_missing`. A failed or skipped action makes the envelope `ok: false`
+and stops the sequence, instead of reporting success or running dependent actions.
+Multiple Intent edits in one request use the same initial `base_version`; execution
+advances that version for its own successful edits. Changes made by another request still
+invalidate the stale snapshot.
+An action that started and never settled makes the next
 `confirm` refuse with `reconcile_required` until you say what happened to it.
 
 ```sh
@@ -586,8 +583,8 @@ collie --json run deliveries <run-id>
 collie --json run deliveries <run-id> --reconcile <delivery-id> --as sent|not-sent
 ```
 
-What has been sent to a run's agents, and the one thing only you can settle: a delivery
-that went out and never came back. Collie never decides that for itself — see
+What has been sent to a run's agents. Explicitly settle an unknown delivery once you have
+checked whether it arrived; a timeout alone never authorizes a resend — see
 [Delivery](steering.md#delivery).
 
 ## Follow up a finished run
@@ -887,11 +884,19 @@ collie --json run start implement --input plan="$PWD/plan" --request-id "$id" \
   || collie --json run start implement --input plan="$PWD/plan" --request-id "$id"
 ```
 
+A receipt is reserved before the action starts. If execution is interrupted before its
+result is saved, retrying reports `outcome: unknown` instead of running the action again.
+Check the Run and its recorded effects before submitting a new request.
+
 A failure carries the request id back in `error.details.requestId`, including when the id
 was generated for you — so a failed send always leaves you something to retry with rather
 than forcing a fresh id, which would be a second run rather than a retry. A `needs_input`
 or `invalid_input` rejection writes no receipt, so the same id is free to reuse once you
 have fixed the command.
+
+Native chat returns `Request: <id>` with its result; pass that value as `request_id` to
+retry. A partially applied sequence keeps its receipt even if its last action asks a
+question, so retrying cannot repeat the earlier actions.
 
 `run start` and `run answer` are the two worth being careful with: without a request id, a
 retried `run start` is a second run.

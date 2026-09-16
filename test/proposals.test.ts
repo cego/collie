@@ -28,7 +28,7 @@ import { executorFor, registeredKinds } from "../src/executors";
 import type { Action } from "../src/evaluator";
 import { carryOutProposal } from "../src/operations";
 import { currentEnv, type PluginEnv } from "../src/env";
-import { seedIntent, writeIntent } from "../src/intent";
+import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { RunStore } from "../src/run";
 import { herdOf } from "../src/steering";
 import { runEffect } from "./support/effect";
@@ -168,27 +168,19 @@ test("every refusal is its own fact, and says which one it was", () =>
     }),
   ));
 
-test("only a person confirms; a Driver, the evaluator and native chat cannot", () =>
+test("automation can execute and decline proposals without a terminal", () =>
   runEffect(
     Effect.gen(function* () {
-      const proposal = yield* written();
-      // SAFETY: the literal is exactly an Actor; the annotation only picks the origin.
       const evaluator: Actor = { origin: "evaluator", requestId: "e-1" };
-      // Native chat's bridge. It runs as a child of a harness inside a pane, so it has a
-      // controlling terminal — and a terminal is what the CLI reads as a person. Its
-      // origin is stamped by the entrypoint for exactly this reason, and it is not human
-      // however much of a TTY the process has.
       const chat: Actor = { origin: "chat", requestId: "c-1" };
-      for (const actor of [driver, evaluator, chat]) {
+      for (const actor of [driver, evaluator, chat, board]) {
+        const proposal = yield* written();
         expect(
           yield* confirm(file, proposal.id, proposal.content_hash, actor, versions),
-        ).toMatchObject({ refused: "not_human" });
-        expect(yield* decline(file, proposal.id, actor)).toMatchObject({ refused: "not_human" });
+        ).toMatchObject({ actions });
+        const declined = yield* written();
+        expect(yield* decline(file, declined.id, actor)).toMatchObject({ refused: null });
       }
-      // Both front doors count: a terminal with a person at it, and the board.
-      expect(
-        yield* confirm(file, proposal.id, proposal.content_hash, board, versions),
-      ).toMatchObject({ actions });
     }),
   ));
 
@@ -214,25 +206,22 @@ test("an action that started and never settled stops the next confirmation", () 
       );
       expect(judged).toMatchObject({ refused: "reconcile_required" });
 
-      // A human says what happened, and it stops blocking. Only a human — and only about
-      // an action that really is waiting: `later` is a fiction of this test's, and the
-      // unsettled step belongs to the proposal that actually ran one.
-      expect(yield* reconcileStep(file, proposal.id, 1, "applied", driver)).toMatchObject({
-        refused: "not_human",
-      });
+      // Only an action that really is waiting can be reconciled.
       expect(yield* reconcileStep(file, later.id, 1, "not-applied", human)).toMatchObject({
         refused: "not_pending",
       });
       expect(yield* reconcileStep(file, proposal.id, 0, "not-applied", human)).toMatchObject({
         refused: "not_pending",
       });
-      yield* reconcileStep(file, proposal.id, 1, "not-applied", human);
+      expect(yield* reconcileStep(file, proposal.id, 1, "not-applied", driver)).toMatchObject({
+        refused: null,
+      });
       const settled = (yield* read(file)).filter(
         (line): line is Extract<ProposalLine, { kind: "step" }> => line.kind === "step",
       );
       expect(settled.at(-1)).toMatchObject({
         state: "skipped",
-        note: expect.stringContaining("human:"),
+        note: expect.stringContaining("driver:d-1"),
       });
     }),
   ));
@@ -308,6 +297,17 @@ test("admission asks again, immediately before the action runs", () => {
   expect(admit({ kind: "ask_human", question: "which?" }, ctx({ run: null }))).toBeNull();
 });
 
+test("terminal Runs can be resumed or visited through the same operations as the CLI", () => {
+  for (const status of ["failed", "stopped", "succeeded"]) {
+    // The resume operation owns its lifecycle rules, including succeeded Runs whose
+    // fan-out is unfinished. Admission must not reject them before it can check.
+    const terminal = ctx({ run: { id: "r1", status }, driverLive: false });
+    expect(admit({ kind: "resume", run: "r1" }, terminal)).toBeNull();
+    expect(admit({ kind: "navigate", run: "r1" }, terminal)).toBeNull();
+    expect(admit({ kind: "hold", run: "r1" }, terminal)).toContain(`the run is ${status}`);
+  }
+});
+
 test("this build registers no executors, so nothing is stubbed into pretending", () => {
   // Every kind is registered by the module that owns the operation. Until one does, a
   // confirmed action of that kind is refused rather than silently succeeding at nothing.
@@ -317,7 +317,7 @@ test("this build registers no executors, so nothing is stubbed into pretending",
 });
 
 // From here on this process has executors registered, which is why it comes last.
-test("carrying out a Confirmation asks admission again, whichever front door said yes", () =>
+test("a refused action fails the request and does not execute later actions", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -344,7 +344,16 @@ test("carrying out a Confirmation asks admission again, whichever front door sai
       const proposal = yield* record(herdFile, {
         interpretation: "hold it",
         targets: [{ run: run.id }],
-        actions: [{ kind: "hold", run: run.id }],
+        actions: [
+          { kind: "hold", run: run.id },
+          {
+            kind: "update_intent",
+            run: run.id,
+            change: "set-goal",
+            patch: "must not happen",
+            base_version: 1,
+          },
+        ],
         allowedNow: [],
         // The Intent was v1 when this was proposed, and `seedIntent` wrote v1.
         intentVersions: { [run.id]: 1 },
@@ -354,10 +363,13 @@ test("carrying out a Confirmation asks admission again, whichever front door sai
       // Nothing owns this Run, so there is nobody to hold it — a condition the proposal
       // could not know about and only the moment of carrying it out can. The board used
       // to run its actions without asking this, which is the whole point of one module.
-      const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
-      if (!out.ok) throw new Error(out.error.message);
-      expect(out.data.results).toMatchObject([{ kind: "hold", state: "skipped" }]);
-      expect(out.data.results[0]!.note).toContain("no Driver");
+      const out = yield* carryOutProposal(env, proposal.id, undefined, board);
+      expect(out.ok).toBe(false);
+      if (out.ok) return;
+      expect(out.error.code).toBe("operation_failed");
+      expect(out.error.message).toContain("no Driver");
+      expect(out.error.details).toMatchObject({ results: [{ kind: "hold", state: "skipped" }] });
+      expect((yield* readIntent(run.dir))?.goal).toBe("a picker");
     }),
   ));
 
@@ -441,11 +453,12 @@ test("a confirmed start goes through the same Input settling a typed one does", 
       // started on a work source nobody named is a Run about something nobody said. (A
       // branch is the one Input Collie works out for itself, so it is the work source that
       // has to be missing here.) What matters for the sequence is that the refusal is this
-      // action's and not the next one's: `hold` is still reached.
+      // action's and not the next one's: `hold` must not be reached.
       const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
-      if (!out.ok) throw new Error(out.error.message);
-      expect(out.data.results[0]).toMatchObject({ kind: "start", state: "failed" });
-      expect(out.data.results[0]!.note).toContain("input");
+      expect(out.ok).toBe(false);
+      if (out.ok) return;
+      expect(out.error.details).toMatchObject({ results: [{ kind: "start", state: "failed" }] });
+      expect(out.error.message).toContain("input");
     }),
   ));
 

@@ -249,9 +249,8 @@ export function overrideActive(lines: ReadonlyArray<LedgerLine>): boolean {
 }
 
 /**
- * A human's answer to an `unknown`: whether the text reached the agent or not. Only a
- * human may give it — a process that could reconcile its own `unknown` would be a
- * process that retries, which is exactly what the state exists to prevent.
+ * An explicit account of an unknown delivery. Callers establish whether it was sent;
+ * a timeout alone never supplies an answer or authorizes a resend.
  */
 export function reconcile(
   lines: ReadonlyArray<LedgerLine>,
@@ -260,7 +259,6 @@ export function reconcile(
   by: string,
   at: string,
 ): Delivery | { readonly error: string } {
-  if (!by.startsWith("human:")) return { error: "only a human may reconcile a delivery" };
   const delivery = newestById(lines).get(id);
   if (!delivery) return { error: `no delivery "${id}" in this ledger` };
   if (delivery.state !== "unknown") return { error: `delivery "${id}" is ${delivery.state}` };

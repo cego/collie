@@ -7,6 +7,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { nowIso } from "./time";
+import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
 import {
   Herdr,
@@ -50,7 +51,7 @@ import {
   settle,
   type Resolution,
 } from "./inputs";
-import { readRegistry, registryPath, scopeKey, scopeOfRun } from "./registry";
+import { readRegistry, registryPath, scopeFor, scopeKey, scopeOfRun } from "./registry";
 import { newTask, writeTask, type TaskChoice, type TaskRecord } from "./task";
 import { nameTask, type LiveNames, type NamingDeps, type TaskContext } from "./tasknames";
 import {
@@ -96,7 +97,6 @@ import {
   actorName,
   admit,
   confirm as confirmProposal,
-  isHuman,
   decline,
   proposalsPath,
   read as readProposals,
@@ -126,7 +126,7 @@ import {
 } from "./run";
 import { taskWorkspaceLabel } from "./naming";
 import { branchListed, checkoutFor, pruneWorktrees, runNames } from "./worktree";
-import { closable } from "./home";
+import { closable, isHomeDirectory } from "./home";
 import { forkResolvedDefinition } from "./fork";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
@@ -837,6 +837,14 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   },
 ) {
   const { workflow, resolutions, workspace } = options;
+  if (yield* isHomeDirectory(env.stateDir, env.cwd))
+    return {
+      _tag: "Rejected" as const,
+      result: err(
+        "needs_input",
+        "Choose the project to work on with --workspace <id> or COLLIE_CWD=/path/to/project. Collie's Home is a state directory, not your project.",
+      ),
+    };
   const named = primaryName(resolutions);
   const herdr = new Herdr(env);
   // Collie has no daemon, so pruning happens where it already wakes up. Before the
@@ -929,7 +937,12 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   for (const line of pruned) yield* run.log(`worktrees: ${line}`);
   if (checkout.note) yield* run.log(checkout.note);
   if (options.note) yield* run.log(options.note);
-  yield* seedRunIntent(env, run, resolutions, options.intent ?? {});
+  yield* seedRunIntent(
+    { ...env, workspaceId: from?.workspace ?? env.workspaceId },
+    run,
+    resolutions,
+    options.intent ?? {},
+  );
   const undriven = yield* handOver(env, run);
   return undriven
     ? { _tag: "Rejected" as const, result: undriven.result }
@@ -957,7 +970,7 @@ const seedRunIntent = Effect.fn("operations.seedRunIntent")(function* (
     readonly constraints?: ReadonlyArray<Omit<Constraint, "since">>;
   },
 ) {
-  const key = scopeKey(scopeOfRun(run.record));
+  const key = scopeKey(scopeFor(env, env.cwd));
   const defaults = yield* readDefaults(yield* defaultsPath(env.stateDir, key)).pipe(
     Effect.catch((cause) =>
       run.log(`no workspace defaults: ${String(cause)}`).pipe(Effect.as(null)),
@@ -969,7 +982,7 @@ const seedRunIntent = Effect.fn("operations.seedRunIntent")(function* (
     : yield* fromWorkSource(null, "");
   const intent = seedIntent(run.id, {
     defaults,
-    goal: named.goal ?? work.goal,
+    goal: named.goal ?? resolutions.find((r) => r.strategy === "goal")?.value ?? work.goal,
     constraints: [...work.constraints, ...(named.constraints ?? [])],
     runVerification: run.record.approved_verifications,
   });
@@ -1194,7 +1207,7 @@ export const declineProposal = Effect.fn("operations.declineProposal")(function*
 export const carryOutProposal = Effect.fn("operations.carryOutProposal")(function* (
   env: PluginEnv,
   proposalId: string,
-  hash: string,
+  hash: string | undefined,
   actor: Actor,
 ) {
   // The operations register what they can carry out; without this the registry is empty
@@ -1214,22 +1227,47 @@ export const carryOutProposal = Effect.fn("operations.carryOutProposal")(functio
     if (intent !== null) versions.set(target.run, intent.version);
   }
 
-  const judged = yield* confirmProposal(file, proposalId, hash, actor, versions);
+  const judged = yield* confirmProposal(
+    file,
+    proposalId,
+    hash ?? proposal?.content_hash ?? "",
+    actor,
+    versions,
+  );
   if ("refused" in judged) return err("invalid_input", judged.detail, { reason: judged.refused });
 
   const results: Array<{ index: number; kind: string; state: string; note: string }> = [];
-  for (const [index, action] of judged.actions.entries()) {
+  const expectedVersions = { ...judged.proposal.intent_versions };
+  for (const [index, proposed] of judged.actions.entries()) {
+    // All edits in a request name the snapshot it was checked against. Advance only
+    // for edits this sequence applied; unrelated concurrent edits still fail admission.
+    const action =
+      proposed.kind === "update_intent" &&
+      proposed.base_version === judged.proposal.intent_versions[proposed.run]
+        ? { ...proposed, base_version: expectedVersions[proposed.run] ?? proposed.base_version }
+        : proposed;
+    if (action.kind === "none" || action.kind === "ask_human") {
+      const state = action.kind === "none" ? "applied" : "failed";
+      const note = action.kind === "none" ? action.why : action.question;
+      yield* stepSettled(file, proposalId, index, state, note);
+      results.push({ index, kind: action.kind, state, note });
+      if (action.kind === "ask_human") break;
+      continue;
+    }
     const executor = executorFor(action.kind);
     if (!executor) {
       yield* stepSettled(file, proposalId, index, "skipped", "executor_missing");
       results.push({ index, kind: action.kind, state: "skipped", note: "executor_missing" });
-      continue;
+      break;
     }
-    const refusal = yield* admissionFor(env, action, judged.proposal);
+    const refusal = yield* admissionFor(env, action, {
+      ...judged.proposal,
+      intent_versions: expectedVersions,
+    });
     if (refusal !== null) {
       yield* stepSettled(file, proposalId, index, "skipped", refusal);
       results.push({ index, kind: action.kind, state: "skipped", note: refusal });
-      continue;
+      break;
     }
     yield* stepStarted(file, proposalId, index);
     const outcome = yield* executor(action, actorName(actor));
@@ -1243,13 +1281,25 @@ export const carryOutProposal = Effect.fn("operations.carryOutProposal")(functio
     // A sequence the human approved as a sequence: what follows a failure was approved on
     // the assumption that the failure did not happen.
     if (outcome.state === "failed") break;
+    if (action.kind === "update_intent") expectedVersions[action.run] = action.base_version + 1;
+  }
+  const message = results
+    .map((r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`)
+    .join("\n");
+  if (results.some((r) => r.state === "failed" || r.state === "skipped")) {
+    const changed = results.some((r) => r.state === "applied" && r.kind !== "none");
+    // needs_input is retryable without a receipt only when nothing has happened yet.
+    const code =
+      results.at(-1)?.kind === "ask_human" && !changed ? "needs_input" : "operation_failed";
+    return err(code, message, {
+      proposal: proposalId,
+      results,
+    });
   }
   return {
     ok: true as const,
     data: { proposal: proposalId, results },
-    human: results
-      .map((r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`)
-      .join("\n"),
+    human: message,
   };
 });
 
@@ -1307,7 +1357,7 @@ function emptyAdmission(): Parameters<typeof admit>[1] {
  * confirmation can refuse rather than deliver to whatever took that agent's name since.
  */
 /**
- * A structured request from native chat, recorded as a proposal nobody has acted on.
+ * A structured request from native chat, validated and executed in the same call.
  *
  * This is the whole of what chat may *do*, and it is deliberately the same path a steer
  * takes from the point the actions exist: the closed `ActionSchema`, `validate`, and the
@@ -1315,9 +1365,8 @@ function emptyAdmission(): Parameters<typeof admit>[1] {
  * the native agent already expressed this structurally, and paying a model to re-read it
  * would be two interpretations of one request.
  *
- * Everything comes back `pending`, always. The origin is `steer` rather than `driver`
- * for that reason: a Run's own grant of `auto_correct` was for its Driver's drift checks,
- * and a conversation is not a Driver. The human confirms on the board, by id and hash.
+ * The journal and stale-target checks are shared with optional proposals. Attribution
+ * stays with the chat request; no terminal or second human confirmation is required.
  */
 export const request = Effect.fn("operations.request")(function* (
   env: PluginEnv,
@@ -1331,15 +1380,6 @@ export const request = Effect.fn("operations.request")(function* (
 ) {
   if (options.actions.length === 0)
     return err("invalid_input", "A request with no actions changes nothing; say what to do.");
-  // Never a human, whatever the process looks like. The bridge runs inside a harness's
-  // pane and inherits its terminal, so the `cli-tty` shortcut would read a model as a
-  // person — see `Actor`.
-  if (isHuman(options.actor))
-    return err(
-      "invalid_state",
-      "A request is not a confirmation; the human confirms on the board.",
-    );
-
   const store = new RunStore(env.stateDir);
   const named = [...new Set(options.actions.flatMap((a) => ("run" in a ? [a.run] : [])))];
   const runs = new Map<string, Run>();
@@ -1383,7 +1423,6 @@ export const request = Effect.fn("operations.request")(function* (
     interpretation: options.interpretation,
     targets: named.map((run) => ({ run })),
     actions: checked.map((entry) => entry.action),
-    // Nothing a conversation produced runs without the human.
     allowedNow: [],
     intentVersions: Object.fromEntries([...intents].map(([id, at]) => [id, at.version])),
     by: actorName(options.actor),
@@ -1392,28 +1431,7 @@ export const request = Effect.fn("operations.request")(function* (
     file,
     Object.keys(addressed).length === 0 ? proposal : { ...proposal, incarnations: addressed },
   );
-  const driverless: string[] = [];
-  for (const [id, run] of runs)
-    if ((yield* driverOwnership(run.dir)) !== "live") driverless.push(id);
-  return ok(
-    {
-      proposal: {
-        id: recorded.id,
-        hash: recorded.content_hash,
-        expires_at: recorded.expires_at,
-        actions: checked.map((entry) => ({ ...entry.action, status: entry.state })),
-      },
-      no_driver: driverless,
-    },
-    [
-      previewOf(options.interpretation, checked),
-      `Waiting for the human: they confirm it on the board, or with`,
-      `  collie confirm ${recorded.id} --hash ${recorded.content_hash}`,
-      ...(driverless.length === 0
-        ? []
-        : [`No Driver owns ${driverless.join(", ")}: a delivery would be queued in the inbox.`]),
-    ].join("\n"),
-  );
+  return yield* carryOutProposal(env, recorded.id, recorded.content_hash, options.actor);
 });
 
 const incarnationsFor = Effect.fn("operations.incarnationsFor")(function* (
@@ -1506,7 +1524,7 @@ export const steer = Effect.fn("operations.steer")(function* (
     /**
      * Who is asking. `event` is the board speaking first about something that changed;
      * the question is journaled as that, never as the human's words. It changes what the
-     * conversation shows and nothing about what the answer may do.
+     * conversation shows. Unsolicited event suggestions stay proposals.
      */
     readonly asked?: "human" | "event";
   },
@@ -1593,7 +1611,7 @@ export const steer = Effect.fn("operations.steer")(function* (
     interpretation: proposed.interpretation,
     targets: [{ run: run.id }],
     actions: checked.map((entry) => entry.action),
-    // Nothing a conversation produced runs without the human: see the note above.
+    // A requested action is separate from the Driver's standing authority.
     allowedNow: [],
     intentVersions: intent === null ? {} : { [run.id]: intent.version },
     by: `evaluator:${callId}`,
@@ -1612,6 +1630,12 @@ export const steer = Effect.fn("operations.steer")(function* (
     evaluatorCall: callId,
   };
   yield* append(journal, from === null ? reply : { ...reply, card: from }, roots);
+
+  if (options.asked !== "event")
+    return yield* carryOutProposal(env, recorded.id, recorded.content_hash, {
+      origin: "cli",
+      requestId: options.requestId,
+    });
 
   const driver = yield* driverOwnership(run.dir);
   return ok(
@@ -1689,6 +1713,8 @@ export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: Plugi
       if (record.evidence_gaps.length > 0)
         said.push(`not proved: ${record.evidence_gaps.join("; ")}`);
       if (record.obstacle !== null) said.push(`in the way: ${record.obstacle}`);
+      const attention = yield* attentionFor(item, new Herdr(env));
+      if (attention.category !== "none") said.push(attention.explanation);
       return said.join(", ");
     }),
   );
@@ -1709,11 +1735,25 @@ export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: Plugi
  * evidence pack embeds, so a detail asked for in chat is the detail a proposal was made
  * from.
  */
-export const runFacts = Effect.fn("operations.runFacts")(function* (run: Run) {
+export const runFacts = Effect.fn("operations.runFacts")(function* (run: Run, env: PluginEnv) {
   const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
+  const attention = yield* attentionFor(run, new Herdr(env));
   const lines = [
-    `Goal: ${intent?.goal ?? "(none recorded)"}`,
+    `Status: ${yield* runStatus(run)}; Driver: ${attention.driver}`,
+    `Directory: ${run.record.cwd}`,
+    `Workspace: ${run.record.workspace ?? "none"}`,
+    `Goal: ${intent?.goal ?? run.record.inputs.goal ?? "(none recorded)"}`,
     `Intent version: ${intent?.version ?? "(none)"}`,
+    attention.explanation,
+    `Actions: ${attention.actions.join(", ") || "none"}`,
+    ...(attention.choice === null
+      ? []
+      : [
+          `Question ${attention.choice.id}: ${attention.choice.header}`,
+          ...attention.choice.items.map(
+            (item) => `- ${item.title}${item.subtitle ? ` — ${item.subtitle}` : ""}`,
+          ),
+        ]),
     ...(intent?.constraints ?? []).map(
       (c) => `- constraint ${c.id} (${c.severity}, ${c.source}): ${c.text}`,
     ),
@@ -1780,7 +1820,7 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
     );
   }
   if (run !== null) {
-    lines.push("", `## Run ${run.id}`, "", yield* runFacts(run));
+    lines.push("", `## Run ${run.id}`, "", yield* runFacts(run, env));
     if (card !== null) {
       const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
       const bound = cards.find((entry) => entry.id === card);
@@ -1968,6 +2008,11 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
   run: Run,
   requestId: string,
 ) {
+  if (yield* isHomeDirectory(env.stateDir, run.record.cwd))
+    return err(
+      "needs_input",
+      "This Run points at Collie Home, not a project. Start a new Run with --workspace <id> or COLLIE_CWD=/path/to/project; resuming would reuse the wrong directory.",
+    );
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   // The ownership check is a look, not a claim. Two resumes could both find no owner, both
@@ -2374,7 +2419,7 @@ export const registerRunExecutors = Effect.fn("operations.registerRunExecutors")
         resolutions: prepared.resolutions,
         decisions: given.decisions,
         workspace: where === null ? null : where.found,
-        note: "started by a confirmed proposal",
+        note: "started by a request",
       });
       if (started._tag === "Rejected") return failed(started.result.error.message);
       return {
@@ -2383,9 +2428,8 @@ export const registerRunExecutors = Effect.fn("operations.registerRunExecutors")
       };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
-  // One workspace's standing constraints. Every Run started there afterwards begins with
-  // them, which is why a confirmation is what writes one: a model that could change what
-  // future Runs are held to would be writing its own brief.
+  // One workspace's standing constraints. Explicit requests update these defaults;
+  // worker output does not change what future Runs are held to.
   registerExecutor("update_defaults", (action) =>
     Effect.gen(function* () {
       // The named workspace's scope, never this process's. A Run reads its defaults under

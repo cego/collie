@@ -99,7 +99,7 @@ const delivery = (over: Partial<Delivery> = {}): Delivery => ({
 test("proven is a recorded date, attribution and the other harnesses are not, and a boundary needs nothing proven", () =>
   runEffect(
     Effect.gen(function* () {
-      for (const [harness, row] of Object.entries(CAPABILITIES))
+      for (const row of Object.values(CAPABILITIES))
         for (const [capability, record] of Object.entries(row)) {
           // A capability moves to `proven` only with the day it was recorded.
           if (record.status === "proven") expect(record.tested_at).not.toBeNull();

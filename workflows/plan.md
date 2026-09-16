@@ -1,7 +1,7 @@
 ---
 name: plan
-title: plan — grill me, then write the spec and the tickets
-description: Interviews you about a goal, writes the spec and tickets into the run dir, then asks what next.
+title: plan — turn a goal into a spec and tickets
+description: Uses the goal and repository context to write a spec and tickets, asking only for missing decisions.
 inputs:
   goal: goal
   ticket: ticket
@@ -10,7 +10,6 @@ inputs:
 steps:
   - id: grill
     persona: planner
-    skill: grill-with-docs
     # One planner agent for the whole run, so its model is named once, here.
     model: fable
     effort: medium
@@ -66,6 +65,8 @@ steps:
         agent: grill
         prompt: refine
         output: refine.json
+      - title: Finish planning
+        stop: true
 ---
 
 The goal, in my words:
@@ -87,29 +88,20 @@ and it will be.
 If the goal above is a Linear issue id or a Linear URL, fetch it first with the Linear
 MCP and treat what it says as the goal.
 
-You were started with {{skill:grill-with-docs}}, so the skill is already running: one question
-at a time, until you can state the plan back to me and I agree with it. Write no spec and
-no tickets in this step.
-
-If you cannot see the destination from here, or this is more than one session of work,
-say so and stop: ask me to run {{skill:wayfinder}} in this tab, and set `"wayfinder": true` in
-your Output. You cannot start that skill yourself — only I can — and the map belongs at
-`{{run.dir}}/plan/MAP.md`.
+Read the goal and the repository first. Ask only when a missing decision changes what
+you should build. When the goal is clear, proceed without an interview or approval of
+a summary. Do not ask me to invoke another skill or to confirm that you may write the plan.
+For larger work, break it into manageable pieces yourself.
 
 Glossary (`CONTEXT.md`) and ADR changes we agree on go into the repository as we agree
 them — they are domain knowledge. Nothing else does.
 
-Part of stating the plan back to me is saying what kind of result it is, because that
-decides what will have to be proved before it can ship: `feature`, `bug`, `refactor`,
-`investigation`, `docs` or `migration`. Work it out from what we have agreed and say it in
-one line as part of the interview — never as a separate question at the end, and never by
-guessing from a word in the goal. If it genuinely is not one of those, leave it empty:
-unclassified work is held to this project's verifications and nothing more, which is
-better than being held to the wrong thing.
+Choose the result kind from the task: `feature`, `bug`, `refactor`, `investigation`,
+`docs` or `migration`. Leave it empty if none fits; this is metadata, not another question.
 
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "slug":
 "<short-kebab-case-name-for-this-work>", "outcome": "<one of the kinds above, or empty>",
-"decided": ["what we settled", ...], "wayfinder": true or false}`.
+"decided": ["what we settled", ...]}`.
 
 ## spec
 

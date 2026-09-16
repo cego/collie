@@ -11,6 +11,8 @@ import { installFakeSkills, writeDef } from "./support/defs";
 import { FakeBin } from "./support/bin";
 import { newRequestId, prepareWorkflow, resumeRun, startRun } from "../src/operations";
 import { RunStore } from "../src/run";
+import { defaultsPath, EMPTY_DEFAULTS, readIntent, writeDefaults } from "../src/intent";
+import { scopeFor, scopeKey } from "../src/registry";
 import {
   listTasks,
   newTask,
@@ -119,6 +121,71 @@ const workspaceCalls = Effect.fn("taskTest.workspaceCalls")(function* () {
       ),
   };
 });
+
+test("a launch goal is the Run's Intent without a second goal flag", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* startedRun(rig.pluginEnv(), "redesign the control panel");
+      expect((yield* readIntent(run.dir))?.goal).toBe("redesign the control panel");
+    }),
+  ));
+
+test("a fresh Task inherits the launching workspace's defaults", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      yield* writeDefaults(yield* defaultsPath(rig.stateDir, scopeKey(scopeFor(env, env.cwd))), {
+        ...EMPTY_DEFAULTS,
+        constraints: [
+          {
+            id: "style",
+            text: "use existing conventions",
+            kind: "semantic",
+            severity: "warn",
+            source: "human",
+            since: 1,
+          },
+        ],
+      });
+      const run = yield* startedRun(env, "ship the picker");
+      expect((yield* readIntent(run.dir))?.constraints.map((c) => c.id)).toContain("style");
+    }),
+  ));
+
+test("the Home state directory is not mistaken for the project to work on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cwd = `${rig.stateDir}/herd/session`;
+      yield* fs.makeDirectory(cwd, { recursive: true });
+      const result = yield* start(rig.pluginEnv({ COLLIE_CWD: cwd }), "redesign the panel");
+      expect(result._tag).toBe("Rejected");
+      if (result._tag !== "Rejected") return;
+      expect(result.result.error.message).toContain("COLLIE_CWD");
+      expect(yield* new RunStore(rig.stateDir).list()).toHaveLength(0);
+      expect((yield* workspaceCalls()).created).toBe(0);
+    }),
+  ));
+
+test("a legacy Home-rooted Run is not resumed into the state directory", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* startedRun(rig.pluginEnv(), "redesign the panel");
+      run.record.cwd = `${rig.stateDir}/herd/session`;
+      run.record.status = "failed";
+      run.record.steps[0]!.status = "failed";
+      yield* run.save();
+      const before = structuredClone(run.record);
+      const result = yield* resumeRun(rig.pluginEnv(), run, yield* newRequestId()).pipe(
+        Effect.provide(driverLayer),
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.code).toBe("needs_input");
+      expect(result.error.message).toContain("Home");
+      expect((yield* new RunStore(rig.stateDir).load(run.id)).record).toEqual(before);
+    }),
+  ));
 
 test("every fresh start gets a task workspace of its own, and it is focused", () =>
   runEffect(

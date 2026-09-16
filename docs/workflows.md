@@ -22,13 +22,15 @@ target.
 **For:** turning a goal you can describe into a spec and tickets someone — or something —
 can build from.
 
-**Inputs:** `goal` (what you want), which you are always asked for, and `ticket` (a Linear
+**Inputs:** `goal` (what you want), supplied at launch or asked for when missing, and `ticket` (a Linear
 issue). `ticket` is read from the branch name and left empty when there is none — it is
-never asked for. The goal is the only launch question: the grilling starts at once, and
+never asked for. The goal is the only launch question, and
 the end menu is asked when the plan is written rather than before it exists.
 
-**What happens:** a planner interviews you one question at a time, then writes `SPEC.md`
-and one ticket per slice into the run's `plan/` directory. Plans never enter the repository
+**What happens:** a planner reads the goal and repository, asks only when a missing
+decision changes the work, then writes `SPEC.md` and one ticket per slice into the run's
+`plan/` directory. There is no mandatory interview, summary approval, or manual skill
+handoff. Plans never enter the repository
 ([ADR-0002](adr/0002-plan-artefacts-live-in-the-run-directory.md)).
 
 **Ends with a menu:** and you can answer it in conversation. Telling the planner
@@ -41,6 +43,7 @@ and one ticket per slice into the run's `plan/` directory. Plans never enter the
 - **Offload to Linear** — the planner files the tickets as Linear issues. It asks once
   which team they go to and remembers the answer in `config.json`.
 - **Refine** — another planner round, as often as you like.
+- **Finish planning** — finish without starting implementation or another planning round.
 
 Definition: [`workflows/plan.md`](../workflows/plan.md).
 

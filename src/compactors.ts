@@ -262,9 +262,9 @@ const gateVersion = Effect.fn("Compactors.gateVersion")(function* (harness: stri
   const installed = stdout.trim().split("\n").at(-1)?.trim() ?? "";
   const problem =
     code !== 0
-      ? `cannot ask ${harness} its version (exit ${code}) — Collie manages its compaction and will not launch an agent it cannot manage`
+      ? `cannot ask ${harness} its version (exit ${code})`
       : !atLeast(installed, wanted)
-        ? `${harness} ${installed || "(no version)"} is older than the ${wanted} its compaction controls were verified against — upgrade it, or set compact_at_tokens to 0`
+        ? `${harness} ${installed || "(no version)"} is older than the ${wanted} its compaction controls support`
         : null;
   gated.set(harness, problem);
   if (problem) return yield* Effect.fail(new Error(problem));

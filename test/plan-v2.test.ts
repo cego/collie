@@ -65,6 +65,31 @@ function plan() {
   });
 }
 
+test("a completed plan can finish without starting more work", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        CLEAN,
+        { __write: { "plan/SPEC.md": "# Add a version flag\n" }, output: CLEAN },
+        {
+          __write: { "plan/issues/01-version.md": "# Version flag\n**Repo:** .\n" },
+          output: CLEAN,
+        },
+      ]);
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "plan",
+        { goal: "Add a version flag" },
+        {
+          prompts: scriptedPrompts(["Finish planning"]),
+        },
+      );
+      expect(status).toBe("done");
+      expect(run.record.children).toEqual([]);
+      expect(run.step("tickets").status).toBe("done");
+    }),
+  ));
+
 test("plan is one agent through grill, spec and tickets, then a menu", () =>
   runEffect(
     Effect.gen(function* () {
@@ -84,6 +109,7 @@ test("plan is one agent through grill, spec and tickets, then a menu", () =>
         "Second opinion",
         "Offload to Linear",
         "Refine",
+        "Finish planning",
       ]);
       expect(choices[0]!.run).toBe("implement");
       // The plan it wrote, and the parent's own answer about where the run lives, so a
@@ -223,7 +249,7 @@ test(
         // A mention names the skill and the file to read; the slash form is only
         // what the human channel types to start one.
         for (const [step, mentions] of [
-          ["grill", "the `grill-with-docs` skill"],
+          ["grill", "When the goal is clear, proceed without an interview"],
           ["spec", "the `to-spec` skill"],
           ["tickets", "the `to-tickets` skill"],
         ] as const) {
@@ -264,6 +290,7 @@ test(
           "Architecture first",
           "Offload to Linear",
           "Refine",
+          "Finish planning",
         ]);
 
         const path = yield* Path.Path;

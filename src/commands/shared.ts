@@ -338,17 +338,14 @@ export function mutating(
 }
 
 /**
- * Who is asking, derived rather than supplied. A controlling terminal means a person
- * typed this; anything else — a script, a Driver, the evaluator — is not a human and
- * cannot confirm, amend or reconcile anything. The board stamps `board` through its own
- * front door.
+ * Attribution only: a piped command is still a CLI request, not a Driver.
  *
  * All three streams, not stdout alone: `collie --json confirm … > out.json` is a person
  * at a terminal, and a Driver has a pipe on every one of them.
  */
 export function actorNow(requestId: string): Actor {
   const terminal = process.stdin.isTTY || process.stdout.isTTY || process.stderr.isTTY;
-  return { origin: terminal ? "cli-tty" : "driver", requestId };
+  return { origin: terminal ? "cli-tty" : "cli", requestId };
 }
 
 export { actorName };

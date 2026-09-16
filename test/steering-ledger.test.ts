@@ -206,10 +206,11 @@ test("the same work blocks a second delivery; the same words about other work do
   expect(blocked([delivery({ state: "unknown" })], inFlight.causal_key)?.state).toBe("unknown");
 });
 
-test("only a human reconciles an unknown, and doing so stops it blocking", () => {
+test("an explicit reconciliation works from automation and stops an unknown blocking", () => {
   const unknown = delivery({ state: "unknown" });
-  expect(reconcile([unknown], "d1", "sent", "driver:r1", "t")).toEqual({
-    error: "only a human may reconcile a delivery",
+  expect(reconcile([unknown], "d1", "sent", "driver:r1", "t")).toMatchObject({
+    state: "superseded",
+    note: "reconciled as sent by driver:r1",
   });
   expect(reconcile([unknown], "d9", "sent", "human:req-2", "t")).toEqual({
     error: 'no delivery "d9" in this ledger',

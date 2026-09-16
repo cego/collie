@@ -8,19 +8,16 @@
 // Five of them only read. Three write, and say so in `readOnly` rather than letting a
 // client assume: `collie_news` settles the items it hands over, `collie_installation`
 // runs the installation checks and one of those fetches this checkout's refs, and
-// `collie_propose` appends to the proposals journal. None changes a Run — a proposal is
-// confirmed by the human on the board, through the same closed action schema, the same `validate`,
-// the same journal and the same executors a typed steer and the CLI go through. There is
-// no route here that writes a Run record, runs a command, or confirms anything, and the
-// bridge's actor is stamped by this entrypoint rather than worked out from the process —
-// a model inside a harness's pane inherits that pane's terminal, and the CLI's "a TTY
-// means a person" shortcut would read it as human.
+// `collie_propose` executes requested actions through the shared journal and executors.
+// Its name is retained for existing clients; it no longer requires a confirmation hop.
+// Inputs and targets are still validated, and the bridge records chat attribution.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Crypto, Effect, Schema } from "effect";
+import { Clock, Effect, Option, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
-import { herdFacts, request, runFacts, workspaceCwdFromPanes } from "./operations";
+import { mutation } from "./envelope";
+import { herdFacts, newRequestId, request, runFacts, workspaceCwdFromPanes } from "./operations";
 import { ActionSchema } from "./evaluator";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { Herdr } from "./herdr";
@@ -32,6 +29,7 @@ import {
   settle as settleNews,
 } from "./news";
 import { RunStore } from "./run";
+import { attentionFor } from "./attention";
 import { deliveriesOf, herdOf } from "./steering";
 import {
   loadDefinitions,
@@ -93,6 +91,7 @@ const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
 const ProposeInput = Schema.Struct({
   interpretation: Schema.String,
   actions: Schema.Array(ActionSchema),
+  request_id: Schema.optionalKey(Schema.String),
 });
 const decodePropose = Schema.decodeUnknownOption(ProposeInput);
 
@@ -144,7 +143,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
           .pipe(Effect.catch(() => Effect.succeed(null)));
         return run === null
           ? `No Run "${decoded.value.run}". collie_herd lists the ones there are.`
-          : yield* said(runFacts(run));
+          : yield* said(runFacts(run, env));
       }),
   },
   {
@@ -235,11 +234,11 @@ export const TOOLS: ReadonlyArray<Tool> = [
   {
     name: "collie_propose",
     readOnly: false,
-    title: "Ask for something to be done",
+    title: "Carry out a request",
     description:
-      "Propose one or more actions about named Runs. This does not carry them out: it " +
-      "records a proposal, and the human confirms it on the board, by its id and the hash " +
-      "of exactly these actions. You cannot confirm it, and asking to will be refused. " +
+      "Carry out the user's requested actions and return their execution results. No " +
+      "separate confirmation is needed. Reuse request_id when retrying the same request. " +
+      "Use reads for questions, not this tool. " +
       "Name every Run by the id `collie_herd` lists — a Run that does not exist is refused " +
       "rather than guessed at, and if you are not sure which the human meant, ask them " +
       "instead of proposing. `interpretation` is what you understood, in their words.",
@@ -253,14 +252,17 @@ export const TOOLS: ReadonlyArray<Tool> = [
           const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
           if (key === null)
             return "Collie cannot reach herdr, so there is nothing to propose against.";
-          const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
-          const answered = yield* request(env, key, {
-            interpretation: decoded.value.interpretation,
-            actions: decoded.value.actions,
-            // Stamped here, by the entrypoint. Nothing in the request says who is asking.
-            actor: { origin: "chat", requestId },
-          });
-          return answered.ok ? answered.human : answered.error.message;
+          const requestId = decoded.value.request_id ?? (yield* newRequestId());
+          const answer = yield* said(
+            mutation(env, "chat-request", Option.some(requestId), (id) =>
+              request(env, key, {
+                interpretation: decoded.value.interpretation,
+                actions: decoded.value.actions,
+                actor: { origin: "chat", requestId: id },
+              }),
+            ).pipe(Effect.map((result) => (result.ok ? result.human : result.error.message))),
+          );
+          return `Request: ${requestId}\n${answer}`;
         }),
       ),
   },
@@ -321,10 +323,18 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
       ? []
       : pendingFor(yield* readProposals(yield* proposalsPath(env.stateDir, key)), run, now);
   const deliveries = yield* deliveriesOf(env.stateDir, run);
+  const attention = yield* attentionFor(found, new Herdr(env));
+  const question = attention.choice;
   return [
     "### Waiting on the human",
     "",
-    ...(proposals.length === 0
+    ...(question === null
+      ? []
+      : [
+          `- Question ${question.id}: ${question.header}`,
+          ...question.items.map((item) => `  - ${item.title}`),
+        ]),
+    ...(proposals.length === 0 && question === null
       ? ["- nothing"]
       : proposals.map(
           (p) => `- ${p.id} (${p.content_hash}): ${p.interpretation} — expires ${p.expires_at}`,

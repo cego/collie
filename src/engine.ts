@@ -47,7 +47,6 @@ import { HARNESSES, isPermissionMode, PERMISSION_MODES, personaPrefix, startArgs
 import {
   atBoundary,
   controlDir,
-  gateHarnesses,
   installControls,
   withControlLock,
   type CompactionPorts,
@@ -1656,16 +1655,9 @@ const runStep = Effect.fn("Engine.runStep")(function* (
   const modes = yield* Effect.forEach(variants, (variant) =>
     permissionMode(step, variant, o.defaults),
   );
-  // Which agents this step keeps and which it starts, before it starts any of them:
-  // the compaction gate is about the launches, and a harness Collie cannot manage has
-  // to stop the step here rather than leave an empty tab behind.
+  // Which agents this step keeps and which it starts.
   const priors = variants.map((_, i) => previous[i] ?? borrowedAgent(o, step, ctx));
   const reuses = priors.map((prior) => prior !== null && !step.fresh);
-  yield* gateCompaction(
-    o,
-    step,
-    variants.flatMap((variant, i) => (reuses[i] ? [] : [variant.harness])),
-  );
 
   // Start (or reuse) every agent first, then prompt them all, so they work at once.
   for (const [i, variant] of variants.entries()) {
@@ -1704,10 +1696,8 @@ const runStep = Effect.fn("Engine.runStep")(function* (
         yield* herdr.paneRename(record.paneId, paneName);
       if (record.tabId) yield* renameTab(o, ctx, record.tabId, runTab(o, GLYPH.running));
     } else {
-      // Before any pane exists, because a harness Collie manages but cannot talk to
-      // fails the step rather than leaving an agent unmanaged — and an endpoint that
-      // never came up would otherwise fail it with an empty tab already open in the
-      // human's session, which is the thing the gate exists to avoid.
+      // Install optional controls before opening panes, so an installation error
+      // does not leave an empty tab. Unsupported controls fall back to the harness.
       yield* withControlLock(
         o.env.stateDir,
         record.agent,
@@ -3030,9 +3020,8 @@ const callAttention = Effect.fn("Engine.callAttention")(function* (
 });
 
 /**
- * A harness that asks before it will work in a directory asks in its own pane, where
- * it is easy to miss and impossible to answer for someone else. So the question is put
- * here instead, once per directory, before a single tab opens.
+ * Starting the Run selects its working directory. Record that selection for harnesses
+ * that need directory trust, without asking the same question again in Collie.
  */
 const ensureTrusted = Effect.fn("Engine.ensureTrusted")(function* (o: EngineOptions) {
   if (o.defaults.trust === "never") return;
@@ -3046,30 +3035,6 @@ const ensureTrusted = Effect.fn("Engine.ensureTrusted")(function* (o: EngineOpti
       const trust = HARNESSES[variant.harness]?.trust?.(o.env.home, o.env.stateDir);
       if (!trust || (yield* trust.state(cwd)) !== "untrusted") continue;
 
-      // A checkout Collie created a moment ago is not a directory the human has an
-      // opinion about: they said yes to the Run, and the worktree is where it happens.
-      if (o.defaults.trust === "ask" && !o.run.record.worktree?.created_by_collie) {
-        if (!o.prompts) continue;
-        const answer = yield* o.prompts!.menu(
-          [
-            {
-              id: "trust",
-              title: "Trust it now",
-              subtitle: "records it where the harness looks",
-            },
-            {
-              id: "ask",
-              title: "Let claude ask me in its tab",
-              subtitle: "the run waits for you",
-            },
-          ],
-          {
-            header: `${variant.harness} has not worked in ${cwd} before`,
-            footer: "↑↓ move · Enter choose",
-          },
-        );
-        if (answer?.id !== "trust") continue;
-      }
       // A grant that cannot be written is not a reason to stop the run: with nothing
       // recorded, the harness falls back to asking in its own pane, which is exactly
       // where the question would have been without this.
@@ -3140,22 +3105,6 @@ const permissionMode = Effect.fn("Engine.permissionMode")(function* (
   if (isPermissionMode(named)) return named;
   return yield* Effect.fail(
     new Error(`${step.id}: unknown permissions "${named}" (known: ${PERMISSION_MODES.join(", ")})`),
-  );
-});
-
-/**
- * Refuses the step before a tab opens where compaction is on and one of the harnesses
- * about to be launched cannot be managed through the interface Collie verified. Warning
- * and starting the agent anyway is how a partial-harness feature ships: the whole point
- * of the gate is that an unmanaged agent is not a quiet telemetry problem.
- */
-const gateCompaction = Effect.fn("Engine.gateCompaction")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  harnesses: ReadonlyArray<string>,
-) {
-  yield* gateHarnesses(yield* compactionDeps(o), harnesses).pipe(
-    Effect.mapError((cause) => new Error(`${step.id}: ${reason(cause)}`)),
   );
 });
 

@@ -13,7 +13,7 @@ import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
-import { COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
+import { atLeast, COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
 import { boundThread, withCodex } from "../src/codex";
 import { Unsubmitted, type AgentContext } from "../src/compaction";
 
@@ -418,13 +418,14 @@ test(
 );
 
 test(
-  "the installed Codex is the release these controls were verified against, and takes both flags",
+  "the installed Codex supports these controls and takes both flags",
   () =>
     runEffect(
       Effect.gen(function* () {
         const wanted = VERIFIED_VERSIONS.get("codex") ?? "";
         const version = yield* Effect.promise(() => Bun.$`codex --version`.text());
-        expect(version).toContain(wanted);
+        expect(wanted).not.toBe("");
+        expect(atLeast(version, wanted)).toBe(true);
         yield* codex.gate();
 
         // The launch topology: a server on a loopback port, and a TUI pointed at it.

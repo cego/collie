@@ -4,7 +4,13 @@ import { TestClock } from "effect/testing";
 import { FakeHerdr, Rig } from "./support/recorder";
 import {} from "../src/naming";
 import { fakeHerdr } from "./support/fake-herdr-core";
-import { installBaseline, plannedRun, runWorkflow, scriptedPrompts } from "./support/engine";
+import {
+  EffectFakeHerdr,
+  installBaseline,
+  plannedRun,
+  runWorkflow,
+  scriptedPrompts,
+} from "./support/engine";
 import { writeDef } from "./support/defs";
 import { runEffect } from "./support/effect";
 import { writeInbox } from "../src/operations";
@@ -577,14 +583,14 @@ function claudeSeen(rig: Rig, projects: Record<string, { hasTrustDialogAccepted?
   });
 }
 
-test("an untrusted directory is offered up front, so no tab ever stops on the dialog", () =>
+test("starting work trusts its directory without a duplicate Collie approval", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       yield* claudeSeen(rig, {});
       yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
-      const prompts = scriptedPrompts(["Trust it now"]);
+      const prompts = scriptedPrompts([]);
 
       const { run, status, lines } = yield* runWorkflowEffect(
         rig,
@@ -594,7 +600,7 @@ test("an untrusted directory is offered up front, so no tab ever stops on the di
       );
 
       expect(status).toBe("done");
-      expect(prompts.offered).toEqual([["Trust it now", "Let claude ask me in its tab"]]);
+      expect(prompts.offered).toEqual([]);
       const config = decodeJson(yield* fs.readFileString(path.join(rig.root, ".claude.json")));
       expect(config.projects[run.record.cwd].hasTrustDialogAccepted).toBe(true);
       expect(lines.some((l) => l.includes("trusted"))).toBe(true);
@@ -704,14 +710,18 @@ test("a trust write that fails leaves claude to ask, and the run goes ahead anyw
     }),
   ));
 
-test("declining leaves claude to ask, and the run goes ahead anyway", () =>
+test("explicitly disabling trust leaves Claude's configuration alone", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       yield* claudeSeen(rig, {});
       yield* rig.queueOutputs([{ verdict: "clean", findings: [] }]);
-      const prompts = scriptedPrompts(["Let claude ask me in its tab"]);
+      const prompts = scriptedPrompts([]);
+      yield* fs.writeFileString(
+        path.join(rig.configDir, "config.json"),
+        encodeJson({ trust: "never" }),
+      );
 
       const { status } = yield* runWorkflowEffect(rig, "solo", { goal: "g" }, { prompts });
 
@@ -928,10 +938,7 @@ test("an agent that goes quiet is nudged twice and then given up on", () =>
         {
           // Quiet is the signal: same status, same pane tail, every poll.
           env: { FAKE_HERDR_AGENT_STATUS: "working", FAKE_HERDR_PANE_TEXT: "stuck" },
-          // Real wall clock, so the budget has to survive a poll iteration that the
-          // machine delays: nudges are owed per whole quiet period, and one stalled
-          // iteration under a 30ms period skipped straight from no nudge to the
-          // give-up at three.
+          // The simulated clock advances only between polls, not during I/O.
           defaults: { quietMs: 300 },
           outputPollMs: 10,
         },
@@ -1045,10 +1052,9 @@ test("a give-up keeps an Output the agent had already written", () =>
         { goal: "Add a picker", ticket: "" },
         {
           env: { FAKE_HERDR_AGENT_STATUS: "working", FAKE_HERDR_PANE_TEXT: "stuck" },
-          // Long enough that both nudges are due before the give-up whatever the
-          // polls cost: the quiet clock is what this asserts, not the round trips.
+          // Ten simulated polls per quiet period; wall-clock I/O is not the signal.
           defaults: { quietMs: 1000 },
-          outputPollMs: 5,
+          outputPollMs: 100,
         },
       );
 
@@ -1072,10 +1078,9 @@ test("the nudge itself does not count as the agent waking up", () =>
         { goal: "Add a picker", ticket: "" },
         {
           env: { FAKE_HERDR_AGENT_STATUS: "working", FAKE_HERDR_PANE_TEXT: "prompts" },
-          // Long enough that both nudges are due before the give-up whatever the
-          // polls and the submissions cost: the quiet clock is what this asserts.
+          // Ten simulated polls per quiet period; wall-clock I/O is not the signal.
           defaults: { quietMs: 1000 },
-          outputPollMs: 5,
+          outputPollMs: 100,
         },
       );
 
@@ -1587,34 +1592,41 @@ test("a ticket rewritten under a building step is sent to it as a change to reco
         { verdict: "clean", findings: [] },
       ]);
 
-      // The live planner, answering a question by rewriting the ticket instead of
-      // only saying so — which is the case nothing used to notice.
-      yield* Effect.forkDetach(
-        Effect.sleep(100).pipe(
-          Effect.andThen(
-            fs.writeFileString(
-              ticket,
-              "# 01: first\n\n- [ ] collisions are explicit refusals\n- [ ] a destination-keyed lock\n",
-            ),
-          ),
-        ),
-      );
+      // Edit after the first agent receives work, not after an assumed startup time.
+      class EditingHerdr extends EffectFakeHerdr {
+        private edited = false;
+        override agentPrompt(target: string, text: string) {
+          return super.agentPrompt(target, text).pipe(
+            Effect.tap(() => {
+              if (this.edited) return Effect.void;
+              this.edited = true;
+              return fs
+                .writeFileString(
+                  ticket,
+                  "# 01: first\n\n- [ ] collisions are explicit refusals\n- [ ] a destination-keyed lock\n",
+                )
+                .pipe(Effect.orDie);
+            }),
+          );
+        }
+      }
+      const env = {
+        FAKE_HERDR_AGENT_STATUS: [
+          ...Array(40).fill("working"),
+          "idle",
+          ...Array(40).fill("working"),
+          "idle",
+        ].join(","),
+        FAKE_HERDR_PANE_TEXT: "changing",
+      };
 
-      const { status } = yield* runWorkflowEffect(
+      const { run, status } = yield* runWorkflowEffect(
         rig,
         "builder",
         { plan: planDir },
         {
-          env: {
-            // Each step polls until its own `idle`, so the edit lands during `look`.
-            FAKE_HERDR_AGENT_STATUS: [
-              ...Array(40).fill("working"),
-              "idle",
-              ...Array(40).fill("working"),
-              "idle",
-            ].join(","),
-            FAKE_HERDR_PANE_TEXT: "changing",
-          },
+          env,
+          herdr: new EditingHerdr(rig.pluginEnv(), rig.env(env)),
           defaults: { quietMs: 3000 },
           outputPollMs: 10,
         },
@@ -1624,10 +1636,9 @@ test("a ticket rewritten under a building step is sent to it as a change to reco
       const changed = (yield* rig.calls()).filter(
         (c) => c.cmd === "agent prompt" && c.argv![3]!.includes("changed on disk"),
       );
-      // Once, and to the agent that is going to build it — never to the fresh reader,
-      // which started after the edit and read the new ticket in the first place.
+      // Once, and to the builder, not the fresh review step that reads the tickets itself.
       expect(changed).toHaveLength(1);
-      expect(changed[0]!.argv![2]).toContain("build");
+      expect(changed[0]!.argv![2]).toBe(run.step("build").variants[0]!.agent);
       const told = changed.map((c) => c.argv![3]!);
       // The checkboxes, both ways: what the ticket now demands and what it dropped.
       expect(told[0]).toContain("01-first.md changed:");
