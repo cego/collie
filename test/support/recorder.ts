@@ -331,6 +331,7 @@ export class Rig {
     agent: string | null = null,
     workspaceId: string | null = null,
     foregroundCwd: string | null = null,
+    agentStatus: string | null = null,
   ) {
     return this.appendState("paneList", {
       pane_id: paneId,
@@ -338,6 +339,7 @@ export class Rig {
       label: null,
       cwd,
       agent,
+      agent_status: agentStatus,
       workspace_id: workspaceId,
       foreground_cwd: foregroundCwd,
     });
