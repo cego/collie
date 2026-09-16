@@ -234,7 +234,7 @@ const workflowShow = Command.make(
           const defaults = yield* loadDefaults(resolved.env.configDir);
           const wf = resolveWorkflow(workflow, defs, defaults);
           const inherited = new Set(wf.embeddedInputs);
-          const inputs = branchListed(wf.name, wf.inputs);
+          const inputs = branchListed(wf.base, wf.inputs);
           return {
             ok: true,
             data: {

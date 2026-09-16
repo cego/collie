@@ -1536,3 +1536,36 @@ test("each: tickets needs a plan to take them from, an output, and nothing to ra
       ).toContain('each must be "tickets"');
     }),
   ));
+
+test("a fork under its own name is still the workflow it extends", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "renovate",
+        "---\nname: renovate\ninputs:\n  repository: gitlab-repository\nsteps:\n  - id: merge\n    output: merge.json\n---\n## merge\nBaseline.\n",
+      );
+      yield* writeDef(
+        rig.configDir,
+        "workflows",
+        "renovate-batch",
+        "---\nname: renovate-batch\nextends: renovate\n---\n## merge\nOnto an integration branch.\n",
+      );
+      // A fork of the fork, to show the bottom of the chain carries however deep it goes.
+      yield* writeDef(
+        rig.configDir,
+        "workflows",
+        "renovate-batch-dry",
+        "---\nname: renovate-batch-dry\nextends: renovate-batch\n---\n## merge\nDry run.\n",
+      );
+
+      const defs = yield* loadDefinitions(yield* layers(rig.pluginEnv()));
+
+      // `name` is what the operator typed; `base` is what the Run behaves as — and it
+      // is `base` that decides whether the Run is given a checkout of its own.
+      expect(defs.workflows.get("renovate")!.base).toBe("renovate");
+      expect(defs.workflows.get("renovate-batch")!.base).toBe("renovate");
+      expect(defs.workflows.get("renovate-batch-dry")!.base).toBe("renovate");
+    }),
+  ));
