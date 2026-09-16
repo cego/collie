@@ -986,8 +986,11 @@ export class Herdr {
             Effect.succeed(cause.code === "agent_not_found" ? ("gone" as const) : null),
           ),
         );
-        if (status === "working" || status === "blocked") return "live" as const;
-        if (status === "gone" || status === "idle" || status === "done") continue;
+        // Idle is alive: the agent holds its name and its pane, so a Driver that started
+        // another under that name — or restarted its step beneath it — would collide.
+        if (status === "working" || status === "blocked" || status === "idle")
+          return "live" as const;
+        if (status === "gone" || status === "done") continue;
         verdict = "unverified";
       }
       return verdict;
