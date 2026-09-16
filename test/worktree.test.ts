@@ -1752,6 +1752,59 @@ test("an agent in the checkout's own workspace keeps it, directory or no directo
     }),
   ));
 
+test("a finished Run's own agent, idle in the tab it left behind, does not keep its checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt", { tabs: ["1:5"] });
+      yield* settledGit();
+      yield* mergedMr();
+      // The Run is done and its agent is still sitting there, idle — that is the leftover
+      // the removal closes, not work in progress.
+      yield* rig.addPane("1-5", "1:5", worktreePath, "claude");
+
+      expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
+      const closed = (yield* rig.calls()).filter((call) => call.cmd === "tab close");
+      expect(closed.map((call) => call.argv?.at(2))).toEqual(["1:5"]);
+    }),
+  ));
+
+test("a finished Run's own agent still working in its tab keeps the checkout", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const worktreePath = yield* collieWorktree("wt", { tabs: ["1:5"] });
+      yield* settledGit();
+      yield* mergedMr();
+      yield* rig.addPane("1-5", "1:5", worktreePath, "claude", null, null, "working");
+
+      expect(yield* prune()).toEqual(["kept wt · an agent is working in it"]);
+    }),
+  ));
+
+test("a board outside any repository still sweeps the checkouts the Runs recorded", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const worktreePath = yield* collieWorktree("wt", { managedBy: "git", workspaceId: null });
+      yield* settledGit();
+      yield* mergedMr();
+      // The Home: herdr refuses to list worktrees from it, and the sweep asks the
+      // recorded checkout instead.
+      const home = join(rig.root, "home");
+      yield* fs.makeDirectory(home, { recursive: true });
+      const herdr = new Herdr(
+        rig.pluginEnv({
+          FAKE_HERDR_FAIL: '{"worktree list":"not a git worktree"}',
+          FAKE_HERDR_FAIL_TIMES: "1",
+        }),
+      );
+
+      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: home })).toEqual([
+        "♻ removed wt · merged in !14",
+      ]);
+      expect(yield* asked()).toContain(`worktree remove ${worktreePath}`);
+    }),
+  ));
+
 test("a hand-made checkout at the path a Collie one used is not a candidate", () =>
   runEffect(
     Effect.gen(function* () {

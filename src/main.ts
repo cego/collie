@@ -23,6 +23,16 @@ import {
  */
 const args = Bun.argv.slice(2);
 
+// Whoever spawned this process and has since gone is the only one who could have read
+// its output, so nothing is lost by stopping. Without this, the first write after the
+// peer closed fails and every later one waits for a `drain` that never comes — the
+// error reporter's own attempt to say so included — and the process stays behind idle.
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (error: NodeJS.ErrnoException) => {
+    if (error.code === "EPIPE") process.exit(1);
+  });
+}
+
 type MainError = Error | PlatformError.PlatformError;
 type MainServices = BunServices.BunServices | FileSystem.FileSystem | Path.Path;
 

@@ -1037,7 +1037,12 @@ interface InUse {
  */
 const inUse = Effect.fn("worktree.inUse")(function* (
   herdr: Herdr,
-  opts: { paths: ReadonlyMap<string, string>; keep?: string | undefined },
+  opts: {
+    paths: ReadonlyMap<string, string>;
+    keep?: string | undefined;
+    /** The tabs finished Runs left behind, whose agents hold nothing unless still working. */
+    leftovers: ReadonlySet<string>;
+  },
 ) {
   const panes = yield* Effect.result(herdr.paneList());
   if (panes._tag === "Failure") return null;
@@ -1045,6 +1050,9 @@ const inUse = Effect.fn("worktree.inUse")(function* (
   const workspaces = new Map<string, string>();
   for (const pane of panes.success) {
     if (!pane.agent) continue;
+    // A Run's own agent, idle in the tab it left behind, is what the removal closes —
+    // counting it as work in progress kept every finished Run's checkout forever.
+    if (opts.leftovers.has(pane.tabId) && pane.agentStatus !== "working") continue;
     // Both directories: an agent started in the repository and `cd`-ed into a checkout
     // is working in the checkout, whatever the pane was opened on.
     for (const dir of [pane.cwd, pane.foregroundCwd]) {
@@ -1230,7 +1238,7 @@ const fromRuns = Effect.fn("worktree.fromRuns")(function* (stateDir: string) {
  * worktree's verdict standing for a few minutes so a 1.5-second refresh does not
  * shell out to git and glab over and over.
  */
-const prune = Effect.fn("worktree.prune")(function* (opts: {
+interface PruneOptions {
   herdr: Herdr;
   stateDir: string;
   cwd: string;
@@ -1238,7 +1246,15 @@ const prune = Effect.fn("worktree.prune")(function* (opts: {
   keep?: string;
   now?: number;
   run?: Runner<ChildProcessSpawner.ChildProcessSpawner>;
-}) {
+}
+
+/** One repository's round: what herdr lists for it, against what the Runs recorded. */
+const prune = Effect.fn("worktree.prune")(function* (
+  opts: PruneOptions & {
+    runs: Effect.Success<ReturnType<typeof fromRuns>>;
+    listing: WorktreeListing | null;
+  },
+) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   // `say`: git writes why it will not drop a checkout, or delete a branch, to stderr,
@@ -1258,13 +1274,8 @@ const prune = Effect.fn("worktree.prune")(function* (opts: {
   );
   const before = `${Schema.encodeSync(PruneStateJson)(state)}\n`;
 
-  const { mine, paths, tabs } = yield* fromRuns(opts.stateDir);
-  const listing =
-    mine.size === 0
-      ? null
-      : yield* opts.herdr
-          .worktreeList(opts.cwd)
-          .pipe(Effect.catch(() => Effect.succeed<WorktreeListing | null>(null)));
+  const { mine, paths, tabs } = opts.runs;
+  const listing = opts.listing;
   // Path, branch and the moment git wrote the checkout, all from the record that made
   // it: a Collie worktree removed by hand and a human's worktree later made at the
   // same path on the same branch would otherwise be the same candidate, and a
@@ -1309,7 +1320,8 @@ const prune = Effect.fn("worktree.prune")(function* (opts: {
   // this round rather than judged on an empty list. The board still hears about every
   // candidate being held, and nothing is written down: an unverified round is not a
   // verdict, so the next refresh asks again rather than waiting out the debounce.
-  const use = yield* inUse(opts.herdr, { paths, keep: opts.keep });
+  const leftovers = new Set([...tabs.values()].flatMap((opened) => [...opened]));
+  const use = yield* inUse(opts.herdr, { paths, keep: opts.keep, leftovers });
   if (!use) {
     const standing = yield* conclude(round);
     return [
@@ -1470,9 +1482,35 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
  * somebody else is already doing this, so there is nothing to say and nothing to wait
  * for.
  */
-export const pruneWorktrees = (opts: Parameters<typeof prune>[0]) =>
+export const pruneWorktrees = (opts: PruneOptions) =>
   Effect.gen(function* () {
     const path = yield* Path.Path;
     const lock = path.join(opts.stateDir, `${PRUNE_FILE}.lock`);
-    return yield* withLock(lock, Effect.succeed<string[]>([]), prune(opts));
+    return yield* withLock(lock, Effect.succeed<string[]>([]), sweep(opts));
   }).pipe(Effect.catch(() => Effect.succeed<string[]>([])));
+
+/**
+ * Every repository the recorded checkouts belong to, each asked from one of its own
+ * checkouts. The board's cwd alone was not enough: the Home is no repository, so its
+ * sweep listed nothing, and a Renovate checkout under a repository nobody has a
+ * workspace in was never anyone's candidate.
+ */
+const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
+  const fs = yield* FileSystem.FileSystem;
+  const runs = yield* fromRuns(opts.stateDir);
+  const lines: string[] = [];
+  const listed = new Set<string>();
+  // One `herdr worktree list` per live checkout, every sweep. Cheap while checkouts are few.
+  for (const cwd of new Set([opts.cwd, ...runs.mine.keys()])) {
+    const own = cwd === opts.cwd;
+    // A checkout an earlier listing named is in a repository already swept.
+    if (!own && (listed.has(cwd) || !(yield* fs.exists(cwd)))) continue;
+    const listing = yield* opts.herdr
+      .worktreeList(cwd)
+      .pipe(Effect.catch(() => Effect.succeed<WorktreeListing | null>(null)));
+    if (!own && (listing === null || listing.worktrees.every((w) => listed.has(w.path)))) continue;
+    for (const worktree of listing?.worktrees ?? []) listed.add(worktree.path);
+    lines.push(...(yield* prune({ ...opts, cwd, runs, listing })));
+  }
+  return lines;
+});

@@ -102,6 +102,7 @@ const PaneListReply = Schema.Struct({
         tab_id: Schema.String,
         label: Schema.optionalKey(Schema.NullOr(Schema.String)),
         agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
+        agent_status: Schema.optionalKey(Schema.NullOr(Schema.String)),
         workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
         cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
         // Where the process in the pane is now, which is not where it started once
@@ -451,6 +452,8 @@ export interface PaneInfo {
   tabId: string;
   label: string | null;
   agent: string | null;
+  /** herdr's read of what the agent is doing: `working`, `idle`, or `unknown`. */
+  agentStatus?: string | null;
   workspaceId: string | null;
   /** Where the pane's process was started, which is the directory it stands for. */
   cwd: string | null;
@@ -766,6 +769,7 @@ export class Herdr {
           tabId: pane.tab_id,
           label: pane.label ?? null,
           agent: pane.agent ?? null,
+          agentStatus: pane.agent_status ?? null,
           workspaceId: pane.workspace_id ?? null,
           cwd: pane.cwd ?? null,
           foregroundCwd: pane.foreground_cwd ?? null,

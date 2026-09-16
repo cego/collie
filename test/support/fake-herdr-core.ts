@@ -15,6 +15,7 @@ interface FakePane {
   /** Where the pane's process was started, which is what a worktree check reads. */
   cwd?: string | null;
   agent?: string | null;
+  agent_status?: string | null;
   workspace_id?: string | null;
   foreground_cwd?: string | null;
   /** What a plugin attached, which is what the Home's ownership proof reads back. */
@@ -87,6 +88,7 @@ const FakePaneSchema = Schema.Struct({
   terminal_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
   agent: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  agent_status: Schema.optionalKey(Schema.NullOr(Schema.String)),
   workspace_id: Schema.optionalKey(Schema.NullOr(Schema.String)),
   foreground_cwd: Schema.optionalKey(Schema.NullOr(Schema.String)),
 });
@@ -195,6 +197,7 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
       label: pane.label,
       cwd: pane.cwd ?? null,
       agent: pane.agent ?? null,
+      agent_status: pane.agent_status ?? null,
       workspace_id: pane.workspace_id ?? null,
       foreground_cwd: pane.foreground_cwd ?? null,
     })),
