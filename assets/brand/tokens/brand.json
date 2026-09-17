@@ -1,0 +1,38 @@
+{
+  "name": "Collie · The personalized companion",
+  "colors": {
+    "forest": "#1C5145",
+    "deep": "#142E27",
+    "meadow": "#D9F28F",
+    "mist": "#E8F1EB",
+    "chalk": "#F7F9F5",
+    "ink": "#202B26"
+  },
+  "typography": {
+    "wordmark": {
+      "family": "Nunito Sans",
+      "weight": 900,
+      "letterSpacing": "-0.08em"
+    },
+    "interface": {
+      "family": "DM Sans",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ]
+    }
+  },
+  "spacing": {
+    "base": "4px",
+    "clearSpace": "25% of the mark height",
+    "cornerRadius": "12px"
+  },
+  "source": {
+    "file": "source/collie-master.png",
+    "format": "raster PNG",
+    "width": 1254,
+    "height": 1254
+  }
+}
