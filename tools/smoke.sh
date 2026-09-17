@@ -54,4 +54,39 @@ line=$(echo '{"session_id":"smoke","context_window":{"total_input_tokens":9,"tot
 grep -q '"kind":"usage","tokens":10' "$CONTROLS/events.jsonl" ||
   fail "the compaction helper did not record the sample it was given"
 
+# A pane that has been busy for hours, with a compaction of Collie's in flight: this
+# write is the one that trims the file, and what it drops is what the Run waiting on
+# that compaction can still read.
+FULL="$STATE/full"
+mkdir -p "$FULL"
+{
+  echo '{"at":1,"session":"smoke","kind":"session"}'
+  echo '{"at":2,"session":"smoke","kind":"start","request":"req-smoke"}'
+  i=0
+  while [ "$i" -lt 198 ]; do
+    echo '{"at":3,"session":"smoke","kind":"usage","tokens":500000}'
+    i=$((i + 1))
+  done
+} > "$FULL/events.jsonl"
+echo '{"session_id":"smoke","hook_event_name":"PostCompact","trigger":"manual","compact_summary":"condensed"}' \
+  | "$BIN" herdr compaction "$FULL" >/dev/null || fail "the compaction helper exited nonzero on a full file"
+[ "$(wc -l < "$FULL/events.jsonl")" -le 200 ] || fail "the compaction helper let the telemetry past its cap"
+grep -q '"kind":"session"' "$FULL/events.jsonl" || fail "the trim dropped the agent's session binding"
+grep -q '"request":"req-smoke"' "$FULL/events.jsonl" || fail "the trim dropped the compaction it was waiting on"
+grep -q '"phase":"post"' "$FULL/events.jsonl" || fail "the helper did not record the completion"
+
+# A status line runs beside the hook that ends a compaction: independent processes, one
+# file. A release where they overwrite each other loses the outcome a Run is waiting on.
+TOGETHER="$STATE/together"
+mkdir -p "$TOGETHER"
+i=0
+while [ "$i" -lt 12 ]; do
+  echo '{"session_id":"smoke","context_window":{"total_input_tokens":9,"total_output_tokens":1,"used_percentage":3,"current_usage":{"input_tokens":9}}}' \
+    | "$BIN" herdr compaction "$TOGETHER" >/dev/null 2>&1 &
+  i=$((i + 1))
+done
+wait
+[ "$(grep -c '"kind":"usage"' "$TOGETHER/events.jsonl")" = "12" ] ||
+  fail "concurrent compaction helpers lost an event"
+
 echo "smoke: $BIN answered --help, one JSON success and two typed failures, and served its own compaction helper"

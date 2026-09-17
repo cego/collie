@@ -59,13 +59,13 @@ const claimLock = Effect.fn("claimLock")(function* (lock: string) {
 });
 
 /** The one acquisition policy: recover stale claims and wait out brief live contention. */
-const acquireLock = Effect.fn("acquireLock")((lock: string) =>
+const acquireLock = Effect.fn("acquireLock")((lock: string, claims: number) =>
   claimLock(lock).pipe(
     Effect.flatMap((claimed) =>
       claimed ? Effect.succeed(true) : Effect.fail(new LockContended()),
     ),
     Effect.retry({
-      times: LOCK_CLAIM_RETRIES,
+      times: claims,
       schedule: Schedule.spaced(LOCK_CLAIM_RETRY_INTERVAL),
       while: (error) => error instanceof LockContended,
     }),
@@ -83,9 +83,11 @@ export const withLock = <A, E, R, A2, E2, R2>(
   lock: string,
   contended: Effect.Effect<A2, E2, R2>,
   effect: Effect.Effect<A, E, R>,
+  /** How many claims to make first, for a caller that can wait longer than a second. */
+  claims: number = LOCK_CLAIM_RETRIES,
 ) =>
   Effect.gen(function* () {
-    if (!(yield* acquireLock(lock))) return yield* contended;
+    if (!(yield* acquireLock(lock, claims))) return yield* contended;
     return yield* effect.pipe(Effect.ensuring(releaseOwnLock(lock).pipe(Effect.ignore)));
   });
 

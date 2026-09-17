@@ -386,7 +386,12 @@ directory, because the agent outlives the Run that launched it — the same fact
 registry exists for. That directory holds the control record, the helper the launch
 generated, and the telemetry the harness's own interface appends; an unresolved
 compaction attempt is on the record, so whichever process reaches that agent next
-refuses to dispatch past it. Installation through agent startup holds a per-agent PID
+refuses to dispatch past it. That telemetry is a bounded file independent processes all
+write — a status line, a hook, a Driver — so every write takes the file's own lock, and
+the cap drops the oldest lines while keeping the session line and the newest few
+compaction events. Those are what a waiting Run polls for: a file the cap had taken the
+binding out of reads as an agent nothing is known about, and the Run waits out its budget
+for an answer that had already arrived. Installation through agent startup holds a per-agent PID
 lock outside the controls directory. Cleanup takes the same lock and rechecks `agent
 list` before removing controls or stopping an endpoint. A parallel launch therefore
 cannot mistake an agent still starting for a stale one; a failed launch releases its

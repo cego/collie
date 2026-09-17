@@ -38,6 +38,7 @@ import {
   type LaunchContext,
 } from "./compaction";
 import { loadDefaults } from "./config";
+import { withLock } from "./lock";
 import { DELIVERY_TOKEN } from "./dispatcher";
 
 /**
@@ -87,6 +88,21 @@ export const VERIFIED_VERSIONS: ReadonlyMap<string, string> = new Map([
 
 /** The file each agent's controls append their telemetry to, one JSON object per line. */
 const TELEMETRY = "events.jsonl";
+/** Held for the read-slice-write of that file, by whichever process is writing it. */
+const TELEMETRY_LOCK = "events.lock";
+/**
+ * Events no control could record, one `{at}` per line. Appended rather than rewritten, so
+ * the writer that could not have the telemetry can still say that it could not: what is
+ * missing from a file is invisible, and a correlation that reads absence as evidence would
+ * read it as nothing having happened.
+ */
+const LOSSES = "events.lost";
+/**
+ * Claims a telemetry write makes before giving up, at the lock module's spacing: five
+ * seconds, where a write holds the file for milliseconds. Longer buys nothing a hung
+ * holder would give back, and a write that does give up is recorded as a loss.
+ */
+const TELEMETRY_CLAIMS = 200;
 
 /**
  * What a control may report. Decoded rather than trusted: a hook, an extension and a
@@ -123,6 +139,27 @@ const EventJson = Schema.fromJsonString(EventSchema);
 const decodeEvent = Schema.decodeUnknownOption(EventJson);
 const encodeEvent = Schema.encodeSync(EventJson);
 
+const LossJson = Schema.fromJsonString(Schema.Struct({ at: Schema.Number }));
+const decodeLoss = Schema.decodeUnknownOption(LossJson);
+const encodeLoss = Schema.encodeSync(LossJson);
+
+/**
+ * Whether anything went unrecorded since `since`. A correlation that reads absence —
+ * Claude's, where an unmarked start is what makes the completion after it somebody
+ * else's — cannot answer from a file with a hole in it.
+ */
+const lostSince = Effect.fn("Compactors.lostSince")(function* (dir: string, since: number) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const file = path.join(dir, LOSSES);
+  if (!(yield* fs.exists(file))) return false;
+  const lines = yield* fs.readFileString(file);
+  return lines.split("\n").some((line) => {
+    const decoded = decodeLoss(line);
+    return decoded._tag === "Some" && decoded.value.at >= since;
+  });
+});
+
 /**
  * This agent's telemetry, narrowed to the session it is on now. The newest `session`
  * line is the binding: a harness that started a second session in the same pane has a
@@ -154,12 +191,51 @@ const readEvents = Effect.fn("Compactors.readEvents")(function* (dir: string) {
  * harness's own UI, so an append-only file would be tens of thousands of lines by
  * lunchtime; only the newest sample and the current attempt are ever read.
  */
-const KEEP_LINES = 200;
+export const KEEP_LINES = 200;
 
 /**
- * Appends one event, keeping the file bounded. Read-slice-write rather than append: the
- * cap is the point, and a torn write only loses telemetry, which the policy already
- * treats as unavailable rather than as an answer.
+ * How many compaction events the cap keeps whatever else it drops: one compaction's start
+ * and outcome, with room for a human's or an automatic one in between.
+ */
+const KEEP_LIFECYCLE = 6;
+
+/** The newest identity line, and the newest `KEEP_LIFECYCLE` compaction events. */
+function protectedLines(lines: ReadonlyArray<string>): ReadonlySet<number> {
+  const keep = new Set<number>();
+  let lifecycle = 0;
+  let bound = false;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const decoded = decodeEvent(lines[i]!);
+    if (decoded._tag !== "Some") continue;
+    const kind = decoded.value.kind;
+    if (kind === "session") {
+      if (bound) continue;
+      bound = true;
+    } else if (kind === "usage" || kind === "submit" || lifecycle === KEEP_LIFECYCLE) {
+      continue;
+    } else lifecycle += 1;
+    keep.add(i);
+  }
+  return keep;
+}
+
+/** The newest `room` lines, giving up the oldest unprotected ones. */
+function trimmed(lines: ReadonlyArray<string>, room: number): ReadonlyArray<string> {
+  if (lines.length <= room) return lines;
+  let excess = lines.length - room;
+  const keep = protectedLines(lines);
+  const kept = lines.filter((line, at) => {
+    if (excess === 0 || keep.has(at)) return true;
+    excess -= 1;
+    return false;
+  });
+  return kept.length > room ? kept.slice(-room) : kept;
+}
+
+/**
+ * Appends one event, keeping the file bounded. Read-slice-write rather than append,
+ * because the cap is the point — and under this agent's own lock, because the writers are
+ * independent processes: a status line, a hook and a Driver all reach the same file.
  */
 export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
   dir: string,
@@ -171,20 +247,35 @@ export const writeEvent = Effect.fn("Compactors.writeEvent")(function* (
   const path = yield* Path.Path;
   const file = path.join(dir, TELEMETRY);
   yield* fs.makeDirectory(dir, { recursive: true });
-  const existing = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : "";
-  const lines = existing.split("\n").filter((line) => line.trim() !== "");
-  // Identity is the writer's job, once, rather than every adapter's: an event on a
-  // session nothing has bound yet binds it, and one on a session that has changed
-  // rebinds — which is what makes every earlier sample and attempt stale. An event
-  // that is itself a session line needs no second one in front of it.
-  const bound = boundSession(lines);
-  const rebinds = bound !== event.session && event.kind !== "session";
-  const session: TelemetryEvent[] = rebinds
-    ? [{ at: event.at, session: event.session, kind: "session" }]
-    : [];
-  const added = [...session, event].map((line) => encodeEvent(line));
-  const kept = [...lines.slice(-(KEEP_LINES - added.length)), ...added];
-  yield* fs.writeFileString(file, `${kept.join("\n")}\n`);
+  const line = encodeEvent(event);
+  yield* withLock(
+    path.join(dir, TELEMETRY_LOCK),
+    // Nothing goes in the telemetry outside the lock — the holder's snapshot would
+    // overwrite it — so what is recorded instead is that this event is missing.
+    fs.writeFileString(path.join(dir, LOSSES), `${encodeLoss({ at: event.at })}\n`, {
+      flag: "a",
+    }),
+    Effect.gen(function* () {
+      const existing = (yield* fs.exists(file)) ? yield* fs.readFileString(file) : "";
+      // Room for the event and for an identity line in front of it.
+      const older = trimmed(
+        existing.split("\n").filter((text) => text.trim() !== ""),
+        KEEP_LINES - 2,
+      );
+      // Identity is the writer's job, once, rather than every adapter's: an event on a
+      // session nothing has bound yet binds it, and one on a session that has changed
+      // rebinds — which is what makes every earlier sample and attempt stale. Read from
+      // what survives the trim, so a file the cap took the binding out of is one this
+      // write puts it back into.
+      const bound = boundSession(older);
+      const rebinds = bound !== event.session && event.kind !== "session";
+      const session = rebinds
+        ? [encodeEvent({ at: event.at, session: event.session, kind: "session" })]
+        : [];
+      yield* fs.writeFileString(file, `${[...older, ...session, line].join("\n")}\n`);
+    }),
+    TELEMETRY_CLAIMS,
+  );
 });
 
 /** The session every later line is read against: the newest one a `session` line named. */
@@ -286,9 +377,37 @@ import { readFileSync, writeFileSync } from "node:fs";
 
 const FILE = ${JSON.stringify(file)};
 const KEEP = ${KEEP_LINES};
+const KEEP_LIFECYCLE = ${KEEP_LIFECYCLE};
 
 export default function (pi) {
   let session = null;
+
+  const kindOf = (line) => {
+    try {
+      return JSON.parse(line).kind;
+    } catch {
+      return undefined;
+    }
+  };
+
+  // The newest identity line and the newest few compaction events, which is what a
+  // waiting Run polls for: the cap drops the oldest of everything else instead.
+  const protect = (lines) => {
+    const keep = new Set();
+    let lifecycle = 0;
+    let bound = false;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      const kind = kindOf(lines[i]);
+      if (kind === "session") {
+        if (bound) continue;
+        bound = true;
+      } else if (kind === undefined || kind === "usage" || lifecycle === KEEP_LIFECYCLE) {
+        continue;
+      } else lifecycle += 1;
+      keep.add(i);
+    }
+    return keep;
+  };
 
   // Read-slice-write rather than append, so one agent's telemetry stays bounded
   // however long it runs: only the newest sample and the current attempt are read.
@@ -300,7 +419,19 @@ export default function (pi) {
       } catch {
         // Nothing written yet.
       }
-      kept = kept.slice(-(KEEP - 1));
+      let excess = kept.length - (KEEP - 1);
+      if (excess > 0) {
+        const keep = protect(kept);
+        kept = kept.filter((line, at) => {
+          if (excess === 0 || keep.has(at)) return true;
+          excess -= 1;
+          return false;
+        });
+        kept = kept.slice(-(KEEP - 1));
+      }
+      if (event.kind !== "session" && !kept.some((line) => kindOf(line) === "session")) {
+        kept.push(JSON.stringify({ at: Date.now(), session, kind: "session" }));
+      }
       kept.push(JSON.stringify({ at: Date.now(), session, ...event }));
       writeFileSync(FILE, \`\${kept.join("\\n")}\\n\`);
     } catch {
@@ -568,7 +699,9 @@ const claudeOutcome = Effect.fn("Compactors.claudeOutcome")(function* (
   for (const event of events.slice(at + 1)) {
     if (event.kind !== "auto" || event.reason !== "manual") continue;
     if (event.phase === "pre") return null;
-    return { kind: "success" } as const;
+    // The start that would have made this completion somebody else's may be the event
+    // nothing could record, so a hole since the request is unresolved, not success.
+    return (yield* lostSince(dir, events[at]!.at)) ? null : ({ kind: "success" } as const);
   }
   return null;
 });

@@ -216,6 +216,62 @@ test("install writes the extension and passes it with Pi's own launch flag", () 
     }),
   ));
 
+/** The parts of Pi's own surface the extension Collie generates registers against. */
+interface PiEvent {
+  reason?: string;
+}
+interface PiContext {
+  sessionManager: { getSessionFile: () => string | null };
+  getContextUsage: () => { tokens: number };
+  compact: (callbacks: { onComplete: () => void; onError: (error: Error) => void }) => void;
+}
+interface PiHost {
+  on: (event: string, handler: (event: PiEvent, ctx: PiContext) => void) => void;
+  registerCommand: (
+    name: string,
+    command: { handler: (args: string, ctx: PiContext) => void },
+  ) => void;
+}
+
+test("the extension it installs keeps the identity and the outcome past its own cap", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* pi.install({ agent: "reuse-run-two-r1", harness: "pi", cwd: rig.projectDir, dir });
+      const handlers = new Map<string, (event: PiEvent, ctx: PiContext) => void>();
+      const commands = new Map<string, { handler: (args: string, ctx: PiContext) => void }>();
+      // The generated extension itself, run: a template nothing loads is a template
+      // nothing has checked.
+      const extension: { default: (host: PiHost) => void } = yield* Effect.promise(
+        () => import(path.join(dir, "collie.ts")),
+      );
+      extension.default({
+        on: (event, handler) => handlers.set(event, handler),
+        registerCommand: (name, command) => commands.set(name, command),
+      });
+      let tokens = 100_000;
+      const piCtx: PiContext = {
+        sessionManager: { getSessionFile: () => "ses_one" },
+        getContextUsage: () => ({ tokens }),
+        compact: (callbacks) => callbacks.onComplete(),
+      };
+      const turns = (count: number) => {
+        for (let i = 0; i < count; i++) {
+          tokens += 1;
+          handlers.get("turn_end")!({}, piCtx);
+        }
+      };
+
+      handlers.get("session_start")!({}, piCtx);
+      turns(200);
+      commands.get("collie-compact")!.handler("req-1", piCtx);
+      // The pane goes on working: hundreds of samples after the compaction it asked for.
+      turns(300);
+
+      expect(yield* pi.poll(ctx(), "req-1")).toEqual({ kind: "success" });
+      expect(yield* pi.usage(ctx())).toBe(tokens);
+    }),
+  ));
+
 // Not mocks: whether the interface Collie installs is the one this machine's Pi has
 // is exactly the question a mock cannot answer. Pi takes seconds to answer either.
 test(

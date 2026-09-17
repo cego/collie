@@ -122,7 +122,16 @@ hand-off gives another Run's Driver the same agent — including the in-flight a
 must not dispatch past.
 
 Nothing persists copied conversation content or compaction summaries: identity, usage and
-outcome only. A record that names a process names what that process is, too: control
+outcome only. That telemetry is capped by age, except for the session line and the newest
+few compaction events: those are the whole of what an attempt is resolved by, and a status
+line that ran while the agent compacted must not push them out. Older compactions are
+history, and the submissions and samples beside them are what the next read is about.
+Every write takes the file's own lock, because the writers are independent processes — a
+harness's status line runs beside the hook that ends a compaction. A writer that cannot
+get the lock puts nothing in the telemetry, where the holder would overwrite it, and
+records instead that an event is missing: Claude's correlation reads absence, so a hole
+in the file would otherwise read as nothing having happened and release the waiting work
+on somebody else's compaction. A completion after a hole is unresolved. A record that names a process names what that process is, too: control
 records outlive the servers they describe, so a launch that signalled a recorded pid on
 trust would eventually SIGTERM whatever the machine had since given that number to. The
 pid is signalled only while `/proc/<pid>/cmdline` still contains the command it was
