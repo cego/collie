@@ -557,7 +557,7 @@ export const settleGiven = Effect.fn("operations.settleGiven")(function* (
         })),
         // `branch` among them: this is the refusal an agent hits whenever any Input is
         // missing, so it is where it is most likely to learn that the Input exists.
-        schema: branchListed(workflow.base, workflow.inputs),
+        schema: branchListed(workflow.checkout, workflow.inputs),
       }),
     );
   }
@@ -879,7 +879,8 @@ export const startRun = Effect.fn("operations.startRun")(function* (
   const checkout = yield* checkoutFor(herdr, {
     cwd: env.cwd,
     stateDir: env.stateDir,
-    workflow: workflow.base,
+    workflow: workflow.name,
+    checkout: workflow.checkout,
     name: named.short,
     inputs: inputValues(resolutions),
     sources: inputSources(resolutions),

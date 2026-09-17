@@ -128,8 +128,9 @@ Checkouts are unchanged: a mutating run still gets a worktree of its own, keyed 
 branch. A task workspace groups the work; it does not isolate files or branches.
 
 `--input branch=<name>` is the one input no workflow declares, and `workflow show` lists it
-for every mutating workflow. It names the branch the run works on, and so which worktree it
-gets. Nobody is ever asked for one: a branch nobody named is resolved in this order:
+for every workflow whose frontmatter says `checkout: branch`
+([Checkout](authoring.md#checkout)) — not for a `roaming` one, which owns a checkout but
+no branch. It names the branch the run works on, and so which worktree it gets. Nobody is ever asked for one: a branch nobody named is resolved in this order:
 
 1. `--input branch=<name>`, which wins over everything below.
 2. The branch the reviewed work is already on, for a run fixing a review.

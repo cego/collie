@@ -136,7 +136,7 @@ export function workflowData(wf: WorkflowDef) {
     name: wf.name,
     title: wf.title,
     description: wf.description,
-    inputs: branchListed(wf.base, wf.inputs),
+    inputs: branchListed(wf.checkout ?? "none", wf.inputs),
     steps: wf.steps.map((step) => step.id),
     layer: wf.layer,
     path: wf.path,

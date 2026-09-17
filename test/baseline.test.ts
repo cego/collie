@@ -177,9 +177,9 @@ test("every mutating workflow declares the workspace opt-in, so both front doors
       // Declared rather than intercepted by one adapter: `startRun` settles it from
       // `--input` and a chaining Choice forwards it, so the CLI, the herdr actions and
       // a chained Run all reach the same opt-in through the same Input.
-      const branchOwning = [...defs.workflows.keys()].filter(
-        (name) => mutates(name) && !roams(name),
-      );
+      const branchOwning = [...defs.workflows.values()]
+        .filter((wf) => mutates(wf.checkout ?? "none") && !roams(wf.checkout ?? "none"))
+        .map((wf) => wf.name);
       expect(branchOwning).toContain("implement");
       for (const name of [...branchOwning, "plan", "architecture"]) {
         const wf = resolveWorkflow(name, defs, FALLBACK_DEFAULTS);
@@ -231,8 +231,9 @@ test("renovate names the checkout it roams in and waits for Helle before it touc
       // The checkout is cut from this input; ticket 02's allocation reads the same name.
       expect(wf.inputs[REPOSITORY_INPUT]).toBe("gitlab-repository");
       // A roaming checkout has no branch to name, so it is offered no branch input.
-      expect(roams("renovate")).toBe(true);
-      expect(mutates("renovate")).toBe(true);
+      expect(wf.checkout).toBe("roaming");
+      expect(roams(wf.checkout)).toBe(true);
+      expect(mutates(wf.checkout)).toBe(true);
       // The team is an input, so nothing team-specific is baked into the baseline.
       expect(wf.inputs.team).toBe("optional");
       expect(wf.steps.some((step) => /Frontend/.test(step.preamble + step.prompt))).toBe(false);

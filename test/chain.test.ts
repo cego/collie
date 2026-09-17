@@ -161,6 +161,7 @@ Draft into {{run.dir}}/plan/SPEC.md
 
 const IMPLEMENT = `---
 name: implement
+checkout: branch
 inputs:
   plan: plan-dir
   task: optional
