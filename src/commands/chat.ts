@@ -28,6 +28,7 @@ import {
   uncertain as uncertainNews,
 } from "../news";
 import { serveMcp } from "../mcp";
+import { claudeSettingsPath, installStatusLine, promptLineFor, statusLineFor } from "../statusline";
 import { err } from "../operations";
 import { herdOf } from "../steering";
 import { isJsonObject } from "../schema";
@@ -156,6 +157,48 @@ const news = Command.make(
     ),
 ).pipe(Command.withDescription("What Collie has noticed that nobody has read yet"));
 
+/**
+ * What Claude Code prints under the chat prompt, and the one-off that configures it.
+ *
+ * Printed on every redraw, so it reads one small file and nothing else. `--install` is
+ * `setup.sh`'s step: the setting is in the human's own Claude Code config, which is
+ * `setup.sh`'s business exactly as the keybindings are and never `prepare.sh`'s.
+ */
+const statusLine = Command.make(
+  "status-line",
+  {
+    install: Flag.boolean("install").pipe(
+      Flag.withDescription("Configure Claude Code to print it (what setup.sh runs)"),
+      Flag.withDefault(false),
+    ),
+  },
+  ({ install }) =>
+    answering((env) =>
+      Effect.gen(function* () {
+        if (install) {
+          const said = yield* installStatusLine(env);
+          return {
+            ok: true as const,
+            data: { settings: yield* claudeSettingsPath(env) },
+            human: said,
+          };
+        }
+        const line = yield* statusLineFor(env);
+        return { ok: true as const, data: { line }, human: line };
+      }),
+    ),
+).pipe(Command.withDescription("The board's selection, as Claude Code's status line"));
+
+/**
+ * What Claude Code's `UserPromptSubmit` hook attaches to a prompt: the card the board has
+ * open, or nothing. Run on every message the human sends, so it reads one small file.
+ */
+const context = Command.make("context", {}, () =>
+  answering((env) =>
+    Effect.map(promptLineFor(env), (line) => ({ ok: true as const, data: { line }, human: line })),
+  ),
+).pipe(Command.withDescription("The board's selection, as a chat prompt's context"));
+
 const list = Command.make("list", {}, () =>
   answering(() =>
     Effect.succeed({
@@ -210,7 +253,7 @@ export const tools = Command.make("tools").pipe(
 
 export const chat = Command.make("chat").pipe(
   Command.withDescription(`The Home's native conversation (default ${DEFAULT_CHAT_HARNESS})`),
-  Command.withSubcommands([status, harness, news]),
+  Command.withSubcommands([status, harness, news, statusLine, context]),
 );
 
 /**

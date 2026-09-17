@@ -29,6 +29,7 @@ import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
 import { shell, type Runner } from "./mr";
 import { err } from "./operations";
+import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
 
 export interface Check {
   /** How the check is named, in the rendering and in `--json`. */
@@ -431,6 +432,25 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
           `not installed: ${absent.join(", ")}`,
           `install the harness CLI: ${absent.join(", ")}`,
         )),
+  });
+
+  // Reported, never failed: the board and every Run work without it, and a machine that
+  // is otherwise ready must not exit non-zero over a line under a prompt.
+  const line = yield* readStatusLine(env);
+  const settings = yield* claudeSettingsPath(env);
+  const install = `collie ${STATUS_LINE_ARGS.join(" ")} --install`;
+  checks.push({
+    name: "status line",
+    ...(line.kind === "ours"
+      ? passed(
+          "Claude Code prints the board's selection under the chat prompt, the same fact chat is told at each prompt",
+        )
+      : line.kind === "theirs"
+        ? noted(
+            `Claude Code prints a status line of its own (${line.command}), so the board's selection is not under the chat prompt`,
+            `to show it instead, set statusLine.command in ${settings} to what \`${install}\` would write`,
+          )
+        : noted(`not configured in ${settings}`, install)),
   });
 
   const gitDir = yield* onPath(search, "git");

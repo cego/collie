@@ -1,6 +1,6 @@
 id = "cego.collie"
 name = "Collie"
-version = "0.14.3"
+version = "0.15.0"
 min_herdr_version = "0.8.2"
 description = "Pick and run codified agent workflows (plan, implement, review) as multi-tab orchestrations."
 platforms = ["linux", "macos"]
@@ -26,8 +26,8 @@ title = "Resume a workflow run"
 contexts = ["global", "workspace"]
 command = ["bin/collie", "herdr", "resume"]
 
-# From any pane, `prefix+shift+c`: the workspace's board is a name to reach for rather
-# than a position to remember.
+# From any pane, `prefix+shift+c`: the Herd's board is a name to reach for rather than a
+# position to remember.
 [[actions]]
 id = "board"
 title = "Open the Control Plane"

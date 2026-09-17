@@ -139,7 +139,7 @@ same.
 | `prefix+u`       | `cego.collie.resume` — resume a run with unfinished steps       |
 | —                | `cego.collie.continue` — continue a task with another workflow  |
 | `prefix+shift+f` | `cego.collie.fork` — copy a workflow or persona into your layer |
-| `prefix+shift+c` | `cego.collie.board` — open this workspace's Control Plane       |
+| `prefix+shift+c` | `cego.collie.board` — open this Herd's Control Plane            |
 
 They show up in herdr's keybind help (`prefix+?`). Without a binding, any action still
 runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
@@ -325,18 +325,18 @@ is left.
 **One board per herdr session**, in a workspace of Collie's own called the **Home**
 ([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). One herdr session is one **Herd**,
 and one Herd has one board: two boards would be two views disagreeing about the same Runs.
-Per-workspace and per-run views are [filters](#filters-which-of-the-herds-work-is-showing)
-over that one board, not boards of their own. Your work stays where it is — a Run still
-runs in the workspace it was started from, and so do its worktrees, its agents and its
-hand-offs.
+There is no per-workspace board and no view to switch to: one workspace's work is its own
+cards on this one, and the search is what narrows to it. Your work stays where it is — a
+Run still runs in the workspace it was started from, and so do its worktrees, its agents
+and its hand-offs.
 
 The Home is **owned by metadata, never by a label**: the workspace and the board's pane
 carry a token naming this Herd, and Collie's record of which workspace that is counts only
 while the token — or the recorded pane, still with the terminal it was recorded with —
 proves it. Two workspaces claiming it, or a claim nothing proves, is a question Collie
-refuses to answer for you: the board says so and `collie home reconcile` is how you settle
-it. Nothing is created because a token expired, and nothing is adopted because it looks
-right.
+refuses to answer for you: rather than draw a board it cannot say is this Herd's, the
+shortcut prints why, names the candidates and gives you `collie home reconcile`. Nothing is
+created because a token expired, and nothing is adopted because it looks right.
 
 The Home is **one tab with two panes**: the board on the left at four sevenths of the
 width, and [native chat](#talking-to-collie-about-the-flock) on the right at three. Both
@@ -350,9 +350,9 @@ run opens it again. The run itself is driven by a Driver with no pane at all.
 
 `prefix+shift+c` reaches it from any pane in any workspace, making the Home first when
 this Herd has none yet, and taking you there — a workspace switch as well as a tab focus.
-It also records where you pressed it, so the board opens narrowed to the work you came
-from; pressed inside the Home it widens to the whole Herd instead. (`prefix+c` is herdr's
-own `new_tab` and is left alone.)
+What it opens is the whole Herd's board wherever you pressed it: there is one board, and
+the search is the only thing that narrows it. (`prefix+c` is herdr's own `new_tab` and is
+left alone.)
 
 A `🐕 Collie` tab left over from when every workspace had one shows a single line saying
 the board moved, and the key that goes there. Nothing else: no board and no chat. It is
@@ -373,46 +373,158 @@ its first pane's — and says on screen where the run will be rooted before aski
 single Input. A workspace whose directory is empty, missing or Collie's own namespace is
 listed with the reason it will not do.
 
-It is an application (ADR-0005): a nav rail over Runs, History, Workflows and Settings,
-the list, a detail panel beside it — or as a full-width overlay when the pane is too narrow
-for two columns — and the keys along the bottom. Click a row to select it, and the row and
-the footer both offer what that row can be asked for. Mouse reporting is on only while the
-pane has focus, so clicking another pane gives you your terminal's own text selection back
-immediately.
+It is an application ([ADR-0005](adr/0005-collie-tab-is-an-application.md)), and it is a
+**board of Tasks, not a table of Runs**
+([ADR-0013](adr/0013-the-board-is-cards-of-tasks.md)): one card per
+[Task](../CONTEXT.md), whatever Runs that Task took. A header sentence, then four sections
+that answer four questions in order — what needs you, what is working, what is waiting on
+you, what finished. A decision beats liveness, liveness beats history, and history is split
+by whether the work **landed**.
 
-The **Selection** is one row, wherever the mouse or the keyboard cursor put it, and every
-action applies to it. It is held by the row's id, not its position: the list re-sorts every
-refresh, and a run finishing under the cursor leaves the row that took its place selected.
+**Needs you** is one card per open decision. **Working** is one card per Task something is
+actually doing — a Run with a Driver that owns it, or an agent herdr still has: its name,
+its project, one plain sentence about what is happening, one amber line when it has
+drifted, the step glyphs, where it has got to, how many agents are on it and how long it
+has been going. Silence past `board_quiet_ms` reads `…but silent for 14 minutes` and moves
+nothing; a record that says `running` while nothing drives it and no agent works on it is
+not working, whatever the record says — after a minute of that it is **abandoned**, and
+waiting on you. **Waiting on you** is work that ended without landing, and that nobody has
+asked you about: an implement that succeeded and whose merge request is open, a plan that
+is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
+merge request behind it and has neither been resumed nor disposed of. A Run that ended with
+nothing to file — no branch, no merge request, no plan, no question — is finished, not
+waiting: fifty such cards are not fifty obligations. Each card's first button is the one
+action that ends its wait — Open MR, Implement now, Resume, Mark superseded — with Mark
+merged and Mark abandoned beside it in the menu. The newest ending is at the top; anything
+older than a week folds into one counted line, `▸ 9 older than a week`, and the header
+counts the week's endings while the fold counts the rest. **Finished** is work that landed
+— a disposition was recorded, the Run succeeded at a workflow that produces nothing to
+land, such as a review, or it ended with nothing to file — as one line, `3 finished today,
+1 failed`, until you click it open; anything older than a day is behind `older…`, which
+reads it from this checkout's history rather than carding every Run Collie has ever kept.
+
+Collie learns a merge by itself. In the background, every few minutes and never on a
+redraw, it asks GitLab about each merge request in Waiting on you; one that merged gets its
+`merged` disposition recorded as GitLab's word and its card moves to Finished. One that was
+closed without merging only changes its card's sentence: closing can mean superseded as
+easily as abandoned, and only you know which.
+
+The header sentence counts the whole Herd, not what the search left: `One decision is
+waiting on you. 4 working, 1 gone quiet. 3 waiting on you.` — the last count being this
+week's endings, the older ones sitting behind the fold — amber while anything needs
+you and muted otherwise. Beside it, a search field (`/`) matching a task's name, its project, its branch
+and what its agents are called and are doing, and **New run**. At the left, the brand
+signature — Luma and the lettering, drawn as a picture over the Kitty graphics protocol —
+appears when every terminal attached to herdr paints such pictures (Ghostty, kitty,
+WezTerm; not Alacritty); otherwise the plain `collie` wordmark stands there instead. herdr answers the protocol's handshake on its own, so the board reads the
+attached clients' `TERM` instead, and draws no mark rather than a blank when unsure.
 
 ```
-🐕 collie  [Runs] History Workflows Settings
-┌─Runs─────────────────────────────────────────────┐┌─Detail──────────────┐
-│  1 Implementer  working · Simplify the picker    ││Implement · a-picker │
-│❯ ⚙ Implement · add-a-picker  fix · 12m · iter 3/5││fix · 12m            │
-│  ✓ Review · !2367            done  [l log]       ││implement-2026...    │
-│  ⚠ Review · worktree         abandoned           ││                     │
-└──────────────────────────────────────────────────┘└─────────────────────┘
-┌──────────────────────────────────────────────────────────────────────────┐
-│l log · k stop · Enter go to it · t log tail · g all · p run · ? keys     │
-└──────────────────────────────────────────────────────────────────────────┘
+collie  One decision is waiting on you. 4 working, 1 gone quiet.   ⌕ find a task   + New run
+
+NEEDS YOU
+┌─────────────────────────────────────────┐
+│◆ RUM sourcemap upload  frontend-core  9m│
+│Waiting on your answer about the cap.    │
+└─────────────────────────────────────────┘
+WORKING · 2
+┌─────────────────────────────────────────┐┌────────────────────────────────────┐
+│● Strapi prod seeder        content   58m││● Docs run          collie       5h │
+│Fixing the review findings, round 2 of 5.││Building, but silent for 3 hours.   │
+│↯ editing src/ui/App.tsx, outside the    ││                                    │
+│✓●○  review  2 agents                    ││●○○  build  1 agent                 │
+└─────────────────────────────────────────┘└────────────────────────────────────┘
+WAITING ON YOU · 1
+┌─────────────────────────────────────────┐
+│✓ Control plane redesign    collie    2h │
+│Finished; mk/collie!65 is open.          │
+│✓✓✓✓✓  done                              │
+│ Open MR   ⋯                             │
+└─────────────────────────────────────────┘
+▸ 1 finished today
 ```
 
-A run that started runs of its own has them under it, the way a run has its agents — a
-[plan that spans repositories](workflows.md#plans-that-span-repositories) is one thing on
-the board rather than several rows beside each other. The parent's own line says which
-wave it is on and what it is waiting for, and Enter on a child goes to that child's run.
+A held Task carries one more line under its sentence — `⏸ Held until 14:00.`, on your own
+clock rather than UTC — and the drawer says who held it and why. See [Hold and release](cli.md#hold-and-release).
 
-```
-┌─Runs─────────────────────────────────────────────────────────────────────┐
-│❯ ⚙ Plan · add-a-version-flag       wave 2/2 · waiting on cego/web        │
-│    ✓ Implement · add-a-version-flag  done · …/g/api!12                   │
-│    ⚙ Implement · add-a-version-flag  fix · 4m · iteration 2/5            │
-│      1 Implementer  working · Fix the findings                           │
-└──────────────────────────────────────────────────────────────────────────┘
-```
+**A decision is answered on its own card**, with nothing to select first. A question's
+options are buttons, the first one filled; clicking one answers that question and no
+other, so one replaced while you were reading it cannot be answered by mistake. A question
+with no options has a field instead: click it, type, and Enter sends. What you have
+half-typed stays in the tab, per question, until you send it — nothing reaches the run
+directory until then. A proposal card lists every action it would carry out, `✓ allowed
+now` where the target's own authority already covers it and `? needs your yes` where it
+does not, with the proposal's id and hash beside **Confirm** — your yes is consent to that
+payload, and nothing else on the card can give it. **Decline** declines it. Either way the
+card leaves Needs you and the header recounts.
+
+A run holding at its [evidence gate](cli.md#outcomes) is a decision card too, and says
+which verifications it would be held to. **Approve** takes the list as it stands, **Skip**
+opens the merge request without checking any of it, and **Edit the list** opens the record
+with the names to tick off — `Approve the list` holds the run to what is left, and nothing
+left is Skip by another name, which the gate refuses. The answer goes on the record, so a
+skipped gate is a decision somebody took rather than a check that quietly did not run.
+
+The sentence is the step's own words where its workflow gives it a `summary`
+([Authoring](authoring.md#step-keys)), and the step kind's own verb where it does not. A
+step id never reaches it.
+
+A glyph says where the Task is: ✓ done, ● working, ◆ waiting on you, ○ not yet, ✗ failed,
+■ stopped. A card whose state is worth interrupting you for carries a coloured edge — amber
+for a question or a gate, red for a proposal or a failure, purple for one that has gone
+quiet. A [plan that spans repositories](workflows.md#plans-that-span-repositories) is one
+card, whose sentence names the wave and which repository is next.
+
+Two cards fit across at the comfortable density and three at the compact one (`density` in
+[your defaults](#your-defaults)); a pane under 80 columns shows one. Mouse reporting is on
+only while the pane has focus, so clicking another pane gives you your terminal's own text
+selection back immediately.
+
+**Click a card** and its whole record slides over the board as a drawer — intent, the steps
+with their durations, the agents, the branch and merge request, and the latest card — with
+`close` and Esc to dismiss it. It is an overlay: the board behind it keeps every other card
+where it was, so reading one Task never costs you the overview.
+
+**Point at a card** and, where its age was, `go to tab` and `⋯` appear; the card does not
+move or grow. `⋯` opens that Task's menu, and so does a right-click anywhere on the card —
+use `⋯` in a terminal that keeps the right button for its own menu. Clicking anywhere else
+closes it, as does Esc, and the key beside each item does it from the keyboard:
+
+|         |                    |                                     |
+| ------- | ------------------ | ----------------------------------- |
+| `enter` | Open record        | always                              |
+| `g`     | Go to its tab      | always                              |
+| `s`     | Steer…             | while something is still driving it |
+| `w`     | Open merge request | when there is one                   |
+| `u`     | Resume run         | failed or stopped                   |
+| `x`     | Follow-up run      | finished                            |
+| `k`     | Stop run           | working, quiet or waiting on you    |
+
+Only what that Task can be asked for is listed: an item that would come back "this run has
+already finished" is not offered at all. Nothing is offered on one board and withheld on
+another — there is one board and one set of actions on a card — and no herdr id is on
+screen anywhere: a Task is its name, a workspace is its project, an agent is its role.
+
+The drawer's header carries the same as buttons, without the one that opens what is already
+open, and adds **Mark merged** and **Mark abandoned** once the work is over — recorded
+[beside the run's status, never over it](cli.md#what-became-of-the-work), with its merge request
+as the reference where the board knows one. A Task with a decision open shows **Answer
+above** instead, which closes the drawer to the card whose buttons answer it.
+
+**Steer…** opens the record with the keyboard in the field at its foot; type and press
+Enter, and Collie answers with a proposal on that Task's card. The field is not there for a
+run nothing is driving.
+
+Every action says what it did in one line at the foot of the board, which goes when you do
+anything else.
 
 A pane with no terminal, a dumb `TERM` or one too narrow to render in prints the
-one-screen text view instead, with one line saying why, and keeps the keys it always had.
+one-screen text view instead, with one line saying why: the same three sections, with the
+same sentence on every line.
+
+```sh
+collie --json board   # the same model, for an agent reading the CLI
+```
 
 ### What a run's tab says
 
@@ -433,163 +545,87 @@ changed. So a review handed back to a live implementer, or a finished run's agen
 prompt yourself, goes back to ⚙ without anyone renaming anything. With no Driver and no
 Control Plane open, nothing reconciles — herdr's own agent-status column is the truth then.
 
-### Views
+### Workflows, Settings and what came before
 
-**Runs** is this session's live work: each running run with the agents working for it
-listed under it, then the runs that have finished, with theirs. **History** is
-every finished run of this checkout whatever session it came from — where "review !123
-again next week" comes from once the original run is gone. **Workflows** is every workflow
-with its layer, inputs, decisions and whatever validation says is wrong with it —
+`≡` at the header's right is everything that is not the board. **Workflows** is every
+workflow with its layer, inputs, decisions and whatever validation says is wrong with it —
 workflows only, because a persona is instructions rather than something to run; `f` is
-where personas are acted on. **Settings** is the defaults and remembered values in `config.json`, and whether the
-harness is trusted here. None of them is read until it is first shown.
+where personas are acted on. **Settings** is the defaults and remembered values in
+`config.json`, and whether the harness is trusted here. Each fills the pane, `close` or
+Esc brings the board back exactly as you left it, and neither is read until it is first
+opened.
 
-**Agents** is every agent of this session's runs that herdr still has — reviewers and
-synthesizers as well as the implementer and the planner. Each hangs off its run, indented
-and joined to it by `├`/`└`, so the run above says which run it belongs to and its own row
-says what it is doing — a finished run included, because the implementer a hand-off names
-outlives the run it was started for. An agent whose run is not on the board at all goes
-under one dim `agents with no run here` header at the end. The ones a hand-off can name are called by
-their role; the rest are called by their step and model. A role is a label, not a filter.
+Clicking a workflow runs it. Clicking a setting you may change opens a field on its own
+row, beside the value it would replace: type the new one and press Enter, or Esc to leave
+it. The field starts empty rather than holding the old value — these are short values, and
+Enter on an empty field is what unsets one. `density` is a setting: `comfortable` draws two
+cards across and `compact` three, and the board redraws as soon as it is written.
 
-Each agent row says what that agent is doing right now, taken from the terminal title its
-harness publishes — Claude Code puts the task it is on there — so progress is visible
-without opening the pane. A harness that publishes no title leaves the row naming the run
-instead. It costs nothing extra: the title comes back on the same `agent list` the statuses
-do.
+**What came before** is the foot of the expanded Finished section. `older…` reads this
+checkout's earlier finished runs — every session that ran here, which is where "review
+!123 again next week" comes from once the original run is gone — and pages them in ten at
+a time, as lines rather than cards: they are a record, not work in hand. Nothing of it is
+read until the link is pressed.
 
-Under the directory, a line appears when this installation is behind its remote, naming
-how far behind it is and the command that clears it:
+`Tab` moves the keyboard on: the board, the record over it, then `≡`, and round again.
 
-```
-Collie is 3 commits behind its remote — `collie upgrade`
-```
+### The record: Summary, Review, Plan, Cards, Log
 
-Nothing else happens: it is shown, never sent, because being a few commits behind is not
-worth interrupting anyone for. The count is read from the refs this machine already has,
-so the board never waits on a remote; a fetch runs behind it every few minutes and the
-next redraw shows what that brought. The line is absent entirely when this installation is
-not a checkout or its branch has no upstream. `collie doctor` reports the same thing, and
-fetches before it answers because you are waiting on it.
+Clicking a card opens that task's **record** over the right-hand side of the board — over
+it, never instead of it, because reading one task must not cost the overview of every
+other. `close` or Esc puts it away. Under the name and the buttons are five tabs, and one
+is showing at a time:
 
-**Runs** is what is going on now. A run whose Driver died — no agent of its own left and
-nothing written for a minute — moves to **Finished** as `⚠ abandoned` rather than sitting
-there pretending to work.
+- **Summary** — what it is for and where it has got to: the intent (its goal, and each
+  constraint marked `¬`), the steps with a duration each, the live agents — each saying
+  what it is doing right now, from the terminal title its harness publishes, so progress is
+  visible without opening the pane — the branch, and the merge request behind it: state,
+  pipeline, approvals, unresolved threads, and what has moved since this review finished.
+  The newest card is at the bottom.
+- **Review** — the review the run wrote, readable without splitting a pane and running
+  `less`. It is what the record is opened for.
+- **Plan** — the plan it is building from: its own `plan/` where it wrote one, else the plan
+  directory it was started from. Each ticket is listed by its first heading, with `✓` when
+  every checkbox in it is checked. That is what lets the work be judged against its intent
+  without leaving the tab.
+- **Cards** — the evidence: every card the Driver wrote for this run, the drift nobody has
+  settled, and what each message sent to its agents actually reached.
+- **Log** — the end of the run's own `runner.log`. It is read only while this tab is
+  showing it, because a run directory can hold a 40 MB log.
 
-A run with a question for you is listed first, under a dim **Needs you** header, and the
-footer says `N run(s) need you` whenever the Selection is somewhere else. A blocked run
-costs the whole run's wall-clock and used to be visible only if its row happened to be the
-Selection. The header is a label, not a row: the arrows step over it and nothing acts on
-it. A pending question and nothing else counts: a run holding at a gate, or one whose agent
-is answering a prompt in its own pane, says what it is waiting for in its detail column and
-counts as running — there is nothing on this board to answer for either, and `1 need you`
-used to send you to a row with no question under it.
+The review and the plan's spec are capped and paged: `… truncated` says so, and `m` reads
+another cap of it. They are rendered a line at a time — headings in accent and bold, list
+markers dim, fenced code dim, everything else plain. Line-level and no markdown dependency:
+inline emphasis is left exactly as the agent wrote it, because rewriting the text is how a
+review stops saying what it said.
 
-An active row says which step is running and how long it has been going — `fix · 12m` —
-so a stuck agent stands out from a slow one, and a run whose directory has not changed for
-longer than `board_quiet_ms` adds `quiet for 9m`.
+The record scrolls with the wheel wherever the pointer is over it, and a new record — or a
+new tab — starts at the top, because how far the last one had been scrolled says nothing
+about this one.
 
-### Filters: which of the Herd's work is showing
+At the bottom is one field: **say something about this run**. What you type there is a
+[steer](steering.md) about that run and nothing else — it is written down, Collie is asked,
+and what comes back is a proposal you confirm. The field is absent for a run that is
+finished, failed or stopped: there is nothing driving it to say it to. What the send
+actually reached shows up under **Cards**, as `→ implementer acknowledged`.
 
-The board is the Herd's, and the filter is what narrows it. `all` is every workspace of
-this herdr session that Collie has a run, an agent or a history in, as one tree — the
-default, and what the shortcut leaves you on when you press it inside the Home. Narrowed
-to **one workspace** it is that workspace's runs alone, which is what the shortcut leaves
-you on when you press it from a worker workspace, and what the `scope: local` default asks
-for. `g` toggles between the whole Herd and the workspace the board was opened from, Enter
-on a workspace row narrows to that workspace, and `Esc` widens again — after clearing the
-text filter, if there is one. The nav says which filter is showing.
+### Stopping, and stopping several
 
-Supervision never reads the filter: a Driver corrects, notifies and asks wherever its Run
-is, whatever the board happens to be showing.
+**Stop run** — from a card's menu, from the record, or `k` — does not reach the Driver
+straight away. The card says `■ stopping…`, the foot of the pane says `Stopped <name>` with
+an **Undo** button, and only when five seconds have passed is anything sent. Nothing is
+signalled and nothing is written in the meantime, so Undo takes back a decision rather than
+racing one, and a run that ended by itself inside those five seconds is left alone — the
+board says it finished on its own. Closing the tab inside the grace is the same as undoing
+it: nothing was sent.
 
-```
-🐕 collie  [Runs] History Workflows Settings  all · 3 workspace(s)
-┌─Runs────────────────────────────────────────────────────────────────────────┐
-│❯ ⚙ Implement · control-plane-glass   1 running · review · 2/5               │
-│    ⚙ Implement                       review · 2m · iteration 2/5      2m    │
-│      1 ├ Implementer                 blocked · Simplify the picker          │
-│      2 └ Review · Opus               working · Review cego.collie           │
-│                                                                             │
-│  ⚠ Collie                            1 running · 1 need you · next          │
-│    ⚠ Implement                       next — your turn                 4m    │
-│                                                                             │
-│  ⚙ Elsewhere · collie-mr-roles-wt    a workspace this session no longer has │
-│    ⚙ Implement · mr-roles            review · 3/5 · quiet for 49h     2d    │
-│                                                                             │
-│    2 more workspace(s)               nothing of Collie's in them · Env · …  │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+**Shift-click** picks cards out. With two or more picked, a bar at the foot says
+`N selected · stop all · clear`: `stop all` stops every one of them that has something to
+stop, under the same grace and one toast for the lot. Picking is not opening — nothing is
+asked for until you press something — and an ordinary click is about the one card you
+clicked, so it drops the selection.
 
-One **group row** per workspace, in herdr's own order, bold and selectable: herdr's label
-with the status glyph stripped, then how many runs are going, how many need you, and the
-leading run's step and iteration — enough to triage without expanding anything. Its glyph
-is the worst of its runs (⚠ over ⚙ over whatever the newest finished one was).
-
-Under it the active runs, then at most two finished ones so a quiet workspace says why it
-is quiet, and under those that run's agents — all of them, because this board hides
-nothing. A run is named by its **workflow alone**, because the group row already says what
-the workspace is for; a run under **Elsewhere** keeps what it was pointed at, because that
-group row names several checkouts. An agent keeps its own name in full, since the model is
-what tells two variants of one step apart, and the `1`–`9` digits are numbered down the
-whole tree, so a digit always names the row it is drawn on — the tenth agent onwards keeps
-its row and loses its digit, as on the local board.
-
-The workspaces with nothing of Collie's in them are named on one dim closing line rather
-than given a row each: a herdr session is mostly those, so nothing is hidden and nothing is
-in the way. Active runs recorded against a workspace this session no longer has — a closed
-workspace, or another herdr session's — are grouped last under **Elsewhere**, named after
-the checkout they were working in, because a run still going somewhere this board cannot
-show is still news.
-
-No herdr id is ever on screen: a workspace is its label, a run is its workflow, an agent is
-its role. The ids stay inside the jump, which is the only thing that needs them. The tree's
-indent is in the gutter beside the glyph, so title, detail and age start in the same column
-at every depth, and no row changes height when the mouse crosses it — the only thing that
-grows a row is the question the selected run is waiting on.
-
-A board of the whole session costs a local one's herdr calls and no more: the same run scan
-and the same one read of `agent list` and `workspace list`, which both boards are built from.
-
-Starting a workflow, resuming, forking and hand-offs act on one workspace's checkout and
-on this Session's own agents, so `p`, `u`, `f`, `s`, `x` and `a` — and the nav's
-`＋ New run`, which is what `p` is for the mouse — are offered only while the board is
-narrowed to a workspace: a fix round or a second review runs in a checkout, whichever row
-you press it on. `g` is how you get back to a board where they mean something. Answering a question, `k`, `l`, `w` and Enter work on
-any run in the tree, and `k` closes the panes of that run's own agents wherever they are.
-
-### The detail panel
-
-Fills with the Selection: a run's inputs, steps, hand-offs, each step's Output and — the
-point of it — the review it wrote, readable without splitting a pane. A run whose target is
-a merge request shows that above the review: state, pipeline, approvals, unresolved
-threads, and what has moved since this review finished. The Steps list carries a duration
-per step: how long a finished one took, and how long the running one has been going. A
-workflow shows its steps, inputs, decisions and validation problems.
-
-Under the review is the **plan** the run is building from, where it has one: its own
-`plan/` if it wrote one, else the plan directory it was started from. The `SPEC.md` text
-is capped and paged with `m` exactly like the review, and each ticket is listed by its
-first heading with `✓` when every checkbox in it is checked. That is what lets the work be
-judged against its intent without leaving the tab.
-
-The panel scrolls: `PgUp`/`PgDn` by a page and `⇧↑`/`⇧↓` by a line, with a scrollbar
-whenever there is more in it than fits. The arrows stay the Selection's, because that is
-what they have always been. The mouse wheel goes to whichever region the pointer is over
-— the list or the panel — and a new Selection starts the panel at the top, because how
-far the last one had been scrolled says nothing about this one.
-
-The review and the plan spec are rendered a line at a time: headings in accent and bold,
-list markers dim, fenced code dim, everything else plain. Line-level and no markdown
-dependency — inline emphasis is left exactly as the agent wrote it, because rewriting the
-text is how a review stops saying what it said.
-
-### The Live region: what has been happening
-
-Under the detail, and scrolling with it: the **cards** the Driver wrote for the selected
-Run, its open **drift**, what has been **delivered** to its agents, and — with nothing
-selected — the Herd's newest cards, so a board nobody has moved the cursor on still says
-what has just happened.
+### What a card says
 
 A card's header names what it is about: `slice · build · iteration 2 · abc1234 · try-it` —
 the kind, the step, the iteration, the revision it was written against, and how
@@ -606,110 +642,71 @@ was left unchecked` — because silently absent is exactly the reassurance a car
 - the **narrative** is last and dim, prefixed `Collie:`. It is prose a model wrote about its
   own work, and nothing about it changes a card's significance.
 
-A row's own marks say there is something here to see, so you never have to select a Run to
-find out: `↯` open drift, `⚠ manual` a human has typed at one of its agents,
-`⚠ unattributed` corrections are going out on a harness that cannot tell Collie's
-submissions from yours, `⏸` held, `!` a proposal waiting on you, `▶` a slice worth looking
-at. A workspace row carries the worst of what is under it. Nothing about any of this takes your focus — only a pending question
+A card on the board says there is something here to see without your opening the record:
+drift is one amber `↯` line in the task's own words, and a held task carries its `⏸` line
+under the sentence. Nothing about any of this takes your focus — only a pending question
 does that.
 
-A report about a Run that had already finished when it was judged is shown under that Run
-as `pending report (undelivered)`. It was never written to that Run's inbox: the Run is
-over, and there is nothing there to act on it. A [follow-up run](workflows.md) is how you
-act on one.
+A report about a Run that had already finished when it was judged is shown as
+`pending report (undelivered)`. It was never written to that Run's inbox: the Run is over,
+and there is nothing there to act on it. A [follow-up run](workflows.md) is how you act on
+one.
 
 ### Confirming a proposal on the board
 
-Explicit requests in chat or `collie steer` execute directly. Unsolicited suggestions
-remain **proposals**: the board shows what Collie understood and each proposed action.
-Enter carries one out; Esc declines it. Other action keys do not fire while the proposal
-has focus. The board binds its answer to the recorded payload, so a changed suggestion
-cannot silently replace the one displayed.
-
-From a terminal or script, use `collie confirm <id>` or `collie decline <id>`
-([docs/cli.md](cli.md)). `--hash` is optional when you want to name an exact payload;
-neither a TTY nor a second human confirmation is required.
+There is no composer here and no mode to enter: talking to Collie is the pane beside this
+one. What the board is for is the other half — **confirming**. A **proposal** is drawn as
+soon as it arrives: what Collie understood, and
+every action it would take, each marked `allowed now` where that Run's own authority already
+grants it or `needs your yes` where it does not, with the proposal's id and hash. Enter
+carries it out; Esc declines it. Those two keys are the only ones the proposal takes — a
+human reading what they are being asked to consent to cannot stop a run by pressing `k` at
+it. The yes names the id and the hash, so it is consent to that payload rather than to a
+summary of it. `collie steer`, `collie confirm` and `collie decline` are the same thing on
+the command line ([docs/cli.md](cli.md)). Nothing else can answer for you: chat may carry
+out what you asked for, but no tool of its own confirms a proposal — a model cannot consent
+to its own, however it asks.
 
 ### Keys
 
-Keys are offered only when there is something to act on, and the Selection's own actions
-are buttons on the footer's first line — clicking one does what the key does. While a
-field has the keys — a run's question, a Settings value, the filter — the footer offers
-that field's keys and nothing else, because every other key is being typed rather than
-pressed. Nothing is
-drawn under a row: every row is one line whatever is selected, so the list does not move
-under the cursor. Movement is the arrows and not `j`/`k`: `k` is the stop key, and a
-destructive key that sometimes means "up" is worse than no vim binding.
+The board is a mouse-first surface: everything it does is a button, a card or a menu item,
+and the keys are shortcuts for what is already on screen. There is no footer of keys —
+`?` puts the whole list over the pane instead, and any key closes it again.
 
-The footer holds the Selection's own actions as buttons, then one line of keys — whatever
-the row and the detail panel offer, and `g <the other scope> · p run · ? keys · q close`
-(`p run` on a local board only, like the key). Two wrapped lines of every global
-was what made the important ones unreadable, so the rest of the table lives behind `?`: a
-full-pane list of every key with what it does, in two columns so it fits a 24-row pane,
-closed by any key. The meanings there are the short form; this table is the long one.
+| Key   | What it does                                                  |
+| ----- | ------------------------------------------------------------- |
+| `Tab` | Move the keyboard on: the board, the record over it, then `≡` |
+| `/`   | Search, and narrow all three sections as you type             |
+| `Esc` | Close the record; with none open, clear the search            |
+| `m`   | Read another page of a review or plan the record cut short    |
+| `r`   | Re-read what is on screen, and the merge request behind it    |
+| `?`   | Every key with what it does, over the whole pane              |
+| `q`   | Close the tab                                                 |
 
-While a field has the keys — a question, the filter, a Settings value — the line says what
-that field's keys do instead, and the Selection's own buttons go: `k` typed a `k` while
-`[k stop]` stopped the run.
+A card's menu takes the key beside each of its items — the table
+[above](#the-control-plane), and the second half of what `?` lists — and `Esc` closes it. A field takes its own keys and nothing
+else, because every other key is being typed rather than pressed: an answer, a steer and a
+Settings value send with Enter, the search hands the keys back and keeps what you typed,
+and Esc leaves any of them — clearing the search, which is what it is for. A proposal takes
+exactly two, Enter to carry it out and Esc to decline. The launch flow adds `↑↓` to move
+and `ctrl+u` to clear the line.
 
-| Key           | What it does                                                                    |
-| ------------- | ------------------------------------------------------------------------------- |
-| `↑↓`          | Move the Selection                                                              |
-| `⇧↑↓`         | Scroll the detail panel by a line                                               |
-| `PgUp`/`PgDn` | Scroll the detail panel by a page                                               |
-| `Tab`         | Move between views                                                              |
-| `1`–`9`       | Focus that agent's pane                                                         |
-| `Enter`       | Go to what the row points at — a workspace, a run's agent tab, an agent's pane  |
-| `g`           | Filter, in the Runs view: this workspace ⇄ every workspace of this Herd         |
-| `p`           | Run a workflow — the same launch flow as `prefix+f`, inline in this tab         |
-| `C`           | Continue a task with another workflow, rather than starting a new task          |
-| `u`           | Resume a run with unfinished steps                                              |
-| `f`           | Fork a workflow or persona                                                      |
-| `s`           | Hand the **selected** run's review to a live implementer                        |
-| `l`           | Open the selected run's `runner.log` in a temporary pane                        |
-| `t`           | Tail that log inside the detail panel                                           |
-| `m`           | Read another page of a review or plan spec the panel cut short                  |
-| `x`           | Start a fix run from what the selected review left open                         |
-| `a`           | Review the selected run's target again                                          |
-| `o`           | Post the selected review to its merge request                                   |
-| `w`           | Open the selected merge request in a browser                                    |
-| `c`           | Copy that merge request's URL                                                   |
-| `k`           | Stop the selected run — closing a pane no longer does that, because it has none |
-| `n`           | Go to the next unanswered question, wrapping; clears a filter hiding it         |
-| `/`           | Filter the list, and say how much is left — a matching agent keeps its run      |
-| `Esc`         | Clear the text filter; with none left, widen the board to the whole Herd        |
-| `R`           | Re-read what is on screen, and the one merge request behind it                  |
-| `?`           | Every key with what it does, over the whole pane; any key closes it             |
-| `q`           | Close the tab                                                                   |
-
-`＋ New run` in the nav does what `p` does.
-
-Anywhere the tab takes text — a question, the launch flow's filter, `/`, a Settings value —
+Anywhere the tab takes text — an answer, the launch flow's filter, `/`, a Settings value —
 a paste is accepted as typed text. The newline a copied line brings with it is dropped
 rather than delivered, so a pasted value can be read before Enter sends it.
 
 ### Questions
 
-When a run asks you something, its options appear in a region of their own, drawn over
-the bottom of the list and above the footer — never taller than half the pane, so a long
-menu shows the options around the cursor and says how many more there are. It covers the
-list rather than taking rows from it, so no row moves and the list is the same size
-whether or not anything is asking. The keys become that question's — `↑↓`, Enter, Esc, or just type where it wants text — and clicking
-an option answers it. The question belongs to that run, so a second run waiting on one is
-answered by selecting it rather than waiting its turn. The question lives in the run's
-directory, so closing this tab, reopening it, or resuming later shows you the same question
-again rather than losing it. The Driver toasts and brings the tab to the front before it
-asks, so a question is never left unseen in a tab you are not looking at — unless you have
-set [`questions: notify`](#your-defaults), which keeps the toast and drops the jump.
+A question is answered on its own card, and what you press is written to the run directory
+where its Driver is waiting. That is what makes it durable: closing this tab, reopening it
+or resuming the run later brings you the same question rather than losing it, and it is the
+same question `collie run answer` and chat answer. A proposal and an evidence gate live in
+the same place, for the same reason.
 
-`n` goes to the next unanswered question, in the board's own order, wrapping once. It works
-from a question as well as from anywhere else, so several waiting runs are answered one
-after another without touching the arrows, and it works at either scope: on a wide board it
-selects another workspace's question where it stands rather than jumping you into a pane.
-A question the filter is hiding is still unanswered, so `n` finds it and visibly clears the
-filter to show it. `[n next question]` on the footer is the same action for the mouse, and
-`n` typed into a field — a free-text answer, `/`, a Settings value — is a character, not a
-jump. With nothing left to answer the Selection stays put and the footer says so.
+The Driver toasts and brings the tab to the front before it asks, so a question is never
+left unseen in a tab you are not looking at — unless you have set
+[`questions: notify`](#your-defaults), which keeps the toast and drops the jump. Nothing
+else moves you: a card, a correction and a proposal all arrive while you carry on.
 
 What you have half-typed or half-chosen against a question is kept per run and per question
 for as long as the tab is open, so moving between waiting runs costs nobody their answer.
@@ -725,11 +722,21 @@ history, streaming and compaction are the harness's own, because they always wer
 than anything Collie would have written.
 
 Ask about the flock and you get an answer about the flock. Chat reads the whole Herd,
-always: what the board is filtered to and whichever row your cursor is on change what
-**you** are looking at and never what Collie may see. Where there are more Runs than one
-answer carries, it says how many it left out rather than answering as though that was all
-of them. A follow-up is understood — the conversation is the harness's own session, and it
-is still there when you reopen the Home.
+always: nothing on the board narrows what Collie may see. Where there are
+more Runs than one answer carries, it says how many it left out rather than answering as
+though that was all of them. A follow-up is understood — the conversation is the harness's
+own session, and it is still there when you reopen the Home.
+
+**Chat knows which card you have open.** Every message you send carries one line naming
+the open card, attached as you send it and never when you click — so opening ten cards and
+asking about none costs the conversation nothing, and closing the record ends it. "How is
+it going?" or "stop it" with a card open is about that card: the run tools take the
+selection when you name no run, and the answer opens by saying which run it was about, so
+a selection you had forgotten is visible rather than silent. It is a fact chat is **told**,
+never a filter Collie applies for you — the Herd-wide reads stay Herd-wide whatever is open
+([ADR-0012](adr/0012-the-boards-selection-is-an-explicit-chat-input.md)). Under your own
+prompt the same fact can be Claude Code's status line, `board selection: <task name>`,
+configured by `setup.sh` if you have no status line of your own; `collie doctor` says which.
 
 **Choosing a harness.** `claude` is the default, on an installation you have had for
 months as much as a new one, and independently of the harness your Runs are on.
@@ -749,13 +756,37 @@ Claude conversation is still there when you choose Claude again.
 one, follow up a finished run, amend an Intent, start a workflow, fork a Workflow or a
 Persona, change what every new Run begins with, close the panes an older release left, or
 upgrade this installation — it has the same set the CLI and the board have, through the
-same validation and the same executors. Requested actions execute directly and chat
-reports the results. You do not need to copy a hash or approve the same request again
-on the board. Unsolicited background suggestions remain optional proposals.
+same validation and the same executors.
 
-Reconciliation, verification, authority editing, and managing older proposals remain
-available through the CLI. Scripts can use those commands without a terminal.
-Requests are recorded with their actual origin, including `chat:` and `cli:`.
+Which of two things it does with one depends on **who wanted it**
+([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md)):
+
+- **You asked for it, so it is done.** "Hold happytiger until 14:00" holds it, and the
+  cards say `⏸ Held until 14:00.` Chat may do what you could do on the board yourself;
+  pointing you at the UI for something it can plainly do is chat obstructing you. A hold
+  is `collie_hold`; stopping, resuming, releasing, answering a question, steering an agent,
+  following up a finished run and starting one are `collie_do`, and so are the board's
+  decisions — saying yes or no to a proposal, and marking what became of finished work.
+  Each says what it came to.
+- **Collie wanted it, so it waits.** Drift the evaluator noticed, a correction it wants
+  to send: the board draws the proposal, and you confirm it against its id and the hash of
+  exactly those actions, or decline it and nothing changed. Chat has no such route: what it
+  wants of its own accord it says in words, and only your yes turns it into a request.
+
+What it cannot ask for of its own accord: reconciling a delivery nobody can account for,
+verifying, and setting what a Run — or every Run — may do without asking. Those are yours.
+That the rest is really there is a gate: `test/chat-parity.test.ts` walks the CLI's own
+command tree and fails on a command with no conversational route, so the list cannot
+quietly fall behind the CLI.
+
+A yes is yours, and you can say it here. "Confirm it" settles the proposal against its id
+and the hash of exactly those actions, as the board does; "no" declines it by id alone,
+because a refusal consents to nothing. What chat cannot do is decide: it never settles one on its own judgement, and
+nothing it reads in a Run's notes or an agent's output is you asking. There is no action
+that confirms anything either, so a proposal can never carry its own yes. Everything it
+does is recorded as `chat:`, a confirmation you asked for included — which matters because
+the bridge runs inside the harness's pane and so has a terminal, and a terminal is what the
+CLI reads as a person. The origin is stamped by the entrypoint, not inferred.
 
 There is no shell there, no file access and no way to write a record. A run it names that
 does not exist is refused rather than retargeted, and a run you did not name is not one it
@@ -764,11 +795,11 @@ workspace it is for, so a launch asked for in the Home lands in the repository i
 and it needs no existing run.
 
 `collie tools list` and `collie tools call` are the same contract from a terminal, and
-the list says which of the eight only read. Three of them do not: reading the news settles
-the items it hands over, the installation checks fetch this checkout's refs, and proposing
-appends to the journal. None of the three changes a run, but none is a read either, and a
-harness that decides for itself what to run without asking is told the difference rather
-than left to assume.
+the list says which of the nine only read. Four of them do not: reading the news settles
+the items it hands over, the installation checks fetch this checkout's refs, proposing
+appends to the journal, and `collie_hold` holds what you asked it to hold. A harness that
+decides for itself what to run without asking is told the difference rather than left to
+assume.
 
 If the harness you chose is not installed, chat says so and stops there: the board and
 every Run are untouched, and Collie does not quietly open the other one instead.
@@ -801,11 +832,11 @@ which:**
   channels are an organization opt-in; Collie will not auto-confirm that consent, will not
   fake a push, and will not switch you to Pi behind your back. That nothing reaches an
   idle Claude pane unasked is a row of the live probe, watched on both harnesses rather
-  than inferred from a help page. The board shows what is waiting in the meantime.
+  than inferred from a help page.
 
 **Sent is not read.** An item stays waiting until the conversation has actually taken it,
 and one whose send nobody can account for stays visibly uncertain rather than being
-retried or quietly marked delivered. The board says how many of each.
+retried or quietly marked delivered. `collie chat status` counts both.
 
 Speaking first buys it nothing: a proposal from a turn Collie started goes through exactly
 the same authority path as one you typed. Who started the turn is not an input to what is
@@ -970,6 +1001,7 @@ checkout there is no branch and no working tree to review, so the target menu is
   "trust": "auto",
   "permissions": "bypass",
   "scope": "local",
+  "density": "comfortable",
   "questions": "focus",
   "chat_harness": "claude"
 }
@@ -980,10 +1012,11 @@ independent of `harness`, which is what runs your work, and it is a preference f
 **next** launch rather than a switch: see
 [Talking to Collie](#talking-to-collie-about-the-flock).
 
-`scope` is which board a Control Plane opens on — `local`, this workspace, or `all`, every
-workspace of this herdr session Collie has work in ([Filters](#filters-which-of-the-herds-work-is-showing)).
-`g` changes it for that tab and nothing remembers it, so this is the only place the answer
-to "the way I use it" lives.
+`scope` is left over from the board of views and changes nothing you can see: the board is
+the whole Herd's whichever workspace you opened it from, and the search is what narrows it.
+
+`density` is how many cards the board fits across — `comfortable` for two, `compact` for
+three. A pane under 80 columns shows one whatever this says.
 
 `questions` is what happens when a run stops to ask you something. `focus`, the default,
 brings that workspace's Collie tab to the front — the behavior every install has had.
@@ -1025,10 +1058,10 @@ duration: a step that is still printing is never nudged, however long it runs. `
 for as long as it takes.
 
 `board_quiet_ms` is the same signal from the outside, and a separate number because it is
-a different question: how long a running run's directory may go unchanged before the
-Control Plane's row says `quiet for 9m`. Five minutes by default. Nothing is nudged and
-nothing is given up on — it is shown, so a hung run is visible before you notice by
-accident.
+a different question: how long a running run's directory may go unchanged before its card
+reads `…but silent for 9m` and takes the quiet edge. Five minutes by default. Nothing is
+nudged and nothing is given up on — it is shown, so a hung run is visible before you notice
+by accident.
 
 `compact_at_tokens` is where compaction between pieces of work kicks in — see
 [Compaction between pieces of work](#compaction-between-pieces-of-work).
@@ -1225,15 +1258,14 @@ herdr.
 **The glyph says ✓ but the agent is working.** Nothing was watching that tab: the glyph is
 reconciled by the run's Driver while it lives and by a Control Plane that can see the run,
 and a run whose Driver has finished — an agent you prompted yourself, or a review handed to
-an implementer whose own run is over — has neither. A board sees its own workspace's runs
-at the `local` scope and every workspace's at `all`, so open the Control Plane in that
-run's workspace (`prefix+shift+c`), or any board and press `g`, and it is corrected within
-a tick. Otherwise read herdr's own agent-status column in the sidebar, which is always the
-truth.
+an implementer whose own run is over — has neither. The board is the whole Herd's, so
+opening it (`prefix+shift+c`) corrects any run of this session within a tick. Otherwise
+read herdr's own agent-status column in the sidebar, which is always the truth.
 
-**A run shows as `⚠ abandoned`.** Its Driver is gone: no agent of its own is left and
-nothing has been written for a minute. The run's audit trail is intact, so
-`collie run resume <id>` starts a fresh Driver and skips the steps that finished.
+**A card has been silent for hours.** Its Driver may be gone: nothing has written to the
+run directory, and a run with no Driver never finishes on its own. The audit trail is
+intact, so `collie run resume <id>` starts a fresh Driver and skips the steps that
+finished.
 
 **A run says another Driver already owns it.** The ownership claim in the run directory is
 held by a live process. Stop it with `collie run stop <id>` before resuming.

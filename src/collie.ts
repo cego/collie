@@ -12,6 +12,7 @@ import { upgrade } from "./commands/upgrade";
 import { verify } from "./commands/verify";
 import { confirm, decline, proposal, steer } from "./commands/steer";
 import { chat, mcp, tools } from "./commands/chat";
+import { board } from "./commands/board";
 import { home } from "./commands/home";
 import { workflow } from "./commands/workflow";
 import { printResult } from "./envelope";
@@ -28,6 +29,7 @@ export const app = root.pipe(
     decline,
     proposal,
     verify,
+    board,
     home,
     chat,
     tools,

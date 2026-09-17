@@ -21,8 +21,9 @@ import {
   renderWorkspace,
   type WorkspaceView,
 } from "../src/workspace";
-import { NO_MARKS } from "../src/lines";
+import { buildBoard, type TaskView } from "../src/board";
 import { recordDisposition } from "../src/disposition";
+import { nowIso } from "../src/time";
 import { originPath, readOrigin } from "../src/home";
 import { herdOf } from "../src/steering";
 import { appState, boardFlow, type ControlSession } from "../src/flows";
@@ -185,6 +186,11 @@ function board(alive: AgentInfo[], now?: number, quietMs?: number) {
     quietMs,
   });
 }
+
+/** The Tasks the same state dir makes, which is what the text view's sections are. */
+const tasks = Effect.fn("workspaceTest.tasks")(function* (now?: number, quietMs?: number) {
+  return yield* buildBoard({ stateDir: rig.pluginEnv().stateDir, now, quietMs });
+});
 
 /** The board as the pane builds it, with `git` answering for the installation. */
 const viewOfInstallation = Effect.fn("workspaceTest.viewOfInstallation")(function* (now?: number) {
@@ -753,13 +759,17 @@ effectTest("the board lists this Session's agents and runs, and nobody else's", 
   expect(view.recent.map((r) => r.title)).toEqual(["Review · worktree"]);
   expect(view.recent[0]!.detail).toBe("blocked · 1 finding(s) open");
 
-  const text = renderWorkspace(view, "sent the review");
+  const text = renderWorkspace(view, "sent the review", undefined, { tasks: yield* tasks() });
   expect(text.split("\n")[0]).toBe(`${COLLIE_TAB} — ${rig.projectDir.split("/").at(-1)}`);
   expect(text).toContain("1  Implementer");
   expect(text).toContain("Simplify cego.collie plugin");
-  expect(text).toContain("⚙ Implement · add-a-picker");
-  expect(text).toContain("⚠ Review · worktree");
-  expect(text).not.toContain("not-mine");
+  // The three sections the pane draws, with a Task's own sentence on each line.
+  expect(text).toContain("Needs you");
+  expect(text).toContain("● Implement · add-a-picker");
+  expect(text).toContain("✗ Review · worktree");
+  // The Agents section is this Session's; the three sections are the whole Herd's, which
+  // is what one board per Herd means (ADR-0009).
+  expect(text).toContain("Plan · not-mine");
   expect(text).toContain("1-9 focus that agent");
   expect(text).toContain("s send the last review to the implementer");
   expect(text.trimEnd().split("\n").at(-1)).toBe("sent the review");
@@ -821,7 +831,10 @@ effectTest("a running run whose agents are all gone is abandoned, not active", f
   const gone = yield* board([], (yield* Clock.currentTimeMillis) + 3_600_000);
   expect(gone.active).toEqual([]);
   expect(gone.recent.map((r) => [r.glyph, r.detail])).toEqual([["⚠", "abandoned"]]);
-  expect(renderWorkspace(gone)).toContain("⚠ Review · worktree");
+  const abandoned = yield* tasks((yield* Clock.currentTimeMillis) + 3_600_000);
+  expect(renderWorkspace(gone, undefined, undefined, { tasks: abandoned })).toContain(
+    "Review · worktree",
+  );
 
   // A run that has only just been created is not abandoned, it is starting.
   expect((yield* board([])).active.map((r) => r.title)).toEqual(["Review · worktree"]);
@@ -935,8 +948,10 @@ effectTest("an empty state dir renders the board rather than nothing", function*
   const text = renderWorkspace(view);
 
   expect(view.active).toEqual([]);
-  expect(text).toContain("(none running)");
-  expect(text).toContain("(nothing yet)");
+  // Three sections and nothing in them, rather than a blank screen.
+  expect(text).toContain("Needs you");
+  expect(text).toContain("Working · 0");
+  expect(text).toContain("(nothing)");
 });
 
 effectTest("a register that will not decode reads as empty rather than failing", function* () {
@@ -1354,7 +1369,34 @@ effectTest("no group, run or agent row carries a herdr id", function* () {
   for (const word of words) expect(word).not.toMatch(/\bw\d+(:[a-z]\d+)?\b|\b\d+-\d+\b/);
 });
 
-test("the text view carries the marks and the live lines the app draws", () => {
+/** One Task, for a text view assembled by hand rather than read off a state dir. */
+const TASK: TaskView = {
+  id: "r1",
+  name: "Implement · steering",
+  project: "collie",
+  state: "active",
+  steps: [{ name: "build", state: "active" }],
+  sentence: "Building.",
+  age: "2m",
+  drift: null,
+  held: null,
+  heldBy: null,
+  decision: null,
+  agents: [],
+  children: [],
+  mr: null,
+  branch: null,
+  disposition: null,
+  landed: false,
+  ended: null,
+  mrState: null,
+  planReady: false,
+  run: "r1",
+  runs: ["r1"],
+  at: 0,
+};
+
+test("the text view carries a card's own lines and the live lines the app draws", () => {
   const view: WorkspaceView = {
     repo: "collie",
     cwd: "/w/collie",
@@ -1383,7 +1425,13 @@ test("the text view carries the marks and the live lines the app draws", () => {
   };
 
   const text = renderWorkspace(view, undefined, undefined, {
-    marks: { r1: { ...NO_MARKS, drift: true, held: true } },
+    tasks: [
+      {
+        ...TASK,
+        drift: "editing src/ui/App.tsx, which is outside the slice",
+        held: "⏸ Held until 14:00.",
+      },
+    ],
     live: {
       run: "r1",
       cards: [],
@@ -1396,7 +1444,10 @@ test("the text view carries the marks and the live lines the app draws", () => {
     },
   });
 
-  expect(text).toContain("↯ ⏸");
+  // Drift is a sentence on the card and held is a line under it; neither is a glyph
+  // in a column a human has to look up.
+  expect(text).toContain("↯ editing src/ui/App.tsx, which is outside the slice");
+  expect(text).toContain("⏸ Held until 14:00.");
   expect(text).toContain("collie home reconcile");
   expect(text).toContain("two workspaces carry this Herd's token");
 });
@@ -1424,7 +1475,9 @@ test("a row says what its Run is for, what it has not proved, and what to do abo
         namedAfter: "fix the picker",
       });
       run.record.status = "blocked";
-      run.record.finished_at = "2026-09-11T12:00:00.000Z";
+      // Today's, because the board's Finished section is the last day's work and this
+      // test is about what a card says rather than about how long it stays.
+      run.record.finished_at = yield* nowIso();
       run.record.halt = "evidence_missing";
       run.record.evidence_gaps = ["tests failed", "regression was never run"];
       run.record.obstacle = "tests has failed 3 times in a row the same way (exit 1).";
@@ -1442,11 +1495,10 @@ test("a row says what its Run is for, what it has not proved, and what to do abo
       expect(row.next).toBe("resume");
       expect(row.delivered).toBeNull();
 
-      // And the text view a narrow pane falls back to says the same four things.
-      const text = renderWorkspace(view);
-      expect(text).toContain("bug · 2 evidence gap(s)");
-      expect(text).toContain("failed 3 times in a row");
-      expect(text).toContain(`run resume ${run.id}`);
+      // And the text view a narrow pane falls back to says, in one sentence, why it
+      // stopped. What it has not proved is the record's, which the drawer reads.
+      const text = renderWorkspace(view, undefined, undefined, { tasks: yield* tasks() });
+      expect(text).toContain("Stopped: tests has failed 3 times in a row the same way");
     }),
   ));
 
@@ -1467,10 +1519,10 @@ test("a Run whose work shipped by hand says so, without its status being edited"
         namedAfter: "add a picker",
       });
       run.record.status = "failed";
-      run.record.finished_at = "2026-09-11T12:00:00.000Z";
+      run.record.finished_at = yield* nowIso();
       yield* run.save();
       yield* recordDisposition(run.dir, {
-        at: "2026-09-11T13:00:00.000Z",
+        at: yield* nowIso(),
         by: "mk",
         kind: "merged",
         ref: "cego/collie!43",
@@ -1485,7 +1537,9 @@ test("a Run whose work shipped by hand says so, without its status being edited"
       expect(row.delivered).toBe("merged cego/collie!43");
       expect(row.glyph).toBe("✗");
       expect(row.detail).toContain("failed");
-      expect(renderWorkspace(view)).toContain("merged cego/collie!43");
+      expect(renderWorkspace(view, undefined, undefined, { tasks: yield* tasks() })).toContain(
+        "Merged as cego/collie!43",
+      );
     }),
   ));
 

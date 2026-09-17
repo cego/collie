@@ -10,13 +10,17 @@
 // different things:
 //
 //   read        — a tool answers it. The row carries the call, and it is made here.
-//   propose     — an action kind chat may ask for. The row carries the action, and it is
-//                 decoded against the closed union and matched to a registered executor.
-//   human-only  — the human's, and not chat's on purpose. Confirming, declining,
-//                 reconciling and granting authority are decisions; a model that could
-//                 make them would be authorising itself. `verify` binds a command's exit
-//                 to a tree, which is evidence, and evidence a model produced about
-//                 itself is not.
+//   write       — the human's own instruction, carried out at once by a tool of its own.
+//                 Chat may do what the human could do on the board themselves; sending
+//                 them to the UI for it is chat obstructing the person it serves.
+//   propose     — something Collie wants of its own accord. The row carries the action,
+//                 and it is decoded against the closed union and matched to a registered
+//                 executor; the human confirms it on the board.
+//   human-only  — the human's, and not chat's on purpose. Reconciling and granting
+//                 authority are the human's own account of what happened and what work
+//                 may do unasked; `verify` binds a command's exit to a tree, which is
+//                 evidence, and evidence a model produced about itself is not. A yes to a
+//                 proposal is not on this list: the human says it, and chat relays it.
 //
 // A leaf with no row is what this file exists to fail on.
 
@@ -44,6 +48,7 @@ afterAll(() => {
 type Route =
   | { readonly route: "read"; readonly tool: string; readonly input?: JsonObject }
   | { readonly route: "propose"; readonly kind: ActionKind; readonly action: JsonObject }
+  | { readonly route: "write"; readonly tool: string }
   | { readonly route: "human-only"; readonly why: string };
 
 const RUN = "r-does-not-exist";
@@ -71,29 +76,20 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
       action: { kind: "fork_definition", what: "persona", name: "reviewer", as: "reviewer-ours" },
     },
   ],
-  [
-    "run start",
-    {
-      route: "propose",
-      kind: "start",
-      action: { kind: "start", workflow: "review", inputs: { goal: "x" } },
-    },
-  ],
+  // Asked for by the human, carried out; wanted by Collie, proposed. `start` is in both
+  // schemas for that reason, and the row names the human's side.
+  ["run start", { route: "write", tool: "collie_do" }],
   ["run list", { route: "read", tool: "collie_herd" }],
   ["run show", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run wait", { route: "read", tool: "collie_run", input: { run: RUN } }],
-  ["run stop", { route: "propose", kind: "stop", action: { kind: "stop", run: RUN } }],
-  ["run resume", { route: "propose", kind: "resume", action: { kind: "resume", run: RUN } }],
-  [
-    "run answer",
-    {
-      route: "propose",
-      kind: "answer",
-      action: { kind: "answer", run: RUN, choiceId: "c1", answer: "yes" },
-    },
-  ],
-  ["run hold", { route: "propose", kind: "hold", action: { kind: "hold", run: RUN } }],
-  ["run release", { route: "propose", kind: "release", action: { kind: "release", run: RUN } }],
+  ["run stop", { route: "write", tool: "collie_do" }],
+  ["run resume", { route: "write", tool: "collie_do" }],
+  ["run answer", { route: "write", tool: "collie_do" }],
+  // The human's own instruction, carried out rather than proposed (ADR-0011). Stop,
+  // resume, release, answer, steer and follow up are `collie_do`'s; a hold has a tool of
+  // its own because it also holds a whole workspace, which no action kind does.
+  ["run hold", { route: "write", tool: "collie_hold" }],
+  ["run release", { route: "write", tool: "collie_do" }],
   [
     "run clear-override",
     {
@@ -103,18 +99,11 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     },
   ],
   ["run deliveries", { route: "read", tool: "collie_receipts", input: { run: RUN } }],
-  ["run disposition", { route: "read", tool: "collie_run", input: { run: RUN } }],
+  ["run disposition", { route: "write", tool: "collie_do" }],
   ["run metrics", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run drift", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run cards", { route: "read", tool: "collie_run", input: { run: RUN } }],
-  [
-    "run follow-up",
-    {
-      route: "propose",
-      kind: "followup",
-      action: { kind: "followup", run: RUN, text: "and the docs" },
-    },
-  ],
+  ["run follow-up", { route: "write", tool: "collie_do" }],
   ["run intent show", { route: "read", tool: "collie_run", input: { run: RUN } }],
   [
     "run intent set-goal",
@@ -208,19 +197,9 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run logs", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["task list", { route: "read", tool: "collie_workspaces" }],
   ["run output", { route: "read", tool: "collie_run", input: { run: RUN } }],
-  [
-    "steer",
-    {
-      route: "propose",
-      kind: "deliver",
-      action: { kind: "deliver", run: RUN, agent: "a1", text: "hello", mode: "boundary" },
-    },
-  ],
-  [
-    "confirm",
-    { route: "human-only", why: "a yes to a payload is a decision, and decisions are the human's" },
-  ],
-  ["decline", { route: "human-only", why: "so is a no" }],
+  ["steer", { route: "write", tool: "collie_do" }],
+  ["confirm", { route: "write", tool: "collie_do" }],
+  ["decline", { route: "write", tool: "collie_do" }],
   [
     "proposal reconcile",
     { route: "human-only", why: "only the person who watched it can say what happened" },
@@ -229,6 +208,8 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     "verify",
     { route: "human-only", why: "evidence a model produced about its own work is not evidence" },
   ],
+  // The same Herd, shaped as the board's Tasks rather than as its Runs.
+  ["board", { route: "read", tool: "collie_herd" }],
   ["home show", { route: "read", tool: "collie_installation" }],
   [
     "home reconcile",
@@ -245,6 +226,16 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["chat status", { route: "read", tool: "collie_installation" }],
   ["chat harness", { route: "human-only", why: "what Collie opens with is the human's setting" }],
   ["chat news", { route: "read", tool: "collie_news" }],
+  // The line under the human's own prompt; `--install` is the setting behind it, which is
+  // theirs like the harness preference is. Chat is told the same fact at each prompt.
+  [
+    "chat status-line",
+    { route: "human-only", why: "the same fact reaches chat as prompt context" },
+  ],
+  [
+    "chat context",
+    { route: "human-only", why: "this is that context's own command: chat is given it" },
+  ],
   [
     "tools list",
     { route: "human-only", why: "this is the conversational route itself: chat is given them" },
@@ -325,6 +316,14 @@ test(
             ]);
             continue;
           }
+          if (route.route === "write") {
+            // A tool of its own, and one that admits it writes: a client decides from
+            // `readOnly` what it may run without asking.
+            const tool = toolNamed(route.tool);
+            expect([operation, tool !== null]).toEqual([operation, true]);
+            expect([operation, tool!.readOnly]).toEqual([operation, false]);
+            continue;
+          }
           if (route.route === "propose") {
             // Three halves, and each is a different way this goes wrong: a kind the model
             // is invited to ask for, an action the closed union actually accepts, and a
@@ -372,7 +371,9 @@ test("nothing this build cannot carry out is offered as something to ask for", (
 test("every tool chat is given is a route somebody named", () => {
   // The other direction: a tool that no operation routes to is reach nobody asked for.
   const routed = new Set(
-    INVENTORY.flatMap((entry) => (entry[1].route === "read" ? [entry[1].tool] : [])),
+    INVENTORY.flatMap((entry) =>
+      entry[1].route === "read" || entry[1].route === "write" ? [entry[1].tool] : [],
+    ),
   );
   expect(TOOLS.map((tool) => tool.name).filter((name) => !routed.has(name))).toEqual([
     "collie_propose",

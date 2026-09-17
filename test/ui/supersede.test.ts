@@ -30,6 +30,9 @@ function stateFor(selected: string | null): AppState {
   return {
     view: "runs",
     filter: { kind: "workspace", id: "w1" },
+    tasks: [],
+    now: Date.parse("2026-09-16T12:00:00.000Z"),
+    density: "comfortable",
     wide: null,
     board: {
       repo: selected ?? "none",
@@ -50,6 +53,7 @@ function stateFor(selected: string | null): AppState {
     marks: {},
     live: null,
     previewing: null,
+    stopping: [],
   };
 }
 
@@ -92,10 +96,10 @@ test("a newer focus interrupts the read in flight, and the newer one lands", () 
           act: () => Effect.succeed(null),
         });
 
-        driven.dispatch({ _tag: "Select", id: "run:a" });
+        driven.dispatch({ _tag: "Select", id: "run:a", on: null });
         yield* until("the first read to start", () => started.includes("run:a"));
 
-        driven.dispatch({ _tag: "Select", id: "run:b" });
+        driven.dispatch({ _tag: "Select", id: "run:b", on: null });
         yield* until("the second read to land", () => driven.state().board.repo === "run:b");
 
         // Superseded, not merely ignored: the fiber was actually stopped.
@@ -131,7 +135,7 @@ test("a command that takes its time does not stall the next keypress", () =>
 
         // The Selection moves while that is still going: it is a focus change, so it
         // never joins the queue the command is sitting in.
-        driven.dispatch({ _tag: "Select", id: "run:b" });
+        driven.dispatch({ _tag: "Select", id: "run:b", on: null });
         yield* until("the Selection to land", () => driven.state().board.repo === "run:b");
 
         expect(driven.state().board.repo).toBe("run:b");

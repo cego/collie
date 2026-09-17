@@ -1,112 +1,39 @@
-// The Collie tab. Four regions — nav rail, list, detail, footer — over one Selection.
-// Everything this file reads is the plain `AppState` the bridge pushes in, and
+// The Collie tab. A header sentence, three sections of cards, and one Task's record over
+// them. Everything this file reads is the plain `AppState` the bridge pushes in, and
 // everything it does is a plain `Command` dispatched back out: it imports no Effect and
 // holds no runtime, which is what makes it testable with `testRender` and plain data.
 
-import { createMemo, createSignal, createEffect, untrack, For, Show } from "solid-js";
-import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core";
+import { createEffect, createMemo, createSignal, untrack, Show } from "solid-js";
+import type { ScrollBoxRenderable } from "@opentui/core";
 import { onBlur, onFocus, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/solid";
 import {
-  footerActions,
-  ALL_KEYS,
-  clampSelection,
-  nextQuestionId,
-  runsRows,
-  sessionLocal,
-  detailFor,
+  actionsFor,
   emptyStateOf,
-  footerKeys,
-  keyboardOn,
-  keyIntent,
-  matching,
-  needsYouStatus,
-  optionWindow,
-  selectableRows,
-  statusColour,
+  menuFor,
+  olderFinished,
+  runRowId,
   viewRows,
-  VIEWS,
-  type Action,
   type AppState,
-  type Asking,
   type Command,
-  type Filter,
-  type Keyboarding,
+  type Keypress,
+  type MenuItem,
   type Row,
   type ViewName,
 } from "./state";
-import { commitsBehind } from "../workspace";
+import { headerSentence, sectionsOf, type Question, type TaskView } from "../board";
 import { truncated } from "../views";
-import { Detail } from "./detail";
+import { columnsFor, C } from "./sections";
+import { Board, Button, CardMenu, KeyHelp, type Batch, type Decide, type Where } from "./Board";
+import { Pane } from "./Pane";
+import { Drawer, type GateCut, type Tab } from "./Drawer";
 import { ProposalPreview } from "./live";
 import { usePasteInto } from "./paste";
 import { Flow } from "./Flow";
 import type { Pending } from "./prompts";
 
-/**
- * Below this the detail cannot be a column and stays out of the way as a full-width
- * overlay instead. A Collie tab split beside an editor is around 60 columns, and a
- * 30-column list next to a 30-column detail is two unreadable columns rather than one
- * readable one.
- */
-const DETAIL_COLUMN_MIN = 72;
-
-/**
- * Rows the Selection's buttons get. Two, because a finished merge-request run offers
- * five of them and they do not fit one line of the 60 columns a Collie tab beside an
- * editor has — and a button clipped in half is an action offered nowhere, since the
- * footer's key list stopped repeating them when they moved here.
- */
-const ACTION_ROWS = 2;
-
-/**
- * Rows the key list gets. One: the line is the panel's own keys and three globals, and
- * every other key lives behind `?` — which is what made the important ones readable.
- */
-const KEY_ROWS = 1;
-
-/**
- * The footer's own rows — its border, its buttons, its keys and what the tab last said.
- * Summed rather than stated, because a footer whose box and whose children disagree clips
- * one of them, and it is what a question is anchored above.
- */
-const FOOTER_HEIGHT = 2 + ACTION_ROWS + KEY_ROWS + 1;
-
-/** A question's border, its header and its footer: what it costs before its options. */
-const QUESTION_CHROME = 4;
-
-/**
- * A row's columns, as fixed widths rather than shares of the pane. A Collie tab on an
- * ultrawide pane is 320 columns: a title at 45%, a flexing detail and a right-pinned age
- * put a canyon of whitespace between the three things being compared, and the tree's
- * indent left the glyphs in one column and the text in three.
- *
- * So: a gutter that carries the marker, the indent and the glyph, then three columns
- * that start in the same place on every row whatever its depth. Their widths are what
- * caps a row, so a wide pane gives the list air rather than a canyon.
- */
-const GUTTER = 4;
-const TITLE = 48;
-/** What a row's marks get: `⚠ manual` is the longest of them, plus a space. */
-const MARKS = 10;
-const DOING = 62;
-const AGE = 8;
-/**
- * What the title keeps on a pane too narrow for the fixed widths — a Collie tab beside
- * the detail panel at 100 columns has 68 for the list, and the three columns want 122.
- * The title shrinks to this, less its own indent, and the detail takes whatever is left,
- * so the columns still line up with each other at every width and every depth.
- */
-const TITLE_FLOOR = 30;
-/** Two columns of indent per level of the tree, drawn inside the gutter. */
-const INDENT = 2;
-
-const DIM = "#8a8a8a";
-const ACCENT = "#7aa2f7";
-/** The wide scope, in the nav: the board is showing more than this workspace. */
-const WIDE = "#e0af68";
-/** An opaque ground for anything drawn over the list. Named colours and "default" are
- * not colours opentui parses: it falls through to magenta. */
-const GROUND = "#1a1b26";
+const PRINTABLE = /^[\x20-\x7e]$/;
+/** How far in from the right the header's own menu opens, so it sits under its button. */
+const MENU_GAP = 28;
 
 export interface AppProps {
   state: () => AppState;
@@ -116,38 +43,47 @@ export interface AppProps {
    */
   pending?: () => Pending | null;
   dispatch: (command: Command) => void;
+  /** The brand mark's file, for a terminal that can draw one. Absent in a test. */
+  logo?: string;
 }
 
 export function App(props: AppProps) {
   const renderer = useRenderer();
   const dimensions = useTerminalDimensions();
-  const [selected, setSelected] = createSignal<string | null>(null);
-  // The filter survives leaving the keyboard in it — `/` narrows the list so a row can
-  // then be acted on, so Enter stops typing and keeps the text; only Esc drops it.
-  const [filter, setFilter] = createSignal("");
-  const [typing, setTyping] = createSignal(false);
-  /**
-   * Unsent answers, per Run and Choice. One shared `asking` used to follow the cursor:
-   * moving to a second waiting Run showed the text typed at the first, and answering
-   * either sent whatever was on screen. Keyed by the Choice's own id, so a question
-   * replaced under the human gets a blank field rather than the old question's draft.
-   * For this board's lifetime only — an unsent answer is not a Run's business.
-   */
-  const [drafts, setDrafts] = createSignal<Record<string, Asking>>({});
-  const [editingKey, setEditing] = createSignal<{ key: string; value: string } | null>(null);
+  const [query, setQuery] = createSignal("");
+  const [searching, setSearching] = createSignal(false);
+  /** The Task whose record is open, by its own id: a Run finishing must not close it. */
+  const [openId, setOpenId] = createSignal<string | null>(null);
+  /** Which part of that record is being read. A new record opens on Summary. */
+  const [tab, setTab] = createSignal<Tab>("summary");
+  /** Remembered for this tab's life only: which day's finished work someone opened is
+      not a Run's business. */
+  const [finishedOpen, setFinishedOpen] = createSignal(false);
+  const [waitingOlderOpen, setWaitingOlderOpen] = createSignal(false);
+  const [drawer, setDrawer] = createSignal<ScrollBoxRenderable>();
+  /** Answers being composed, by run and question: the tab's, until someone sends one. */
+  const [drafts, setDrafts] = createSignal<Readonly<Record<string, string>>>({});
+  const [typingTo, setTypingTo] = createSignal<string | null>(null);
+  /** What the open menu offers and where it was asked for: a card's, or the header's. */
+  const [menuOn, setMenuOn] = createSignal<{ items: ReadonlyArray<MenuItem>; at: Where } | null>(
+    null,
+  );
+  /** How many pages of this checkout's earlier finished runs someone has asked for. */
+  const [olderPages, setOlderPages] = createSignal(0);
+  /** The setting being typed into, and what has been typed at it. */
+  const [editing, setEditing] = createSignal<{ key: string; typed: string } | null>(null);
+  /** The cards picked with shift, by Task: what the bar at the foot acts on. */
+  const [picked, setPicked] = createSignal<ReadonlySet<string>>(new Set());
+  /** A gate's list being cut down, by the gate's own id: the tab's, until it is sent. */
+  const [cutting, setCutting] = createSignal<{
+    id: string;
+    kept: ReadonlyArray<string>;
+  } | null>(null);
+  /** What is being steered, and what has been typed at it so far. */
+  const [steering, setSteering] = createSignal(false);
+  const [steers, setSteers] = createSignal<Readonly<Record<string, string>>>({});
+  const [toast, setToast] = createSignal<string | null>(null);
   const [helping, setHelping] = createSignal(false);
-  /** What this board itself has to say, over whatever the last command said. */
-  const [ownNote, setOwnNote] = createSignal<string | null>(null);
-  /**
-   * Everything this board sends out goes through here, so that what the board itself
-   * last said cannot outlive it: "no unanswered question" must not sit over the result
-   * of the next refresh, answer, view change or Selection.
-   */
-  const tell = (command: Command) => {
-    setOwnNote(null);
-    props.dispatch(command);
-  };
-  const [panel, setPanel] = createSignal<ScrollBoxRenderable>();
 
   /**
    * Mouse reporting only while the pane has focus. herdr is a multiplexer: with mouse
@@ -161,139 +97,281 @@ export function App(props: AppProps) {
     renderer.useMouse = false;
   });
 
-  const all = createMemo(() => viewRows(props.state()));
-  /** The board's rows, whatever View is showing: what `n` reaches a question through. */
-  const board = createMemo(() => runsRows(props.state()));
-  // `matching`, not a plain filter: the rows are nested by the time they get here, so a
-  // run whose agent matched has to come with it and the board's order has to survive.
-  const rows = createMemo(() => matching(all(), filter()));
-  // What the cursor may rest on, which is every row but the group headers.
-  const selectable = createMemo(() => selectableRows(rows()));
+  const tasks = () => props.state().tasks;
+  const sections = createMemo(() => sectionsOf(tasks(), query()));
+  // Over every Task rather than what the search left: a decision a query is hiding is
+  // still waiting on the human.
+  const header = createMemo(() => headerSentence(tasks(), props.state().now));
+  const columns = () => columnsFor(dimensions().width, props.state().density);
+  const open = () => tasks().find((view) => view.id === openId()) ?? null;
 
-  // Clamped against the list as it was, so a run finishing under the cursor leaves the
-  // row that took its place selected rather than jumping to the top.
-  let previous: Row[] = [];
-  createEffect(() => {
-    const next = selectable();
-    setSelected(clampSelection(untrack(selected), previous, next));
-    previous = next;
-  });
-
-  // What is selected decides what the producers read, so a change in it is dispatched
-  // rather than kept here: that is what fills the detail panel and fetches the one
-  // merge request the Selection points at.
+  // What is open decides what the producers read, so it is dispatched rather than kept
+  // here: that is what fills the drawer's record.
   let told: string | null = null;
   createEffect(() => {
-    const id = selected();
+    const view = open();
+    const id = view === null ? null : runRowId(view.run);
     if (id === told) return;
     told = id;
-    tell({ _tag: "Select", id });
-  });
-
-  const current = (): Row | null => selectable().find((r) => r.id === selected()) ?? null;
-
-  // From the top for a new Selection: how far the last one had been scrolled says
-  // nothing about this one, and a long review left the next row's panel opened halfway
-  // down somebody else's.
-  createEffect(() => {
-    selected();
-    panel()?.scrollTo(0);
-  });
-  const detail = () => detailFor(props.state(), current());
-  /**
-   * Whether anything on screen was cut short, which is the only thing `m` can act on.
-   * The review and the plan's spec are read at the same cap and paged by the same key,
-   * so either being short is what makes the key worth offering.
-   */
-  const cutShort = () => [detail()?.review, detail()?.plan?.spec].some(truncated);
-  /**
-   * The detail panel's own keys. They act on the selected Run's detail, so they are
-   * offered only where there is one and only where there is something in it to act on —
-   * `t` on a Settings row used to arm tailing for whatever Run was selected next, and `m`
-   * re-read a review that was not cut short.
-   */
-  const panelKeys = () => [
-    // Enter is not one of the row's buttons: it is the same key on every row that
-    // points at anything, and a sixth button did not fit the two rows they get.
-    ...(current()?.jump ? ["Enter go to it"] : []),
-    ...(current()?.runId ? ["t log tail"] : []),
-    ...(cutShort() ? ["m read more"] : []),
-  ];
-  // The question belongs to the selected run, so a second waiting run is answerable
-  // by selecting it — the board used to answer only the first one asking.
-  const question = () => current()?.choice ?? null;
-  const draftKey = () => {
-    const asked = question();
-    const runId = current()?.runId;
-    return asked && runId ? `${runId}\u0000${asked.id}` : null;
-  };
-  const asking = (): Asking => {
-    const key = draftKey();
-    return (key === null ? null : drafts()[key]) ?? { index: 0, typed: "" };
-  };
-  const setAsking = (next: Asking) => {
-    const key = draftKey();
-    if (key !== null) setDrafts((was) => ({ ...was, [key]: next }));
-  };
-  /** The merge request URL on screen, which is the only thing `c` can copy. */
-  const mrUrl = () => {
-    const mr = detail()?.mr;
-    return mr?._tag === "Details" ? mr.url : null;
-  };
-
-  const move = (by: number) => {
-    const list = selectable();
-    if (list.length === 0) return;
-    const at = list.findIndex((r) => r.id === selected());
-    setSelected(list[Math.min(list.length - 1, Math.max(0, at + by))]!.id);
-  };
-
-  const answer = (value: string) => {
-    const key = draftKey();
-    const asked = question();
-    const runId = current()?.runId;
-    // The same three facts the draft key is made of, so there is one condition rather
-    // than two spellings of it.
-    if (key === null || !asked || !runId) return;
-    tell({ _tag: "Answer", runId, choiceId: asked.id, value });
-    // The draft dies with the Choice it was for, and only that one: a Run answered
-    // here must not clear what is half-typed against another Run's question.
-    setDrafts((was) => {
-      const { [key]: _sent, ...rest } = was;
-      return rest;
+    props.dispatch({
+      _tag: "Select",
+      id,
+      on: view === null ? null : { task: view.id, run: view.run, name: view.name },
     });
-  };
+  });
+
+  // A new record opens on Summary with the keyboard back on the board: which tab the last
+  // one was left on says nothing about this one.
+  createEffect(() => {
+    openId();
+    setSteering(false);
+    setTab("summary");
+  });
+
+  // And from the top, for a new record or a new tab: how far the last one had been
+  // scrolled says nothing about what is in the box now.
+  createEffect(() => {
+    openId();
+    tab();
+    drawer()?.scrollTo(0);
+  });
 
   /**
-   * The next unanswered question, selected where it is. Over every row of this Scope
-   * rather than what the filter left — a hidden question is still unanswered — so the
-   * filter is dropped when it is what stands between the human and the row.
-   *
-   * Over the board's rows rather than the showing View's, and it switches to the Runs
-   * View to get there: "no unanswered question" from Settings while a Run is asking is
-   * false, and a key that answers by naming the View the human should have been on
-   * instead is a key that could have taken them there. The Selection is set after the
-   * View is asked for, which is the order the clamp allows — it only re-decides when the
-   * rows change, and by then the row this names is among them.
+   * The run's log is read only while the Log tab is showing it. What was asked for is
+   * remembered rather than read back off the record: the read lands a tick after the
+   * dispatch, and asking again in between would switch it off.
    */
-  const goToQuestion = () => {
-    const target = nextQuestionId(board(), selected());
-    if (target === null) return setOwnNote("no unanswered question");
-    setOwnNote(null);
-    if (props.state().view !== "runs") tell({ _tag: "ShowView", view: "runs" });
-    if (!selectable().some((row) => row.id === target)) {
-      setFilter("");
-      setTyping(false);
-    }
-    setSelected(target);
-  };
-
-  const showView = (by: number) => {
-    const at = VIEWS.findIndex((v) => v.name === props.state().view);
-    tell({ _tag: "ShowView", view: VIEWS[(at + by + VIEWS.length) % VIEWS.length]!.name });
-  };
+  let tailing = false;
+  createEffect(() => {
+    const wanted = openId() !== null && tab() === "log";
+    if (wanted === tailing) return;
+    tailing = wanted;
+    props.dispatch({ _tag: "ToggleTail" });
+  });
 
   const flow = () => props.pending?.() ?? null;
+
+  /**
+   * Everything a card, its menu or the drawer asks for. The two that open the drawer are
+   * answered here: which record is on screen is the tab's own business, not the bridge's.
+   */
+  /**
+   * Closed on the next tick, not in the press: a terminal that reports a press twice — two
+   * mouse protocols, or a press and a release both read as one — sends the second while
+   * the menu is still on screen, where the menu's backdrop takes it instead of the card
+   * that was under the item.
+   */
+  const closeMenu = () => {
+    queueMicrotask(() => setMenuOn(null));
+  };
+  const act = (command: Command) => {
+    closeMenu();
+    setToast(null);
+    if (command._tag === "EditSetting") return setEditing({ key: command.key, typed: "" });
+    if (command._tag === "OpenRecord") return setOpenId(command.id);
+    if (command._tag === "OpenSteer") {
+      setOpenId(command.id);
+      return focusSteer();
+    }
+    props.dispatch(command);
+  };
+
+  /**
+   * What the last command said it did. It goes when the human does anything else rather
+   * than on a clock: a line that vanishes while it is being read says nothing, and this
+   * file holds no runtime to time one with.
+   */
+  createEffect(() => setToast(props.state().note));
+
+  const OVERFLOW: ReadonlyArray<MenuItem> = [
+    { key: "", label: "Workflows", command: { _tag: "ShowView", view: "workflows" } },
+    { key: "", label: "Settings", command: { _tag: "ShowView", view: "settings" } },
+  ];
+  const openOverflow = (at: Where = { x: dimensions().width - MENU_GAP, y: 1 }) =>
+    setMenuOn({ items: OVERFLOW, at });
+
+  const older = () => olderFinished(props.state().history, sections().finished, olderPages());
+  const askForOlder = () => {
+    setOlderPages((pages) => pages + 1);
+    props.dispatch({ _tag: "ShowOlder" });
+  };
+
+  /** Which of Workflows and Settings is filling the pane, or null for the board. */
+  const pane = (): ViewName | null => {
+    const view = props.state().view;
+    return view === "runs" ? null : view;
+  };
+  const toBoard = () => {
+    setEditing(null);
+    props.dispatch({ _tag: "ShowView", view: "runs" });
+  };
+  const press = (row: Row) => {
+    const action = actionsFor(row, props.state().filter)[0];
+    if (action !== undefined) act(action.command);
+  };
+
+  /**
+   * Tab moves the keyboard on, through whatever is on screen: the board, the record over
+   * it, and the one menu that leads off the board. It used to move between views, and
+   * there are no views left to move between.
+   */
+  const onwards = () => {
+    if (menuOn() !== null) return setMenuOn(null);
+    if (openId() !== null && !steering()) return setSteering(true);
+    setSteering(false);
+    openOverflow();
+  };
+
+  /** Whether the document on screen was cut short, which is the one thing `m` acts on. */
+  const cutShort = () => {
+    const detail = props.state().detail;
+    if (tab() === "review") return truncated(detail?.review);
+    return tab() === "plan" && truncated(detail?.plan?.spec);
+  };
+
+  /** The keyboard is in one field at a time: taking it is taking it off the last one. */
+  const focusSearch = () => {
+    setTypingTo(null);
+    setSteering(false);
+    setSearching(true);
+  };
+  const focusAnswer = (question: Question) => {
+    setSearching(false);
+    setSteering(false);
+    setTypingTo(draftKey(question));
+  };
+  const focusSteer = () => {
+    setSearching(false);
+    setTypingTo(null);
+    setSteering(true);
+  };
+
+  const steerDraft = () => (openId() === null ? "" : (steers()[openId()!] ?? ""));
+  const editSteer = (edit: (was: string) => string) => {
+    const id = openId();
+    if (id !== null) setSteers((was) => ({ ...was, [id]: edit(was[id] ?? "") }));
+  };
+  const sendSteer = () => {
+    const view = open();
+    const text = steerDraft().trim();
+    if (view === null || text === "") return;
+    setSteering(false);
+    setSteers((was) => ({ ...was, [view.id]: "" }));
+    props.dispatch({ _tag: "Steer", runId: view.run, text });
+  };
+
+  const draftKey = (question: Question) => `${question.run}:${question.id}`;
+  const editDraft = (question: Question, edit: (was: string) => string) =>
+    setDrafts((was) => ({ ...was, [draftKey(question)]: edit(was[draftKey(question)] ?? "") }));
+
+  const decide: Decide = {
+    answer: (question, value) => {
+      if (value === "") return;
+      setTypingTo(null);
+      props.dispatch({ _tag: "Answer", runId: question.run, choiceId: question.id, value });
+    },
+    confirm: (proposal) =>
+      props.dispatch({ _tag: "ConfirmProposal", id: proposal.id, hash: proposal.hash }),
+    decline: (proposal) => props.dispatch({ _tag: "DeclineProposal", id: proposal.id }),
+    approve: (gate, verifications) => {
+      setCutting(null);
+      props.dispatch({
+        _tag: "Answer",
+        runId: gate.run,
+        choiceId: gate.id,
+        value: verifications === null ? "approve" : `approve:${verifications.join(",")}`,
+      });
+    },
+    skip: (gate) => {
+      setCutting(null);
+      props.dispatch({ _tag: "Answer", runId: gate.run, choiceId: gate.id, value: "skip" });
+    },
+    edit: (gate) => {
+      const holding = tasks().find(
+        (view) => view.decision?.kind === "gate" && view.decision.id === gate.id,
+      );
+      if (holding !== undefined) setOpenId(holding.id);
+      setCutting({ id: gate.id, kept: gate.verifications });
+    },
+    draft: (question) => drafts()[draftKey(question)] ?? "",
+    typing: (question) => typingTo() === draftKey(question),
+    typeHere: focusAnswer,
+  };
+
+  /**
+   * The stops the board is holding, as the one line they are worth. Until the grace is
+   * up nothing has been sent, so this is what Undo takes back — and when it runs out the
+   * bridge clears the marks and the command's own note takes this line's place.
+   */
+  const goingNote = () => {
+    const going = props.state().stopping;
+    if (going.length === 0) return null;
+    if (going.length > 1) return `Stopped ${going.length} runs`;
+    return `Stopped ${tasks().find((view) => view.run === going[0])?.name ?? going[0]}`;
+  };
+
+  const batch: Batch = {
+    stopping: (view) => props.state().stopping.includes(view.run),
+    picked: (view) => picked().has(view.id),
+    onPick: (view) =>
+      setPicked((was) => {
+        const next = new Set(was);
+        if (!next.delete(view.id)) next.add(view.id);
+        return next;
+      }),
+  };
+
+  /** What is picked, in the board's own order, and whether there is anything to stop. */
+  const stoppable = (view: TaskView) =>
+    menuFor(view).some((item) => item.command._tag === "StopRun");
+  const pickedViews = () => tasks().filter((view) => picked().has(view.id));
+  const stopPicked = () => {
+    for (const view of pickedViews())
+      if (stoppable(view)) props.dispatch({ _tag: "StopRun", runId: view.run });
+    setPicked(new Set<string>());
+  };
+
+  /** The list the open record's gate is having cut down, where that is what is going on. */
+  const cut = (): GateCut | null => {
+    const gate = open()?.decision;
+    const on = cutting();
+    if (gate?.kind !== "gate" || on === null || on.id !== gate.id) return null;
+    return {
+      verifications: gate.verifications,
+      kept: on.kept,
+      // Rebuilt from the gate's own order, so the list reads as the gate wrote it.
+      toggle: (name) =>
+        setCutting((was) =>
+          was === null
+            ? was
+            : {
+                id: was.id,
+                kept: was.kept.includes(name)
+                  ? was.kept.filter((kept) => kept !== name)
+                  : gate.verifications.filter((one) => was.kept.includes(one) || one === name),
+              },
+        ),
+      approve: () => decide.approve(gate, on.kept),
+      cancel: () => setCutting(null),
+    };
+  };
+
+  /** The question the keyboard is in, while the board is still asking it. */
+  const typingInto = (): Question | null => {
+    const at = typingTo();
+    if (at === null) return null;
+    for (const view of tasks()) {
+      const asked = view.decision;
+      if (asked?.kind === "question" && draftKey(asked) === at) return asked;
+    }
+    return null;
+  };
+
+  /** The proposals a card carries: those are answered on the card, not over the board. */
+  const carded = () =>
+    new Set(
+      tasks().flatMap((view) => (view.decision?.kind === "proposal" ? [view.decision.id] : [])),
+    );
 
   /**
    * The proposal on screen, resolved from what is pending rather than from what was
@@ -302,11 +380,8 @@ export function App(props: AppProps) {
    */
   const previewing = () => {
     const id = props.state().previewing;
+    if (id === null || carded().has(id)) return null;
     return props.state().live?.proposals.find((p) => p.id === id) ?? null;
-  };
-  const previewed = () => {
-    const found = previewing();
-    return found === null ? null : { id: found.id, hash: found.content_hash };
   };
   /**
    * A proposal that has just appeared is put on screen. It is the one thing the board
@@ -315,570 +390,253 @@ export function App(props: AppProps) {
    */
   let answered = new Set<string>();
   createEffect(() => {
-    const pending = props.state().live?.proposals ?? [];
+    const onCards = carded();
+    const pending = (props.state().live?.proposals ?? []).filter((p) => !onCards.has(p.id));
     const fresh = pending.find((p) => !answered.has(p.id));
     answered = new Set(pending.map((p) => p.id));
     if (fresh && untrack(() => props.state().previewing) === null) {
-      tell({ _tag: "Preview", id: fresh.id });
+      props.dispatch({ _tag: "Preview", id: fresh.id });
     }
   });
-
-  /**
-   * Everything a row or the footer asks for goes through here. `EditSetting` is the
-   * app's own — it opens the editor rather than writing anything — and every other
-   * command goes to the bridge. One path, so a click and a key cannot mean different
-   * things: they used to, and the click unset the default it offered to set.
-   */
-  const act = (command: Command) => {
-    if (command._tag === "NextQuestion") return goToQuestion();
-    if (command._tag === "EditSetting") {
-      const row = rows().find((r) => r.setting?.key === command.key);
-      if (row?.setting) setEditing({ key: row.setting.key, value: row.setting.value });
-      return;
-    }
-    tell(command);
-  };
-
-  /**
-   * Who has the keyboard, as one value the keys, a paste and the footer all read. They
-   * each used to decide it again from the same four signals, in an order written out by
-   * hand three times — and a paste that disagreed went into a field nobody was looking at.
-   */
-  const keyboard = createMemo<Keyboarding>(() =>
-    keyboardOn({
-      flow: flow() !== null,
-      proposal: previewed(),
-      choice: question(),
-      filtering: typing(),
-      setting: editingKey(),
-    }),
-  );
 
   /** A paste is typing, so it goes to whichever field the keyboard is on. */
   usePasteInto((append) => {
-    const at = keyboard();
-    if (at._tag === "Choice" && at.choice.kind === "ask") {
-      const was = asking();
-      return setAsking({ ...was, typed: append(was.typed) });
+    if (flow() !== null) return;
+    const setting = editing();
+    if (pane() !== null)
+      return setting === null
+        ? undefined
+        : setEditing({ ...setting, typed: append(setting.typed) });
+    if (steering()) return editSteer(append);
+    const asked = typingInto();
+    if (asked !== null) return editDraft(asked, append);
+    if (searching()) setQuery(append);
+  });
+
+  useKeyboard((key: Keypress) => {
+    // The inline launch flow is a question over the whole board: while it is asking,
+    // `q` is a letter of the goal rather than the key that closes the tab.
+    if (flow() !== null) return;
+    setToast(null);
+    if (helping()) return setHelping(false);
+    if (key.name === "tab") return onwards();
+    // A pane fills the board, so the board's own keys are not what is on screen.
+    if (pane() !== null) return typeIntoSetting(key);
+    // Above everything: a human answering a confirmation is answering it, and the keys
+    // behind it act on cards they cannot see.
+    const proposal = previewing();
+    if (proposal !== null) {
+      if (key.name === "return") {
+        return props.dispatch({
+          _tag: "ConfirmProposal",
+          id: proposal.id,
+          hash: proposal.content_hash,
+        });
+      }
+      if (key.name === "escape")
+        return props.dispatch({ _tag: "DeclineProposal", id: proposal.id });
+      return;
     }
-    if (at._tag === "Filter") return setFilter(append);
-    if (at._tag === "Setting") setEditing({ ...at.setting, value: append(at.setting.value) });
+    // A menu is a question about what to do next: the keys beside its items are the
+    // only ones it takes, and Esc is how it is left.
+    const menu = menuOn();
+    if (menu !== null) {
+      if (key.name === "escape") return setMenuOn(null);
+      const pressed = key.name === "return" ? "enter" : key.sequence;
+      const item = menu.items.find((one) => one.key !== "" && one.key === pressed);
+      return item === undefined ? undefined : act(item.command);
+    }
+    if (steering()) return typeIntoSteer(key);
+    // Before the board's own keys: while a card is being typed into, `q` is a letter of
+    // the answer and `/` is not the search.
+    const asked = typingInto();
+    if (asked !== null) return typeIntoAnswer(asked, key);
+    if (searching()) return typeIntoSearch(key);
+    if (key.name === "escape") {
+      if (openId() !== null) return setOpenId(null);
+      return setQuery("");
+    }
+    // The rest of a document the record cut short, a cap at a time.
+    if (key.sequence === "m" && cutShort()) return props.dispatch({ _tag: "MoreReview" });
+    if (key.sequence === "/") return focusSearch();
+    if (key.sequence === "?") return setHelping(true);
+    if (key.name === "q") return props.dispatch({ _tag: "Quit" });
+    if (key.name === "r") return props.dispatch({ _tag: "Refresh" });
   });
 
   /**
-   * One keypress, as one decision made elsewhere. `keyboardOn` above says who has the
-   * keyboard; `keyIntent` says what this key means to them; this performs it. Which key
-   * does what is a unit test over there rather than the order of early returns in here,
-   * and the two intents that are genuinely a renderer's job — scrolling the panel,
-   * putting a URL on the clipboard — are the only reason it returns intents at all.
+   * A pane's keys. A setting is typed into from empty rather than amended: these are
+   * short values, and Enter on an empty field is what unsets one.
    */
-  useKeyboard((key) => {
-    const intent = keyIntent(
-      {
-        on: keyboard(),
-        view: props.state().view,
-        helping: helping(),
-        asking: asking(),
-        filter: props.state().filter,
-        query: filter(),
-        scrollable: panel() !== undefined,
-        row: current(),
-        rows: all(),
-        cutShort: cutShort(),
-        mrUrl: mrUrl(),
-      },
-      key,
-    );
-    if (intent === null) return;
-    switch (intent._tag) {
-      case "Help":
-        return setHelping(intent.open);
-      case "Answered":
-        setAsking(intent.asking);
-        if (intent.value !== null) answer(intent.value);
-        return;
-      case "Filtering":
-        setFilter(intent.filter);
-        return setTyping(intent.typing);
-      case "Editing":
-        return setEditing(intent.editing);
-      case "Submitted":
-        act(intent.command);
-        // The one field the key can submit is closed by submitting it: the value is
-        // written, so there is nothing left being typed.
-        setEditing(null);
-        return;
-      case "NextQuestion":
-        return goToQuestion();
-      case "Move":
-        return move(intent.by);
-      case "ShowViewBy":
-        return showView(intent.by);
-      case "Scroll":
-        return panel()?.scrollBy(intent.by, intent.unit === "page" ? "viewport" : "absolute");
-      case "Copy":
-        return renderer.copyToClipboardOSC52(intent.text);
-      case "Do":
-        return act(intent.command);
+  const typeIntoSetting = (key: Keypress) => {
+    const at = editing();
+    if (at === null) return key.name === "escape" ? toBoard() : undefined;
+    if (key.name === "escape") return setEditing(null);
+    if (key.name === "return") {
+      setEditing(null);
+      return props.dispatch({ _tag: "SetDefault", key: at.key, value: at.typed });
     }
-  });
+    if (key.name === "backspace") return setEditing({ ...at, typed: at.typed.slice(0, -1) });
+    if (PRINTABLE.test(key.sequence)) setEditing({ ...at, typed: at.typed + key.sequence });
+  };
 
-  const detailAsColumn = () => dimensions().width >= DETAIL_COLUMN_MIN;
+  /** The same as an answer's field: Esc leaves it and keeps what was typed. */
+  const typeIntoSteer = (key: Keypress) => {
+    const id = openId();
+    if (id === null) return setSteering(false);
+    if (key.name === "escape") return setSteering(false);
+    if (key.name === "return") return sendSteer();
+    if (key.name === "backspace") return editSteer((was) => was.slice(0, -1));
+    if (PRINTABLE.test(key.sequence)) editSteer((was) => was + key.sequence);
+  };
+
+  /** Esc leaves the field and keeps the draft; only sending it empties the card. */
+  const typeIntoAnswer = (question: Question, key: Keypress) => {
+    if (key.name === "escape") return setTypingTo(null);
+    if (key.name === "return") return decide.answer(question, decide.draft(question).trim());
+    if (key.name === "backspace") return editDraft(question, (was) => was.slice(0, -1));
+    if (PRINTABLE.test(key.sequence)) editDraft(question, (was) => was + key.sequence);
+  };
+
+  /**
+   * The search keeps what was typed when the keyboard leaves it: `/` narrows the board so
+   * a card can then be clicked, so Enter stops typing and keeps the text; only Esc drops
+   * it.
+   */
+  const typeIntoSearch = (key: Keypress) => {
+    if (key.name === "escape") {
+      setQuery("");
+      return setSearching(false);
+    }
+    if (key.name === "return") return setSearching(false);
+    if (key.name === "backspace") return setQuery((was) => was.slice(0, -1));
+    if (PRINTABLE.test(key.sequence)) setQuery((was) => was + key.sequence);
+  };
 
   return (
     <box style={{ flexDirection: "column", width: "100%", height: "100%" }}>
-      {/* Every key, over everything: the footer offers the Selection's own and three
-          globals, and this is where the rest of them are findable. */}
-      <Show when={helping()}>
-        <Help />
-      </Show>
       {/* The launch flow, inline: the same component the popup pane draws. */}
-      <Show when={flow() && !helping()}>
+      <Show when={flow()}>
         <Flow pending={flow()!} />
       </Show>
-      <Show when={flow() === null && !helping()}>
-        <Nav
-          view={props.state().view}
-          filter={props.state().filter}
-          groups={props.state().wide?.groups.length ?? 0}
-          repo={props.state().board.repo}
-          behind={props.state().board.behind}
-          onShow={(view) => props.dispatch({ _tag: "ShowView", view })}
-          onNewRun={() => props.dispatch({ _tag: "OpenMode", mode: "pick" })}
+      <Show when={flow() === null && pane() !== null}>
+        <Pane
+          title={pane() === "workflows" ? "Workflows" : "Settings"}
+          rows={viewRows(props.state())}
+          empty={emptyStateOf(pane()!)}
+          editing={editing()}
+          onPress={press}
+          onClose={toBoard}
         />
       </Show>
-      <Show when={!helping()}>
+      <Show when={flow() === null && pane() === null}>
         <box style={{ flexDirection: "row", flexGrow: 1 }}>
-          <List
-            title={VIEWS.find((v) => v.name === props.state().view)!.title}
-            rows={rows()}
-            empty={filter() === "" ? emptyStateOf(props.state().view) : "nothing matches"}
-            selected={selected()}
-            onSelect={setSelected}
+          <Board
+            sections={sections()}
+            columns={columns()}
+            header={header()}
+            logo={props.logo ?? null}
+            query={query()}
+            searching={searching()}
+            onSearch={focusSearch}
+            finishedOpen={finishedOpen()}
+            open={openId()}
+            onOpen={(view) => {
+              setPicked(new Set<string>());
+              setOpenId((was) => (was === view.id ? null : view.id));
+            }}
+            onMenu={(view, at) => setMenuOn({ items: menuFor(view), at })}
+            onAct={act}
+            older={older()}
+            onOlder={askForOlder}
+            onOverflow={openOverflow}
+            decide={decide}
+            batch={batch}
+            onToggleFinished={() => setFinishedOpen((was) => !was)}
+            waitingOlderOpen={waitingOlderOpen()}
+            onToggleWaitingOlder={() => setWaitingOlderOpen((was) => !was)}
+            now={props.state().now}
+            width={dimensions().width}
+            onNewRun={() => props.dispatch({ _tag: "OpenMode", mode: "pick" })}
+            onClearQuery={() => setQuery("")}
           />
-          <Show when={detailAsColumn()}>
-            <Detail
-              ref={setPanel}
-              row={current()}
-              detail={detail()}
+          {/* Over the board, never instead of it: reading one Task must not cost the
+              overview of every other one. */}
+          <Show when={open()}>
+            <Drawer
+              ref={setDrawer}
+              view={open()!}
+              detail={props.state().detail}
               live={props.state().live}
-              cwd={props.state().board.cwd}
-              overlay={false}
-              dispatch={props.dispatch}
+              tab={tab()}
+              onTab={setTab}
+              cut={cut()}
+              onAct={act}
+              steer={{
+                text: steerDraft(),
+                typing: steering(),
+                onTypeHere: focusSteer,
+                onSend: sendSteer,
+              }}
+              onClose={() => setOpenId(null)}
             />
           </Show>
         </box>
-        <Show when={!detailAsColumn()}>
-          <Detail
-            ref={setPanel}
-            row={current()}
-            detail={detail()}
-            live={props.state().live}
-            cwd={props.state().board.cwd}
-            overlay
-            dispatch={props.dispatch}
-          />
-        </Show>
-      </Show>
-      {/* Over the bottom of the list, not among its rows and not beside them: a question
-          spliced between rows moved every row below the one asking, and a region that
-          took rows from the list changed how much of it there was to look at. Drawn on
-          top, so the list's own share of the pane is the same whether or not a Run is
-          asking anything. */}
-      <Show when={question() && !helping()}>
-        <Question choice={question()!} asking={asking()} dispatch={props.dispatch} />
       </Show>
       {/* What a confirmation is consent to, over everything: a human answering one is
-          answering it, and the keys behind it act on rows they cannot see. */}
-      <Show when={previewing() && !helping()}>
+          answering it, and the keys behind it act on cards they cannot see. */}
+      <Show when={previewing()}>
         <ProposalPreview proposal={previewing()!} />
       </Show>
-      <Show when={!helping()}>
-        <Footer
-          row={current()}
-          dispatch={act}
-          on={keyboard()}
-          boardFilter={props.state().filter}
-          panel={panelKeys()}
-          note={ownNote() ?? props.state().note}
-          needsYou={needsYouStatus(rows(), selected())}
-          questions={board().some((row) => row.choice)}
-          filter={filter()}
-          matched={filter() === "" ? null : rows().length}
+      {/* What a selection can do that a card cannot: the same stop, once, for all of it. */}
+      <Show when={picked().size > 1}>
+        <box style={{ flexDirection: "row", height: 1, flexShrink: 0, backgroundColor: C.line }}>
+          <text fg={C.text}>{` ${picked().size} selected `}</text>
+          {/* Absent where nothing picked can be stopped: a button that would do nothing
+              is worse than no button. */}
+          <Show when={pickedViews().some(stoppable)}>
+            <text
+              fg={C.amber}
+              bg={C.strong}
+              style={{ marginRight: 1 }}
+              onMouseDown={() => stopPicked()}
+            >
+              {" Stop all "}
+            </text>
+          </Show>
+          <Button label="Clear" onPress={() => setPicked(new Set())} />
+        </box>
+      </Show>
+      <Show when={goingNote() ?? toast()}>
+        <box style={{ flexDirection: "row", height: 1, flexShrink: 0 }}>
+          <text fg={C.text} bg={C.selected} style={{ flexGrow: 1 }}>
+            {` ${goingNote() ?? toast()} `}
+          </text>
+          {/* Only while nothing has been sent: an undo offered after the fact would be
+              a button that cannot do what it says. */}
+          <Show when={goingNote() !== null}>
+            <text
+              fg={C.ground}
+              bg={C.blue}
+              onMouseDown={() => props.dispatch({ _tag: "UndoStop" })}
+            >
+              {" Undo "}
+            </text>
+          </Show>
+        </box>
+      </Show>
+      <Show when={helping()}>
+        <KeyHelp onClose={() => setHelping(false)} />
+      </Show>
+      <Show when={menuOn()}>
+        <CardMenu
+          items={menuOn()!.items}
+          at={menuOn()!.at}
+          pane={dimensions()}
+          onAct={act}
+          onClose={closeMenu}
         />
       </Show>
-    </box>
-  );
-}
-
-/**
- * Every key, over the whole pane. A full screen rather than a corner, because the point
- * is to be readable: the footer can only ever offer what the Selection can be asked for,
- * and this is where a key that is not on that line is findable.
- */
-/**
- * How wide the key column is: two spaces of indent, then `PgUp/PgDn` — the longest of
- * them — and one space before the meaning, so no key ever runs into its own text.
- */
-const KEY_WIDTH = 12;
-
-/**
- * One column of the help overlay. The meaning is given an explicit width rather than
- * left to flex: a `text` only clips at a width it was told, so relying on the column to
- * shrink had the two of them overdrawing each other at a narrow pane.
- */
-function HelpColumn(props: { keys: ReadonlyArray<{ key: string; what: string }>; width: number }) {
-  return (
-    <box style={{ flexDirection: "column", width: props.width }}>
-      <For each={props.keys}>
-        {(entry) => (
-          <box style={{ flexDirection: "row", height: 1 }}>
-            <text style={{ width: KEY_WIDTH }} fg={ACCENT}>
-              {`  ${entry.key}`}
-            </text>
-            <text style={{ width: Math.max(0, props.width - KEY_WIDTH), height: 1 }} fg={DIM}>
-              {entry.what}
-            </text>
-          </box>
-        )}
-      </For>
-    </box>
-  );
-}
-
-function Help() {
-  const dimensions = useTerminalDimensions();
-  const half = Math.ceil(ALL_KEYS.length / 2);
-  /** Inside the border, and halved: the two columns share whatever the pane gives. */
-  const column = () => Math.floor((dimensions().width - 2) / 2);
-  return (
-    <box border borderColor={ACCENT} title="Keys" style={{ flexDirection: "column", flexGrow: 1 }}>
-      {/* An explicit height, because the columns are the only thing that says how tall
-          this is, and the hint below has to sit under them rather than beside them. */}
-      <box style={{ flexDirection: "row", height: half }}>
-        <HelpColumn keys={ALL_KEYS.slice(0, half)} width={column()} />
-        <HelpColumn keys={ALL_KEYS.slice(half)} width={column()} />
-      </box>
-      <text fg={DIM}>{"  any key closes this"}</text>
-    </box>
-  );
-}
-
-/**
- * The nav names every View and switches between them: clicking one asks for it, and so
- * does `Tab`. The one showing is bright, the rest dim.
- */
-function Nav(props: {
-  view: ViewName;
-  /** What the Runs view is filtered to, and how many groups are in an unfiltered one. */
-  filter: Filter;
-  groups: number;
-  repo: string;
-  /** How far behind its remote this installation is, where that is worth saying. */
-  behind: number | null;
-  onShow: (view: ViewName) => void;
-  onNewRun: () => void;
-}) {
-  /** Which scope, with the count of what is in it once that board has been read. */
-  const scope = () => {
-    if (sessionLocal(props.filter)) return "  local";
-    return props.groups > 0 ? `  all · ${props.groups} workspace(s)` : "  all";
-  };
-  return (
-    <box style={{ flexDirection: "row", height: 1 }}>
-      <text fg={ACCENT}>{`\u{1F415} ${props.repo}  `}</text>
-      <For each={VIEWS}>
-        {(v) => (
-          <text
-            fg={v.name === props.view ? "#ffffff" : DIM}
-            onMouseDown={() => props.onShow(v.name)}
-          >
-            {v.name === props.view ? `[${v.title}] ` : `${v.title} `}
-          </text>
-        )}
-      </For>
-      {/* The launch flow, without a popup: `p` does the same thing from the keyboard,
-          and like `p` it belongs to the board of this workspace — a run starts in this
-          checkout, which is not what a board of every workspace is about. */}
-      <Show when={sessionLocal(props.filter)}>
-        <text fg={ACCENT} onMouseDown={() => props.onNewRun()}>
-          {"  ＋ New run"}
-        </text>
-      </Show>
-      {/* The scope is the one thing about this board that is not obvious from what is
-          on it, so it says which one this is and which key changes it. */}
-      <text fg={sessionLocal(props.filter) ? DIM : WIDE}>{scope()}</text>
-      {/* Shown, never sent: being a few commits behind is worth seeing here and not
-          worth interrupting anyone for. */}
-      <Show when={(props.behind ?? 0) > 0}>
-        <text fg={DIM}>{`  ${commitsBehind(props.behind!)} · collie upgrade`}</text>
-      </Show>
-    </box>
-  );
-}
-
-function List(props: {
-  title: string;
-  empty: string;
-  rows: readonly Row[];
-  selected: string | null;
-  onSelect: (id: string) => void;
-}) {
-  const [region, setRegion] = createSignal<ScrollBoxRenderable>();
-  /**
-   * Arrows move the Selection, and a Selection the region has scrolled past is one the
-   * human cannot see acting on keys they can still press. Each row carries its id so
-   * the region can be asked to bring exactly that one back into view.
-   *
-   * Only when the Selection actually moved. The bridge replaces the state every three
-   * seconds and on every filesystem event, and this effect reads the rows too — so it
-   * used to re-scroll on each of those, taking the list back to the Selection while
-   * the human was reading somewhere else with the wheel. The id is recorded only once
-   * it has been scrolled to, so a Selection whose row has not been read yet is still
-   * brought into view when it arrives.
-   */
-  let shown: string | null = null;
-  createEffect(() => {
-    const id = props.selected;
-    if (id === shown) return;
-    if (id !== null && props.rows.some((r) => r.id === id)) {
-      shown = id;
-      region()?.scrollChildIntoView(id);
-    }
-  });
-  return (
-    <scrollbox ref={setRegion} title={props.title} border borderColor={DIM} style={{ flexGrow: 1 }}>
-      {/* An empty View that says nothing is a dead end, so it says what to do. */}
-      <Show when={props.rows.length > 0} fallback={<text fg={DIM}>{props.empty}</text>}>
-        <For each={props.rows}>
-          {(row) => (
-            <RowLine row={row} selected={row.id === props.selected} onSelect={props.onSelect} />
-          )}
-        </For>
-      </Show>
-    </scrollbox>
-  );
-}
-
-/**
- * One row, one line, whatever is selected. Nothing a Selection or the mouse does may
- * change a row's height: the keys it offers are in the footer and the question it is
- * waiting on is in its own region, because both of those used to be drawn under the row
- * and pushed every row below it down a line as the cursor passed.
- */
-function RowLine(props: { row: Row; selected: boolean; onSelect: (id: string) => void }) {
-  // Colour reinforces the glyph and never replaces it: not everyone can see it, and
-  // the glyph is what the text fallback and herdr's own tab strip show.
-  const marker = () => (props.selected ? "❯" : " ");
-  /** How far into the gutter this row's text starts: the tree's own depth. */
-  const indent = () => props.row.depth * INDENT;
-  // A header names the group under it and can be acted on in no way at all, so it is
-  // dim: the rows it introduces are the ones a human is aiming at. A workspace is the
-  // opposite — its own line is where the eye stops, so it is bold and never dim.
-  const quiet = () => props.row.kind === "header";
-  const heading = () => props.row.kind === "group";
-  return (
-    <box
-      id={props.row.id}
-      style={{ flexDirection: "row", height: 1 }}
-      onMouseDown={() => props.onSelect(props.row.id)}
-    >
-      {/* The gutter: the marker, the indent, and the glyph or the row's own digit. */}
-      <text style={{ width: GUTTER + indent(), flexShrink: 0 }} fg={statusColour(props.row.glyph)}>
-        {`${marker()} ${" ".repeat(indent())}${props.row.key ?? props.row.glyph}`}
-      </text>
-      <text
-        style={{
-          width: TITLE - indent(),
-          // Less the indent, like the width: a floor that ignored it would put the
-          // detail column of a nested row two further along than its parent's.
-          minWidth: TITLE_FLOOR - indent(),
-          height: 1,
-          flexShrink: 1,
-        }}
-        fg={quiet() ? DIM : undefined}
-        attributes={props.selected || heading() ? TextAttributes.BOLD : TextAttributes.NONE}
-      >
-        {props.row.title}
-      </text>
-      {/* What steering found, between the name and what the row is doing: a mark is
-          what makes a row worth selecting, so it must be visible without selecting it.
-          It takes no width at all on a row that has none — the columns are shared out by
-          a pane that is narrower than they want at every ordinary width, and a marks
-          column that was always there would clip every other row's detail for nothing. */}
-      <text
-        style={{ width: props.row.marks === "" ? 0 : MARKS, height: 1, flexShrink: 1 }}
-        fg={ACCENT}
-      >
-        {props.row.marks}
-      </text>
-      <text style={{ width: DOING, height: 1, flexShrink: 1 }} fg={heading() ? undefined : DIM}>
-        {props.row.detail}
-      </text>
-      <text style={{ width: AGE, height: 1, flexShrink: 0 }} fg={DIM}>
-        {props.row.ago}
-      </text>
-    </box>
-  );
-}
-
-function ActionButton(props: { action: Action; dispatch: (command: Command) => void }) {
-  const key = () => (props.action.key === "\r" ? "Enter" : props.action.key);
-  return (
-    <text
-      style={{ height: 1 }}
-      fg={ACCENT}
-      onMouseDown={() => props.dispatch(props.action.command)}
-    >
-      {`[${key()} ${props.action.label}]  `}
-    </text>
-  );
-}
-
-/**
- * A question a Run is waiting on, in a region of its own. It draws that region and
- * states its own height, so what it takes up is not a second thing the board has to
- * know and keep in step — a line added here used to be a line clipped there.
- */
-function Question(props: {
-  choice: NonNullable<Row["choice"]>;
-  asking: Asking;
-  dispatch: (command: Command) => void;
-}) {
-  const dimensions = useTerminalDimensions();
-  const send = (value: string) =>
-    props.dispatch({ _tag: "Answer", runId: props.choice.run, choiceId: props.choice.id, value });
-  const options = () => (props.choice.kind === "menu" ? props.choice.items : []);
-  /**
-   * The lines it has for options. It covers the bottom of the list rather than taking
-   * rows from it, so what this bounds is how much of the list it hides: never more than
-   * half the pane. One line at the least, whatever the pane — a region that cannot show
-   * the cursor's own option is one nothing can be chosen from.
-   */
-  const room = () => Math.max(1, Math.floor(dimensions().height / 2) - QUESTION_CHROME);
-  /** The options it has room for, as a window the cursor stays inside. */
-  const window = () => optionWindow(options(), props.asking.index, room());
-  /** What it left out, said where the keys are said rather than on a line of its own. */
-  const footer = () => {
-    const { hidden } = window();
-    return hidden === 0 ? props.choice.footer : `${props.choice.footer} \u00b7 ${hidden} more`;
-  };
-  /** The option the cursor is on, which the window always contains. */
-  const cursor = () => options()[props.asking.index];
-  /** Its chrome and the options it shows — or the one line an answer is typed on. */
-  const height = () => QUESTION_CHROME + Math.max(1, window().shown.length);
-  return (
-    <box
-      border
-      borderColor={ACCENT}
-      // Opaque, because it is drawn over regions that would otherwise show through it.
-      backgroundColor={GROUND}
-      // Out of the flow, over the bottom of the list and anchored above the footer, so
-      // nothing else on the pane is a row shorter for it.
-      style={{
-        position: "absolute",
-        left: 0,
-        right: 0,
-        bottom: FOOTER_HEIGHT,
-        height: height(),
-        flexDirection: "column",
-        paddingLeft: 4,
-      }}
-    >
-      <text style={{ height: 1 }}>{props.choice.header}</text>
-      <Show
-        when={props.choice.kind === "menu"}
-        fallback={<text style={{ height: 1 }} fg={ACCENT}>{`> ${props.asking.typed}`}</text>}
-      >
-        <For each={window().shown}>
-          {(item) => (
-            <text
-              style={{ height: 1 }}
-              fg={item === cursor() ? ACCENT : undefined}
-              onMouseDown={() => send(item.id)}
-            >
-              {`${item === cursor() ? "\u276f" : " "} ${item.title}`}
-            </text>
-          )}
-        </For>
-      </Show>
-      <text style={{ height: 1 }} fg={DIM}>
-        {footer()}
-      </text>
-    </box>
-  );
-}
-
-function Footer(props: {
-  row: Row | null;
-  dispatch: (command: Command) => void;
-  /** What has the keyboard, which is what decides everything this offers. */
-  on: Keyboarding;
-  /** The detail panel's keys, which depend on what is in the panel rather than the row. */
-  panel: ReadonlyArray<string>;
-  note: string | null;
-  /** "2 run(s) need you", where any are and the Selection is not on one. */
-  needsYou: string | null;
-  filter: string;
-  /** How many rows the filter left, so a narrowed list says how narrow it is. */
-  matched: number | null;
-  /** What the board is filtered to, so `g` can offer the other one by name. */
-  boardFilter: Filter;
-  /** Whether anything on this board is asking, which is what `n` can act on. */
-  questions: boolean;
-}) {
-  /** The value being edited, where a Settings row is the one taking the keys. */
-  const editing = () => (props.on._tag === "Setting" ? props.on.setting : null);
-  /**
-   * The Selection's own keys, as buttons. This is the one place a row's actions are
-   * offered: they used to be drawn under the row itself, which made selecting a row
-   * push every row below it down a line. Clicking one still does what the key does.
-   */
-  const own = () =>
-    footerActions({
-      row: props.row,
-      filter: props.boardFilter,
-      questions: props.questions,
-      on: props.on,
-    });
-  // The keys the footer offers are the ones the Selection can actually be asked for,
-  // plus the globals; a key with nothing to act on is a lie, and the rest of them
-  // live behind `?`.
-  const keys = () => footerKeys({ panel: props.panel, on: props.on, filter: props.boardFilter });
-  const status = () => {
-    const value = editing();
-    if (value) return `${value.key} = ${value.value}\u258f`;
-    const filtering = props.on._tag === "Filter";
-    if (props.filter !== "" || filtering) {
-      const count = props.matched === null ? "" : `  ${props.matched} row(s)`;
-      return `/${props.filter}${filtering ? "\u258f" : ""}${count}`;
-    }
-    // Before the note, not after it: a run stopped waiting on an answer is costing the
-    // whole run's wall-clock, and the note is whatever the last command happened to say.
-    return props.needsYou ?? props.note ?? "";
-  };
-  // Two rows for the Selection's buttons, one for the keys and one for what the tab last
-  // said, each clipped to exactly that: an unbounded wrap here used to run over the line
-  // under it and render both as mojibake. Fixed, whatever the Selection is — a footer
-  // that grew and shrank moved the list it belongs to.
-  return (
-    <box
-      border
-      borderColor={DIM}
-      // Never squeezed either: the keys are how anything on this board is done at all.
-      style={{ flexDirection: "column", height: FOOTER_HEIGHT, flexShrink: 0 }}
-    >
-      <box style={{ flexDirection: "row", flexWrap: "wrap", height: ACTION_ROWS }}>
-        <For each={own()}>
-          {(action) => <ActionButton action={action} dispatch={props.dispatch} />}
-        </For>
-      </box>
-      <text style={{ height: KEY_ROWS }} fg={DIM}>
-        {keys()}
-      </text>
-      <text style={{ height: 1 }} fg={props.filter !== "" || editing() ? ACCENT : undefined}>
-        {status()}
-      </text>
     </box>
   );
 }

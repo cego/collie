@@ -439,9 +439,14 @@ export interface HomeDeps {
     readonly cwd: string;
     readonly label: string;
   }) => HomeAnswer<string>;
+  /**
+   * The board pane. `beside` a live chat pane, it is split into that pane's tab and put
+   * on its left, so a reopened board rejoins the Home rather than opening a tab of its own.
+   */
   readonly openPane: (
     workspaceId: string,
     cwd: string,
+    beside?: string | null,
   ) => HomeAnswer<{ readonly tabId: string | null; readonly paneId: string | null }>;
   readonly markWorkspace: (
     workspaceId: string,
@@ -534,7 +539,8 @@ export const ensureHome = Effect.fn("Home.ensure")(function* (
         // the width the human dragged it to; reopening the Home is not a rebuild.
         let next = decision.record;
         if (decision.missing.includes("board")) {
-          const opened = yield* deps.openPane(next.workspaceId, namespaceDir);
+          const beside = decision.missing.includes("chat") ? null : next.chatPaneId;
+          const opened = yield* deps.openPane(next.workspaceId, namespaceDir, beside);
           // Re-read: `panes` predates this pane, and a null terminalId loses ownership
           // proof (ii) as soon as the token expires.
           const pane = (yield* deps.panes).find((entry) => entry.paneId === opened.paneId);
@@ -742,19 +748,39 @@ export function homeDeps(herdr: Herdr, log: (line: string) => HomeAnswer<void>):
     workspaces: herdr.workspaceList().pipe(nothing<ReadonlyArray<WorkspaceInfo>>([])),
     panes: herdr.paneList().pipe(nothing<ReadonlyArray<PaneInfo>>([])),
     createWorkspace: (opts) => herdr.workspaceCreate(opts).pipe(nothing("")),
-    openPane: (workspaceId, cwd) =>
-      herdr
-        .pluginPaneOpen({
-          entrypoint: "workspace",
-          placement: "tab",
-          focus: false,
-          workspaceId,
-          cwd,
-          env: { COLLIE_CWD: cwd },
-        })
-        .pipe(
-          nothing<{ tabId: string | null; paneId: string | null }>({ tabId: null, paneId: null }),
-        ),
+    openPane: (workspaceId, cwd, beside = null) =>
+      Effect.gen(function* () {
+        const opened =
+          beside === null
+            ? yield* herdr.pluginPaneOpen({
+                entrypoint: "workspace",
+                placement: "tab",
+                focus: false,
+                workspaceId,
+                cwd,
+                env: { COLLIE_CWD: cwd },
+              })
+            : // No workspace: herdr refuses a split that names one, the target pane says
+              // where.
+              yield* herdr.pluginPaneOpen({
+                entrypoint: "workspace",
+                placement: "split",
+                targetPaneId: beside,
+                direction: "right",
+                focus: false,
+                cwd,
+                env: { COLLIE_CWD: cwd },
+              });
+        // Split to the right of the chat, then swapped and widened: the board is the
+        // Home's left pane at four sevenths, as it was made the first time.
+        if (beside !== null && opened.paneId !== null) {
+          yield* herdr.paneSwap(opened.paneId, beside).pipe(nothing(undefined));
+          yield* herdr.paneResize(opened.paneId, "right", 4 / 7 - 1 / 2).pipe(nothing(undefined));
+        }
+        return opened;
+      }).pipe(
+        nothing<{ tabId: string | null; paneId: string | null }>({ tabId: null, paneId: null }),
+      ),
     splitPane: (opts) =>
       herdr
         .paneSplit({

@@ -51,6 +51,7 @@ import type { HerdrError } from "../src/herdr";
 import { processStartTime } from "../src/lock";
 import type { Asking, RunRow } from "../src/workspace";
 import { NO_OUTCOME, askingRun, buildView, renderWorkspace } from "../src/workspace";
+import { buildBoard } from "../src/board";
 import { scopeFor } from "../src/registry";
 import { RunStore } from "../src/run";
 import { runEffect } from "./support/effect";
@@ -338,8 +339,15 @@ effectTest(
       const view = yield* board();
       const waiting = askingRun(view);
       expect(waiting?.id, `pass ${pass}`).toBe(run.id);
-      const text = renderWorkspace(view, undefined, { index: 1, typed: "" });
-      expect(text).toContain("⚠ Plan · add-a-picker");
+      const text = renderWorkspace(
+        view,
+        undefined,
+        { index: 1, typed: "" },
+        {
+          tasks: yield* buildBoard({ stateDir: rig.stateDir }),
+        },
+      );
+      expect(text).toContain("◆ Plan · add-a-picker");
       expect(text).toContain("plan-add-a-picker — next");
       expect(text).toContain("  Implement now");
       expect(text).toContain("❯ Refine");

@@ -8,17 +8,15 @@ import { behindRemote } from "./doctor";
 import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
 import { COLLIE_TAB, displayName, GLYPH, runLabel, stepNow } from "./naming";
 import type { Live } from "./live";
+import { boardLines, type TaskView } from "./board";
 import {
   asText,
   cardLines,
   deliveryLine,
   driftLines,
-  markFor,
-  marksOf,
   newsLines,
   ownershipLines,
   type Line,
-  type Marks,
 } from "./lines";
 import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
 import { latest, readDispositions } from "./disposition";
@@ -384,7 +382,7 @@ const mtimeOf = Effect.fn("mtimeOf")(function* (file: string) {
  *
  * ponytail: shallow, deepen it only if a run turns up that writes only into `steps/`.
  */
-const touchedDirAt = Effect.fn("touchedDirAt")(function* (dir: string) {
+export const touchedDirAt = Effect.fn("touchedDirAt")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
@@ -860,38 +858,6 @@ function askingRows(choice: PendingChoice, asking: Asking): string[] {
   return rows;
 }
 
-function runRows(rows: RunRow[], asking: Asking, waiting: string | null, marks?: Marks): string[] {
-  const out: string[] = [];
-  for (const r of rows) {
-    // The same marks the app draws, in the same order: this view is what a pane too
-    // narrow for the app shows, and it must not say less about a Run than the app does.
-    const mark = marksOf(markFor(marks, r.id));
-    out.push(`  ${r.glyph} ${r.title.padEnd(30)}${mark === "" ? "" : `${mark}  `}${r.detail}`);
-    // What the Run is for and whether it got there, under the row that says what it did.
-    // The app draws the same four; a pane too narrow for the app must not be shown a
-    // shorter, more reassuring version of a Run.
-    const said = outcomeRow(r);
-    if (said !== "") out.push(`    ${said}`);
-    if (r.choice && r.id === waiting) out.push(...askingRows(r.choice, asking));
-  }
-  return out;
-}
-
-/**
- * The outcome line under a row: what this Run is for, what it has not proved, what is in
- * its way, what to do about it, and what became of its work. Empty where a Run has
- * nothing to say on any of them, so an ordinary running row is still one line.
- */
-export function outcomeRow(r: RunRow): string {
-  const parts: string[] = [];
-  if (r.outcome !== null) parts.push(r.outcome);
-  if (r.gaps > 0) parts.push(`${r.gaps} evidence gap(s)`);
-  if (r.obstacle !== null) parts.push(r.obstacle);
-  if (r.delivered !== null) parts.push(r.delivered);
-  if (r.next !== null) parts.push(`run ${r.next} ${r.id}`);
-  return parts.join(" · ");
-}
-
 /**
  * What has been happening, as lines. The very same lines the Live region draws — the app
  * maps each one's tone to a colour and this joins the text — because a human on a pane too
@@ -933,8 +899,8 @@ export function renderWorkspace(
   view: WorkspaceView,
   note?: string,
   asking: Asking = { index: 0, typed: "" },
-  /** What steering has found, and what has been happening. Absent where nothing has. */
-  steering: { marks?: Marks; live?: Live | null } = {},
+  /** The board's Tasks, and what has been happening. */
+  steering: { live?: Live | null; tasks?: ReadonlyArray<TaskView> } = {},
 ): string {
   const lines = [`${COLLIE_TAB} — ${view.repo}`, view.cwd];
   if (view.behind !== null && view.behind > 0) {
@@ -967,12 +933,13 @@ export function renderWorkspace(
     // say here, and an empty section would be noise on every refresh.
     ...(view.worktrees.length > 0 ? section("Worktrees", view.worktrees.map(indent), "") : []),
     ...section("Agents", agents, "none live here"),
-    ...section(
-      "Runs",
-      runRows(view.active, asking, waiting?.id ?? null, steering.marks),
-      "none running",
+    // The board's own three sections, as the pane draws them. One model behind both, so
+    // a human on the escape hatch and a human on the board are told the same thing —
+    // with the question a dumb terminal answers in place under the card that is asking.
+    ...boardLines(
+      steering.tasks ?? [],
+      waiting?.choice ? { run: waiting.id, lines: askingRows(waiting.choice, asking) } : null,
     ),
-    ...section("Finished", runRows(view.recent, asking, null, steering.marks), "nothing yet"),
     ...(steering.live ? section("Live", liveLines(steering.live), "nothing yet") : []),
     "",
     keys.join(" · "),

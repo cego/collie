@@ -1,6 +1,6 @@
 # Collie
 
-<img src="assets/brand/logos/collie-horizontal-green-1024.png" alt="Collie with Luma, its green and white dog logo" width="360" />
+<img src="assets/brand/logos/collie-horizontal-light-1024.png" alt="Collie with Luma, its green and white dog logo" width="360" />
 
 Codified agent workflows for herdr: `plan`, `implement`, `review`, `architecture` —
 deterministic multi-tab orchestrations you pick from a popup. A shared starting point, not a
@@ -30,12 +30,12 @@ set `COLLIE_TOKEN`, or let a machine with bun build from source. See
 | `prefix+f`       | Run a workflow                             |
 | `prefix+u`       | Resume a run with unfinished steps         |
 | `prefix+shift+f` | Fork a workflow or persona into your layer |
-| `prefix+shift+c` | Open this workspace's Control Plane        |
+| `prefix+shift+c` | Open this session's Control Plane          |
 
-`prefix` is `ctrl+b` by default. The first run in a workspace opens a **Control Plane** tab
-as that workspace's first tab (`prefix+1`): live agents, running and finished runs, and
-every question a run is waiting on. `prefix+shift+c` reaches it from any pane, and opens
-it when the workspace has none yet.
+`prefix` is `ctrl+b` by default. One herdr session has one **Control Plane**, in a workspace
+of Collie's own: a board of one card per task — what needs you, what is working, what
+finished — with chat about the flock in the pane beside it. `prefix+shift+c` reaches it from
+any pane in any workspace, and opens it when the session has none yet.
 
 ## The workflows
 

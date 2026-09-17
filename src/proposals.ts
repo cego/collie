@@ -168,7 +168,9 @@ export const record = Effect.fn("Proposals.record")(function* (file: string, wha
  * tools rather than worked out from anything about the process. That matters here more
  * than anywhere else: the bridge runs as a child of a harness inside a pane, so it
  * inherits a controlling terminal, and the `cli-tty` heuristic would read a model as a
- * person. Attribution is recorded, not used to require a second approval.
+ * person. Attribution is recorded, not used to require a second approval: what the human
+ * asked for in chat is carried out as theirs, and what Collie wants of its own accord is
+ * a proposal because of where it came from, never because of who confirms it.
  */
 export interface Actor {
   readonly origin: "cli" | "cli-tty" | "board" | "driver" | "evaluator" | "chat";
@@ -484,12 +486,13 @@ export function admit(action: Action, ctx: AdmissionContext): string | null {
   const terminal = TERMINAL_STATUSES.has(ctx.run.status);
   if (action.kind === "followup" && !terminal)
     return "a follow-up is a child of a finished run, and this one is still going";
-  // Resume owns its lifecycle checks; navigation does not change the Run.
+  // Resume owns its lifecycle checks, succeeded included; navigation does not change the
+  // Run, so a finished one may still be gone to.
   if (
-    terminal &&
     action.kind !== "followup" &&
     action.kind !== "resume" &&
-    action.kind !== "navigate"
+    action.kind !== "navigate" &&
+    terminal
   )
     return `the run is ${ctx.run.status}`;
 

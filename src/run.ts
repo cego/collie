@@ -124,6 +124,13 @@ const SliceRecordSchema = Schema.Struct({
 
 const StepRecordSchema = Schema.Struct({
   id: Schema.String,
+  /**
+   * What this step is doing, as its frozen definition words it. Copied at creation so a
+   * card can say it without reading the snapshot — which carries every step's prompt —
+   * on every redraw. Null where the definition names none, and the board falls back to
+   * the step kind's own verb.
+   */
+  summary: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   status: StepStatusSchema,
   iteration: Schema.Number,
   note: Schema.NullOr(Schema.String),
@@ -363,6 +370,18 @@ const RunSchema = Schema.Struct({
   helle: Schema.NullOr(
     Schema.Struct({ slug: Schema.String, claim: Schema.Literals(["mine", "adopted"]) }),
   ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
+  /**
+   * The hold this Run is under: why, who asked, and when it lifts. Written by the Driver
+   * from the inbox command, because the board reads a record and never an inbox — and
+   * `awaiting` alone says a Run is held without saying by whom or until when.
+   */
+  held: Schema.NullOr(
+    Schema.Struct({
+      reason: Schema.String,
+      by: Schema.String,
+      until: Schema.NullOr(Schema.String),
+    }),
+  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   summary: Schema.NullOr(Schema.String),
 }).mapFields(Struct.map(Schema.mutableKey));
 export type RunRecord = Schema.Schema.Type<typeof RunSchema>;
@@ -574,6 +593,8 @@ export interface CreateRunOptions {
   /** What Collie may run itself for this Run; seeded from the layers, then fixed. */
   approvedVerifications?: ReadonlyArray<VerifySpec>;
   stepIds: string[];
+  /** What each step is doing, from the workflow this Run froze; see `StepRecord.summary`. */
+  stepSummaries?: Readonly<Record<string, string>>;
   maxIterations: number;
   /**
    * What this Run is called after, whole — its branch where it has one, so the name says
@@ -668,6 +689,7 @@ export class RunStore {
         input_sources: opts.inputSources,
         steps: opts.stepIds.map((id) => ({
           id,
+          summary: opts.stepSummaries?.[id] ?? null,
           status: "pending",
           iteration: 0,
           note: null,
@@ -709,6 +731,7 @@ export class RunStore {
         mr_url: null,
         linear_issues: [],
         helle: null,
+        held: null,
         summary: null,
       };
       const run = new Run(path.join(root, id), record);

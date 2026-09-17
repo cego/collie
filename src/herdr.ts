@@ -819,6 +819,24 @@ export class Herdr {
   }
 
   /** Exchanges two panes' positions; their slots keep their sizes. */
+  /** Moves a pane's split by a fraction of the tab, the way a dragged divider would. */
+  paneResize(
+    paneId: string,
+    direction: "left" | "right" | "up" | "down",
+    amount: number,
+  ): HerdrEffect<void> {
+    return this.cli([
+      "pane",
+      "resize",
+      "--pane",
+      paneId,
+      "--direction",
+      direction,
+      "--amount",
+      String(amount),
+    ]).pipe(Effect.asVoid);
+  }
+
   paneSwap(sourcePaneId: string, targetPaneId: string): HerdrEffect<void> {
     return this.cli([
       "pane",

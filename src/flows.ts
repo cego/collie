@@ -4,8 +4,12 @@
 
 import { Cause, Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { currentReports, readDrift } from "./drift";
+import { buildBoard, type MrState, type TaskView } from "./board";
+import { settleMerges } from "./merges";
 import { nowIso } from "./time";
 import {
+  DENSITIES,
+  isDensity,
   isQuestionMode,
   isScope,
   loadDefaults,
@@ -57,7 +61,7 @@ import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { notify } from "./notify";
 import { COLLIE_TAB, collieOwns, reason, runLabel, shellQuote, tabLabelsFor } from "./naming";
-import { markedFrom, RunStore, type Run } from "./run";
+import { markedFrom, RunStore, type Run, type RunRecord } from "./run";
 import { readSnapshot, stepDifference, stepsDiffer } from "./snapshot";
 import { pruneWorktrees } from "./worktree";
 import { sendReview, sendReviewToImplementer, type Session } from "./handoff";
@@ -73,6 +77,10 @@ import {
   STOPPED,
 } from "./driver";
 import { scopeFor } from "./registry";
+import { recordDisposition, statusLine } from "./disposition";
+import { selectionPath, writeSelection } from "./selection";
+import { everyViewerPaints } from "./outer";
+import { actorName } from "./proposals";
 import { listTasks, taskOfWorkspace, type TaskChoice } from "./task";
 import {
   answerRun,
@@ -86,8 +94,13 @@ import {
   startRun,
   carryOutProposal,
   declineProposal,
+  evaluationDeps,
+  followUp,
+  steer,
   registerRunExecutors,
   workspaceCwdFromPanes,
+  runSettled,
+  runStatus,
   stopRun as stopRunOperation,
 } from "./operations";
 import {
@@ -112,6 +125,7 @@ import {
   mrDetails,
   mrTarget,
   parseMrTarget,
+  parseMrUrl,
   repoArgs,
   shell,
   type MrPanel,
@@ -897,6 +911,19 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
         origin,
         load: (focus) => app.load(focus),
         act: (command, prompts) => runCommand(session, env, command, prompts),
+        // A picture only where every human attached can see one; otherwise no mark.
+        logo: (yield* everyViewerPaints())
+          ? `${env.pluginRoot}/assets/brand/logos/collie-horizontal-light-512.png`
+          : undefined,
+        // What the board has open, where the other half of the Home can read it. Nothing
+        // to write it to without a Herd, which is a board running outside herdr.
+        selected:
+          key === null
+            ? undefined
+            : (on) =>
+                Effect.flatMap(selectionPath(env.stateDir, key), (file) =>
+                  writeSelection(file, on),
+                ),
       });
       return null;
     }).pipe(
@@ -1074,6 +1101,37 @@ export function appState(
    */
   const planCache = new Map<string, PlanPanel | null>();
   const asksAgents = remembersAgents(session.herdr);
+  /**
+   * What GitLab last said about each merge request the board waits on, and when it was
+   * asked. Asked in the background after a load, never on the load's own path: ten open
+   * merge requests must not cost ten `glab` calls per redraw.
+   */
+  const mrStates = new Map<string, MrState>();
+  const mrChecked = new Map<string, number>();
+  let settling = false;
+  const settleInBackground = (views: ReadonlyArray<TaskView>, now: number) =>
+    Effect.gen(function* () {
+      if (settling) return;
+      settling = true;
+      yield* Effect.forkDetach(
+        settleMerges({
+          stateDir: env.stateDir,
+          cwd: env.cwd,
+          run,
+          views,
+          now,
+          checked: mrChecked,
+          states: mrStates,
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              settling = false;
+            }),
+          ),
+          Effect.ignore,
+        ),
+      );
+    });
 
   const merge = Effect.fn("Flows.mergeRequestFor")(function* (
     target: string | null,
@@ -1158,10 +1216,28 @@ export function appState(
           ...(history ?? []),
         ].find((r) => r.id === runId)
       : undefined;
-    // Read for the Selection and never for a list: `target` is on the row already, and a
-    // badge is only ever filled from what is in the cache. When to read past that cache
-    // is `rereads`' decision, not a second copy of it here.
-    const mr = yield* merge(selected?.target ?? null, env.cwd, again.forceMr);
+    // The Run itself, not the row: what a card is about is on the record, and a row
+    // carries only what its list needed. One record, for the one Run selected.
+    const selectedRun =
+      runId === null
+        ? null
+        : ((runs ?? []).find((run) => run.id === runId) ??
+          (yield* new RunStore(env.stateDir)
+            .load(runId)
+            .pipe(Effect.catch(() => Effect.succeed(null)))));
+    const where =
+      selected !== undefined
+        ? { id: selected.id, dir: selected.dir }
+        : selectedRun === null
+          ? null
+          : { id: selectedRun.id, dir: selectedRun.dir };
+    // Read for the Selection and never for a list, and a badge is only ever filled from
+    // what is in the cache. When to read past that cache is `rereads`' decision.
+    const mr = yield* merge(
+      mrAbout(selectedRun?.record ?? null) ?? selected?.target ?? null,
+      env.cwd,
+      again.forceMr,
+    );
     if (again.forceMr) planCache.clear();
     /**
      * Every Run on whichever board is showing, for the marks and for the Herd-wide
@@ -1189,7 +1265,7 @@ export function appState(
         : yield* liveFor({
             stateDir: env.stateDir,
             socketPath: env.socketPath,
-            run: selected ? { id: selected.id, dir: selected.dir } : null,
+            run: where === null ? null : { id: where.id, dir: where.dir },
             // From the scan this read already made, never a second load per Run: the
             // record is the only thing the marks need that a row does not carry, and
             // re-reading every `run.json` per tick is what a shared scan exists to avoid.
@@ -1200,9 +1276,26 @@ export function appState(
             ownership,
             region: focus.view === "runs",
           });
+    const defaults = yield* loadDefaults(env.configDir);
+    const tasksBuilt = reuse
+      ? reuse.state.tasks
+      : yield* buildBoard({
+          stateDir: env.stateDir,
+          socketPath: env.socketPath,
+          alive: live?.alive ?? [],
+          runs,
+          quietMs: defaults.boardQuietMs,
+          mrStates,
+        });
+    if (!reuse) yield* settleInBackground(tasksBuilt, yield* Clock.currentTimeMillis);
     const state = {
       view: focus.view,
       filter: focus.filter,
+      // The board's own model, Herd-wide: a workspace is a filter over one board, never
+      // a board of its own (ADR-0009). From the scan this read already made.
+      tasks: tasksBuilt,
+      now: yield* Clock.currentTimeMillis,
+      density: defaults.density,
       wide,
       board,
       note: null,
@@ -1221,6 +1314,8 @@ export function appState(
       previewing: focus.previewing,
       live: found?.live ?? null,
       // Always re-read: this is the one thing a moved Selection actually changes.
+      // The bridge's own, and it overlays what it is holding onto every load.
+      stopping: [],
       detail: runId
         ? yield* buildRunDetail({
             stateDir: env.stateDir,
@@ -1238,6 +1333,17 @@ export function appState(
   });
 
   return { load };
+}
+
+/**
+ * The merge request a Run is about: the one it opened, else the one it was pointed at.
+ * Both, because `implement` produces one and `review` is given one — reading only the
+ * second left every merge request a Run built without a state, a pipeline or approvals.
+ */
+function mrAbout(record: RunRecord | null): string | null {
+  const opened = record?.mr_url ? parseMrUrl(record.mr_url) : null;
+  if (opened !== null) return mrTarget(opened.project, opened.iid);
+  return record?.inputs.target ?? null;
 }
 
 /** One command, run against the Selection it names. The string becomes the footer note. */
@@ -1293,7 +1399,12 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     // question the run directory answers on its own.
     case "StopRun": {
       const run = yield* runOf(command.runId);
-      return run ? yield* stopRun(session, run) : `${command.runId} has gone`;
+      if (!run) return `${command.runId} has gone`;
+      // A Run that ended by itself while the board held the stop is not stopped: the
+      // grace is for the human to change their mind, not a window to kill a finished Run
+      // in. Read from its directory rather than from the board, which may be seconds old.
+      if (runSettled(yield* runStatus(run))) return `${runLabel(run.record)} finished on its own`;
+      return yield* stopRun(session, run);
     }
     case "OpenLog": {
       const run = yield* runOf(command.runId);
@@ -1412,6 +1523,11 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       if (typed !== "" && command.key === "scope" && !isScope(typed)) {
         return `scope has to be one of ${SCOPES.join(", ")}, not "${command.value}"`;
       }
+      // Same reason as `scope`: the board draws two cards across or three, so a typo
+      // is refused here rather than quietly leaving it on the wider one.
+      if (typed !== "" && command.key === "density" && !isDensity(typed)) {
+        return `density has to be one of ${DENSITIES.join(", ")}, not "${command.value}"`;
+      }
       // Same reason as `scope`: a Driver has to either take focus or not, so a typo
       // is refused here rather than quietly leaving every question stealing focus.
       if (typed !== "" && command.key === "questions" && !isQuestionMode(typed)) {
@@ -1447,9 +1563,87 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
           return yield* forkFlow(session.herdr, env, prompts).pipe(Effect.as(null));
       }
 
+    /**
+     * A Run nothing is driving, taken up again where it stopped. `resumeRun` re-checks
+     * that for itself: the card it was asked from is minutes old, and a second Driver is
+     * not something to start on a guess.
+     */
+    case "ResumeRun": {
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      const resumed = yield* resumeRun(env, run, yield* newRequestId());
+      return resumed.ok ? resumed.human : resumed.error.message;
+    }
+
+    /** A finished plan, built: the same launch "Implement now" runs, from the card. */
+    case "ImplementNow": {
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      const path = yield* Path.Path;
+      return yield* launch(session, env, prompts, {
+        workflow: "implement",
+        inputs: { plan: path.join(run.dir, "plan") },
+        note: `implementing ${runLabel(run.record)}'s plan`,
+        parent: run,
+      });
+    }
+
+    /**
+     * A child Run on a finished one's outcome. What it should do is asked for here rather
+     * than guessed from the parent: a follow-up with no words is a Run with no spec.
+     */
+    case "FollowUp": {
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      const text = yield* prompts.ask(`What still needs doing on ${runLabel(run.record)}?`);
+      if (text === null || text.trim() === "") return null;
+      const started = yield* followUp(env, run, text.trim(), yield* newRequestId());
+      return started.ok ? started.human : started.error.message;
+    }
+
+    /**
+     * One thing said to Collie about one Run. It carries nothing out on its own: the
+     * evaluator answers with a proposal, which arrives as that Task's decision card.
+     */
+    case "Steer": {
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      const said = yield* steer(env, yield* evaluationDeps(env), {
+        text: command.text,
+        target: run.id,
+        requestId: yield* newRequestId(),
+      });
+      return said.ok ? said.human : said.error.message;
+    }
+
+    /**
+     * What became of the work. Beside the Run's status, never over it: a Run that failed
+     * and was then finished by hand is both facts at once.
+     */
+    case "RecordDisposition": {
+      const run = yield* runOf(command.runId);
+      if (!run) return `${command.runId} has gone`;
+      return yield* fromBoard(env, (actor) =>
+        Effect.gen(function* () {
+          const line = {
+            at: yield* nowIso(),
+            by: actorName(actor),
+            kind: command.kind,
+            ref: command.ref,
+            note: null,
+          };
+          yield* recordDisposition(run.dir, line);
+          return statusLine(run.record.status, line);
+        }),
+      );
+    }
+
     case "EditSetting":
     case "NextQuestion":
+    case "OpenRecord":
+    case "OpenSteer":
     case "ShowView":
+    case "ShowOlder":
     case "ToggleFilter":
     case "SetFilter":
     case "Preview":
@@ -1457,11 +1651,13 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "MoreReview":
     case "Select":
     case "Refresh":
+    case "UndoStop":
     case "Quit":
       // The app and the bridge act on these themselves; they never reach a handler.
       // `EditSetting` opens the app's own editor, and the value it gathers comes back
       // as a `SetDefault` that carries one; `NextQuestion` moves the Selection and
-      // drops a filter, neither of which is anything out here owns.
+      // drops a filter; `OpenRecord` and `OpenSteer` open the drawer. None of those is
+      // anything out here owns.
       return null;
   }
 });
@@ -1508,9 +1704,18 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
    * The same reads the app makes, so this view says no less about a Run than the app
    * does — a pane too narrow for the renderer must not be a quieter board.
    */
+  /** The board's own Tasks, so the text view and the pane draw the same three sections. */
+  const tasksOf = Effect.fn("Flows.textBoard.tasks")(function* () {
+    return yield* buildBoard({
+      stateDir: env.stateDir,
+      socketPath: env.socketPath,
+      quietMs: (yield* loadDefaults(env.configDir)).boardQuietMs,
+    });
+  });
+
   const steeringOf = Effect.fn("Flows.textBoard.steering")(function* (view: WorkspaceView) {
     const rows = [...view.active, ...view.recent];
-    return yield* liveFor({
+    const live = yield* liveFor({
       stateDir: env.stateDir,
       socketPath: env.socketPath,
       run: null,
@@ -1523,6 +1728,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       ownership: null,
       region: true,
     });
+    return { ...live, tasks: yield* tasksOf() };
   });
   // Nothing to loop on: with no keyboard the board is a report, so it is printed once
   // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.

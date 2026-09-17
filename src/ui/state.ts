@@ -17,8 +17,11 @@ import type { Mode } from "../flows";
 import type { DefinitionRow, RunDetail, SettingsView } from "../views";
 import { MAX_AGENTS, type AgentRow, type RunRow } from "../workspace";
 import type { WideGroup, WideView, WorkspaceView } from "../workspace";
-import type { Scope } from "../config";
+import type { Density, Scope } from "../config";
+import type { TaskView } from "../board";
+import { mrTarget, parseMrTarget, parseMrUrl } from "../mr";
 import type { Live } from "../live";
+import type { Selection } from "../selection";
 
 /** What the nav switches between. One at a time, each a projection of state. */
 export type ViewName = "runs" | "history" | "workflows" | "settings";
@@ -109,6 +112,12 @@ export interface Focus {
 export interface AppState {
   view: ViewName;
   filter: Filter;
+  /** Every Task on this Herd's board, in the order the board draws them. */
+  tasks: ReadonlyArray<TaskView>;
+  /** When this state was read, which is what the board measures ages and folds against. */
+  now: number;
+  /** How many cards fit across, where the pane is wide enough for the choice. */
+  density: Density;
   board: WorkspaceView;
   /**
    * Every workspace of this herdr session Collie has work in, or null while the scope
@@ -128,6 +137,11 @@ export interface AppState {
    * out that it has drifted.
    */
   marks: Marks;
+  /**
+   * The Runs the board has marked to stop and not yet sent, so a card says it is going
+   * and the toast can still take it back. The bridge's own, not something a load reads.
+   */
+  stopping: ReadonlyArray<string>;
   /**
    * What the Live region draws, or null until the Runs view has been shown. Produced for
    * the Selection's Run, and the Herd's newest cards while nothing is selected.
@@ -209,7 +223,13 @@ export type Jump = { label: string } & (
  */
 export type Command =
   | { _tag: "FocusAgent"; agent: string }
+  /**
+   * Stop this Run — after the board's grace, which is the bridge's to keep. Nothing
+   * reaches the Driver until it is up, so an undo inside it is exact rather than a race.
+   */
   | { _tag: "StopRun"; runId: string }
+  /** Take back every stop still inside its grace. The bridge answers it. */
+  | { _tag: "UndoStop" }
   | { _tag: "OpenLog"; runId: string }
   /**
    * Answer the Choice the board drew, named by its id. The id is what makes it that
@@ -259,6 +279,27 @@ export type Command =
    * default it was labelled to set.
    */
   | { _tag: "EditSetting"; key: string }
+  /** Open this Task's record. The app answers it: the drawer is its own, not the bridge's. */
+  | { _tag: "OpenRecord"; id: string }
+  /** The same, with the keyboard in the steer field. Also the app's own. */
+  | { _tag: "OpenSteer"; id: string }
+  /** Say one thing to a Run's Driver, which Collie answers with a proposal. */
+  | { _tag: "Steer"; runId: string; text: string }
+  | { _tag: "ResumeRun"; runId: string }
+  /** A Run of its own that builds on a finished one. */
+  | { _tag: "FollowUp"; runId: string }
+  /**
+   * What became of the work, recorded beside the Run's status and never over it. `ref` is
+   * what backs it up — the merge request where the board knows one.
+   */
+  | {
+      _tag: "RecordDisposition";
+      runId: string;
+      kind: "merged" | "abandoned" | "superseded";
+      ref: string;
+    }
+  /** Start `implement` on a finished plan's own plan directory, in the plan's Task. */
+  | { _tag: "ImplementNow"; runId: string }
   /**
    * Go to the next unanswered question. The app answers this itself, like
    * `EditSetting`: it moves the Selection and clears a filter hiding the row, neither
@@ -268,11 +309,18 @@ export type Command =
   | { _tag: "SetDefault"; key: string; value: string }
   | { _tag: "OpenMode"; mode: Mode }
   | { _tag: "ShowView"; view: ViewName }
+  /** Read the earlier finished runs of this checkout, which nothing reads until asked. */
+  | { _tag: "ShowOlder" }
   /** Show or hide the selected Run's log tail inside the panel. */
   | { _tag: "ToggleTail" }
   /** Read another cap of the selected Run's review, for one that was cut short. */
   | { _tag: "MoreReview" }
-  | { _tag: "Select"; id: string | null }
+  /**
+   * The row the reads are about, and — for a Task's card — what the other half of the
+   * Home is told is selected. `on` carries the Task rather than the row id because
+   * chat answers about a Task by name and acts on its Run, neither of which a row id is.
+   */
+  | { _tag: "Select"; id: string | null; on: Selection | null }
   /** Go to what a row points at, resolved from its key at the moment Enter is pressed. */
   | { _tag: "Jump"; jump: Jump }
   /** The whole Herd ⇄ the workspace this board was opened from. */
@@ -291,6 +339,7 @@ export type Command =
  */
 const FOCUS_ONLY = [
   "ShowView",
+  "ShowOlder",
   "ToggleTail",
   "MoreReview",
   "Select",
@@ -329,6 +378,8 @@ export function retarget(at: Focus, command: FocusCommand): Focus {
     case "SetFilter":
       return { ...at, filter: command.filter, selected: null, previewing: null };
     // Not a change in the world: a preview is what was already read, drawn.
+    case "ShowOlder":
+      return at.shown.includes("history") ? at : { ...at, shown: [...at.shown, "history"] };
     case "Preview":
       return { ...at, previewing: command.id };
     case "MoreReview":
@@ -487,6 +538,11 @@ const RUN_ROW = "run:";
  */
 export function runIdOf(rowId: string | null): string | null {
   return rowId !== null && rowId.startsWith(RUN_ROW) ? rowId.slice(RUN_ROW.length) : null;
+}
+
+/** The row id a Run is selected by, minted here because `runIdOf` reads it back. */
+export function runRowId(runId: string): string {
+  return `${RUN_ROW}${runId}`;
 }
 
 function runRow(r: RunRow, now: number, kind: "active" | "recent" | "history", marks?: Marks): Row {
@@ -1100,44 +1156,178 @@ function fieldHasKeys(on: Keyboarding): boolean {
   );
 }
 
+/** One line of a card's menu: what it says, the key beside it, and what it does. */
+export interface MenuItem {
+  key: string;
+  label: string;
+  command: Command;
+}
+
+/** Nothing is driving it any more, so there is nothing to stop, steer or answer. */
+function settled(state: TaskView["state"]): boolean {
+  return state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
+}
+
 /**
- * Every key the app handles, with what it does. One list: the help overlay draws it,
- * `docs/using.md` restates it, and a key added to the handler and not to this is a key
- * nobody can find. The footer offers a subset — only what the Selection can be asked
- * for — which is why the complete list needs a place of its own.
- *
- * Kept short on purpose: the overlay has to fit a 24-row pane, and `docs/using.md` is
- * where the sentence-long version of each of these lives.
+ * The one action that ends a card's wait, drawn first on the card. Working cards go to
+ * their tab; waiting cards get the action that lands or retires the work; a finished or
+ * decision card has none here — its buttons are the decision's own, or the menu's.
+ */
+export function primaryFor(view: TaskView): MenuItem | null {
+  const runId = view.run;
+  if (view.decision !== null) return null;
+  if (view.state === "active" || view.state === "quiet")
+    return { key: "g", label: "Go to tab", command: goToTab(view) };
+  if (view.landed) return null;
+  if (view.planReady)
+    return { key: "i", label: "Implement now", command: { _tag: "ImplementNow", runId } };
+  if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned")
+    return { key: "u", label: "Resume", command: { _tag: "ResumeRun", runId } };
+  if (view.mrState === "closed")
+    return {
+      key: "S",
+      label: "Mark superseded",
+      command: { _tag: "RecordDisposition", runId, kind: "superseded", ref: "" },
+    };
+  const mr = mrOf(view);
+  if (mr !== null)
+    return {
+      key: "w",
+      label: "Open MR",
+      command: { _tag: "OpenMr", target: mrTarget(mr.project, mr.iid), runId },
+    };
+  return null;
+}
+
+/**
+ * What this Task can be asked for, in the order the menu shows it. Only what would work:
+ * an item the human has to try to find out is refused is worse than no item.
+ */
+export function menuFor(view: TaskView): MenuItem[] {
+  const runId = view.run;
+  const items: MenuItem[] = [
+    { key: "enter", label: "Open record", command: { _tag: "OpenRecord", id: view.id } },
+    { key: "g", label: "Go to its tab", command: goToTab(view) },
+  ];
+  if (!settled(view.state)) {
+    items.push({ key: "s", label: "Steer…", command: { _tag: "OpenSteer", id: view.id } });
+  }
+  const mr = mrOf(view);
+  if (mr !== null) {
+    items.push({
+      key: "w",
+      label: "Open merge request",
+      command: { _tag: "OpenMr", target: mrTarget(mr.project, mr.iid), runId },
+    });
+  }
+  if (view.planReady) {
+    items.push({ key: "i", label: "Implement now", command: { _tag: "ImplementNow", runId } });
+  }
+  if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned") {
+    items.push({ key: "u", label: "Resume run", command: { _tag: "ResumeRun", runId } });
+  }
+  if (view.state === "done") {
+    items.push({ key: "x", label: "Follow-up run", command: { _tag: "FollowUp", runId } });
+  }
+  if (!settled(view.state)) {
+    items.push({ key: "k", label: "Stop run", command: { _tag: "StopRun", runId } });
+  }
+  return items;
+}
+
+/**
+ * What became of the work, for work that is over. Offered for every settled state: a Run
+ * that failed and was then finished by hand is exactly what a disposition is for.
+ */
+export function dispositionsFor(view: TaskView): MenuItem[] {
+  if (!settled(view.state)) return [];
+  const mr = mrOf(view);
+  // `collie!151` rather than the whole URL: this ends up in the card's own sentence.
+  const ref = mr === null ? "" : `${(mr.project ?? "").split("/").at(-1)}!${mr.iid}`;
+  return [
+    {
+      key: "M",
+      label: "Mark merged",
+      command: { _tag: "RecordDisposition", runId: view.run, kind: "merged", ref },
+    },
+    {
+      key: "A",
+      label: "Mark abandoned",
+      command: { _tag: "RecordDisposition", runId: view.run, kind: "abandoned", ref: "" },
+    },
+    ...(view.mrState === "closed"
+      ? [
+          {
+            key: "S",
+            label: "Mark superseded",
+            command: { _tag: "RecordDisposition", runId: view.run, kind: "superseded", ref },
+          } satisfies MenuItem,
+        ]
+      : []),
+  ];
+}
+
+/** The earlier finished runs on screen, and whether there are more to ask for. */
+export interface Older {
+  rows: ReadonlyArray<RunRow>;
+  more: boolean;
+}
+
+/** How many earlier runs each press of `older…` brings in. */
+const OLDER_BATCH = 10;
+
+/**
+ * The finished runs of this checkout that the board is not already showing as cards,
+ * a page at a time. `more` is true while there is anything left to ask for — including
+ * before History has been read at all, because asking is what reads it.
+ */
+export function olderFinished(
+  history: ReadonlyArray<RunRow> | null,
+  finished: ReadonlyArray<TaskView>,
+  pages: number,
+  batch = OLDER_BATCH,
+): Older {
+  if (history === null) return { rows: [], more: true };
+  const carded = new Set(finished.flatMap((view) => view.runs));
+  const rest = history.filter((row) => !carded.has(row.id));
+  const rows = rest.slice(0, pages * batch);
+  return { rows, more: rows.length < rest.length };
+}
+
+/** Where this Task's work is. Which tab that is stays for the handler to resolve. */
+export function goToTab(view: TaskView): Command {
+  return { _tag: "Jump", jump: { kind: "run", runId: view.run, label: view.name } };
+}
+
+/** However the Task names its merge request: the URL one opened, or the target one was
+    pointed at. */
+function mrOf(view: TaskView) {
+  if (view.mr === null) return null;
+  return parseMrUrl(view.mr) ?? parseMrTarget(view.mr);
+}
+
+/**
+ * Every key the board takes, the card menu's included. One list: `?` draws it and
+ * `docs/using.md` restates it, so a key added to the handler and not to this is a key
+ * nobody can find. It has to fit a 24-row pane.
  */
 export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
-  { key: "↑↓", what: "Move the Selection" },
-  { key: "Shift+↑↓", what: "Scroll the panel by a line" },
-  { key: "PgUp/PgDn", what: "Scroll the panel by a page" },
-  { key: "Tab", what: "Move between views" },
-  { key: "1-9", what: "Focus that agent's pane" },
-  { key: "p", what: "Run a workflow" },
-  { key: "C", what: "Continue a task with another workflow" },
-  { key: "u", what: "Resume an unfinished run" },
-  { key: "f", what: "Fork a workflow or persona" },
-  { key: "s", what: "Send the review to an implementer" },
-  { key: "l", what: "Open the run's log in a pane" },
-  { key: "t", what: "Tail that log in the panel" },
-  { key: "m", what: "Read more of a cut-short panel" },
-  { key: "x", what: "Fix what the review left open" },
-  { key: "a", what: "Review that target again" },
-  { key: "o", what: "Post the review to its MR" },
-  { key: "w", what: "Open that MR in a browser" },
-  { key: "c", what: "Copy that MR's URL" },
-  { key: "k", what: "Stop the selected run" },
-  { key: "n", what: "Go to the next unanswered question" },
-  { key: "Enter", what: "Go to it, or run what is selected" },
-  { key: "/", what: "Filter the list" },
-  { key: "Esc", what: "Clear the filter, then widen" },
-  { key: "g", what: "This workspace, or the whole Herd" },
-  { key: "R", what: "Re-read what is on screen" },
+  { key: "Tab", what: "The board, the record over it, then ≡" },
+  { key: "/", what: "Search, and narrow all three sections" },
+  { key: "Esc", what: "Close the record, then clear the search" },
+  { key: "m", what: "Read more of a cut-short review or plan" },
+  { key: "r", what: "Re-read what is on screen" },
   { key: "?", what: "This list; any key closes it" },
   { key: "q", what: "Close the tab" },
+  { key: "enter", what: "Open record — on a card's menu" },
+  { key: "g", what: "Go to its tab" },
+  { key: "s", what: "Steer…" },
+  { key: "w", what: "Open merge request" },
+  { key: "u", what: "Resume run" },
+  { key: "x", what: "Follow-up run" },
+  { key: "k", what: "Stop run" },
 ];
+
 /**
  * The globals the line always ends in. Few, because the footer's job is the Selection's
  * own keys: the two-line wrap of every global was what made the important ones

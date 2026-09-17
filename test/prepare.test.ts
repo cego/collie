@@ -102,7 +102,7 @@ beforeEach(() =>
         `if [ "$1" = run ]; then
           echo build >> "${home}/builds"
           mkdir -p bin
-          printf '#!/bin/sh\\necho runner %s\\n' "$$" > bin/collie
+          printf '#!/bin/sh\\necho "$@" >> "${home}/collie-calls"\\necho runner %s\\n' "$$" > bin/collie
           chmod +x bin/collie
         fi
         exit 0`,
@@ -455,5 +455,21 @@ test("a pull it cannot do does not end the install", () =>
       // Someone with work in progress here still wants the rest of the run.
       expect(done.out).toContain("prepare: runner:");
       expect(done.code).toBe(0);
+    }),
+  ));
+
+test("setup configures Claude Code's status line; prepare never touches it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The human's own Claude Code config, like the keybindings: asked for once, by the
+      // script a teammate runs on purpose, and never by the routine that rebuilds a
+      // runner. The runner is what edits the file, so the step is a call rather than a
+      // shell script writing JSON.
+      prepare();
+      expect(yield* exists(`${home}/collie-calls`)).toBe(false);
+
+      setup();
+
+      expect(yield* read(`${home}/collie-calls`)).toContain("chat status-line --install");
     }),
   ));

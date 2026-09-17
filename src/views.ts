@@ -20,6 +20,7 @@ import {
   type Provenance,
 } from "./definitions";
 import { RUNNER_LOG } from "./driver";
+import { readIntent } from "./intent";
 import type { PluginEnv } from "./env";
 import { choiceHint } from "./engine";
 import { displayName, reason, targetLabel } from "./naming";
@@ -393,6 +394,11 @@ export interface RunDetail {
   steps: Array<{ id: string; status: string; note: string; took: string | null; agents: string[] }>;
   /** One line each, as the record wrote them. */
   handoffs: string[];
+  /**
+   * What this Run is for and what bounds it, so the drawer can judge the work against
+   * its intent. Null where the Run has none readable.
+   */
+  intent: { goal: string | null; constraints: ReadonlyArray<string> } | null;
   /** The rendered review — the thing the panel exists for. */
   review: Panel;
   /**
@@ -529,6 +535,14 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     handoffs: record.handoffs.map(
       (h) => `${h.direction} ${h.role} (${h.agent}) · run ${h.run}${h.note ? ` · ${h.note}` : ""}`,
     ),
+    intent: yield* readIntent(run.dir).pipe(
+      Effect.map((held) =>
+        held === null
+          ? null
+          : { goal: held.goal, constraints: held.constraints.map((c) => c.text) },
+      ),
+      Effect.catch(() => Effect.succeed(null)),
+    ),
     review,
     plan: yield* plannedFor(run, cap, opts.plans),
     outputs,
@@ -598,6 +612,7 @@ const DEFAULT_KEYS = [
   "permissions",
   "scope",
   "questions",
+  "density",
   "max_iterations",
   "handoff_timeout_ms",
   "quiet_ms",
@@ -634,6 +649,7 @@ export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: Pl
       { key: "permissions", value: defaults.permissions },
       { key: "scope", value: defaults.scope },
       { key: "questions", value: defaults.questions },
+      { key: "density", value: defaults.density },
       { key: "max_iterations", value: String(defaults.maxIterations) },
       { key: "handoff_timeout_ms", value: String(defaults.handoffTimeoutMs) },
       { key: "quiet_ms", value: String(defaults.quietMs) },

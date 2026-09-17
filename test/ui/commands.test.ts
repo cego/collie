@@ -516,3 +516,26 @@ effectTest("questions is refused unless it is a way of presenting one", function
   expect(yield* set("questions", "notify")).toContain("notify");
   expect((yield* loadDefaults(rig.pluginEnv().configDir)).questions).toBe("notify");
 });
+
+effectTest("a run that finished inside the stop's grace is not stopped after it", function* () {
+  yield* rig.addWorkspace("w9", "Implement · glass", rig.projectDir);
+  // Over by the time the five seconds were up, which is the race the grace opens: the
+  // board asked for a stop on a run that was still going when it was asked for.
+  const run = yield* elsewhere({ workspaceId: "w9" });
+  run.record.status = "failed";
+  yield* run.save();
+
+  const note = yield* runCommand(
+    session(),
+    rig.pluginEnv(),
+    { _tag: "StopRun", runId: run.id },
+    prompts,
+  );
+
+  expect(note).toContain("finished on its own");
+  // Nothing was signalled and nothing was written: no inbox entry, no stopped marker.
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  expect(yield* fs.exists(path.join(run.dir, "stopped"))).toBe(false);
+  expect(yield* fs.exists(path.join(run.dir, "inbox"))).toBe(false);
+});

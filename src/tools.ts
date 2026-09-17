@@ -5,22 +5,55 @@
 // operations the board draws itself from, so the two cannot tell different stories — and
 // a model that decided to be creative has nowhere to put it.
 //
-// Five of them only read. Three write, and say so in `readOnly` rather than letting a
-// client assume: `collie_news` settles the items it hands over, `collie_installation`
-// runs the installation checks and one of those fetches this checkout's refs, and
-// `collie_propose` executes requested actions through the shared journal and executors.
-// Its name is retained for existing clients; it no longer requires a confirmation hop.
-// Inputs and targets are still validated, and the bridge records chat attribution.
+// Most of them only read. The rest write, and say so in `readOnly` rather than letting a
+// client assume. Every write here carries out what the human asked for in this
+// conversation, at once — chat may do what they could do on the board themselves, because
+// sending them to the UI for it is chat obstructing the person it serves (ADR-0011).
+// `collie_hold` holds; `collie_do` takes the board's own actions and decisions, with the
+// open card standing in for a Run nobody named; `collie_propose` takes the whole closed
+// action set — Intent amendments, forks, defaults, upgrades — with a request id that makes
+// a retry return the first receipt. What Collie wants of its own accord is not here at
+// all: the evaluator's proposals wait on the board, and chat asks the human in words.
+//
+// The bridge's actor is stamped by this entrypoint rather than worked out from the process
+// — a model inside a harness's pane inherits that pane's terminal, and the CLI's "a TTY
+// means a person" shortcut would read it as human. Attribution, never a gate.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Effect, Option, Schema } from "effect";
+import { Clock, Crypto, Effect, Option, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
 import { mutation } from "./envelope";
-import { herdFacts, newRequestId, request, runFacts, workspaceCwdFromPanes } from "./operations";
-import { ActionSchema } from "./evaluator";
-import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
+import {
+  carryOutAsked,
+  carryOutProposal,
+  declineProposal,
+  holdRun,
+  holdWorkspace,
+  newRequestId,
+  request,
+  runFacts,
+  workspaceCwdFromPanes,
+} from "./operations";
+import { ActionSchema, type Action } from "./evaluator";
+import {
+  actorName,
+  pendingFor,
+  proposalsPath,
+  read as readProposals,
+  type Actor,
+} from "./proposals";
+import { recordDisposition, statusLine } from "./disposition";
 import { Herdr } from "./herdr";
+import {
+  buildBoard,
+  headerSentence,
+  mrLabel,
+  sectionOf,
+  type Section,
+  type TaskView,
+} from "./board";
+import { loadDefaults } from "./config";
 import {
   asText as newsText,
   newsPath,
@@ -28,7 +61,8 @@ import {
   read as readNews,
   settle as settleNews,
 } from "./news";
-import { RunStore } from "./run";
+import { RunStore, type Run } from "./run";
+import { nowIso, untilFrom } from "./time";
 import { attentionFor } from "./attention";
 import { deliveriesOf, herdOf } from "./steering";
 import {
@@ -38,14 +72,14 @@ import {
   skillDirs,
   validateWorkflow,
 } from "./definitions";
-import { loadDefaults } from "./config";
 import { chatHarnessOf, chatPath, pushable, readChat, whyUnavailable } from "./chat";
 import { closable, decide, homePath, readHome, UNREADABLE } from "./home";
 import { doctor } from "./doctor";
 import { defaultsPath, describeDefaults, EMPTY_DEFAULTS, readDefaults } from "./intent";
 import { scopeKey } from "./registry";
+import { readSelection, selectionPath } from "./selection";
 import { listTasks } from "./task";
-import type { JsonObject } from "./schema";
+import { isString, type JsonObject } from "./schema";
 
 export interface Tool {
   readonly name: string;
@@ -75,7 +109,14 @@ type ToolAnswer = Effect.Effect<
 
 const NO_INPUT = { type: "object", properties: {}, additionalProperties: false };
 
-const RunInput = Schema.Struct({ run: Schema.String });
+const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
+const HoldInput = Schema.Struct({
+  run: Schema.optionalKey(Schema.String),
+  workspace: Schema.optionalKey(Schema.String),
+  until: Schema.optionalKey(Schema.String),
+  reason: Schema.optionalKey(Schema.String),
+});
+const decodeHold = Schema.decodeUnknownOption(HoldInput);
 const DefinitionInput = Schema.Struct({
   workflow: Schema.optionalKey(Schema.String),
   persona: Schema.optionalKey(Schema.String),
@@ -96,6 +137,57 @@ const ProposeInput = Schema.Struct({
 const decodePropose = Schema.decodeUnknownOption(ProposeInput);
 
 /**
+ * What the human can ask for and have done: the board's own actions on a named Run, plus
+ * starting one. A closed subset of the same union, because the line is who wanted it —
+ * amending an Intent, forking a definition and changing what a workspace's Runs begin
+ * with are Collie's to propose and the human's to confirm.
+ */
+const ASKED_KINDS = [
+  "stop",
+  "resume",
+  "release",
+  "answer",
+  "deliver",
+  "followup",
+  "start",
+] as const;
+
+/**
+ * The board's decisions, which are not actions on a Run: a yes to a proposal, a no, and
+ * what became of finished work. Here because the human said it, which is the whole of
+ * what lets a confirmation through (ADR-0011).
+ */
+const SettleSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("confirm"),
+    proposal: Schema.String,
+    /** The hash of exactly those actions, as `collie_receipts` lists it beside the id. */
+    hash: Schema.String,
+  }),
+  Schema.Struct({ kind: Schema.Literal("decline"), proposal: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("disposition"),
+    run: Schema.String,
+    became: Schema.Literals(["merged", "abandoned", "superseded"]),
+    /** What backs it up: a merge request, a commit, or the Run that took the work over. */
+    ref: Schema.optionalKey(Schema.String),
+  }),
+]);
+type Settle = Schema.Schema.Type<typeof SettleSchema>;
+const SETTLE_KINDS = ["confirm", "decline", "disposition"] as const;
+
+const AskedInput = Schema.Struct({
+  actions: Schema.Array(Schema.Union([ActionSchema, SettleSchema])),
+});
+const decodeAsked = Schema.decodeUnknownOption(AskedInput);
+
+function askedSchema(): JsonObject {
+  const document = Schema.toJsonSchemaDocument(AskedInput);
+  // SAFETY: a JSON Schema document is JSON, which is what JsonObject says.
+  return { ...document.schema, $defs: document.definitions } as JsonObject;
+}
+
+/**
  * The JSON Schema the harnesses are given for `collie_propose`, generated from the same
  * closed union the decoder uses. Generated rather than written out, so a kind this build
  * cannot carry out is not a kind a model is invited to ask for.
@@ -112,13 +204,14 @@ export const TOOLS: ReadonlyArray<Tool> = [
     readOnly: true,
     title: "The Herd",
     description:
-      "Every Run in this Herd right now: workflow, status, live agents, the outcome each " +
-      "has to prove, what is not proved yet, and what is in the way. Herd-wide and never " +
-      "narrowed by what the board is filtered to or which row is selected; where more Runs " +
-      "exist than fit, the answer says how many were left out. Read this before answering " +
-      "anything about the flock, and again when the answer has to be current.",
+      "The board as the human sees it, card for card: its header sentence, then every " +
+      "card under Needs you, Working, Waiting on you and Finished with its run id, state, " +
+      "merge request or branch, agents and sentence. Herd-wide and never narrowed by what " +
+      "the board is filtered to or which card is open; where more cards exist than fit, " +
+      "the answer says how many were left out. Read this before answering anything about " +
+      "the flock, and again when the answer has to be current.",
     input: NO_INPUT,
-    call: (env) => said(herdFacts(env)),
+    call: (env) => said(boardFacts(env)),
   },
   {
     name: "collie_run",
@@ -127,24 +220,21 @@ export const TOOLS: ReadonlyArray<Tool> = [
     description:
       "One Run in detail: its goal, the constraints bounding it, its Steps, the work it " +
       "has handed over with the evidence and the gaps in it, and any drift nobody has " +
-      "settled. Use it when a question is about a particular Run rather than the flock.",
+      "settled. Use it when a question is about a particular Run rather than the flock. " +
+      "Name the Run; with no `run` it answers about whatever the board has selected, and " +
+      "says which that was.",
     input: {
       type: "object",
-      properties: { run: { type: "string", description: "The Run id, as collie_herd lists it" } },
-      required: ["run"],
+      properties: {
+        run: {
+          type: "string",
+          description: "The Run id, as collie_herd lists it; omit for the board's selection",
+        },
+      },
       additionalProperties: false,
     },
     call: (env, input) =>
-      Effect.gen(function* () {
-        const decoded = decodeRun(input);
-        if (decoded._tag === "None") return 'collie_run takes {"run": "<run id>"}.';
-        const run = yield* new RunStore(env.stateDir)
-          .load(decoded.value.run)
-          .pipe(Effect.catch(() => Effect.succeed(null)));
-        return run === null
-          ? `No Run "${decoded.value.run}". collie_herd lists the ones there are.`
-          : yield* said(runFacts(run, env));
-      }),
+      onSelectedRun(env, input, "collie_run", (run) => said(runFacts(run, env))),
   },
   {
     name: "collie_workspaces",
@@ -168,19 +258,20 @@ export const TOOLS: ReadonlyArray<Tool> = [
       "to its agents with the state each actually reached. `submitted` is that herdr took " +
       "it, `acknowledged` is that the agent wrote back, `verified` is that something " +
       "independent checked — they are three different facts and none of them stands in for " +
-      "another. Read this instead of saying that something was done.",
+      "another. Read this instead of saying that something was done. With no `run` it " +
+      "answers about whatever the board has selected, and says which that was.",
     input: {
       type: "object",
-      properties: { run: { type: "string", description: "The Run id" } },
-      required: ["run"],
+      properties: {
+        run: {
+          type: "string",
+          description: "The Run id; omit for the board's selection",
+        },
+      },
       additionalProperties: false,
     },
     call: (env, input) =>
-      Effect.gen(function* () {
-        const decoded = decodeRun(input);
-        if (decoded._tag === "None") return 'collie_receipts takes {"run": "<run id>"}.';
-        return yield* said(receiptFacts(env, decoded.value.run));
-      }),
+      onSelectedRun(env, input, "collie_receipts", (run) => said(receiptFacts(env, run.id))),
   },
   {
     name: "collie_news",
@@ -232,13 +323,56 @@ export const TOOLS: ReadonlyArray<Tool> = [
     call: (env) => said(installationFacts(env)),
   },
   {
+    name: "collie_hold",
+    readOnly: false,
+    title: "Hold a Run, or a whole workspace",
+    description:
+      "Stop a Run — or every unfinished Run in a workspace — taking on new work. What is " +
+      "already running carries on; the Driver simply declines to start the next thing. " +
+      "Carried out at once, because it is the human's own instruction: do not propose a " +
+      "hold they asked for. Name the Run by the id `collie_herd` lists, or the workspace " +
+      "by the id `collie_workspaces` lists, and give `until` as a clock time (`14:00`) or " +
+      "a full timestamp to have it lift by itself. Without `until` it is held until " +
+      "someone releases it.",
+    input: {
+      type: "object",
+      properties: {
+        run: { type: "string", description: "The Run to hold" },
+        workspace: { type: "string", description: "Hold every unfinished Run in this workspace" },
+        until: { type: "string", description: "When it lifts: `14:00`, or a full timestamp" },
+        reason: { type: "string", description: "Why, in the human's own words" },
+      },
+      additionalProperties: false,
+    },
+    call: (env, input) => said(hold(env, input)),
+  },
+  {
+    name: "collie_do",
+    readOnly: false,
+    title: "Do what the human asked for",
+    description:
+      "Carry out, at once, something the human asked you to do: the board's own actions " +
+      `on a named Run (${ASKED_KINDS.join(", ")}), and its decisions — ` +
+      "`confirm` a waiting proposal by its id and the hash `collie_receipts` lists beside " +
+      "it, `decline` one, and `disposition` to record what became of a finished Run's " +
+      "work. This is not a proposal: they said it, so it is done, and the board shows the " +
+      "result. Do not send them to the board for one of these. Name a Run by the id " +
+      "`collie_herd` lists, or leave `run` out to act on the card the board has open, " +
+      "which the answer then names. What is not here is what you would be asking for yourself — " +
+      "amending an Intent, forking a definition, changing the defaults, upgrading, " +
+      "cleaning up — and that is `collie_propose`.",
+    input: askedSchema(),
+    call: (env, input) => said(carryOut(env, input)),
+  },
+  {
     name: "collie_propose",
     readOnly: false,
     title: "Carry out a request",
     description:
-      "Carry out the user's requested actions and return their execution results. No " +
-      "separate confirmation is needed. Reuse request_id when retrying the same request. " +
-      "Use reads for questions, not this tool. " +
+      "Carry out the human's requested actions and return their results, including the " +
+      "kinds `collie_do` does not take: amending an Intent, forking a definition, changing " +
+      "a workspace's defaults, a cleanup, an upgrade. No separate confirmation: they asked. " +
+      "Reuse request_id when retrying the same request. Use reads for questions, not this. " +
       "Name every Run by the id `collie_herd` lists — a Run that does not exist is refused " +
       "rather than guessed at, and if you are not sure which the human meant, ask them " +
       "instead of proposing. `interpretation` is what you understood, in their words.",
@@ -267,6 +401,227 @@ export const TOOLS: ReadonlyArray<Tool> = [
       ),
   },
 ];
+
+/**
+ * What the board has open, or null where there is no Herd, no board and no selection.
+ * Every caller treats those three the same way: nothing is selected.
+ */
+const selectionOf = Effect.fn("Tools.selection")(function* (env: PluginEnv) {
+  const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
+  if (key === null) return null;
+  return yield* readSelection(yield* selectionPath(env.stateDir, key)).pipe(
+    Effect.catch(() => Effect.succeed(null)),
+  );
+});
+
+const isSettle = (action: Action | Settle): action is Settle =>
+  SETTLE_KINDS.some((kind) => kind === action.kind);
+
+/** The human's own instruction, carried out and reported a line per action. */
+const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: JsonObject) {
+  const selected = yield* onSelection(env, input);
+  const decoded = decodeAsked(selected.input);
+  if (decoded._tag === "None")
+    return 'collie_do takes {"actions": [...]}, and every action has to be one of the kinds in the schema. An action with no "run" acts on the board\'s selection, and the board has nothing open.';
+  const actions = decoded.value.actions;
+  if (actions.length === 0) return "collie_do needs an action. Ask which one they meant.";
+  const asked: ReadonlyArray<string> = [...ASKED_KINDS, ...SETTLE_KINDS];
+  const wrong = actions.filter((action) => !asked.includes(action.kind));
+  if (wrong.length > 0)
+    return `collie_do does not carry out ${[...new Set(wrong.map((a) => a.kind))].join(", ")}: that is collie_propose's, and the human confirms it on the board.`;
+  const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const actor: Actor = { origin: "chat", requestId };
+  const said: string[] =
+    selected.on === null
+      ? []
+      : [`On the board's selection, "${selected.on.name}" (${selected.on.run}):`];
+  for (const action of actions) {
+    const done = yield* isSettle(action)
+      ? settle(env, action, actor)
+      : carryOutAsked(env, [action], actor).pipe(Effect.map((results) => results[0]!));
+    said.push(`${done.kind}: ${done.state}${done.note ? ` — ${done.note}` : ""}`);
+    // What follows a failure was asked for on the assumption that it did not happen.
+    if (done.state === "failed") break;
+  }
+  return said.join("\n");
+});
+
+/** A decision of the board's, taken where the human said it. */
+const settle = Effect.fn("Tools.settle")(function* (env: PluginEnv, action: Settle, actor: Actor) {
+  if (action.kind === "disposition") {
+    const run = yield* new RunStore(env.stateDir)
+      .load(action.run)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (run === null) return { kind: action.kind, state: "failed", note: `no Run "${action.run}"` };
+    const line = {
+      at: yield* nowIso(),
+      by: actorName(actor),
+      kind: action.became,
+      ref: action.ref ?? "",
+      note: null,
+    };
+    yield* recordDisposition(run.dir, line);
+    return { kind: action.kind, state: "applied", note: statusLine(run.record.status, line) };
+  }
+  const done =
+    action.kind === "confirm"
+      ? yield* carryOutProposal(env, action.proposal, action.hash, actor)
+      : yield* declineProposal(env, action.proposal, actor);
+  if (!done.ok) return { kind: action.kind, state: "failed", note: done.error.message };
+  // A settled proposal is not a proposal that ran: whether its actions did is in their
+  // own results, and what was asked for after this assumed they had.
+  const ran =
+    "results" in done.data && done.data.results.some((result) => result.state === "failed")
+      ? "failed"
+      : "applied";
+  return { kind: action.kind, state: ran, note: done.human };
+});
+
+/** Cards per answer. Sections come in the board's order, so Finished is what gets cut. */
+const HERD_CARDS = 40;
+const SECTIONS: ReadonlyArray<readonly [Section, string]> = [
+  ["needs-you", "Needs you"],
+  ["working", "Working"],
+  ["waiting", "Waiting on you"],
+  ["finished", "Finished"],
+];
+
+/** One card as chat reads it: what the human sees on it, plus the id an action needs. */
+function cardLine(view: TaskView): string {
+  const project = view.project === "" ? "" : ` (${view.project})`;
+  const where =
+    view.mr !== null
+      ? `, mr ${mrLabel(view.mr)}`
+      : view.branch !== null
+        ? `, branch ${view.branch}`
+        : "";
+  const agents =
+    view.agents.length === 0 ? "" : `, agents ${view.agents.map((agent) => agent.name).join(", ")}`;
+  return `- run ${view.run}: ${view.name}${project}, ${view.state}${where}${agents}. ${view.sentence}`;
+}
+
+/** What `collie_herd` answers with: the board, so chat and board can never disagree about a card. */
+const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
+  const alive = yield* new Herdr(env).agentList().pipe(Effect.catch(() => Effect.succeed([])));
+  const now = yield* Clock.currentTimeMillis;
+  const views = yield* buildBoard({
+    stateDir: env.stateDir,
+    socketPath: env.socketPath,
+    alive,
+    now,
+    quietMs: (yield* loadDefaults(env.configDir)).boardQuietMs,
+  });
+  if (views.length === 0) return "- (no Runs in this Herd)";
+  const lines = [headerSentence(views, now).text];
+  let room = HERD_CARDS;
+  for (const [section, title] of SECTIONS) {
+    const cards = views.filter((view) => sectionOf(view) === section);
+    if (cards.length === 0) continue;
+    lines.push("", `## ${title} · ${cards.length}`, ...cards.slice(0, room).map(cardLine));
+    room = Math.max(0, room - cards.length);
+  }
+  const left = views.length - HERD_CARDS;
+  if (left > 0) lines.push("", `- (${left} more card(s) not listed here)`);
+  return lines.join("\n");
+});
+
+/** The action kinds that are not about one Run, so the selection never stands in for theirs. */
+const UNSCOPED_KINDS: ReadonlyArray<string> = ["start", "confirm", "decline"];
+
+/** Only the two fields the stand-in turns on; the closed union decodes the rest. */
+const LooseActions = Schema.Struct({
+  actions: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
+});
+const decodeLoose = Schema.decodeUnknownOption(LooseActions);
+const wantsRun = (action: JsonObject) => {
+  const kind = action["kind"];
+  return action["run"] === undefined && isString(kind) && !UNSCOPED_KINDS.includes(kind);
+};
+
+/**
+ * `collie_do`'s input with the board's selection standing in for every run-scoped action
+ * that named no Run, and which selection that was — so the answer can say so (ADR-0012).
+ */
+const onSelection = Effect.fn("Tools.onSelection")(function* (env: PluginEnv, input: JsonObject) {
+  const loose = decodeLoose(input);
+  if (loose._tag === "None" || !loose.value.actions.some(wantsRun)) return { input, on: null };
+  const on = yield* selectionOf(env);
+  if (on === null) return { input, on: null };
+  const filled = loose.value.actions.map((action) =>
+    wantsRun(action) ? { ...action, run: on.run } : action,
+  );
+  return { input: { ...input, actions: filled }, on };
+});
+
+/**
+ * A read about one Run, which the board's selection may stand in for.
+ *
+ * The selection is taken only when the caller named no Run, and the answer says which
+ * Run it was: an answer about work nobody named, that does not say which work, is how
+ * "how is it going?" gets answered confidently about the wrong thing.
+ */
+const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
+  env: PluginEnv,
+  input: JsonObject,
+  tool: string,
+  answer: (run: Run) => ToolAnswer,
+) {
+  const decoded = decodeRun(input);
+  if (decoded._tag === "None")
+    return `${tool} takes {"run": "<run id>"}, or nothing at all for the board's selection.`;
+  const named = decoded.value.run ?? null;
+  // Non-null exactly when the selection was what this answer is about, which is what the
+  // sentences below turn on.
+  const on = named === null ? yield* selectionOf(env) : null;
+  const id = named ?? on?.run ?? null;
+  if (id === null)
+    return `${tool} takes {"run": "<run id>"}, or answers about the board's selection when there is one. The board has nothing selected — collie_herd lists the Runs there are.`;
+  const run = yield* new RunStore(env.stateDir)
+    .load(id)
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+  if (run === null)
+    return on === null
+      ? `No Run "${id}". collie_herd lists the ones there are.`
+      : `The board has "${on.name}" selected, but Collie has no Run "${id}" any more.`;
+  const text = yield* answer(run);
+  return on === null
+    ? text
+    : `About "${on.name}" (${on.run}), which the board has selected.\n\n${text}`;
+});
+
+/**
+ * A hold the human asked for, carried out. The actor is `chat` all the same: what is
+ * relaxed is that chat may act, never that chat is a person — nothing here confirms a
+ * proposal, and a hold is reversible by the same two ways it was asked for.
+ */
+const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObject) {
+  const decoded = decodeHold(input);
+  if (decoded._tag === "None")
+    return 'collie_hold takes {"run": "..."} or {"workspace": "..."}, and optionally "until" and "reason".';
+  const { workspace, until, reason } = decoded.value;
+  const on =
+    decoded.value.run === undefined && workspace === undefined ? yield* selectionOf(env) : null;
+  const run = decoded.value.run ?? on?.run;
+  if (run === undefined && workspace === undefined)
+    return "collie_hold needs a run or a workspace to hold, and the board has nothing open. Ask which one they meant.";
+  const ends = until === undefined ? null : untilFrom(until, yield* Clock.currentTimeMillis);
+  if (until !== undefined && ends === null)
+    return `Collie could not read "${until}" as a time. Ask for a clock time like 14:00, or a full timestamp.`;
+  const why = reason ?? "asked in chat";
+  const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
+
+  if (workspace !== undefined) {
+    const answered = yield* holdWorkspace(env.stateDir, workspace, why, requestId, ends, "chat");
+    return answered.ok ? answered.human : answered.error.message;
+  }
+  const found = yield* new RunStore(env.stateDir)
+    .load(run!)
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+  if (found === null) return `Collie has no Run "${run}". Read collie_herd and name one of those.`;
+  const answered = yield* holdRun(found, why, requestId, ends, "chat");
+  const about = on === null ? "" : `On the board's selection, "${on.name}": `;
+  return about + (answered.ok ? answered.human : answered.error.message);
+});
 
 /** What `collie_workspaces` answers with: where a Run could go, and what could start. */
 const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) {

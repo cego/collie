@@ -22,6 +22,7 @@ import { Schema } from "effect";
 const encodeSpecs = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
 import { RunStore, type Run, type WorktreeRecord } from "../../src/run";
 import type { EnginePrompts } from "../../src/engine";
+import type { GateAnswer } from "../../src/driver";
 import type { CompactionPorts } from "../../src/compaction";
 import { testDefaults } from "./compaction";
 import type { PickItem, Resolution } from "../../src/inputs";
@@ -61,16 +62,29 @@ export function installBaseline(rig: Rig) {
   });
 }
 
-/** A menu and a keyboard the tests drive: picks by title, answers in order. */
+/**
+ * A menu and a keyboard the tests drive: picks by title, answers in order. A gate takes
+ * the list as it stands unless a test scripts something else, and every gate it was asked
+ * is recorded so a test can say it was.
+ */
 export function scriptedPrompts(
   picks: (string | null)[],
   answers: string[] = [],
-): EnginePrompts & { offered: string[][]; asked: string[] } {
+  gates: (GateAnswer | null)[] = [],
+): EnginePrompts & { offered: string[][]; asked: string[]; gated: string[][] } {
   const offered: string[][] = [];
   const asked: string[] = [];
+  const gated: string[][] = [];
   return {
     offered,
     asked,
+    gated,
+    gate(what: { verifications: ReadonlyArray<string> }) {
+      gated.push([...what.verifications]);
+      return Effect.succeed(
+        gates.length === 0 ? { kind: "approve" as const, verifications: null } : gates.shift()!,
+      );
+    },
     menu(items: PickItem[]) {
       offered.push(items.map((i) => i.title));
       if (picks.length === 0) {
@@ -111,12 +125,28 @@ export function approveVerification(
     executable: "true",
   },
 ) {
+  return approveVerifications(rig, [spec]);
+}
+
+/** The same, for a project that has written down more than one. */
+export function approveVerifications(
+  rig: Rig,
+  specs: ReadonlyArray<{
+    name: string;
+    executable: string;
+    argv?: string[];
+    cwd?: string;
+  }>,
+) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const file = path.join(rig.projectDir, ".herdr", "verify.json");
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
-    yield* fs.writeFileString(file, encodeSpecs([{ argv: [], cwd: ".", ...spec }]));
+    yield* fs.writeFileString(
+      file,
+      encodeSpecs(specs.map((spec) => ({ argv: [], cwd: ".", ...spec }))),
+    );
   });
 }
 
@@ -180,6 +210,8 @@ export function runWorkflow(
     task?: string | null;
     /** The Task's workspace, where it is not the one this environment is focused on. */
     workspace?: string | null;
+    /** Drive this Run again instead of creating one: what a resume does. */
+    existing?: Run;
     /**
      * Run a Workflow the way a chained Run and a resumed Driver do: resolved, but never
      * validated. Only for testing what the engine still refuses on its own.
@@ -203,7 +235,10 @@ export function runWorkflow(
     const errors = opts.unvalidated ? [] : yield* validateWorkflow(wf, defs, defaults);
     if (errors.length > 0) return yield* Effect.fail(new Error(errors.join("\n")));
 
-    const inferred = yield* inferInputs(wf.inputs, { cwd: env.cwd, stateDir: env.stateDir });
+    const inferred = yield* inferInputs(wf.inputs, {
+      cwd: env.cwd,
+      stateDir: env.stateDir,
+    });
     for (const r of inferred) {
       const override = inputs[r.name];
       if (override === undefined) continue;
@@ -221,26 +256,28 @@ export function runWorkflow(
     const merged = inputValues(inferred);
     const sources = inputSources(inferred);
 
-    const run = yield* new RunStore(env.stateDir).create({
-      workflow: wf.name,
-      cwd: opts.worktree?.path ?? env.cwd,
-      session: env.socketPath,
-      workspace: opts.workspace ?? env.workspaceId,
-      task: opts.task,
-      workspaceLabel: opts.workspaceLabel ?? "test",
-      worktree: opts.worktree,
-      inputs: merged,
-      inputSources: sources,
-      decisions: opts.decisions,
-      definition: wf,
-      approvedVerifications: yield* approvedFrom({
+    const run: Run =
+      opts.existing ??
+      (yield* new RunStore(env.stateDir).create({
+        workflow: wf.name,
         cwd: opts.worktree?.path ?? env.cwd,
-        configDir: env.configDir,
-      }),
-      stepIds: wf.steps.map((s) => s.id),
-      maxIterations: wf.maxIterations,
-      ...named(inferred, merged),
-    });
+        session: env.socketPath,
+        workspace: opts.workspace ?? env.workspaceId,
+        task: opts.task,
+        workspaceLabel: opts.workspaceLabel ?? "test",
+        worktree: opts.worktree,
+        inputs: merged,
+        inputSources: sources,
+        decisions: opts.decisions,
+        definition: wf,
+        approvedVerifications: yield* approvedFrom({
+          cwd: opts.worktree?.path ?? env.cwd,
+          configDir: env.configDir,
+        }),
+        stepIds: wf.steps.map((s) => s.id),
+        maxIterations: wf.maxIterations,
+        ...named(inferred, merged),
+      }));
 
     if (opts.before) yield* opts.before(run);
 

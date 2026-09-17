@@ -51,18 +51,28 @@ export function stepDuration(
 }
 
 /**
+ * How long something has lasted, spelled out: `49 hours`, `3 minutes`. What a sentence
+ * wants where `took`'s `49h` is a code to expand — a card saying "silent for 49h" reads
+ * as a measurement, and "silent for 49 hours" reads as the problem it is.
+ */
+export function spanned(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  for (const { unit, size } of UNITS) {
+    const n = Math.floor(seconds / size);
+    if (n >= 1) return `${n} ${unit}${n === 1 ? "" : "s"}`;
+  }
+  return "";
+}
+
+/**
  * How long ago, in the coarsest unit that still says something. A menu line and a
  * prompt both want "2 days ago", not a timestamp to subtract in your head.
  */
 export function ago(iso: string, nowMs: number): string {
   const then = Date.parse(iso);
   if (Number.isNaN(then)) return iso;
-  const seconds = Math.max(0, Math.round((nowMs - then) / 1000));
-  for (const { unit, size } of UNITS) {
-    const n = Math.floor(seconds / size);
-    if (n >= 1) return `${n} ${unit}${n === 1 ? "" : "s"} ago`;
-  }
-  return "just now";
+  const span = spanned(nowMs - then);
+  return span === "" ? "just now" : `${span} ago`;
 }
 
 /**
@@ -85,3 +95,62 @@ export function agoShort(atMs: number, nowMs: number): string {
   }
   return "now";
 }
+
+/** A bare clock time, which is what a human types: `14:00`, never `2:00pm`. */
+const CLOCK = /^([01]\d|2[0-3]):([0-5]\d)$/;
+/** A full timestamp, matched before parsing: `Date.parse("14")` is a year, not a time. */
+const STAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
+const DAY_MS = 86_400_000;
+
+const isoAt = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
+
+/**
+ * When a hold ends, from what a human wrote. A clock time is **their** clock — this
+ * machine's timezone, not UTC — and the next time it comes round: "hold until 09:00" at
+ * half past nine is tomorrow morning, never a hold that expired before it was asked for.
+ * A full timestamp is taken as written, zone and all. Anything else is `null`: a hold
+ * whose end nobody could read would be a hold that never lifts.
+ */
+export function untilFrom(text: string, nowMs: number): string | null {
+  const clock = CLOCK.exec(text.trim());
+  if (clock) {
+    const at = DateTime.setParts(local(nowMs), {
+      hour: Number(clock[1]),
+      minute: Number(clock[2]),
+      second: 0,
+      millisecond: 0,
+    });
+    // A day by the calendar rather than 24 hours: over a daylight-saving change the two
+    // are an hour apart, and what a human meant is the same time tomorrow.
+    const next = DateTime.toEpochMillis(at) > nowMs ? at : DateTime.add(at, { days: 1 });
+    return DateTime.formatIso(next);
+  }
+  const stamp = text.trim();
+  if (!STAMP.test(stamp)) return null;
+  const parsed = Date.parse(stamp);
+  return Number.isNaN(parsed) ? null : isoAt(parsed);
+}
+
+/**
+ * A time to read on a card, on the reader's own clock. Today's is the clock alone,
+ * tomorrow's says so, and anything further off carries its date — "held until 02:00"
+ * with no day is wrong by a day.
+ */
+export function atClock(iso: string, nowMs: number): string {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) return iso;
+  const when = DateTime.toParts(local(ms));
+  const clock = `${pad(when.hour)}:${pad(when.minute)}`;
+  const days = Math.round((startOfDay(ms) - startOfDay(nowMs)) / DAY_MS);
+  if (days <= 0) return clock;
+  const date = `${when.year}-${pad(when.month)}-${pad(when.day)}`;
+  return days === 1 ? `${clock} tomorrow` : `${date} ${clock}`;
+}
+
+const pad = (n: number) => String(n).padStart(2, "0");
+
+/** That instant on the reader's own clock, which is what a time to act on is in. */
+const local = (ms: number) => DateTime.setZone(DateTime.makeUnsafe(ms), DateTime.zoneMakeLocal());
+
+/** Midnight before that instant, on the same clock. */
+const startOfDay = (ms: number) => DateTime.toEpochMillis(DateTime.startOf(local(ms), "day"));

@@ -3,7 +3,7 @@
 // `dispatch` puts plain data on a queue an Effect fiber drains. Nothing crosses in any
 // other direction — components never hold an Effect, and the handlers never render.
 
-import { Deferred, Effect, FileSystem, Queue, Scope, Stream, SubscriptionRef } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Queue, Scope, Stream, SubscriptionRef } from "effect";
 import { createCliRenderer } from "@opentui/core";
 import { render, useKeyboard, useRenderer } from "@opentui/solid";
 import { createSignal, ErrorBoundary, onMount, Show, type Accessor } from "solid-js";
@@ -21,6 +21,7 @@ import {
   type Focus,
   type FocusCommand,
 } from "./state";
+import type { Selection } from "../selection";
 
 // Re-exported where it was declared: the Focus is the bridge's own state, and it moved
 // into the state layer so the reads it decides can be tested as the plain data they are.
@@ -33,6 +34,13 @@ export type { Focus };
  */
 const POLL_MS = 3_000;
 
+/**
+ * How long a stop is held on the board before the Driver hears about it. The whole point
+ * of the wait: nothing is signalled and nothing is written, so an undo inside it takes
+ * back a decision rather than racing one.
+ */
+const GRACE_MS = 5_000;
+
 export interface Bridge<E, R> {
   /** Everything the app draws, for what is being looked at. Never called in a render. */
   load: (focus: Focus) => Effect.Effect<AppState, E, R>;
@@ -44,10 +52,20 @@ export interface Bridge<E, R> {
   act: (command: Command, prompts: InputPrompts) => Effect.Effect<string | null, E, R>;
   /** Where a change to a Run shows up, which is what the watch is put on. */
   stateDir: string;
+  /** The brand mark's file, drawn as a bitmap where the terminal can. */
+  logo?: string;
   /** Which of the Herd's work the board opens on, decided once at startup. */
   filter: Filter;
   /** The workspace this board was opened from, which `g` narrows to. */
   origin: string | null;
+  /**
+   * What the board has selected, for whoever is outside the tab: the status line under
+   * the chat prompt, and the tools a conversation asks with no run of its own. Optional,
+   * because a bridge in a test has nobody to tell.
+   */
+  selected?: (on: Selection | null) => Effect.Effect<void, E, R>;
+  /** The stop grace, in milliseconds. Shortened only by a test. */
+  graceMs?: number;
   /**
    * Handed this board's own `dispatch` once it is running. What a confirmed `navigate`
    * needs: an executor is an Effect and the Selection is the app's, so this is the one
@@ -162,6 +180,12 @@ export function driveBridge<E, R>(
      */
     const control = yield* Queue.make<FocusCommand>();
     const work = yield* Queue.make<Command>();
+    /**
+     * The third lane: a stop waiting out its grace, and the undo that takes it back.
+     * Its own, because the wait is five seconds long — on the work queue it would hold
+     * up every command behind it, and on the control queue it would stall the keyboard.
+     */
+    const stops = yield* Queue.make<Extract<Command, { _tag: "StopRun" | "UndoStop" }>>();
     const closed = yield* Deferred.make<void>();
 
     /**
@@ -185,6 +209,10 @@ export function driveBridge<E, R>(
     const [state, setState] = createSignal<AppState>(
       yield* bridge.load(yield* SubscriptionRef.get(focus)),
     );
+
+    /** What has been marked and not yet sent, by Run, with the fiber counting it down. */
+    const waiting = new Map<string, Fiber.Fiber<unknown, unknown>>();
+    const marked = () => setState((previous) => ({ ...previous, stopping: [...waiting.keys()] }));
 
     /**
      * A read that fails says so in the footer and leaves the last state on screen. The
@@ -224,7 +252,14 @@ export function driveBridge<E, R>(
         Stream.switchMap((at) => Stream.fromEffect(stated(bridge.load(at)))),
         Stream.runForEach((next) =>
           Effect.sync(() => {
-            if (next.ok) setState((previous) => ({ ...next.value, note: previous.note }));
+            // The note and the marks are the bridge's own: a load knows nothing about
+            // either, and taking its word for them would wipe both every three seconds.
+            if (next.ok)
+              setState((previous) => ({
+                ...next.value,
+                note: previous.note,
+                stopping: previous.stopping,
+              }));
           }),
         ),
       ),
@@ -234,8 +269,48 @@ export function driveBridge<E, R>(
       Effect.forever(
         Effect.gen(function* () {
           const command = yield* Queue.take(control);
-          if (command._tag === "Quit") return yield* Deferred.succeed(closed, undefined);
+          // Ignored rather than reported: a record chat reads is not worth a board that
+          // stops answering the keyboard, and this lane has to stay instantaneous.
+          const tell = (on: Selection | null) =>
+            bridge.selected === undefined ? Effect.void : Effect.ignore(bridge.selected(on));
+          // A board nobody has open has nothing selected.
+          if (command._tag === "Quit") {
+            yield* tell(null);
+            return yield* Deferred.succeed(closed, undefined);
+          }
           yield* SubscriptionRef.update(focus, (at) => retarget(at, command));
+          if (command._tag === "Select") yield* tell(command.on);
+        }),
+      ),
+    );
+
+    yield* Effect.forkScoped(
+      Effect.forever(
+        Effect.gen(function* () {
+          const command = yield* Queue.take(stops);
+          if (command._tag === "UndoStop") {
+            const counting = [...waiting.values()];
+            waiting.clear();
+            marked();
+            return yield* Effect.forEach(counting, Fiber.interrupt, { discard: true });
+          }
+          // Already counting down: a second press is not a second stop.
+          if (waiting.has(command.runId)) return;
+          const fiber = yield* Effect.forkScoped(
+            Effect.sleep(`${bridge.graceMs ?? GRACE_MS} millis`).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  waiting.delete(command.runId);
+                  marked();
+                }),
+              ),
+              // Onto the work queue, so the stop itself is an ordinary command: the note
+              // it returns is the one the human reads, and the board re-reads after it.
+              Effect.andThen(Queue.offer(work, command)),
+            ),
+          );
+          waiting.set(command.runId, fiber);
+          marked();
         }),
       ),
     );
@@ -260,7 +335,9 @@ export function driveBridge<E, R>(
       state,
       pending,
       dispatch: (command) => {
-        if (changesFocusOnly(command)) Queue.offerUnsafe(control, command);
+        if (command._tag === "StopRun" || command._tag === "UndoStop")
+          Queue.offerUnsafe(stops, command);
+        else if (changesFocusOnly(command)) Queue.offerUnsafe(control, command);
         else Queue.offerUnsafe(work, command);
       },
       closed: Deferred.await(closed),
@@ -300,7 +377,12 @@ export function runApp<E, R>(
               />
             )}
           >
-            <App state={driven.state} pending={driven.pending} dispatch={driven.dispatch} />
+            <App
+              state={driven.state}
+              pending={driven.pending}
+              dispatch={driven.dispatch}
+              logo={bridge.logo}
+            />
           </ErrorBoundary>
         ),
         renderer,

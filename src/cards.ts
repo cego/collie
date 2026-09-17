@@ -26,7 +26,7 @@ const RevisionSchema = Schema.Struct({
 const CardSchema = Schema.Struct({
   id: Schema.String,
   run: Schema.String,
-  kind: Schema.Literals(["slice", "review", "fix-round", "mr", "final", "followup"]),
+  kind: Schema.Literals(["slice", "review", "fix-round", "mr", "final", "followup", "hold"]),
   at: Schema.String,
   step: Schema.String,
   iteration: Schema.Int,

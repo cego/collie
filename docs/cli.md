@@ -89,14 +89,14 @@ collie --json run start <workflow> --input k=v [--input k=v …]
 collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 ```
 
-| Flag              | What it does                                                                            |
-| ----------------- | --------------------------------------------------------------------------------------- |
-| `--input k=v`     | Repeatable. The names come from `workflow show`, plus `branch` (below).                 |
-| `--inputs-json`   | Every input at once, as one JSON object.                                                |
-| `--decide s=t`    | Repeatable. Answers Choice step `s` with title `t` now, so the run does not stop there. |
-| `--task <id>`     | Continue that Task instead of starting a new one, as `task list` prints it.             |
-| `--continue-task` | Continue the Task whose workspace this is; `needs_input` outside one.                   |
-| `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                              |
+| Flag              | What it does                                                                                                                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `--input k=v`     | Repeatable. The names come from `workflow show`, plus `branch` (below).                                                                                                              |
+| `--inputs-json`   | Every input at once, as one JSON object.                                                                                                                                             |
+| `--decide s=t`    | Repeatable. Answers Choice step `s` with title `t` now, so the run does not stop there. The step that opens the merge request takes `approve` or `skip`, which is its evidence gate. |
+| `--task <id>`     | Continue that Task instead of starting a new one, as `task list` prints it.                                                                                                          |
+| `--continue-task` | Continue the Task whose workspace this is; `needs_input` outside one.                                                                                                                |
+| `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                                                                                                                           |
 
 ### Tasks
 
@@ -350,6 +350,38 @@ stories about why a run stopped.
 | `mr_url`, `linear_issues`, `summary`  | What the run produced.                                                                                                                                                        |
 | `progress[]`                          | The Driver's own log of what it did, with timestamps.                                                                                                                         |
 
+## The board
+
+```sh
+collie --json board
+```
+
+Every Task on this Herd's board, in the order the Home draws them: **Needs you** first,
+then **Working**, then **Finished**, and inside each the state order `blocked`, `active`,
+`quiet`, `failed`, `stopped`, `done`. It is the same model the pane renders, so an agent
+reading this and a human reading the board cannot be told two different stories about one
+Task.
+
+Herd-wide, and never narrowed by which workspace you typed it in: one board per Herd
+([ADR-0009](adr/0009-the-collie-tab-is-the-herds.md)). A Run belonging to no Task is a
+Task of its own; the Runs a plan fanned out are that plan's `children` rather than Tasks
+beside it.
+
+| Field                    | What it says                                                                                                               |
+| ------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| `id`                     | The Task, or the Run's own id where it belongs to no Task.                                                                 |
+| `name`, `project`        | The two halves of the task workspace's label. No herdr ids.                                                                |
+| `state`                  | `blocked`, `active`, `quiet`, `failed`, `stopped` or `done`.                                                               |
+| `steps[]`                | The pipeline across the Task's Runs, each `done`, `active`, `blocked`, `failed` or `todo`. A step that loops is one entry. |
+| `sentence`               | What is happening, in one plain sentence — no step names, counters or glyph codes.                                         |
+| `age`, `at`              | How long it has been going, and when it last changed.                                                                      |
+| `drift`, `held`          | The one line each carries, or `null`.                                                                                      |
+| `decision`               | The question, proposal or gate waiting on you, or `null`. This is what puts a Task in Needs you.                           |
+| `agents[]`, `children[]` | The live agents on it, and one entry per repository of a plan that spans several.                                          |
+| `mr`, `branch`           | What it is building, where it can be read.                                                                                 |
+| `disposition`            | What became of the work, where a person recorded it — never inferred from a merge request.                                 |
+| `run`, `runs[]`          | The Run a card acts on, and every Run of the Task.                                                                         |
+
 ## Answer a question
 
 A run that reaches a Choice step reports `status: "waiting"` and fills `awaiting` and
@@ -377,6 +409,12 @@ the menu and leaves the run open for `resume`. A title that is not on offer come
 `invalid_answer` with the valid ones in `details.answers`; a question already answered comes
 back as `choice_already_answered`; a run that is not at a question comes back as
 `run_not_waiting`.
+
+A run holding at its [evidence gate](#outcomes) is
+waiting in the same way, and is answered by the same command. Its answers are `approve`,
+`skip`, or `approve:<names>` — the list cut down to the verifications it is to be held to,
+comma-separated, each one of the names the gate offered. `run show` gives the list in
+`attention.choice.verifications`. Anything else comes back as `invalid_answer`.
 
 ## Stop and resume
 
@@ -484,6 +522,9 @@ and Collie's tools — that is where questions about the flock are asked, and it
 ```sh
 collie --json chat status
 collie --json chat harness pi
+collie chat status-line
+collie chat status-line --install
+collie chat context
 collie --json tools list
 collie --json tools call collie_herd
 collie --json tools call collie_run --input '{"run":"<run-id>"}'
@@ -494,24 +535,59 @@ collie --json tools call collie_run --input '{"run":"<run-id>"}'
 already running, and it changes nothing about the harnesses your runs use. Claude Code is
 the default, on an existing installation as much as a new one.
 
+`chat status-line` prints `board selection: <name>`, or `board selection: none · whole
+herd`, which is what Claude Code shows under the prompt so that chat and board agree on
+what "it" means. `--install` is what `setup.sh` runs: it configures `statusLine` in your
+own Claude Code settings — never `prepare.sh`, exactly like the keybindings — and leaves a
+status line you already have alone, naming it instead. `collie doctor` reports which of
+those it found. Outside a herdr session the command prints nothing, so a Claude Code you
+opened somewhere else carries no line about a board it is nowhere near.
+
+`chat context` is the same fact for the conversation: the Home's Claude Code runs it as a
+`UserPromptSubmit` hook, so each message you send carries one line naming the open card,
+and nothing at all while none is open. You never type it, and it is wired per launch —
+nothing in your own Claude Code settings changes.
+
 `tools` is the same contract native chat is given, and it is the whole of what chat can
 reach. Claude gets it over a local MCP server (`collie mcp`, which you never type) and Pi
 through a generated extension; this is the third way in.
 
-| tool                  | What it does                                                                             |
-| --------------------- | ---------------------------------------------------------------------------------------- |
-| `collie_herd`         | Every run in the Herd, bounded, saying how many it left out                              |
-| `collie_run`          | One run: goal, directory, Driver, pending question and answers, steps, cards and drift   |
-| `collie_workspaces`   | The workspaces this session has, and the workflows that can be started                   |
-| `collie_receipts`     | One run's pending question and proposals, and the state of messages sent to agents       |
-| `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body    |
-| `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults |
-| `collie_news`         | What has happened that nobody has been told, and reading it settles those items          |
-| `collie_propose`      | Carry out requested actions and return their results; the legacy tool name is retained   |
+| tool                  | What it does                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------- |
+| `collie_herd`         | Every run in the Herd, bounded, saying how many it left out                                 |
+| `collie_run`          | One run: its goal, constraints, steps, cards and open drift                                 |
+| `collie_workspaces`   | The workspaces this session has, and the workflows that can be started                      |
+| `collie_receipts`     | One run's pending proposals, and what state each message to its agents actually reached     |
+| `collie_definitions`  | The Workflows and Personas there are; one resolved and checked, or one Persona's body       |
+| `collie_installation` | What Collie needs, which workspace the Home is, what a cleanup would close, the defaults    |
+| `collie_news`         | What has happened that nobody has been told, and reading it settles those items             |
+| `collie_hold`         | Hold a run, or every unfinished run in a workspace, optionally until a time                 |
+| `collie_do`           | Carry out, at once, a board action or decision on a named run the human asked for           |
+| `collie_propose`      | Carry out the rest of what the human can ask for, with a request id that makes retries safe |
 
-The reads are Herd-wide and are never narrowed by the board's filter or its selection.
+The reads are Herd-wide and are never narrowed **implicitly**: no read is filtered by what
+the board is showing or which card is open. The selection is an **input** a tool may be
+given instead ([ADR-0012](adr/0012-the-boards-selection-is-an-explicit-chat-input.md)).
+Chat is told it at each prompt, and `collie_run`, `collie_receipts`, `collie_hold` and
+`collie_do` act on it when you name no run — saying which run that was, in the answer.
 `collie_installation` is the one read that is not read-only: the installation checks
 include a bounded `git fetch`, and it says so rather than letting a client assume.
+
+Three of them write, and every one carries out what the human asked for in the
+conversation, at once ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md)):
+chat may do what they could do on the board themselves, because sending them to the UI for
+it is chat obstructing the person it serves. What Collie wants of its own accord never
+comes through these: the evaluator's proposals wait on the board, and chat asks in words.
+
+`collie_do` takes the board's own actions on a named run — `stop`, `resume`, `release`,
+`answer`, `deliver`, `followup` and `start` — through the same closed union, the same
+last-moment admission check and the same executors a confirmation runs. It also takes the
+board's decisions, which are not actions on a run: `confirm` a waiting proposal by its id
+and the hash `collie_receipts` lists beside it, `decline` one, and `disposition` to record
+what became of a finished run's work. It answers a line per action saying what each one
+came to. A kind outside that set is refused with the name of the tool that does take it:
+amending an Intent, forking a definition, changing the defaults, a cleanup and an upgrade
+are `collie_propose`'s.
 
 `collie_propose` takes the same closed action set a steer produces — `stop`, `resume`,
 `hold`, `release`, `answer`, `deliver`, `start`, `followup`, `update_intent`,
@@ -528,9 +604,14 @@ remove — prose there matches no id, and is refused rather than reported as app
 proposal about the installation names no run, so the board draws it whichever row is
 selected.
 
-Confirming older proposals, declining, reconciling unknown results, recording verifications,
-and editing authority remain CLI commands rather than chat action kinds. They work from
-scripts too; no controlling terminal is required.
+What is deliberately not in that set: confirming, declining, reconciling, verifying, and
+setting a Run's or the Herd's **authority**. There is no action kind that settles a
+proposal, so a proposal can never contain its own yes. What a human says in chat is a
+different thing: `collie_do` relays it, against an id and a hash they were shown.
+Everything else a human can type — including forking a Workflow or a Persona, changing
+what every new Run begins with, closing the panes an older release left, and upgrading
+this installation — chat may ask for, and you confirm. `test/chat-parity.test.ts` walks the command tree itself and fails on a command
+with no route, so this list cannot quietly fall behind.
 
 A run it names that does not exist is refused rather than retargeted; an agent the run
 does not have comes back as a question for you rather than being dropped. `start` takes a
@@ -621,6 +702,10 @@ different fact, recorded beside the status rather than over it, with what backs 
 This is not a [Delivery](../CONTEXT.md), which is one message to one agent; `run
 deliveries` is that.
 
+The board records the same thing: **Mark merged** and **Mark abandoned** in a finished
+Task's drawer, with its merge request as the reference. See
+[the Control Plane](using.md#the-control-plane).
+
 Without `--as` the command reads. With it, `--as` is `merged`, `abandoned`, or
 `superseded`, and there is deliberately no value meaning the run succeeded after all.
 `run show` then says both: `failed · merged cego/collie!43 by mk`. Nothing is inferred —
@@ -679,11 +764,19 @@ What kind of result a run has to prove, and so what evidence closes it:
 | `docs`          | the documented commands, run as written, each with a passing verification                                                                                   |
 | `migration`     | `migrate-up` and `migrate-down` (or `rollback`) both passing                                                                                                |
 
-The gate runs before the merge request, which is where the claim is made. Collie runs the
-run's own approved set itself at the tree as it stands, then says what is missing; gaps
-stop the run with `evidence_missing` and are listed on the record and in `run show`. A run
-with nothing approved is told so rather than passed — an empty set would make the gate say
-yes to anything.
+The gate runs before the merge request, which is where the claim is made. It asks first:
+the run stops as a decision on the board — `Holding at the mr gate until you approve the
+list.` — with the list it would be held to and **Approve**, **Edit the list** and **Skip**.
+The question is written in the run directory as any other is, so closing the tab or
+resuming later brings it back, `collie run answer` answers it, and `--decide` answers it at
+launch. **Skip** goes past the gate: nothing is collected and nothing is judged, and the
+answer is on the record.
+
+Once it is approved, Collie runs the run's own approved set itself at the tree as it
+stands — the whole list, or what an edit left of it — then says what is missing; gaps stop
+the run with `evidence_missing` and are listed on the record and in `run show`. A run with
+nothing approved is told so rather than passed — an empty set would make the gate say yes
+to anything.
 
 An investigation that concludes there is nothing to change skips the merge request with a
 note and finishes. That is a real outcome, and nothing is invented to have something to
@@ -781,13 +874,25 @@ passed is a **claim** and is shown as one; only a collected result is a verifica
 
 ```sh
 collie --json run hold <run-id> --reason "the branch is wrong" --request-id "$(uuidgen)"
+collie --json run hold <run-id> --until 14:00 --reason "lunch" --request-id "$(uuidgen)"
+collie --json run hold --workspace <workspace-id> --until 14:00 --request-id "$(uuidgen)"
 collie --json run release <run-id> --request-id "$(uuidgen)"
 ```
 
 `hold` stops a run taking on **new** work; whatever is already running carries on. The
 Driver acts on it at its next work boundary, so a step in flight finishes rather than
-being cut off. `run show` then reports attention `held` with the reason, and `release` is
-the only thing that starts it moving again.
+being cut off. `run show` then reports attention `held` with the reason.
+
+`--until` is when it lifts by itself: a clock time (`14:00`, the next time it comes round
+on **this machine's** clock, not UTC) or a full timestamp, taken with whatever zone it
+carries. The Driver releases the run at that moment and writes a card saying
+so, because the person who set it is the one not watching. A time Collie cannot read is
+refused here rather than written down — a hold whose end nobody can act on is a hold that
+never lifts. Without `--until`, `release` is what starts it moving again.
+
+`--workspace` holds every unfinished run in one workspace instead of a single run. Each run
+takes its own hold, so releasing one — or **answering one's question**, which is you coming
+back — lifts that one and leaves the rest held.
 
 Both need a live Driver — the hold is a command to it, and a run with nobody driving has
 nothing to decline to start.
