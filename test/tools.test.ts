@@ -8,6 +8,8 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readEnv, type PluginEnv } from "../src/env";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { RunStore } from "../src/run";
+import { inboxFiles } from "../src/driver";
+import { latest, readDispositions } from "../src/disposition";
 import { CHOICE, RUNNER_PID } from "../src/driver";
 import { TOOLS, toolNamed } from "../src/tools";
 import { resetExecutors } from "../src/executors";
@@ -24,14 +26,18 @@ import {
   confirm as confirmProposal,
   proposalsPath,
   read as readProposals,
+  record as recordProposal,
   type Actor,
   type ProposalRecord,
 } from "../src/proposals";
+import type { Action } from "../src/evaluator";
 import { herdOf } from "../src/steering";
+import { selectionPath, writeSelection } from "../src/selection";
 import { newTask, writeTask } from "../src/task";
 import { runEffect } from "./support/effect";
 
 const encodeJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
+const decodeInbox = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Any));
 
 let stateDir: string;
 let env: PluginEnv;
@@ -93,7 +99,9 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
   // record or confirmed a proposal would be a way around the admission rules, not a tool.
   expect(TOOLS.map((tool) => tool.name).sort()).toEqual([
     "collie_definitions",
+    "collie_do",
     "collie_herd",
+    "collie_hold",
     "collie_installation",
     "collie_news",
     "collie_propose",
@@ -109,6 +117,12 @@ test("the tools are the whole of the model's reach, and only one of them asks fo
     expect(propose).toContain(`"${kind}"`);
   expect(propose).not.toContain('"shell"');
   expect(propose).not.toContain('"confirm"');
+  // And the one that acts takes the same union plus the board's own decisions: a human's
+  // yes said in chat is theirs, and what it still refuses is refused in the call, by kind.
+  const does = encodeJson(toolNamed("collie_do")!.input);
+  for (const kind of ["stop", "resume", "answer", "confirm", "decline", "disposition"])
+    expect(does).toContain(`"${kind}"`);
+  expect(does).not.toContain('"shell"');
 });
 
 test("a tool that writes does not tell a client it only reads", () => {
@@ -117,7 +131,13 @@ test("a tool that writes does not tell a client it only reads", () => {
   // returns, the installation checks fetch this checkout's refs, and proposing appends to
   // the journal. None of the three is a read.
   const writes = TOOLS.filter((tool) => !tool.readOnly).map((tool) => tool.name);
-  expect(writes.sort()).toEqual(["collie_installation", "collie_news", "collie_propose"]);
+  expect(writes.sort()).toEqual([
+    "collie_do",
+    "collie_hold",
+    "collie_installation",
+    "collie_news",
+    "collie_propose",
+  ]);
 });
 
 test("a read covers the whole Herd, whatever a board is filtered to", () =>
@@ -151,7 +171,7 @@ test("a Herd too big for one answer says how much it left out", () =>
   runEffect(
     Effect.gen(function* () {
       for (let n = 0; n < 42; n++) yield* aRun(`run ${n}`);
-      expect(yield* call("collie_herd")).toMatch(/\(\d+ more Run\(s\) not listed here\)/);
+      expect(yield* call("collie_herd")).toMatch(/\(\d+ more card\(s\) not listed here\)/);
     }),
   ));
 
@@ -210,8 +230,77 @@ test("a read validates what it was given, and says so rather than throwing", () 
     Effect.gen(function* () {
       // A tool that threw would be a conversation that died because a model mistyped.
       expect(yield* call("collie_run", { run: "no-such-run" })).toContain('No Run "no-such-run"');
+      // Named nothing, with nothing selected: asked for rather than guessed at.
       const wrong = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, { nope: 1 }));
-      expect(wrong).toContain("collie_run takes");
+      expect(wrong).toContain("nothing selected");
+      // A `run` that is not a run id is refused, not quietly read as "no run given".
+      const typed = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, { run: 5 }));
+      expect(typed).toContain("collie_run takes");
+    }),
+  ));
+
+test("a write with no run acts on the board's selection, and says that it did", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // Nothing open: nothing to stand in, so the input is refused as incomplete.
+      expect(yield* call("collie_do", { actions: [{ kind: "stop" }] })).toContain("nothing open");
+
+      const run = yield* aRun("add a picker");
+      yield* writeSelection(yield* selectionPath(stateDir, KEY), {
+        task: "t1",
+        run: run.id,
+        name: "Strapi prod seeder",
+      });
+
+      const said = yield* call("collie_do", { actions: [{ kind: "stop" }] });
+      expect(said).toContain(`"Strapi prod seeder" (${run.id})`);
+      expect(said).toContain("stop:");
+      const held = yield* call("collie_hold", {});
+      expect(held).toContain("Strapi prod seeder");
+    }),
+  ));
+
+test("a run-scoped read with no run takes the board's selection, and says that it did", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      yield* writeSelection(yield* selectionPath(stateDir, KEY), {
+        task: "t1",
+        run: run.id,
+        name: "Strapi prod seeder",
+      });
+
+      const detail = yield* call("collie_run");
+      // Told which Run it answered about: an answer about a Run nobody named, that does
+      // not say which one, is how "how is it going?" gets answered about the wrong work.
+      expect(detail).toContain("Strapi prod seeder");
+      expect(detail).toContain("add a picker");
+
+      const receipts = yield* call("collie_receipts");
+      expect(receipts).toContain("Strapi prod seeder");
+      expect(receipts).toContain("Waiting on the human");
+    }),
+  ));
+
+test("a run the reader named wins over the selection, and the Herd read is never narrowed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const selected = yield* aRun("the selected one");
+      const other = yield* aRun("the one they asked about");
+      yield* writeSelection(yield* selectionPath(stateDir, KEY), {
+        task: "t1",
+        run: selected.id,
+        name: "Strapi prod seeder",
+      });
+
+      const said = yield* call("collie_run", { run: other.id });
+      expect(said).toContain("the one they asked about");
+      expect(said).not.toContain("Strapi prod seeder");
+
+      // The selection is an input a tool may take, never a filter over the Herd.
+      const herd = yield* call("collie_herd");
+      expect(herd).toContain(selected.id);
+      expect(herd).toContain(other.id);
     }),
   ));
 
@@ -700,5 +789,201 @@ test("news is built from the record, and carries no transcripts or diffs", () =>
       // summarised anything, and nothing dragged a worker's output in behind it.
       expect(said).toContain("nothing was verified");
       expect(said.length).toBeLessThan(500);
+    }),
+  ));
+
+test("collie_hold holds a Run the human asked to hold, and says until when", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+
+      const said = yield* call("collie_hold", { run: run.id, until: "14:00", reason: "lunch" });
+
+      // Carried out, not proposed: a human's own instruction in chat is theirs, and
+      // sending them to the board for it is chat obstructing the person it serves.
+      expect(said).toContain(run.id);
+      expect(said).toContain("14:00");
+      const files = yield* inboxFiles(run.dir);
+      expect(files).toHaveLength(1);
+      const fs = yield* FileSystem.FileSystem;
+      expect(decodeInbox(yield* fs.readFileString(files[0]!))).toMatchObject({
+        type: "hold",
+        reason: "lunch",
+        by: "chat",
+      });
+      // Nothing was proposed: there is nothing for the human to confirm afterwards.
+      expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual([]);
+    }),
+  ));
+
+test("collie_do carries out what the human asked for, and says what happened", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+
+      // "Stop it" is the human's own instruction: it is done, not proposed back at them.
+      const said = yield* call("collie_do", {
+        actions: [{ kind: "stop", run: run.id }],
+      });
+
+      expect(said).toContain("stop");
+      expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual([]);
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.exists(`${run.dir}/stopped`)).toBe(true);
+    }),
+  ));
+
+test("collie_do resumes the failed Run the board offers a resume on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      run.record.status = "failed";
+      yield* run.save();
+
+      // The one state a resume is for: admission must not refuse it for having ended.
+      const said = yield* call("collie_do", { actions: [{ kind: "resume", run: run.id }] });
+      expect(said).not.toContain("skipped");
+      expect(said).not.toContain("the run is failed");
+    }),
+  ));
+
+test("collie_do settles a proposal the human said yes to in chat", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      // The evaluator's own idea, waiting on the board: the one kind of proposal there is
+      // now that chat's requests are carried out as they are made.
+      const file = yield* proposalsPath(stateDir, KEY);
+      const pending = (interpretation: string, actions: Action[]) =>
+        recordProposal(file, {
+          interpretation,
+          targets: [{ run: run.id }],
+          actions,
+          allowedNow: [],
+          intentVersions: {},
+          by: "evaluator:e-1",
+        });
+      yield* pending("release it, the branch is sorted out", [{ kind: "release", run: run.id }]);
+      const waiting = (yield* readProposals(file)).filter(
+        (line): line is ProposalRecord => line.kind === "proposal",
+      );
+      const proposal = waiting[0]!;
+
+      // "Yes, do it" is the human's own decision, said here rather than on the board.
+      const said = yield* call("collie_do", {
+        actions: [{ kind: "confirm", proposal: proposal.id, hash: proposal.content_hash }],
+      });
+      expect(said).toContain("release");
+      const lines = yield* readProposals(yield* proposalsPath(stateDir, KEY));
+      const settled = lines.flatMap((line) => (line.kind === "confirmed" ? [line] : []));
+      expect(settled.map((line) => line.id)).toEqual([proposal.id]);
+      // Recorded as chat's: relaying what they said is not becoming them.
+      expect(settled[0]!.by.startsWith("chat:")).toBe(true);
+
+      // And a no is the same instruction the other way round.
+      yield* pending("stop it", [{ kind: "stop", run: run.id }]);
+      const second = (yield* readProposals(yield* proposalsPath(stateDir, KEY)))
+        .filter((line): line is ProposalRecord => line.kind === "proposal")
+        .find((line) => line.id !== proposal.id)!;
+      yield* call("collie_do", { actions: [{ kind: "decline", proposal: second.id }] });
+      expect(
+        (yield* readProposals(yield* proposalsPath(stateDir, KEY))).some(
+          (line) => line.kind === "declined" && line.id === second.id,
+        ),
+      ).toBe(true);
+    }),
+  ));
+
+test("a confirmation whose actions failed stops the rest of what was asked", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      yield* call("collie_propose", {
+        interpretation: "start the review",
+        actions: [{ kind: "start", workflow: "no-such-workflow", inputs: { goal: "x" } }],
+      });
+      const proposal = (yield* readProposals(yield* proposalsPath(stateDir, KEY))).flatMap(
+        (line) => (line.kind === "proposal" ? [line] : []),
+      )[0]!;
+
+      const said = yield* call("collie_do", {
+        actions: [
+          { kind: "confirm", proposal: proposal.id, hash: proposal.content_hash },
+          { kind: "disposition", run: run.id, became: "merged", ref: "collie!151" },
+        ],
+      });
+
+      // A sequence stops at its first failure.
+      expect(said).toContain("confirm: failed");
+      expect(said).not.toContain("disposition");
+      expect(yield* readDispositions(run.dir)).toEqual([]);
+    }),
+  ));
+
+test("collie_do records what became of the work, and starts a Run when asked to", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+
+      const marked = yield* call("collie_do", {
+        actions: [{ kind: "disposition", run: run.id, became: "merged", ref: "collie!151" }],
+      });
+      expect(marked).toContain("merged");
+      const line = latest(yield* readDispositions(run.dir));
+      expect(line?.kind).toBe("merged");
+      expect(line?.ref).toBe("collie!151");
+      expect(line?.by.startsWith("chat:")).toBe(true);
+
+      // A launch the human asked for is theirs too: what comes back is about the
+      // workflow, never a note that this is somebody else's to confirm.
+      const launched = yield* call("collie_do", {
+        actions: [{ kind: "start", workflow: "no-such-workflow", inputs: { goal: "x" } }],
+      });
+      expect(launched).not.toContain("collie_propose");
+      expect(launched).toContain("no-such-workflow");
+    }),
+  ));
+
+test("collie_do refuses what is Collie's to propose and the human's to decide", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+
+      // Its own initiative is a proposal, whatever it calls the tool.
+      const correction = yield* call("collie_do", {
+        actions: [
+          { kind: "update_intent", run: run.id, change: "set-goal", patch: "x", base_version: 1 },
+        ],
+      });
+      expect(correction).toContain("collie_propose");
+      expect(yield* inboxFiles(run.dir)).toHaveLength(0);
+
+      // And nothing here confirms: a yes to a payload is the human's, on the board.
+      expect(yield* call("collie_do", { actions: [] })).toContain("action");
+    }),
+  ));
+
+test("collie_hold holds a whole workspace, and refuses a time nobody can act on", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const one = yield* aRun("add a picker");
+      const two = yield* aRun("fix the parser");
+      for (const run of [one, two]) {
+        run.record.workspace = "w1";
+        yield* run.save();
+      }
+
+      const said = yield* call("collie_hold", { workspace: "w1", until: "14:00" });
+      expect(said).toContain("2");
+      for (const run of [one, two]) expect(yield* inboxFiles(run.dir)).toHaveLength(1);
+
+      // A time the Driver could not read would be a hold that never lifts, so it is
+      // refused here rather than written as words.
+      const refused = yield* call("collie_hold", { run: one.id, until: "soon" });
+      expect(refused).toContain("soon");
+      expect(yield* inboxFiles(one.dir)).toHaveLength(1);
+
+      // Neither a Run nor a workspace is nothing to hold, and it says so.
+      expect(yield* call("collie_hold", {})).toContain("run");
     }),
   ));

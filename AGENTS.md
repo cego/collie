@@ -37,10 +37,13 @@ doors: herdr actions, and the `collie` CLI.
   is asked, and the rule that live labels are data) and `src/naming.ts` (the labels
   themselves, and which of them are still Collie's to write).
 - **Changing what the board draws, what it is a board of, or which workspace owns it** →
-  [`docs/using.md`](docs/using.md#the-control-plane), alongside `src/home.ts` (ownership),
-  `src/live.ts` (what the Live region is given) and `src/ui/live.tsx` (how it is drawn).
-  One board per Herd, in the Home ([ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md));
-  a workspace is a filter over it, never a board of its own.
+  [`docs/using.md`](docs/using.md#the-control-plane), alongside `src/board.ts` (the TaskView
+  model and the sentence), `src/ui/Board.tsx` and `src/ui/Drawer.tsx` (the cards and the
+  record) and `src/home.ts` (ownership). One board per Herd, in the Home
+  ([ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md)), and it is one card per Task
+  rather than a table of Runs
+  ([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md), which supersedes what
+  [ADR-0005](docs/adr/0005-collie-tab-is-an-application.md) says the tab draws).
 - **Changing what a Run must prove, or what counts as proof** →
   [`docs/cli.md`](docs/cli.md#outcomes) and
   [ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md), alongside `src/outcome.ts` (the
@@ -50,7 +53,10 @@ doors: herdr actions, and the `collie` CLI.
 - **Changing the Home's panes, the chat harness, or what native chat may read** →
   [`docs/using.md`](docs/using.md#talking-to-collie-about-the-flock), alongside
   `src/chat.ts` (the harness and the session), `src/tools.ts` (the read contract) and
-  [ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md).
+  [ADR-0011](docs/adr/0011-the-conversation-is-a-native-harness.md). What the board has
+  selected is an explicit input chat may read, never a filter over the reads
+  ([ADR-0012](docs/adr/0012-the-boards-selection-is-an-explicit-chat-input.md), alongside
+  `src/selection.ts` and `src/statusline.ts`).
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

@@ -27,7 +27,7 @@ import type {
   StepRequirement,
   Variant,
 } from "./definitions";
-import { roundVariant, stepVariants, variantKeys } from "./definitions";
+import { gateSteps, roundVariant, stepSummaries, stepVariants, variantKeys } from "./definitions";
 import type { Defaults } from "./config";
 import { configValue, readConfig, writeConfigValue } from "./config";
 import type { PluginEnv } from "./env";
@@ -167,7 +167,14 @@ import {
 } from "./cards";
 import { ensureHomeFor } from "./home";
 import { shell } from "./mr";
-import { readChoice, readInboxMidStep, type InboxCommandValue } from "./driver";
+import {
+  dropHolds,
+  readChoice,
+  parseGateAnswer,
+  readInboxMidStep,
+  type GateAnswer,
+  type InboxCommandValue,
+} from "./driver";
 import * as dispatch from "./dispatcher";
 import type { SubmitOutcome } from "./dispatcher";
 import {
@@ -263,11 +270,24 @@ const notify = (
     settings: o.defaults.notifications,
   });
 
+type PromptServices =
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
+  | FileSystem.FileSystem
+  | Path.Path;
+
 /** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
-export type EnginePrompts = InputPrompts<
-  Error | PlatformError,
-  ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto | FileSystem.FileSystem | Path.Path
->;
+export interface EnginePrompts extends InputPrompts<Error | PlatformError, PromptServices> {
+  /**
+   * The evidence gate, which is a decision rather than a menu: its answer may narrow the
+   * list it is about, so it comes back as what was decided rather than as an item.
+   */
+  gate(asked: {
+    readonly run: string;
+    readonly step: string;
+    readonly verifications: ReadonlyArray<string>;
+  }): Effect.Effect<GateAnswer | null, Error | PlatformError, PromptServices>;
+}
 
 export interface EngineOptions {
   herdr: Herdr;
@@ -431,7 +451,7 @@ interface Steering {
   /** Messages for this Run's agents, waiting for the ticket that sends them. */
   deliveries: InboxCommandValue[];
   /** Why the Run is holding, or null. No new work goes out while this is set. */
-  held: { reason: string } | null;
+  held: { reason: string; by: string; until: string | null } | null;
   /** The Intent version this Driver has loaded. */
   intentVersion: number;
   /** External submissions already turned into an override, by agent. */
@@ -1125,6 +1145,62 @@ const checkEvidence = Effect.fn("Engine.checkEvidence")(function* (
   return { verifications: yield* verificationsOf(o), final: yield* fingerprint(cwd) };
 });
 
+/** What a gate answer is recorded and resumed as, which is also what a launch may decide. */
+function gateWire(answer: GateAnswer): string {
+  if (answer.kind === "skip") return "skip";
+  return answer.verifications === null ? "approve" : `approve:${answer.verifications.join(",")}`;
+}
+
+/**
+ * The gate itself. A decision, not a menu: it is written where a question lives, so the
+ * board draws it as a card and closing the tab does not lose it, and its answer may cut
+ * the list down before anything is run.
+ *
+ * Approved without asking where there is nothing to hold — a step that will be skipped
+ * anyway — or nobody to ask, which is every Run driven without a terminal.
+ */
+const askGate = Effect.fn("Engine.askGate")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  step: ResolvedStep,
+  approved: ReadonlyArray<VerifySpec>,
+  blocking: boolean,
+) {
+  const { run, out } = o;
+  const whole: GateAnswer = { kind: "approve", verifications: null };
+  if (!blocking) return whole;
+  const names = approved.map((spec) => spec.name);
+  const prompts = o.prompts;
+  if (!prompts) {
+    yield* run.log(`${step.id}: no terminal to ask, so the evidence gate took the list as it is`);
+    return whole;
+  }
+  const decided = run.record.decisions[step.id];
+  const answer =
+    decided === undefined
+      ? yield* Effect.gen(function* () {
+          yield* callAttention(o, ctx, `${step.id}: approve what proves this run`, step.id);
+          const asked = yield* prompts.gate({ run: run.id, step: step.id, verifications: names });
+          run.record.awaiting = null;
+          yield* run.save();
+          yield* liftHoldOnAnswer(o, ctx);
+          // Off `asks you` the moment it is answered, exactly as a Choice comes off it.
+          yield* reconcileTabs(o, ctx, nothingLive);
+          return asked;
+        })
+      : parseGateAnswer(decided, names);
+  if (answer === null) return null;
+  run.record.choices.push({ step: step.id, title: gateWire(answer), at: yield* nowIso() });
+  yield* run.save();
+  const why = decided === undefined ? "" : " (decided at launch)";
+  yield* out(
+    answer.kind === "skip"
+      ? `  ▸ the evidence gate was skipped${why}`
+      : `  ▸ the evidence gate approved: ${(answer.verifications ?? names).join(", ")}${why}`,
+  );
+  return answer;
+});
+
 /**
  * What the Run has proved, checked before the merge request is opened, by the engine and
  * not by an agent. Collie runs the Run's own approved set itself at the tree as it stands
@@ -1150,14 +1226,33 @@ const evidenceGate = Effect.fn("Engine.evidenceGate")(function* (
   const stop = (status: RunStatus): Next => ({ kind: "finish", status });
   // Only a workflow that declares an outcome is held to one. A fork with its own last
   // step is not silently given a gate it never asked for.
-  if (wf.inputs.outcome === undefined) return null;
+  if (!gateSteps(wf).some((gated) => gated.id === step.id)) return null;
 
   const kind = outcomeOf(run.record.outcome);
   const approved = yield* approvedOf(o);
   const cwd = run.record.worktree?.path ?? run.record.cwd;
 
+  const decided = yield* askGate(o, ctx, step, approved, blocking);
+  if (decided === null) {
+    // Blocked with its note and no halt, exactly as a cancelled menu is: the Run is left
+    // open for whoever comes back to it, and `attention` says which step stopped and why.
+    const note = "the evidence gate was not answered";
+    yield* run.mark(step.id, "blocked");
+    run.step(step.id).note = note;
+    yield* run.save();
+    yield* out(`  ${note}`);
+    return stop(yield* finish(o, ctx, "blocked", viewSource, note));
+  }
+  // Skipped is past the gate, not through it: nothing is collected and no gap is judged,
+  // because the human has said this Run is not held to its list.
+  if (decided.kind === "skip") return null;
+  const held =
+    decided.verifications === null
+      ? approved
+      : approved.filter((spec) => decided.verifications!.includes(spec.name));
+
   // Collie's own run of every approved command, now, on this tree.
-  yield* collectApproved(o, approved);
+  yield* collectApproved(o, approved, held);
 
   // The gate has just collected results of its own, so this is a moment the journal
   // grew: record them, and say whether anything is identifiably in the way.
@@ -1168,7 +1263,7 @@ const evidenceGate = Effect.fn("Engine.evidenceGate")(function* (
   const got: Collected = {
     verifications: yield* verificationsOf(o),
     final,
-    approved,
+    approved: held,
     outputs,
     reviewed,
     insideRun: (ref) => refInside(o, ref),
@@ -2158,6 +2253,7 @@ const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
           });
           run.record.awaiting = null;
           yield* run.save();
+          yield* liftHoldOnAnswer(o, ctx);
           // Off `asks you` the moment it is answered: the next step's own rename can
           // be a hand-off and a whole agent start away.
           yield* reconcileTabs(o, ctx, nothingLive);
@@ -2414,6 +2510,7 @@ const chain = Effect.fn("Engine.chain")(function* (
     definition: child,
     approvedVerifications: yield* approvedFrom({ cwd, configDir: o.env.configDir }),
     stepIds: child.steps.map((s) => s.id),
+    stepSummaries: stepSummaries(child),
     maxIterations: child.maxIterations,
     ...runNames(checkout, { value: tail, short: tail }),
     parent: run.id,
@@ -4451,13 +4548,21 @@ const takeSteering = Effect.fn("Engine.takeSteering")(function* (o: EngineOption
     switch (command.type) {
       case "hold": {
         const why = command.reason ?? "no reason given";
-        ctx.steering.held = { reason: why };
-        yield* o.run.log(`held: ${why}`);
-        yield* o.out(`  ⏸ held: ${why}`);
+        const until = command.until ?? null;
+        ctx.steering.held = { reason: why, by: command.by ?? "you", until };
+        // On the record here rather than only at the boundary: a board reads a record,
+        // and a hold taken during a long step is not invisible until that step ends.
+        o.run.record.held = { ...ctx.steering.held };
+        yield* o.run.save();
+        const ends = until === null ? "" : ` until ${until}`;
+        yield* o.run.log(`held${ends}: ${why}`);
+        yield* o.out(`  ⏸ held${ends}: ${why}`);
         break;
       }
       case "release": {
         ctx.steering.held = null;
+        o.run.record.held = null;
+        yield* o.run.save();
         yield* o.run.log(`released: ${command.reason ?? "no reason given"}`);
         yield* o.out(`  ▶ released`);
         break;
@@ -4562,6 +4667,23 @@ const recordDriftReport = Effect.fn("Engine.recordDriftReport")(function* (
 });
 
 /**
+ * Answering is the human coming back, so the Run they left held carries on — this one and
+ * no other, because each Run holds through an inbox of its own. Both halves: the hold
+ * this Driver has already read, and one still in the inbox from before the answer.
+ */
+const liftHoldOnAnswer = Effect.fn("Engine.liftHoldOnAnswer")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+) {
+  const dropped = yield* dropHolds(o.run.dir).pipe(Effect.catch(() => Effect.succeed(0)));
+  if (ctx.steering.held === null && dropped === 0) return;
+  ctx.steering.held = null;
+  o.run.record.held = null;
+  yield* o.run.save();
+  yield* o.run.log("hold lifted: answered");
+});
+
+/**
  * Nothing new goes out while a Run is held. The current step's agents have already been
  * waited on by the time this is reached, so what is held is the *next* piece of work —
  * the Driver is not interrupting anyone, it is declining to start anything.
@@ -4572,13 +4694,35 @@ const holdUntilReleased = Effect.fn("Engine.holdUntilReleased")(function* (
 ) {
   if (!ctx.steering.held) return;
   o.run.record.awaiting = "hold";
+  // On the record rather than only in this fiber: the board reads a record, and
+  // `awaiting` alone says a Run is held without saying by whom or until when.
+  o.run.record.held = { ...ctx.steering.held };
   yield* o.run.save();
+  let lifted = false;
   while (ctx.steering.held) {
+    const until = ctx.steering.held.until;
+    if (until !== null && Date.parse(until) <= (yield* Clock.currentTimeMillis)) {
+      ctx.steering.held = null;
+      lifted = true;
+      yield* o.run.log(`hold lifted: ${until} passed`);
+      yield* o.out(`  ▶ hold lifted`);
+      break;
+    }
     yield* Effect.sleep(o.outputPollMs ?? 2000);
     yield* takeSteering(o, ctx);
   }
   o.run.record.awaiting = null;
+  o.run.record.held = null;
   yield* o.run.save();
+  // A hold that ended by itself is the one nobody was there for, so it is the one worth
+  // writing down: the human who left is not watching the log.
+  if (lifted) {
+    yield* writeCard(o, ctx, {
+      kind: "hold",
+      step: "hold",
+      claims: ["The hold ran out and this run is taking on work again."],
+    });
+  }
 });
 
 /**
@@ -5574,6 +5718,9 @@ const finish = Effect.fn("Engine.finish")(function* (
   run.record.status = status;
   run.record.finished_at = yield* nowIso();
   run.record.awaiting = null;
+  // A hold holds back work, and there is none left: the last step has no boundary after
+  // it to release one, and no Driver remains to let it expire.
+  run.record.held = null;
   run.record.summary = summarise(o, status);
   yield* run.save();
   // Every tab of it, once, now that there is no step to name and nothing of this run's

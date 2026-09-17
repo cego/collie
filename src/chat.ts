@@ -21,7 +21,7 @@ import { selfCommand, type PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import type { AgentInfo, Herdr, PaneInfo } from "./herdr";
 import { ensureLockDir, withLock } from "./lock";
-import { reason } from "./naming";
+import { reason, shellQuote } from "./naming";
 import { isString, type JsonObject } from "./schema";
 import { herdDir } from "./steering";
 import { nowIso } from "./time";
@@ -167,6 +167,8 @@ export interface LaunchFiles {
   readonly mcpConfig: string;
   /** Pi's extension, for `-e`. */
   readonly extension: string;
+  /** Claude's additional settings, for `--settings`: the hook that attaches the selection. */
+  readonly settings: string;
 }
 
 /**
@@ -201,6 +203,9 @@ export function chatArgs(
         files.mcpConfig,
         // Only Collie's server: the human's own MCP servers are not this conversation's.
         "--strict-mcp-config",
+        // Additional settings, never a rewrite of the human's own.
+        "--settings",
+        files.settings,
         // "" is Claude's spelling of "none of the built-in ones".
         "--tools",
         "",
@@ -448,6 +453,29 @@ export function mcpConfig(command: ReadonlyArray<string>, env: Readonly<Record<s
   )}\n`;
 }
 
+/**
+ * The `--settings` document a Claude launch is given: one `UserPromptSubmit` hook whose
+ * output is the board's selection, attached to the prompt as context. Cheaper than a
+ * tool: no round trip to learn what "it" is, and nothing at all while no card is open.
+ * Pi has no such hook, so its conversation asks with a run-scoped tool given no run.
+ */
+export function claudeSettings(
+  command: ReadonlyArray<string>,
+  env: Readonly<Record<string, string>>,
+): string {
+  const hook = [
+    ...Object.entries(env).map(([key, value]) => `${key}=${shellQuote(value)}`),
+    ...command.map(shellQuote),
+    "chat",
+    "context",
+  ].join(" ");
+  return `${JSON.stringify(
+    { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: hook }] }] } },
+    null,
+    2,
+  )}\n`;
+}
+
 export interface PiTool {
   readonly name: string;
   readonly label: string;
@@ -476,7 +504,9 @@ export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (op
   yield* fs.makeDirectory(opts.dir, { recursive: true });
   const mcpConfig = path.join(opts.dir, "mcp.json");
   const extension = path.join(opts.dir, "collie.ts");
+  const settings = path.join(opts.dir, "settings.json");
   yield* fs.writeFileString(mcpConfig, opts.mcpConfig);
+  yield* fs.writeFileString(settings, claudeSettings(opts.self, opts.serverEnv));
   yield* fs.writeFileString(
     extension,
     piExtension(
@@ -491,6 +521,7 @@ export const writeLaunchFiles = Effect.fn("Chat.writeLaunchFiles")(function* (op
     systemPrompt: path.join(opts.pluginRoot, "prompts", "collie-chat.md"),
     mcpConfig,
     extension,
+    settings,
   } satisfies LaunchFiles;
 });
 

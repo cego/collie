@@ -69,7 +69,12 @@ export const ActionSchema = Schema.Union([
     text: Schema.String,
     mode: Schema.Literals(["boundary", "now", "interrupt"]),
   }),
-  Schema.Struct({ kind: Schema.Literal("hold"), run: Schema.String }),
+  Schema.Struct({
+    kind: Schema.Literal("hold"),
+    run: Schema.String,
+    /** When it lifts by itself, ISO or a clock time; absent is held until released. */
+    until: Schema.optionalKey(Schema.String),
+  }),
   Schema.Struct({ kind: Schema.Literal("release"), run: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("stop"), run: Schema.String }),
   Schema.Struct({

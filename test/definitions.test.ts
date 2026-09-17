@@ -574,6 +574,7 @@ test("user defaults come from config.json in the config layer", () =>
         trust: "auto",
         permissions: "bypass",
         scope: "local",
+        density: "comfortable",
         questions: "focus",
         proactive: true,
       });

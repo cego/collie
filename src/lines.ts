@@ -185,6 +185,10 @@ export function describeAction(action: Action): string {
       return "close the Collie panes an older release left";
     case "upgrade":
       return "upgrade this installation of Collie";
+    case "hold":
+      return action.until === undefined
+        ? `hold ${action.run}`
+        : `hold ${action.run} until ${action.until}`;
     case "ask_human":
       return `ask you: ${action.question}`;
     case "none":

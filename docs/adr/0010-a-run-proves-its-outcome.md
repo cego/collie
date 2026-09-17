@@ -118,6 +118,11 @@ That is visible and intended: the alternative is a Run silently doing something 
 A project with no `.herdr/verify.json` is told so at the gate rather than passed: an empty
 approved set would make the gate say yes to anything.
 
+The gate asks before it collects: it is a decision on the board, answered with **Approve**,
+the list cut down, or **Skip**. What it refuses is a Run claiming more than it proved, not
+a human deciding what this Run has to prove — and either way the answer is on the record,
+so a merge request opened past a skipped gate can be read back as one.
+
 A merge request now says what was actually verified and by whom, which is a smaller claim
 than the one the description used to make.
 

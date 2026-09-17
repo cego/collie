@@ -234,9 +234,9 @@ function fake(initial: { workspaces?: WorkspaceInfo[]; panes?: PaneInfo[] } = {}
         ];
         return "w-new";
       }),
-    openPane: (workspaceId) =>
+    openPane: (workspaceId, _cwd, beside = null) =>
       Effect.sync(() => {
-        calls.push(`openPane ${workspaceId}`);
+        calls.push(`openPane ${workspaceId}${beside === null ? "" : ` beside ${beside}`}`);
         const opened = pane({ paneId: "9-1", tabId: "9", workspaceId, terminalId: "term-9" });
         state.panes = [...state.panes, opened];
         return { tabId: opened.tabId, paneId: opened.paneId };
@@ -331,13 +331,13 @@ test("a pane herdr would not open leaves a creating record the next ensure finis
       const open = h.deps.openPane;
       const deps: HomeDeps = {
         ...h.deps,
-        openPane: (workspaceId, _cwd) =>
+        openPane: (workspaceId, cwd, beside) =>
           refuse
             ? Effect.sync(() => {
                 h.calls.push(`openPane ${workspaceId} refused`);
                 return { tabId: null, paneId: null };
               })
-            : open(workspaceId),
+            : open(workspaceId, cwd, beside),
       };
 
       // The workspace was made and is tokened as this Herd's; the pane was not. That is
@@ -580,6 +580,26 @@ test("a split herdr will not do leaves a board that still works", () =>
       expect(yield* readHome(yield* homePath(stateDir, KEY))).toMatchObject({
         paneId: "9-1",
         chatPaneId: null,
+      });
+    }),
+  ));
+
+test("a board reopened while its chat is still there is split into the chat's tab", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeHome(yield* homePath(stateDir, KEY), record());
+      // The board pane went; the chat pane did not. Reopening in a tab of its own would
+      // leave the Home as two tabs, which is not a Home.
+      const h = fake({
+        workspaces: [workspace("w1", { [HOME_TOKEN]: KEY })],
+        panes: [pane({ paneId: "1-2", terminalId: "term-2" })],
+      });
+      expect((yield* ensureHome(stateDir, KEY, "/ns", h.deps)).kind).toBe("ready");
+      expect(h.calls).toContain("openPane w1 beside 1-2");
+      expect(yield* readHome(yield* homePath(stateDir, KEY))).toMatchObject({
+        paneId: "9-1",
+        chatPaneId: "1-2",
+        state: "ready",
       });
     }),
   ));

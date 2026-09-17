@@ -4,9 +4,9 @@
 // prompting, rendering, and turning a result into text or JSON.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
+import { Clock, Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { nowIso } from "./time";
+import { atClock, nowIso, untilFrom } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
 import {
@@ -20,6 +20,8 @@ import {
 import { loadDefaults } from "./config";
 import {
   DefinitionError,
+  gateSteps,
+  stepSummaries,
   layers,
   loadDefinitions,
   resolveWorkflow,
@@ -37,6 +39,7 @@ import {
   inboxFiles,
   STOPPED,
   InboxCommandJson,
+  parseGateAnswer,
   readChoice,
   stopDriver,
   type InboxCommandValue,
@@ -122,6 +125,7 @@ import {
   Run,
   RunStore,
   withRunLock,
+  type RunRecord,
   type WorktreeRecord,
 } from "./run";
 import { taskWorkspaceLabel } from "./naming";
@@ -428,7 +432,10 @@ type ParsedDecisions =
   | { ok: false; error: Failure };
 
 function parseDecide(values: ReadonlyArray<string>, wf: ResolvedWorkflow): ParsedDecisions {
-  const decidable = wf.steps.filter((step) => (step.choices?.length ?? 0) > 0);
+  // The evidence gate is decidable too: it is a decision the Run reaches, and a launch
+  // that already knows its answer should not have to come back and give it.
+  const gates = gateSteps(wf);
+  const decidable = [...wf.steps.filter((step) => (step.choices?.length ?? 0) > 0), ...gates];
   const decisions: Record<string, string> = {};
   for (const entry of values) {
     const at = entry.indexOf("=");
@@ -443,6 +450,20 @@ function parseDecide(values: ReadonlyArray<string>, wf: ResolvedWorkflow): Parse
         ok: false,
         error: err("invalid_input", `"${id}" is not a Choice step of ${wf.name} (has: ${known}).`),
       };
+    }
+    // A gate takes its own answers, and an edited list only where the board sends one.
+    if (gates.includes(step)) {
+      if (title !== "approve" && title !== "skip") {
+        return {
+          ok: false,
+          error: err(
+            "invalid_input",
+            `"${title}" is not an answer to the ${wf.name} gate at "${id}" (has: approve, skip).`,
+          ),
+        };
+      }
+      decisions[id] = title;
+      continue;
     }
     const titles = [...new Set((step.choices ?? []).map((c) => c.title))];
     if (!titles.includes(title)) {
@@ -930,6 +951,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     definition: workflow,
     approvedVerifications: yield* approvedFrom({ cwd: checkout.cwd, configDir: env.configDir }),
     stepIds: workflow.steps.map((step) => step.id),
+    stepSummaries: stepSummaries(workflow),
     maxIterations: workflow.maxIterations,
     ...runNames(checkout, named),
     parent: options.parent,
@@ -1096,6 +1118,13 @@ export const answerRun = Effect.fn("operations.answerRun")(function* (
       answers: choice.items.map((item) => item.id),
     });
   }
+  if (choice.kind === "gate" && parseGateAnswer(answer, choice.verifications ?? []) === null) {
+    return err(
+      "invalid_answer",
+      `"${answer}" is not an answer to a gate: approve, skip, or approve:<the list, cut down>.`,
+      { answers: choice.items.map((item) => item.id), verifications: choice.verifications ?? [] },
+    );
+  }
   // A settings question is typed into, not picked from — and a Choice title typed into
   // one is somebody answering the menu they were looking at a moment ago. It used to be
   // taken literally and written to `config.json`, which is how a Linear team came to be
@@ -1137,12 +1166,59 @@ export const holdRun = Effect.fn("operations.holdRun")(function* (
   run: Run,
   reason: string,
   requestId: string,
+  /** When it lifts, ISO. Null is a hold only a human ends. */
+  until: string | null = null,
+  by = "you",
 ) {
   if (runSettled(yield* runStatus(run)))
     return err("invalid_state", `Run "${run.id}" has already finished.`);
-  yield* writeInbox(run.dir, { type: "hold", requestId, reason });
-  return ok({ runId: run.id, reason }, `Holding ${run.id}: ${reason}.`);
+  yield* writeInbox(
+    run.dir,
+    until === null
+      ? { type: "hold", requestId, reason, by }
+      : { type: "hold", requestId, reason, by, until },
+  );
+  const ends = until === null ? "" : ` until ${atClock(until, yield* Clock.currentTimeMillis)}`;
+  return ok({ runId: run.id, reason, until }, `Holding ${run.id}${ends}: ${reason}.`);
 });
+
+/**
+ * Every unsettled Run of one workspace, held together. What "hold happytiger until 14:00"
+ * means: a workspace is a place work is happening, and holding it is holding all of it.
+ * Each Run takes its own hold, so releasing or answering one lifts only that one.
+ */
+export const holdWorkspace = Effect.fn("operations.holdWorkspace")(function* (
+  stateDir: string,
+  workspace: string,
+  reason: string,
+  requestId: string,
+  until: string | null = null,
+  by = "you",
+) {
+  const runs = (yield* new RunStore(stateDir).list()).filter(
+    (run) => run.record.workspace === workspace,
+  );
+  const held: string[] = [];
+  for (const run of runs) {
+    if (runSettled(yield* runStatus(run))) continue;
+    // One request id per Run: the inbox is keyed by it, and one id across several Runs
+    // would be one request the receipts could not tell apart.
+    yield* holdRun(run, reason, `${requestId}-${run.id}`, until, by);
+    held.push(run.id);
+  }
+  if (held.length === 0)
+    return err("invalid_state", `No unfinished Run in workspace "${workspace}".`);
+  const ends = until === null ? "" : ` until ${atClock(until, yield* Clock.currentTimeMillis)}`;
+  return ok(
+    { workspace, runs: held, reason, until },
+    `Holding ${held.length} run(s) in ${workspace}${ends}: ${reason}.`,
+  );
+});
+
+/** The hold a Run is under, for a reader that has its record and not its inbox. */
+export function heldUntil(record: RunRecord): RunRecord["held"] {
+  return record.held;
+}
 
 /** Lets a held Run take on work again. Only a human ever writes this. */
 export const releaseRun = Effect.fn("operations.releaseRun")(function* (
@@ -1304,11 +1380,44 @@ export const carryOutProposal = Effect.fn("operations.carryOutProposal")(functio
   };
 });
 
+/**
+ * One action the human asked for in chat, carried out now. The same closed union, the
+ * same last-moment admission check and the same executors a confirmation runs; what it
+ * has no part of is a proposal, because nobody is being asked — the human already said
+ * it (ADR-0011). What Collie wants of its own accord still goes through `request`.
+ */
+export const carryOutAsked = Effect.fn("operations.carryOutAsked")(function* (
+  env: PluginEnv,
+  actions: ReadonlyArray<Action>,
+  actor: Actor,
+) {
+  yield* registerRunExecutors(env);
+  const results: Array<{ kind: string; state: string; note: string }> = [];
+  for (const action of actions) {
+    const executor = executorFor(action.kind);
+    if (!executor) {
+      results.push({ kind: action.kind, state: "skipped", note: "executor_missing" });
+      continue;
+    }
+    const refusal = yield* admissionFor(env, action, null);
+    if (refusal !== null) {
+      results.push({ kind: action.kind, state: "skipped", note: refusal });
+      continue;
+    }
+    const outcome = yield* executor(action, actorName(actor));
+    results.push({ kind: action.kind, state: outcome.state, note: outcome.note ?? "" });
+    // What follows a failure was asked for on the assumption that it did not happen.
+    if (outcome.state === "failed") break;
+  }
+  return results;
+});
+
 /** Everything the proposal assumed, asked again immediately before the action runs. */
 const admissionFor = Effect.fn("operations.admissionFor")(function* (
   env: PluginEnv,
   action: Parameters<typeof admit>[0],
-  proposal: ProposalRecord,
+  /** Null for an action nobody proposed: there is then nothing it assumed earlier. */
+  proposal: ProposalRecord | null,
 ) {
   const store = new RunStore(env.stateDir);
   const id = "run" in action ? action.run : null;
@@ -1323,7 +1432,7 @@ const admissionFor = Effect.fn("operations.admissionFor")(function* (
     Effect.catch(() => Effect.succeed<Intent | "unreadable">("unreadable")),
   );
   if (intent === "unreadable") return `${run.id}'s Intent cannot be read`;
-  const bound = proposal.card;
+  const bound = proposal?.card;
   const now =
     bound === undefined
       ? null
@@ -1333,9 +1442,9 @@ const admissionFor = Effect.fn("operations.admissionFor")(function* (
     driverLive: (yield* driverOwnership(run.dir)) === "live",
     pendingChoice: (yield* readChoice(run.dir))?.id ?? null,
     incarnation: agent === null ? null : (live.find((a) => a.name === agent)?.terminalId ?? null),
-    proposedIncarnation: agent === null ? null : (proposal.incarnations?.[agent] ?? null),
+    proposedIncarnation: agent === null ? null : (proposal?.incarnations?.[agent] ?? null),
     intentVersion: intent?.version ?? null,
-    proposedIntentVersion: proposal.intent_versions[run.id] ?? null,
+    proposedIntentVersion: proposal?.intent_versions[run.id] ?? null,
     revision: bound === undefined || now === null ? null : { card: bound.revision, now },
   });
 });
@@ -2168,6 +2277,7 @@ export const followUp = Effect.fn("operations.followUp")(function* (
     definition: prepared.workflow,
     approvedVerifications: yield* approvedFrom({ cwd: env.cwd, configDir: env.configDir }),
     stepIds: prepared.workflow.steps.map((step) => step.id),
+    stepSummaries: stepSummaries(prepared.workflow),
     maxIterations: parent.record.max_iterations,
     namedAfter: parent.record.named_after ?? parent.record.slug,
     parent: parent.id,
@@ -2297,7 +2407,17 @@ export const registerRunExecutors = Effect.fn("operations.registerRunExecutors")
   registerExecutor("answer", (action) =>
     onRun(action.run, (run, id) => answerRun(run, action.answer, id, action.choiceId)),
   );
-  registerExecutor("hold", (action) => onRun(action.run, (run, id) => holdRun(run, "steered", id)));
+  registerExecutor("hold", (action) =>
+    onRun(action.run, (run, id) =>
+      Effect.gen(function* () {
+        const until =
+          action.until === undefined
+            ? null
+            : untilFrom(action.until, yield* Clock.currentTimeMillis);
+        return yield* holdRun(run, "steered", id, until);
+      }),
+    ),
+  );
   registerExecutor("release", (action) =>
     onRun(action.run, (run, id) => releaseRun(run, "steered", id)),
   );

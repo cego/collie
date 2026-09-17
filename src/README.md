@@ -19,8 +19,9 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `inputs.ts`        | Input inference from branch, cwd, earlier runs and glab                                  |
 | `engine.ts`        | Tabs, agents, prompts, waits, gates, choices and the fix loop                            |
 | `workspace.ts`     | The Control Plane: what the Session's board shows, and the text fallback that draws it   |
-| `ui/`              | The Collie tab: plain state and commands, the Solid components, and the Effect bridge    |
+| `ui/`              | The Collie tab: the card board and its drawer, plain state and commands, and the bridge  |
 | `views.ts`         | History, Workflows, Settings and a Run's detail, as state the app renders                |
+| `board.ts`         | The board's model: one TaskView per Task, its pipeline, sections, and a card's sentence  |
 | `driver.ts`        | The run dir as the channel to a detached driver: progress, pid and questions             |
 | `attention.ts`     | Why a run wants a human, what a resume would keep, and which actions are safe            |
 | `registry.ts`      | Which long-lived agents this Session still has, per workspace + repo                     |

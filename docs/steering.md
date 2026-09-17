@@ -229,11 +229,11 @@ The implementer writes a **progress checkpoint** per ticket, and the Driver turn
 finished one into a card while the step is still running. That is the point: a human sees
 a slice land without waiting an hour for the step.
 
-The Home board draws them in its
-[Live region](using.md#the-live-region-what-has-been-happening), where the same discipline
-is on screen: a claim is prefixed `claimed:` so it can never be read as a pass, `missing`
-is drawn even when it is empty, and the narrative is last and dim. A row carries a mark —
-`↯`, `⚠ manual`, `⏸`, `!`, `▶` — so there is something to see without selecting the Run,
+The Home board draws them under a task's record, in
+[Cards](using.md#what-a-card-says), where the same discipline is on screen: a claim is
+prefixed `claimed:` so it can never be read as a pass, `missing` is drawn even when it is
+empty, and the narrative is last and dim. The card on the board carries the newest one and
+an amber `↯` line for open drift, so there is something to see without opening the record,
 and none of it takes focus.
 
 ## Correcting drift

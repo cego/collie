@@ -31,6 +31,7 @@ export function runRecord(over: Partial<RunRecord> = {}): RunRecord {
     session: null,
     task: null,
     helle: null,
+    held: null,
     workspace: null,
     workspace_label: null,
     workspace_worktree: null,

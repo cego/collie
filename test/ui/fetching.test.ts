@@ -14,6 +14,7 @@ import { mrDetails, shell } from "../../src/mr";
 import { Herdr } from "../../src/herdr";
 import { scopeFor } from "../../src/registry";
 import { RunStore } from "../../src/run";
+import { recordDisposition } from "../../src/disposition";
 import { focus } from "../support/focus";
 
 let rig: Rig;
@@ -90,6 +91,15 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
     run.record.finished_at = run.record.created_at;
     run.record.target_label = `!${n}`;
     yield* run.save();
+    // Disposed of, so the background merge watch has nothing to ask GitLab about and
+    // every `glab` call counted below is the selection's own.
+    yield* recordDisposition(run.dir, {
+      at: run.record.created_at,
+      by: "test",
+      kind: "merged",
+      ref: `!${n}`,
+      note: null,
+    });
     ids.push(run.id);
   }
   return ids;
@@ -220,4 +230,73 @@ effectTest("a glab that writes a notice to stderr is still read as a merge reque
     _tag: "Unavailable",
     reason: "what glab said about gitlab.example.com/g/p!1 is not a merge request",
   });
+});
+
+effectTest("a card outside the legacy lists still fills its own record", function* () {
+  // The board's five finished rows are not what a Task is: a card can name a Run neither
+  // list holds, and its record used to come back as the whole Herd's evidence.
+  const ids = yield* seedMany(8);
+  const oldest = ids[0]!;
+  const asked = glab();
+  const app = appState(session(), rig.pluginEnv(), asked.run);
+
+  const state = yield* app.load(focus({ selected: `run:${oldest}` }));
+
+  expect([...state.board.active, ...state.board.recent].map((r) => r.id)).not.toContain(oldest);
+  expect(state.live?.run).toBe(oldest);
+  expect(state.detail?.mr?._tag).toBe("Details");
+});
+
+effectTest("the merge request a Run opened is the one its record details", function* () {
+  const env = rig.pluginEnv();
+  const run = yield* new RunStore(env.stateDir).create({
+    workflow: "implement",
+    cwd: env.cwd,
+    session: env.socketPath,
+    workspace: env.workspaceId,
+    workspaceLabel: "test",
+    inputs: { goal: "ship it" },
+    inputSources: {},
+    stepIds: ["build", "mr"],
+    maxIterations: 1,
+    namedAfter: "ship-it",
+  });
+  run.record.mr_url = "https://gitlab.example.com/g/p/-/merge_requests/7";
+  yield* run.save();
+  const asked = glab();
+  const app = appState(session(), env, asked.run);
+
+  // An implement Run's merge request is what it produced, not what it was pointed at.
+  const state = yield* app.load(focus({ selected: `run:${run.id}` }));
+
+  expect(state.detail?.mr?._tag).toBe("Details");
+  expect(asked.views()).toHaveLength(1);
+});
+
+effectTest("selecting a card on the board keeps the merge request it opened", function* () {
+  const env = rig.pluginEnv();
+  const run = yield* new RunStore(env.stateDir).create({
+    workflow: "implement",
+    cwd: env.cwd,
+    session: env.socketPath,
+    workspace: env.workspaceId,
+    workspaceLabel: "test",
+    inputs: { goal: "ship it" },
+    inputSources: {},
+    stepIds: ["build", "mr"],
+    maxIterations: 1,
+    namedAfter: "ship-it",
+  });
+  run.record.mr_url = "https://gitlab.example.com/g/p/-/merge_requests/7";
+  yield* run.save();
+  const asked = glab();
+  const app = appState(session(), env, asked.run);
+
+  // A click is a Selection change and nothing else, so the scan is reused. The row it
+  // lands on carries no merge request of its own: the Run's record is what has one.
+  yield* app.load(focus());
+  const state = yield* app.load(focus({ selected: `run:${run.id}` }));
+
+  expect([...state.board.active, ...state.board.recent].map((r) => r.id)).toContain(run.id);
+  expect(state.detail?.mr?._tag).toBe("Details");
 });

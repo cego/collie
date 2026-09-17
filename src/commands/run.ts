@@ -1,5 +1,6 @@
 import {
   Cause,
+  Clock,
   Duration,
   Effect,
   FileSystem,
@@ -22,6 +23,7 @@ import {
   err,
   followUp,
   holdRun,
+  holdWorkspace,
   releaseRun,
   prepareWorkflow,
   resumeRun,
@@ -59,7 +61,7 @@ import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
 import { metricsOf, readMetrics } from "../metrics";
 import { latest, readDispositions, recordDisposition, statusLine } from "../disposition";
-import { nowIso } from "../time";
+import { nowIso, untilFrom } from "../time";
 import type { Run } from "../run";
 import type { PluginEnv } from "../env";
 import {
@@ -816,11 +818,79 @@ const reasonFlag = Flag.string("reason").pipe(
   Flag.withDefault("no reason given"),
 );
 
+const untilFlag = Flag.string("until").pipe(
+  Flag.withDescription("When the hold lifts by itself: `14:00`, or a full timestamp"),
+  Flag.optional,
+);
+
+const holdWorkspaceFlag = Flag.string("workspace").pipe(
+  Flag.withDescription("Hold every unfinished Run in this workspace instead of one Run"),
+  Flag.optional,
+);
+
+type ParsedEnd = { ok: true; until: string | null } | { ok: false; error: Result };
+
+/**
+ * When a hold ends. Refused here rather than carried as words nobody can act on: a hold
+ * whose end the Driver cannot read is a hold that never lifts.
+ */
+function parseEnd(value: Option.Option<string>, nowMs: number): ParsedEnd {
+  if (Option.isNone(value)) return { ok: true, until: null };
+  const at = untilFrom(value.value, nowMs);
+  return at === null
+    ? {
+        ok: false,
+        error: err(
+          "invalid_input",
+          `Invalid --until "${value.value}"; use a clock time like 14:00, or a full timestamp.`,
+        ),
+      }
+    : { ok: true, until: at };
+}
+
 const runHold = Command.make(
   "hold",
-  { runId: runIdArg, reason: reasonFlag, requestId: requestIdFlag },
-  ({ runId, reason, requestId }) =>
-    runMutationCommand("run-hold", runId, requestId, (_env, run, id) => holdRun(run, reason, id)),
+  {
+    runId: runIdArg.pipe(Argument.optional),
+    workspace: holdWorkspaceFlag,
+    reason: reasonFlag,
+    until: untilFlag,
+    requestId: requestIdFlag,
+  },
+  ({ runId, workspace, reason, until, requestId }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      const ends = parseEnd(until, yield* Clock.currentTimeMillis);
+      const where = Option.getOrNull(workspace);
+      const id = Option.getOrNull(runId);
+      yield* attempt(
+        Effect.gen(function* () {
+          if (!ends.ok) return ends.error;
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (where !== null) {
+            return yield* mutation(resolved.env, "run-hold-workspace", requestId, (request) =>
+              holdWorkspace(resolved.env.stateDir, where, reason, request, ends.until),
+            );
+          }
+          if (id === null) {
+            return err(
+              "invalid_input",
+              "`run hold` takes a Run's id, or `--workspace <id>` for every Run in one.",
+            );
+          }
+          const task = yield* selectedTask(global);
+          return yield* mutation(resolved.env, "run-hold", requestId, (request) =>
+            Effect.gen(function* () {
+              const found = yield* readRun(resolved.env, id, task);
+              if (found._tag === "RunFailure") return found.result;
+              return yield* holdRun(found.run, reason, request, ends.until);
+            }),
+          );
+        }),
+        global.json,
+      );
+    }),
 ).pipe(
   Command.withDescription("Stop a Run taking on new work; what is already running carries on"),
 );

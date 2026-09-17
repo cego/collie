@@ -64,6 +64,7 @@ const ChoiceSchema = Schema.Struct({
 
 const StepSchema = Schema.Struct({
   id: Schema.String,
+  summary: opt(Schema.String),
   origin: Schema.String,
   prompt: Schema.String,
   preamble: Schema.String,

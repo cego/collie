@@ -188,6 +188,7 @@ test("chat is launched with Collie's tools and nothing else", () => {
     systemPrompt: "/p/collie-chat.md",
     mcpConfig: "/d/mcp.json",
     extension: "/d/c.ts",
+    settings: "/d/settings.json",
   };
   const claude = chatArgs("claude", "s-1", files, false);
   expect(claude).toEqual([
@@ -198,6 +199,8 @@ test("chat is launched with Collie's tools and nothing else", () => {
     "--mcp-config",
     "/d/mcp.json",
     "--strict-mcp-config",
+    "--settings",
+    "/d/settings.json",
     "--tools",
     "",
   ]);
@@ -329,6 +332,16 @@ test("both adapters are told about the same Collie, in one place", () =>
       // and answered about the human's real Herd inside a disposable one.
       const extension = yield* fs.readFileString(files.extension);
       const config = decodeJson(yield* fs.readFileString(files.mcpConfig));
+      // The prompt hook shells back into the same Collie, so the same environment is
+      // spelled out on its command line rather than inherited from the pane.
+      // SAFETY: the file was written by `claudeSettings` two lines above, whose one shape this names.
+      const hook = decodeJson(yield* fs.readFileString(files.settings)) as {
+        hooks: { UserPromptSubmit: Array<{ hooks: Array<{ command: string }> }> };
+      };
+      const command = hook.hooks.UserPromptSubmit[0]!.hooks[0]!.command;
+      expect(command).toEndWith("'/bin/collie' chat context");
+      for (const [key, value] of Object.entries(serverEnv))
+        expect(command).toContain(`${key}='${value}'`);
       for (const [key, value] of Object.entries(serverEnv)) {
         expect(extension).toContain(`"${key}":"${value}"`);
         expect(config).toMatchObject({ mcpServers: { collie: { env: { [key]: value } } } });

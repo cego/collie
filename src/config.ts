@@ -13,6 +13,13 @@ import { isYamlMap, YamlMapSchema, type YamlMap, type YamlValue } from "./yaml";
  * default a human sets and every other reader takes the type from `Defaults`.
  */
 export type Scope = "local" | "all";
+
+/** How many cards the board fits across. A Setting, and the pane's width overrules it. */
+export type Density = "comfortable" | "compact";
+export const DENSITIES: ReadonlyArray<Density> = ["comfortable", "compact"];
+export function isDensity(value: string): value is Density {
+  return DENSITIES.some((density) => density === value);
+}
 export const SCOPES: ReadonlyArray<Scope> = ["local", "all"];
 export function isScope(value: string): value is Scope {
   return SCOPES.some((scope) => scope === value);
@@ -69,6 +76,8 @@ export interface Defaults {
   permissions: string;
   /** Which scope the Control Plane opens on. `g` changes it for that tab only. */
   scope: Scope;
+  /** How many cards the board fits across, where the pane is wide enough for a choice. */
+  density: Density;
   /** `notifications.<kind>: false` turns that kind of toast off; absent means on. */
   notifications: Readonly<Record<string, boolean>>;
   /** Whether a new question takes the human's focus, or only says so. */
@@ -96,6 +105,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   trust: "auto",
   permissions: "bypass",
   scope: "local",
+  density: "comfortable",
   notifications: {},
   questions: "focus",
   proactive: true,
@@ -190,6 +200,10 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDi
     // Coerced rather than kept as written: the board has to open on one of the two
     // whatever the file says. A value that is neither is refused where it is written.
     scope: isString(raw.scope) && isScope(raw.scope) ? raw.scope : FALLBACK_DEFAULTS.scope,
+    // Coerced like `scope`: the board has to draw at one of the two whatever the file
+    // says. A value that is neither is refused where it is written.
+    density:
+      isString(raw.density) && isDensity(raw.density) ? raw.density : FALLBACK_DEFAULTS.density,
     notifications: Option.getOrElse(
       Schema.decodeUnknownOption(Notifications)(raw.notifications),
       () => ({}),

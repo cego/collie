@@ -66,6 +66,12 @@ add_binding "prefix+shift+f" fork   "Fork a workflow or persona"
 # `prefix+c` is herdr's own `new_tab`, so the board takes the shifted one.
 add_binding "prefix+shift+c" board  "Open the Control Plane"
 
+# The line under the chat prompt, in the human's own Claude Code settings: first-time
+# work like the keybindings above, and never `prepare.sh`'s. The runner edits the file so
+# that everything else the human keeps there survives it, and says what it did.
+say "Configuring Claude Code's status line"
+"$ROOT/bin/collie" chat status-line --install || say "Could not configure the status line; collie doctor says what to do"
+
 if herdr status server 2>/dev/null | grep -q "status: running"; then
   say "Reloading herdr config"
   herdr server reload-config >/dev/null
@@ -75,10 +81,10 @@ fi
 
 say "Done."
 say "Inside herdr: prefix+f picks a workflow, prefix+u resumes, prefix+shift+f forks,"
-say "and prefix+shift+c opens this workspace's Control Plane."
+say "and prefix+shift+c opens this session's Control Plane."
 say "Outside it, the collie skill lets an agent drive runs from the CLI."
-say "The first run in a workspace opens a '🐕 Collie' tab as its first tab (prefix+1):"
-say "live agents, running and finished runs, and every menu a workflow asks you to answer."
+say "The board is one card per task, in three sections: what needs you, what is working,"
+say "what finished. Chat about the flock is the pane beside it."
 
 # The last word, and the exit status: either everything is ready or what is missing
 # with the command that fixes each one. `exec`, so nothing here can print after it

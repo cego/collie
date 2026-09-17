@@ -289,6 +289,13 @@ test("admission asks again, immediately before the action runs", () => {
   expect(admit(followup, ctx())).toContain("still going");
   expect(admit(followup, ctx({ run: { id: "r1", status: "succeeded" } }))).toBeNull();
 
+  // A resume is what a failed or stopped Run is offered, so ending is not a reason to
+  // refuse it; `resumeRun` owns the rest, the one that already succeeded included.
+  const resume: Action = { kind: "resume", run: "r1" };
+  expect(admit(resume, ctx({ run: { id: "r1", status: "failed" } }))).toBeNull();
+  expect(admit(resume, ctx({ run: { id: "r1", status: "stopped" } }))).toBeNull();
+  expect(admit(resume, ctx({ run: { id: "r1", status: "succeeded" } }))).toBeNull();
+
   // A card-bound proposal is about a revision, and revisions move.
   expect(admit(deliver, ctx({ revision: { card: "abc", now: "def" } }))).toBe("revision_moved");
 

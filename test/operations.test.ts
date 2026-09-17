@@ -47,7 +47,9 @@ afterEach(() =>
   ),
 );
 
-const AskedSchema = Schema.Struct({ schema: Schema.Record(Schema.String, Schema.String) });
+const AskedSchema = Schema.Struct({
+  schema: Schema.Record(Schema.String, Schema.String),
+});
 
 const CauseSchema = Schema.Struct({ cause: Schema.String });
 
@@ -83,7 +85,9 @@ test("a given diff-target is normalised, not just recorded", () =>
       const ready = yield* prepared("review");
 
       const settled = yield* settleGiven(rig.pluginEnv(), ready, {
-        inputs: { target: "https://gitlab.cego.dk/cego/collie/-/merge_requests/2" },
+        inputs: {
+          target: "https://gitlab.cego.dk/cego/collie/-/merge_requests/2",
+        },
         decide: [],
       });
 
@@ -105,26 +109,38 @@ test("a decision is checked against the Workflow's own steps and titles", () =>
         inputs: { target: "worktree" },
         decide: ["post=Don't post"],
       });
-      expect(taken).toMatchObject({ ok: true, decisions: { post: "Don't post" } });
+      expect(taken).toMatchObject({
+        ok: true,
+        decisions: { post: "Don't post" },
+      });
 
       const badStep = yield* settleGiven(env, yield* prepared("review"), {
         inputs: { target: "worktree" },
         decide: ["nope=Don't post"],
       });
-      expect(badStep).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+      expect(badStep).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
 
       const badTitle = yield* settleGiven(env, yield* prepared("review"), {
         inputs: { target: "worktree" },
         decide: ["post=Ship it"],
       });
-      expect(badTitle).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+      expect(badTitle).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
 
       // A run id that is not there is refused before anything is created.
       const noPrevious = yield* settleGiven(env, yield* prepared("review"), {
         inputs: { target: "worktree", previous: "review-nope-20260101-000000" },
         decide: [],
       });
-      expect(noPrevious).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+      expect(noPrevious).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
 
       // So is one that never wrote a review: the engine would fall back to no previous
       // review and the run would compare against nothing without saying so.
@@ -143,7 +159,10 @@ test("a decision is checked against the Workflow's own steps and titles", () =>
       });
       expect(reviewless).toMatchObject({
         ok: false,
-        error: { code: "invalid_input", message: expect.stringContaining("no review") },
+        error: {
+          code: "invalid_input",
+          message: expect.stringContaining("no review"),
+        },
       });
 
       // And a `../` id cannot walk out of the state dir to read someone else's.
@@ -151,7 +170,10 @@ test("a decision is checked against the Workflow's own steps and titles", () =>
         inputs: { target: "worktree", previous: "../../etc" },
         decide: [],
       });
-      expect(traversal).toMatchObject({ ok: false, error: { code: "invalid_input" } });
+      expect(traversal).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
     }),
   ));
 
@@ -287,7 +309,10 @@ test("an Input nobody can be asked for comes back as needs_input", () =>
         decide: [],
       });
 
-      expect(settled).toMatchObject({ ok: false, error: { code: "needs_input" } });
+      expect(settled).toMatchObject({
+        ok: false,
+        error: { code: "needs_input" },
+      });
     }),
   ));
 
@@ -355,7 +380,10 @@ test("upgrade pulls the checkout, then installs, and says what moved", () =>
 
       // Nothing moved: the same HEAD before and after is worth saying plainly rather
       // than reporting an update that did not happen.
-      expect(same).toMatchObject({ ok: true, data: { checkout: true, updated: false } });
+      expect(same).toMatchObject({
+        ok: true,
+        data: { checkout: true, updated: false },
+      });
       expect(same.ok && same.human).toContain("already up to date at abc1234");
       // Every step of preparing the machine, so "nothing to do" reads differently
       // from "the runner updated but the skills step could not run".
@@ -389,7 +417,10 @@ test("upgrade reports a pull it could not do rather than installing anyway", () 
 
       expect(refused).toMatchObject({
         ok: false,
-        error: { code: "operation_failed", details: { output: "would clobber local changes" } },
+        error: {
+          code: "operation_failed",
+          details: { output: "would clobber local changes" },
+        },
       });
       // And it did not go on to install over the top of whatever is there.
       const fs = yield* FileSystem.FileSystem;
@@ -423,7 +454,12 @@ OUT`,
 
       expect(moved).toMatchObject({
         ok: true,
-        data: { checkout: true, updated: true, before: "abc1234", after: "def5678" },
+        data: {
+          checkout: true,
+          updated: true,
+          before: "abc1234",
+          after: "def5678",
+        },
       });
       expect(moved.ok && moved.human).toContain("from abc1234 to def5678");
       expect(moved.ok && moved.human).toMatch(/skills\s+skipped/);
@@ -440,7 +476,10 @@ test("upgrade of a plain install fetches the release without asking git anything
 
       const fetched = yield* upgrade(env);
 
-      expect(fetched).toMatchObject({ ok: true, data: { checkout: false, updated: false } });
+      expect(fetched).toMatchObject({
+        ok: true,
+        data: { checkout: false, updated: false },
+      });
       expect(fetched.ok && fetched.human).toContain("not a checkout");
     }),
   ));
@@ -540,7 +579,10 @@ test("a workflow that still needs an answer settles nothing and says so", () =>
 
       const prepared = yield* prepareWorkflow(env, "plan");
       if (!prepared.ok) throw new Error("expected plan to prepare");
-      const settled = yield* settleGiven(env, prepared, { inputs: {}, decide: [] });
+      const settled = yield* settleGiven(env, prepared, {
+        inputs: {},
+        decide: [],
+      });
 
       // What `collie run start` and every non-interactive caller depend on: an Input
       // nobody could infer is the caller's to give, and nothing is half-created for it.
@@ -579,5 +621,30 @@ test("a checkout herdr opens a workspace for gets the Task's own name, and no se
       expect(task!.label).not.toContain(made!.record.worktree!.branch);
       expect(made!.record.workspace_label).toBe(task!.label);
       expect(yield* rig.cmds()).not.toContain("workspace create");
+    }),
+  ));
+
+test("a launch may decide the evidence gate, and only with an answer it takes", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+
+      const approved = yield* settleGiven(env, yield* prepared("implement"), {
+        inputs: { plan: rig.projectDir },
+        decide: ["mr=approve"],
+      });
+      expect(approved).toMatchObject({
+        ok: true,
+        decisions: { mr: "approve" },
+      });
+
+      const nonsense = yield* settleGiven(env, yield* prepared("implement"), {
+        inputs: { plan: rig.projectDir },
+        decide: ["mr=Ship it"],
+      });
+      expect(nonsense).toMatchObject({
+        ok: false,
+        error: { code: "invalid_input" },
+      });
     }),
   ));

@@ -101,6 +101,8 @@ export interface ChoiceDef {
 
 export interface StepDef {
   id: string;
+  /** What this step is doing, in the board's own words: "Reproducing the race". */
+  summary?: string;
   persona?: string;
   harness?: string;
   model?: string;
@@ -276,6 +278,7 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
   const steps: StepDef[] = rawSteps.map((raw, index) => {
     const stepData = isYamlMap(raw) ? raw : {};
     const step: StepDef = { id: str(stepData.id, `step-${index + 1}`) };
+    if (isString(stepData.summary)) step.summary = stepData.summary;
     if (isString(stepData.persona)) step.persona = stepData.persona;
     if (isString(stepData.harness)) step.harness = stepData.harness;
     if (isString(stepData.model)) step.model = stepData.model;
@@ -633,6 +636,23 @@ export interface ResolvedStep extends StepDef {
   preamble: string;
   /** Section names the origin body offers, for the error message when one is missing. */
   known: string[];
+}
+
+/**
+ * The steps the evidence gate holds: a merge request is the claim, so it is checked where
+ * one is about to be opened, and only a Workflow that declares an outcome is held to one.
+ * Read by the engine, which gates there, and by the CLI, which lets a launch decide it.
+ */
+/** What each step is doing, for the Run record to keep beside the step it is about. */
+export function stepSummaries(wf: ResolvedWorkflow) {
+  return Object.fromEntries(
+    wf.steps.flatMap((step) => (step.summary === undefined ? [] : [[step.id, step.summary]])),
+  );
+}
+
+export function gateSteps(wf: ResolvedWorkflow): ReadonlyArray<ResolvedStep> {
+  if (wf.inputs.outcome === undefined) return [];
+  return wf.steps.filter((step) => step.requires?.includes("gitlab"));
 }
 
 export interface ResolvedWorkflow {

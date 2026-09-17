@@ -1,6 +1,8 @@
 # 0005 — The Collie tab is an OpenTUI/Solid application
 
-**Status:** accepted, 2026-09-01
+**Status:** accepted, 2026-09-01. What the tab _draws_ — views behind a nav rail, a row
+per Run, a detail panel — is superseded by
+[ADR-0013](0013-the-board-is-cards-of-tasks.md); the decision below is unchanged.
 
 ## Context
 

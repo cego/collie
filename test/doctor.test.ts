@@ -10,6 +10,7 @@ import { installBaseline } from "./support/engine";
 import { installFakeSkills, writeDef } from "./support/defs";
 import { FakeBin } from "./support/bin";
 import { doctor } from "../src/doctor";
+import { claudeSettingsPath, installStatusLine } from "../src/statusline";
 import { shell } from "../src/mr";
 import type { OpResult } from "../src/operations";
 
@@ -118,6 +119,7 @@ test("a healthy machine passes every check and says so", () =>
         "node",
         "skills",
         "harnesses",
+        "status line",
         "up to date",
         "workflows",
         "glab",
@@ -375,5 +377,35 @@ test("an override that keeps the old expensive flow is reported with the edit, a
       expect(current.ok).toBe(true);
       expect(current.detail).toContain("overridden here, current flow: implement (project");
       expect(current.fix).toBe("");
+    }),
+  ));
+
+test("the chat pane's status line is reported, whoever configured it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* healthy();
+
+      // Nothing configured yet: something to do, not a missing prerequisite — a board
+      // still works without a line under the chat prompt.
+      const bare = check(yield* report(), "status line");
+      expect(bare.ok).toBe(true);
+      expect(bare.detail).toContain("not configured");
+      expect(bare.fix).toContain("status-line --install");
+
+      yield* installStatusLine(env());
+      const configured = check(yield* report(), "status line");
+      expect(configured.detail).toContain("board");
+      // Named, so the human reads that the line under the prompt and the answer chat
+      // gets are the same fact.
+      expect(configured.detail).toContain("each prompt");
+      expect(configured.fix).toBe("");
+
+      // Somebody else's line is theirs: named, and never quietly replaced.
+      yield* fs.writeFileString(
+        yield* claudeSettingsPath(env()),
+        `{"statusLine":{"type":"command","command":"my-own-line"}}\n`,
+      );
+      expect(check(yield* report(), "status line").detail).toContain("my-own-line");
     }),
   ));

@@ -542,6 +542,7 @@ function makePlanRun(
       mr_url: null,
       linear_issues: [],
       helle: null,
+      held: null,
       summary: null,
       ...extra,
     };

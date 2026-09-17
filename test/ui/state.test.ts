@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test";
 import {
   actionsFor,
+  dispositionsFor,
+  menuFor,
+  olderFinished,
   ALL_KEYS,
   footerKeys,
   keyIntent,
@@ -36,6 +39,7 @@ import type { PendingChoice } from "../../src/driver";
 import type { WideGroup, WideView, WorkspaceView } from "../../src/workspace";
 import { NO_OUTCOME } from "../../src/workspace";
 import { focus } from "../support/focus";
+import { task } from "../support/task";
 
 /** A fixed clock: relative times are the point, so they must not depend on the wall. */
 const NOW = Date.parse("2026-09-02T12:00:00.000Z");
@@ -511,6 +515,9 @@ test("a History row is not somewhere to jump: its run is a record, not a pane", 
   const rows = viewRows({
     view: "history",
     filter: { kind: "workspace", id: "w1" },
+    tasks: [],
+    now: 0,
+    density: "comfortable",
     wide: null,
     board: board(),
     note: null,
@@ -521,6 +528,7 @@ test("a History row is not somewhere to jump: its run is a record, not a pane", 
     marks: {},
     live: null,
     previewing: null,
+    stopping: [],
   });
 
   expect(rows[0]!.jump).toBeNull();
@@ -833,14 +841,16 @@ test("the list carries the relative time each row is asked about", () => {
 test("one focus command changes only what it names", () => {
   const at = focus();
 
-  expect(retarget(at, { _tag: "Select", id: "run:r1" }).selected).toBe("run:r1");
+  expect(retarget(at, { _tag: "Select", id: "run:r1", on: null }).selected).toBe("run:r1");
   expect(retarget(at, { _tag: "ToggleTail" }).tail).toBe(true);
   expect(retarget({ ...at, tail: true }, { _tag: "ToggleTail" }).tail).toBe(false);
   expect(retarget(at, { _tag: "Refresh" }).nonce).toBe(1);
   // Another page of a capped review, and a new Selection starts from the first page
   // again rather than inheriting how far the last one had been paged.
   expect(retarget(at, { _tag: "MoreReview" }).reviewPages).toBe(2);
-  expect(retarget({ ...at, reviewPages: 4 }, { _tag: "Select", id: "run:r2" }).reviewPages).toBe(1);
+  expect(
+    retarget({ ...at, reviewPages: 4 }, { _tag: "Select", id: "run:r2", on: null }).reviewPages,
+  ).toBe(1);
 
   // A View shown once is kept fresh from then on; one already shown is not listed twice.
   const shown = retarget(at, { _tag: "ShowView", view: "history" });
@@ -985,12 +995,9 @@ test("a field that has taken the keys says what they do instead", () => {
   );
 });
 
-test("the help overlay lists every key the app handles, each with what it does", () => {
+test("the help overlay lists every key the board handles, each with what it does", () => {
   const keys = ALL_KEYS.map((k) => k.key);
-  // The ones the footer cannot always offer are exactly what the overlay is for.
-  for (const key of ["↑↓", "Tab", "/", "R", "m", "t", "c", "s", "u", "f", "?", "q"]) {
-    expect(keys).toContain(key);
-  }
+  for (const key of ["Tab", "/", "Esc", "m", "r", "?", "q"]) expect(keys).toContain(key);
   expect(ALL_KEYS.every((k) => k.what !== "")).toBe(true);
 });
 
@@ -1067,6 +1074,9 @@ function state(): AppState {
   return {
     view: "runs",
     filter: { kind: "all" },
+    tasks: [],
+    now: 0,
+    density: "comfortable",
     wide: null,
     board: board(),
     note: null,
@@ -1077,6 +1087,7 @@ function state(): AppState {
     marks: {},
     live: null,
     previewing: null,
+    stopping: [],
   };
 }
 
@@ -1286,32 +1297,29 @@ test("the row's own actions are the last thing a key is tried against", () => {
   });
 });
 
-test("every key the overlay advertises is one the keyboard actually acts on", () => {
-  // The overlay's list and the cascade that dispatches are two lists that have to
-  // agree, and nothing tied them together: a key dropped from the handler stayed
-  // advertised, and one added to the handler stayed invisible. Only the single-character
-  // keys, because the rest of the list is notation (`↑↓`, `PgUp/PgDn`, `1-9`) rather
-  // than a sequence — those have tests of their own above.
-  const single = ALL_KEYS.filter((entry) => entry.key.length === 1);
-  expect(single.length).toBeGreaterThan(10);
+test("a Task pointed at a merge request can open it, however it got there", () => {
+  // A `review` Run is given one and opens none; an `implement` Run opens one. Both are
+  // a merge request the human can ask for from the card.
+  const given = menuFor(task({ mr: "mr:gitlab.cego.dk/mk/collie!151" }));
+  expect(given.map((one) => one.label)).toContain("Open merge request");
+  expect(given.find((one) => one.label === "Open merge request")?.command).toMatchObject({
+    _tag: "OpenMr",
+    target: "mr:gitlab.cego.dk/mk/collie!151",
+  });
+});
 
-  // SAFETY: one active run went in, so one row comes out.
-  const [active] = rowsOf(board({ active: [run("r1")] })) as [Row];
-  // SAFETY: one finished run went in, so one row comes out.
-  const [recent] = rowsOf(
-    board({ recent: [run("r0", { target: "mr:host/g/p!42", fixable: true })] }),
-  ) as [Row];
-  // Two boards, because the keys are split across them by design: `k` stops a running
-  // run and `x`/`o`/`w` only ever act on one that has stopped.
-  const boards = [
-    keys({ row: active, cutShort: true, mrUrl: "https://host/mr/42" }),
-    keys({ row: recent, cutShort: true, mrUrl: "https://host/mr/42" }),
-  ];
-
-  const unhandled = single.filter((entry) =>
-    boards.every((at) => keyIntent(at, press(entry.key, { name: entry.key })) === null),
+test("every key a card's menu offers is one the overlay advertises", () => {
+  // Two lists that have to agree: the menu is built per Task state, and a key offered
+  // on a card and missing from `?` is a key nobody can look up.
+  const advertised = new Set(ALL_KEYS.map((entry) => entry.key));
+  const states = ["blocked", "active", "quiet", "failed", "stopped", "done"] as const;
+  const offered = new Set(
+    states.flatMap((state) =>
+      menuFor(task({ state, mr: "https://host/g/p/-/merge_requests/42" })).map((item) => item.key),
+    ),
   );
-  expect(unhandled.map((entry) => entry.key)).toEqual([]);
+  expect(offered.size).toBeGreaterThan(4);
+  expect([...offered].filter((key) => !advertised.has(key))).toEqual([]);
 });
 
 test("a filter keeps a matching agent under a finished run too", () => {
@@ -1564,4 +1572,94 @@ test("a run filter keeps that run's agents and its repository runs", () => {
   // depth — the connector is what joins them — so depth alone cannot say where the
   // group ends.
   expect(rows.map((r) => r.id)).toEqual(["run:r1", "agent:implementer-1"]);
+});
+
+test("a card's menu offers only what that Task can be asked for", () => {
+  const working = menuFor(task());
+  expect(working.map((item) => [item.key, item.label])).toEqual([
+    ["enter", "Open record"],
+    ["g", "Go to its tab"],
+    ["s", "Steer…"],
+    ["k", "Stop run"],
+  ]);
+  expect(working[0]!.command).toEqual({ _tag: "OpenRecord", id: "t1" });
+  expect(working[1]!.command).toEqual({
+    _tag: "Jump",
+    jump: { kind: "run", runId: "r1", label: "Strapi prod seeder" },
+  });
+  expect(working[3]!.command).toEqual({ _tag: "StopRun", runId: "r1" });
+
+  // A run nobody is driving cannot be stopped or steered; it can be taken up again.
+  expect(menuFor(task({ state: "failed" })).map((item) => item.label)).toEqual([
+    "Open record",
+    "Go to its tab",
+    "Resume run",
+  ]);
+  expect(menuFor(task({ state: "stopped" })).map((item) => item.label)).toContain("Resume run");
+  // Only a run that finished has work to build on.
+  expect(menuFor(task({ state: "done" })).map((item) => item.label)).toEqual([
+    "Open record",
+    "Go to its tab",
+    "Follow-up run",
+  ]);
+});
+
+test("the merge request is offered when there is one to open, named the way glab takes it", () => {
+  const withMr = task({ mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/151" });
+  const item = menuFor(withMr).find((one) => one.label === "Open merge request");
+  expect(item?.key).toBe("w");
+  expect(item?.command).toEqual({
+    _tag: "OpenMr",
+    target: "mr:gitlab.cego.dk/mk/collie!151",
+    runId: "r1",
+  });
+  // A URL nothing can resolve is not offered: a menu item that would fail is worse than
+  // none at all.
+  expect(menuFor(task({ mr: "see the ticket" })).map((one) => one.label)).not.toContain(
+    "Open merge request",
+  );
+});
+
+test("what became of the work is offered once the work is over, with its MR as the reference", () => {
+  expect(dispositionsFor(task())).toEqual([]);
+  const done = task({ state: "done", mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/151" });
+  expect(dispositionsFor(done)).toEqual([
+    {
+      key: "M",
+      label: "Mark merged",
+      command: { _tag: "RecordDisposition", runId: "r1", kind: "merged", ref: "collie!151" },
+    },
+    {
+      key: "A",
+      label: "Mark abandoned",
+      command: { _tag: "RecordDisposition", runId: "r1", kind: "abandoned", ref: "" },
+    },
+  ]);
+  // Stopped and failed work can also have been landed by hand.
+  expect(dispositionsFor(task({ state: "failed" }))[0]!.command).toEqual({
+    _tag: "RecordDisposition",
+    runId: "r1",
+    kind: "merged",
+    ref: "",
+  });
+});
+
+test("older… offers the finished runs of this checkout the board is not already showing", () => {
+  const history = [run("r1"), run("r2"), run("r3"), run("r4")];
+  const onBoard = [task({ id: "t1", state: "done", run: "r1", runs: ["r1", "r2"] })];
+
+  // Nothing read yet: the link is there, because asking for it is what reads it.
+  expect(olderFinished(null, onBoard, 1)).toEqual({ rows: [], more: true });
+
+  // A run already on the board as a card is not repeated under it.
+  const first = olderFinished(history, onBoard, 1, 1);
+  expect(first.rows.map((row) => row.id)).toEqual(["r3"]);
+  expect(first.more).toBe(true);
+
+  const second = olderFinished(history, onBoard, 2, 1);
+  expect(second.rows.map((row) => row.id)).toEqual(["r3", "r4"]);
+  expect(second.more).toBe(false);
+
+  // Before anyone asks, none of it is drawn.
+  expect(olderFinished(history, onBoard, 0)).toEqual({ rows: [], more: true });
 });

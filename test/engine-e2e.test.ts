@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Clock, ConfigProvider, Effect, FileSystem, Path, Schema } from "effect";
+import { Clock, ConfigProvider, DateTime, Effect, FileSystem, Path, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { FakeHerdr, Rig } from "./support/recorder";
 import {} from "../src/naming";
@@ -26,7 +26,12 @@ import {
 } from "../src/drift";
 import { FakeBin } from "./support/bin";
 import { REQUIRED_FLAGS } from "../src/evaluator";
-import { RunStore } from "../src/run";
+import { RunStore, type RunRecord } from "../src/run";
+import { readCards } from "../src/cards";
+import { filePrompts, readChoice } from "../src/driver";
+
+/** A moment `ms` from now, as the inbox writes one. */
+const isoIn = (nowMs: number, ms: number) => DateTime.formatIso(DateTime.makeUnsafe(nowMs + ms));
 
 const Json = Schema.fromJsonString(Schema.Any);
 const decodeJson = Schema.decodeUnknownSync(Json);
@@ -1298,6 +1303,103 @@ test("a hold written while a Run works stops the next piece of work, and a relea
     }),
   ));
 
+test("a hold taken while a step works is on the record before that work ends", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // The step's Output is 600ms away, so the hold below arrives while its agent is
+      // still working — which is the case the board reads a record for.
+      yield* rig.queueOutputs([
+        { __delay_ms: 1200, output: { verdict: "clean", findings: [], slug: "s" } },
+      ]);
+      const seen: string[] = [];
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          handoffTimeoutMs: 10_000,
+          outputPollMs: 50,
+          // Working, and working, and working: the step's own wait is where a Driver
+          // reads the inbox while an agent has the work.
+          env: { FAKE_HERDR_AGENT_STATUS: [...Array(40).fill("working"), "idle"].join(",") },
+          before: (started) =>
+            Effect.forkDetach(
+              Effect.gen(function* () {
+                // After the prompt has gone out, so this is `takeSteering` inside the
+                // wait rather than the boundary before the step.
+                yield* Effect.sleep("600 millis");
+                yield* writeInbox(started.dir, {
+                  type: "hold",
+                  requestId: "hold-1",
+                  reason: "lunch",
+                  until: "2036-09-16T14:00:00.000Z",
+                });
+                // What a board would read while the step is still going.
+                for (let n = 0; n < 12 && seen.length === 0; n++) {
+                  yield* Effect.sleep("40 millis");
+                  const text = yield* fs
+                    .readFileString(path.join(started.dir, "run.json"))
+                    .pipe(Effect.catch(() => Effect.succeed("{}")));
+                  if (text.includes("2036-09-16T14:00:00.000Z")) seen.push("held");
+                }
+                yield* writeInbox(started.dir, {
+                  type: "release",
+                  requestId: "rel-1",
+                  reason: "back",
+                });
+              }),
+            ),
+        },
+      );
+
+      expect(seen).toEqual(["held"]);
+      expect(status).toBe("done");
+      // And released is released: nothing is left marked held once it is over.
+      expect(run.record.held).toBeNull();
+    }),
+  ));
+
+test("a Run that has finished is not still held by a hold nobody can lift", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The last step has no boundary after it, so a hold that arrives while it works is
+      // never released by one. Left on the record it is a card saying "Held until" about
+      // a Run with no Driver left to expire it.
+      yield* rig.queueOutputs([
+        { __delay_ms: 1200, output: { verdict: "clean", findings: [], slug: "s" } },
+      ]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          handoffTimeoutMs: 10_000,
+          outputPollMs: 50,
+          env: { FAKE_HERDR_AGENT_STATUS: [...Array(40).fill("working"), "idle"].join(",") },
+          before: (started) =>
+            Effect.forkDetach(
+              Effect.gen(function* () {
+                yield* Effect.sleep("600 millis");
+                yield* writeInbox(started.dir, {
+                  type: "hold",
+                  requestId: "hold-1",
+                  reason: "lunch",
+                  until: "2036-09-16T14:00:00.000Z",
+                });
+              }),
+            ),
+        },
+      );
+
+      expect(status).toBe("done");
+      expect(run.record.held).toBeNull();
+    }),
+  ));
+
 test("an Intent amended under a live Driver is loaded, and a stale drift report is refused", () =>
   runEffect(
     Effect.gen(function* () {
@@ -1647,3 +1749,176 @@ test("a ticket rewritten under a building step is sent to it as a change to reco
       expect(told[0]).toContain("Reconcile rather than restart");
     }),
   ));
+
+const HOLDS = `---
+name: holds
+title: holds — one question and nothing else
+inputs:
+  goal: goal
+steps:
+  - id: next
+    choices:
+      - title: Stop here
+        stop: true
+      # Two, because a step with one choice is taken without anyone being asked.
+      - title: Leave it open
+        stop: true
+---
+Goal: {{inputs.goal}}
+`;
+
+test("a hold with a time on it lifts itself, and leaves a card saying so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [], slug: "s" }]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker", ticket: "t" },
+        {
+          outputPollMs: 20,
+          before: (started) =>
+            Effect.gen(function* () {
+              yield* writeInbox(started.dir, {
+                type: "hold",
+                requestId: "hold-1",
+                reason: "leaving for lunch",
+                by: "mk",
+                // Far enough out that the Driver is holding before it lifts, near enough
+                // that the test is not a sleep: the point is that it ends by itself.
+                until: isoIn(yield* Clock.currentTimeMillis, 200),
+              });
+            }),
+        },
+      );
+
+      expect(status).toBe("done");
+      const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
+      // The log says when it ends, not only that it is held: a hold nobody can date is
+      // one a human has to come back and check.
+      expect(log).toMatch(/held until .*: leaving for lunch/);
+      expect(log).toContain("hold lifted");
+      // Nobody came back to release it, and it is not left marked as waiting on one.
+      expect(run.record.awaiting).toBeNull();
+      expect(run.record.held).toBeNull();
+      const cards = yield* readCards(run.dir);
+      expect(cards.map((card) => card.kind)).toContain("hold");
+    }),
+  ));
+
+test("a Run says who held it and until when, for as long as it is held", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", findings: [], slug: "s" }]);
+      let whileHeld: RunRecord["held"] = null;
+
+      const { status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker", ticket: "t" },
+        {
+          outputPollMs: 20,
+          before: (started) =>
+            Effect.gen(function* () {
+              yield* writeInbox(started.dir, {
+                type: "hold",
+                requestId: "hold-1",
+                reason: "leaving for lunch",
+                by: "mk",
+                until: "2026-12-24T14:00:00.000Z",
+              });
+              yield* Effect.forkDetach(
+                Effect.gen(function* () {
+                  // Read from disk while it is holding: the board reads a record, and
+                  // this is the record it would read.
+                  const store = new RunStore(rig.stateDir);
+                  for (let tries = 0; tries < 200 && whileHeld === null; tries += 1) {
+                    yield* Effect.sleep("10 millis");
+                    whileHeld = (yield* store.load(started.id))?.record.held ?? null;
+                  }
+                  yield* writeInbox(started.dir, {
+                    type: "release",
+                    requestId: "rel-1",
+                    reason: "back",
+                  });
+                }),
+              );
+            }),
+        },
+      );
+
+      expect(status).toBe("done");
+      expect(whileHeld).toMatchObject({
+        reason: "leaving for lunch",
+        by: "mk",
+        until: "2026-12-24T14:00:00.000Z",
+      });
+    }),
+  ));
+
+test(
+  "answering a held Run's question lifts that Run's hold",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeDef(rig.baselineDir, "workflows", "holds", HOLDS);
+
+        const { run, status } = yield* runWorkflowEffect(
+          rig,
+          "holds",
+          { goal: "g" },
+          {
+            outputPollMs: 20,
+            promptsFor: (started) =>
+              filePrompts({
+                dir: started.dir,
+                run: started.id,
+                step: () => "next",
+                timeoutMs: 15_000,
+                pollMs: 10,
+              }),
+            before: (started) =>
+              Effect.forkDetach(
+                Effect.gen(function* () {
+                  // Held while the question is open, which is the only way a Run is both
+                  // asking and held: a hold takes effect at a work boundary, and a Run
+                  // waiting on a Choice has not reached one.
+                  let choice = null;
+                  for (let tries = 0; tries < 500 && choice === null; tries += 1) {
+                    yield* Effect.sleep("10 millis");
+                    choice = yield* readChoice(started.dir);
+                  }
+                  if (choice === null) return;
+                  yield* writeInbox(started.dir, {
+                    type: "hold",
+                    requestId: "hold-1",
+                    reason: "leaving for lunch",
+                    by: "mk",
+                  });
+                  yield* fs.writeFileString(
+                    path.join(started.dir, "inbox", "answer-1.json"),
+                    `${encodeJson({
+                      type: "answer",
+                      requestId: "answer-1",
+                      choiceId: choice.id,
+                      answer: "Stop here",
+                    })}\n`,
+                  );
+                }),
+              ),
+          },
+        );
+
+        expect(status).toBe("done");
+        expect(run.record.held).toBeNull();
+        const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
+        expect(log).toContain("hold lifted: answered");
+      }),
+    ),
+  20_000,
+);

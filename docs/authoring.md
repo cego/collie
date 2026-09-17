@@ -120,6 +120,7 @@ declares it the same way and reads `{{inputs.repo}}`; see
 | Key           | Type           | What it does                                                                                         |
 | ------------- | -------------- | ---------------------------------------------------------------------------------------------------- |
 | `id`          | string         | The step's name, and the `## <id>` body section it sends. Required in practice.                      |
+| `summary`     | string         | What this step is doing, for the board's card: `Reproducing the race with a failing test`.           |
 | `persona`     | string         | The persona injected when its agent starts.                                                          |
 | `harness`     | string         | Which agent CLI. Falls back to your `config.json`.                                                   |
 | `model`       | string         | Which model. `default` uses the harness adapter's pinned default.                                    |

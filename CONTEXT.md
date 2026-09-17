@@ -55,11 +55,17 @@ is the conversation having taken it — only the second settles an item, and a s
 can account for stays `uncertain` for a human rather than being retried.
 
 **Collie tools** — The whole of what native chat may reach, over Collie's own shared
-operations. Reads cover the Herd and are never narrowed by the board's Filter or Selection.
-`collie_propose`, despite its legacy name, executes requested actions using the same
-validation and executors as the CLI and board, without a second confirmation. Reached over a
-local MCP server by Claude and a generated extension by Pi, and by `collie tools call` from
-a terminal: one implementation, three ways in.
+operations. Most read — `collie_herd`, `collie_run`, `collie_workspaces`,
+`collie_receipts`, `collie_definitions`, `collie_installation`, `collie_news` — Herd-wide,
+and never narrowed by the board's Filter or its Selection, which are what a human is
+looking at rather than what supervision may see; the Selection is told to chat with each
+prompt and stands in only where a tool was given no Run.
+Three write — `collie_hold`, `collie_do`, `collie_propose` — and every one carries out
+what the human asked for, at once, over the same closed action set, the same admission
+check and the same executors the CLI and the board use. What Collie wants of its own
+accord is a Proposal because of where it came from, never because of who confirms it. Reached over a local MCP server by Claude and a generated
+extension by Pi, and by `collie tools call` from a terminal: one implementation, three ways
+in.
 
 **Redirect notice** — What a per-workspace Collie pane from an older release shows on its
 next launch: one line and "Open Collie". No board, no chat.
@@ -71,9 +77,15 @@ is required. Questions about the flock are Native chat's.
 **Proposal** — A durable, hash-bound set of actions. Explicit requests execute through
 this record immediately. Unsolicited background suggestions remain pending.
 
-**Confirmation** — Execution of a pending Proposal by id, optionally naming its exact
-content hash. Scripts and chat may execute requests without a terminal requirement.
-The actual origin is retained for attribution, not used as an approval gate.
+**Confirmation** — A human command naming a Proposal's id **and** its content hash. A yes
+to a summary is not consent to a payload nobody read. Who is human is derived by the front
+door — a controlling terminal or the board — never claimed by a caller. Native chat's
+bridge is `chat`, stamped by the entrypoint that serves Collie tools rather than derived:
+it runs inside a harness's pane and so has a controlling terminal, which the CLI would
+otherwise read as a person. It is not human, and it settles nothing on its own judgement:
+the one path that may is `collie_do`, which carries the yes the human said in that turn and
+records it as `chat:`. No action kind confirms anything, so a Proposal can never contain
+its own.
 
 **Delivery** — One message to one live agent incarnation, with states `reserved`,
 `submitted`, `acknowledged`, `verified` and the terminal `failed`, `unknown`, `superseded`,
@@ -141,6 +153,45 @@ this work is>`, from the work and from the names already live in the session —
 display only: a label never decides membership, and a label a human changed is theirs,
 never written again. It is where Collie scopes a Run lookup: a workspace that is not a
 Task's narrows nothing. It gives no file or branch isolation — that is the Worktree's job.
+
+**TaskView** — One Task as the board draws it: name, project, state, the step glyphs, one
+plain sentence about what is happening, its age, drift, hold, pending **Decision**, agents,
+children, branch, merge request and disposition. Built by one function from the Runs, the
+live agents and the run directories, so the Home's cards, the one-screen text view and
+`collie --json board` are the same model rather than three readings of it. A Run belonging
+to no Task is a TaskView of its own.
+
+**Decision** — What a Task is waiting on a human for, and the one thing that puts it in
+**Needs you**: a **question** a Run asked, a **Proposal** Collie made, or an evidence
+**gate** asking which verifications this Run is to be held to. All three live in the Run
+directory, are answered on the card, from the CLI or from chat, and survive the board
+closing. One answered ahead of the step that would ask is **decided at launch**.
+
+**Working** — A Task something is actually doing: a Run with a Driver that owns it, or an
+agent herdr still has. A Run whose record says `running` but which nothing drives and no
+agent works on is not Working, whatever the record says — it is **Abandoned**, and
+**Waiting on you**.
+
+**Waiting on you** — A Task whose work has ended without **landing**, and which nobody has
+asked you about: an implement Run that succeeded and whose merge request is open, a plan
+that is ready to implement, a Run that failed, was stopped or was Abandoned with a branch
+or merge request behind it and has neither been resumed nor disposed of. The board's third
+section. Not a **Decision**: a Decision is Collie asking; this is work in your hands that
+has not been mentioned. A Run that ended with nothing to file — no branch, no merge
+request, no plan, no question — has **Landed** and is not waiting on anyone.
+
+**Landed** — What a Task's work has done once it needs nothing more from anyone: a
+**Disposition** was recorded — merged, abandoned or superseded — the Run succeeded at a
+Workflow that produces nothing to land, such as a review, or it ended with nothing anyone
+could file: no branch, no merge request, no plan, no question. A Task whose work has landed
+is **Finished**, the board's last section.
+
+**Abandoned (Run)** — A Run recorded `running` whose Driver is gone and whose agents herdr
+no longer has, once a minute has passed since it last wrote anything. Distinct from the
+`abandoned` Disposition, which a human records about the work.
+
+**Held** — A Task whose Runs are under a **Hold**, drawn as a `⏸` line under its sentence
+and lifted either by a human or, where the hold named a time, by the Driver at that time.
 
 **Session** — One herdr session and one workspace, taken together. It is the
 scope of a Control Plane tab and of the register of live agents, so only Runs in the same
@@ -243,7 +294,7 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice chains to another Workflow (`run`), prompts a named agent (`prompt`), posts the run's review to the merge request it reviewed (`post`), or just ends the Step (`stop`). A Choice with one thing left to offer is taken rather than asked.
 
-**Decision** — An answer given before a Choice step is reached, kept in the Run record by step id. `run start --decide <step>=<title>` is the only way to give one: launching a Workflow asks its Inputs and nothing else, and every Choice is asked when the Run reaches it. Taken only if that choice is still available when the step is reached; otherwise the Run asks, and says why. Titles name decisions, so two choices that can never both be offered — a hand-off and its stand-alone twin — may share one.
+**Decided at launch** — An answer given before the step that would ask for it is reached, kept in the Run record by step id. `run start --decide <step>=<title>` is the only way to give one: launching a Workflow asks its Inputs and nothing else, and every Choice is asked when the Run reaches it. Taken only if that choice is still available when the step is reached; otherwise the Run asks, and says why. Titles name decisions, so two choices that can never both be offered — a hand-off and its stand-alone twin — may share one.
 
 **Chain** — Starting a Workflow from a Choice, with Inputs forwarded. The new Run is a child of the current one. A Choice may chain several Runs at once, one per repository a plan touches; see Repo run.
 
@@ -274,11 +325,13 @@ human. One set of components, two placements — a popup pane for the herdr acti
 Collie tab for `＋ New run` — because a question a human answers is a component. A
 question a Run answers is a file in its Run directory, and those two never converge.
 
-**Selection** — The one row every action applies to, whether the mouse or the keyboard
-cursor put it there. Held by the row's stable id — a Run id, an agent name — never an
-index, because the list re-sorts under it. Moving it is a change in what is read, not in
-what is true: the detail panel and the one merge request behind it are produced for the
-Selection, and a read superseded by a newer Selection is interrupted rather than finished.
+**Selection** — The Task whose record is open on the board, and what chat means by "it"
+([ADR-0012](docs/adr/0012-the-boards-selection-is-an-explicit-chat-input.md)). Held by a
+stable id — a Task id, a Run id — never an index, because the sections re-sort under it.
+Changing it is a change in what is read, not in what is true: the record and the one merge
+request behind it are produced for the Selection, and a read superseded by a newer one is
+interrupted rather than finished. An action is never applied to it: every action on the
+board belongs to the card it is on.
 
 **Focus** — What the Collie tab is being looked at as: the showing View, every View shown
 at least once, the Selection, and whether the panel's log tail is open. It is what decides
@@ -298,13 +351,12 @@ when it creates it, and never moves a tab it does not own or one a human has sin
 and nothing more — supervision never reads it, so a Run outside the current filter is still
 driven, still checked and still corrected.
 
-**Scope** — What a Control Plane's Runs view is a board of: `local`, this Session's own
-workspace, or `all`, every workspace of this herdr session that Collie has a Run, an agent
-or a history in — one grouped tree, with the session's other workspaces named on a closing
-line. `g` toggles it in the tab and nothing remembers which; the Scope a tab opens on is
-the `scope` default in `config.json`. The wider Scope changes what is shown and what a Run
-lookup searches, never what a Session is: hand-offs, the register and starting a Workflow
-stay this Session's.
+**Scope** — `local`, this Session's own workspace, or `all`, every workspace of this herdr
+session that Collie has a Run, an agent or a history in. It is what a Run lookup searches
+and never what a Session is: hand-offs, the register and starting a Workflow stay this
+Session's. The board no longer has one — it is the whole Herd's, one card per Task
+([ADR-0013](docs/adr/0013-the-board-is-cards-of-tasks.md)) — so the `scope` default in
+`config.json` is read at launch and narrows nothing a human sees.
 
 **Work boundary** — The moment immediately before a reused agent that has finished its
 previous work is given the next piece: a Workflow's next step on the same agent, a fix
@@ -340,6 +392,6 @@ already recorded: its Step results, the findings the loop still owns, the stop m
 the Driver's Ownership. It carries a stable reason code, the sentence a human reads, the
 Steps a resume would keep, the agents that may still be live, and the actions that are
 valid now. What none of the recorded facts settle is said to be unsettled, never guessed.
-`collie run wait --until attention`, `run show` and the Control Plane's detail panel are
-three readings of this one value; canonical in `src/attention.ts`, with the reason codes in
+`collie run wait --until attention`, `run show` and a card's own record are three readings
+of this one value; canonical in `src/attention.ts`, with the reason codes in
 `docs/cli.md`.

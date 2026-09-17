@@ -35,12 +35,14 @@ export interface ProgressLine {
 }
 export interface PendingChoice {
   id: string;
-  kind: "menu" | "ask";
+  kind: "menu" | "ask" | "gate";
   run: string;
   step: string;
   header: string;
   footer: string;
   items: readonly PickItem[];
+  /** A gate's list: the verifications this Run would be held to. */
+  verifications?: readonly string[];
 }
 export interface ChoiceAnswer {
   id: string;
@@ -64,12 +66,13 @@ const ProgressLineJson = Schema.fromJsonString(
 const PendingChoiceJson = Schema.fromJsonString(
   Schema.Struct({
     id: Schema.String,
-    kind: Schema.Literals(["menu", "ask"]),
+    kind: Schema.Literals(["menu", "ask", "gate"]),
     run: Schema.String,
     step: Schema.String,
     header: Schema.String,
     footer: Schema.String,
     items: Schema.Array(PickItemJson),
+    verifications: Schema.optionalKey(Schema.Array(Schema.String)),
   }),
 );
 const ChoiceAnswerJson = Schema.fromJsonString(
@@ -117,6 +120,10 @@ const InboxCommand = Schema.Struct({
   answer: Schema.optionalKey(Schema.String),
   /** `hold`/`release`: why, in the human's words. */
   reason: Schema.optionalKey(Schema.String),
+  /** `hold`: when it lifts, ISO, or absent for one only a human ends. */
+  until: Schema.optionalKey(Schema.String),
+  /** `hold`: who asked, so the drawer can say. */
+  by: Schema.optionalKey(Schema.String),
   /** `intent_changed`: the version now on disk. */
   version: Schema.optionalKey(Schema.Int),
   /** `deliver`: one message for one live agent, composed by whoever asked for it. */
@@ -213,6 +220,36 @@ export const clearChoice = Effect.fn("clearChoice")(function* (dir: string) {
     yield* fs.remove(path.join(dir, name), { force: true });
 });
 
+/** The two answers a gate offers; the board's "Edit the list" sends `approve:<names>`. */
+export const GATE_ITEMS: readonly PickItem[] = [
+  { id: "approve", title: "Approve", subtitle: "hold this run to the list as it stands" },
+  { id: "skip", title: "Skip", subtitle: "open the merge request without checking the evidence" },
+];
+
+export type GateAnswer =
+  /** `verifications` is null for the list as it stands, and the edit's own where it was cut. */
+  | { readonly kind: "approve"; readonly verifications: readonly string[] | null }
+  | { readonly kind: "skip" };
+
+/**
+ * What a gate answer says, and null for one it does not take. An edit down to nothing is
+ * Skip by another name, and a name nobody approved would hold the Run to a command Collie
+ * may not run — so neither is an answer.
+ */
+export function parseGateAnswer(answer: string, offered: readonly string[]): GateAnswer | null {
+  const text = answer.trim();
+  if (text === "skip") return { kind: "skip" };
+  if (text === "approve") return { kind: "approve", verifications: null };
+  if (!text.startsWith("approve:")) return null;
+  const names = text
+    .slice("approve:".length)
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name !== "");
+  if (names.length === 0 || names.some((name) => !offered.includes(name))) return null;
+  return { kind: "approve", verifications: names };
+}
+
 const consumeInboxAnswer = Effect.fn("consumeInboxAnswer")(function* (
   dir: string,
   choice: PendingChoice,
@@ -230,12 +267,34 @@ const consumeInboxAnswer = Effect.fn("consumeInboxAnswer")(function* (
       !choice.items.some((item) => item.id === command.answer)
     )
       continue;
+    if (
+      choice.kind === "gate" &&
+      parseGateAnswer(command.answer, choice.verifications ?? []) === null
+    )
+      continue;
     yield* fs.remove(file, { force: true });
     return choice.kind === "ask"
       ? { id: choice.id, text: command.answer }
       : { id: choice.id, choice: command.answer };
   }
   return null;
+});
+
+/**
+ * Holds nobody has read yet, thrown away. Answering a Run's question is the human coming
+ * back, so a hold they wrote before that must not take effect at the next boundary — and
+ * only this Run's, because each Run holds through an inbox of its own.
+ */
+export const dropHolds = Effect.fn("dropHolds")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  let dropped = 0;
+  for (const file of yield* inboxFiles(dir).pipe(Effect.catch(() => Effect.succeed([])))) {
+    const command = yield* read(InboxCommandJson, file);
+    if (command?.type !== "hold") continue;
+    yield* fs.remove(file, { force: true }).pipe(Effect.ignore);
+    dropped += 1;
+  }
+  return dropped;
 });
 
 /**
@@ -639,5 +698,21 @@ export function filePrompts(opts: {
         footer: "",
         items: [],
       }).pipe(Effect.map((answer) => answer?.text ?? null)),
+    gate: (asked) =>
+      wait({
+        kind: "gate",
+        run: asked.run,
+        step: asked.step,
+        header: `Approve what proves this run: ${asked.verifications.join(", ")}`,
+        footer: "Enter approve · Esc leave the run open",
+        items: GATE_ITEMS,
+        verifications: [...asked.verifications],
+      }).pipe(
+        Effect.map((answer) =>
+          answer?.choice === undefined || answer.choice === null
+            ? null
+            : parseGateAnswer(answer.choice, asked.verifications),
+        ),
+      ),
   };
 }

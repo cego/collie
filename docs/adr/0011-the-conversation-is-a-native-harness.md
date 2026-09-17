@@ -1,8 +1,9 @@
 # The conversation is a native harness
 
-**Status: accepted.** Built for the Home's first slice: the two-pane Home, the harness
-preference, the bounded read contract, and the two transport adapters. What full
-conversational control may then _do_ is a later slice and is not decided here.
+**Status: accepted**, amended by the Control Plane redesign. Built for the Home's first
+slice: the two-pane Home, the harness preference, the bounded read contract, and the two
+transport adapters. The amendment is "Chat may do what the human could do on the board"
+below, which replaces this ADR's original rule that chat's write tools carry nothing out.
 
 The Herd's conversation is an ordinary Claude Code or Pi session running in the Home's
 right-hand pane. Collie does not implement a chat.
@@ -40,21 +41,57 @@ dragged stays where they put it, and a lost chat pane does not cost them the boa
 **One contract, three ways in.** `src/tools.ts` is the whole of what chat may ask:
 bounded, Herd-wide, and built from the same shared operations the board draws itself from.
 Five of its tools read; `collie_installation` also reads, and says it is not read-only
-because the installation checks fetch this checkout's refs. `collie_propose` records a
-proposal over the same closed action set, the same `validate` and the same executors a typed steer and the CLI go
-through — and carries nothing out. No second interpretation: the native agent expressed the
-request structurally, so nothing pays a model to re-read it. Claude reaches it through a local MCP server over stdio (`collie mcp`, the
-official SDK, started by the launch with `--mcp-config --strict-mcp-config`); Pi through a
-generated extension loaded with `-e`; a human through `collie tools call`. Two spellings of
-"what is going on" would be Collie and the row in front of a human telling different
-stories about one Run.
+because the installation checks fetch this checkout's refs. No second interpretation: the
+native agent expressed the request structurally, so nothing pays a model to re-read it.
+Claude reaches it through a local MCP server over stdio (`collie mcp`, the official SDK,
+started by the launch with `--mcp-config --strict-mcp-config`); Pi through a generated
+extension loaded with `-e`; a human through `collie tools call`. Two spellings of "what is
+going on" would be Collie and the row in front of a human telling different stories about
+one Run.
+
+**Chat may do what the human could do on the board.** An earlier version of this ADR said
+chat's write tools "carry nothing out" and that anything touching a Run had to be proposed
+and confirmed. That was wrong, and it is superseded here. It made chat obstruct the person
+it serves: asked to hold a workspace before leaving, Collie could only put the request on
+the board and ask them to click it — a reduced-control interface wearing a safety rule.
+The line is not "does it change a Run"; it is **who wanted it**.
+
+- **The human's own instruction is carried out at once**, and the board shows the result.
+  `collie_hold` holds a Run or a workspace, with an optional `until`; `collie_do` takes the
+  board's own actions on a named Run — stop, resume, release, answer, steer (`deliver`),
+  follow up and start — through the same closed union, the same last-moment admission
+  check and the same executors a confirmation runs. It takes the board's **decisions**
+  too: confirming a waiting proposal by its id and hash, declining one, and recording what
+  became of finished work. A yes is still the human's — what changed is where they may say
+  it. Saying "yes, do it" and being told to go and click it is the same obstruction as
+  being told to go and click a hold.
+- **What Collie wants of its own accord waits for a yes.** `collie_propose` records a
+  proposal over the same closed action set, the same `validate` and the same executors a
+  typed steer and the CLI go through; the human confirms it on the board by its id and the
+  hash of exactly those actions. Drift Collie noticed and corrections it wants to send are
+  this, and stay this.
+
+`test/chat-parity.test.ts` is where the line is kept honest: every operation the CLI offers
+carries a route, and `write` says a tool does it directly.
 
 **Chat is never a person.** Its actor origin is `chat`, stamped by the entrypoint that
-serves the tools — never derived and never read out of the request. The bridge runs as a
-child of the harness inside a pane, so it inherits a controlling terminal, and the CLI's
-"a TTY means a person" shortcut would read a model as one. Everything it proposes is
-`pending` whatever a Run granted its Driver, because that grant was for the Driver's own
-drift checks. There is no action kind that confirms, declines, reconciles or verifies.
+serves the tools — never derived and never read out of the request — and a confirmation it
+relayed is recorded as `chat:<id>`, not as the human. The bridge runs as a child of the
+harness inside a pane, so it inherits a controlling terminal, and the CLI's "a TTY means a
+person" shortcut would read a model as one. What relaxed above is that chat may act on
+what it was told, never that chat became the human. Three things hold that line where it
+matters:
+
+- **No action kind settles anything.** There is no `confirm`, `decline`, `reconcile` or
+  `verify` in `ActionSchema`, so a proposal can never carry its own yes, and a Run's notes
+  asking to be confirmed are asking for something no proposal can contain.
+- **Only the instruction path may settle.** `collie_propose` records; `collie_do` acts, and
+  it alone stamps the actor as relaying what the human said in this turn. `maySettle` is
+  what `judgeConfirmation` and `decline` ask, and a plain `chat` actor is still refused.
+- **Everything chat proposes of its own accord is `pending`**, whatever a Run granted its
+  Driver: that grant was for the Driver's own drift checks, and a conversation is not a
+  Driver. Reconciling and verifying stay the human's, because they are an account of what
+  somebody watched happen.
 
 **The built-in tools are off** in both launches — `--tools ""` and `--no-builtin-tools`.
 Collie's reads are the agent's entire reach, so there is no shell beside the admission
@@ -84,6 +121,12 @@ has to be recorded again.
 | news reaches the conversation on its next turn       | pass   | pass |
 | and reading it is what settles it                    | pass   | pass |
 | a queued push arrives on its own                     | fail   | fail |
+
+"Chat cannot confirm its own proposal" is the probe confirming with a plain `chat` actor,
+and it still refuses on this tree. What that row does not prove any more is that no
+confirmation can come from chat: the human's own yes, relayed through `collie_do`, is one,
+and it is recorded as `chat:<id>`. That path is held by `test/tools.test.ts` and
+`test/chat-parity.test.ts`; the live probe has not been re-run on this tree.
 
 Every marker the probe asserts is a string the model had to find out — a Run id it could
 only get from `collie_herd` — never one typed at it. That is not fussiness: a pane shows
