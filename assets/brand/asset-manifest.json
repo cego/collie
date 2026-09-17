@@ -1,0 +1,217 @@
+{
+  "version": 1,
+  "concept": "01 · The personalized companion",
+  "assets": [
+    {
+      "file": "source/collie-master.png",
+      "bytes": 902688,
+      "sha256": "bea761fda1b70590a30f4997302243b574cba8f4e0f7a9394e3d5d8fec955f94",
+      "width": 1254,
+      "height": 1254
+    },
+    {
+      "file": "source/generation.json",
+      "bytes": 5675,
+      "sha256": "4e96e94c87b91f852ef670ce4584f7cedb837ab4ebc37899b53306a4f20829b7"
+    },
+    {
+      "file": "logos/collie-horizontal-green-1024.png",
+      "bytes": 71031,
+      "sha256": "d5ad9ecdc87f94b3b3f82f57d15ac1aa3bc0cc2a8f7f96e5656855ca58af1a9e",
+      "width": 1024,
+      "height": 320
+    },
+    {
+      "file": "logos/collie-horizontal-green-2048.png",
+      "bytes": 215153,
+      "sha256": "8c086777efac81209d8dbf0ef52a086a2b3c4b350baf27599bb43a7ea001a22f",
+      "width": 2048,
+      "height": 640
+    },
+    {
+      "file": "logos/collie-horizontal-green-512.png",
+      "bytes": 25312,
+      "sha256": "c2c8f30e72944988140b1f6891dccbc1bc7136cb113286a6ca88680766991607",
+      "width": 512,
+      "height": 160
+    },
+    {
+      "file": "logos/collie-horizontal-light-1024.png",
+      "bytes": 75864,
+      "sha256": "6c401802e641cb188ea0c222b327abee73bdda870335caed86932129fa2c531c",
+      "width": 1024,
+      "height": 320
+    },
+    {
+      "file": "logos/collie-horizontal-light-2048.png",
+      "bytes": 215187,
+      "sha256": "d1510879d5f15df17db3d192b70d4f858b45a3a5be6710c17e4a9c2ea220148e",
+      "width": 2048,
+      "height": 640
+    },
+    {
+      "file": "logos/collie-horizontal-light-512.png",
+      "bytes": 27547,
+      "sha256": "3ae576f9ef8f28f6b1fb5e63548d8356e5fcb16fdb01ce4dd69b29f424ac82d3",
+      "width": 512,
+      "height": 160
+    },
+    {
+      "file": "logos/collie-mark-1024.png",
+      "bytes": 676689,
+      "sha256": "431371c2e73375f01458a2e9596db124d5f1e367f13d7d09684d282a391c4c6d",
+      "width": 1024,
+      "height": 1024
+    },
+    {
+      "file": "logos/collie-mark-128.png",
+      "bytes": 17169,
+      "sha256": "f16463cca4293e74f777008e158ddabcaf8495e91a9d460a6e2beddc310d54bb",
+      "width": 128,
+      "height": 128
+    },
+    {
+      "file": "logos/collie-mark-256.png",
+      "bytes": 52518,
+      "sha256": "2c7e62aa28a4215885a3c6075759ea92869d3fa710682d4499e7ed2dbdead679",
+      "width": 256,
+      "height": 256
+    },
+    {
+      "file": "logos/collie-mark-32.png",
+      "bytes": 2353,
+      "sha256": "830731ac5e81ed15ae4729574899a3ded7ccbaf43d9c65c146a3b713a592b79e",
+      "width": 32,
+      "height": 32
+    },
+    {
+      "file": "logos/collie-mark-48.png",
+      "bytes": 4114,
+      "sha256": "34d63944653f0fdf9e30218ccdf78f69170474e9365dc71fae30fda4e0f7737c",
+      "width": 48,
+      "height": 48
+    },
+    {
+      "file": "logos/collie-mark-512.png",
+      "bytes": 190601,
+      "sha256": "1671ee39e6406a56ebc230a6d7d4849f72f8d1e3aa574fc87846c4594312455a",
+      "width": 512,
+      "height": 512
+    },
+    {
+      "file": "logos/collie-mark-64.png",
+      "bytes": 6147,
+      "sha256": "6ea121238f0a236775aef118682cea30d3a6e064533af994ab68cf1bad0d88c7",
+      "width": 64,
+      "height": 64
+    },
+    {
+      "file": "logos/collie-stacked-green-1024.png",
+      "bytes": 432520,
+      "sha256": "f0b63714e53cdf87bb04f69a0c996493d6b883b7323684174290d8c198700528",
+      "width": 1024,
+      "height": 1160
+    },
+    {
+      "file": "icons/android-chrome-192x192.png",
+      "bytes": 21629,
+      "sha256": "9f16b541d203b310b3046b15a7ebfb852bf58607e77494cba0b54e4bb569ee35",
+      "width": 192,
+      "height": 192
+    },
+    {
+      "file": "icons/android-chrome-512x512.png",
+      "bytes": 118524,
+      "sha256": "037da7682b0ac49dd791c2e0e24f01eff8067805d62b33ccd98aedb601ea0525",
+      "width": 512,
+      "height": 512
+    },
+    {
+      "file": "icons/apple-touch-icon.png",
+      "bytes": 19458,
+      "sha256": "b95a7b91f53b8d4c7cf7112c021876a7c1e519aff4e119ea399542f0a9fa9307",
+      "width": 180,
+      "height": 180
+    },
+    {
+      "file": "icons/favicon-16.png",
+      "bytes": 836,
+      "sha256": "bb853cc33fb65ba93ab24d10551663f8ab317355c88d598ef8f5bb6882fde378",
+      "width": 16,
+      "height": 16
+    },
+    {
+      "file": "icons/favicon-32.png",
+      "bytes": 2056,
+      "sha256": "7056f70a067b98ad8a63e9906ca7d395bf696fa9ab0e37f58675d701780d24ff",
+      "width": 32,
+      "height": 32
+    },
+    {
+      "file": "icons/favicon-48.png",
+      "bytes": 3714,
+      "sha256": "633cb76539babfd7dd598b0f27d86a49319ca29a15fdbcb20b6fb40f0093bfd7",
+      "width": 48,
+      "height": 48
+    },
+    {
+      "file": "icons/favicon.ico",
+      "bytes": 6660,
+      "sha256": "b952a3029df094d68b3928d061c5da66e05ddaa9948fee941d565ce2092dbc90"
+    },
+    {
+      "file": "icons/maskable-icon-512.png",
+      "bytes": 67372,
+      "sha256": "375609091be8f69f4365abfaba14936781bd6794a76ce47034a93e25fda08b53",
+      "width": 512,
+      "height": 512
+    },
+    {
+      "file": "gitlab/collie-project-avatar.png",
+      "bytes": 22036,
+      "sha256": "bad23bb8857f7091a39d0c8131f239b8e581bdc0c9c766ba54e040da6a4084db",
+      "width": 192,
+      "height": 192
+    },
+    {
+      "file": "tokens/brand.css",
+      "bytes": 288,
+      "sha256": "e505f9c72534c17fa8dad1a0ed2cc3de1ca692a8c3c1f32a7107e09be841fde4"
+    },
+    {
+      "file": "tokens/brand.json",
+      "bytes": 711,
+      "sha256": "6e6977b8ae5b8099fe105db28c093739583f7ac3ce79d3d50875c44f47dbed5b"
+    },
+    {
+      "file": "web/head.html",
+      "bytes": 401,
+      "sha256": "d5b39ccb115b6038075109a23fb7562ff177e098359ec11d55326d19316cf41a"
+    },
+    {
+      "file": "web/site.webmanifest",
+      "bytes": 549,
+      "sha256": "316372d26c5e6d5774f87f896772bc1fef9192b4398ad6172acba3aa350bd849"
+    },
+    {
+      "file": "fonts/dm-sans-license.txt",
+      "bytes": 4482,
+      "sha256": "9af36190332437f5ecd09974de43c1f7c77a310a996cdd8ceb25628b458840e1"
+    },
+    {
+      "file": "fonts/dm-sans-variable.ttf",
+      "bytes": 240164,
+      "sha256": "8cd08d97e89c24d0aa92edd2f0f4c8ee6195eee9b7c9f154865a58b02f0c1c0d"
+    },
+    {
+      "file": "fonts/nunito-sans-license.txt",
+      "bytes": 4393,
+      "sha256": "efbb0c9e864cef973982d9a17567e6be5c3d1759695574586f3f18c7ecca064b"
+    },
+    {
+      "file": "fonts/nunito-sans-variable.ttf",
+      "bytes": 571240,
+      "sha256": "f934d7142fb4784bf828da485b7dcbd90c0c80d514e9d49a5da0ed3a1ae2491d"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "mode": "built-in image_gen",
+  "prompt": "Use case: style-transfer\nAsset type: one final transparent PNG cartoon brand mark, square, at least 1254 x 1254.\nInput images: Image 1 is the EDIT TARGET, a faithful portrait of Luma. Image 2 is ONLY the reference for the original clean simple cartoon shape language.\n\nMake ONE targeted change to Image 1: simplify its rendering to the SAME SIMPLE CARTOON STYLE as Image 2. Keep Luma's anatomy and identity in Image 1 fixed. Preserve its three-quarter head angle with nose toward the viewer's right, broad rounded head, unequal soft floppy ears, modest eyes at their current locations, broad muzzle, quiet kind closed-mouth expression, and head-plus-small-chest framing. Do not copy Image 2's anatomy, frontal symmetry, pointed ear, eye size, or grin.\n\nReplace the etched illustration treatment with a small number of broad smooth solid graphic shapes. Completely remove ALL individual fur strokes, hatching, whiskers, stippling, little cheek highlights, decorative eyebrow streaks, and decorative ear streaks. The ears are solid forest green, with at most one simple smooth fold-separation curve per ear if essential. Face cheeks are solid forest green. Show the eyes with simple gentle curves, modest green pupils and small white catchlights. Show the broad rounded nose and closed mouth with simple graphic shapes. Give the outer contour and chest bib only a FEW broad rounded fur tips like Image 2; no serrated edges or hair-by-hair detail. The result must read immediately as a simple friendly cartoon logo, never an engraving or detailed pet portrait.\n\nLOCK THE WHITE BLAZE: retain one narrow UNINTERRUPTED opaque white stripe from the upper forehead, down between the eyes, along the angled bridge, all the way to the dark green nose and white muzzle. No green gap anywhere. Make the narrowest connection clear at icon size. Keep the face predominantly dark green, the existing restrained muzzle/chin white and white chest bib. No invented white eyebrow markings or white ear patches.\n\nUse only forest green #1C5145 and solid opaque white #FFFFFF, with antialiasing only at shape edges. All interior fills must be fully opaque. Outside the centered dog silhouette is a genuinely transparent alpha background with comfortable clear margins. No other colors, shading, gradients, texture, text, scenery, collars, accessories, checkerboard, or background rectangle. Deliver exactly one final logo.",
+  "identityPrompt": "Use case: identity-preserve\nAsset type: one square transparent PNG cartoon brand logo, at least 1254 x 1254.\nINPUT ROLES ARE ESSENTIAL: Image 1, the photograph of Luma, is the PRIMARY EDIT TARGET and identity/anatomy anchor. Image 2 is ONLY a reference for the simple green-and-white graphic drawing style; do not copy its symmetric head, generic face, eyes, ears, smile, or white markings.\n\nTransform the exact photographed head of Luma in Image 1 into a clean cartoon logo. Someone who knows this particular dog should recognize the head and expression. Keep the photo's slight three-quarter angle, with nose pointing toward the viewer's right. Preserve the broad rounded skull, the actual eye placement and modest eye size, the broad calm closed muzzle, and the naturally unequal floppy ears: the viewer-left ear hangs longer beside the cheek, while the viewer-right ear is foreshortened. Preserve the photo's face proportions and relaxed gentle expression. Do not center or mirror the anatomy. Use a quiet closed mouth line, not the prior logo's exaggerated curled smile. Do not enlarge the eyes or shorten the muzzle into a baby cartoon.\n\nMANDATORY OWNER-CONFIRMED MARKING: Luma has ONE NARROW CONTINUOUS WHITE BLAZE from upper forehead all the way down the bridge to the dark nose and white muzzle. The thin connection between the eyes must stay UNBROKEN and legible at icon size. Follow the angled bridge in the photograph. This stripe must NOT end above the eyes or leave a green gap. Keep most of the face dark green, with restrained white on the muzzle/chin and a white chest bib. No invented white eyebrows, no decorative white ear patches, no large white symmetrical moustache. Ears remain green.\n\nRendering: Simplify this exact head into the existing clean friendly cartoon brand language: bold smooth shapes, a few restrained feathered contour tips, forest green #1C5145 and opaque white #FFFFFF only. A head and small chest crop, centered on a square with comfortable transparent margins. Every fur fill is solid opaque color; white markings are opaque white rather than transparent holes. Outside the silhouette must be a true alpha-transparent background. No photo texture, gradients, shading, extra colors, outlines in another color, scenery, full body, text, accessories, checkerboard pattern, or background rectangle. Deliver exactly one logo.",
+  "references": [
+    "Photo-based portrait of Luma; identity and edit target",
+    "Selected companion logo, direction 01; cartoon style reference",
+    "Owner-supplied photograph of Luma; retained privately"
+  ],
+  "output": "collie-master.png",
+  "postprocessing": {
+    "method": "Localized PNG color and opacity repair",
+    "source": "Previously approved Luma portrait",
+    "region": {
+      "left": 455,
+      "top": 480,
+      "right": 740,
+      "bottom": 770,
+      "feather": 24
+    },
+    "fill": [
+      25,
+      79,
+      68,
+      255
+    ],
+    "description": "Replace cloudy color and accidental transparency in the green cheek with an opaque fill sampled from the adjacent cheek. Preserve white markings, facial contours, and every pixel outside the repair region.",
+    "changedPixels": 69683
+  }
+}

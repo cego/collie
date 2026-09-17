@@ -1,0 +1,12 @@
+{
+  "status": "approved",
+  "gitlabProjectId": 2225,
+  "repository": "https://gitlab.cego.dk/mk/collie",
+  "targetBranch": "master",
+  "assetDirectory": "assets/brand",
+  "avatar": "gitlab/collie-project-avatar.png",
+  "avatarEndpoint": "PUT /api/v4/projects/2225",
+  "avatarMultipartField": "avatar",
+  "mergeRequestAssignee": "mk",
+  "requiresBrandApproval": false
+}

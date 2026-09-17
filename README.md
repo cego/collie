@@ -1,5 +1,7 @@
 # Collie
 
+<img src="assets/brand/logos/collie-horizontal-green-1024.png" alt="Collie with Luma, its green and white dog logo" width="360" />
+
 Codified agent workflows for herdr: `plan`, `implement`, `review`, `architecture` —
 deterministic multi-tab orchestrations you pick from a popup. A shared starting point, not a
 restriction: fork any workflow or persona into your own layer.
@@ -49,6 +51,8 @@ Everything is also a command, so an agent can drive Collie:
 
 ## Documentation
 
+- [Brand showcase](assets/brand/index.html) — the approved visual identity as portable HTML.
+- [Brand guide](assets/brand/README.md) — logos, icons, color, typography, and usage.
 - [Using Collie](docs/using.md) — install, keybindings, the Control Plane, hand-offs,
   your defaults, troubleshooting.
 - [Workflows](docs/workflows.md) — what each workflow is for, what it needs, how they chain.
@@ -59,5 +63,8 @@ Everything is also a command, so an agent can drive Collie:
 - [`CONTEXT.md`](CONTEXT.md) — the vocabulary.
 - [ADRs](docs/adr) — the decisions and why.
 - [`AGENTS.md`](AGENTS.md) — where an agent working on this repo should look first.
+
+Open `assets/brand/index.html` in a browser, or publish the `assets/` directory with any
+static host. The showcase includes local fonts, artwork, and downloads, with no build step.
 
 Where this is going: [PRODUCT.md](PRODUCT.md). What the words mean: [CONTEXT.md](CONTEXT.md).
