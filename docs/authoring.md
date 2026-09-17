@@ -53,7 +53,7 @@ over. The rules, exactly:
 | Steps          | Matched by `id`. A child step's keys are laid over the parent step's; keys you leave out stay.   |
 | New steps      | A child step with an id the parent does not have is new work, appended after the parent's steps. |
 | `inputs:`      | Merged by name; a name in both takes the child's strategy.                                       |
-| Scalars        | `title:`, `description:`, `max_iterations:` — the child's wins where it names one.               |
+| Scalars        | `title:`, `description:`, `max_iterations:`, `checkout:` — the child's wins where it names one.  |
 | `parallel:`    | Replaced whole, never merged entry by entry.                                                     |
 | `choices:`     | Replaced whole, never merged entry by entry.                                                     |
 | `## <section>` | A child section replaces the parent's of the same name; new ones are appended.                   |
@@ -70,10 +70,30 @@ replaces it. An unknown parent, or a cycle, is a validation error naming the fil
 | `title`            | string | One line for the picker's list. Defaults to `name`.                             |
 | `description`      | string | One paragraph for the picker's detail pane.                                     |
 | `inputs`           | map    | `name: strategy` — see [Input strategies](#input-strategies).                   |
+| `checkout`         | string | What the workflow needs of the repository — see [Checkout](#checkout).          |
 | `max_iterations`   | number | How many times a `repeat:` loop may go round. Falls back to your `config.json`. |
 | `steps`            | list   | The steps, in order — see [Step keys](#step-keys).                              |
 | `extends`          | string | Follow this definition and change only what this file names.                    |
 | `forked_from_hash` | string | Written by a `copy` fork; how a stale copy is spotted. Do not write it by hand. |
+
+### Checkout
+
+What a Run of this workflow needs of the repository, and so which checkout it is given.
+Inherited like everything else a child does not restate, so a fork of a workflow that
+owns a checkout owns one too — this is declared here rather than inferred from the
+workflow's name so that a fork is whatever it says it is.
+
+| Value     | What the Run gets                                                                                                                     |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `none`    | The directory it was started in. The default, and right for a workflow that reads a diff or writes only outside the repository.       |
+| `branch`  | Its own checkout of the branch it builds, keyed by that branch, so two Runs never share an index or a stash stack.                    |
+| `roaming` | Its own checkout detached at the default branch, binding no branch to itself, for a Run that moves across branches as it merges them. |
+
+A workflow declaring `branch` is also offered the `branch` input no workflow declares
+(`docs/cli.md`); a `roaming` one is not, having no branch of its own to be given. A
+value that is none of the three fails the file rather than the Run: a workflow that
+quietly got no checkout would work in whatever directory it was launched from, which is
+how two Runs come to share one working tree.
 
 ### Input strategies
 

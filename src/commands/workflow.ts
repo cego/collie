@@ -234,7 +234,7 @@ const workflowShow = Command.make(
           const defaults = yield* loadDefaults(resolved.env.configDir);
           const wf = resolveWorkflow(workflow, defs, defaults);
           const inherited = new Set(wf.embeddedInputs);
-          const inputs = branchListed(wf.base, wf.inputs);
+          const inputs = branchListed(wf.checkout, wf.inputs);
           return {
             ok: true,
             data: {
@@ -253,7 +253,7 @@ const workflowShow = Command.make(
               wf.title,
               wf.description,
               `Inputs: ${Schema.encodeSync(UnknownJson)(inputs)}`,
-              ...(mutates(wf.name) && !roams(wf.name) ? [BRANCH_HELP] : []),
+              ...(mutates(wf.checkout) && !roams(wf.checkout) ? [BRANCH_HELP] : []),
               ...(wf.embeddedInputs.length > 0
                 ? [`Inherited from an embedded workflow: ${[...inherited].join(", ")}`]
                 : []),

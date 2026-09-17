@@ -151,6 +151,26 @@ export interface Provenance {
   parentHash?: string;
 }
 
+/**
+ * What a Workflow needs of the repository, and so which checkout a Run of it gets.
+ * Declared in the Workflow's own front matter rather than inferred from its name, so
+ * a fork is whatever it says it is and inherits this like everything else it does not
+ * restate.
+ *
+ * - `none` reads a diff or the caller's own tree, and works where it was started.
+ * - `branch` owns the checkout of the branch it builds, so two Runs never share an
+ *   index or a stash stack.
+ * - `roaming` is detached at the default branch and moves across the branches it
+ *   merges, binding none of them to itself.
+ */
+export const CHECKOUT_KINDS = ["none", "branch", "roaming"] as const;
+export type CheckoutKind = (typeof CHECKOUT_KINDS)[number];
+
+const CHECKOUT_NAMES: readonly string[] = CHECKOUT_KINDS;
+
+export const isCheckoutKind = (value: string): value is CheckoutKind =>
+  CHECKOUT_NAMES.includes(value);
+
 export interface WorkflowDef extends Provenance {
   name: string;
   /**
@@ -160,6 +180,11 @@ export interface WorkflowDef extends Provenance {
    * which Workflow this is keys on `base`, never on `name`.
    */
   base: string;
+  /**
+   * The checkout a Run of this Workflow needs. Absent means the parent's, and `none`
+   * at the bottom of the chain: a Workflow that changes nothing says nothing.
+   */
+  checkout?: CheckoutKind;
   title: string;
   description: string;
   inputs: Record<string, InputStrategy>;
@@ -308,6 +333,16 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
   };
   if (isString(data.extends)) workflow.extends = data.extends;
   if (isString(data.forked_from_hash)) workflow.forkedFromHash = data.forked_from_hash;
+  // A value nothing recognises is a Workflow that would quietly get no checkout and
+  // share the directory it was started in, so it fails the file rather than the Run.
+  if (data.checkout !== undefined) {
+    const named = isString(data.checkout) ? data.checkout : "";
+    if (!isCheckoutKind(named))
+      return yield* Effect.fail(
+        new Error(`checkout: "${named}" is not one of ${CHECKOUT_KINDS.join(", ")}`),
+      );
+    workflow.checkout = named;
+  }
   return workflow;
 });
 
@@ -514,6 +549,9 @@ function mergeWorkflow(parent: WorkflowDef, child: WorkflowDef): WorkflowDef {
     // `base` is deliberately not among the keys the child brings: inheriting the
     // parent's carries the bottom of the chain up, however many forks deep it is.
     ...pick(child, ["name", "path", "layer", "extends", "forkedFromHash"]),
+    // Inherited like `base`: a fork of a Workflow that owns a checkout owns one too,
+    // unless it says otherwise itself.
+    checkout: child.checkout ?? parent.checkout,
     // A file with no `title:` is parsed as titled after itself, so that is what
     // "the child did not name one" looks like here.
     title: child.title && child.title !== child.name ? child.title : parent.title,
@@ -601,6 +639,8 @@ export interface ResolvedWorkflow {
   name: string;
   /** The bottom of the `extends` chain — see `WorkflowDef.base`. */
   base: string;
+  /** The checkout a Run of this Workflow gets — see `WorkflowDef.checkout`. */
+  checkout: CheckoutKind;
   title: string;
   description: string;
   inputs: Record<string, InputStrategy>;
@@ -743,6 +783,7 @@ export function resolveWorkflow(
   return {
     name: wf.name,
     base: wf.base,
+    checkout: wf.checkout ?? "none",
     title: wf.title,
     description: wf.description,
     inputs,

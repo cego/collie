@@ -180,6 +180,7 @@ effectTest("a branch nothing names is worked out, and the picker never asks for 
     "implement",
     `---
 name: implement
+checkout: branch
 title: implement — needs somewhere to work
 inputs:
   goal: goal

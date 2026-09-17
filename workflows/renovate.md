@@ -2,6 +2,9 @@
 name: renovate
 title: renovate — merge the month's dependency updates, tag, release and record it
 description: Claims the repository in Helle and waits its turn, merges or accounts for every Renovate Bot merge request, tags and watches the release, then checks the repository off the team's shared Renovate issue in Linear.
+# Detached at the default branch and roaming across the Renovate branches it merges,
+# so no branch of the repository is bound to this Run's worktree.
+checkout: roaming
 inputs:
   # Paste a GitLab URL or enter an existing local checkout.
   # Collie caches a URL clone, then cuts the Run's own detached checkout from it.

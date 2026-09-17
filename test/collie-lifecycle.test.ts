@@ -95,6 +95,7 @@ Help.
         path.join(plugin, "workflows", "implement.md"),
         `---
 name: implement
+checkout: branch
 title: Implement
 description: Builds a plan.
 inputs:

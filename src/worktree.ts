@@ -18,6 +18,7 @@ import {
   type WorktreeInfo,
   type WorktreeListing,
 } from "./herdr";
+import type { CheckoutKind } from "./definitions";
 import { defaultBase } from "./inputs";
 import { disambiguate, GLYPH, tabLabel } from "./naming";
 import {
@@ -36,27 +37,27 @@ import { resumable, RunStore, type WorktreeRecord } from "./run";
 import { slugify } from "./template";
 
 /**
- * The workflows that change the repository, and so need a checkout of their own.
- * `plan` and `architecture` get one where they chain into `implement` — the chained
- * Run resolves it — and `review` reads a diff or the caller's own tree.
+ * Whether a Workflow changes the repository, and so needs a checkout of its own. It
+ * is the Workflow's own `checkout:` and never its name: a fork is as much a Renovate
+ * Run as what it extends, and keying this on names gave every fork the directory it
+ * was launched from — which is the sharing this whole mechanism exists to prevent.
+ *
+ * `plan` and `architecture` declare none: they get a checkout where they chain into
+ * `implement`, and the chained Run resolves it.
  */
-const MUTATING = new Set(["implement", "renovate"]);
-
-/**
- * The mutating workflows whose checkout roams rather than owning one branch. A
- * Renovate Run moves across every Renovate Bot branch it merges, so its checkout is
- * detached at the repository's default branch and no branch is bound to its record:
- * a branch bound to the Run's worktree is a branch no other checkout may have, and
- * these are branches the operator's own checkouts are entitled to.
- */
-const ROAMING = new Set(["renovate"]);
-
-export function mutates(workflow: string): boolean {
-  return MUTATING.has(workflow);
+export function mutates(checkout: CheckoutKind): boolean {
+  return checkout !== "none";
 }
 
-export function roams(workflow: string): boolean {
-  return ROAMING.has(workflow);
+/**
+ * Whether the checkout roams rather than owning one branch. A Renovate Run moves
+ * across every Renovate Bot branch it merges, so its checkout is detached at the
+ * repository's default branch and no branch is bound to its record: a branch bound to
+ * the Run's worktree is a branch no other checkout may have, and these are branches
+ * the operator's own checkouts are entitled to.
+ */
+export function roams(checkout: CheckoutKind): boolean {
+  return checkout === "roaming";
 }
 
 /**
@@ -114,7 +115,10 @@ export interface BranchAsk {
  * answer the branch resolver learns to take is not a second edit here.
  */
 export interface CheckoutAsk extends BranchAsk {
+  /** What this Run is called, for the tab a new checkout opens in. */
   workflow: string;
+  /** What the Workflow declared it needs of the repository. */
+  checkout: CheckoutKind;
   /** The workspace the Run was activated from, and stays in. */
   workspaceId?: string | null;
   workspaceLabel?: string | null;
@@ -168,11 +172,11 @@ export const BRANCH_INPUT = "branch";
  * true of it — inference never supplies it, and a Run without it still starts.
  */
 export function branchListed(
-  workflow: string,
+  checkout: CheckoutKind,
   inputs: Record<string, string>,
 ): Record<string, string> {
   // Not for a roaming Workflow: it has no branch of its own to be given one.
-  return mutates(workflow) && !roams(workflow) ? { ...inputs, [BRANCH_INPUT]: "optional" } : inputs;
+  return mutates(checkout) && !roams(checkout) ? { ...inputs, [BRANCH_INPUT]: "optional" } : inputs;
 }
 
 /**
@@ -835,9 +839,9 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
     task: null,
     branchSource: null,
   };
-  if (!mutates(opts.workflow)) return here;
+  if (!mutates(opts.checkout)) return here;
 
-  if (roams(opts.workflow)) {
+  if (roams(opts.checkout)) {
     const repository = opts.inputs[REPOSITORY_INPUT]?.trim() || "";
     let from = repository || opts.cwd;
     const project = remoteRepository(repository)

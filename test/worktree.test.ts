@@ -165,23 +165,21 @@ const plan = (inputs: Record<string, string>, explicit?: string, extra: Partial<
     ...extra,
   });
 
-test("only the workflows that change the repository get a checkout of their own", () => {
-  expect(mutates("implement")).toBe(true);
-  expect(mutates("renovate")).toBe(true);
-  expect(mutates("review")).toBe(false);
-  expect(mutates("plan")).toBe(false);
+test("only the workflows that declare a checkout get one of their own", () => {
+  expect(mutates("branch")).toBe(true);
+  expect(mutates("roaming")).toBe(true);
+  // What a workflow that declares nothing resolves to, and what `review` and `plan` are.
+  expect(mutates("none")).toBe(false);
 });
 
 test("a roaming workflow owns a checkout but no branch, so none is asked for", () => {
-  expect(roams("renovate")).toBe(true);
-  expect(roams("implement")).toBe(false);
+  expect(roams("roaming")).toBe(true);
+  expect(roams("branch")).toBe(false);
+  expect(roams("none")).toBe(false);
 
-  expect(Object.keys(branchListed("implement", { plan: "work-source" }))).toEqual([
-    "plan",
-    "branch",
-  ]);
+  expect(Object.keys(branchListed("branch", { plan: "work-source" }))).toEqual(["plan", "branch"]);
   // Nothing to ask: a Renovate Run moves across every branch it merges and owns none.
-  expect(Object.keys(branchListed("renovate", { repository: "optional" }))).toEqual(["repository"]);
+  expect(Object.keys(branchListed("roaming", { repository: "optional" }))).toEqual(["repository"]);
 });
 
 test("a run described in words branches off the default branch, under the operator's login", () =>
@@ -1082,6 +1080,7 @@ test("a mutating run makes its checkout with git and stays in the workspace it s
         stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
+        checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
         inputs: { plan_kind: "text" },
@@ -1131,6 +1130,7 @@ test("a workspace whose own directory is not a checkout still gets its run a wor
         stateDir: rig.stateDir,
         cwd: env.cwd,
         workflow: "implement",
+        checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
         inputs: { plan_kind: "text" },
@@ -1156,6 +1156,7 @@ test("a branch with a slash in it nests, and never collides with the dashed name
           stateDir: rig.stateDir,
           cwd: rig.projectDir,
           workflow: "implement",
+          checkout: "branch",
           name: "Add a picker",
           login: LOGIN,
           inputs: { plan_kind: "text" },
@@ -1189,6 +1190,7 @@ test("the checkout goes where herdr's own config says worktrees go", () =>
         stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
+        checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
         inputs: { plan_kind: "text" },
@@ -1211,6 +1213,7 @@ test("the checkout a branch already has is reused, never added twice", () =>
         stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
+        checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
         inputs: { plan_kind: "text" },
@@ -1232,6 +1235,7 @@ test("workspace=new asks herdr for the checkout and takes the workspace it opens
         stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
+        checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
         inputs: { plan_kind: "text", workspace: "new" },
@@ -1261,6 +1265,7 @@ test("a checkout git will not add is a run that does not start", () =>
         stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
+        checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
         inputs: { plan_kind: "text" },
@@ -1288,6 +1293,7 @@ test("a checkout Collie cannot be given is a run that does not start", () =>
         stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "implement",
+        checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
         inputs: { plan_kind: "text", workspace: "new" },
@@ -1306,6 +1312,7 @@ const renovateCheckout = (inputs: Record<string, string> = {}, cwd = rig.project
     cwd,
     stateDir: rig.stateDir,
     workflow: "renovate",
+    checkout: "roaming",
     name: "Renovate spilnu",
     inputs,
     workspaceId: "wTasks",
@@ -1667,6 +1674,7 @@ test("a workflow that changes nothing works where it was started, and is not ref
         stateDir: rig.stateDir,
         cwd: rig.projectDir,
         workflow: "review",
+        checkout: "none",
         name: "!42",
         inputs: {},
         workspaceId: "wT",

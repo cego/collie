@@ -2,6 +2,9 @@
 name: implement
 title: implement — build the plan, review it, fix until nothing blocks
 description: Builds from a plan dir, a Linear issue or a description, gets one complete review, fixes what blocks until a review finds nothing blocking, then opens the merge request.
+# Owns the checkout of the branch it builds, so two Runs never share an index or a
+# stash stack.
+checkout: branch
 inputs:
   plan: work-source
   # The short kebab-case name of the work, which a generated branch is named after.

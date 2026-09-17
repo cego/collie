@@ -1544,7 +1544,7 @@ test("a fork under its own name is still the workflow it extends", () =>
         rig.baselineDir,
         "workflows",
         "renovate",
-        "---\nname: renovate\ninputs:\n  repository: gitlab-repository\nsteps:\n  - id: merge\n    output: merge.json\n---\n## merge\nBaseline.\n",
+        "---\nname: renovate\ncheckout: roaming\ninputs:\n  repository: gitlab-repository\nsteps:\n  - id: merge\n    output: merge.json\n---\n## merge\nBaseline.\n",
       );
       yield* writeDef(
         rig.configDir,
@@ -1567,5 +1567,45 @@ test("a fork under its own name is still the workflow it extends", () =>
       expect(defs.workflows.get("renovate")!.base).toBe("renovate");
       expect(defs.workflows.get("renovate-batch")!.base).toBe("renovate");
       expect(defs.workflows.get("renovate-batch-dry")!.base).toBe("renovate");
+
+      // And the checkout it needs comes with it, however many forks deep: a fork that
+      // is handed the directory it was launched from shares a working tree with the
+      // Run that launched it.
+      expect(defs.workflows.get("renovate")!.checkout).toBe("roaming");
+      expect(defs.workflows.get("renovate-batch")!.checkout).toBe("roaming");
+      expect(defs.workflows.get("renovate-batch-dry")!.checkout).toBe("roaming");
+    }),
+  ));
+
+test("a fork may declare a checkout of its own, and an unknown one fails the file", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* writeDef(
+        rig.baselineDir,
+        "workflows",
+        "renovate",
+        "---\nname: renovate\ncheckout: roaming\nsteps:\n  - id: merge\n    output: merge.json\n---\n## merge\nBaseline.\n",
+      );
+      // A fork that reads rather than changes the repository says so, and is believed.
+      yield* writeDef(
+        rig.configDir,
+        "workflows",
+        "renovate-report",
+        "---\nname: renovate-report\nextends: renovate\ncheckout: none\n---\n## merge\nReport only.\n",
+      );
+      yield* writeDef(
+        rig.configDir,
+        "workflows",
+        "renovate-typo",
+        "---\nname: renovate-typo\nextends: renovate\ncheckout: detached\n---\n## merge\nTypo.\n",
+      );
+
+      const defs = yield* loadDefinitions(yield* layers(rig.pluginEnv()));
+
+      expect(defs.workflows.get("renovate-report")!.checkout).toBe("none");
+      // Not silently `none`: a value nothing recognises would be a Run quietly working
+      // in the directory it was started from.
+      expect(defs.workflows.has("renovate-typo")).toBe(false);
+      expect(defs.errors.some((e) => /renovate-typo.*checkout: "detached"/s.test(e))).toBe(true);
     }),
   ));
