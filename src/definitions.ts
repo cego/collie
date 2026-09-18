@@ -765,7 +765,7 @@ const missingSkills = Effect.fn("Definitions.missingSkills")(function* (
   const errors: string[] = [];
   for (const [name, by] of asked) {
     if (!(yield* skillInstalled(dirs, name)))
-      errors.push(`${by}: the skill "${name}" is not installed — run \`npx skills add ${name}\``);
+      errors.push(`${by}: the skill "${name}" is not installed — run \`collie upgrade\``);
   }
   return errors;
 });

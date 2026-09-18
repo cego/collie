@@ -1142,8 +1142,8 @@ Run {{skill:tdd}}.
 
       const errors = yield* validateWorkflow(wf, defs, FALLBACK_DEFAULTS, [skills]);
       expect(errors).toEqual([
-        'w step "a": the skill "to-spec" is not installed — run `npx skills add to-spec`',
-        'persona "reviewer": the skill "not-installed" is not installed — run `npx skills add not-installed`',
+        'w step "a": the skill "to-spec" is not installed — run `collie upgrade`',
+        'persona "reviewer": the skill "not-installed" is not installed — run `collie upgrade`',
       ]);
 
       // A directory with the right name and no SKILL.md in it is not installed: the

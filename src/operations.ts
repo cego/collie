@@ -27,6 +27,7 @@ import {
   resolveWorkflow,
   skillDirs,
   validateWorkflow,
+  stepVariants,
   type ResolvedWorkflow,
 } from "./definitions";
 import { readSnapshot, stepDifference, stepsDiffer } from "./snapshot";
@@ -131,6 +132,7 @@ import {
 import { taskWorkspaceLabel } from "./naming";
 import { branchListed, checkoutFor, pruneWorktrees, runNames } from "./worktree";
 import { closable, isHomeDirectory } from "./home";
+import { probeHelle, probeLinearMcp } from "./optional";
 import { forkResolvedDefinition } from "./fork";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
@@ -866,6 +868,36 @@ export const startRun = Effect.fn("operations.startRun")(function* (
         "Choose the project to work on with --workspace <id> or COLLIE_CWD=/path/to/project. Collie's Home is a state directory, not your project.",
       ),
     };
+  // The integrations this Run would reach for and cannot make: asked now, with the
+  // fix, rather than at the merge step hours in or by an agent looking for a tool it
+  // does not have. Only what this Run needs — a Workflow that never waits on Helle is
+  // not refused over Helle.
+  if (workflow.steps.some((step) => step.waits?.includes("helle"))) {
+    const helle = yield* probeHelle(env);
+    if (helle.state !== "ok")
+      return {
+        _tag: "Rejected" as const,
+        result: err("operation_failed", `${workflow.name} waits on Helle: ${helle.detail}.`, {
+          fix: helle.fix,
+        }),
+      };
+  }
+  const defaults = yield* loadDefaults(env.configDir);
+  if (
+    resolutions.some((item) => item.kind === "linear") &&
+    workflow.steps.some((step) => stepVariants(step, defaults).some((v) => v.harness === "claude"))
+  ) {
+    const linear = yield* probeLinearMcp(env);
+    if (linear.state !== "ok")
+      return {
+        _tag: "Rejected" as const,
+        result: err(
+          "operation_failed",
+          `${workflow.name} was given a Linear issue, and ${linear.detail}.`,
+          { fix: linear.fix },
+        ),
+      };
+  }
   const named = primaryName(resolutions);
   const herdr = new Herdr(env);
   // Collie has no daemon, so pruning happens where it already wakes up. Before the

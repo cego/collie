@@ -29,6 +29,7 @@ import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
 import { shell, type Runner } from "./mr";
 import { err } from "./operations";
+import { probeHelle, probeLinearMcp, type Probe } from "./optional";
 import { claudeSettingsPath, readStatusLine, STATUS_LINE_ARGS } from "./statusline";
 
 export interface Check {
@@ -39,6 +40,8 @@ export interface Check {
   detail: string;
   /** The command or the one thing to do about it; empty when there is nothing to fix. */
   fix: string;
+  /** Set up and not working: nothing a Run needs by default, so `ok`, but shown as `!`. */
+  warn?: boolean;
 }
 
 /**
@@ -53,6 +56,16 @@ const passed = (detail: string): Outcome => ({ ok: true, detail, fix: "" });
 const failed = (detail: string, fix: string): Outcome => ({ ok: false, detail, fix });
 /** Nothing is wrong, but there is still something a reader may want to run. */
 const noted = (detail: string, fix: string): Outcome => ({ ok: true, detail, fix });
+/** Configured and broken, for something no Run needs by default: not a failure, but not a ✓. */
+const warned = (detail: string, fix: string): Outcome => ({ ok: true, detail, fix, warn: true });
+
+/** An optional integration, as doctor reports it: absent is a note, broken is a warning. */
+const optional = (probe: Probe): Outcome =>
+  probe.state === "ok"
+    ? passed(probe.detail)
+    : probe.state === "absent"
+      ? noted(probe.detail, probe.fix)
+      : warned(probe.detail, probe.fix);
 
 const VERSION = /\d+\.\d+\.\d+/;
 const isString = Schema.is(Schema.String);
@@ -117,6 +130,7 @@ const asked = Effect.fn("Doctor.asked")(function* (env: PluginEnv) {
   const defaults = yield* loadDefaults(env.configDir);
   const skills = new Set<string>();
   const harnesses = new Set<string>();
+  const waits = new Set<string>();
   for (const name of defs.workflows.keys()) {
     let workflow;
     try {
@@ -130,9 +144,10 @@ const asked = Effect.fn("Doctor.asked")(function* (env: PluginEnv) {
     for (const skill of requiredSkills(workflow, defs).keys()) skills.add(skill);
     for (const step of workflow.steps) {
       for (const variant of stepVariants(step, defaults)) harnesses.add(variant.harness);
+      for (const wait of step.waits ?? []) waits.add(wait);
     }
   }
-  return { skills: [...skills].sort(), harnesses: [...harnesses].sort() };
+  return { skills: [...skills].sort(), harnesses: [...harnesses].sort(), waits };
 });
 
 /**
@@ -485,6 +500,13 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
           : failed("installed, but not logged in", "glab auth login")),
   });
 
+  // Optional, and only where a loaded Workflow could reach for them: Helle for a step
+  // that waits on it, Linear for an agent Claude Code runs. Absent is a note; set up
+  // and broken is a warning, because that one fails a Run that nobody expected to.
+  if (needs.waits.has("helle")) checks.push({ name: "helle", ...optional(yield* probeHelle(env)) });
+  if (needs.harnesses.includes("claude"))
+    checks.push({ name: "linear mcp", ...optional(yield* probeLinearMcp(env)) });
+
   return report(checks);
 });
 
@@ -492,7 +514,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
 function render(checks: Check[]): string {
   return checks
     .flatMap((check) => [
-      `  ${check.ok ? "✓" : "✗"} ${check.name.padEnd(16)}${check.detail}`,
+      `  ${check.ok ? (check.warn ? "!" : "✓") : "✗"} ${check.name.padEnd(16)}${check.detail}`,
       ...(check.fix === "" ? [] : [`      fix: ${check.fix}`]),
     ])
     .join("\n");

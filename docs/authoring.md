@@ -453,7 +453,7 @@ installed fails validation before a tab opens, naming the skill and the command 
 installs it:
 
 ```
-implement step "build": the skill "implement" is not installed — run `npx skills add implement`
+implement step "build": the skill "implement" is not installed — run `collie upgrade`
 ```
 
 `.agents/skills` in the project you are in is checked first, then `~/.agents/skills`.

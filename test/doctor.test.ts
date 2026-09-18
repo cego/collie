@@ -64,6 +64,7 @@ const Checks = Schema.Struct({
       ok: Schema.Boolean,
       detail: Schema.String,
       fix: Schema.String,
+      warn: Schema.optionalKey(Schema.Boolean),
     }),
   ),
 });
@@ -123,6 +124,8 @@ test("a healthy machine passes every check and says so", () =>
         "up to date",
         "workflows",
         "glab",
+        "helle",
+        "linear mcp",
       ]);
       expect(check(result, "workflows").detail).toBe("implement and review are the bundled ones");
     }),
@@ -407,5 +410,70 @@ test("the chat pane's status line is reported, whoever configured it", () =>
         `{"statusLine":{"type":"command","command":"my-own-line"}}\n`,
       );
       expect(check(yield* report(), "status line").detail).toContain("my-own-line");
+    }),
+  ));
+
+test("Helle is optional: absent is a note, configured and broken is a warning, never a failure", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* healthy();
+
+      // Nothing at all: only a workflow that waits on Helle needs it, so say where it
+      // would go and what to put there, and leave the run green.
+      const absent = check(yield* report(), "helle");
+      expect(absent.ok).toBe(true);
+      expect(absent.warn).toBeUndefined();
+      expect(absent.detail).toContain(`${rig.root}/.config/helle/env`);
+      expect(absent.fix).toContain("HELLE_API_TOKEN=");
+
+      // A file with one of its two lines: misconfigured, which is not "not set up".
+      const file = `${rig.root}/.config/helle/env`;
+      yield* fs.makeDirectory(`${rig.root}/.config/helle`, { recursive: true });
+      yield* fs.writeFileString(file, "HELLE_API_URL=http://127.0.0.1:1\n");
+      const missingToken = check(yield* report(), "helle");
+      expect(missingToken.ok).toBe(true);
+      expect(missingToken.warn).toBe(true);
+      expect(missingToken.detail).toContain("HELLE_API_TOKEN");
+      expect(missingToken.fix).toContain(file);
+
+      // Both lines, and a Helle that does not answer: the token or the URL is wrong,
+      // and the human is told which file to look in.
+      yield* fs.writeFileString(file, "HELLE_API_URL=http://127.0.0.1:1\nHELLE_API_TOKEN=x\n");
+      const result = yield* report();
+      const unreachable = check(result, "helle");
+      expect(unreachable.warn).toBe(true);
+      expect(unreachable.fix).toContain(file);
+      expect(result.ok).toBe(true);
+      expect(result.ok && result.human).toContain("! helle");
+    }),
+  ));
+
+test("a Linear MCP in Claude Code is looked for, and the add command is the fix", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* healthy();
+
+      const absent = check(yield* report(), "linear mcp");
+      expect(absent.ok).toBe(true);
+      expect(absent.detail).toContain("no Linear MCP server");
+      expect(absent.fix).toContain("claude mcp add");
+
+      // User scope, named however the human named it: the URL says it is Linear's.
+      yield* fs.writeFileString(
+        `${rig.root}/.claude.json`,
+        '{"mcpServers":{"tickets":{"type":"http","url":"https://mcp.linear.app/mcp"}}}',
+      );
+      const found = check(yield* report(), "linear mcp");
+      expect(found.detail).toContain('"tickets"');
+      expect(found.fix).toBe("");
+
+      // A settings file Claude Code itself cannot read is a warning with the file named.
+      yield* fs.writeFileString(`${rig.root}/.claude.json`, "{not json");
+      const broken = check(yield* report(), "linear mcp");
+      expect(broken.ok).toBe(true);
+      expect(broken.warn).toBe(true);
+      expect(broken.fix).toContain(".claude.json");
     }),
   ));

@@ -1038,6 +1038,18 @@ its own reported state); a Node runtime for the skills CLI; every skill and ever
 the loaded workflows and personas name; whether the checkout is behind its remote; and
 `glab` present and logged in.
 
+Two more are optional, and reported rather than required. **Helle**, where a loaded
+workflow waits on it (`renovate` does): the credentials file the Helle MCP wrapper sources,
+`~/.config/helle/env` (or `HELLE_ENV_FILE`), read and then tried against Helle's `/me`. **A
+Linear MCP server in Claude Code**, where a workflow routes a step to Claude: user and
+local scope in `.claude.json`, project scope in the project's `.mcp.json`, matched by name
+or URL. Each has three states, and the glyph says which: `✓` there and working, a note
+with the setup command when it is not set up at all, and `!` — set up and not working, a
+file with one of its two lines, a token Helle refuses, a settings file that is not JSON —
+with the file to look in. Neither ever fails the run: the bundled `implement` and `review`
+need neither. A run that does need one is refused at `collie run start` with the same
+detail and fix, before any tab opens.
+
 The skills and harnesses come from the loaded definitions rather than a list in the code,
 so a forked workflow naming a different skill is checked against that one. Every executable
 it looks for has to be executable, not merely present: a shim without its bit set fails

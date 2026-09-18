@@ -199,6 +199,10 @@ was started from, and cloning from a URL is out of scope. `team`, the Linear tea
 Renovate issue this run records itself on — empty falls back to `linear.team` in your
 `config.json`, and the run asks once when neither is set.
 
+**Needs:** Helle credentials in `~/.config/helle/env` and a Linear MCP in Claude Code —
+see [Optional integrations](using.md#optional-integrations). The run is refused at start,
+with the fix, when the credentials are missing or Helle refuses them.
+
 **Checkout:** its own, and unlike `implement`'s it is **detached** at the repository's
 default branch with no branch bound to it, because the run moves across every Renovate
 branch it merges. Your own checkout is never touched or switched. See
