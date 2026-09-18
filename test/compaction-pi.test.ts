@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { onMachineWith } from "./support/live";
 import { fakeChannel } from "./support/compaction";
 import { COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
 import type { AgentContext } from "../src/compaction";
@@ -274,7 +275,7 @@ test("the extension it installs keeps the identity and the outcome past its own 
 
 // Not mocks: whether the interface Collie installs is the one this machine's Pi has
 // is exactly the question a mock cannot answer. Pi takes seconds to answer either.
-test(
+onMachineWith("pi")(
   "the installed Pi is at least the release these controls were verified against",
   () =>
     runEffect(
@@ -288,7 +289,7 @@ test(
   { timeout: 30_000 },
 );
 
-test(
+onMachineWith("pi")(
   "Pi still takes the extension flag the adapter launches an agent with",
   () =>
     runEffect(

@@ -11,6 +11,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { Effect, FileSystem, Path, Result, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { onMachineWith } from "./support/live";
 import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
 import { atLeast, COMPACTION_PORTS, VERIFIED_VERSIONS } from "../src/compactors";
@@ -377,7 +378,7 @@ test("an agent with no endpoint recorded is a failure, not a context of zero", (
 
 // The contract, against the installed Codex. Its own schema generator is the authority
 // on what this release has; a mock cannot answer that question.
-test(
+onMachineWith("codex")(
   "the installed Codex's own protocol schema has every method and field the adapter uses",
   () =>
     runEffect(
@@ -417,7 +418,7 @@ test(
   { timeout: 60_000 },
 );
 
-test(
+onMachineWith("codex")(
   "the installed Codex supports these controls and takes both flags",
   () =>
     runEffect(

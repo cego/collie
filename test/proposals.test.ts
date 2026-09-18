@@ -24,7 +24,7 @@ import {
   type AdmissionContext,
   type ProposalLine,
 } from "../src/proposals";
-import { executorFor, registeredKinds } from "../src/executors";
+import { executorFor, registeredKinds, resetExecutors } from "../src/executors";
 import type { Action } from "../src/evaluator";
 import { carryOutProposal } from "../src/operations";
 import { currentEnv, type PluginEnv } from "../src/env";
@@ -32,6 +32,7 @@ import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { RunStore } from "../src/run";
 import { herdOf } from "../src/steering";
 import { runEffect } from "./support/effect";
+import { withSkills } from "./support/skills";
 
 let stateDir: string;
 let file: string;
@@ -53,6 +54,9 @@ beforeEach(() =>
       const fs = yield* FileSystem.FileSystem;
       stateDir = yield* fs.makeTempDirectory({ prefix: "hw-proposals-" });
       file = yield* proposalsPath(stateDir, "herd-1");
+      // The executors register once per process and close over the environment they were
+      // given, so without this a test carries out its actions in the first test's.
+      resetExecutors();
     }),
   ),
 );
@@ -333,7 +337,10 @@ test("a refused action fails the request and does not execute later actions", ()
       // this env resolves to rather than under a key the test picked.
       const socketPath = path.join(stateDir, "herdr.sock");
       yield* fs.writeFileString(socketPath, "");
-      const env: PluginEnv = { ...(yield* currentEnv), stateDir, socketPath };
+      const env = yield* withSkills(
+        { ...(yield* currentEnv), stateDir, socketPath } satisfies PluginEnv,
+        "implement",
+      );
       const herdFile = yield* proposalsPath(stateDir, yield* herdOf(socketPath));
 
       const run = yield* new RunStore(stateDir).create({
@@ -387,7 +394,10 @@ test("an Intent nobody can decode refuses the confirmation instead of reading as
       const path = yield* Path.Path;
       const socketPath = path.join(stateDir, "herdr.sock");
       yield* fs.writeFileString(socketPath, "");
-      const env: PluginEnv = { ...(yield* currentEnv), stateDir, socketPath };
+      const env = yield* withSkills(
+        { ...(yield* currentEnv), stateDir, socketPath } satisfies PluginEnv,
+        "implement",
+      );
       const herdFile = yield* proposalsPath(stateDir, yield* herdOf(socketPath));
 
       const run = yield* new RunStore(stateDir).create({
@@ -428,7 +438,10 @@ test("a confirmed start goes through the same Input settling a typed one does", 
       const path = yield* Path.Path;
       const socketPath = path.join(stateDir, "herdr.sock");
       yield* fs.writeFileString(socketPath, "");
-      const env: PluginEnv = { ...(yield* currentEnv), stateDir, socketPath };
+      const env = yield* withSkills(
+        { ...(yield* currentEnv), stateDir, socketPath } satisfies PluginEnv,
+        "implement",
+      );
       const herdFile = yield* proposalsPath(stateDir, yield* herdOf(socketPath));
 
       const run = yield* new RunStore(stateDir).create({
