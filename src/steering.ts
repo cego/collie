@@ -26,6 +26,7 @@ const CauseSchema = Schema.Struct({
   ref: Schema.String,
 });
 export type Cause = Schema.Schema.Type<typeof CauseSchema>;
+export const isCauseKind = Schema.is(CauseSchema.fields.kind);
 
 /**
  * Where a delivery has got to. `submitted` says herdr took it, which is not the same as

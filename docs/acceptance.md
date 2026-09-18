@@ -125,7 +125,7 @@ file it names appears in the diff.
 
 The states a message passes through are separate facts, and collapsing them is how a send
 gets reported as progress. The delivery ledger's states and what each one rests on are
-canonical in [Steering](steering.md#the-four-states-and-why-they-are-four); in short: `reserved` is
+canonical in [Steering](steering.md#the-states-and-why-they-are-kept-apart); in short: `reserved` is
 Collie's intent to send, `submitted` says herdr accepted the text, `acknowledged` needs
 the agent's own ack file, and `verified` needs an independent check. `unknown` is the
 honest state when nobody can say, and only a person settles it.

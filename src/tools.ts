@@ -20,7 +20,7 @@
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Crypto, Effect, Option, Result, Schema } from "effect";
+import { Clock, Crypto, Effect, FileSystem, Option, Result, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
 import { mutation } from "./envelope";
@@ -65,6 +65,7 @@ import { RunStore, type Run } from "./run";
 import { nowIso, untilFrom } from "./time";
 import { attentionFor } from "./attention";
 import { deliveriesOf, herdOf } from "./steering";
+import { inboxFiles, InboxCommandJson } from "./driver";
 import {
   loadDefinitions,
   layers,
@@ -767,6 +768,20 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
       ? []
       : pendingFor(yield* readProposals(yield* proposalsPath(env.stateDir, key)), run, now);
   const deliveries = yield* deliveriesOf(env.stateDir, run);
+  // A boundary delivery the Driver has not read yet is in the Run's inbox and on no
+  // ledger. It is the one place a steer can sit without a line, so it is listed too.
+  const fs = yield* FileSystem.FileSystem;
+  const unread: string[] = [];
+  for (const file of yield* inboxFiles(found.dir).pipe(Effect.catch(() => Effect.succeed([])))) {
+    const command = yield* fs.readFileString(file).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(InboxCommandJson)),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    if (command?.type === "deliver" && command.deliver)
+      unread.push(
+        `- ${command.deliver.deliveryId}: in the inbox, not yet read by the Driver, for ${command.deliver.cause.kind}`,
+      );
+  }
   const attention = yield* attentionFor(found, new Herdr(env));
   const question = attention.choice;
   return [
@@ -786,12 +801,13 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
     "",
     "### Sent to this Run's agents",
     "",
-    ...(deliveries.length === 0
+    ...(deliveries.length === 0 && unread.length === 0
       ? ["- nothing"]
       : deliveries.map(
           ({ delivery }) =>
             `- ${delivery.id}: ${delivery.state}${delivery.note ? ` (${delivery.note})` : ""}, for ${delivery.cause.kind}`,
         )),
+    ...unread,
   ].join("\n");
 });
 

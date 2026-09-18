@@ -116,7 +116,7 @@ import { openReports, readDrift } from "./drift";
 import { readCards } from "./cards";
 import { describeAction } from "./lines";
 import { fingerprint } from "./verify";
-import { MAX_DELIVERY_BYTES } from "./dispatcher";
+import { entryFromLive, interrupt, MAX_DELIVERY_BYTES, transaction } from "./dispatcher";
 import { executorFor, registerExecutor, registeredKinds, type ExecutionResult } from "./executors";
 import type { CollieError } from "./envelope";
 import { REVIEW_FILE } from "./output";
@@ -2537,14 +2537,83 @@ export const registerRunExecutors = Effect.fn("operations.registerRunExecutors")
     Effect.gen(function* () {
       const run = yield* load(action.run);
       if (run === null) return failed(`no Run "${action.run}"`);
-      const live = yield* new Herdr(env).agentList().pipe(Effect.catch(() => Effect.succeed([])));
+      const herdr = new Herdr(env);
+      const live = yield* herdr.agentList().pipe(Effect.catch(() => Effect.succeed([])));
       const incarnation = live.find((a) => a.name === action.agent)?.terminalId ?? null;
       if (incarnation === null)
         return failed(`herdr has no live agent "${action.agent}" to address`);
       const requestId = yield* newRequestId();
       const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
-      // Queued for the Run's own Driver, never sent from here: the Driver is what holds
-      // it behind a compaction, composes it into the next work, and records the ack.
+      const intentVersion = intent?.version ?? 0;
+      const cause = { kind: "steer" as const, ref: requestId };
+
+      // `now` and `interrupt` go into the pane from here: herdr types them, the
+      // Dispatcher's ledger lock keeps the Driver's own sends out of the way, and the
+      // ledger line is what `collie_receipts` reads. Waiting for the Driver's poll bought
+      // nothing but the wait. Only a boundary delivery is the Driver's — it is composed
+      // into a prompt only the Driver builds.
+      const step = run.record.steps.find((s) => s.variants.some((v) => v.agent === action.agent));
+      const variant = step?.variants.find((v) => v.agent === action.agent);
+      if (action.mode !== "boundary" && step && variant) {
+        const deps = {
+          stateDir: env.stateDir,
+          herdr,
+          log: (line: string) => run.log(line).pipe(Effect.ignore),
+        };
+        const { entry, reason } = yield* entryFromLive(deps, {
+          role: step.id,
+          agent: action.agent,
+          paneId: variant.paneId,
+          workspaceId: null,
+          runId: run.id,
+          workflow: run.record.workflow,
+        });
+        if (entry === null) return failed(reason);
+        const draft = {
+          run: run.id,
+          harness: variant.harness,
+          cause,
+          mode: action.mode,
+          intentVersion,
+          attempt: 1,
+          requestId,
+        };
+        const outcome = yield* transaction(deps, entry, (channel) =>
+          action.mode === "interrupt"
+            ? interrupt(
+                {
+                  ...deps,
+                  status: (agent) =>
+                    herdr.agentStatus(agent).pipe(Effect.catch(() => Effect.succeed("unknown"))),
+                },
+                channel,
+                entry,
+                action.text,
+                draft,
+              )
+            : channel.submit(action.text, draft),
+        ).pipe(
+          Effect.catchTag("NotDeliverable", (cause) =>
+            Effect.succeed({
+              ok: false as const,
+              id: null,
+              reason: "failed",
+              detail: cause.reason,
+            }),
+          ),
+        );
+        if (outcome.ok)
+          return {
+            state: "applied" as const,
+            note: `sent to ${action.agent} now (${outcome.submission}); see collie_receipts`,
+          };
+        // A harness never shown to take a message mid-turn gets it the one way every
+        // harness does — in front of its next prompt — rather than losing the steer.
+        if (!outcome.detail.startsWith("capability_unproven"))
+          return failed(`${outcome.reason}: ${outcome.detail}`);
+        yield* run.log(`${action.mode} delivery ${requestId}: ${outcome.detail}, queued instead`);
+      }
+
       yield* writeInbox(run.dir, {
         type: "deliver",
         requestId,
@@ -2553,13 +2622,16 @@ export const registerRunExecutors = Effect.fn("operations.registerRunExecutors")
           incarnation,
           agent: action.agent,
           text: action.text,
-          mode: action.mode,
-          cause: { kind: "steer", ref: requestId },
-          intentVersion: intent?.version ?? 0,
+          mode: "boundary",
+          cause,
+          intentVersion,
           attempt: 1,
         },
       });
-      return { state: "applied" as const, note: `queued for ${run.id}'s Driver` };
+      return {
+        state: "applied" as const,
+        note: `queued for ${run.id}'s Driver to put in front of ${action.agent}'s next prompt`,
+      };
     }).pipe(Effect.catch((cause) => Effect.succeed(failed(String(cause))))),
   );
   registerExecutor("navigate", (action) =>

@@ -187,8 +187,10 @@ import {
   newestById,
   overrideActive,
   readLedger,
+  isCauseKind,
   textHash,
   type Cause,
+  type Delivery,
 } from "./steering";
 import {
   pendingFor,
@@ -4429,6 +4431,17 @@ const agentEntry = Effect.fn("Engine.agentEntry")(function* (
   return live;
 });
 
+/**
+ * The inbox carries a cause's kind as a plain string; the ledger wants one it knows. A
+ * kind this build does not know is recorded as a steer — the nearest true thing.
+ */
+function causeOf(deliver: NonNullable<InboxCommandValue["deliver"]>): Cause {
+  const kind = deliver.cause.kind;
+  return isCauseKind(kind)
+    ? { kind, ref: deliver.cause.ref }
+    : { kind: "steer", ref: deliver.deliveryId };
+}
+
 /** The boundary deliveries queued for this agent, taken off the queue as they are used. */
 function takeBoundaryFor(ctx: RunCtx, agent: string) {
   const mine = ctx.steering.deliveries.filter(
@@ -4442,6 +4455,7 @@ function takeBoundaryFor(ctx: RunCtx, agent: string) {
     .map((deliver) => ({
       id: deliver.deliveryId,
       text: deliver.text,
+      cause: causeOf(deliver),
       intentVersion: deliver.intentVersion,
       attempt: deliver.attempt,
     }));
@@ -4498,7 +4512,7 @@ const queueDelivery = Effect.fn("Engine.queueDelivery")(function* (
   command: InboxCommandValue & { deliver: NonNullable<InboxCommandValue["deliver"]> },
 ) {
   ctx.steering.deliveries.push(command);
-  yield* o.run.log(`delivery queued for ${command.deliver.agent}`);
+  yield* o.run.log(`delivery ${command.deliver.deliveryId} queued for ${command.deliver.agent}`);
   yield* recordQueued(o, command, "queued", "waiting for the agent's next prompt");
 });
 
@@ -4511,20 +4525,60 @@ const recordQueued = Effect.fn("Engine.recordQueued")(function* (
 ) {
   const deliver = command.deliver;
   if (!deliver) return;
-  const cause = { kind: "steer" as const, ref: deliver.deliveryId };
-  yield* appendLine(yield* ledgerPath(o.env.stateDir, deliver.incarnation), {
-    id: deliver.deliveryId,
+  yield* recordHeld(
+    o,
+    {
+      id: deliver.deliveryId,
+      incarnation: deliver.incarnation,
+      agent: deliver.agent,
+      cause: causeOf(deliver),
+      mode: deliver.mode,
+      text: deliver.text,
+      intentVersion: deliver.intentVersion,
+      attempt: deliver.attempt,
+      requestId: command.requestId,
+    },
+    state,
+    note,
+  );
+});
+
+/**
+ * A ledger line the Driver writes about a delivery it did not send through a channel:
+ * one it holds, one it let expire, or one a prompt carried. The Dispatcher writes every
+ * other line, and this is the same shape it writes.
+ */
+const recordHeld = Effect.fn("Engine.recordHeld")(function* (
+  o: EngineOptions,
+  about: {
+    readonly id: string;
+    readonly incarnation: string;
+    readonly agent: string;
+    readonly cause: Cause;
+    readonly mode: Delivery["mode"];
+    readonly text: string;
+    readonly intentVersion: number;
+    readonly attempt: number;
+    readonly requestId: string;
+  },
+  state: Delivery["state"],
+  note: string,
+) {
+  yield* appendLine(yield* ledgerPath(o.env.stateDir, about.incarnation), {
+    id: about.id,
     at: yield* nowIso(),
     run: o.run.id,
-    incarnation: deliver.incarnation,
-    agent: deliver.agent,
-    causal_key: causalKey(o.run.id, cause, deliver.intentVersion),
-    request_id: command.requestId,
-    cause,
-    mode: deliver.mode,
-    text_hash: textHash(deliver.text),
-    intent_version: deliver.intentVersion,
-    attempt: deliver.attempt,
+    incarnation: about.incarnation,
+    agent: about.agent,
+    // The key the Dispatcher would compute: a held line cannot block a dispatched entry
+    // about the same work.
+    causal_key: causalKey(o.run.id, about.cause, about.intentVersion),
+    request_id: about.requestId,
+    cause: about.cause,
+    mode: about.mode,
+    text_hash: textHash(about.text),
+    intent_version: about.intentVersion,
+    attempt: about.attempt,
     state,
     note,
   }).pipe(Effect.ignore);
@@ -4539,38 +4593,39 @@ const recordQueued = Effect.fn("Engine.recordQueued")(function* (
 const recordComposed = Effect.fn("Engine.recordComposed")(function* (
   o: EngineOptions,
   entry: AgentEntry,
-  item: { readonly id: string; readonly text: string; readonly intentVersion: number },
+  item: {
+    readonly id: string;
+    readonly text: string;
+    readonly cause: Cause;
+    readonly intentVersion: number;
+    readonly attempt: number;
+  },
   carriedBy: SubmitOutcome,
 ) {
   const terminalId = entry.incarnation?.terminalId;
   if (terminalId === undefined) return;
-  const file = yield* ledgerPath(o.env.stateDir, terminalId);
-  const at = yield* nowIso();
-  const cause = { kind: "steer" as const, ref: item.id };
-  yield* appendLine(file, {
-    id: item.id,
-    at,
-    run: o.run.id,
-    incarnation: terminalId,
-    agent: entry.agent,
-    // The key the Dispatcher would compute: a delivery id cannot block a dispatched
-    // entry about the same work.
-    causal_key: causalKey(o.run.id, cause, item.intentVersion),
-    request_id: item.id,
-    cause,
-    mode: "boundary",
-    text_hash: textHash(item.text),
-    intent_version: item.intentVersion,
-    attempt: 1,
-    state: carriedBy.ok ? "submitted" : "failed",
+  yield* recordHeld(
+    o,
+    {
+      id: item.id,
+      incarnation: terminalId,
+      agent: entry.agent,
+      cause: item.cause,
+      mode: "boundary",
+      text: item.text,
+      intentVersion: item.intentVersion,
+      attempt: item.attempt,
+      requestId: item.id,
+    },
+    carriedBy.ok ? "submitted" : "failed",
     // What is known of the carrier is all that is known of this: a prompt herdr saw no
     // turn come of carried this item into the same uncertainty.
-    note: !carriedBy.ok
+    !carriedBy.ok
       ? "the prompt it was composed into was not sent"
       : carriedBy.submission === "unobserved"
         ? `composed into ${carriedBy.id}; unobserved`
         : `composed into ${carriedBy.id}`,
-  });
+  );
 });
 
 /**
