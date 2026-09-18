@@ -201,14 +201,9 @@ export function chatArgs(
         files.systemPrompt,
         "--mcp-config",
         files.mcpConfig,
-        // Only Collie's server: the human's own MCP servers are not this conversation's.
-        "--strict-mcp-config",
         // Additional settings, never a rewrite of the human's own.
         "--settings",
         files.settings,
-        // "" is Claude's spelling of "none of the built-in ones".
-        "--tools",
-        "",
       ]
     : [
         // pi's `--session-id` creates the id if it is missing and reopens it if it is

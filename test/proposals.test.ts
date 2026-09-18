@@ -472,12 +472,14 @@ test("a confirmed start goes through the same Input settling a typed one does", 
       // named is a refusal rather than a guess — there is no human here to ask, and a Run
       // started on a work source nobody named is a Run about something nobody said. (A
       // branch is the one Input Collie works out for itself, so it is the work source that
-      // has to be missing here.) What matters for the sequence is that the refusal is this
-      // action's and not the next one's: `hold` must not be reached.
+      // has to be missing here.) The refusal is this action's and not the next one's: the
+      // `hold` is about another Run, so it is still attempted and reported on its own.
       const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
       expect(out.ok).toBe(false);
       if (out.ok) return;
-      expect(out.error.details).toMatchObject({ results: [{ kind: "start", state: "failed" }] });
+      expect(out.error.details).toMatchObject({
+        results: [{ kind: "start", state: "failed" }, { kind: "hold" }],
+      });
       expect(out.error.message).toContain("input");
     }),
   ));

@@ -777,6 +777,9 @@ export function homeDeps(herdr: Herdr, log: (line: string) => HomeAnswer<void>):
           yield* herdr.paneSwap(opened.paneId, beside).pipe(nothing(undefined));
           yield* herdr.paneResize(opened.paneId, "right", 4 / 7 - 1 / 2).pipe(nothing(undefined));
         }
+        // Named for what it is, not herdr's "1".
+        if (opened.tabId !== null)
+          yield* herdr.tabRename(opened.tabId, "Collie").pipe(nothing(undefined));
         return opened;
       }).pipe(
         nothing<{ tabId: string | null; paneId: string | null }>({ tabId: null, paneId: null }),

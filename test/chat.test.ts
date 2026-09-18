@@ -198,11 +198,8 @@ test("chat is launched with Collie's tools and nothing else", () => {
     "/p/collie-chat.md",
     "--mcp-config",
     "/d/mcp.json",
-    "--strict-mcp-config",
     "--settings",
     "/d/settings.json",
-    "--tools",
-    "",
   ]);
   // Reopening one is a different flag: Claude's `--session-id` refuses an id that has
   // been used before, however long ago, and only `--resume` reopens it.

@@ -12,6 +12,9 @@ inputs:
   # The Linear team whose shared Renovate issue this Run records itself on. Empty falls
   # back to `linear.team` in your config, so nothing team-specific lives in the baseline.
   team: optional
+  # The team's shared Renovate issue when the operator already knows it, so track never
+  # has to ask which of several it is.
+  issue: optional
 steps:
   - id: track
     persona: renovate
@@ -41,6 +44,7 @@ steps:
 
 Repository checkout or GitLab URL (empty means the workspace this run started from): {{inputs.repository}}
 Linear team (empty means `{{config.linear.team}}`): {{inputs.team}}
+Linear Renovate issue (empty means find it): {{inputs.issue}}
 This run's checkout: {{cwd}}
 This run's directory: {{run.dir}}
 
@@ -55,8 +59,9 @@ repository, so that work in progress is visible from the moment it starts.
 
 - The team is the one named above. If both the input and the config value are empty, ask
   me which team, once, and say in your Output that you did.
-- Search that team's open issues for the Renovate issue — the one the team checks
-  repositories off on, whatever it is called.
+- An issue named above is the issue: read it and skip the search.
+- Otherwise search that team's open issues for the Renovate issue — the one the team
+  checks repositories off on, whatever it is called.
 - Exactly one match is the issue. Several is a consultation: list them with their ids,
   titles and due dates, and ask me which. None means you create one, titled for the
   current month, whose description is the checklist and nothing else.
