@@ -17,7 +17,7 @@ doors: herdr actions, and the `collie` CLI.
 - **Claiming a change works, or reviewing one that claims to** →
   [`docs/acceptance.md`](docs/acceptance.md), alongside `bun run acceptance`. A green
   suite is not evidence that a promise was kept; that gate says which are.
-- **Adding a herdr call, or a red `contract:stable` pipeline** →
+- **Adding a herdr call, or a red `contract` workflow** →
   [`docs/internals.md`](docs/internals.md#checking-the-boundary-against-herdr), alongside
   `herdr-pin.json` and `test/herdr-contract.test.ts`.
 - **Changing the compaction threshold, the work-boundary policy, or a harness's

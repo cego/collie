@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:te
 import { Effect, FileSystem, Path, Result } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { onMachineWith } from "./support/live";
 import { fakeChannel } from "./support/compaction";
 import { reason } from "../src/naming";
 import { COMPACTION_PORTS, VERIFIED_VERSIONS, writeEvent } from "../src/compactors";
@@ -539,7 +540,7 @@ test("two agents in one directory each read their own session", () =>
 // The contract, against the installed OpenCode. Its own server generates the API
 // document, so booting one and reading `/doc` is the only way to ask this release what
 // it actually has — and a mock cannot answer it.
-test(
+onMachineWith("opencode")(
   "the installed OpenCode's own API document has the endpoints and the token fields",
   () =>
     runEffect(
@@ -583,7 +584,7 @@ test(
   { timeout: 90_000 },
 );
 
-test(
+onMachineWith("opencode")(
   "the installed OpenCode is the release these controls were verified against, and takes the launch flags",
   () =>
     runEffect(

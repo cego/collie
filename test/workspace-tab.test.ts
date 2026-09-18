@@ -26,6 +26,7 @@ import { recordDisposition } from "../src/disposition";
 import { nowIso } from "../src/time";
 import { originPath, readOrigin } from "../src/home";
 import { herdOf } from "../src/steering";
+import { workspaceNamed } from "../src/operations";
 import { appState, boardFlow, type ControlSession } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { RunStore } from "../src/run";
@@ -326,6 +327,32 @@ effectTest("the first run makes the Herd a Home and opens its board there", func
   // Run's own workspace, and Collie owns nothing else there yet.
   for (const cmd of ["pane move", "pane swap"]) expect(yield* rig.cmds()).not.toContain(cmd);
 });
+
+effectTest(
+  "a launch names a checkout by its path, and the workspace is opened on it",
+  function* () {
+    // Chat has no way to open a workspace on the board; without this, a repository nobody
+    // had open was a launch it had to refuse (ADR-0011).
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dir = path.join(rig.projectDir, "checkout");
+    yield* fs.makeDirectory(dir, { recursive: true });
+
+    const opened = yield* workspaceNamed(rig.pluginEnv(), dir);
+    expect(opened).toMatchObject({ found: { cwd: dir, label: "checkout" } });
+    expect((yield* rig.calls()).filter((c) => c.cmd === "workspace create")).toHaveLength(1);
+
+    // The same checkout again is that same workspace, not a second one beside it.
+    const again = yield* workspaceNamed(rig.pluginEnv(), dir);
+    expect(again).toMatchObject({ found: { cwd: dir } });
+    expect((yield* rig.calls()).filter((c) => c.cmd === "workspace create")).toHaveLength(1);
+
+    // A name that is neither a workspace nor a directory is still refused.
+    expect(yield* workspaceNamed(rig.pluginEnv(), "no-such-thing")).toMatchObject({
+      error: expect.stringContaining("no workspace"),
+    });
+  },
+);
 
 effectTest("a second run finds the Home rather than making another", function* () {
   yield* rig.queueOutputs([CLEAN, CLEAN]);

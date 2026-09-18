@@ -1,0 +1,30 @@
+# The same gate on every push and pull request: the script contributors run, then the
+# thing that actually ships.
+name: ci
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      # A rolling key: a fixed one would never save the timings back after the first run.
+      - uses: actions/cache@v4
+        with:
+          path: .scratch/test-timings.json
+          key: test-timings-${{ github.run_id }}
+          restore-keys: test-timings-
+      - run: bun install --frozen-lockfile
+      # The same script contributors run, so the local gate and CI cannot drift.
+      - run: bun run check
+      # `bun test` runs the sources; this runs the compiled entrypoint and JSON envelope.
+      - run: bun run build
+      - run: bun run smoke
+      # Proves the committed snapshot is what the pinned herdr really prints.
+      - run: bun run contract:check

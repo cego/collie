@@ -11,6 +11,7 @@ import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { classifyWorkSource } from "../src/inputs";
 import { currentEnv, type PluginEnv } from "../src/env";
 import { runEffect } from "./support/effect";
+import { withSkills } from "./support/skills";
 
 let stateDir: string;
 let repo: string;
@@ -49,7 +50,7 @@ beforeEach(() =>
         { mode: 0o755 },
       );
       driverLayer = ConfigProvider.layer(ConfigProvider.fromUnknown({ COLLIE_DRIVER: driver }));
-      env = { ...(yield* currentEnv), stateDir, socketPath: null };
+      env = yield* withSkills({ ...(yield* currentEnv), stateDir, socketPath: null }, "implement");
     }),
   ),
 );

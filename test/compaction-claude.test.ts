@@ -7,6 +7,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { onMachineWith } from "./support/live";
 import { fakeChannel } from "./support/compaction";
 import { atLeast, COMPACTION_PORTS, recordClaudeEvent, VERIFIED_VERSIONS } from "../src/compactors";
 import type { AgentContext } from "../src/compaction";
@@ -308,7 +309,7 @@ test("install writes run-scoped settings and passes them with Claude's own flag"
 
 // Not mocks: whether the interface Collie installs is the one this machine's Claude has
 // is exactly the question a mock cannot answer.
-test(
+onMachineWith("claude")(
   "the installed Claude is at least the release these controls were verified against",
   () =>
     runEffect(
@@ -326,7 +327,7 @@ test(
   { timeout: 30_000 },
 );
 
-test(
+onMachineWith("claude")(
   "Claude still takes the settings flag the adapter launches an agent with",
   () =>
     runEffect(

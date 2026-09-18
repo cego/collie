@@ -1,0 +1,27 @@
+# herdr releases often and Collie is meant to run on the newest one, so the drift check is
+# a schedule rather than a gate on every pull request: an unrelated PR must not go red
+# because herdr shipped. The contract check needs no herdr server: `herdr api schema --json`
+# prints the schema the binary bundles.
+name: contract
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, preview]
+    # Preview is weeks of warning about a coming break, and never a reason to stop anything.
+    continue-on-error: ${{ matrix.channel == 'preview' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      - run: bun install --frozen-lockfile
+      - run: bun run tools/herdr-schema.ts ${{ matrix.channel }} --out /tmp/herdr-schema.json
+      - run: HERDR_API_SCHEMA=/tmp/herdr-schema.json bun test test/herdr-contract.test.ts

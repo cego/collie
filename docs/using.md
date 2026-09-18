@@ -9,7 +9,7 @@ vocabulary — Run, Step, Driver, Choice, Hand-off — see [`CONTEXT.md`](../CON
 One command, safe to re-run:
 
 ```sh
-git clone git@gitlab.cego.dk:mk/collie.git ~/.collie && ~/.collie/setup.sh
+git clone git@github.com:cego/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
 `setup.sh` does its own work — clone the checkout or pull it, add the four keybindings
@@ -41,18 +41,18 @@ checks that what arrived is a program rather than trusting the status code.
 
 The install finds a token in this order:
 
-1. `COLLIE_TOKEN`, if you set it — a personal access token with `read_api`:
+1. `COLLIE_TOKEN`, if you set it — a token that can read the repository:
 
    ```sh
-   COLLIE_TOKEN=glpat-… ~/.collie/setup.sh
+   COLLIE_TOKEN=ghp_… ~/.collie/setup.sh
    ```
 
-2. The login the host's own CLI already holds. For a GitLab release that is
-   `glab config get token --host <host>`, and for a GitHub one `gh auth token --hostname
+2. The login the host's own CLI already holds. For a GitHub release that is
+   `gh auth token --hostname <host>`, and for a GitLab one `glab config get token --host
 <host>`. Which of the two it asks comes from the release URL: GitLab download paths
    carry `/-/releases/`, GitHub's carry `/releases/download/`, so a self-hosted instance of
    either is recognised by its shape rather than its hostname. If you have run
-   `glab auth login` for the host, the install needs nothing else from you.
+   `gh auth login`, the install needs nothing else from you.
 
 The token is passed to `curl` through its config file on stdin rather than `--header`, so
 it never appears in the process arguments that `ps` shows other users on the machine.
@@ -115,10 +115,10 @@ login of yours. Neither is needed by the bundled `implement` and `review`, so `c
 reports them without failing, and a run that needs one is refused up front with the fix
 rather than failing hours in.
 
-| Integration    | Who needs it                                                           | How to set it up                                                                                       |
-| -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Helle          | `renovate`, or any forked workflow with `waits: helle`                 | `HELLE_API_URL=<url>` and `HELLE_API_TOKEN=<token>` in `~/.config/helle/env`, the file the Helle MCP wrapper sources |
-| Linear MCP     | `plan`'s "Offload to Linear"; `implement` given a Linear issue or URL   | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then log in when Claude Code asks |
+| Integration | Who needs it                                                          | How to set it up                                                                                                           |
+| ----------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Helle       | `renovate`, or any forked workflow with `waits: helle`                | `HELLE_API_URL=<url>` and `HELLE_API_TOKEN=<token>` in `~/.config/helle/env`, the file the Helle MCP wrapper sources       |
+| Linear MCP  | `plan`'s "Offload to Linear"; `implement` given a Linear issue or URL | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then log in when Claude Code asks |
 
 Doctor tells the two failure modes apart. Not set up at all is a note under a `✓`, with
 the command above. Set up and not working is a `!`: a credentials file missing one of its
@@ -133,7 +133,7 @@ is no — a Run that would only find out at its merge step is not started.
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `COLLIE_DIR`          | Checkout used by `setup.sh` when it is run outside a checkout; defaults to `~/.collie`.                                                      |
 | `COLLIE_REPO`         | Git URL cloned by `setup.sh`.                                                                                                                |
-| `COLLIE_TOKEN`        | Personal access token (`read_api`) used to download a release asset. Optional where `glab` or `gh` is already logged in to the release host. |
+| `COLLIE_TOKEN`        | Token used to download a release asset. Optional where `glab` or `gh` is already logged in to the release host.                              |
 | `COLLIE_BIN_DIR`      | Where `install.sh` writes the `collie` on your PATH; defaults to `~/.local/bin`. `collie doctor` looks there for a shim that is not on PATH. |
 | `CLAUDE_SKILLS_DIR`   | Claude Code's skill store, where `prepare.sh` links the operator skill beside `~/.agents/skills`; defaults to `~/.claude/skills`.            |
 | `COLLIE_RELEASE_BASE` | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                                             |
@@ -142,7 +142,7 @@ is no — a Run that would only find out at its merge step is not started.
 | `COLLIE_RUN`          | Internal Run ID passed to a detached Driver.                                                                                                 |
 | `COLLIE_CWD`          | Working directory passed to picker, agent, and Driver processes; also re-roots a CLI run.                                                    |
 | `GITLAB_USER_LOGIN`   | Who a generated branch is namespaced under. Unset, Collie asks `glab` who you are for this checkout's host.                                  |
-| `HELLE_ENV_FILE`      | Where Helle credentials are read from; defaults to `~/.config/helle/env`. See [Optional integrations](#optional-integrations).             |
+| `HELLE_ENV_FILE`      | Where Helle credentials are read from; defaults to `~/.config/helle/env`. See [Optional integrations](#optional-integrations).               |
 
 `COLLIE_MODE` and `COLLIE_RUN` are process-to-process contracts set by Collie; you do not
 set them yourself.

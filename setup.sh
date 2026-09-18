@@ -5,7 +5,7 @@
 # Safe to re-run; every step skips what is already in place.
 set -eu
 
-REPO_URL="${COLLIE_REPO:-git@gitlab.cego.dk:mk/collie.git}"
+REPO_URL="${COLLIE_REPO:-git@github.com:cego/collie.git}"
 PLUGIN_ID="cego.collie"
 CONFIG="${HERDR_CONFIG:-$HOME/.config/herdr/config.toml}"
 CHECKOUT="${COLLIE_DIR:-$HOME/.collie}"
