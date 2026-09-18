@@ -411,11 +411,19 @@ const workspaceForDirectory = Effect.fn("operations.workspaceForDirectory")(func
         : workspaceCwdFromPanes(workspace.workspaceId, panes)) === dir,
   );
   if (already) return { found: { ...already, cwd: dir } };
-  const label = path.basename(dir);
-  const made = yield* Effect.result(new Herdr(env).workspaceCreate({ cwd: dir, label }));
-  if (made._tag === "Failure")
-    return { error: `could not open a workspace on ${dir}: ${herdrFailureReason(made.failure)}` };
-  return { found: { workspaceId: made.success, label, cwd: dir, worktree: null, tokens: {} } };
+  // No workspace is opened for it: a fresh Run gets a task workspace of its own whatever
+  // it was launched from, so one opened here only to root the launch is left behind
+  // empty beside the Run's. The checkout roots the launch; the caller's workspace is
+  // where it was launched from.
+  return {
+    found: {
+      workspaceId: env.workspaceId ?? "",
+      label: path.basename(dir),
+      cwd: dir,
+      worktree: null,
+      tokens: {},
+    },
+  };
 });
 
 /** A workspace a request named: the one it is, why it is not one, or none named. */
@@ -1388,7 +1396,17 @@ export const carryOutProposal = Effect.fn("operations.carryOutProposal")(functio
 
   const results: Array<{ index: number; kind: string; state: string; note: string }> = [];
   const expectedVersions = { ...judged.proposal.intent_versions };
+  // Runs an earlier action failed on: what was asked about them next was asked assuming
+  // the failure did not happen. Everything else in the request is independent of it —
+  // six launches asked for in one breath are six requests, and the first path that does
+  // not exist is no reason to leave the other five unattempted.
+  const failedRuns = new Set<string>();
   for (const [index, proposed] of judged.actions.entries()) {
+    if ("run" in proposed && failedRuns.has(proposed.run)) {
+      yield* stepSettled(file, proposalId, index, "skipped", "after_failure");
+      results.push({ index, kind: proposed.kind, state: "skipped", note: "after_failure" });
+      continue;
+    }
     // All edits in a request name the snapshot it was checked against. Advance only
     // for edits this sequence applied; unrelated concurrent edits still fail admission.
     const action =
@@ -1428,10 +1446,9 @@ export const carryOutProposal = Effect.fn("operations.carryOutProposal")(functio
       state: outcome.state,
       note: outcome.note ?? "",
     });
-    // A sequence the human approved as a sequence: what follows a failure was approved on
-    // the assumption that the failure did not happen.
-    if (outcome.state === "failed") break;
-    if (action.kind === "update_intent") expectedVersions[action.run] = action.base_version + 1;
+    if (outcome.state === "failed" && "run" in action) failedRuns.add(action.run);
+    if (outcome.state !== "failed" && action.kind === "update_intent")
+      expectedVersions[action.run] = action.base_version + 1;
   }
   const message = results
     .map((r) => `${r.index} ${r.kind}: ${r.state}${r.note ? ` — ${r.note}` : ""}`)

@@ -256,6 +256,7 @@ test("plan runs one step in a tab of its own and records the run", () =>
         // the shell it comes with can be closed rather than left as a second tab.
         "pane list",
         "plugin pane",
+        "tab rename",
         "pane list",
         // The board's pane, then the tab split beside it for native chat.
         "pane split",

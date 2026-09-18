@@ -12,12 +12,17 @@ inputs:
   # The Linear team whose shared Renovate issue this Run records itself on. Empty falls
   # back to `linear.team` in your config, so nothing team-specific lives in the baseline.
   team: optional
+  # The team's shared Renovate issue when the operator already knows it, so track never
+  # has to ask which of several it is.
+  issue: optional
 steps:
   - id: track
     persona: renovate
     # One agent for the whole run, so its model is named once, here.
     model: default
     effort: medium
+    # Keep Claude Code's configured auto mode; this agent is reused by every later step.
+    permissions: harness
     output: track.json
   - id: assess
     persona: renovate
@@ -41,6 +46,7 @@ steps:
 
 Repository checkout or GitLab URL (empty means the workspace this run started from): {{inputs.repository}}
 Linear team (empty means `{{config.linear.team}}`): {{inputs.team}}
+Linear Renovate issue (empty means find it): {{inputs.issue}}
 This run's checkout: {{cwd}}
 This run's directory: {{run.dir}}
 
@@ -55,8 +61,9 @@ repository, so that work in progress is visible from the moment it starts.
 
 - The team is the one named above. If both the input and the config value are empty, ask
   me which team, once, and say in your Output that you did.
-- Search that team's open issues for the Renovate issue — the one the team checks
-  repositories off on, whatever it is called.
+- An issue named above is the issue: read it and skip the search.
+- Otherwise search that team's open issues for the Renovate issue — the one the team
+  checks repositories off on, whatever it is called.
 - Exactly one match is the issue. Several is a consultation: list them with their ids,
   titles and due dates, and ask me which. None means you create one, titled for the
   current month, whose description is the checklist and nothing else.
@@ -110,10 +117,12 @@ consultation.
 GitLab approval is required **before attempting to merge**. Read the merge request's
 current head SHA and approve it with `glab mr approve <iid> --sha <head-sha>`. Verify the
 approval was recorded and all required approval rules are satisfied before the merge
-command. Recheck approvals after every push or rebase, because either can reset them;
-review and approve the new head before retrying a merge. If approval is refused or needs
-another eligible reviewer, consult me — never bypass approval rules or try merging first
-to discover that approval is missing.
+command. Run the approval, approval verification, and merge in a separate shell call
+each, so the harness can authorize the exact operation.
+Recheck approvals after every push or rebase, because either can reset them; review and
+approve the new head before retrying a merge. If approval is refused or needs another
+eligible reviewer, consult me — never bypass approval rules or try merging first to
+discover that approval is missing.
 
 Before you check a branch out, ask git who holds it — `git worktree list` names every
 registered worktree and the branch each has checked out. A Renovate branch another

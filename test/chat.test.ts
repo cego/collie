@@ -183,7 +183,7 @@ test("the record survives a round trip through disk", () =>
     }),
   ));
 
-test("chat is launched with Collie's tools and nothing else", () => {
+test("chat keeps native tools and adds Collie's tools", () => {
   const files = {
     systemPrompt: "/p/collie-chat.md",
     mcpConfig: "/d/mcp.json",
@@ -198,11 +198,8 @@ test("chat is launched with Collie's tools and nothing else", () => {
     "/p/collie-chat.md",
     "--mcp-config",
     "/d/mcp.json",
-    "--strict-mcp-config",
     "--settings",
     "/d/settings.json",
-    "--tools",
-    "",
   ]);
   // Reopening one is a different flag: Claude's `--session-id` refuses an id that has
   // been used before, however long ago, and only `--resume` reopens it.
@@ -217,8 +214,6 @@ test("chat is launched with Collie's tools and nothing else", () => {
     "/p/collie-chat.md",
     "-e",
     "/d/c.ts",
-    "--no-builtin-tools",
-    "--no-extensions",
     "--no-context-files",
   ]);
   // Neither pins a model, an effort level or a spend: native selection stays the

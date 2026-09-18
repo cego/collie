@@ -30,7 +30,7 @@ import { TOOLS } from "./tools";
 /**
  * The harnesses a human may hold this conversation in. Deliberately shorter than
  * `HARNESSES`: chat needs a native editor, a resumable session named by id, and a
- * documented way to give it Collie's tools and nothing else. Workers' harnesses are
+ * documented way to add Collie's tools to its native environment. Workers' harnesses are
  * unaffected by anything here.
  */
 export const CHAT_HARNESSES = ["claude", "pi"] as const;
@@ -179,9 +179,7 @@ export interface LaunchFiles {
  * authentication are the human's, and a chat that silently overrode them would be a
  * different product wearing the harness's name.
  *
- * The built-in tools are turned **off** in both. Collie's tools are the whole of this
- * agent's reach, so there is no shell beside the admission rules for a model to use
- * instead of them.
+ * Both harnesses keep their native tools and configuration alongside Collie's tools.
  */
 export function chatArgs(
   harness: ChatHarness,
@@ -201,14 +199,9 @@ export function chatArgs(
         files.systemPrompt,
         "--mcp-config",
         files.mcpConfig,
-        // Only Collie's server: the human's own MCP servers are not this conversation's.
-        "--strict-mcp-config",
         // Additional settings, never a rewrite of the human's own.
         "--settings",
         files.settings,
-        // "" is Claude's spelling of "none of the built-in ones".
-        "--tools",
-        "",
       ]
     : [
         // pi's `--session-id` creates the id if it is missing and reopens it if it is
@@ -220,12 +213,6 @@ export function chatArgs(
         files.systemPrompt,
         "-e",
         files.extension,
-        "--no-builtin-tools",
-        // Collie's extension and no other. Without this a conversation opened for the
-        // Herd also gets whatever the human has in `~/.pi` — their MCP servers, their
-        // tools — which is a wider reach than Collie's read contract and not this
-        // agent's to have. `-e` above still loads.
-        "--no-extensions",
         // The role is the appended prompt above, not whatever repository the pane's
         // directory happens to be.
         "--no-context-files",

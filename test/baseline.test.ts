@@ -248,6 +248,7 @@ test("renovate names the checkout it roams in and waits for Helle before it touc
       const waiting = wf.steps.filter((step) => step.waits?.includes("helle"));
       expect(waiting.map((step) => step.id)).toEqual(["assess"]);
       expect(wf.steps[0]!.id).toBe("track");
+      expect(wf.steps[0]!.permissions).toBe("harness");
       expect(wf.steps.every((step) => step.persona === "renovate")).toBe(true);
     }),
   ));
@@ -271,6 +272,7 @@ test("renovate never lets a merge request end unaccounted for, and never takes a
       expect(prompt("merge")).toContain("glab mr approve <iid> --sha <head-sha>");
       expect(prompt("merge")).toContain("before attempting to merge");
       expect(prompt("merge")).toContain("Recheck approvals after every push or rebase");
+      expect(prompt("merge")).toContain("separate shell call");
       // Exactly one outcome each, and a deferral only with the operator's approval.
       for (const outcome of ["merged", "closed", "deferred"]) {
         expect(prompt("merge")).toContain(outcome);

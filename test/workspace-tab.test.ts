@@ -340,12 +340,9 @@ effectTest(
 
     const opened = yield* workspaceNamed(rig.pluginEnv(), dir);
     expect(opened).toMatchObject({ found: { cwd: dir, label: "checkout" } });
-    expect((yield* rig.calls()).filter((c) => c.cmd === "workspace create")).toHaveLength(1);
-
-    // The same checkout again is that same workspace, not a second one beside it.
-    const again = yield* workspaceNamed(rig.pluginEnv(), dir);
-    expect(again).toMatchObject({ found: { cwd: dir } });
-    expect((yield* rig.calls()).filter((c) => c.cmd === "workspace create")).toHaveLength(1);
+    // Nothing is opened for it: the Run opens its own task workspace, and one opened
+    // here only to root the launch would be left behind empty beside it.
+    expect((yield* rig.calls()).filter((c) => c.cmd === "workspace create")).toHaveLength(0);
 
     // A name that is neither a workspace nor a directory is still refused.
     expect(yield* workspaceNamed(rig.pluginEnv(), "no-such-thing")).toMatchObject({
