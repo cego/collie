@@ -138,7 +138,7 @@ import {
   EXTRA_PASSES,
   staleSince,
 } from "./drift";
-import { capabilitiesOf } from "./steering-caps";
+import { capabilitiesOf, gate } from "./steering-caps";
 import {
   fingerprint,
   readVerifications,
@@ -3286,6 +3286,7 @@ const written = Effect.fn("Engine.written")(function* (path: string) {
 
 const awaitOutput = Effect.fn("Engine.awaitOutput")(function* (
   o: EngineOptions,
+  ctx: RunCtx,
   agent: string,
   stepId: string,
   path: string,
@@ -3301,6 +3302,9 @@ const awaitOutput = Effect.fn("Engine.awaitOutput")(function* (
   const poll = o.outputPollMs ?? 2000;
   const deadline = (yield* Clock.currentTimeMillis) + budget;
   while (!(yield* written(path)) && (yield* Clock.currentTimeMillis) < deadline) {
+    // An agent waiting on a human is the one most likely to be sent something, and this
+    // wait can be hours: the inbox is read here as it is while the agent works.
+    yield* takeSteering(o, ctx);
     yield* Effect.sleep(Math.min(poll, Math.max(1, deadline - (yield* Clock.currentTimeMillis))));
   }
   if (yield* written(path)) yield* o.out(`  ▸ ${agent} produced its Output`);
@@ -3371,7 +3375,7 @@ const collectWatched = Effect.fn("Engine.collectWatched")(function* (
   variantKey: string | null,
   stuck: string | null,
 ) {
-  const outcome: VariantOutcome = yield* collect(o, step, record, variantKey, !stuck);
+  const outcome: VariantOutcome = yield* collect(o, ctx, step, record, variantKey, !stuck);
   if (stuck && outcome.record.status !== "done") {
     outcome.record.status = "blocked";
     outcome.record.error = stuck;
@@ -3774,27 +3778,13 @@ const settleAtFinish = Effect.fn("Engine.settleAtFinish")(function* (
 ) {
   // A boundary delivery is composed into the next piece of work. There is no next piece
   // of work, so saying so is better than leaving it looking pending for ever.
-  for (const command of ctx.steering.deliveries) {
-    const deliver = command.deliver;
-    if (!deliver) continue;
-    const cause = { kind: "steer" as const, ref: deliver.deliveryId };
-    yield* appendLine(yield* ledgerPath(o.env.stateDir, deliver.incarnation), {
-      id: deliver.deliveryId,
-      at: yield* nowIso(),
-      run: o.run.id,
-      incarnation: deliver.incarnation,
-      agent: deliver.agent,
-      causal_key: causalKey(o.run.id, cause, deliver.intentVersion),
-      request_id: command.requestId,
-      cause,
-      mode: deliver.mode,
-      text_hash: textHash(deliver.text),
-      intent_version: deliver.intentVersion,
-      attempt: deliver.attempt,
-      state: "expired",
-      note: "the Run finished before there was any work to compose it into",
-    }).pipe(Effect.ignore);
-  }
+  for (const command of ctx.steering.deliveries)
+    yield* recordQueued(
+      o,
+      command,
+      "expired",
+      "the Run finished before there was any work to compose it into",
+    );
   ctx.steering.deliveries = [];
 
   const intent = yield* intentOf(o);
@@ -4465,14 +4455,25 @@ function takeBoundaryFor(ctx: RunCtx, agent: string) {
 const deliverOutOfBand = Effect.fn("Engine.deliverOutOfBand")(function* (
   o: EngineOptions,
   ctx: RunCtx,
-  deliver: NonNullable<InboxCommandValue["deliver"]>,
-  requestId: string,
+  command: InboxCommandValue & { deliver: NonNullable<InboxCommandValue["deliver"]> },
 ) {
+  const { deliver, requestId } = command;
   const record = [...ctx.groups.values()].find((entry) => entry.agent === deliver.agent);
   if (record === undefined) {
     yield* o.run.log(
       `${deliver.mode} delivery for ${deliver.agent}, which this Run is not driving`,
     );
+    return;
+  }
+  // A harness never shown to take a message mid-turn gets it the way every harness does
+  // — in front of its next prompt — rather than the steer being refused and lost.
+  const ungated = yield* gate(record.harness, deliver.mode).pipe(
+    Effect.as(null),
+    Effect.catch((cause) => Effect.succeed(cause.reason)),
+  );
+  if (ungated !== null) {
+    yield* o.run.log(`${deliver.mode} delivery ${deliver.deliveryId}: ${ungated}, queued instead`);
+    yield* queueDelivery(o, ctx, { ...command, deliver: { ...deliver, mode: "boundary" } });
     return;
   }
   const sent = yield* sendTo(o, record, {
@@ -4484,6 +4485,49 @@ const deliverOutOfBand = Effect.fn("Engine.deliverOutOfBand")(function* (
     mode: deliver.mode,
   });
   yield* o.run.log(`${deliver.mode} delivery ${deliver.deliveryId}: ${sent ? "sent" : "not sent"}`);
+});
+
+/**
+ * A boundary delivery held for the next prompt. On the ledger as `queued` the moment it
+ * is: `collie_receipts` is where a human asks what became of their steer, and a message
+ * that waits out a forty-minute step with no line there reads as one that was dropped.
+ */
+const queueDelivery = Effect.fn("Engine.queueDelivery")(function* (
+  o: EngineOptions,
+  ctx: RunCtx,
+  command: InboxCommandValue & { deliver: NonNullable<InboxCommandValue["deliver"]> },
+) {
+  ctx.steering.deliveries.push(command);
+  yield* o.run.log(`delivery queued for ${command.deliver.agent}`);
+  yield* recordQueued(o, command, "queued", "waiting for the agent's next prompt");
+});
+
+/** One ledger line about a delivery the Driver holds rather than sends. */
+const recordQueued = Effect.fn("Engine.recordQueued")(function* (
+  o: EngineOptions,
+  command: InboxCommandValue,
+  state: "queued" | "expired",
+  note: string,
+) {
+  const deliver = command.deliver;
+  if (!deliver) return;
+  const cause = { kind: "steer" as const, ref: deliver.deliveryId };
+  yield* appendLine(yield* ledgerPath(o.env.stateDir, deliver.incarnation), {
+    id: deliver.deliveryId,
+    at: yield* nowIso(),
+    run: o.run.id,
+    incarnation: deliver.incarnation,
+    agent: deliver.agent,
+    causal_key: causalKey(o.run.id, cause, deliver.intentVersion),
+    request_id: command.requestId,
+    cause,
+    mode: deliver.mode,
+    text_hash: textHash(deliver.text),
+    intent_version: deliver.intentVersion,
+    attempt: deliver.attempt,
+    state,
+    note,
+  }).pipe(Effect.ignore);
 });
 
 /**
@@ -4579,15 +4623,14 @@ const takeSteering = Effect.fn("Engine.takeSteering")(function* (o: EngineOption
         });
         break;
       }
-      case "deliver":
-        if (command.deliver && command.deliver.mode !== "boundary") {
-          yield* deliverOutOfBand(o, ctx, command.deliver, command.requestId);
-          break;
-        }
+      case "deliver": {
+        const deliver = command.deliver;
+        if (!deliver) break;
         // Queued, not sent: the Dispatcher is the only thing that sends.
-        ctx.steering.deliveries.push(command);
-        yield* o.run.log(`delivery queued for ${command.deliver?.agent ?? "an agent"}`);
+        if (deliver.mode === "boundary") yield* queueDelivery(o, ctx, { ...command, deliver });
+        else yield* deliverOutOfBand(o, ctx, { ...command, deliver });
         break;
+      }
       case "drift_report":
         yield* recordDriftReport(o, ctx, command);
         break;
@@ -4965,6 +5008,7 @@ const planRefusal = Effect.fn("Engine.planRefusal")(function* (
 
 const collect = Effect.fn("Engine.collect")(function* (
   o: EngineOptions,
+  ctx: RunCtx,
   step: ResolvedStep,
   record: VariantRecord,
   variantKey: string | null,
@@ -4982,7 +5026,7 @@ const collect = Effect.fn("Engine.collect")(function* (
 
   const path = yield* o.run.outputPath(step.id, variantKey, step.output);
   record.output = pathService.relative(o.run.dir, path);
-  if (wait) yield* awaitOutput(o, record.agent, step.id, path);
+  if (wait) yield* awaitOutput(o, ctx, record.agent, step.id, path);
   if (!(yield* written(path))) {
     record.status = "blocked";
     record.error = `no Output at ${record.output}`;

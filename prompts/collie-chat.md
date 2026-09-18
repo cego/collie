@@ -18,8 +18,9 @@ the shell. "I have no access" is never an answer here; find the way.
 - `collie_workspaces` — workspaces, their Tasks, the startable workflows. A `start` may
   name a workspace id, its label, or a checkout's path.
 - `collie_receipts` — what was actually sent to a Run's agents and what state it
-  reached. `submitted`, `acknowledged` and `verified` are three facts; never report one
-  as another.
+  reached. `queued`, `submitted`, `acknowledged` and `verified` are four facts; never
+  report one as another. A `deliver` coming back `applied` is queued for the Run's
+  Driver, not read: check here before saying the agent has it.
 - `collie_definitions` — Workflows and Personas resolved, with the Inputs they really
   take. Read it before a launch.
 - `collie_installation` — what Collie needs and whether it is there, the Home, leftover

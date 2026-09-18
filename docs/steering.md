@@ -18,16 +18,20 @@ Three modes:
 | `now`       | Sent to an agent that is already working.           | A proven `now` for that harness.       |
 | `interrupt` | An interrupt key, then the message.                 | A proven `interrupt` for that harness. |
 
-`boundary` is the default and the only one that works everywhere: it is the next prompt
-file, which every harness already takes. The other two are gated on a **recorded live
-result** per harness, and fail closed with `capability_unproven:<harness>:<mode>` where
-there is none. That refusal is written to the ledger, so a steer that did not go out has
-an answer rather than a silence.
+`boundary` is the only one that works everywhere: it is the next prompt file, which every
+harness already takes. But a human's message is about the work under way, and the next
+prompt can be forty minutes off and about something else — so a `deliver` with no mode
+is `now`, and where that harness has no proven `now` the Driver queues it as a boundary
+delivery instead, saying so in the Run's log. An explicit `now` or `interrupt` asked of
+the Dispatcher directly is gated on a **recorded live result** per harness, and fails
+closed with `capability_unproven:<harness>:<mode>` where there is none. That refusal is
+written to the ledger, so a steer that did not go out has an answer rather than a silence.
 
 ## The four states, and why they are four
 
 | State          | What it means                                                           |
 | -------------- | ----------------------------------------------------------------------- |
+| `queued`       | A boundary delivery the Driver holds for the agent's next prompt.       |
 | `reserved`     | Written **before** herdr was called. A crash here leaves this.          |
 | `submitted`    | herdr took it. Not: the agent read it.                                  |
 | `acknowledged` | The agent wrote the ack file naming this delivery, version and attempt. |
