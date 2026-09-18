@@ -342,10 +342,14 @@ export const resolveWorkspace = Effect.fn("operations.resolveWorkspace")(functio
 });
 
 /**
- * The workspace a request named, resolved to one this herdr actually has — by id, or by
- * the label a human would say. `null` is a request that named none. An error is a name
- * that matches nothing or more than one thing: a launch aimed at a guess is a Run in a
- * repository nobody asked for.
+ * The workspace a request named, resolved to one this herdr actually has — by id, by the
+ * label a human would say, or by the directory it stands for. `null` is a request that
+ * named none. An error is a name that matches nothing or more than one thing: a launch
+ * aimed at a guess is a Run in a repository nobody asked for.
+ *
+ * A directory nothing is open on is opened: the human naming a checkout has said which
+ * repository they mean, and sending them to the board to open it first is chat obstructing
+ * the person it serves (ADR-0011).
  */
 export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
   env: PluginEnv,
@@ -362,8 +366,11 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
       ? byId
       : all.filter((workspace) => workspace.label.toLowerCase() === wanted.toLowerCase());
   const refused = (error: string): WorkspaceNamed => ({ error });
-  if (matched.length === 0)
+  if (matched.length === 0) {
+    const opened = yield* workspaceForDirectory(env, wanted, all, panes);
+    if (opened !== null) return opened;
     return refused(`no workspace "${named}"; ${all.map((w) => w.label).join(", ") || "none"}`);
+  }
   if (matched.length > 1)
     return refused(
       `"${named}" names ${matched.length} workspaces (${matched
@@ -375,6 +382,40 @@ export const workspaceNamed = Effect.fn("operations.workspaceNamed")(function* (
     workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
   if (cwd === "") return refused(`workspace "${named}" has no directory to run in`);
   return { found: { ...workspace, cwd } };
+});
+
+/**
+ * A name that is a directory, as the workspace standing for it: the one already on that
+ * checkout, or a new one opened there. `null` is a name that is not a directory at all,
+ * which is the caller's "matches nothing".
+ */
+const workspaceForDirectory = Effect.fn("operations.workspaceForDirectory")(function* (
+  env: PluginEnv,
+  named: string,
+  all: ReadonlyArray<WorkspaceInfo>,
+  panes: ReadonlyArray<Pick<PaneInfo, "workspaceId" | "cwd">>,
+): Effect.fn.Return<WorkspaceNamed, never, BunServices> {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const expanded = named.startsWith("~/") ? path.join(env.home, named.slice(2)) : named;
+  const dir = path.resolve(env.cwd, expanded);
+  const isDir = yield* fs
+    .stat(dir)
+    .pipe(Effect.map((info) => info.type === "Directory"))
+    .pipe(Effect.catch(() => Effect.succeed(false)));
+  if (!isDir) return null;
+  const already = all.find(
+    (workspace) =>
+      (workspace.cwd !== ""
+        ? workspace.cwd
+        : workspaceCwdFromPanes(workspace.workspaceId, panes)) === dir,
+  );
+  if (already) return { found: { ...already, cwd: dir } };
+  const label = path.basename(dir);
+  const made = yield* Effect.result(new Herdr(env).workspaceCreate({ cwd: dir, label }));
+  if (made._tag === "Failure")
+    return { error: `could not open a workspace on ${dir}: ${herdrFailureReason(made.failure)}` };
+  return { found: { workspaceId: made.success, label, cwd: dir, worktree: null, tokens: {} } };
 });
 
 /** A workspace a request named: the one it is, why it is not one, or none named. */

@@ -245,7 +245,9 @@ export const TOOLS: ReadonlyArray<Tool> = [
       "their Runs belong to, and the workflows that can be started. Read this before " +
       "proposing a launch: a Run belongs to " +
       "the workspace whose repository it is about, and the Home is Collie's own namespace, " +
-      "not anybody's checkout.",
+      "not anybody's checkout. A start may also name a checkout's path instead of a " +
+      "workspace: a directory none is open on gets a workspace opened on it, so a " +
+      "repository missing from this list is no reason to send the human to the board.",
     input: NO_INPUT,
     call: (env) => said(workspaceFacts(env)),
   },
@@ -646,6 +648,9 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
     ...(tasks.length === 0 ? ["- (no Tasks)"] : []),
     "",
     `workflows: ${[...defs.workflows.keys()].sort().join(", ") || "none"}`,
+    "",
+    "a start may name a workspace id, its label, or the path of a checkout — a directory",
+    "with no workspace open on it gets one.",
   ].join("\n");
 });
 

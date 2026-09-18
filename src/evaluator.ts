@@ -89,10 +89,11 @@ export const ActionSchema = Schema.Union([
     inputs: Schema.Record(Schema.String, Schema.String),
     decisions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
     /**
-     * Which workspace's checkout the Run is for. Absent means the caller's own, which is
-     * what a `collie run start` in a repository means. Named, because a launch asked for
-     * from the Home would otherwise root in Collie's own namespace directory — a Run
-     * about a repository nobody named.
+     * Which workspace's checkout the Run is for: a workspace id, its label, or the path
+     * of the checkout itself — a directory no workspace is open on gets one opened.
+     * Absent means the caller's own, which is what a `collie run start` in a repository
+     * means. Named, because a launch asked for from the Home would otherwise root in
+     * Collie's own namespace directory — a Run about a repository nobody named.
      */
     workspace: Schema.optionalKey(Schema.String),
   }),
