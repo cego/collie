@@ -275,16 +275,16 @@ adding a decoded call without a row turns that test red rather than going unchec
 
 The version Collie is verified against is `herdr-pin.json`, with the schema that version
 prints committed beside it as `herdr-api-schema.json`, and `min_herdr_version` in
-`herdr-plugin.toml` equal to it. Merge-request pipelines run the test against the snapshot
+`herdr-plugin.toml` equal to it. The `ci` workflow runs the test against the snapshot
 and prove the snapshot is really what the pinned binary prints, so an unrelated merge
 request never goes red because herdr released.
 
-A daily pipeline schedule runs `contract:stable` against the newest stable herdr and
-`contract:preview` against the newest preview build, which is allowed to fail. Both name
-the version and protocol they tested. A red `contract:stable` means the newest herdr moved
+The daily `contract` workflow runs `stable` against the newest stable herdr and
+`preview` against the newest preview build, which is allowed to fail. Both name
+the version and protocol they tested. A red `stable` means the newest herdr moved
 something Collie reads: either widen the struct, or — when the field is genuinely gone —
 change what reads it. Bumping the pin afterwards is editing the version and checksums in
-`herdr-pin.json` and running `bun run contract:regen`. A red `contract:preview` is the same
+`herdr-pin.json` and running `bun run contract:regen`. A red `preview` is the same
 news weeks early, and nothing to stop for.
 
 It also owns the one fact herdr settles but answers no command about: where a
@@ -548,7 +548,7 @@ words, and a nudge and a re-sent prompt are different work in the same words.
 ## Build and release
 
 The runner is TypeScript compiled by `bun build --compile`, one binary per platform, built
-in CI on tag and downloaded from the GitLab release by `install.sh`
+in CI on tag and downloaded from the GitHub release by `install.sh`
 ([ADR-0001](adr/0001-compiled-runner-fetched-from-release.md)). Workflow and persona
 definitions stay plain files in the repo and never require a rebuild.
 
@@ -565,7 +565,7 @@ is cut from.
 
 ## Working on Collie
 
-**Bun 1.4 or newer** — `engines` in `package.json`, `.mise.toml` and the CI image all say
+**Bun 1.4 or newer** — `engines` in `package.json`, `.mise.toml` and the workflows under `.github/` all say
 so. The runner is compiled by bun and the tests are `bun:test`, so the version is a
 prerequisite rather than a preference.
 

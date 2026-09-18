@@ -8,7 +8,7 @@ The plugin needs an executable behind each herdr action. Teammates install via `
 
 ## Decision
 
-Write the runner in TypeScript, compile with `bun build --compile` per platform in CI on tag, and have the manifest's `[[build]]` step (`install.sh`) download the matching binary from the GitLab release. Workflow and persona definitions stay plain files in the repo and never require a rebuild.
+Write the runner in TypeScript, compile with `bun build --compile` per platform in CI on tag, and have the manifest's `[[build]]` step (`install.sh`) download the matching binary from the GitHub release (GitLab until 2026-09-18, when the repository moved). Workflow and persona definitions stay plain files in the repo and never require a rebuild.
 
 ## Alternatives
 

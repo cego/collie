@@ -13,15 +13,15 @@ Run one command. It's safe to run again, and it ends by telling you whether you'
 what's still missing and how to fix it:
 
 ```sh
-git clone git@gitlab.cego.dk:mk/collie.git ~/.collie && ~/.collie/setup.sh
+git clone git@github.com:cego/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
 Before you run it, you need:
 
 - **herdr** installed and started once. See the [herdr install guide](https://herdr.dev/docs/install/).
-- **A login to `gitlab.cego.dk`**: an SSH key for the clone, and a `glab auth login` for
-  that host, so the install can download the runner and the workflows can open merge
-  requests.
+- **A GitHub login**: an SSH key for the clone, and `gh auth login`, so the install can
+  download the runner. **A `glab auth login` to `gitlab.cego.dk`**, so the workflows can open
+  merge requests there.
 - **Node**, so the install can fetch the skills the workflows use.
 - **Claude Code**, logged in. The bundled workflows run their agents on it.
 
