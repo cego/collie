@@ -554,7 +554,10 @@ function handle(
         };
         state.workspaces.push(workspace);
         yield* writeJson(statePath, state);
-        result = { type: "workspace_created", workspace };
+        // herdr's own reply: the new workspace comes with a shell tab.
+        const tab = { tab_id: `${workspace.workspace_id}-t1`, label: "1" };
+        const root_pane = { pane_id: `${workspace.workspace_id}-p1`, tab_id: tab.tab_id };
+        result = { type: "workspace_created", workspace, tab, root_pane };
         break;
       }
       case "tab list":

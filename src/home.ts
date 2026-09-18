@@ -747,7 +747,11 @@ export function homeDeps(herdr: Herdr, log: (line: string) => HomeAnswer<void>):
   return {
     workspaces: herdr.workspaceList().pipe(nothing<ReadonlyArray<WorkspaceInfo>>([])),
     panes: herdr.paneList().pipe(nothing<ReadonlyArray<PaneInfo>>([])),
-    createWorkspace: (opts) => herdr.workspaceCreate(opts).pipe(nothing("")),
+    createWorkspace: (opts) =>
+      herdr.workspaceCreate(opts).pipe(
+        Effect.map((made) => made.workspaceId),
+        nothing(""),
+      ),
     openPane: (workspaceId, cwd, beside = null) =>
       Effect.gen(function* () {
         const opened =

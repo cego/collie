@@ -164,9 +164,20 @@ Otherwise:
 - Diff the default branch against the previous version tag — **the whole diff**, not only
   the Renovate merge requests — and choose the next version from that and from the
   repository's own versioning conventions.
-- Tag annotated, with tag notes saying what shipped.
-- Create a GitLab release with release notes **only where the repository is a package**
-  that publishes from its tag pipeline. An application or a frontend gets the tag alone.
+- Tag annotated. The tag notes are a changelog entry in the shape of changelog-gen: a
+  heading `## <version> - <YYYY-MM-DD>`, then only the sections that have entries, in
+  this order and under these names — `### Features and Improvements`, `### Bug fixes`,
+  `### Miscellaneous` — with one line per change, `- <what changed> [!<iid>]`, where the
+  merge request reference is the only link. Dependency bumps go under Miscellaneous as
+  `- Bump <package> <from> -> <to> [!<iid>]`; several bumps of one package fold into one
+  line. Write every line from the commit or merge request title, not from the diff, in
+  under 100 characters and with no prose around it. Nothing else goes in the notes: no
+  summary paragraph, no pipeline or approval detail, no list of what was checked. Write
+  the notes to a file and tag from it with `--cleanup=verbatim`, or git strips the `#`
+  headers as comments.
+- Create a GitLab release with the same notes, verbatim, **only where the repository is a
+  package** that publishes from its tag pipeline. An application or a frontend gets the
+  tag alone.
 - Watch the tag's pipeline, including its publish or deploy jobs, until it succeeds. It
   succeeding is what makes this a finished renovation. A failing or blocked job is a
   consultation with the Helle claim still held — never a Run that calls itself done.

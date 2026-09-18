@@ -84,6 +84,8 @@ const StepSchema = Schema.Struct({
   choices: opt(Schema.Array(ChoiceSchema)),
   standalone: opt(Schema.Boolean),
   requires: opt(Schema.Array(Schema.String)),
+  // Without this a frozen Run lost every `waits: helle` and merged unclaimed.
+  waits: opt(Schema.Array(Schema.String)),
   fanIn: opt(Schema.String),
   each: opt(Schema.String),
   repeat: opt(

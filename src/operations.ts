@@ -14,6 +14,7 @@ import {
   herdrFailureReason,
   type AgentInfo,
   type PaneInfo,
+  type StartedTab,
   type TabInfo,
   type WorkspaceInfo,
 } from "./herdr";
@@ -256,6 +257,8 @@ export const spawnDriver = Effect.fn("operations.spawnDriver")(function* (
   cwd: string,
   /** The workspace the Run's tabs belong in; its own, where it has a worktree. */
   workspaceId?: string | null,
+  /** The new task workspace's shell pane, which the Driver reads as its launch pane. */
+  launchPane?: StartedTab | null,
 ) {
   const commandLine = yield* driverCommand(env);
   // A Run in its own worktree is in its own workspace, and the Driver has to open its
@@ -264,6 +267,10 @@ export const spawnDriver = Effect.fn("operations.spawnDriver")(function* (
   if (workspaceId) {
     workspace.HERDR_WORKSPACE_ID = workspaceId;
     workspace.HERDR_ACTIVE_WORKSPACE_ID = workspaceId;
+  }
+  if (launchPane) {
+    workspace.HERDR_PANE_ID = launchPane.paneId;
+    workspace.HERDR_ACTIVE_PANE_ID = launchPane.paneId;
   }
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   yield* Effect.scoped(
@@ -835,7 +842,11 @@ const taskFor = Effect.fn("operations.taskFor")(function* (
     readonly opened: { readonly id: string; readonly label: string | null } | null;
   },
 ) {
-  const kept = (task: TaskRecord) => ({ _tag: "Ok" as const, task });
+  const kept = (task: TaskRecord, launchPane: StartedTab | null = null) => ({
+    _tag: "Ok" as const,
+    task,
+    launchPane,
+  });
   const refuse = (message: string, cause: string) => ({
     _tag: "Rejected" as const,
     result: err("operation_failed", message, { cause }),
@@ -861,13 +872,17 @@ const taskFor = Effect.fn("operations.taskFor")(function* (
   // workspace it opened rather than created keeps the name it already had.
   const label = opts.opened?.label ?? opts.label;
   let id = opts.opened?.id ?? null;
+  // The shell tab a created workspace comes with, for the Run's first agent to take
+  // over instead of leaving an empty "1" beside its own tabs.
+  let launchPane: StartedTab | null = null;
   if (id === null) {
     const made = yield* Effect.result(herdr.workspaceCreate({ cwd: env.cwd, label }));
     if (made._tag === "Failure") {
       const cause = herdrFailureReason(made.failure);
       return refuse(`No workspace could be opened for this task: ${cause}`, cause);
     }
-    id = made.success;
+    id = made.success.workspaceId;
+    launchPane = made.success.rootTab;
   }
   const task = yield* writeTask(
     env.stateDir,
@@ -875,7 +890,7 @@ const taskFor = Effect.fn("operations.taskFor")(function* (
   );
   // Focused, not just created: a human who started work is taken to it.
   yield* Effect.ignore(herdr.workspaceFocus(id));
-  return kept(task);
+  return kept(task, launchPane);
 });
 
 /**
@@ -1047,7 +1062,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     resolutions,
     options.intent ?? {},
   );
-  const undriven = yield* handOver(env, run);
+  const undriven = yield* handOver(env, run, resolved.launchPane);
   return undriven
     ? { _tag: "Rejected" as const, result: undriven.result }
     : // The checkout as well as the Run: the branch is decided here, and the line that
@@ -1106,12 +1121,16 @@ const seedRunIntent = Effect.fn("operations.seedRunIntent")(function* (
  * The reason comes back as a result rather than a failure so a caller's request
  * receipt records it, and a retry with the same request id replays it.
  */
-export const handOver = Effect.fn("operations.handOver")(function* (env: PluginEnv, run: Run) {
+export const handOver = Effect.fn("operations.handOver")(function* (
+  env: PluginEnv,
+  run: Run,
+  launchPane: StartedTab | null = null,
+) {
   // The workspace the Run belongs in, which is the one it was activated from unless
   // herdr opened one for its checkout. A Driver inherits the invoking pane's workspace
   // otherwise, and a `--workspace` run would open its tabs wherever it was typed.
   const workspaceId = run.record.workspace;
-  const why = yield* spawnDriver(env, run.id, run.record.cwd, workspaceId).pipe(
+  const why = yield* spawnDriver(env, run.id, run.record.cwd, workspaceId, launchPane).pipe(
     Effect.as(null),
     Effect.catch((cause) => Effect.succeed(String(cause))),
   );

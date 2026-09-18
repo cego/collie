@@ -864,17 +864,21 @@ effectTest(
     yield* fs.makeDirectory(path.join(pluginRoot, "bin"), { recursive: true });
     yield* fs.writeFileString(
       path.join(pluginRoot, "bin", "collie"),
-      `#!/bin/sh\nprintf '%s %s %s' "$1" "$2" "$COLLIE_RUN" > ${JSON.stringify(marker)}\n`,
+      `#!/bin/sh\nprintf '%s %s %s %s' "$1" "$2" "$COLLIE_RUN" "$HERDR_PANE_ID" > ${JSON.stringify(marker)}\n`,
       { mode: 0o755 },
     );
 
     const env = rig.pluginEnv({ HERDR_PLUGIN_ROOT: pluginRoot });
-    yield* spawnDriver(env, "run-1", rig.projectDir).pipe(Effect.provide(configLayer()));
+    // The task workspace's shell pane rides along as the Driver's launch pane.
+    const launchPane = { tabId: "t9", paneId: "p9" };
+    yield* spawnDriver(env, "run-1", rig.projectDir, null, launchPane).pipe(
+      Effect.provide(configLayer()),
+    );
     for (let i = 0; i < 100 && !(yield* fs.exists(marker)); i++) yield* Effect.sleep("25 millis");
 
     // The path reached exec whole: the fake driver ran, with the run in its env,
     // and the metacharacters in the path stayed path characters.
-    expect(yield* fs.readFileString(marker)).toBe("herdr drive run-1");
+    expect(yield* fs.readFileString(marker)).toBe("herdr drive run-1 p9");
     expect(yield* fs.exists(path.join(rig.root, "pwned"))).toBe(false);
     expect(yield* fs.exists("pwned")).toBe(false);
   },

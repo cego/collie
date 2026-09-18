@@ -15,6 +15,7 @@ import { Herdr } from "../../src/herdr";
 import { scopeFor } from "../../src/registry";
 import { RunStore } from "../../src/run";
 import { recordDisposition } from "../../src/disposition";
+import { writeMrStates } from "../../src/merges";
 import { focus } from "../support/focus";
 
 let rig: Rig;
@@ -102,6 +103,9 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
     });
     ids.push(run.id);
   }
+  // And in production, as far as a merge can go: the watch that follows a merged card to
+  // its deploy jobs has nothing left to ask about these either.
+  yield* writeMrStates(env.stateDir, new Map(ids.map((_, at) => [`g/p!${at + 1}`, "in-prod"])));
   return ids;
 });
 

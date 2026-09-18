@@ -113,6 +113,93 @@ test("a closed merge request is news, not a verdict, and a fresh answer is not a
     }),
   ));
 
+/** A GitLab whose merge landed and whose deploy jobs have taken it as far as `live` says. */
+function deployed(live: { stage: string; prod: string | null }, log: string[] = []): Runner {
+  const merged = "35ae2cea5e5848602729dbc0e8a87ed0d9049c46";
+  return (cmd, args) => {
+    log.push(`${cmd} ${args.join(" ")}`);
+    const route = args[0] === "api" ? (args.at(-1) ?? "") : "";
+    if (route.endsWith("/environments"))
+      return Effect.succeed({
+        code: 0,
+        stdout: JSON.stringify([
+          { name: "stage", tier: "staging" },
+          { name: "prod", tier: "production" },
+          { name: "review/x", tier: "development" },
+        ]),
+      });
+    if (route.includes("/deployments?"))
+      return Effect.succeed({
+        code: 0,
+        stdout: JSON.stringify([
+          ...(live.prod ? [{ sha: live.prod, environment: { name: "prod" } }] : []),
+          { sha: live.stage, environment: { name: "stage" } },
+          { sha: "0000000", environment: { name: "prod" } },
+        ]),
+      });
+    if (route.includes("/merge_base?"))
+      // Only a descendant of the merge commit has it as the merge-base.
+      return Effect.succeed({
+        code: 0,
+        stdout: JSON.stringify({ id: route.includes("refs[]=child") ? merged : "0000000" }),
+      });
+    if (args[0] === "api") return Effect.succeed({ code: 0, stdout: '{"username":"mk"}' });
+    if (args[0] === "mr")
+      return Effect.succeed({
+        code: 0,
+        stdout: `{"iid":65,"state":"merged","merge_commit_sha":"${merged}","title":"Cards","web_url":"${MR}"}`,
+      });
+    return Effect.succeed({ code: 0, stdout: "" });
+  };
+}
+
+test("a merged card follows its deploy jobs: on stage, then in production, then asked no more", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { stateDir, run } = yield* seeded();
+      const states = new Map();
+      const checked = new Map<string, number>();
+      let now = Date.parse("2026-09-17T10:00:00Z");
+      const settle = (gitlab: Runner, log: string[] = []) =>
+        Effect.gen(function* () {
+          const current = yield* buildBoard({ stateDir, mrStates: states, now });
+          yield* settleMerges({
+            stateDir,
+            cwd: "/project",
+            run: gitlab,
+            views: current,
+            now,
+            checked,
+            states,
+          });
+          return log;
+        });
+
+      // Stage has a child of the merge commit; prod still runs something older.
+      yield* settle(deployed({ stage: "child", prod: "0000000" }));
+      expect(states.get("mk/collie!65")).toBe("on-stage");
+      expect((yield* readDispositions(run.dir)).map((line) => line.kind)).toEqual(["merged"]);
+      let board = yield* buildBoard({ stateDir, now });
+      expect(board[0]!.landed).toBe(true);
+      expect(board[0]!.sentence).toBe("Merged as mk/collie!65. On stage.");
+
+      // Disposed of, and still followed: production now has the merge commit itself.
+      now += 6 * 60_000;
+      yield* settle(deployed({ stage: "child", prod: "35ae2cea5e5848602729dbc0e8a87ed0d9049c46" }));
+      expect(states.get("mk/collie!65")).toBe("in-prod");
+      board = yield* buildBoard({ stateDir, now });
+      expect(board[0]!.sentence).toBe("Merged as mk/collie!65. In production.");
+      // One merged disposition, not one per round.
+      expect((yield* readDispositions(run.dir)).map((line) => line.kind)).toEqual(["merged"]);
+
+      // In production is as far as it goes: GitLab is not asked about it again.
+      now += 6 * 60_000;
+      const log: string[] = [];
+      yield* settle(deployed({ stage: "child", prod: "child" }, log), log);
+      expect(log).toEqual([]);
+    }),
+  ));
+
 test("what is working, or already disposed of, is not asked about", () =>
   runEffect(
     Effect.gen(function* () {
@@ -130,7 +217,7 @@ test("what is working, or already disposed of, is not asked about", () =>
             state: "done",
             landed: true,
             mr: MR,
-            disposition: "merged mk/collie!65",
+            disposition: "superseded mk/collie!66",
           }),
           task({ id: "no-mr", state: "failed" }),
         ],

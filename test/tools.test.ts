@@ -231,11 +231,14 @@ test("a read validates what it was given, and says so rather than throwing", () 
       // A tool that threw would be a conversation that died because a model mistyped.
       expect(yield* call("collie_run", { run: "no-such-run" })).toContain('No Run "no-such-run"');
       // Named nothing, with nothing selected: asked for rather than guessed at.
+      // A key the tool does not take is refused, not read past.
       const wrong = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, { nope: 1 }));
-      expect(wrong).toContain("nothing selected");
+      expect(wrong).toContain("collie_run refused the request (InvalidInput)");
+      const bare = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, {}));
+      expect(bare).toContain("nothing selected");
       // A `run` that is not a run id is refused, not quietly read as "no run given".
       const typed = yield* Effect.suspend(() => toolNamed("collie_run")!.call(env, { run: 5 }));
-      expect(typed).toContain("collie_run takes");
+      expect(typed).toContain("collie_run refused the request (InvalidInput)");
     }),
   ));
 
@@ -639,7 +642,7 @@ test("a request outside the closed set of actions is not a request", () =>
         [{ kind: "stop" }],
       ]) {
         expect(yield* call("collie_propose", { interpretation: "go on then", actions })).toContain(
-          "collie_propose takes",
+          "collie_propose refused the request (InvalidInput)",
         );
       }
       // Nor does saying so make a request a person's.
@@ -891,6 +894,35 @@ test("collie_do settles a proposal the human said yes to in chat", () =>
           (line) => line.kind === "declined" && line.id === second.id,
         ),
       ).toBe(true);
+    }),
+  ));
+
+test("a key an action does not take is refused by name, never dropped", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const said = yield* call("collie_do", {
+        actions: [
+          {
+            kind: "start",
+            workflow: "review",
+            inputs: { target: "worktree" },
+            goal: "stage only",
+            constraints: ["never deploy to prod"],
+          },
+        ],
+      });
+      expect(said).toContain("collie_do refused the request (InvalidInput)");
+      expect(said).toContain('actions[0] (kind "start") does not take goal, constraints');
+      expect(said).toContain("a start takes kind, workflow, inputs, decisions, workspace");
+      expect(said).toContain('put it in "inputs"');
+      expect(said).toContain("update_intent");
+      expect(said).toContain("Nothing was done");
+      expect(yield* new RunStore(stateDir).list()).toHaveLength(0);
+
+      // The flat tools too, and the schema's own words where no kind explains it.
+      expect(yield* call("collie_hold", { run: "r", untl: "14:00" })).toContain(
+        "collie_hold refused the request (InvalidInput)",
+      );
     }),
   ));
 

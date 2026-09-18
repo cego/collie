@@ -77,6 +77,21 @@ test("a snapshot round-trips the resolved workflow, prompts and all", () =>
     }),
   ));
 
+test("a snapshot keeps what a step waits for, or a frozen Run would skip its Helle gate", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const wf = yield* resolved("renovate");
+      const dir = path.join(rig.root, "run-waits");
+      yield* fs.makeDirectory(dir, { recursive: true });
+      const back = yield* readSnapshot(dir, yield* writeSnapshot(dir, wf));
+      const gated = wf.steps.filter((s) => s.waits?.includes("helle")).map((s) => s.id);
+      expect(gated.length).toBeGreaterThan(0);
+      expect(back!.steps.filter((s) => s.waits?.includes("helle")).map((s) => s.id)).toEqual(gated);
+    }),
+  ));
+
 test("no definition recorded reads as no snapshot, not as an error", () =>
   runEffect(
     Effect.gen(function* () {
