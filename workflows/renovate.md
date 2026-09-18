@@ -21,6 +21,8 @@ steps:
     # One agent for the whole run, so its model is named once, here.
     model: default
     effort: medium
+    # Keep Claude Code's configured auto mode; this agent is reused by every later step.
+    permissions: harness
     output: track.json
   - id: assess
     persona: renovate
@@ -115,10 +117,12 @@ consultation.
 GitLab approval is required **before attempting to merge**. Read the merge request's
 current head SHA and approve it with `glab mr approve <iid> --sha <head-sha>`. Verify the
 approval was recorded and all required approval rules are satisfied before the merge
-command. Recheck approvals after every push or rebase, because either can reset them;
-review and approve the new head before retrying a merge. If approval is refused or needs
-another eligible reviewer, consult me — never bypass approval rules or try merging first
-to discover that approval is missing.
+command. Run the approval, approval verification, and merge in a separate shell call
+each, so the harness can authorize the exact operation.
+Recheck approvals after every push or rebase, because either can reset them; review and
+approve the new head before retrying a merge. If approval is refused or needs another
+eligible reviewer, consult me — never bypass approval rules or try merging first to
+discover that approval is missing.
 
 Before you check a branch out, ask git who holds it — `git worktree list` names every
 registered worktree and the branch each has checked out. A Renovate branch another
