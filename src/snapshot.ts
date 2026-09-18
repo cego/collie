@@ -100,6 +100,9 @@ const StepSchema = Schema.Struct({
 
 const WorkflowSchema = Schema.Struct({
   name: Schema.String,
+  // Optional only for snapshots written before they were kept; every new one has them.
+  base: opt(Schema.String),
+  checkout: opt(Schema.String),
   title: Schema.String,
   description: Schema.String,
   inputs: Schema.Record(Schema.String, Schema.String),

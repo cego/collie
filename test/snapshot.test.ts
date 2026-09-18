@@ -74,6 +74,9 @@ test("a snapshot round-trips the resolved workflow, prompts and all", () =>
       // and a snapshot that lost it would send a resumed Run somewhere else.
       expect(back!.steps.map((s) => s.prompt)).toEqual(wf.steps.map((s) => s.prompt));
       expect(back!.maxIterations).toBe(wf.maxIterations);
+      // Field for field, the whole thing: a field the schema does not name is a field the
+      // Driver silently runs without, which is how `waits: helle` was lost once.
+      expect(back).toEqual(wf);
     }),
   ));
 
