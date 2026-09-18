@@ -1,5 +1,9 @@
 # Tag a version (no `v`: install.sh builds the download URL from the version in
 # herdr-plugin.toml verbatim) to publish the runner binaries install.sh fetches.
+#
+# One job for all four targets, and no marketplace actions, for the reason ci.yml gives:
+# passing files between jobs is what upload-artifact was for, and four cross-builds on one
+# runner are cheaper than a second runtime in this repository.
 name: release
 on:
   push:
@@ -8,40 +12,38 @@ on:
 permissions:
   contents: write
 
+env:
+  BUN_VERSION: "1.4.2"
+
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        target: [linux-x64, linux-arm64, darwin-x64, darwin-arm64]
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4"
+      - name: Check out this tag
+        run: |
+          git init -q .
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/$GITHUB_REPOSITORY"
+          git fetch -q --depth 1 origin "$GITHUB_SHA"
+          git checkout -q FETCH_HEAD
+      - name: Install bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash -s "bun-v$BUN_VERSION"
+          echo "$HOME/.bun/bin" >>"$GITHUB_PATH"
       # `--os`/`--cpu` because `@opentui/core` ships its renderer as a per-platform
       # optional package and a plain install brings only this runner's. Cross-compiling
       # four targets from one glibc runner needs all four present at build time.
       - run: bun install --frozen-lockfile --os='*' --cpu='*'
       # The build script gates on the artifact embedding its own target's renderer, so a
       # cross-build that resolved the wrong native package fails here rather than shipping.
-      - run: bun run tools/build.ts ${{ matrix.target }} collie-${{ matrix.target }}
-      # Only the runner's own target can be executed here; the others are smoked by ci.yml's
-      # native build.
-      - if: matrix.target == 'linux-x64'
-        run: sh tools/smoke.sh ./collie-${{ matrix.target }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: collie-${{ matrix.target }}
-          path: collie-${{ matrix.target }}
-
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          merge-multiple: true
-      - run: gh release create "$GITHUB_REF_NAME" collie-* --repo "$GITHUB_REPOSITORY" --title "Collie $GITHUB_REF_NAME" --notes "Collie $GITHUB_REF_NAME"
+      - name: Build every target
+        run: |
+          for target in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            bun run tools/build.ts "$target" "collie-$target"
+          done
+      # Only the runner's own target can be executed here; the others are covered by the
+      # build script's own check that each one embeds its target's renderer.
+      - run: sh tools/smoke.sh ./collie-linux-x64
+      - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" collie-* --repo "$GITHUB_REPOSITORY" --title "Collie $GITHUB_REF_NAME" --notes "Collie $GITHUB_REF_NAME"

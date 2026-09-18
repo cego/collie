@@ -8,6 +8,9 @@ on:
     - cron: "0 6 * * *"
   workflow_dispatch:
 
+env:
+  BUN_VERSION: "1.4.2"
+
 jobs:
   contract:
     runs-on: ubuntu-latest
@@ -18,10 +21,17 @@ jobs:
     # Preview is weeks of warning about a coming break, and never a reason to stop anything.
     continue-on-error: ${{ matrix.channel == 'preview' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4"
+      # Shell rather than actions/checkout and setup-bun, for the reason ci.yml gives.
+      - name: Check out this commit
+        run: |
+          git init -q .
+          git remote add origin "https://x-access-token:${{ github.token }}@github.com/$GITHUB_REPOSITORY"
+          git fetch -q --depth 1 origin "$GITHUB_SHA"
+          git checkout -q FETCH_HEAD
+      - name: Install bun
+        run: |
+          curl -fsSL https://bun.sh/install | bash -s "bun-v$BUN_VERSION"
+          echo "$HOME/.bun/bin" >>"$GITHUB_PATH"
       - run: bun install --frozen-lockfile
       - run: bun run tools/herdr-schema.ts ${{ matrix.channel }} --out /tmp/herdr-schema.json
       - run: HERDR_API_SCHEMA=/tmp/herdr-schema.json bun test test/herdr-contract.test.ts
