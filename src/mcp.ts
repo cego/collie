@@ -2,10 +2,10 @@
 // `tools.ts`.
 //
 // A transport adapter and nothing more. It speaks the official SDK's protocol over this
-// process's stdin and stdout, started by the chat launch with `--mcp-config` and
-// `--strict-mcp-config`, and it exposes exactly what `TOOLS` exposes. There is no port,
-// no daemon and no second orchestration service: the server lives as long as the chat
-// that started it, and every answer it gives is a read through the shared operations.
+// process's stdin and stdout, started by the chat launch with `--mcp-config`, and it
+// exposes exactly what `TOOLS` exposes. There is no port, no daemon and no second
+// orchestration service: the server lives as long as the chat that started it, and every
+// answer it gives is a read through the shared operations.
 
 import { BunServices } from "@effect/platform-bun";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
