@@ -12,9 +12,10 @@ One command, safe to re-run:
 git clone git@gitlab.cego.dk:mk/collie.git ~/.collie && ~/.collie/setup.sh
 ```
 
-`setup.sh` does its own work — clone the checkout or pull it, add the three keybindings
-below to `~/.config/herdr/config.toml` if they are missing, reload a running herdr — and
-calls `prepare.sh` for everything else. That is the one routine that prepares a
+`setup.sh` does its own work — clone the checkout or pull it, add the four keybindings
+below to `~/.config/herdr/config.toml` if they are missing, configure Claude Code's status
+line unless you have one of your own, reload a running herdr — and calls `prepare.sh` for
+everything else. That is the one routine that prepares a
 machine, and `collie upgrade` and herdr's plugin build hook end in it too, so a prerequisite
 is added in one place:
 
@@ -107,6 +108,25 @@ The step needs the network and a Node runtime, and neither is a reason to leave 
 a runner. If either is missing the step says so in one line, the rest of the install
 completes, and `collie upgrade` picks it up next time.
 
+### Optional integrations
+
+Two things a run can reach for that no install can set up for you, because both are a
+login of yours. Neither is needed by the bundled `implement` and `review`, so `collie doctor`
+reports them without failing, and a run that needs one is refused up front with the fix
+rather than failing hours in.
+
+| Integration    | Who needs it                                                           | How to set it up                                                                                       |
+| -------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Helle          | `renovate`, or any forked workflow with `waits: helle`                 | `HELLE_API_URL=<url>` and `HELLE_API_TOKEN=<token>` in `~/.config/helle/env`, the file the Helle MCP wrapper sources |
+| Linear MCP     | `plan`'s "Offload to Linear"; `implement` given a Linear issue or URL   | `claude mcp add --transport http --scope user linear-server https://mcp.linear.app/mcp`, then log in when Claude Code asks |
+
+Doctor tells the two failure modes apart. Not set up at all is a note under a `✓`, with
+the command above. Set up and not working is a `!`: a credentials file missing one of its
+lines, a token Helle answers 401 to, a host that does not answer, a `.claude.json` that is
+not valid JSON. Each names the file to look in. `collie run start` asks the same two
+questions for the workflow it is about to run and refuses with that detail when the answer
+is no — a Run that would only find out at its merge step is not started.
+
 ### Environment variables
 
 | Variable              | Contract                                                                                                                                     |
@@ -122,6 +142,7 @@ completes, and `collie upgrade` picks it up next time.
 | `COLLIE_RUN`          | Internal Run ID passed to a detached Driver.                                                                                                 |
 | `COLLIE_CWD`          | Working directory passed to picker, agent, and Driver processes; also re-roots a CLI run.                                                    |
 | `GITLAB_USER_LOGIN`   | Who a generated branch is namespaced under. Unset, Collie asks `glab` who you are for this checkout's host.                                  |
+| `HELLE_ENV_FILE`      | Where Helle credentials are read from; defaults to `~/.config/helle/env`. See [Optional integrations](#optional-integrations).             |
 
 `COLLIE_MODE` and `COLLIE_RUN` are process-to-process contracts set by Collie; you do not
 set them yourself.
@@ -1243,13 +1264,15 @@ touches — if a binding you expect is missing, `setup.sh` is the one to run.
 every prerequisite at once — herdr and its minimum version, the plugin link, the runner and
 the shim's directory on PATH, a Node runtime, the skills and harnesses your workflows name,
 whether this checkout is behind its remote, and whether `glab` is logged in — and prints the
-command that fixes each. It exits non-zero when any check fails. It also says what
+command that fixes each. It exits non-zero when any check fails. Helle credentials and a
+Linear MCP in Claude Code are reported too, as `!` when they are set up and not working, and
+never fail it: see [Optional integrations](#optional-integrations). It also says what
 `implement` and `review` resolve to here: a user or project override wins over the bundled
 definition, so one that still carries `architecture` and `simplify` steps or two reviewers is
 what a run in this project would actually do. That is reported with the exact edit and
 never edited — the override is yours.
 
-**A keybinding does nothing over SSH.** The three bindings use plain letters after the
+**A keybinding does nothing over SSH.** The bindings use plain letters after the
 prefix on purpose, because `alt` chords are not delivered reliably over SSH or through some
 terminals. If you rebound one to a chord, that is the first thing to undo. Without any
 binding, `herdr plugin action invoke cego.collie.pick` still works from a shell inside

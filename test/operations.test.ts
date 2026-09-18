@@ -54,6 +54,15 @@ const AskedSchema = Schema.Struct({
 const CauseSchema = Schema.Struct({ cause: Schema.String });
 
 /** A git that will make a worktree, so a mutating start gets as far as its checkout. */
+/** A Linear MCP in Claude Code's user scope, for the runs given a Linear issue as the work. */
+const linearMcp = () =>
+  Effect.flatMap(FileSystem.FileSystem, (fs) =>
+    fs.writeFileString(
+      `${rig.root}/.claude.json`,
+      '{"mcpServers":{"linear-server":{"type":"http","url":"https://mcp.linear.app/mcp"}}}',
+    ),
+  );
+
 const gitThatCheckouts = () =>
   bin.add("git", `case "$*" in\n${gitWorktreeCases(rig.projectDir)}\n  *) echo main ;;\nesac`);
 
@@ -250,6 +259,7 @@ test("a run whose GitLab identity cannot be established says so, and asks nothin
   runEffect(
     Effect.gen(function* () {
       yield* gitThatCheckouts();
+      yield* linearMcp();
       // Nothing in the environment names the operator, and this rig's glab will not say.
       const env = rig.pluginEnv({ GITLAB_USER_LOGIN: "" });
 
@@ -597,6 +607,7 @@ test("a checkout herdr opens a workspace for gets the Task's own name, and no se
   runEffect(
     Effect.gen(function* () {
       yield* gitThatCheckouts();
+      yield* linearMcp();
       const ready = yield* prepared("implement");
       const settled = yield* settleGiven(rig.pluginEnv(), ready, {
         inputs: { plan: "ENG-1", workspace: "new" },
@@ -646,5 +657,64 @@ test("a launch may decide the evidence gate, and only with an answer it takes", 
         ok: false,
         error: { code: "invalid_input" },
       });
+    }),
+  ));
+
+test("a run that waits on Helle is refused up front, with the file to write, not at its merge step", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* gitThatCheckouts();
+      const ready = yield* prepared("renovate");
+      const settled = yield* settleGiven(rig.pluginEnv(), ready, {
+        inputs: { repository: rig.root, team: "Frontend" },
+        decide: [],
+      });
+      if (!settled.ok) throw new Error(`expected renovate to settle: ${settled.error.message}`);
+
+      const started = yield* startRun(rig.pluginEnv(), {
+        workflow: ready.workflow,
+        resolutions: ready.resolutions,
+        decisions: settled.decisions,
+        workspace: null,
+      });
+
+      if (started._tag === "Started") throw new Error("expected no run without Helle");
+      expect(started.result.error.code).toBe("operation_failed");
+      expect(started.result.error.message).toContain("Helle");
+      expect(started.result.error.message).toContain(`${rig.root}/.config/helle/env`);
+      expect(started.result.error.details).toMatchObject({
+        fix: expect.stringContaining("HELLE_API_TOKEN="),
+      });
+      expect(yield* new RunStore(rig.stateDir).list()).toHaveLength(0);
+    }),
+  ));
+
+test("a Linear issue as the work needs a Linear MCP in Claude Code, and the refusal says how to add one", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* gitThatCheckouts();
+      const ready = yield* prepared("implement");
+      const settled = yield* settleGiven(rig.pluginEnv(), ready, {
+        inputs: { plan: "ENG-1" },
+        decide: [],
+      });
+      if (!settled.ok) throw new Error("expected implement to settle");
+
+      const started = yield* startRun(rig.pluginEnv(), {
+        workflow: ready.workflow,
+        resolutions: ready.resolutions,
+        decisions: settled.decisions,
+        workspace: null,
+      });
+
+      if (started._tag === "Started") throw new Error("expected no run without a Linear MCP");
+      expect(started.result.error.code).toBe("operation_failed");
+      expect(started.result.error.message).toContain("Linear");
+      expect(started.result.error.details).toMatchObject({
+        fix: expect.stringContaining("claude mcp add"),
+      });
+      // A plan directory reaches for no Linear, so the same machine starts one of those.
+      const noLinear = ready.resolutions.filter((r) => r.kind !== "linear");
+      expect(noLinear.length).toBe(ready.resolutions.length - 1);
     }),
   ));

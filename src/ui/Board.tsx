@@ -103,6 +103,8 @@ export interface Where {
 const PLACEHOLDER = "find a task or agent";
 /** The board's side margin, in cells: the header and the cards share it. */
 const SIDE = 2;
+/** Cells between a card's border and its text, each side. */
+const CARD_PAD = 1;
 /** The header's height, which is the buttons' and the mark's. */
 const HEADER_ROWS = 3;
 /**
@@ -428,12 +430,13 @@ function Card(props: {
   batch: Batch;
 }) {
   const state = () => stateGlyph(props.view.state);
-  /** The header row less its border, glyph, project and age: what is left for the name. */
+  /** The header row less its border, padding, glyph, project and age: what is left for the name. */
   const nameRoom = () =>
     Math.max(
       6,
       Math.floor(props.width / props.columns) -
         4 -
+        2 * CARD_PAD -
         2 -
         (props.view.project.length + 2) -
         (props.view.age.length + 1),
@@ -447,7 +450,15 @@ function Card(props: {
       border
       borderColor={props.batch.picked(props.view) ? C.blue : (cardEdge(props.view) ?? C.strong)}
       backgroundColor={props.batch.picked(props.view) ? C.selected : props.open ? C.hover : C.card}
-      style={{ flexGrow: 1, flexBasis: 0, flexDirection: "column", minWidth: 0 }}
+      style={{
+        flexGrow: 1,
+        flexBasis: 0,
+        flexDirection: "column",
+        minWidth: 0,
+        // A cell of air inside the border: text drawn against a box edge reads as part of it.
+        paddingLeft: CARD_PAD,
+        paddingRight: CARD_PAD,
+      }}
       onMouseDown={(event: MouseEvent) => {
         if (event.button === RIGHT_BUTTON) return menu(event);
         // Shift picks this card for the bar; a plain click is about this one card, and
