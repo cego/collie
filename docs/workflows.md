@@ -209,14 +209,18 @@ branch it merges. Your own checkout is never touched or switched. See
 [A run that roams across branches](using.md#a-run-that-roams-across-branches).
 
 **What happens:** the run binds the team's Renovate issue and appends the repository to its
-checklist unchecked, then blocks — in the runner, at no token cost — until it holds the
-repository in [Helle](authoring.md#waits). It assesses the whole batch of Renovate merge
-requests before merging any of them, merges them one at a time fixing conflicts and routine
-dependency fallout on each merge request's own branch, chooses a version from the whole
-diff since the previous tag, tags annotated with notes (and creates a GitLab release only
-where the repository is a package), waits for the tag pipeline to publish or deploy, and
-checks the repository off with its merge request links and outcomes. Helle is released when
-the run finishes successfully.
+checklist unchecked, then assesses the whole batch of Renovate merge requests, read only,
+and decides whether the repository is a package or an application. For an application it
+gathers every update into one batch branch and merge request, then blocks — in the runner,
+at no token cost — until it holds the repository in [Helle](authoring.md#waits), deploys the
+batch to stage and proves it there — rolling stage back to the latest stable release, reading
+the Kibana logs, fixing the batch and redeploying, on its own, when it does not — and waits
+for another team member's approval before merging the batch. A package's merge requests are merged one at a time, under the same
+claim, fixing conflicts and routine dependency fallout on each merge request's own branch.
+Either way it then chooses a version from the whole diff since the previous tag, tags
+annotated with changelog-style notes (and creates a GitLab release only where the repository
+is a package), waits for the tag pipeline to publish or deploy, and checks the repository
+off. Helle is released when the run finishes successfully.
 
 **It asks you** at the points where asking is the work: a breaking or substantial
 migration, an update that cannot be merged safely, a bounded retry that made no progress,

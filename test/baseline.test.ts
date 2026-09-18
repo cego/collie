@@ -243,10 +243,15 @@ test("renovate names the checkout it roams in and waits for Helle before it touc
       expect(implement.inputs.repo).toBe("optional");
       expect(implement.inputs[REPOSITORY_INPUT]).toBeUndefined();
 
-      // One gate, on the first step that touches the repository — never on the Linear
-      // bookkeeping, which has to happen before a queue of hours begins.
+      // One gate, on the first step that touches anything shared — the stage deploy —
+      // and before every merge; never on the Linear bookkeeping or the read-only
+      // assessment, which happen before a queue of hours begins.
       const waiting = wf.steps.filter((step) => step.waits?.includes("helle"));
-      expect(waiting.map((step) => step.id)).toEqual(["assess"]);
+      expect(waiting.map((step) => step.id)).toEqual(["stage"]);
+      const ids = wf.steps.map((step) => step.id);
+      expect(ids.indexOf("batch")).toBeLessThan(ids.indexOf("stage"));
+      expect(ids.indexOf("stage")).toBeLessThan(ids.indexOf("approval"));
+      expect(ids.indexOf("approval")).toBeLessThan(ids.indexOf("merge"));
       expect(wf.steps[0]!.id).toBe("track");
       expect(wf.steps[0]!.permissions).toBe("harness");
       expect(wf.steps.every((step) => step.persona === "renovate")).toBe(true);
@@ -263,6 +268,19 @@ test("renovate never lets a merge request end unaccounted for, and never takes a
       // The batch is assessed whole before the first merge, so a migration is heard
       // about before half of it is on the default branch.
       expect(prompt("assess")).toContain("before merging any of them");
+      // An application's updates land as one batch branch, proven on stage under the
+      // claim, approved by someone else, and only then merged.
+      expect(prompt("batch")).toContain("one batch branch");
+      expect(prompt("batch")).toContain("git worktree list");
+      expect(prompt("stage")).toContain("Never deploy the batch branch to production");
+      // A broken stage is rolled back to the stable release before anything is debugged,
+      // and the fix-and-redeploy loop runs on its own until stage is good.
+      expect(prompt("stage")).toContain("Roll stage back");
+      expect(prompt("stage")).toContain("Kibana");
+      expect(prompt("stage")).toContain("Never leave stage on a broken batch");
+      expect(prompt("approval")).toContain("another team member");
+      expect(prompt("approval")).toContain("never approve it yourself");
+      expect(prompt("merge")).toContain("batch merge request");
       // A branch another worktree holds is reported, not taken, and not reached around.
       expect(prompt("merge")).toContain("git worktree list");
       expect(prompt("merge")).toContain("remote-tracking ref");
