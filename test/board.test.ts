@@ -22,7 +22,8 @@ import {
   type TaskView,
 } from "../src/board";
 import { recordDisposition } from "../src/disposition";
-import { RUNNER_PID, writeChoice } from "../src/driver";
+import type { AgentInfo } from "../src/herdr";
+import { RUNNER_PID, STOPPED, writeChoice } from "../src/driver";
 import type { ProposalLine } from "../src/proposals";
 import { RunStore, type Run } from "../src/run";
 import { writeTask } from "../src/task";
@@ -45,6 +46,7 @@ function facts(over: Partial<Sentence> = {}): Sentence {
     abandoned: null,
     planReady: false,
     mrState: null,
+    stalled: null,
     ...over,
   };
 }
@@ -198,6 +200,38 @@ const BoardEnvelope = Schema.fromJsonString(
 const stateDir = Effect.fn("board.stateDir")(function* () {
   return yield* (yield* FileSystem.FileSystem).makeTempDirectory({ prefix: "collie-board-" });
 });
+
+/** A step variant with an agent name, which is what joins a Run to what herdr reports. */
+function variant(agent: string) {
+  return {
+    harness: "claude",
+    model: "sonnet",
+    effort: null,
+    permissions: null,
+    agent,
+    label: agent,
+    tabId: "t-1",
+    paneId: "p-1",
+    status: "running" as const,
+    error: null,
+    output: null,
+    repairs: [],
+    nudges: 0,
+  };
+}
+
+/** What herdr says about a pane, which is all the board ever knows about one. */
+function agent(name: string, status: AgentInfo["status"]): AgentInfo {
+  return {
+    name,
+    paneId: "p-1",
+    workspaceId: "w1",
+    status,
+    title: null,
+    terminalId: "t-1",
+    agentSession: null,
+  };
+}
 
 const seed = Effect.fn("board.seed")(function* (opts: {
   stateDir: string;
@@ -355,6 +389,129 @@ test("a question puts the Task in Needs you and blocks the step it is asked from
       expect(board[0]!.sentence).toBe("Waiting on your answer about the failing specs.");
       expect(board[0]!.steps).toContainEqual({ name: "review", state: "blocked" });
       expect(board[0]!.decision).toMatchObject({ kind: "question", id: "c1", run: run.id });
+    }),
+  ));
+
+test("a Run waiting on the human in a pane is Needs you, not Working", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* stateDir();
+      const run = yield* seed({
+        stateDir: dir,
+        workflow: "implement",
+        steps: ["build", "review"],
+        task: "task-1",
+      });
+      // What the Driver records when it stops for the human with nothing to answer on
+      // the card: an agent at its harness's own dialog, or one that went idle without
+      // writing its Output. No `choice.json`, so there is no Decision to go on.
+      run.record.awaiting = "build";
+      yield* run.save();
+
+      const board = yield* buildBoard({ stateDir: dir, now: Date.parse("2026-09-14T10:05:00Z") });
+
+      expect(board[0]!.state).toBe("blocked");
+      expect(sectionOf(board[0]!)).toBe("needs-you");
+      expect(board[0]!.decision).toBeNull();
+      expect(board[0]!.sentence).toBe("Waiting for you in the build step.");
+    }),
+  ));
+
+test("an agent herdr reports blocked names its pane, with no record to say so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* stateDir();
+      const run = yield* seed({
+        stateDir: dir,
+        workflow: "implement",
+        steps: ["build"],
+        task: "task-1",
+      });
+      // A permission prompt part-way through a step: the Driver is still polling for the
+      // Output and has recorded nothing, so herdr is the only one who knows.
+      run.record.steps[0]!.variants.push(variant("impl-1"));
+      yield* run.save();
+
+      const board = yield* buildBoard({
+        stateDir: dir,
+        now: Date.parse("2026-09-14T10:05:00Z"),
+        alive: [agent("impl-1", "blocked")],
+      });
+
+      expect(sectionOf(board[0]!)).toBe("needs-you");
+      expect(board[0]!.sentence).toBe("Waiting for you in impl-1's pane.");
+    }),
+  ));
+
+test("a working agent leaves the Task working", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* stateDir();
+      const run = yield* seed({
+        stateDir: dir,
+        workflow: "implement",
+        steps: ["build"],
+        task: "task-1",
+      });
+      run.record.steps[0]!.variants.push(variant("impl-1"));
+      yield* run.save();
+
+      const board = yield* buildBoard({
+        stateDir: dir,
+        now: Date.parse("2026-09-14T10:05:00Z"),
+        alive: [agent("impl-1", "working")],
+      });
+
+      expect(sectionOf(board[0]!)).toBe("working");
+    }),
+  ));
+
+test("a hold is held, not a question: nothing is waiting for an answer", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const dir = yield* stateDir();
+      const run = yield* seed({
+        stateDir: dir,
+        workflow: "implement",
+        steps: ["build"],
+        task: "task-1",
+      });
+      run.record.awaiting = "hold";
+      yield* run.save();
+
+      const board = yield* buildBoard({ stateDir: dir, now: Date.parse("2026-09-14T10:05:00Z") });
+
+      expect(sectionOf(board[0]!)).toBe("working");
+    }),
+  ));
+
+test("a Run stopped while its agent sat at a prompt was stopped, and waits on nobody", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const dir = yield* stateDir();
+      const run = yield* seed({
+        stateDir: dir,
+        workflow: "implement",
+        steps: ["build"],
+        task: "task-1",
+      });
+      run.record.awaiting = "build";
+      run.record.steps[0]!.variants.push(variant("impl-1"));
+      yield* run.save();
+      // The human answered the question by stopping the Run; the pane it was asked in
+      // may well still be sitting there.
+      yield* fs.writeFileString(path.join(run.dir, STOPPED), "by me");
+
+      const board = yield* buildBoard({
+        stateDir: dir,
+        now: Date.parse("2026-09-14T10:05:00Z"),
+        alive: [agent("impl-1", "blocked")],
+      });
+
+      expect(board[0]!.state).toBe("stopped");
+      expect(sectionOf(board[0]!)).not.toBe("needs-you");
     }),
   ));
 
@@ -668,7 +825,7 @@ const SENTENCES: Array<[string, TaskView[], { text: string; urgent: boolean }]> 
   [
     "one decision",
     [task({ state: "blocked", decision: QUESTION }), task({ id: "t2" })],
-    { text: "One decision is waiting on you. 1 working.", urgent: true },
+    { text: "One task is waiting on you. 1 working.", urgent: true },
   ],
   [
     "several decisions, and a quiet one behind them",
@@ -678,7 +835,7 @@ const SENTENCES: Array<[string, TaskView[], { text: string; urgent: boolean }]> 
       task({ id: "t3" }),
       task({ id: "t4", state: "quiet" }),
     ],
-    { text: "2 decisions are waiting on you. 2 working, 1 gone quiet.", urgent: true },
+    { text: "2 tasks are waiting on you. 2 working, 1 gone quiet.", urgent: true },
   ],
   [
     "finished work, which the header does not count",

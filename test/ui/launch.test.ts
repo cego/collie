@@ -364,9 +364,9 @@ effectTest("resume offers only runs with unfinished steps", function* () {
   expect(asked[0]).toBe("Resume a run");
 });
 
-effectTest("a launch from the Home asks which workspace the work is in", function* () {
+effectTest("a launch from the Home asks which checkout the work is in", function* () {
   // The Home is Collie's own workspace and its directory is the Herd's namespace: a Run
-  // rooted there would have nothing to work on, so the workspace is the first question.
+  // rooted there would have nothing to work on, so the checkout is the first question.
   // The launch asks herdr which workspaces there are, so there has to be one to ask.
   yield* rig.startSocket();
   const at = env();
@@ -406,14 +406,72 @@ Do {{inputs.goal}}.
 
   const inHome = { ...at, workspaceId: "home", cwd: namespaceDir };
   const { code, asked } = yield* answering(
-    // Answered by id, which for a workspace is what herdr calls it.
-    ["goalful", "w2", "Add a picker"],
+    // Answered by row id; an open workspace's row is named after the workspace herdr
+    // has, and picking it picks that workspace's directory, not the Run's workspace.
+    ["goalful", "ws:w2", "Add a picker"],
     (prompts) => pickFlow(new Herdr(inHome), inHome, prompts),
   );
 
   expect(code).toBe(0);
-  expect(asked).toEqual(["Workflows — " + namespaceDir, "Which workspace?", "What is the goal?"]);
+  expect(asked).toEqual(["Workflows — " + namespaceDir, "Which checkout?", "What is the goal?"]);
   // And rooted there rather than in Collie's own namespace.
+  const runs = yield* new RunStore(at.stateDir).list();
+  expect(runs).toHaveLength(1);
+  expect(runs[0]!.record.cwd).toBe(rig.projectDir);
+});
+
+effectTest("a launch from a Home with nothing open takes the checkout as a path", function* () {
+  // The whole point of the row: a fresh Task opens a workspace of its own whatever it
+  // was launched from, so the only thing missing from the Home is the directory — and
+  // requiring one already be open meant a repo nobody had opened could start nothing.
+  yield* rig.startSocket();
+  const at = env();
+  const key = yield* herdOf(at.socketPath);
+  const namespaceDir = yield* herdDir(at.stateDir, key);
+  yield* writeHome(yield* homePath(at.stateDir, key), {
+    workspaceId: "home",
+    tabId: "home:1",
+    paneId: "home-1",
+    terminalId: "t-home-1",
+    createdAt: "2026-09-10T10:00:00.000Z",
+    token: key,
+    state: "ready",
+    previous: [],
+  });
+  yield* rig.addWorkspace("home", "🐕 Collie", namespaceDir);
+  yield* writeDef(
+    rig.baselineDir,
+    "workflows",
+    "goalful",
+    `---
+name: goalful
+title: goalful
+inputs:
+  goal: goal
+steps:
+  - id: build
+    persona: implementer
+    output: build.json
+---
+## build
+
+Do {{inputs.goal}}.
+`,
+  );
+
+  const inHome = { ...at, workspaceId: "home", cwd: namespaceDir };
+  const { code, asked } = yield* answering(
+    ["goalful", "new", rig.projectDir, "Add a picker"],
+    (prompts) => pickFlow(new Herdr(inHome), inHome, prompts),
+  );
+
+  expect(code).toBe(0);
+  expect(asked).toEqual([
+    "Workflows — " + namespaceDir,
+    "Which checkout?",
+    "Which checkout? Type the path to the project.",
+    "What is the goal?",
+  ]);
   const runs = yield* new RunStore(at.stateDir).list();
   expect(runs).toHaveLength(1);
   expect(runs[0]!.record.cwd).toBe(rig.projectDir);

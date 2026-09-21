@@ -23,6 +23,7 @@ import { latest, readDispositions } from "./disposition";
 import { REVIEW_FILE } from "./output";
 import {
   fanoutRepos,
+  needsHuman,
   RunStore,
   type FanoutRecord,
   type Run,
@@ -113,10 +114,11 @@ export interface RunRow {
   /** The question this run is waiting on, rendered under its row. */
   choice: PendingChoice | null;
   /**
-   * Whether this run has a question for the human, i.e. whether `choice` is set. The
-   * board lists these first, because a blocked run costs the whole run's wall-clock and
-   * used to be visible only if its row happened to be the Selection. Nothing else counts
-   * as needing you: a gate the run recorded itself as awaiting has nothing to answer.
+   * Whether this run has stopped for the human: a `choice` to answer on the row, or an
+   * agent waiting for an answer in its own pane. The board lists these first, because a
+   * blocked run costs the whole run's wall-clock and used to be visible only if its row
+   * happened to be the Selection. A row with no `choice` under it is still worth the
+   * header — Enter on it goes to the pane where the answer has to be typed.
    */
   needsYou: boolean;
   /**
@@ -614,12 +616,18 @@ export const buildView = Effect.fn("buildView")(function* (
 
   const active: RunRow[] = [];
   for (const r of runs.filter((r) => r.record.status === "running" && !abandoned.has(r.id))) {
-    // A Choice whose Driver has gone is not shown as answerable: recovery already
-    // classifies it as stale, and a board that still offered it would take an answer,
-    // report it sent, and have the next Driver discard it. Only asked where there is
-    // a Choice at all, so an ordinary refresh costs no ownership probe.
+    // Whatever the Driver stopped for is not shown as answerable once that Driver has
+    // gone: recovery already classifies a Choice it left behind as stale, and a board
+    // that still offered it would take an answer, report it sent, and have the next
+    // Driver discard it — and an `awaiting` it left behind is the same fact. Asked only
+    // where something has stopped at all, so an ordinary refresh costs no probe.
     const pending = yield* readChoice(r.dir);
-    const choice = pending && (yield* choiceAnswerable(r)) ? pending : null;
+    const answerable = (pending !== null || needsHuman(r.record)) && (yield* choiceAnswerable(r));
+    const choice = pending && answerable ? pending : null;
+    // herdr's own word for an agent sitting at its harness's dialog: a permission
+    // prompt mid-step, which the Driver never learns about and records nothing for. No
+    // Driver is needed for this one — the pane is there, asking.
+    const blocked = rows.some((row) => row.run === r.id && row.status === "blocked");
     active.push({
       id: r.id,
       dir: r.dir,
@@ -633,9 +641,10 @@ export const buildView = Effect.fn("buildView")(function* (
       // second time, on the 3s poll and on every watch event and command.
       fixable: fixable.has(r.id),
       choice,
-      // A pending Choice and nothing else: a count that sends a human to a row with
-      // nothing under it to answer is worse than no count.
-      needsYou: choice !== null,
+      // A Choice to answer here, or an agent waiting for one in its own pane: both
+      // stop the run dead, and Enter on the row reaches the pane either way. Only the
+      // inline answer needs a Choice — the header counts what a human has to go to.
+      needsYou: answerable || blocked,
       ...outcomeOf(r.record),
       // A Run still going has not become anything yet.
       delivered: null,

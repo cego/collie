@@ -252,13 +252,34 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
   return 0;
 });
 
+/** A directory a Run could be rooted in, and what it would be picked from the list as. */
+interface Rooting {
+  id: string;
+  title: string;
+  subtitle: string;
+  cwd: string;
+  /** The herdr workspace this directory is already open in, where one is. */
+  workspaceId: string | null;
+  /** Why it will not do, or null when it will. */
+  why: string | null;
+}
+
+/** The row that reaches a checkout no workspace is open on and no Task has used. */
+const NEW_CHECKOUT = "new";
+
 /**
  * The environment a run is rooted in. The board is the Herd's one Home (ADR-0009), and
  * its own directory is Collie's namespace rather than a checkout — so a launch from
- * there asks which workspace the work is in, and roots the Run in that workspace's
- * directory. A launch from anywhere else is already in one.
+ * there asks which checkout the work is in, and roots the Run there. A launch from
+ * anywhere else is already in one.
  *
- * `null` is the human backing out, or being told why a workspace will not do.
+ * What is picked is the checkout, not the Run's workspace: a fresh Task opens a
+ * workspace of its own named after the intent (`taskFor`), whatever it was launched
+ * from. So the list is not what herdr happens to have open — a checkout an earlier Task
+ * used is offered too, and any path can be typed. Those leave `workspaceId` null, which
+ * is the truth: that Task's workspace does not exist yet.
+ *
+ * `null` is the human backing out, or being told why a directory will not do.
  * `WorkspaceInfo` carries no directory of its own on every herdr, so it is resolved from
  * the workspace's worktree and then from its first pane's cwd — never invented.
  */
@@ -271,6 +292,7 @@ const rootedWhere = Effect.fn("Flows.rootedWhere")(function* (
   const home = key === null ? null : yield* readHome(yield* homePath(env.stateDir, key));
   if (home === null || home === UNREADABLE || env.workspaceId !== home.workspaceId) return env;
 
+  const path = yield* Path.Path;
   const namespaceDir = key === null ? "" : yield* herdDir(env.stateDir, key);
   const workspaces = (yield* herdr
     .workspaceList()
@@ -278,42 +300,94 @@ const rootedWhere = Effect.fn("Flows.rootedWhere")(function* (
     (workspace) => workspace.workspaceId !== home.workspaceId,
   );
   const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
-  const candidates = yield* Effect.forEach(workspaces, (workspace) =>
+  const candidates: Rooting[] = yield* Effect.forEach(workspaces, (workspace) =>
     Effect.gen(function* () {
       const cwd =
         workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
-      return { workspace, cwd, why: yield* whyNotRootable(cwd, namespaceDir) };
+      return {
+        id: `ws:${workspace.workspaceId}`,
+        title: workspace.label,
+        subtitle: cwd,
+        cwd,
+        workspaceId: workspace.workspaceId,
+        why: yield* whyNotRootable(cwd, namespaceDir),
+      };
     }),
   );
-  if (candidates.length === 0) {
-    yield* bail(prompts, "No workspace to start a run in: open one on a checkout first.");
-    return null;
+  // Checkouts earlier Tasks were rooted in, for the repo nobody has a workspace open on
+  // — which is most of them once a Task's own workspace has been closed. The Task record
+  // already keeps the directory, so this needs no new state and no scan of the disk.
+  const seen = new Set(candidates.map((entry) => entry.cwd));
+  for (const task of yield* listTasks(env.stateDir)) {
+    if (task.cwd === "" || seen.has(task.cwd)) continue;
+    seen.add(task.cwd);
+    // Silently, unlike a workspace row: a workspace with a bad directory is something
+    // the human can see and close, and a checkout deleted last week is only a record.
+    if ((yield* whyNotRootable(task.cwd, namespaceDir)) !== null) continue;
+    candidates.push({
+      id: `dir:${task.cwd}`,
+      title: path.basename(task.cwd),
+      subtitle: task.cwd,
+      cwd: task.cwd,
+      workspaceId: null,
+      why: null,
+    });
   }
   const chosen = yield* prompts.menu(
-    candidates.map((entry) => ({
-      id: entry.workspace.workspaceId,
-      title: entry.workspace.label,
-      subtitle: entry.why ?? entry.cwd,
-    })),
+    [
+      // First, and there however little else is: the rest of the list is whatever is
+      // open or remembered, and this is the one row that reaches anything else. Without
+      // it a Home with no workspaces open could start nothing at all.
+      { id: NEW_CHECKOUT, title: "New checkout…", subtitle: "type the path to a project" },
+      ...candidates.map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        subtitle: entry.why ?? entry.subtitle,
+      })),
+    ],
     {
-      header: "Which workspace?",
+      header: "Which checkout?",
       footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
     },
   );
   if (!chosen) return null;
-  const picked = candidates.find((entry) => entry.workspace.workspaceId === chosen.id);
-  if (!picked) return null;
+  const picked =
+    chosen.id === NEW_CHECKOUT
+      ? yield* typedCheckout(env, prompts, namespaceDir)
+      : (candidates.find((entry) => entry.id === chosen.id) ?? null);
+  if (picked === null) return null;
   if (picked.why !== null) {
-    yield* bail(prompts, `${picked.workspace.label}: ${picked.why}`);
+    yield* bail(prompts, `${picked.title}: ${picked.why}`);
     return null;
   }
   // Confirmed on screen before a single Input is asked for: the directory a Run is
   // rooted in is the one thing nothing downstream can put right.
   yield* Console.log(`Starting in ${picked.cwd}`);
-  return { ...env, workspaceId: picked.workspace.workspaceId, cwd: picked.cwd };
+  return { ...env, workspaceId: picked.workspaceId, cwd: picked.cwd };
 });
 
-/** Why a workspace's directory will not root a Run, or null when it will. */
+/** A checkout nothing has open and no Task has used: the path, as the human types it. */
+const typedCheckout = Effect.fn("Flows.typedCheckout")(function* (
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  namespaceDir: string,
+) {
+  const answer = yield* prompts.ask("Which checkout? Type the path to the project.");
+  if (answer === null) return null;
+  const path = yield* Path.Path;
+  const typed = answer.trim();
+  if (typed === "") return null;
+  // `~` is what a human types and nothing expanded it on the way here. Anything else
+  // relative is refused rather than resolved: the process's directory is the Home's
+  // namespace, so resolving against it would silently root the Run in the one place
+  // that is never meant.
+  const cwd = typed === "~" || typed.startsWith("~/") ? path.join(env.home, typed.slice(1)) : typed;
+  const entry = { id: `dir:${cwd}`, title: cwd, subtitle: cwd, cwd, workspaceId: null };
+  if (!path.isAbsolute(cwd)) return { ...entry, why: "give the whole path, from / or ~" };
+  return { ...entry, why: yield* whyNotRootable(cwd, namespaceDir) };
+});
+
+/** Why a directory will not root a Run — open, remembered or typed — else null. */
 const whyNotRootable = Effect.fn("Flows.whyNotRootable")(function* (
   cwd: string,
   namespaceDir: string,

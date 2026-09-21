@@ -358,7 +358,10 @@ collie --json board
 
 Every Task on this Herd's board, in the order the Home draws them: **Needs you** first,
 then **Working**, then **Finished**, and inside each the state order `blocked`, `active`,
-`quiet`, `failed`, `stopped`, `done`. It is the same model the pane renders, so an agent
+`quiet`, `failed`, `stopped`, `done`. `state: blocked` is what puts a Task in Needs you,
+and it means one of two things: a `decision` to answer, or an agent waiting for you in its
+own pane — a harness dialog herdr will not answer, or one that went idle without producing
+its Output. The `sentence` says which, and for the second kind it says which pane. It is the same model the pane renders, so an agent
 reading this and a human reading the board cannot be told two different stories about one
 Task.
 
@@ -376,7 +379,7 @@ beside it.
 | `sentence`               | What is happening, in one plain sentence — no step names, counters or glyph codes.                                         |
 | `age`, `at`              | How long it has been going, and when it last changed.                                                                      |
 | `drift`, `held`          | The one line each carries, or `null`.                                                                                      |
-| `decision`               | The question, proposal or gate waiting on you, or `null`. This is what puts a Task in Needs you.                           |
+| `decision`               | The question, proposal or gate waiting on you, or `null`. One of the two ways into Needs you.                              |
 | `agents[]`, `children[]` | The live agents on it, and one entry per repository of a plan that spans several.                                          |
 | `mr`, `branch`           | What it is building, where it can be read.                                                                                 |
 | `disposition`            | What became of the work, where a person recorded it — never inferred from a merge request.                                 |

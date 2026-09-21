@@ -402,7 +402,12 @@ that answer four questions in order — what needs you, what is working, what is
 you, what finished. A decision beats liveness, liveness beats history, and history is split
 by whether the work **landed**.
 
-**Needs you** is one card per open decision. **Working** is one card per Task something is
+**Needs you** is one card per Task that has stopped for you: an open decision you answer
+on the card, or an agent waiting for you in its own pane — a harness dialog herdr will not
+answer, or one that went idle without producing its Output. The second kind has nothing to
+answer under the card and says where to go instead (`Waiting for you in build-r7's pane.`);
+Enter on the card gets you there. Either way the work has stopped, which is what the
+section is for. **Working** is one card per Task something is
 actually doing — a Run with a Driver that owns it, or an agent herdr still has: its name,
 its project, one plain sentence about what is happening, one amber line when it has
 drifted, the step glyphs, where it has got to, how many agents are on it and how long it

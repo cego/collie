@@ -938,3 +938,18 @@ export function runningAgents(record: RunRecord): ReadonlyArray<string> {
     ),
   ];
 }
+
+/**
+ * Whether this Run has stopped for a human. `awaiting` is set in the three places a
+ * Driver can go no further on its own — a Choice it is holding, an agent herdr refused
+ * to prompt because it is at its harness's own dialog, and an agent that went idle
+ * without writing its Output — and `hold` is the one value that is not a question but
+ * an instruction, which `held` already says properly.
+ *
+ * Here rather than in either board, because both of them answer "does this need you"
+ * and two spellings of it is how one of them came to say `working` at a Run whose agent
+ * was sitting at a prompt.
+ */
+export function needsHuman(record: RunRecord): boolean {
+  return record.awaiting !== null && record.awaiting !== "hold";
+}
