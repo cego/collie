@@ -84,6 +84,8 @@ const StepSchema = Schema.Struct({
   choices: opt(Schema.Array(ChoiceSchema)),
   standalone: opt(Schema.Boolean),
   requires: opt(Schema.Array(Schema.String)),
+  // Without this a frozen Run lost every `waits: helle` and merged unclaimed.
+  waits: opt(Schema.Array(Schema.String)),
   fanIn: opt(Schema.String),
   each: opt(Schema.String),
   repeat: opt(
@@ -98,6 +100,9 @@ const StepSchema = Schema.Struct({
 
 const WorkflowSchema = Schema.Struct({
   name: Schema.String,
+  // Optional only for snapshots written before they were kept; every new one has them.
+  base: opt(Schema.String),
+  checkout: opt(Schema.String),
   title: Schema.String,
   description: Schema.String,
   inputs: Schema.Record(Schema.String, Schema.String),

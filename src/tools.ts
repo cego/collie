@@ -20,7 +20,7 @@
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Crypto, Effect, Option, Schema } from "effect";
+import { Clock, Crypto, Effect, FileSystem, Option, Result, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
 import { mutation } from "./envelope";
@@ -65,6 +65,7 @@ import { RunStore, type Run } from "./run";
 import { nowIso, untilFrom } from "./time";
 import { attentionFor } from "./attention";
 import { deliveriesOf, herdOf } from "./steering";
+import { inboxFiles, InboxCommandJson } from "./driver";
 import {
   loadDefinitions,
   layers,
@@ -109,6 +110,17 @@ type ToolAnswer = Effect.Effect<
 
 const NO_INPUT = { type: "object", properties: {}, additionalProperties: false };
 
+/**
+ * A key a tool does not take is refused, never stripped. Effect strips by default, and
+ * a model that passed `goal` beside a start and was told "started" believes the goal is
+ * in force while the Run runs without it. The refusal names the key so it can be acted on.
+ */
+const decodeStrict = <S extends Schema.ConstraintDecoder<unknown, never>>(schema: S) => {
+  const decode = Schema.decodeUnknownResult(schema, { onExcessProperty: "error", errors: "all" });
+  return (input: JsonObject): Result.Result<S["Type"], string> =>
+    Result.mapError(decode(input), (error) => error.message);
+};
+
 const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
 const HoldInput = Schema.Struct({
   run: Schema.optionalKey(Schema.String),
@@ -116,12 +128,17 @@ const HoldInput = Schema.Struct({
   until: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
 });
-const decodeHold = Schema.decodeUnknownOption(HoldInput);
+const decodeHold = decodeStrict(HoldInput);
 const DefinitionInput = Schema.Struct({
   workflow: Schema.optionalKey(Schema.String),
   persona: Schema.optionalKey(Schema.String),
 });
-const decodeRun = Schema.decodeUnknownOption(RunInput);
+const decodeDefinition = decodeStrict(DefinitionInput);
+const decodeRun = decodeStrict(RunInput);
+
+/** What a tool says when it will not act: tagged, so a model can tell it from an answer. */
+const refused = (tool: string, why: string, takes: string) =>
+  `${tool} refused the request (InvalidInput): ${why}. Nothing was done. ${takes}`;
 
 const said = <E, R>(effect: Effect.Effect<string, E, R>) =>
   effect.pipe(
@@ -134,7 +151,7 @@ const ProposeInput = Schema.Struct({
   actions: Schema.Array(ActionSchema),
   request_id: Schema.optionalKey(Schema.String),
 });
-const decodePropose = Schema.decodeUnknownOption(ProposeInput);
+const decodePropose = decodeStrict(ProposeInput);
 
 /**
  * What the human can ask for and have done: the board's own actions on a named Run, plus
@@ -179,7 +196,57 @@ const SETTLE_KINDS = ["confirm", "decline", "disposition"] as const;
 const AskedInput = Schema.Struct({
   actions: Schema.Array(Schema.Union([ActionSchema, SettleSchema])),
 });
-const decodeAsked = Schema.decodeUnknownOption(AskedInput);
+const decodeAsked = decodeStrict(AskedInput);
+
+/** Each action kind's member of the closed unions, so a refusal can speak in its terms. */
+const MEMBERS = new Map<
+  string,
+  (typeof ActionSchema.members | typeof SettleSchema.members)[number]
+>(
+  [...ActionSchema.members, ...SettleSchema.members].map((member) => [
+    member.fields.kind.literal,
+    member,
+  ]),
+);
+
+/**
+ * Why a request's actions were refused, per action and in the model's own terms: a kind
+ * that does not exist, a key the kind does not take and what it does take, or the one
+ * member's own complaint — never the whole union spelled out. Empty where the trouble is
+ * elsewhere, and the schema's own message stands.
+ */
+function wrongActions(input: JsonObject): string[] {
+  const loose = decodeLoose(input);
+  if (loose._tag === "None") return [];
+  return loose.value.actions.flatMap((action, at) => {
+    const kind = isString(action["kind"]) ? action["kind"] : JSON.stringify(action["kind"] ?? null);
+    const member = MEMBERS.get(kind);
+    if (!member)
+      return [
+        `actions[${at}] has kind ${kind}, which is none of ${[...MEMBERS.keys()].join(", ")}`,
+      ];
+    const takes = Object.keys(member.fields);
+    const extra = Object.keys(action).filter((key) => !takes.includes(key));
+    if (extra.length === 0) {
+      const own = decodeStrict(member)(action);
+      return Result.isFailure(own) ? [`actions[${at}] (kind "${kind}"): ${own.failure}`] : [];
+    }
+    const hints = [
+      extra.includes("goal") ? 'a Run\'s goal is an Input: put it in "inputs"' : null,
+      extra.includes("constraints") || extra.includes("constraint")
+        ? "constraints are added with update_intent on the started Run, or update_defaults on the workspace before it starts"
+        : null,
+    ].filter((hint) => hint !== null);
+    return [
+      `actions[${at}] (kind "${kind}") does not take ${extra.join(", ")}; a ${kind} takes ${takes.join(", ")}${hints.length > 0 ? ` (${hints.join("; ")})` : ""}`,
+    ];
+  });
+}
+
+const refusedActions = (tool: string, input: JsonObject, why: string, takes: string) => {
+  const wrong = wrongActions(input);
+  return refused(tool, wrong.length > 0 ? wrong.join("; ") : why, takes);
+};
 
 function askedSchema(): JsonObject {
   const document = Schema.toJsonSchemaDocument(AskedInput);
@@ -383,17 +450,22 @@ export const TOOLS: ReadonlyArray<Tool> = [
       said(
         Effect.gen(function* () {
           const decoded = decodePropose(input);
-          if (decoded._tag === "None")
-            return 'collie_propose takes {"interpretation": "...", "actions": [...]}, and every action has to be one of the kinds in the schema.';
+          if (Result.isFailure(decoded))
+            return refusedActions(
+              "collie_propose",
+              input,
+              decoded.failure,
+              'It takes {"interpretation": "...", "actions": [...]}, and every action has to be one of the kinds in the schema.',
+            );
           const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
           if (key === null)
             return "Collie cannot reach herdr, so there is nothing to propose against.";
-          const requestId = decoded.value.request_id ?? (yield* newRequestId());
+          const requestId = decoded.success.request_id ?? (yield* newRequestId());
           const answer = yield* said(
             mutation(env, "chat-request", Option.some(requestId), (id) =>
               request(env, key, {
-                interpretation: decoded.value.interpretation,
-                actions: decoded.value.actions,
+                interpretation: decoded.success.interpretation,
+                actions: decoded.success.actions,
                 actor: { origin: "chat", requestId: id },
               }),
             ).pipe(Effect.map((result) => (result.ok ? result.human : result.error.message))),
@@ -423,9 +495,14 @@ const isSettle = (action: Action | Settle): action is Settle =>
 const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: JsonObject) {
   const selected = yield* onSelection(env, input);
   const decoded = decodeAsked(selected.input);
-  if (decoded._tag === "None")
-    return 'collie_do takes {"actions": [...]}, and every action has to be one of the kinds in the schema. An action with no "run" acts on the board\'s selection, and the board has nothing open.';
-  const actions = decoded.value.actions;
+  if (Result.isFailure(decoded))
+    return refusedActions(
+      "collie_do",
+      selected.input,
+      decoded.failure,
+      'It takes {"actions": [...]}, and every action has to be one of the kinds in the schema. An action with no "run" acts on the board\'s selection, and the board has nothing open.',
+    );
+  const actions = decoded.success.actions;
   if (actions.length === 0) return "collie_do needs an action. Ask which one they meant.";
   const asked: ReadonlyArray<string> = [...ASKED_KINDS, ...SETTLE_KINDS];
   const wrong = actions.filter((action) => !asked.includes(action.kind));
@@ -569,9 +646,13 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   answer: (run: Run) => ToolAnswer,
 ) {
   const decoded = decodeRun(input);
-  if (decoded._tag === "None")
-    return `${tool} takes {"run": "<run id>"}, or nothing at all for the board's selection.`;
-  const named = decoded.value.run ?? null;
+  if (Result.isFailure(decoded))
+    return refused(
+      tool,
+      decoded.failure,
+      `It takes {"run": "<run id>"}, or nothing at all for the board's selection.`,
+    );
+  const named = decoded.success.run ?? null;
   // Non-null exactly when the selection was what this answer is about, which is what the
   // sentences below turn on.
   const on = named === null ? yield* selectionOf(env) : null;
@@ -598,12 +679,16 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
  */
 const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObject) {
   const decoded = decodeHold(input);
-  if (decoded._tag === "None")
-    return 'collie_hold takes {"run": "..."} or {"workspace": "..."}, and optionally "until" and "reason".';
-  const { workspace, until, reason } = decoded.value;
+  if (Result.isFailure(decoded))
+    return refused(
+      "collie_hold",
+      decoded.failure,
+      'It takes {"run": "..."} or {"workspace": "..."}, and optionally "until" and "reason".',
+    );
+  const { workspace, until, reason } = decoded.success;
   const on =
-    decoded.value.run === undefined && workspace === undefined ? yield* selectionOf(env) : null;
-  const run = decoded.value.run ?? on?.run;
+    decoded.success.run === undefined && workspace === undefined ? yield* selectionOf(env) : null;
+  const run = decoded.success.run ?? on?.run;
   if (run === undefined && workspace === undefined)
     return "collie_hold needs a run or a workspace to hold, and the board has nothing open. Ask which one they meant.";
   const ends = until === undefined ? null : untilFrom(until, yield* Clock.currentTimeMillis);
@@ -683,6 +768,20 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
       ? []
       : pendingFor(yield* readProposals(yield* proposalsPath(env.stateDir, key)), run, now);
   const deliveries = yield* deliveriesOf(env.stateDir, run);
+  // A boundary delivery the Driver has not read yet is in the Run's inbox and on no
+  // ledger. It is the one place a steer can sit without a line, so it is listed too.
+  const fs = yield* FileSystem.FileSystem;
+  const unread: string[] = [];
+  for (const file of yield* inboxFiles(found.dir).pipe(Effect.catch(() => Effect.succeed([])))) {
+    const command = yield* fs.readFileString(file).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(InboxCommandJson)),
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    if (command?.type === "deliver" && command.deliver)
+      unread.push(
+        `- ${command.deliver.deliveryId}: in the inbox, not yet read by the Driver, for ${command.deliver.cause.kind}`,
+      );
+  }
   const attention = yield* attentionFor(found, new Herdr(env));
   const question = attention.choice;
   return [
@@ -702,12 +801,13 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
     "",
     "### Sent to this Run's agents",
     "",
-    ...(deliveries.length === 0
+    ...(deliveries.length === 0 && unread.length === 0
       ? ["- nothing"]
       : deliveries.map(
           ({ delivery }) =>
             `- ${delivery.id}: ${delivery.state}${delivery.note ? ` (${delivery.note})` : ""}, for ${delivery.cause.kind}`,
         )),
+    ...unread,
   ].join("\n");
 });
 
@@ -717,8 +817,14 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
   input: JsonObject,
 ) {
   const defs = yield* loadDefinitions(yield* layers(env));
-  const wanted = Schema.decodeUnknownOption(DefinitionInput)(input);
-  const asked = wanted._tag === "Some" ? wanted.value : {};
+  const wanted = decodeDefinition(input);
+  if (Result.isFailure(wanted))
+    return refused(
+      "collie_definitions",
+      wanted.failure,
+      'It takes {"workflow": "<name>"} or {"persona": "<name>"}.',
+    );
+  const asked = wanted.success;
   if (asked.persona !== undefined) {
     const found = defs.personas.get(asked.persona);
     return found === undefined

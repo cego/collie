@@ -84,7 +84,12 @@ const WorkspaceReply = Schema.Struct({
   tokens: Schema.optionalKey(Schema.NullOr(Schema.Record(Schema.String, Schema.String))),
 });
 const WorkspaceCreateReply = Schema.Struct({
-  result: Schema.Struct({ workspace: Schema.Struct({ workspace_id: Schema.String }) }),
+  result: Schema.Struct({
+    workspace: Schema.Struct({ workspace_id: Schema.String }),
+    // The shell tab a new workspace comes with; its first agent takes it over.
+    tab: Schema.optionalKey(Schema.Struct({ tab_id: Schema.String })),
+    root_pane: Schema.optionalKey(Schema.Struct({ pane_id: Schema.String })),
+  }),
 });
 const WorkspaceListReply = Schema.Struct({
   result: Schema.Struct({ workspaces: Schema.Array(WorkspaceReply) }),
@@ -526,7 +531,13 @@ export const decodeAgentList = (res: BoundaryValue) =>
 /** `herdr workspace list` as this plugin reads it; a worktree-backed workspace's checkout is its directory. */
 const decodeWorkspaceCreate = (res: BoundaryValue) =>
   decodeBoundary("herdr workspace create", WorkspaceCreateReply, res).pipe(
-    Effect.map(({ result }) => result.workspace.workspace_id),
+    Effect.map(({ result }) => ({
+      workspaceId: result.workspace.workspace_id,
+      rootTab:
+        result.tab && result.root_pane
+          ? { tabId: result.tab.tab_id, paneId: result.root_pane.pane_id }
+          : null,
+    })),
   );
 
 export const decodeWorkspaceList = (res: BoundaryValue) =>
@@ -1220,7 +1231,10 @@ export class Herdr {
    * A workspace of Collie's own, for the Herd's Home. `focus: false`: creating it is not
    * the same as going to it, and the shortcut is what does the going.
    */
-  workspaceCreate(opts: { cwd: string; label: string }): HerdrEffect<string> {
+  workspaceCreate(opts: {
+    cwd: string;
+    label: string;
+  }): HerdrEffect<{ workspaceId: string; rootTab: StartedTab | null }> {
     return this.cli(["workspace", "create", "--cwd", opts.cwd, "--label", opts.label]).pipe(
       Effect.flatMap((value) => decodeWorkspaceCreate(value)),
     );

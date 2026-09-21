@@ -67,7 +67,10 @@ export const ActionSchema = Schema.Union([
     run: Schema.String,
     agent: Schema.String,
     text: Schema.String,
-    mode: Schema.Literals(["boundary", "now", "interrupt"]),
+    /** Absent is `now`: a human's message is about the work under way, not the next step. */
+    mode: Schema.Literals(["boundary", "now", "interrupt"]).pipe(
+      Schema.withDecodingDefaultKey(Effect.succeed("now" as const)),
+    ),
   }),
   Schema.Struct({
     kind: Schema.Literal("hold"),

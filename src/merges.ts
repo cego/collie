@@ -5,7 +5,7 @@
 import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { mrLabel, sectionOf, type MrState, type TaskView } from "./board";
 import { latest, readDispositions, recordDisposition } from "./disposition";
-import { mrDetails, parseMrTarget, type MrRef, type Runner } from "./mr";
+import { liveTier, mrDetails, parseMrTarget, type MrRef, type Runner } from "./mr";
 import { RunStore } from "./run";
 import { nowIso } from "./time";
 
@@ -16,7 +16,10 @@ export const MERGE_POLL_MS = 5 * 60_000;
 export const MR_STATES_FILE = "board/mr-states.json";
 
 const StatesJson = Schema.fromJsonString(
-  Schema.Record(Schema.String, Schema.Literals(["open", "merged", "closed"])),
+  Schema.Record(
+    Schema.String,
+    Schema.Literals(["open", "merged", "closed", "on-stage", "in-prod"]),
+  ),
 );
 
 /** `https://host/group/project/-/merge_requests/42` or `mr:host/group/project!42` as one ref. */
@@ -48,24 +51,34 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   states: Map<string, MrState>;
 }) {
   const store = new RunStore(opts.stateDir);
+  // What earlier panes learned, under this pane's own answers: a new pane's empty memory
+  // must not ask production again about what an earlier one already saw land there.
+  for (const [label, state] of yield* readMrStates(opts.stateDir))
+    if (!opts.states.has(label)) opts.states.set(label, state);
   let learned = false;
   for (const view of opts.views) {
     // Anything that ended and nobody disposed of: the waiting cards, and a card that
     // already reads as landed from an earlier answer but has no disposition saying so.
     const section = sectionOf(view);
     if (view.mr === null || section === "working" || section === "needs-you") continue;
-    if (view.disposition !== null) continue;
+    // A merged one is still followed to its deploy jobs, until production has it.
+    if (view.disposition !== null && !view.disposition.startsWith("merged")) continue;
     const label = mrLabel(view.mr);
+    if (opts.states.get(label) === "in-prod") continue;
     if ((opts.checked.get(label) ?? 0) + MERGE_POLL_MS > opts.now) continue;
     const ref = mrRefOf(view.mr);
     if (ref === null) continue;
     opts.checked.set(label, opts.now);
     const panel = yield* mrDetails(ref, opts.cwd, opts.run);
     if (panel._tag !== "Details") continue;
-    const state = stateOf(panel.state);
+    let state = stateOf(panel.state);
+    if (state === "merged") {
+      const tier = yield* liveTier(ref, panel.mergedSha, opts.cwd, opts.run);
+      state = tier === "production" ? "in-prod" : tier === "staging" ? "on-stage" : "merged";
+    }
     if (opts.states.get(label) !== state) learned = true;
     opts.states.set(label, state);
-    if (state !== "merged") continue;
+    if (state === "open" || state === "closed") continue;
     const run = yield* store.load(view.run).pipe(Effect.catch(() => Effect.succeed(null)));
     if (run === null) continue;
     const already = latest(

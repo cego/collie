@@ -1,7 +1,7 @@
 ---
 name: renovate
 title: renovate — merge the month's dependency updates, tag, release and record it
-description: Claims the repository in Helle and waits its turn, merges or accounts for every Renovate Bot merge request, tags and watches the release, then checks the repository off the team's shared Renovate issue in Linear.
+description: Assesses every Renovate Bot merge request, gathers an application's into one batch branch proven on stage under the Helle claim and approved by a teammate, merges, tags and watches the release, then checks the repository off the team's shared Renovate issue in Linear.
 # Detached at the default branch and roaming across the Renovate branches it merges,
 # so no branch of the repository is bound to this Run's worktree.
 checkout: roaming
@@ -27,9 +27,23 @@ steps:
   - id: assess
     persona: renovate
     agent: track
-    # The claim is waited for in the runner, so a queue of hours costs no tokens.
-    waits: helle
     output: assess.json
+  # An application's updates land together: one batch branch, one merge request.
+  - id: batch
+    persona: renovate
+    agent: track
+    output: batch.json
+  # The first step that touches anything shared, so the claim is taken here. Waited for
+  # in the runner, so a queue of hours costs no tokens.
+  - id: stage
+    persona: renovate
+    agent: track
+    waits: helle
+    output: stage.json
+  - id: approval
+    persona: renovate
+    agent: track
+    output: approval.json
   - id: merge
     persona: renovate
     agent: track
@@ -52,7 +66,14 @@ This run's directory: {{run.dir}}
 
 This checkout is the Run's own, detached at the repository's default branch. Collie made
 it before you started and removes it when it is settled: never create one, never switch
-the operator's, and never bind a branch to this one.
+the operator's, and never bind a branch to this one — except the batch branch the `batch`
+step makes for an application, which is the one branch this checkout may hold.
+
+A **package** publishes from its tag pipeline and is deployed by nobody; an
+**application** has deploy jobs or GitLab environments (stage, prod) of its own. `assess`
+decides which this repository is, and the `batch`, `stage` and `approval` steps are for
+applications only: for a package each of them writes its Output with `"skipped":
+"package"` and does nothing else.
 
 ## track
 
@@ -80,9 +101,13 @@ false}`.
 
 ## assess
 
-This Run now holds the repository in Helle — Collie claimed it and waited for the turn
-before this step started — or the repository has no Helle project. Either way the
-repository is yours to work in until the Run ends.
+Nothing shared is touched yet: no Helle claim is held, so read only. Merging, deploying
+and tagging wait for the claim that `stage` takes.
+
+Decide first whether this repository is a package or an application: read its
+`.gitlab-ci.yml` and `glab api projects/<id>/environments`. Deploy jobs or a `staging` or
+`production` environment make it an application; a publish job on tags and no deploy makes
+it a package. Say which in your Output, with the evidence.
 
 List every open merge request authored by Renovate Bot on this project with `glab`, and
 assess the whole batch **before merging any of them**. For each one: what it bumps, from
@@ -101,9 +126,104 @@ expect `release` to create no tag at all.
 Then write the Output JSON: `{"verdict": "clean", "findings": [], "issue":
 "{{outputs.track}}'s issue", "merge_requests": [{"iid": 1, "title": "...", "bumps":
 "pkg 1 -> 2", "needs": "nothing | what it needs", "risk": "routine | migration"}],
-"consulted": ["what I decided", ...], "up_to_date": true or false}`.
+"consulted": ["what I decided", ...], "up_to_date": true or false, "is_package": true or
+false, "kind_evidence": "what said so"}`.
+
+## batch
+
+For a package, or an empty batch, write `{"verdict": "clean", "findings": [], "skipped":
+"package" or "up to date"}` and stop.
+
+For an application, gather every relevant merge request into **one batch branch**, so the
+whole month's change is proven on stage once and reviewed once, instead of landing on the
+default branch one bump at a time.
+
+- Branch `renovate/batch-<YYYY-MM-DD>` from the default branch's current head, in this
+  checkout, and bind it here — this is the one branch this checkout may hold.
+- Before you take a Renovate branch in, ask git who holds it: `git worktree list` names
+  every registered worktree and the branch each has checked out. A branch another worktree
+  holds is **left out and reported**, not merged from its remote-tracking ref either.
+- Merge each remaining Renovate branch into the batch branch, in the order that makes the
+  fewest conflicts, with `git merge --no-ff origin/<branch>`. Fix what the bump broke on
+  the batch branch: a conflict, a call site, a failing test. Anything larger is a
+  consultation.
+- Run the repository's own install, lint, typecheck and tests on the batch branch before
+  you push it. Push with `git push -u origin renovate/batch-<date>`.
+- Open one merge request from the batch branch to the default branch with `glab mr create --assignee mk`,
+  assigned to yourself, titled `Renovate batch <YYYY-MM-DD>`, whose description lists every
+  Renovate merge request it carries as `- <what it bumps> (!<iid>)` and every one it left
+  out with why. Wait for its pipeline's required checks and fix failures on the batch
+  branch. Never force-push it.
+- Leave the individual Renovate merge requests open: Renovate closes them itself once the
+  batch is on the default branch, and `merge` accounts for any that stay open.
+
+Then write the Output JSON: `{"verdict": "clean", "findings": [], "mr_url": "<batch merge
+request url>", "branch": "renovate/batch-<date>", "included": [1, 2], "left_out": [{"iid":
+3, "why": "held by <checkout>"}], "consulted": ["what I decided", ...]}`.
+
+## stage
+
+This Run now holds the repository in Helle — Collie claimed it and waited for the turn
+before this step started — or the repository has no Helle project. Either way the shared
+things are yours until the Run ends: stage, the default branch, the tag.
+
+For a package, write `{"verdict": "clean", "findings": [], "skipped": "package"}` and stop.
+
+For an application, prove the batch branch deploys to stage without issue:
+
+- Run the stage deploy of the batch merge request's pipeline — the manual `stage` deploy
+  job, played with `glab api -X POST projects/<id>/jobs/<job id>/play` — and watch it to
+  success.
+- Then run what the repository itself uses to check stage: an `e2e-stage` or smoke job where
+  the pipeline has one, otherwise open the stage URL the deploy job's environment names and
+  confirm it answers.
+- A failed deploy or a stage that misbehaves is handled **autonomously, in this order**:
+  1. **Roll stage back** to the latest stable release first, so stage is never left broken
+     while you debug: the newest tag whose `prod` deploy succeeded — `glab api
+projects/<id>/deployments?environment=<prod>&status=success&order_by=created_at&sort=desc&per_page=1`
+     names its ref — and its pipeline's `stage` job, played or retried. Watch the rollback
+     to success and say in your log what stage is running now.
+  2. **Debug from the logs**: read stage's application and pipeline logs in Kibana with the
+     `cego:searching-production-logs` skill, or `kibana.cego.dk` directly, for the window of
+     the failed deploy — the error, the dependency it names, the request that failed.
+  3. **Fix on the batch branch**, push, wait for the merge request's checks, and deploy to
+     stage again, from step one of this list.
+     Loop until stage runs the batch branch and its checks pass. The loop is bounded by
+     progress, not by a count: a round that changed nothing — the same failure, no new fix,
+     or logs that name nothing — is a report of no progress and a consultation with the
+     claim held and stage on its stable release. Never leave stage on a broken batch while
+     you wait for me.
+- Never deploy the batch branch to production, and never merge here.
+
+Then write the Output JSON: `{"verdict": "clean", "findings": [], "deploy_job": "<url>",
+"verified_by": "e2e-stage | smoke | manual check", "verified": true or false, "attempts": 1,
+"rollbacks": [{"to": "<tag>", "why": "<what failed>", "fixed_by": "<commit>"}]}`.
+
+## approval
+
+For a package, write `{"verdict": "clean", "findings": [], "skipped": "package"}` and stop.
+
+For an application, the batch merge request must be approved by **another team member**;
+you never approve it yourself, and its author cannot. Ask me, once, in this pane: name the
+batch merge request, say it is on stage and how it was verified, and that it needs an
+approval from someone else on the team — then wait for my answer. On the answer, read
+`glab api projects/<id>/merge_requests/<iid>/approvals`: the batch is approved when
+`approvals_left` is 0 and an approver is not this Run's own GitLab user. Not approved yet
+is asked about again, three times at most; then it is a report of no progress. A push to
+the batch branch after approval resets it — say so and start this step's check over.
+
+Then write the Output JSON: `{"verdict": "clean", "findings": [], "approved_by":
+["<username>"], "head_sha": "<sha approved>"}`.
 
 ## merge
+
+For an application, the merge is the **batch merge request** alone: verify its approvals
+are still on its current head, then merge it with the harness authorising the exact
+operation, and then re-read the Renovate merge request list — each one the batch carried
+is `closed` by Renovate itself or by you, with the batch as its replacement, and each one
+left out ends as `deferred` with my approval or as a finding. The rules below are the
+package's, one merge request at a time; the approval, held-branch and outcome rules hold
+for both.
 
 Merge the batch one merge request at a time, in the order that makes the fewest
 conflicts.
@@ -164,9 +284,20 @@ Otherwise:
 - Diff the default branch against the previous version tag — **the whole diff**, not only
   the Renovate merge requests — and choose the next version from that and from the
   repository's own versioning conventions.
-- Tag annotated, with tag notes saying what shipped.
-- Create a GitLab release with release notes **only where the repository is a package**
-  that publishes from its tag pipeline. An application or a frontend gets the tag alone.
+- Tag annotated. The tag notes are a changelog entry in the shape of changelog-gen: a
+  heading `## <version> - <YYYY-MM-DD>`, then only the sections that have entries, in
+  this order and under these names — `### Features and Improvements`, `### Bug fixes`,
+  `### Miscellaneous` — with one line per change, `- <what changed> [!<iid>]`, where the
+  merge request reference is the only link. Dependency bumps go under Miscellaneous as
+  `- Bump <package> <from> -> <to> [!<iid>]`; several bumps of one package fold into one
+  line. Write every line from the commit or merge request title, not from the diff, in
+  under 100 characters and with no prose around it. Nothing else goes in the notes: no
+  summary paragraph, no pipeline or approval detail, no list of what was checked. Write
+  the notes to a file and tag from it with `--cleanup=verbatim`, or git strips the `#`
+  headers as comments.
+- Create a GitLab release with the same notes, verbatim, **only where the repository is a
+  package** that publishes from its tag pipeline. An application or a frontend gets the
+  tag alone.
 - Watch the tag's pipeline, including its publish or deploy jobs, until it succeeds. It
   succeeding is what makes this a finished renovation. A failing or blocked job is a
   consultation with the Helle claim still held — never a Run that calls itself done.

@@ -18,20 +18,27 @@ Three modes:
 | `now`       | Sent to an agent that is already working.           | A proven `now` for that harness.       |
 | `interrupt` | An interrupt key, then the message.                 | A proven `interrupt` for that harness. |
 
-`boundary` is the default and the only one that works everywhere: it is the next prompt
-file, which every harness already takes. The other two are gated on a **recorded live
-result** per harness, and fail closed with `capability_unproven:<harness>:<mode>` where
-there is none. That refusal is written to the ledger, so a steer that did not go out has
-an answer rather than a silence.
+`boundary` is the only one that works everywhere: it is the next prompt file, which every
+harness already takes. But a human's message is about the work under way, and the next
+prompt can be forty minutes off and about something else — so a `deliver` with no mode
+is `now`. A `now` or `interrupt` goes into the pane from the process that asked for it:
+herdr types it, under the agent's ledger lock so the Driver's own sends stay out of the
+way, and only the Driver is waited for when something has to be _composed into a prompt_,
+which is a boundary delivery. Both are gated on a **recorded live result** per harness,
+and where that harness has none the executor writes a boundary delivery to the inbox
+instead and says so in the Run's log; a `capability_unproven:<harness>:<mode>` refusal is
+on the ledger either way, so a steer that did not go out as asked has an answer rather
+than a silence.
 
-## The four states, and why they are four
+## The states, and why they are kept apart
 
-| State          | What it means                                                           |
-| -------------- | ----------------------------------------------------------------------- |
-| `reserved`     | Written **before** herdr was called. A crash here leaves this.          |
-| `submitted`    | herdr took it. Not: the agent read it.                                  |
-| `acknowledged` | The agent wrote the ack file naming this delivery, version and attempt. |
-| `verified`     | An independent check says the thing asked for actually happened.        |
+| State          | What it means                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `queued`       | A boundary delivery the Driver holds for the agent's next prompt. Before the Driver has read it, it is a file in the Run's inbox and `collie_receipts` lists it as such. |
+| `reserved`     | Written **before** herdr was called. A crash here leaves this.                                                                                                           |
+| `submitted`    | herdr took it. Not: the agent read it.                                                                                                                                   |
+| `acknowledged` | The agent wrote the ack file naming this delivery, version and attempt.                                                                                                  |
+| `verified`     | An independent check says the thing asked for actually happened.                                                                                                         |
 
 They are separate because they are separate facts. herdr types text into a pane and
 returns; that says the keystrokes went somewhere. Collapsing them would let Collie report

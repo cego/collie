@@ -231,6 +231,8 @@ const MrDetailsJson = Schema.fromJsonString(
     source_branch: optionalText,
     target_branch: optionalText,
     sha: optionalText,
+    merge_commit_sha: optionalText,
+    squash_commit_sha: optionalText,
     updated_at: optionalText,
     web_url: optionalText,
     head_pipeline: optionalStatus,
@@ -272,6 +274,8 @@ export interface MrDetails {
   notes: number;
   /** Seven characters: enough to tell two heads apart, short enough to read. */
   headSha: string;
+  /** The commit the merge put on the target branch, in full, or "" while it is not merged. */
+  mergedSha: string;
   /** When GitLab last saw it change, in epoch milliseconds, or 0 when it did not say. */
   updatedAt: number;
   url: string;
@@ -341,6 +345,8 @@ export function mrDetails<R>(
       unresolved: mr.blocking_discussions_resolved === false,
       notes: mr.user_notes_count ?? 0,
       headSha: (mr.sha ?? "").slice(0, 7),
+      mergedSha:
+        mr.state === "merged" ? (mr.merge_commit_sha ?? mr.squash_commit_sha ?? mr.sha ?? "") : "",
       updatedAt: Number.isFinite(updated) ? updated : 0,
       url: mr.web_url ?? "",
     } satisfies MrDetails;
@@ -576,5 +582,73 @@ export function mrFacts<R>(
       template: yield* templateFile(opts.cwd),
       issues: yield* linearIssues(opts, run),
     };
+  });
+}
+
+const EnvironmentsJson = Schema.fromJsonString(
+  Schema.Array(Schema.Struct({ name: Schema.String, tier: optionalText })),
+);
+const DeploymentsJson = Schema.fromJsonString(
+  Schema.Array(
+    Schema.Struct({ sha: Schema.String, environment: Schema.Struct({ name: Schema.String }) }),
+  ),
+);
+const MergeBaseJson = Schema.fromJsonString(Schema.Struct({ id: optionalText }));
+
+export type DeployTier = "production" | "staging";
+
+/**
+ * The furthest a merged commit has got: live in production, live on staging, or neither.
+ * "Live" is what the newest successful deployment of each environment has on it, which is
+ * the commit itself or one descending from it — GitLab's merge-base says which. A project
+ * with no staging or production environment answers null, and so does GitLab not
+ * answering: the board then says "merged", which is true, rather than guessing further.
+ */
+export function liveTier<R>(
+  ref: MrRef,
+  mergedSha: string,
+  cwd: string,
+  run: Runner<R>,
+): Effect.Effect<DeployTier | null, never, R> {
+  return Effect.gen(function* () {
+    const host = hostOf(ref.project);
+    if (!host || !ref.project || mergedSha === "") return null;
+    const path = encodeURIComponent(ref.project.slice(host.length + 1));
+    const api = (route: string) =>
+      run("glab", ["api", "--hostname", host, `projects/${path}/${route}`], cwd);
+    const environments = yield* api("environments");
+    const tiers = new Map<string, DeployTier>();
+    for (const env of Option.getOrElse(
+      Schema.decodeUnknownOption(EnvironmentsJson)(environments.stdout),
+      () => [],
+    )) {
+      if (env.tier === "production" || env.tier === "staging") tiers.set(env.name, env.tier);
+    }
+    if (tiers.size === 0) return null;
+    const deployments = yield* api(
+      "deployments?status=success&order_by=created_at&sort=desc&per_page=50",
+    );
+    // Newest first, so the first deployment seen per environment is what is live there.
+    const live = new Map<string, string>();
+    for (const deployment of Option.getOrElse(
+      Schema.decodeUnknownOption(DeploymentsJson)(deployments.stdout),
+      () => [],
+    )) {
+      if (tiers.has(deployment.environment.name) && !live.has(deployment.environment.name))
+        live.set(deployment.environment.name, deployment.sha);
+    }
+    const carries = (sha: string) =>
+      Effect.gen(function* () {
+        if (sha === mergedSha) return true;
+        const base = yield* api(`repository/merge_base?refs[]=${mergedSha}&refs[]=${sha}`);
+        const decoded = Schema.decodeUnknownOption(MergeBaseJson)(base.stdout);
+        return Option.isSome(decoded) && decoded.value.id === mergedSha;
+      });
+    for (const tier of ["production", "staging"] as const) {
+      for (const [name, sha] of live) {
+        if (tiers.get(name) === tier && (yield* carries(sha))) return tier;
+      }
+    }
+    return null;
   });
 }

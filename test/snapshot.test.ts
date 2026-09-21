@@ -74,6 +74,24 @@ test("a snapshot round-trips the resolved workflow, prompts and all", () =>
       // and a snapshot that lost it would send a resumed Run somewhere else.
       expect(back!.steps.map((s) => s.prompt)).toEqual(wf.steps.map((s) => s.prompt));
       expect(back!.maxIterations).toBe(wf.maxIterations);
+      // Field for field, the whole thing: a field the schema does not name is a field the
+      // Driver silently runs without, which is how `waits: helle` was lost once.
+      expect(back).toEqual(wf);
+    }),
+  ));
+
+test("a snapshot keeps what a step waits for, or a frozen Run would skip its Helle gate", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const wf = yield* resolved("renovate");
+      const dir = path.join(rig.root, "run-waits");
+      yield* fs.makeDirectory(dir, { recursive: true });
+      const back = yield* readSnapshot(dir, yield* writeSnapshot(dir, wf));
+      const gated = wf.steps.filter((s) => s.waits?.includes("helle")).map((s) => s.id);
+      expect(gated.length).toBeGreaterThan(0);
+      expect(back!.steps.filter((s) => s.waits?.includes("helle")).map((s) => s.id)).toEqual(gated);
     }),
   ));
 

@@ -26,6 +26,7 @@ const CauseSchema = Schema.Struct({
   ref: Schema.String,
 });
 export type Cause = Schema.Schema.Type<typeof CauseSchema>;
+export const isCauseKind = Schema.is(CauseSchema.fields.kind);
 
 /**
  * Where a delivery has got to. `submitted` says herdr took it, which is not the same as
@@ -33,11 +34,15 @@ export type Cause = Schema.Schema.Type<typeof CauseSchema>;
  * needs an independent check. They are separate states because they are separate facts,
  * and a system that collapsed them would report work as done on the strength of a send.
  *
+ * `queued` is a boundary delivery the Driver holds for the next prompt, so a steer that
+ * is waiting has a line a human can find rather than a silence until the step ends.
+ *
  * `unknown` is the honest state for a crash between reserving and submitting: nobody can
  * say whether herdr got it. It blocks the same work from being sent again until a human
  * reconciles it, and Collie never retries out of it on its own.
  */
 const DELIVERY_STATES = [
+  "queued",
   "reserved",
   "submitted",
   "acknowledged",

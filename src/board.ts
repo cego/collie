@@ -164,7 +164,10 @@ export interface TaskView {
   at: number;
 }
 
-export type MrState = "open" | "merged" | "closed";
+/** `on-stage` and `in-prod` are merged too: the furthest its deploy jobs have taken it. */
+export type MrState = "open" | "merged" | "closed" | "on-stage" | "in-prod";
+const LANDED_STATES: ReadonlySet<MrState> = new Set(["merged", "on-stage", "in-prod"]);
+const DEPLOYED = { "on-stage": " On stage.", "in-prod": " In production." } as const;
 
 /** Everything the sentence is made of, apart from the TaskView so the formatter is pure. */
 export interface Sentence {
@@ -282,13 +285,17 @@ function doneSentence(
     return `Finished; ${mrLabel(mr)} is open.`;
   }
   switch (disposition.kind) {
-    case "merged":
+    case "merged": {
+      const deployed = mrState === "on-stage" || mrState === "in-prod" ? DEPLOYED[mrState] : "";
       // GitLab's word carries no time of its own: the stamp is when Collie asked.
       if (disposition.by === "gitlab")
-        return disposition.ref === "" ? "Merged." : `Merged as ${disposition.ref}.`;
-      return disposition.ref === ""
-        ? `Merged ${disposition.ago}.`
-        : `Merged as ${disposition.ref} ${disposition.ago}.`;
+        return (disposition.ref === "" ? "Merged." : `Merged as ${disposition.ref}.`) + deployed;
+      return (
+        (disposition.ref === ""
+          ? `Merged ${disposition.ago}.`
+          : `Merged as ${disposition.ref} ${disposition.ago}.`) + deployed
+      );
+    }
     case "abandoned":
       return "Abandoned.";
     default:
@@ -946,7 +953,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     // request has not.
     const landed =
       disposition !== null ||
-      mrState === "merged" ||
+      (mrState !== null && LANDED_STATES.has(mrState)) ||
       (status === "succeeded" && !PRODUCES_WORK.has(record.workflow)) ||
       unfiled;
     const ended =

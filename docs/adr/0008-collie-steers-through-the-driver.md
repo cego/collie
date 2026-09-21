@@ -106,3 +106,24 @@ evaluator's live probe has not been run: both need paid calls or live agents and
 operator present. Until they are, `now` and `interrupt` fail closed and `boundary` is what
 works — which is the honest state, not a gap being papered over. The Run's `CAPABILITIES.md`
 records exactly which rows are `not-run`, and the acceptance gate refuses while they are.
+
+## Amended 2026-09-18: a human's message goes in now
+
+The 09-18 renovate batch showed the cost of `boundary` as the default for a `deliver`:
+every steer waited for the next step's prompt, forty minutes later and after the work it
+was about, and a Driver waiting on an Output read nothing from its inbox at all. So:
+
+- A `deliver` with no mode is `now`. `granted()` therefore asks `now_allowed` of a
+  Driver-origin proposal that names no mode, which is the stricter reading and the right
+  one: a message into a working agent's turn is what `now_allowed` is about.
+- `now` and `interrupt` are sent by the process that asked for them, through the same
+  Dispatcher transaction and ledger the Driver uses — the lock is per incarnation and
+  works across processes — so nothing waits for a Driver poll. The Driver remains the only
+  thing that composes a boundary delivery, because only it builds the prompt.
+- Where the harness has no proven `now`, the executor falls back to a boundary delivery
+  and says so in the Run's log, rather than refusing.
+- The Driver reads its inbox while waiting on an Output, not only while an agent works.
+- A held boundary delivery is `queued` on the ledger from the moment the Driver takes it,
+  and `collie_receipts` lists one still unread in the inbox.
+
+"`boundary` is what works" above stays true of the harnesses with no proven `now`.

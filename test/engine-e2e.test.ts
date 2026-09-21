@@ -1492,7 +1492,61 @@ test("a boundary steer is composed in front of the next work, and recorded as it
         yield* ledgerPath(rig.stateDir, "term-solo-add-a-picker-solo-r1"),
       );
       const composed = ledger.filter((line) => "state" in line && line.id === "steer-1");
-      expect(composed.map((line) => ("state" in line ? line.state : ""))).toEqual(["submitted"]);
+      // `queued` the moment the Driver took it, so `collie_receipts` has a line while it
+      // waits; `submitted` once the prompt carried it.
+      expect(composed.map((line) => ("state" in line ? line.state : ""))).toEqual([
+        "queued",
+        "submitted",
+      ]);
+    }),
+  ));
+
+test("a steer written while an agent waits on a human is read, not left in the inbox", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      // The agent goes idle at once without its Output — asking the human something in
+      // its pane — and the Output only turns up 1200ms later. That wait is where the
+      // 09-18 renovate Drivers sat for an hour with three steers unread in their inboxes.
+      yield* rig.queueOutputs([
+        { __delay_ms: 1200, output: { verdict: "clean", findings: [], slug: "s" } },
+      ]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "solo",
+        { goal: "Add a picker" },
+        {
+          handoffTimeoutMs: 10_000,
+          outputPollMs: 50,
+          env: { FAKE_HERDR_AGENT_STATUS: "idle" },
+          before: (started) =>
+            Effect.forkDetach(
+              Effect.gen(function* () {
+                yield* Effect.sleep("600 millis");
+                yield* writeInbox(started.dir, {
+                  type: "hold",
+                  requestId: "hold-1",
+                  reason: "lunch",
+                  until: "2036-09-16T14:00:00.000Z",
+                });
+                yield* Effect.sleep("200 millis");
+                yield* writeInbox(started.dir, {
+                  type: "release",
+                  requestId: "rel-1",
+                  reason: "back",
+                });
+              }),
+            ),
+        },
+      );
+
+      expect(status).toBe("done");
+      const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
+      expect(log).toContain("held until 2036-09-16T14:00:00.000Z: lunch");
+      expect(log).toContain("released: back");
+      expect(yield* fs.readDirectory(path.join(run.dir, "inbox"))).toEqual([]);
     }),
   ));
 
@@ -1549,8 +1603,8 @@ test("a hand-off herdr saw no turn come of says so, in the record and to the hum
         ["submitted", "unobserved"],
       ]);
       const handoff = ledger.filter((line) => line.id === "handoff-1");
-      expect(handoff.map((line) => line.state)).toEqual(["submitted"]);
-      expect(handoff[0]?.note).toMatch(/^composed into .*; unobserved$/);
+      expect(handoff.map((line) => line.state)).toEqual(["queued", "submitted"]);
+      expect(handoff.at(-1)?.note).toMatch(/^composed into .*; unobserved$/);
 
       // What the human is shown: `run deliveries` says it beside the state.
       const shown = (yield* deliveriesOf(rig.stateDir, run.id)).map((entry) => entry.delivery);
