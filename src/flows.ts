@@ -57,6 +57,8 @@ import {
   type WorkspaceInfo,
 } from "./herdr";
 import { confirmLine, resolveCandidates, settle, type InputPrompts, type PickItem } from "./inputs";
+import type { Found } from "./discovery";
+import { savedModules, startNativeRun } from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { notify } from "./notify";
@@ -454,9 +456,20 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
   const layerList = yield* layers(env);
   const defs = yield* loadDefinitions(layerList);
 
-  const items: PickItem[] = [...defs.workflows.values()]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((wf) => ({ id: wf.name, title: wf.title, subtitle: layerOf(wf) }));
+  // Definitions and saved modules in one list, by id: what an id runs is what is saved
+  // for this project, so a module is the row for its id rather than a second one.
+  const offered = new Map<string, PickItem>();
+  for (const wf of defs.workflows.values()) {
+    offered.set(wf.name, { id: wf.name, title: wf.title, subtitle: layerOf(wf) });
+  }
+  for (const entry of (yield* savedModules(env)).entries) {
+    offered.set(entry.id, {
+      id: entry.id,
+      title: entry.title,
+      subtitle: `[${entry.layer}] ${entry.path}`,
+    });
+  }
+  const items: PickItem[] = [...offered.values()].sort((a, b) => a.id.localeCompare(b.id));
 
   if (items.length === 0) {
     return yield* bail(
@@ -505,6 +518,16 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   const at = yield* rootedWhere(herdr, env, prompts);
   if (at === null) return null;
   const task = opts.task ?? { mode: "new" };
+  // A workflow saved as a module is started through the host, with the same claim and
+  // the same rows `collie run start` uses — the Run is the same either way.
+  const saved = yield* savedModules(at);
+  const module = saved.entries.find((entry) => entry.id === opts.workflow);
+  if (module) return yield* startModule(herdr, at, prompts, { ...opts, task }, module);
+  const broken = saved.problems.find((problem) => problem.id === opts.workflow);
+  if (broken) {
+    yield* bail(prompts, `${broken.path}: ${broken.message}`);
+    return null;
+  }
   // Resolving, validating and inferring is what `collie run start` does too.
   const prepared = yield* prepareWorkflow(
     at,
@@ -575,6 +598,51 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     name: started.checkout.branch,
     source: started.checkout.branchSource,
   });
+});
+
+/**
+ * A saved module from the name to a started Run: what it declares it takes is what the
+ * human is asked for, and nothing else. Typed values and inference belong to the schema
+ * and are not guessed at here.
+ */
+const startModule = Effect.fn("Flows.startModule")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  opts: {
+    placement: Placement;
+    given?: Record<string, string>;
+    parent?: Run;
+    task: TaskChoice;
+  },
+  module: Found,
+) {
+  const input = { ...opts.given };
+  for (const name of module.inputs) {
+    if (input[name] !== undefined) continue;
+    const answer = yield* prompts.ask(`${module.title} — ${name}?`);
+    if (answer === null) return null;
+    const value = answer.trim();
+    if (value === "") {
+      yield* bail(prompts, `${module.id} needs an input for "${name}".`);
+      return null;
+    }
+    input[name] = value;
+  }
+  const started = yield* startNativeRun(env, {
+    id: module.id,
+    request: yield* newRequestId(),
+    input,
+    task: opts.task.mode === "continue" ? opts.task.task.id : null,
+    parent: opts.parent?.id ?? null,
+  });
+  if (!started.ok) {
+    yield* bail(prompts, started.error.message);
+    return null;
+  }
+  if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
+  const given = Object.entries(input).map(([name, value]) => `${name}=${value}`);
+  return `${module.id}: ${given.join("  ")} → ${started.runId}`;
 });
 
 /**

@@ -1,0 +1,262 @@
+// A native Run from both front doors: start it, watch it, and pick it up again.
+//
+// The CLI and the picker do the same things to a workflow saved as a module, so they do
+// them here rather than each their own way: which id is a module's, the claim that makes a
+// retry one Run, and the read model show, list and wait are drawn from. Execution belongs
+// to the host — this is the client side of it, and it holds no state of its own.
+//
+// What a Run is and what became of it stays Collie's; what a workflow has done stays
+// Effect's. Nothing here copies the second into the first.
+
+import { Effect, FileSystem, Stream } from "effect";
+import type { Scope } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
+import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
+import type { PluginEnv } from "./env";
+import { discover, searchPath, type Catalogued } from "./discovery";
+import { connect, type HostClient, type HostUnavailable, type HostVersionMismatch } from "./host";
+import { REFUSED_INPUT, type HostRefused, type RunView } from "./native";
+import { err, type Failure, type OpResult } from "./operations";
+import type { RequestConflict } from "./store";
+
+/** Where this project looks: its own workflows, then this machine's, then the shipped. */
+export const savedModules = (
+  env: PluginEnv,
+): Effect.Effect<Catalogued, never, FileSystem.FileSystem> =>
+  discover(searchPath({ pluginRoot: env.pluginRoot, project: env.cwd }));
+
+/**
+ * Whether this id belongs to a saved module — including one whose file will not load.
+ * A broken module is a file to fix, and running the Markdown workflow it was written to
+ * replace would answer a question its author never asked.
+ */
+export const claimedByModule = (
+  env: PluginEnv,
+  id: string,
+): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
+  savedModules(env).pipe(
+    Effect.map(
+      (found) =>
+        found.entries.some((entry) => entry.id === id) ||
+        found.problems.some((problem) => problem.id === id),
+    ),
+  );
+
+/**
+ * Whether anything native has ever run in this state directory. A machine that has never
+ * started a module does not start a host to be told it has none.
+ */
+export const anyNativeRuns = (
+  env: PluginEnv,
+): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.exists(`${env.stateDir}/native.db`)),
+    Effect.orElseSucceed(() => false),
+  );
+
+type HostFailure =
+  | HostRefused
+  | RequestConflict
+  | HostUnavailable
+  | HostVersionMismatch
+  | RpcClientError.RpcClientError;
+
+type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
+
+/** A refusal as the front doors say one, with the host's own sentence inside it. */
+const refusal = (cause: HostFailure): Failure => {
+  switch (cause._tag) {
+    case "HostRefused":
+      // The host says so first where the input is why, and that is exit 2, not exit 1.
+      return cause.reason.startsWith(`${REFUSED_INPUT}:`)
+        ? err("invalid_input", cause.reason.slice(REFUSED_INPUT.length + 1).trim())
+        : err("operation_failed", cause.reason);
+    case "RequestConflict":
+      return err("invalid_input", cause.reason, { request: cause.request });
+    case "HostVersionMismatch":
+      return err("operation_failed", cause.restart, { host: cause.host, pid: cause.pid });
+    case "HostUnavailable":
+      return err("operation_failed", `No workflow host for ${cause.dir}: ${cause.reason}.`);
+    default:
+      return err("operation_failed", `The workflow host did not answer: ${String(cause)}.`);
+  }
+};
+
+/** One question to the host that owns this state directory, asked on its own connection. */
+const asks = <A>(
+  env: PluginEnv,
+  question: (client: HostClient) => Effect.Effect<A, HostFailure>,
+): Effect.Effect<{ readonly ok: true; readonly value: A } | Failure, never, Client> =>
+  Effect.scoped(
+    connect(env.stateDir).pipe(
+      Effect.flatMap(question),
+      Effect.map((value) => ({ ok: true as const, value })),
+      Effect.catch((cause: HostFailure) => Effect.succeed(refusal(cause))),
+    ),
+  );
+
+/** What a start became, or why there is no Run. */
+export type NativeStart =
+  | {
+      readonly ok: true;
+      readonly runId: string;
+      readonly registration: string;
+      /** False where the request had already been admitted: a retry, not a second Run. */
+      readonly fresh: boolean;
+    }
+  | Failure;
+
+/**
+ * Starts the module this id names, under the caller's own claim on the work. The same
+ * request twice is the same Run — which is what makes a retried command, a re-clicked
+ * row and a replayed receipt one piece of work rather than three.
+ */
+export const startNativeRun = (
+  env: PluginEnv,
+  options: {
+    readonly id: string;
+    readonly request: string;
+    readonly input: Readonly<Record<string, string>>;
+    readonly task?: string | null;
+    readonly parent?: string | null;
+  },
+): Effect.Effect<NativeStart, never, Client> =>
+  asks(env, (client) =>
+    client.start({
+      project: env.cwd,
+      id: options.id,
+      request: options.request,
+      input: options.input,
+      task: options.task ?? undefined,
+      parent: options.parent ?? undefined,
+    }),
+  ).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? {
+            ok: true as const,
+            runId: answered.value.runId,
+            registration: answered.value.registration,
+            fresh: answered.value.fresh,
+          }
+        : answered,
+    ),
+  );
+
+/** Every native Run a listing can show, and why the rest could not be read. */
+export interface NativeListing {
+  readonly runs: ReadonlyArray<RunView>;
+  readonly unreadable: string | null;
+}
+
+/** One native Run as a front door shows it, or null where this is not one. */
+export const nativeRun = (
+  env: PluginEnv,
+  runId: string,
+): Effect.Effect<RunView | Failure | null, never, Client> =>
+  anyNativeRuns(env).pipe(
+    Effect.flatMap((any) =>
+      any
+        ? asks(env, (client) => client.run({ runId })).pipe(
+            Effect.map((answered) => (answered.ok ? answered.value : answered)),
+          )
+        : Effect.succeed(null),
+    ),
+  );
+
+/**
+ * Every native Run this state directory has rows for, and why they could not be read
+ * where they could not be: a host that will not start costs the caller the native Runs,
+ * never the listing it asked for.
+ */
+export const nativeRuns = (
+  env: PluginEnv,
+  task: string | null,
+): Effect.Effect<NativeListing, never, Client> =>
+  anyNativeRuns(env).pipe(
+    Effect.flatMap((any) =>
+      any
+        ? asks(env, (client) => client.runs({ task })).pipe(
+            Effect.map((answered) =>
+              answered.ok
+                ? { runs: answered.value, unreadable: null }
+                : { runs: [], unreadable: answered.error.message },
+            ),
+          )
+        : Effect.succeed({ runs: [], unreadable: null }),
+    ),
+  );
+
+/**
+ * Every state this Run reaches, until `each` says the caller has what it came for. The
+ * first one is where the work is now rather than what changed, so a client that has been
+ * away — a board that was closed, a wait that was interrupted — reads the truth instead
+ * of waiting for an update that has already been and gone.
+ */
+export const watchNativeRun = <R>(
+  env: PluginEnv,
+  runId: string,
+  each: (view: RunView) => Effect.Effect<boolean, never, R>,
+): Effect.Effect<Failure | null, never, R | Client | Scope.Scope> =>
+  Effect.gen(function* () {
+    const opened = yield* connect(env.stateDir).pipe(Effect.result);
+    if (opened._tag === "Failure") return refusal(opened.failure);
+    let known = false;
+    return yield* Stream.runForEachWhile(opened.success.watch({ runId }), (view) => {
+      // Nothing was admitted under that id, so there is nothing to wait for.
+      if (view === null) return Effect.succeed(false);
+      known = true;
+      return each(view).pipe(Effect.map((enough) => !enough));
+    }).pipe(
+      Effect.map(() =>
+        known ? null : err("run_not_found", `Run "${runId}" was not found.`, { run: runId }),
+      ),
+      Effect.catchTag("RpcClientError", (cause) => Effect.succeed(refusal(cause))),
+    );
+  });
+
+/**
+ * Registers what the modules as they are now allow and hands over what is outstanding,
+ * then says where this Run is. A file that was missing and has been put back is picked up
+ * by this rather than by restarting the host.
+ */
+export const recoverNativeRun = (
+  env: PluginEnv,
+  runId: string,
+): Effect.Effect<OpResult, never, Client> =>
+  asks(env, (client) => client.recover().pipe(Effect.andThen(client.run({ runId })))).pipe(
+    Effect.map((answered) => {
+      if (!answered.ok) return answered;
+      const view = answered.value;
+      if (view === null)
+        return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
+      return {
+        ok: true as const,
+        data: { run: view },
+        human: describeRun(view).join("\n"),
+      };
+    }),
+  );
+
+/** A Run as a human reads one: what it is, where its module is, and what is wrong. */
+export const describeRun = (view: RunView): ReadonlyArray<string> => [
+  `${view.runId}\t${statusOf(view)}\t${view.workflow}`,
+  view.entry,
+  ...(view.diagnostic === null ? [] : [view.diagnostic]),
+];
+
+/** The one word a listing gives a Run, and the sentence behind it where there is one. */
+export const statusOf = (view: RunView): string => {
+  switch (view.status.status) {
+    case "complete":
+      return `complete: ${view.status.value}`;
+    case "failed":
+      return `failed: ${view.status.reason}`;
+    default:
+      return view.diagnostic === null ? view.status.status : "waiting for its module";
+  }
+};
+
+/** Whether the engine can still change this Run's state. */
+export const nativeSettled = (view: RunView): boolean =>
+  view.status.status === "complete" || view.status.status === "failed";

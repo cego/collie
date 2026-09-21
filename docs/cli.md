@@ -98,6 +98,23 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--continue-task` | Continue the Task whose workspace this is; `needs_input` outside one.                                                                                                                |
 | `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                                                                                                                           |
 
+### A workflow saved as a module
+
+An id a TypeScript module claims is that module's, and `run start` starts it on the local
+host rather than as an orchestration of agents — no flag says which, because what an id
+runs is what is saved for this project ([`sdk.md`](sdk.md#where-a-module-lives) is where
+that is). `--input k=v` carries the module's own inputs, and its schema settles them before
+a Run, a claim or an execution exists: what it refuses comes back as `invalid_input` naming
+the field. An id whose module will not load is refused by that file rather than falling
+back to a Markdown workflow of the same name.
+
+The Run it starts is shown, listed and waited on by the same commands as any other, and
+`--request-id` deduplicates it the same way — the claim goes to the host, so the retry is
+the same Run there too. `--decide`, `--goal` and `--constraint` are refused on a module for
+now rather than accepted and dropped; the picker asks for what the module declares and
+nothing else. [ADR-0018](adr/0018-a-native-run-is-a-run.md) is why each of those is the way
+it is.
+
 ### Tasks
 
 A **Task** is the work itself, and the Runs it takes: a plan, the implementation it chains
@@ -224,6 +241,15 @@ Without `--follow`, `run wait` prints one envelope when the run reaches a termin
 — `succeeded`, `failed` or `stopped`. `--timeout` takes a spelled-out duration — `30 seconds`, `10 minutes`, `2 hours` — and
 comes back as the `timeout` error code. Abbreviations like `30s` are refused as
 `invalid_input`.
+
+A Run of a saved module is watched the same way, from the host's own stream: every update
+is the whole current state rather than a change to apply, so a `wait` started long after
+the work — or resumed after the last one was interrupted — reads where the Run is instead
+of waiting for a notification that has already been and gone. `--until attention` returns
+on the decision it is suspended at. `run show` names the module file the Run is on, and a
+Run whose module has been deleted still reads, pending, with that file named: its history
+is Collie's rows, and none of them went anywhere. `run list` shows those Runs beside the
+rest; where the host will not start it says so and still lists the others.
 
 A run that stops to ask a question is **not** terminal, so a plain `run wait` waits
 straight through it. `--until attention` is the wait that does not: it returns as soon as
@@ -439,6 +465,11 @@ one you are in before you try, and the error message names it:
 | Whether one does could not be determined  | Look at the run: an unreadable claim is not permission to start a second Driver. |
 | A recorded agent is still live in herdr   | `run stop` it — that closes the panes the run owns — then resume.                |
 | herdr could not be asked about its agents | Retry when herdr is reachable. This is not a run that can never be recovered.    |
+
+`resume` on a Run of a saved module starts no Driver, so none of that applies: it has the
+host register the modules as they are now and hand over whatever it has admitted and not
+yet given to the engine. That is what picks up a Run whose module was missing and has been
+put back, without restarting the host — and it is a no-op for a Run the engine already has.
 
 ## Intent
 
@@ -1117,8 +1148,13 @@ never adopted and never signalled.
 
 Clients talk to it over a unix socket in that same directory, with Effect's own RPC: the
 same schemas at both ends, and nothing listening off this machine. It answers `identity`,
-`discover`, `load`, `registrations`, `start`, `status` and `answer` — the registry `collie
-native` drives, in front of as many clients as ask. Closing a client cancels nothing it
+`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `watch`, `recover`
+and `answer` — the registry `collie native` drives, in front of as many clients as ask.
+`run` and `runs` are the read model the front doors show; `watch` streams it, current state
+first and a whole state each time; `recover` registers what current files now allow and
+hands over what is outstanding. One fiber in the host asks the engine about the work it has
+not finished, on a schedule every client shares, so watching costs the same whether one
+client is looking or the whole board is. Closing a client cancels nothing it
 started; stopping the host with `kill` leaves suspended work suspended, and the next client
 starts a host that picks it up. The operator controls the recovery proof measured — hold,
 release, stop, resume — are not on this protocol yet.

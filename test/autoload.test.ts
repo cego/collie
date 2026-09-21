@@ -7,19 +7,11 @@
 // are now. Every host is a real process, because none of those has an answer in one.
 
 import { expect, test } from "bun:test";
-import {
-  Config,
-  ConfigProvider,
-  Effect,
-  FileSystem,
-  Option,
-  Schedule,
-  Schema,
-  Scope,
-} from "effect";
+import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { connect, ownerOf } from "../src/host";
+import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
+import { events, stopHost, until } from "./support/native";
 
 const repo = new URL("../", import.meta.url).pathname;
 const fixtures = `${repo}test/fixtures/native`;
@@ -111,44 +103,6 @@ const proves = <A, E>(
     }).pipe(Effect.scoped),
   );
 
-/** Retries a read until what it says is what the test is waiting for. */
-const until = <A, E, R>(
-  read: () => Effect.Effect<A, E, R>,
-  wanted: (value: A) => boolean,
-): Effect.Effect<A, E, R> =>
-  Effect.suspend(read).pipe(
-    Effect.flatMap((value) =>
-      wanted(value) ? Effect.succeed(value) : Effect.fail(new Error("not yet")),
-    ),
-    Effect.retry({ times: 80, schedule: Schedule.spaced("250 millis") }),
-    Effect.orDie,
-  );
-
-/** Stops whatever owns this directory: a host outlives every client on purpose. */
-const stopHost = Effect.fn("AutoloadTest.stopHost")(function* (dir: string) {
-  const owner = yield* ownerOf(dir);
-  if (owner === null) return;
-  yield* Effect.sync(() => {
-    try {
-      process.kill(owner.pid, "SIGTERM");
-    } catch {
-      // Already gone, which is the state this is trying to reach.
-    }
-  });
-  yield* until(
-    () => ownerOf(dir),
-    (holder) => holder === null,
-  );
-});
-
-const events = Effect.fn("AutoloadTest.events")(function* (state: string, runId: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const text = yield* fs
-    .readFileString(`${state}/events.${runId}.log`)
-    .pipe(Effect.orElseSucceed(() => ""));
-  return text.split("\n").filter((line) => line.length > 0);
-});
-
 test(
   "a module saved where an author saves one is found and run, with nothing registered by hand",
   () =>
@@ -166,6 +120,8 @@ test(
             title: "A workflow that waits for a decision",
             layer: "user",
             path: `${world.user}/proof.workflow.ts`,
+            // What it takes, so a caller can ask for it without loading the module.
+            inputs: ["note"],
           },
         ]);
 

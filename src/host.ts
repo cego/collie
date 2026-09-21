@@ -41,6 +41,7 @@ import {
   NativeEntryError,
   Registrations,
   RunStatus,
+  RunView,
   hostLayer,
   nativeHostLayer,
   registryLayer,
@@ -119,6 +120,10 @@ export const HostRpcs = RpcGroup.make(
       id: Schema.String,
       request: Schema.String,
       input: Schema.Record(Schema.String, Schema.Json),
+      // What this work belongs to, which is the caller's to know and the host's to keep.
+      // Left out by a caller that is neither continuing a Task nor inside another run.
+      task: Schema.optional(Schema.String),
+      parent: Schema.optional(Schema.String),
     },
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -128,6 +133,22 @@ export const HostRpcs = RpcGroup.make(
     success: RunStatus,
     error: HostRefused,
   }),
+  // The read model both front doors show. A run whose module is missing is still here,
+  // with the file to repair named, rather than an error where its history was.
+  Rpc.make("run", { payload: { runId: Schema.String }, success: Schema.NullOr(RunView) }),
+  Rpc.make("runs", {
+    payload: { task: Schema.NullOr(Schema.String) },
+    success: Schema.Array(RunView),
+  }),
+  // The same run, again, whenever it changes — and current when the stream opens, so a
+  // client that was away reads where the work is rather than what it missed.
+  Rpc.make("watch", {
+    payload: { runId: Schema.String },
+    success: Schema.NullOr(RunView),
+    stream: true,
+  }),
+  /** Registers what current files now allow and hands over what is outstanding. */
+  Rpc.make("recover", { success: Registrations }),
   Rpc.make("answer", {
     payload: { runId: Schema.String, decision: Schema.String, value: Schema.String },
     error: HostRefused,
@@ -196,20 +217,27 @@ const handlers = (dir: string) =>
           catalogue(project).pipe(
             Effect.map((found) => ({
               // Without the revision: that is how this host decides a reload, not a caller.
-              entries: found.entries.map(({ id, title, layer, path }) => ({
+              entries: found.entries.map(({ id, title, layer, path, inputs }) => ({
                 id,
                 title,
                 layer,
                 path,
+                inputs,
               })),
               problems: found.problems,
             })),
           ),
-        start: ({ project, id, request, input }) =>
+        start: ({ project, id, request, input, task, parent }) =>
           resolve(project, id).pipe(
-            Effect.flatMap((generation) => registry.start({ generation, project, request, input })),
+            Effect.flatMap((generation) =>
+              registry.start({ generation, project, request, input, task, parent }),
+            ),
           ),
         status: ({ runId }) => registry.status(runId),
+        run: ({ runId }) => registry.view(runId),
+        runs: ({ task }) => registry.views(task),
+        watch: ({ runId }) => registry.watch(runId),
+        recover: () => registry.recover,
         answer: ({ runId, decision, value }) => registry.answer({ runId, decision, value }),
       });
     }),

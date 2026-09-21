@@ -86,6 +86,13 @@ doors: herdr actions, and the `collie` CLI.
   [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `src/store.ts`,
   `test/store.test.ts` and `test/admission.test.ts`. The request id is the claim and the
   un-receipted row is the whole of recovery; there is no outbox or queue to add to.
+- **Changing how a native Run is started, shown, listed or waited on from the CLI or a
+  herdr action** →
+  [ADR-0018](docs/adr/0018-a-native-run-is-a-run.md) and
+  [`docs/cli.md`](docs/cli.md#a-workflow-saved-as-a-module), alongside `src/lifecycle.ts`,
+  `src/commands/run.ts`, `src/flows.ts` and `test/lifecycle.test.ts`. What an id runs is
+  decided by what is saved for the project, never by a flag, and a status is read from the
+  engine rather than kept anywhere of Collie's.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

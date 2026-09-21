@@ -23,6 +23,7 @@ import {
   Layer,
   Option,
   Predicate,
+  Schedule,
   Schema,
   Scope,
   Semaphore,
@@ -57,6 +58,9 @@ export class NativeEntryError extends Schema.TaggedError<NativeEntryError>()("Na
   file: Schema.String,
   message: Schema.String,
 }) {}
+
+/** What a refusal says first where the input is why, which a front door reads back. */
+export const REFUSED_INPUT = "invalid_input";
 
 /** Anything else a host will not do, said in one sentence a caller can show. */
 export class HostRefused extends Schema.TaggedError<HostRefused>()("HostRefused", {
@@ -532,6 +536,36 @@ const decodeInput = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
 );
 
+/**
+ * A run as a front door shows it: the identities it was admitted under, what it was
+ * started with, and what the engine says about it now. The status is a projection read
+ * from the engine when asked — never a second record of what the work has done.
+ */
+export const RunView = Schema.Struct({
+  runId: Schema.String,
+  workflow: Schema.String,
+  project: Schema.String,
+  task: Schema.NullOr(Schema.String),
+  parent: Schema.NullOr(Schema.String),
+  registration: Schema.String,
+  /** The module file this run was admitted on, recorded so a deleted one is still named. */
+  entry: Schema.String,
+  input: Schema.Record(Schema.String, Schema.Json),
+  status: RunStatus,
+  /** Why the engine could not be asked, or null when it was. */
+  diagnostic: Schema.NullOr(Schema.String),
+});
+export type RunView = typeof RunView.Type;
+
+/** What the status of a run reads as, for comparing one poll with the last. */
+const encodeStatus = Schema.encodeSync(Schema.fromJsonString(RunStatus));
+
+/**
+ * How often a host asks the engine about work it has not finished. One fiber does it for
+ * every client, so watching costs the same whether nobody or the whole board is looking.
+ */
+const SWEEP_INTERVAL = "500 millis";
+
 /** What a host is holding, as a caller may see it: live names and unloadable ones. */
 export const Registrations = Schema.Struct({
   live: Schema.Array(Schema.String),
@@ -589,6 +623,9 @@ export interface RegistryApi {
     readonly project: string;
     readonly runId?: string;
     readonly input: Readonly<Record<string, Schema.Json>>;
+    /** What this work belongs to: a Task, and the run it came out of. */
+    readonly task?: string | null;
+    readonly parent?: string | null;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   readonly status: (
     runId: string,
@@ -598,6 +635,17 @@ export interface RegistryApi {
     readonly decision: string;
     readonly value: string;
   }) => Effect.Effect<void, HostRefused, HostServices>;
+  /** One run as a front door shows it, or null where nothing was admitted under that id. */
+  readonly view: (runId: string) => Effect.Effect<RunView | null>;
+  /** Every run this host has rows for, newest last, narrowed to one Task where named. */
+  readonly views: (task: string | null) => Effect.Effect<ReadonlyArray<RunView>>;
+  /** The same run, again, whenever anything about it changes. */
+  readonly watch: (runId: string) => Stream.Stream<RunView | null>;
+  /**
+   * Rebuilds what this host could not register from the modules as they are now and hands
+   * over anything still outstanding. A repaired file is picked up without a restart.
+   */
+  readonly recover: Effect.Effect<typeof Registrations.Type, never, HostServices>;
   /** The generation a run is on and the execution it was admitted as. */
   readonly routed: (
     runId: string,
@@ -737,6 +785,74 @@ const makeRegistry: (
     // What a host admitted and did not live to hand over. Both crash windows end here.
     for (const row of yield* store.pending) yield* handOver(row);
 
+    /** The file a generation was built from, which a row keeps naming after it has gone. */
+    const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
+
+    const viewOf = Effect.fn("Native.viewOf")(function* (row: RunRow) {
+      const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
+      const admitted = {
+        runId: row.run,
+        workflow: row.workflow,
+        project: row.project,
+        task: row.task,
+        parent: row.parent,
+        registration: row.generation,
+        entry: entryOf(row.generation),
+        input,
+      };
+      const generation = live.get(row.generation);
+      // Not registered here is not a verdict on the work: the rows are all still there,
+      // and what is missing is the module, named so somebody can put it back.
+      if (generation === undefined) {
+        return {
+          ...admitted,
+          status: { status: "pending" as const },
+          diagnostic:
+            unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
+        };
+      }
+      const result = yield* engine.poll(generation.registration.workflow, row.execution);
+      return { ...admitted, status: pollStatus(result, generation.entry), diagnostic: null };
+    });
+
+    const view = (runId: string) =>
+      store
+        .run(runId)
+        .pipe(Effect.flatMap((row) => (row === null ? Effect.succeed(null) : viewOf(row))));
+
+    /**
+     * What the engine last said about each run it may still change. Upstream's tables are
+     * upstream's: a write there invalidates nothing of Collie's, so one fiber asks on a
+     * schedule every client shares and says so once — rather than each client looping.
+     */
+    const watched = new Map<string, { readonly row: RunRow; said: string }>();
+    const remember = (row: RunRow) => watched.set(row.run, { row, said: "" });
+    for (const row of yield* store.runs) remember(row);
+    /** How many clients are listening. A host nobody is watching asks nothing at all. */
+    let watchers = 0;
+
+    const sweep = Effect.gen(function* () {
+      if (watchers === 0) return;
+      let changed = false;
+      for (const [runId, entry] of watched) {
+        const status = (yield* viewOf(entry.row)).status;
+        const said = encodeStatus(status);
+        if (said === entry.said) continue;
+        entry.said = said;
+        changed = true;
+        // A run the engine has finished with cannot change again, so nothing asks after.
+        if (status.status === "complete" || status.status === "failed") watched.delete(runId);
+      }
+      if (changed) yield* store.announce;
+    });
+    yield* Effect.forkScoped(sweep.pipe(Effect.repeat(Schedule.spaced(SWEEP_INTERVAL))));
+
+    /** What this host is holding, as a caller may see it. */
+    const held = Effect.sync(() => ({
+      live: [...live.keys()].sort(),
+      unavailable: [...unavailable.entries()].map(([name, why]) => `${name}: ${why}`).sort(),
+    }));
+
     const newest = Effect.fn("Native.newest")(function* (id: string) {
       const generation = live.get(newestOf.get(id) ?? "");
       if (!generation) {
@@ -793,10 +909,40 @@ const makeRegistry: (
           }),
         ),
 
-      registrations: Effect.sync(() => ({
-        live: [...live.keys()].sort(),
-        unavailable: [...unavailable.entries()].map(([name, why]) => `${name}: ${why}`).sort(),
-      })),
+      registrations: held,
+
+      view,
+      views: (task: string | null) =>
+        store.runs.pipe(
+          Effect.flatMap((rows) =>
+            Effect.forEach(task === null ? rows : rows.filter((row) => row.task === task), viewOf),
+          ),
+        ),
+      watch: (runId: string) =>
+        store
+          .watching(view(runId))
+          .pipe(
+            Stream.onStart(Effect.sync(() => (watchers += 1))),
+            Stream.ensuring(Effect.sync(() => (watchers -= 1))),
+          ),
+
+      recover: Effect.gen(function* () {
+        yield* registering.withPermits(1)(
+          Effect.forEach(known, (route) =>
+            live.has(route.name)
+              ? Effect.void
+              : register(route).pipe(
+                  Effect.catchTag("NativeEntryError", (failure) =>
+                    Effect.sync(() =>
+                      unavailable.set(route.name, `${failure.file}: ${failure.message}`),
+                    ),
+                  ),
+                ),
+          ),
+        );
+        for (const row of yield* store.pending) yield* handOver(row);
+        return yield* held;
+      }),
 
       newest,
       routed,
@@ -807,6 +953,8 @@ const makeRegistry: (
         readonly project: string;
         readonly runId?: string;
         readonly input: Readonly<Record<string, Schema.Json>>;
+        readonly task?: string | null;
+        readonly parent?: string | null;
       }) {
         const generation = options.generation;
         const runId =
@@ -817,7 +965,7 @@ const makeRegistry: (
           generation.registration.workflow.payloadSchema,
         )({ runId, input: options.input }).pipe(
           Effect.mapError(
-            (cause) => new HostRefused({ reason: `invalid_input: ${String(cause)}` }),
+            (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${String(cause)}` }),
           ),
         );
         const claimed = yield* store.admit({
@@ -828,7 +976,10 @@ const makeRegistry: (
           input: options.input,
           generation: generation.name,
           execution: yield* generation.registration.workflow.executionId(payload),
+          task: options.task ?? null,
+          parent: options.parent ?? null,
         });
+        remember(claimed.row);
         // A retry of work the engine already has is nothing more to do; one that crashed
         // before it heard is handed over now, under the identity it was admitted with.
         if (claimed.row.accepted === null) yield* handOver(claimed.row);

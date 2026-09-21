@@ -7,11 +7,12 @@
 // none of them has an answer in one process with an in-memory engine.
 
 import { expect, test } from "bun:test";
-import { Config, ConfigProvider, Effect, FileSystem, Layer, Option, Schedule, Scope } from "effect";
+import { Config, ConfigProvider, Effect, FileSystem, Layer, Option, Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { connect, ownerOf } from "../src/host";
 import { signalProcess } from "../src/lock";
 import { runEffect } from "./support/effect";
+import { stopHost, until } from "./support/native";
 
 const root = new URL("../", import.meta.url).pathname;
 const fixtures = `${root}test/fixtures/native`;
@@ -55,40 +56,6 @@ const workspace = Effect.fn("HostTest.workspace")(function* (prefix: string) {
   }
   return { wf, project: `${dir}/project`, state: `${dir}/state` };
 });
-
-/**
- * Stops whatever owns this directory, whether this test started it or recovered it. A
- * host outlives every client on purpose, so a suite that does not end one leaves it
- * running after the process that asked for it has gone.
- */
-const stopHost = Effect.fn("HostTest.stopHost")(function* (dir: string) {
-  const owner = yield* ownerOf(dir);
-  if (owner === null) return;
-  yield* Effect.sync(() => {
-    try {
-      process.kill(owner.pid, "SIGTERM");
-    } catch {
-      // Already gone, which is the state this is trying to reach.
-    }
-  });
-  yield* until(
-    () => ownerOf(dir),
-    (holder) => holder === null,
-  );
-});
-
-/** Retries a read until what it says is what the test is waiting for. */
-const until = <A, E, R>(
-  read: () => Effect.Effect<A, E, R>,
-  wanted: (value: A) => boolean,
-): Effect.Effect<A, E, R> =>
-  Effect.suspend(read).pipe(
-    Effect.flatMap((value) =>
-      wanted(value) ? Effect.succeed(value) : Effect.fail(new Error("not yet")),
-    ),
-    Effect.retry({ times: 80, schedule: Schedule.spaced("250 millis") }),
-    Effect.orDie,
-  );
 
 test(
   "clients that start at the same moment converge on the one host that holds the lock",

@@ -20,7 +20,12 @@ const opens = (file: string) =>
     ),
   );
 
-const admission = (request: string, run: string, input: Record<string, string>) => ({
+const admission = (
+  request: string,
+  run: string,
+  input: Record<string, string>,
+  belongs?: { readonly task?: string; readonly parent?: string },
+) => ({
   request,
   run,
   workflow: "proof",
@@ -28,6 +33,8 @@ const admission = (request: string, run: string, input: Record<string, string>) 
   input,
   generation: "proof@1",
   execution: `execution-${run}`,
+  task: belongs?.task ?? null,
+  parent: belongs?.parent ?? null,
 });
 
 /** A database of its own, and the store on it, for the length of one question. */
@@ -131,6 +138,23 @@ test("what a host admitted is there when the database is opened again", () =>
         expect((yield* store.pending).map((row) => row.run)).toEqual(["run-a"]);
       }).pipe(Effect.provide(opens(file)), Effect.scoped);
     }).pipe(Effect.scoped),
+  ));
+
+test("a run belongs to the task and the run it was started from", () =>
+  onStore(
+    "collie-store-belongs-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(
+        admission("req-1", "run-a", { note: "child" }, { task: "task-7", parent: "run-parent" }),
+      );
+      const found = yield* store.run("run-a");
+      expect(found?.task).toBe("task-7");
+      expect(found?.parent).toBe("run-parent");
+      // What was started on its own belongs to nothing, which is not the same as "task-7".
+      yield* store.admit(admission("req-2", "run-b", { note: "alone" }));
+      expect((yield* store.run("run-b"))?.task).toBeNull();
+    }),
   ));
 
 test("a run the engine has taken is no longer work to recover", () =>

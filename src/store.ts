@@ -39,6 +39,9 @@ const Run = Schema.Struct({
   input: Schema.String,
   generation: Schema.String,
   execution: Schema.String,
+  /** The Task this work belongs to, and the run it came out of; null where it is neither. */
+  task: Schema.NullOr(Schema.String),
+  parent: Schema.NullOr(Schema.String),
   /** When the engine took this work, or null while it is still a host's to hand over. */
   accepted: Schema.NullOr(Schema.String),
 });
@@ -61,6 +64,8 @@ export interface Admission {
   readonly input: Readonly<Record<string, Schema.Json>>;
   readonly generation: string;
   readonly execution: string;
+  readonly task: string | null;
+  readonly parent: string | null;
 }
 
 export interface StoreApi {
@@ -78,8 +83,12 @@ export interface StoreApi {
   readonly pending: Effect.Effect<ReadonlyArray<RunRow>>;
   readonly run: (run: string) => Effect.Effect<RunRow | null>;
   readonly runs: Effect.Effect<ReadonlyArray<RunRow>>;
+  /** Whatever this reads, again, whenever a run changes. */
+  readonly watching: <A, E>(read: Effect.Effect<A, E>) => Stream.Stream<A, E>;
   /** Every run, again, whenever one is committed. */
   readonly changes: Stream.Stream<ReadonlyArray<RunRow>>;
+  /** A run changed where the change was not one of these writes, so readers reread. */
+  readonly announce: Effect.Effect<void>;
 }
 
 export class Store extends Context.Service<Store, StoreApi>()("collie/native/Store") {}
@@ -115,6 +124,11 @@ const MIGRATIONS = {
       )
     `;
   }),
+  "2_belongs": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE collie_runs ADD COLUMN task TEXT`;
+    yield* sql`ALTER TABLE collie_runs ADD COLUMN parent TEXT`;
+  }),
 };
 
 function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | Reactivity.Reactivity> {
@@ -128,7 +142,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       table: "collie_migrations",
     }).pipe(Effect.orDie);
 
-    const columns = sql`run, request, workflow, project, input, generation, execution, accepted`;
+    const columns = sql`run, request, workflow, project, input, generation, execution, task, parent, accepted`;
 
     const byRequest = SqlSchema.findAll({
       Request: Schema.String,
@@ -187,11 +201,12 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
             RUNS,
             sql`
               INSERT INTO collie_runs
-                (run, request, workflow, project, input, generation, execution, admitted)
+                (run, request, workflow, project, input, generation, execution,
+                 task, parent, admitted)
               VALUES (
                 ${admission.run}, ${admission.request}, ${admission.workflow},
                 ${admission.project}, ${input}, ${admission.generation},
-                ${admission.execution}, ${at}
+                ${admission.execution}, ${admission.task}, ${admission.parent}, ${at}
               )
               ON CONFLICT(request) DO NOTHING
               RETURNING run
@@ -233,7 +248,9 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
           Effect.map((rows) => rows[0] ?? null),
           Effect.orDie,
         ),
+      watching: (read) => reactivity.stream(RUNS, read),
       changes: sql.reactive(RUNS, all),
+      announce: reactivity.invalidate(RUNS),
     } satisfies StoreApi;
   });
 }

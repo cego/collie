@@ -6,6 +6,7 @@
 import { Cause, Config, Effect, FileSystem, Option, Queue, Schema, Schedule, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { HostReply, HostRequest, type CrashPoint } from "../../src/native";
+import { ownerOf } from "../../src/host";
 
 export const root = new URL("../../", import.meta.url).pathname;
 export const fixtures = `${root}test/fixtures/native`;
@@ -91,6 +92,27 @@ export const openHost = Effect.fn("NativeTest.open")(function* (
       ),
     stop: Queue.end(input).pipe(Effect.andThen(child.exitCode), Effect.asVoid, Effect.orDie),
   } satisfies Host;
+});
+
+/**
+ * Stops whatever owns this state directory, whether the test started it or recovered it.
+ * A host outlives every client on purpose, so a suite that does not end one leaves it
+ * running after the process that asked for it has gone.
+ */
+export const stopHost = Effect.fn("NativeTest.stopHost")(function* (dir: string) {
+  const owner = yield* ownerOf(dir);
+  if (owner === null) return;
+  yield* Effect.sync(() => {
+    try {
+      process.kill(owner.pid, "SIGTERM");
+    } catch {
+      // Already gone, which is the state this is trying to reach.
+    }
+  });
+  yield* until(
+    () => ownerOf(dir),
+    (holder) => holder === null,
+  );
 });
 
 /** A workflow directory of its own, with the fixture's entries, helper and Markdown in it. */

@@ -44,6 +44,8 @@ export const Resolved = Schema.Struct({
   title: Schema.String,
   layer: Schema.Literals(LAYERS),
   path: Schema.String,
+  /** What the module declares it takes, so a front door can ask for it by name. */
+  inputs: Schema.Array(Schema.String),
 });
 
 /** An id nothing can be run under, and the file that is why. */
@@ -129,6 +131,7 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
               title: read.success.title,
               layer: root.layer,
               path,
+              inputs: Object.keys(read.success.input),
               revision,
             },
           },

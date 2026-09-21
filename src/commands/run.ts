@@ -37,6 +37,19 @@ import {
 } from "../operations";
 import { fanoutRepos, withRunLock, RunStore } from "../run";
 import {
+  anyNativeRuns,
+  claimedByModule,
+  describeRun,
+  nativeRun,
+  nativeRuns,
+  nativeSettled,
+  recoverNativeRun,
+  startNativeRun,
+  statusOf,
+  watchNativeRun,
+} from "../lifecycle";
+import type { RunView } from "../native";
+import {
   EMPTY_DEFAULTS,
   amend,
   defaultsPath,
@@ -148,6 +161,27 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
   return taken({ mode: "continue", task: here });
 });
 
+/**
+ * The launch flags a saved module does not take yet. Refused rather than dropped: a goal
+ * nobody recorded and a decision nobody answered are worse than being told so here.
+ */
+function unsupportedFlags(flags: {
+  readonly decide: ReadonlyArray<string>;
+  readonly goal: Option.Option<string>;
+  readonly constraint: ReadonlyArray<string>;
+}): Failure | null {
+  const given = [
+    ...(flags.decide.length > 0 ? ["--decide"] : []),
+    ...(Option.isSome(flags.goal) ? ["--goal"] : []),
+    ...(flags.constraint.length > 0 ? ["--constraint"] : []),
+  ];
+  if (given.length === 0) return null;
+  return err(
+    "invalid_input",
+    `A workflow saved as a module takes its own inputs; ${given.join(", ")} is not one of them yet.`,
+  );
+}
+
 const runStart = Command.make(
   "start",
   {
@@ -218,7 +252,7 @@ const runStart = Command.make(
           if (!explicit.ok) return explicit.error;
           const named = namedConstraints(constraint, severity);
           if (named.error !== null) return err("invalid_input", named.error);
-          return yield* mutation(base.env, "run-start", request, (_id) =>
+          return yield* mutation(base.env, "run-start", request, (requestId) =>
             Effect.gen(function* () {
               // The live workspace is resolved inside the mutation, so replaying a
               // receipt returns what was recorded rather than needing that workspace
@@ -230,6 +264,30 @@ const runStart = Command.make(
               // the Runs recorded before Tasks existed.
               const task = yield* chosenTask(resolved.env, taskId, continueTask);
               if (!task.ok) return task.error;
+              // A workflow saved as a module is that module, wherever a Markdown
+              // definition of the same name also is: what an id runs is decided by what
+              // is saved for this project, never by a flag naming an engine.
+              if (yield* claimedByModule(resolved.env, workflow)) {
+                const unsupported = unsupportedFlags({ decide, goal, constraint });
+                if (unsupported !== null) return unsupported;
+                const started = yield* startNativeRun(resolved.env, {
+                  id: workflow,
+                  request: requestId,
+                  input: explicit.inputs,
+                  task: task.choice.mode === "continue" ? task.choice.task.id : null,
+                });
+                if (!started.ok) return started;
+                return {
+                  ok: true,
+                  data: {
+                    runId: started.runId,
+                    workflow,
+                    registration: started.registration,
+                    fresh: started.fresh,
+                  },
+                  human: `Started run ${started.runId}.`,
+                };
+              }
               const prepared = yield* prepareWorkflow(
                 resolved.env,
                 workflow,
@@ -300,13 +358,18 @@ const runList = Command.make("list", {}, () =>
         // caller every readable one, and it cannot be workspace-filtered because its
         // workspace is precisely what could not be read.
         const broken = yield* unreadableRuns(store, readable);
+        // The Runs the host holds, beside them: one listing, whether the work is an
+        // orchestration of agents or a module Effect is executing.
+        const native = yield* nativeRuns(resolved.env, task);
         return {
           ok: true,
-          data: { runs: data, broken },
+          data: { runs: data, broken, native: native.runs },
           human:
             [
               ...data.map((item) => `${item.id}\t${item.status}\t${item.workflow}`),
               ...broken.map((item) => `${item.run}\tunreadable\t${item.reason}`),
+              ...native.runs.map((view) => `${view.runId}\t${statusOf(view)}\t${view.workflow}`),
+              ...(native.unreadable === null ? [] : [`native runs: ${native.unreadable}`]),
             ].join("\n") || "No runs found.",
         };
       }),
@@ -326,6 +389,20 @@ const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
   // The environment travels with the Run: `show` reads the Run's children out of the
   // same state directory, and resolving the context twice is two answers to one question.
   return found._tag === "RunFailure" ? found : { ...found, env: resolved.env };
+});
+
+/**
+ * The same Run read from the host, for an id the run directories do not have. A Run whose
+ * module is missing is shown with the file to repair rather than reported as gone: the
+ * rows are Collie's, and none of them went anywhere.
+ */
+const showNative = Effect.fn("collie.showNative")(function* (global: Global, runId: string) {
+  const resolved = yield* context(global, false);
+  if (resolved._tag === "ContextFailure") return null;
+  const view = yield* nativeRun(resolved.env, runId);
+  if (view === null) return null;
+  if ("ok" in view) return view;
+  return { ok: true as const, data: { run: view }, human: describeRun(view).join("\n") };
 });
 
 /**
@@ -360,7 +437,10 @@ const runShow = Command.make(
       yield* attempt(
         Effect.gen(function* () {
           const resolved = yield* resolveCommandRun(global, runId);
-          if (resolved._tag === "RunFailure") return resolved.result;
+          if (resolved._tag === "RunFailure") {
+            const native = yield* showNative(global, runId);
+            return native ?? resolved.result;
+          }
           const run = resolved.run;
           // The snapshot carries the status, so it is not worked out a second time here.
           const snapshot = yield* runData(run);
@@ -615,6 +695,64 @@ const runWait = Command.make(
   Command.withDescription("Wait for a Run to finish, or to need attention, optionally following"),
 );
 
+/**
+ * A native Run watched to the end, or to the question it is waiting on. Every state the
+ * host reports arrives here, current one first — so a wait that starts long after the
+ * work did is not waiting for an update that has already happened.
+ */
+const waitForNative = Effect.fn("collie.waitForNative")(function* (
+  global: Global,
+  env: PluginEnv,
+  runId: string,
+  options: {
+    readonly follow: boolean;
+    readonly ms: number | null;
+    readonly wantsAttention: boolean;
+  },
+) {
+  const seen = yield* Ref.make<RunView | null>(null);
+  const enough = (view: RunView) =>
+    nativeSettled(view) || (options.wantsAttention && view.status.status === "suspended");
+  const watching = watchNativeRun(env, runId, (view) =>
+    Effect.gen(function* () {
+      const last = yield* Ref.getAndSet(seen, view);
+      // One line per change, not per look: a run polled while it waits is not news.
+      if (options.follow && (last === null || statusOf(last) !== statusOf(view))) {
+        yield* say(
+          global.json
+            ? Schema.encodeSync(UnknownJson)({ type: "status", run: view })
+            : `${view.runId}: ${statusOf(view)}`,
+        );
+      }
+      return enough(view);
+    }).pipe(Effect.orDie),
+  ).pipe(Effect.scoped);
+  const bounded = options.ms === null ? watching : watching.pipe(Effect.timeout(options.ms));
+  const failed = yield* bounded.pipe(
+    Effect.catch((cause) =>
+      Effect.succeed(
+        Cause.isTimeoutError(cause)
+          ? err("timeout", `Timed out waiting for run "${runId}".`)
+          : err("operation_failed", `Could not watch run "${runId}".`, { cause: String(cause) }),
+      ),
+    ),
+  );
+  if (failed !== null) return yield* printResult(failed, global.json);
+  // `--follow` has already said everything as it happened, as it does for a Run with a
+  // Driver: one envelope after the stream would be the last line twice.
+  if (options.follow) return;
+  const view = yield* Ref.get(seen);
+  if (view === null)
+    return yield* printResult(
+      err("run_not_found", `Run "${runId}" was not found.`, { run: runId }),
+      global.json,
+    );
+  yield* printResult(
+    { ok: true, data: { run: view }, human: `${view.runId}: ${statusOf(view)}` },
+    global.json,
+  );
+});
+
 export const waitFor = Effect.fn("collie.waitFor")(function* (
   global: Global,
   runId: string,
@@ -626,15 +764,20 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
   if (resolved._tag === "ContextFailure") return yield* printResult(resolved.result, global.json);
   const task = yield* selectedTask(global);
   const found = yield* readRun(resolved.env, runId, task);
-  if (found._tag === "RunFailure") return yield* printResult(found.result, global.json);
-  const watchedRun = found.run;
   const timeoutResult = parseTimeout(timeout);
   if (!timeoutResult.ok) return yield* printResult(timeoutResult.error, global.json);
   const { ms } = timeoutResult;
-  const herdr = new Herdr(resolved.env);
   const untilResult = parseUntil(until);
   if (!untilResult.ok) return yield* printResult(untilResult.error, global.json);
   const wantsAttention = untilResult.until === "attention";
+  if (found._tag === "RunFailure") {
+    // No run directory of that name. A native Run is watched through its host instead,
+    // which is the only thing that knows what its execution is doing.
+    if (!(yield* anyNativeRuns(resolved.env))) return yield* printResult(found.result, global.json);
+    return yield* waitForNative(global, resolved.env, runId, { follow, ms, wantsAttention });
+  }
+  const watchedRun = found.run;
+  const herdr = new Herdr(resolved.env);
 
   const progressCount = yield* Ref.make(0);
   const sentSnapshot = yield* Ref.make(false);
@@ -1071,8 +1214,30 @@ const runFollowUp = Command.make(
 );
 
 const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =>
-  runMutationCommand("run-resume", runId, requestId, (env, run, id) => resumeRun(env, run, id)),
-).pipe(Command.withDescription("Start a fresh Driver for a Run, skipping finished Steps"));
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* context(global, false);
+        if (resolved._tag === "ContextFailure") return resolved.result;
+        const task = yield* selectedTask(global);
+        return yield* mutation(resolved.env, "run-resume", requestId, (id) =>
+          Effect.gen(function* () {
+            const found = yield* readRun(resolved.env, runId, task);
+            if (found._tag !== "RunFailure") return yield* resumeRun(resolved.env, found.run, id);
+            // A native Run has no Driver to start: what picks it up is the host
+            // registering the modules as they are now and handing over what is still
+            // outstanding, which is also what a repaired file needs.
+            return (yield* anyNativeRuns(resolved.env))
+              ? yield* recoverNativeRun(resolved.env, runId)
+              : found.result;
+          }),
+        );
+      }),
+      global.json,
+    );
+  }),
+).pipe(Command.withDescription("Start a fresh Driver for a Run, or pick up a native Run again"));
 /**
  * Every `run intent` mutation goes through here: read the Intent, apply one pure
  * `amend`, write it back. The version the caller is told is the one on disk, so a
