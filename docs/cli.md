@@ -1080,9 +1080,11 @@ written in TypeScript outside this repository, runs it on Effect's workflow engi
 SQLite in that directory, and answers `load`, `start`, `poll`, `answer`, `hold`, `release`,
 `stop`, `resume`, `registrations`, `metadata`, `provision` and `check`.
 
-`start` carries the author's own `input`, which the workflow's schema settles before a run,
-a routing row or an execution exists: an input it rejects comes back as `invalid_input`
-naming the field. [`docs/sdk.md`](sdk.md) is what a module declares and what is refused.
+`start` carries the author's own `input`, which the workflow's schema settles before a row,
+a claim or an execution exists: an input it rejects comes back as `invalid_input` naming
+the field. [`docs/sdk.md`](sdk.md) is what a module declares and what is refused. The run
+id it is given is also the claim on that work here, so sending one twice is one run and
+sending it with other arguments is refused.
 
 It exists so the proof that a packaged workflow survives a real restart can be run against
 the packaged executable, and it will be superseded by the host Collie ships. It is not a
@@ -1091,6 +1093,10 @@ front door for work: it opens no tab, acquires no agent, and knows nothing about
 `--registration-timeout-ms` is for the proof alone. Left off, a message for a workflow
 whose module is missing waits indefinitely, which is what keeps a module that has gone
 from turning recoverable work into a failed result.
+
+`--crash-at admitted|executed` is for the proof alone as well: the host kills itself in one
+of the two windows a start has — with the run recorded and the engine not yet told, or told
+and the receipt not yet written — so that recovery is demonstrated rather than argued.
 
 ## The local workflow host
 
@@ -1122,6 +1128,13 @@ project's own `.herdr/workflows` is its own: two projects can run different impl
 of one public id at the same time, each on its own registration.
 [`sdk.md`](sdk.md#where-a-module-lives) is where a module is saved and when an edit takes
 effect.
+
+`start` also names the caller's `request` — its own id for the work it is asking for — and
+answers with the run that claim became. Sending it again is that same run rather than a
+second one, whether the first attempt was answered, lost, or interrupted by a host that
+died mid-start; sending it with other arguments is `RequestConflict` rather than a quiet
+change of mind. The rows behind that are in the same SQLite file as the engine's own, and
+[ADR-0017](adr/0017-one-request-is-one-run.md) is why each of them is there.
 
 It says which build it is. A client of another build — after `collie upgrade` has replaced
 the binary under a host that is still running — is told which build is running and which

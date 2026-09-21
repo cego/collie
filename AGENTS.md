@@ -80,6 +80,12 @@ doors: herdr actions, and the `collie` CLI.
   [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `src/host.ts` and
   `test/host.test.ts`. The lock is `src/lock.ts`'s, so ownership is decided the same way
   it is for a Run's persistence and a Driver takeover.
+- **Changing how a start is claimed, what a host records about a run, or how an
+  interrupted start recovers** →
+  [ADR-0017](docs/adr/0017-one-request-is-one-run.md) and
+  [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `src/store.ts`,
+  `test/store.test.ts` and `test/admission.test.ts`. The request id is the claim and the
+  un-receipted row is the whole of recovery; there is no outbox or queue to add to.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

@@ -16,7 +16,18 @@
 
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import { Config, Data, Effect, FileSystem, Layer, Path, Schedule, Schema, Scope } from "effect";
+import {
+  Config,
+  Crypto,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Path,
+  Schedule,
+  Schema,
+  Scope,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
@@ -36,6 +47,7 @@ import {
   Registry,
 } from "./native";
 import { Catalogue, discover, searchPath } from "./discovery";
+import { RequestConflict } from "./store";
 import { currentEnv } from "./env";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
@@ -76,7 +88,13 @@ const Loaded = Schema.Struct({
   title: Schema.String,
 });
 
-const Started = Schema.Struct({ registration: Schema.String, execution: Schema.String });
+/** What a start became: the run it is, and whether this call is what made it. */
+const Started = Schema.Struct({
+  runId: Schema.String,
+  registration: Schema.String,
+  execution: Schema.String,
+  fresh: Schema.Boolean,
+});
 
 /**
  * What a client may ask of a host. Both ends read these declarations, so a request is a
@@ -93,15 +111,17 @@ export const HostRpcs = RpcGroup.make(
   // Which project is asking, because the answer differs: an override is one project's
   // and the host serves them all.
   Rpc.make("discover", { payload: { project: Schema.String }, success: Catalogue }),
+  // The request id is the caller's claim on this work: sending it twice is one run, and
+  // sending it with other arguments is refused rather than quietly becoming something else.
   Rpc.make("start", {
     payload: {
       project: Schema.String,
       id: Schema.String,
-      runId: Schema.String,
+      request: Schema.String,
       input: Schema.Record(Schema.String, Schema.Json),
     },
     success: Started,
-    error: HostRefused,
+    error: Schema.Union([HostRefused, RequestConflict]),
   }),
   Rpc.make("status", {
     payload: { runId: Schema.String },
@@ -185,9 +205,9 @@ const handlers = (dir: string) =>
               problems: found.problems,
             })),
           ),
-        start: ({ project, id, runId, input }) =>
+        start: ({ project, id, request, input }) =>
           resolve(project, id).pipe(
-            Effect.flatMap((generation) => registry.start({ generation, runId, input })),
+            Effect.flatMap((generation) => registry.start({ generation, project, request, input })),
           ),
         status: ({ runId }) => registry.status(runId),
         answer: ({ runId, decision, value }) => registry.answer({ runId, decision, value }),
@@ -208,7 +228,11 @@ export const serve = (
 ): Effect.Effect<
   void,
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+  | FileSystem.FileSystem
+  | Path.Path
+  | Crypto.Crypto
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Scope.Scope
 > =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;

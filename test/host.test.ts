@@ -139,29 +139,68 @@ test(
             return yield* client.start({
               project,
               id: "proof",
-              runId: "r1",
+              request: "req-1",
               input: { note: "kept" },
             });
           }),
         ).pipe(Effect.orDie);
         expect(started.registration).toBe("proof@1");
+        const runId = started.runId;
 
         // The client that stayed: the registration the other one made is still held, and
         // the work it accepted is still going.
         const held = yield* watching.registrations().pipe(Effect.orDie);
         expect(held.live).toEqual(["proof@1"]);
         yield* until(
-          () => watching.status({ runId: "r1" }),
+          () => watching.status({ runId }),
           (status) => status.status === "suspended",
         );
-        yield* watching
-          .answer({ runId: "r1", decision: "decision", value: "yes" })
-          .pipe(Effect.orDie);
+        yield* watching.answer({ runId, decision: "decision", value: "yes" }).pipe(Effect.orDie);
         const done = yield* until(
-          () => watching.status({ runId: "r1" }),
+          () => watching.status({ runId }),
           (status) => status.status === "complete",
         );
         expect(done).toEqual({ status: "complete", value: "note:kept=yes" });
+        yield* stopHost(state);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "one request sent by four clients at once is one run, and changing it is refused",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const { project, state } = yield* workspace("collie-host-request-");
+        const client = yield* connect(state).pipe(Effect.orDie);
+
+        // The same claim, four times over one host: the database settles which of them
+        // made the run, and the other three are told about it.
+        const admitted = yield* Effect.all(
+          [1, 2, 3, 4].map(() =>
+            client.start({ project, id: "proof", request: "req-1", input: { note: "once" } }),
+          ),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.orDie);
+        expect(new Set(admitted.map((one) => one.runId)).size).toBe(1);
+        expect(admitted.filter((one) => one.fresh)).toHaveLength(1);
+
+        // A different claim for the same work is different work: two starts, two runs.
+        const other = yield* client
+          .start({ project, id: "proof", request: "req-2", input: { note: "once" } })
+          .pipe(Effect.orDie);
+        expect(other.runId).not.toBe(admitted[0]?.runId);
+        expect(other.fresh).toBe(true);
+
+        // And the first claim, for something else, is not that claim.
+        const refused = yield* client
+          .start({ project, id: "proof", request: "req-1", input: { note: "changed" } })
+          .pipe(Effect.flip, Effect.orDie);
+        if (refused._tag !== "RequestConflict") {
+          throw new Error(`started, or refused with ${refused._tag}`);
+        }
+        expect(refused.request).toBe("req-1");
         yield* stopHost(state);
       }),
     ),
@@ -178,12 +217,17 @@ test(
           Effect.gen(function* () {
             const client = yield* connect(state);
             yield* client.load({ entry: `${wf}/proof.workflow.ts` });
-            yield* client.start({ project, id: "proof", runId: "r1", input: { note: "durable" } });
+            const started = yield* client.start({
+              project,
+              id: "proof",
+              request: "req-1",
+              input: { note: "durable" },
+            });
             yield* until(
-              () => client.status({ runId: "r1" }),
+              () => client.status({ runId: started.runId }),
               (status) => status.status === "suspended",
             );
-            return yield* client.identity();
+            return { ...(yield* client.identity()), runId: started.runId };
           }),
         ).pipe(Effect.orDie);
 
@@ -200,11 +244,11 @@ test(
             expect(second.pid).not.toBe(first.pid);
             // Rebuilt from the module as it is now, under the name the run started on.
             expect((yield* client.registrations()).live).toEqual(["proof@1"]);
-            expect((yield* client.status({ runId: "r1" })).status).toBe("suspended");
+            expect((yield* client.status({ runId: first.runId })).status).toBe("suspended");
 
-            yield* client.answer({ runId: "r1", decision: "decision", value: "still here" });
+            yield* client.answer({ runId: first.runId, decision: "decision", value: "still here" });
             const done = yield* until(
-              () => client.status({ runId: "r1" }),
+              () => client.status({ runId: first.runId }),
               (status) => status.status === "complete",
             );
             expect(done).toEqual({ status: "complete", value: "note:durable=still here" });

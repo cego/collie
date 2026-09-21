@@ -13,6 +13,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import {
   typecheckEntry,
+  type CrashPoint,
   hostLayer,
   HostReply,
   HostRequest,
@@ -35,15 +36,25 @@ export const native = Command.make(
       Flag.withDescription("How long a message waits for a missing module; unset waits forever"),
       Flag.optional,
     ),
+    crashAt: Flag.Literals("crash-at", ["admitted", "executed"]).pipe(
+      Flag.withDescription(
+        "Die mid-start, so recovery is proven: with the run recorded and the engine not told, or told and the receipt not written",
+      ),
+      Flag.optional,
+    ),
   },
-  (flags) => serve(flags.dir, flags.registrationTimeout),
+  (flags) => serve(flags.dir, flags.registrationTimeout, flags.crashAt),
 ).pipe(
   Command.withDescription(
     "Run one native workflow host on stdin/stdout (the native-runtime proof)",
   ),
 );
 
-const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.Effect<void> =>
+const serve = (
+  dir: string,
+  registrationTimeout: Option.Option<number>,
+  crashAt: Option.Option<CrashPoint>,
+): Effect.Effect<void> =>
   Effect.gen(function* () {
     const engine = yield* WorkflowEngine.WorkflowEngine;
     // Built in this command's scope, which is the host's: a registration outlives the
@@ -90,11 +101,17 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
         }
 
         case "start": {
-          // This host is the recovery proof's, and loads a file it is told to: the
-          // generation is the newest of that id rather than one looked up for a project.
+          // This host is handed a file rather than asked about a project, and the run id
+          // it is given is the claim: one start per run id, retried by run id.
           const started = yield* registry.newest(request.id).pipe(
             Effect.flatMap((generation) =>
-              registry.start({ generation, runId: request.runId, input: request.input }),
+              registry.start({
+                generation,
+                request: request.runId,
+                project: "",
+                runId: request.runId,
+                input: request.input,
+              }),
             ),
             Effect.result,
           );
@@ -240,7 +257,7 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
       Stream.runDrain,
     );
   }).pipe(
-    Effect.provide(registryLayer(dir)),
+    Effect.provide(registryLayer(dir, { crashAt: Option.getOrUndefined(crashAt) })),
     Effect.provide(
       hostLayer({ dir, registrationTimeout: registrationTimeoutOf(registrationTimeout) }),
     ),

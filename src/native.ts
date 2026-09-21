@@ -14,6 +14,7 @@ import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
   Cause,
   Context,
+  Crypto,
   Data,
   Duration,
   Effect,
@@ -33,6 +34,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { ConfigError } from "effect/Config";
 import type { PlatformError } from "effect/PlatformError";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as WorkflowModules from "effect/unstable/workflow";
 import * as EffectRoot from "effect";
@@ -44,6 +46,8 @@ import {
   type Registration,
   type WorkflowEntry,
 } from "./sdk";
+import { currentPid, signalProcess } from "./lock";
+import { RequestConflict, Store, storeLayer, type RunRow } from "./store";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 
@@ -372,9 +376,14 @@ export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSy
 export function hostLayer(options: {
   readonly dir: string;
   readonly registrationTimeout?: Duration.Input;
-}): Layer.Layer<WorkflowEngine.WorkflowEngine, ConfigError> {
+}): Layer.Layer<
+  WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
+  ConfigError
+> {
+  // One connection, two halves: the engine's own tables and the rows Collie keeps beside
+  // them are in the same file, written by the same process.
   const sql = SqliteClient.layer({ filename: `${options.dir}/native.db` }).pipe(
-    Layer.provide(Reactivity.layer),
+    Layer.provideMerge(Reactivity.layer),
   );
   const cluster = SingleRunner.layer({
     shardingConfig: {
@@ -387,7 +396,7 @@ export function hostLayer(options: {
       entityRegistrationTimeout: options.registrationTimeout ?? Duration.infinity,
     },
   }).pipe(Layer.provide([sql, BunCrypto.layer]));
-  return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster));
+  return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster), Layer.provideMerge(sql));
 }
 
 /** Files are the hold and stop flags because an operator sets them between runs. */
@@ -461,55 +470,18 @@ export const HostReply = Schema.Struct({
 });
 
 /**
- * A host's routing, which is what lets a restart find work again. A workflow's native
- * registration name is the tag its executions are stored under, so a run recovers only if
- * the next host registers the module under the name that run started on. Loading the same
- * file again mints the next name rather than replacing the old one: new work goes to the
- * new generation, and what is already running keeps the one it has.
+ * The next generation of an entry: opaque, distinct, and never a name already used. A
+ * workflow's native registration name is the tag its executions are stored under, so a run
+ * recovers only if the next host registers the module under the name that run started on.
+ * Loading the same file again mints the next name rather than replacing the old one.
  *
- * The public workflow id, this registration name and a run id stay three different
- * things; only the first is what an operator types.
+ * The public workflow id, this registration name and a run id stay three different things;
+ * only the first is what an operator types.
  */
-const Routing = Schema.Struct({
-  registrations: Schema.Array(
-    Schema.Struct({ id: Schema.String, name: Schema.String, entry: Schema.String }),
-  ),
-  // A run's registration and the execution it was admitted as. The execution id is
-  // recorded rather than recomputed: it is derived from the payload, and a later op has
-  // the run id and nothing else.
-  runs: Schema.Record(
-    Schema.String,
-    Schema.Struct({ registration: Schema.String, execution: Schema.String }),
-  ),
-});
-export type Routing = typeof Routing.Type;
-
-const routingFile = (dir: string) => `${dir}/routing.json`;
-const decodeRouting = Schema.decodeUnknownEffect(Schema.fromJsonString(Routing));
-const encodeRouting = Schema.encodeSync(Schema.fromJsonString(Routing));
-
-export const readRouting: (dir: string) => Effect.Effect<Routing, never, FileSystem.FileSystem> =
-  Effect.fn("Native.readRouting")(function* (dir: string) {
-    const fs = yield* FileSystem.FileSystem;
-    const raw = yield* fs.readFileString(routingFile(dir)).pipe(Effect.orElseSucceed(() => ""));
-    return yield* decodeRouting(raw).pipe(
-      Effect.orElseSucceed(() => ({ registrations: [], runs: {} })),
-    );
-  });
-
-export const writeRouting: (
-  dir: string,
-  routing: Routing,
-) => Effect.Effect<void, never, FileSystem.FileSystem> = Effect.fn("Native.writeRouting")(
-  function* (dir: string, routing: Routing) {
-    const fs = yield* FileSystem.FileSystem;
-    yield* fs.writeFileString(routingFile(dir), encodeRouting(routing)).pipe(Effect.orDie);
-  },
-);
-
-/** The next generation of an entry: opaque, distinct, and never a name already used. */
-export const nextRegistrationName = (routing: Routing, id: string): string =>
-  `${id}@${routing.registrations.filter((entry) => entry.id === id).length + 1}`;
+export const nextRegistrationName = (
+  known: ReadonlyArray<{ readonly workflow: string }>,
+  id: string,
+): string => `${id}@${known.filter((entry) => entry.workflow === id).length + 1}`;
 
 /** The exit a decision is answered with, encoded by the decision's own schema. */
 export const answerDecision = (
@@ -554,6 +526,11 @@ export const pollStatus = (
   const [reason = ""] = Cause.pretty(value.exit.cause).split("\n");
   return { status: "failed", reason, entry };
 };
+
+/** The input a run was admitted with, as the row keeps it. */
+const decodeInput = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+);
 
 /** What a host is holding, as a caller may see it: live names and unloadable ones. */
 export const Registrations = Schema.Struct({
@@ -600,15 +577,19 @@ export interface RegistryApi {
   }) => Effect.Effect<Generation, NativeEntryError, HostServices>;
   readonly registrations: Effect.Effect<typeof Registrations.Type>;
   readonly newest: (id: string) => Effect.Effect<Generation, HostRefused>;
+  /**
+   * Admits work and hands it to the engine. The request id is the claim: the same one
+   * twice is the same run, and one whose arguments have changed is refused rather than
+   * quietly becoming something else. A caller that already has an identity for the work
+   * brings it; otherwise the host mints one.
+   */
   readonly start: (options: {
     readonly generation: Generation;
-    readonly runId: string;
+    readonly request: string;
+    readonly project: string;
+    readonly runId?: string;
     readonly input: Readonly<Record<string, Schema.Json>>;
-  }) => Effect.Effect<
-    { readonly registration: string; readonly execution: string },
-    HostRefused,
-    HostServices
-  >;
+  }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   readonly status: (
     runId: string,
   ) => Effect.Effect<typeof RunStatus.Type, HostRefused, HostServices>;
@@ -623,15 +604,42 @@ export interface RegistryApi {
   ) => Effect.Effect<{ readonly generation: Generation; readonly execution: string }, HostRefused>;
 }
 
+/** What a start records and returns: the run it is, and whether this call is what made it. */
+export interface Admitted {
+  readonly runId: string;
+  readonly registration: string;
+  readonly execution: string;
+  /** False when the request had already been admitted: a retry, not a second run. */
+  readonly fresh: boolean;
+}
+
+/**
+ * Where a host may be made to die, for the proof that neither window loses work: with the
+ * run recorded and the engine not yet told, and with the engine told and the receipt not
+ * yet written. Only `collie native` sets one, and only a test asks it to.
+ */
+export type CrashPoint = "admitted" | "executed";
+
 /** The registry a host holds, as a service its handlers ask for. */
 export class Registry extends Context.Service<Registry, RegistryApi>()("collie/native/Registry") {}
 
-export const registryLayer = (dir: string): Layer.Layer<Registry, never, HostServices> =>
-  Layer.effect(Registry)(makeRegistry(dir));
+export const registryLayer = (
+  dir: string,
+  options?: { readonly crashAt?: CrashPoint },
+): Layer.Layer<
+  Registry,
+  never,
+  HostServices | Crypto.Crypto | SqlClient.SqlClient | Reactivity.Reactivity
+> => Layer.effect(Registry)(makeRegistry(dir, options?.crashAt)).pipe(Layer.provide(storeLayer));
 
-const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServices | Scope.Scope> =
-  Effect.fn("Native.makeRegistry")(function* (dir: string) {
+const makeRegistry: (
+  dir: string,
+  crashAt?: CrashPoint,
+) => Effect.Effect<RegistryApi, never, HostServices | Store | Crypto.Crypto | Scope.Scope> =
+  Effect.fn("Native.makeRegistry")(function* (dir: string, crashAt?: CrashPoint) {
     const engine = yield* WorkflowEngine.WorkflowEngine;
+    const store = yield* Store;
+    const crypto = yield* Crypto.Crypto;
     const hostScope = yield* Effect.scope;
     /** Every generation this host is holding, by its native registration name. */
     const live = new Map<string, Generation>();
@@ -639,13 +647,13 @@ const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServi
     const unavailable = new Map<string, string>();
     /** Which generation of an id new work goes to. */
     const newestOf = new Map<string, string>();
-    let routing = yield* readRouting(dir);
+    let known = yield* store.generations;
     // Staged copies last only as long as this host: every generation below is staged from
     // the module as it is now, never restored.
     yield* clearGenerations(dir);
 
     const register = Effect.fn("Native.register")(function* (route: {
-      readonly id: string;
+      readonly workflow: string;
       readonly name: string;
       readonly entry: string;
     }) {
@@ -655,7 +663,7 @@ const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServi
       const registration = entry.make(route.name);
       yield* Layer.buildWithScope(registration.layer, hostScope);
       const generation: Generation = {
-        id: route.id,
+        id: route.workflow,
         name: route.name,
         title: entry.title,
         entry: route.entry,
@@ -665,20 +673,69 @@ const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServi
       };
       live.set(route.name, generation);
       unavailable.delete(route.name);
-      newestOf.set(route.id, route.name);
+      newestOf.set(route.workflow, route.name);
       return generation;
     });
 
     // What was registered before this host existed, rebuilt from the modules as they are
     // now. A file that has gone leaves its generation unavailable and every other one
     // registered, which is what keeps one broken module from stopping the rest.
-    for (const route of routing.registrations) {
+    for (const route of known) {
       yield* register(route).pipe(
         Effect.catchTag("NativeEntryError", (failure) =>
           Effect.sync(() => unavailable.set(route.name, `${failure.file}: ${failure.message}`)),
         ),
       );
     }
+
+    /** A host dying where the proof needs one to; nothing else ever sets this. */
+    const crash = (point: CrashPoint) =>
+      crashAt === point
+        ? currentPid.pipe(
+            Effect.flatMap((pid) => signalProcess(pid, "SIGKILL")),
+            Effect.asVoid,
+          )
+        : Effect.void;
+
+    const payloadOf = (generation: Generation, row: RunRow) =>
+      decodeInput(row.input).pipe(
+        Effect.flatMap((input) =>
+          Schema.decodeUnknownEffect(generation.registration.workflow.payloadSchema)({
+            runId: row.run,
+            input,
+          }),
+        ),
+      );
+
+    /**
+     * Gives the engine work that is recorded and not yet accepted, and writes the receipt.
+     * A start, a retry of one that crashed before the engine heard, and a host that starts
+     * with rows outstanding all come through here — under the identity the row was
+     * admitted with, so the engine's own idempotency makes a repeat a no-op rather than a
+     * second run.
+     *
+     * Nothing happens where it cannot be handed over: the module is not registered here,
+     * or no longer takes what it was started with. The row stays as it is, for a repair.
+     */
+    const handOver = Effect.fn("Native.handOver")(function* (row: RunRow) {
+      const generation = live.get(row.generation);
+      if (generation === undefined) return;
+      const payload = yield* payloadOf(generation, row).pipe(Effect.result);
+      if (payload._tag === "Failure") return;
+      yield* crash("admitted");
+      yield* engine
+        .execute(generation.registration.workflow, {
+          executionId: row.execution,
+          payload: payload.success,
+          discard: true,
+        })
+        .pipe(Effect.orDie);
+      yield* crash("executed");
+      yield* store.accepted(row.run);
+    });
+
+    // What a host admitted and did not live to hand over. Both crash windows end here.
+    for (const row of yield* store.pending) yield* handOver(row);
 
     const newest = Effect.fn("Native.newest")(function* (id: string) {
       const generation = live.get(newestOf.get(id) ?? "");
@@ -689,19 +746,18 @@ const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServi
     });
 
     const routed = Effect.fn("Native.routed")(function* (runId: string) {
-      const route = routing.runs[runId];
-      if (!route) {
+      const row = yield* store.run(runId);
+      if (row === null) {
         return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
       }
-      const generation = live.get(route.registration);
+      const generation = live.get(row.generation);
       if (!generation) {
         return yield* new HostRefused({
           reason:
-            unavailable.get(route.registration) ??
-            `${route.registration} is not registered in this host`,
+            unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
         });
       }
-      return { generation, execution: route.execution };
+      return { generation, execution: row.execution };
     });
 
     // One registration at a time. Two clients starting different modules of one id at the
@@ -713,13 +769,13 @@ const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServi
       // generation of that id.
       const described = yield* loadEntry(file, yield* revisionOf(directoryOf(file)));
       const route = {
-        id: described.id,
-        name: nextRegistrationName(routing, described.id),
+        workflow: described.id,
+        name: nextRegistrationName(known, described.id),
         entry: file,
       };
       const generation = yield* register(route);
-      routing = { ...routing, registrations: [...routing.registrations, route] };
-      yield* writeRouting(dir, routing);
+      known = [...known, route];
+      yield* store.remember(route);
       return generation;
     });
 
@@ -747,33 +803,41 @@ const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServi
 
       start: Effect.fn("Native.Registry.start")(function* (options: {
         readonly generation: Generation;
-        readonly runId: string;
+        readonly request: string;
+        readonly project: string;
+        readonly runId?: string;
         readonly input: Readonly<Record<string, Schema.Json>>;
       }) {
         const generation = options.generation;
+        const runId =
+          options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
         // Settled before anything exists to clean up: an input the workflow's own schema
-        // rejects names its field here, and no run, routing row or execution is created.
+        // rejects names its field here, and no row, claim or execution is created.
         const payload = yield* Schema.decodeUnknownEffect(
           generation.registration.workflow.payloadSchema,
-        )({ runId: options.runId, input: options.input }).pipe(
+        )({ runId, input: options.input }).pipe(
           Effect.mapError(
             (cause) => new HostRefused({ reason: `invalid_input: ${String(cause)}` }),
           ),
         );
-        const execution = yield* generation.registration.workflow.executionId(payload);
-        routing = {
-          ...routing,
-          runs: { ...routing.runs, [options.runId]: { registration: generation.name, execution } },
+        const claimed = yield* store.admit({
+          request: options.request,
+          run: runId,
+          workflow: generation.id,
+          project: options.project,
+          input: options.input,
+          generation: generation.name,
+          execution: yield* generation.registration.workflow.executionId(payload),
+        });
+        // A retry of work the engine already has is nothing more to do; one that crashed
+        // before it heard is handed over now, under the identity it was admitted with.
+        if (claimed.row.accepted === null) yield* handOver(claimed.row);
+        return {
+          runId: claimed.row.run,
+          registration: claimed.row.generation,
+          execution: claimed.row.execution,
+          fresh: claimed.fresh,
         };
-        yield* writeRouting(dir, routing);
-        yield* engine
-          .execute(generation.registration.workflow, {
-            executionId: execution,
-            payload,
-            discard: true,
-          })
-          .pipe(Effect.orDie);
-        return { registration: generation.name, execution };
       }),
 
       status: Effect.fn("Native.Registry.status")(function* (runId: string) {

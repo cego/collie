@@ -169,23 +169,23 @@ test(
           },
         ]);
 
-        // No load: the id, and the file the host found for it.
+        // No load: the id, the file the host found for it, and a request of the caller's.
         const started = yield* client
-          .start({ project: project.root, id: "proof", runId: "r1", input: { note: "saved" } })
+          .start({ project: project.root, id: "proof", request: "req-1", input: { note: "saved" } })
           .pipe(Effect.orDie);
         expect(started.registration).toBe("proof@1");
+        expect(started.fresh).toBe(true);
         expect((yield* client.registrations().pipe(Effect.orDie)).live).toEqual(["proof@1"]);
+        const runId = started.runId;
 
         yield* until(
-          () => client.status({ runId: "r1" }),
+          () => client.status({ runId }),
           (status) => status.status === "suspended",
         );
-        yield* client
-          .answer({ runId: "r1", decision: "decision", value: "yes" })
-          .pipe(Effect.orDie);
+        yield* client.answer({ runId, decision: "decision", value: "yes" }).pipe(Effect.orDie);
         expect(
           yield* until(
-            () => client.status({ runId: "r1" }),
+            () => client.status({ runId }),
             (status) => status.status === "complete",
           ),
         ).toEqual({ status: "complete", value: "note:saved=yes" });
@@ -213,8 +213,8 @@ test(
         const client = yield* connect(world.state).pipe(Effect.orDie);
         const started = yield* Effect.all(
           [
-            client.start({ project: one.root, id: "proof", runId: "r-one", input: { note: "a" } }),
-            client.start({ project: two.root, id: "proof", runId: "r-two", input: { note: "b" } }),
+            client.start({ project: one.root, id: "proof", request: "one", input: { note: "a" } }),
+            client.start({ project: two.root, id: "proof", request: "two", input: { note: "b" } }),
           ],
           { concurrency: "unbounded" },
         ).pipe(Effect.orDie);
@@ -229,7 +229,8 @@ test(
           (yield* client.discover({ project: one.root }).pipe(Effect.orDie)).entries[0]?.path,
         ).toBe(`${one.dir}/proof.workflow.ts`);
 
-        for (const runId of ["r-one", "r-two"]) {
+        for (const admitted of started) {
+          const runId = admitted.runId;
           yield* until(
             () => client.status({ runId }),
             (status) => status.status === "suspended",
@@ -238,13 +239,13 @@ test(
         }
         expect(
           yield* until(
-            () => client.status({ runId: "r-one" }),
+            () => client.status({ runId: started[0]!.runId }),
             (status) => status.status === "complete",
           ),
         ).toEqual({ status: "complete", value: "note:a=ok" });
         expect(
           yield* until(
-            () => client.status({ runId: "r-two" }),
+            () => client.status({ runId: started[1]!.runId }),
             (status) => status.status === "complete",
           ),
         ).toEqual({ status: "complete", value: "theirs:b=ok" });
@@ -263,11 +264,11 @@ test(
         const project = yield* world.project("thing");
         yield* save(world.user, MODULE);
         const client = yield* connect(world.state).pipe(Effect.orDie);
-        yield* client
-          .start({ project: project.root, id: "proof", runId: "before", input: { note: "old" } })
+        const before = yield* client
+          .start({ project: project.root, id: "proof", request: "before", input: { note: "old" } })
           .pipe(Effect.orDie);
         yield* until(
-          () => client.status({ runId: "before" }),
+          () => client.status({ runId: before.runId }),
           (status) => status.status === "suspended",
         );
 
@@ -293,28 +294,30 @@ test(
         ).toBe("Edited while a run was waiting");
 
         const after = yield* client
-          .start({ project: project.root, id: "proof", runId: "after", input: { note: "new" } })
+          .start({ project: project.root, id: "proof", request: "after", input: { note: "new" } })
           .pipe(Effect.orDie);
         expect(after.registration).toBe("proof@2");
         yield* until(
-          () => client.status({ runId: "after" }),
+          () => client.status({ runId: after.runId }),
           (status) => status.status === "suspended",
         );
         // The helper the new run used, and the prompt it read: both as they are now.
-        expect((yield* events(world.state, "after"))[0]).toBe(`launch edited:new ${PROMPT.length}`);
+        expect((yield* events(world.state, after.runId))[0]).toBe(
+          `launch edited:new ${PROMPT.length}`,
+        );
 
-        for (const runId of ["before", "after"]) {
+        for (const runId of [before.runId, after.runId]) {
           yield* client.answer({ runId, decision: "decision", value: "x" }).pipe(Effect.orDie);
         }
         expect(
           yield* until(
-            () => client.status({ runId: "before" }),
+            () => client.status({ runId: before.runId }),
             (status) => status.status === "complete",
           ),
         ).toEqual({ status: "complete", value: "note:old=x" });
         expect(
           yield* until(
-            () => client.status({ runId: "after" }),
+            () => client.status({ runId: after.runId }),
             (status) => status.status === "complete",
           ),
         ).toEqual({ status: "complete", value: "edited:new=x" });
@@ -344,17 +347,17 @@ test(
 
         // Refused by the file that is wrong, not run from the one it was written to replace.
         const refused = yield* client
-          .start({ project: project.root, id: "proof", runId: "r1", input: { note: "no" } })
+          .start({ project: project.root, id: "proof", request: "req-1", input: { note: "no" } })
           .pipe(Effect.flip, Effect.orDie);
         expect(refused.reason).toContain(broken);
 
         // A new file appears while the host is running, and is as usable as the rest.
-        yield* client
-          .start({ project: project.root, id: "plain", runId: "r2", input: { note: "fine" } })
+        const plain = yield* client
+          .start({ project: project.root, id: "plain", request: "req-2", input: { note: "fine" } })
           .pipe(Effect.orDie);
         expect(
           yield* until(
-            () => client.status({ runId: "r2" }),
+            () => client.status({ runId: plain.runId }),
             (status) => status.status === "complete",
           ),
         ).toEqual({ status: "complete", value: "plain:fine" });
@@ -367,11 +370,11 @@ test(
           ["plain", "user"],
           ["proof", "user"],
         ]);
-        yield* client
-          .start({ project: project.root, id: "proof", runId: "r3", input: { note: "yes" } })
+        const repairedRun = yield* client
+          .start({ project: project.root, id: "proof", request: "req-3", input: { note: "yes" } })
           .pipe(Effect.orDie);
         yield* until(
-          () => client.status({ runId: "r3" }),
+          () => client.status({ runId: repairedRun.runId }),
           (status) => status.status === "suspended",
         );
         yield* stopHost(world.state);
@@ -388,19 +391,20 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const project = yield* world.project("thing");
         yield* save(world.user, MODULE);
-        yield* Effect.scoped(
+        const runId = yield* Effect.scoped(
           Effect.gen(function* () {
             const client = yield* connect(world.state);
-            yield* client.start({
+            const started = yield* client.start({
               project: project.root,
               id: "proof",
-              runId: "r1",
+              request: "req-1",
               input: { note: "durable" },
             });
             yield* until(
-              () => client.status({ runId: "r1" }),
+              () => client.status({ runId: started.runId }),
               (status) => status.status === "suspended",
             );
+            return started.runId;
           }),
         ).pipe(Effect.orDie);
 
@@ -416,7 +420,7 @@ test(
             expect(held.unavailable.join("\n")).toContain("proof.workflow.ts");
             // Pending with the file to repair named, rather than failed or run on
             // whatever code is nearest.
-            const refused = yield* client.status({ runId: "r1" }).pipe(Effect.flip, Effect.orDie);
+            const refused = yield* client.status({ runId }).pipe(Effect.flip, Effect.orDie);
             expect(refused.reason).toContain("proof.workflow.ts");
           }),
         );
@@ -430,22 +434,25 @@ test(
             const client = yield* connect(world.state).pipe(Effect.orDie);
             expect((yield* client.registrations().pipe(Effect.orDie)).live).toEqual(["proof@1"]);
             const started = yield* client
-              .start({ project: project.root, id: "proof", runId: "r2", input: { note: "new" } })
+              .start({
+                project: project.root,
+                id: "proof",
+                request: "req-2",
+                input: { note: "new" },
+              })
               .pipe(Effect.orDie);
             expect(started.registration).toBe("proof@1");
 
-            yield* client
-              .answer({ runId: "r1", decision: "decision", value: "back" })
-              .pipe(Effect.orDie);
+            yield* client.answer({ runId, decision: "decision", value: "back" }).pipe(Effect.orDie);
             expect(
               yield* until(
-                () => client.status({ runId: "r1" }),
+                () => client.status({ runId }),
                 (status) => status.status === "complete",
               ),
             ).toEqual({ status: "complete", value: "note:durable=back" });
             // The Activity that ran before the restart ran once, whatever replay did.
             expect(
-              (yield* events(world.state, "r1")).filter((line) => line.startsWith("launch")),
+              (yield* events(world.state, runId)).filter((line) => line.startsWith("launch")),
             ).toHaveLength(1);
           }),
         );
