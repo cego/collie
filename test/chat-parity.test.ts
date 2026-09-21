@@ -242,6 +242,13 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ],
   ["tools call", { route: "human-only", why: "the same — this is how a tool call is made" }],
   ["mcp", { route: "human-only", why: "the same, for the harness that reaches Collie over MCP" }],
+  [
+    "native",
+    {
+      route: "human-only",
+      why: "the native-runtime proof's own host: a protocol on stdio, not an operation",
+    },
+  ],
   ["upgrade", { route: "propose", kind: "upgrade", action: { kind: "upgrade" } }],
   ["doctor", { route: "read", tool: "collie_installation" }],
   // Not commands: the board's own operations, and the flags that change what a command

@@ -19,6 +19,8 @@
     ".windsurf/**",
     "advisor-plans/**",
     "plans/**",
+    // Workflow modules an author would write, checked by the provisioned toolchain.
+    "test/fixtures/native/**",
     // Bun scripts that run before any Effect program does: the release build, and the
     // herdr download the contract check verifies.
     "tools/build.ts",

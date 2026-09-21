@@ -57,6 +57,12 @@ doors: herdr actions, and the `collie` CLI.
   selected is an explicit input chat may read, never a filter over the reads
   ([ADR-0012](docs/adr/0012-the-boards-selection-is-an-explicit-chat-input.md), alongside
   `src/selection.ts` and `src/statusline.ts`).
+- **Changing how a workflow module is loaded, which Effect it gets, or what a host may
+  assume about suspension and recovery** →
+  [ADR-0014](docs/adr/0014-native-workflows-run-on-effects-own-engine.md), alongside
+  `src/native.ts` and `test/native-runtime.test.ts`. The two non-default cluster settings
+  and the four upstream behaviours the proof measured are recorded there; an Effect
+  upgrade rechecks them rather than assuming them.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

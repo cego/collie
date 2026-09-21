@@ -15,6 +15,7 @@ import { chat, mcp, tools } from "./commands/chat";
 import { board } from "./commands/board";
 import { home } from "./commands/home";
 import { workflow } from "./commands/workflow";
+import { native } from "./commands/native";
 import { printResult } from "./envelope";
 import { err } from "./operations";
 
@@ -36,6 +37,7 @@ export const app = root.pipe(
     mcp,
     upgrade,
     doctor,
+    native,
   ]),
 );
 

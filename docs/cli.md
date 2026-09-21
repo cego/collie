@@ -1066,3 +1066,37 @@ checkout that is merely behind its remote is not one of those: it is reported, w
 shows rather than sends. `--json` carries the same checks as data. `setup.sh` ends by
 running it, and exits with its status: the last word of an install is either that
 everything is ready, or what is missing and how to fix each one.
+
+## Running a native workflow host
+
+```sh
+collie native --dir <state-dir> [--registration-timeout-ms <n>]
+```
+
+The fixture host from
+[ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md): one process, one state
+directory, one JSON line of request in and one of reply out. It loads a workflow module
+written in TypeScript outside this repository, runs it on Effect's workflow engine over
+SQLite in that directory, and answers `load`, `start`, `poll`, `answer`, `hold`, `release`,
+`stop`, `resume`, `registrations`, `provision` and `check`.
+
+It exists so the proof that a packaged workflow survives a real restart can be run against
+the packaged executable, and it will be superseded by the host Collie ships. It is not a
+front door for work: it opens no tab, acquires no agent, and knows nothing about Runs.
+
+`--registration-timeout-ms` is for the proof alone. Left off, a message for a workflow
+whose module is missing waits indefinitely, which is what keeps a module that has gone
+from turning recoverable work into a failed result.
+
+## Authoring against the native SDK
+
+`provision` writes `package.json`, `tsconfig.json` and `collie-native.d.ts` into a workflow
+directory that has none, and installs the toolchain with the executable's own embedded Bun
+— so typechecking a module needs neither Bun nor Node on the machine. Files already there
+are left alone. `check` typechecks one module and reports each diagnostic with its file and
+line; an error in one module says nothing about the one beside it. With nothing installed
+to check with, that is `toolchain_unavailable` rather than a module reported as fine.
+
+The `effect` the toolchain pins is the one the host runs, and at runtime the executable
+serves its own `effect` and `collie/native` to the module it loads, so what an author
+typechecks against and what executes are the same Effect.
