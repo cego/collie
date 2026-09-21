@@ -52,6 +52,12 @@ export interface Candidate {
   value: string;
   source: string;
   label?: string;
+  /**
+   * Offer it, but never let inference alone land on it. An unrelated merge request
+   * of mine is a reasonable thing to pick from a menu and never a reasonable thing
+   * to review unasked.
+   */
+  menuOnly?: boolean;
 }
 
 export type WorkSourceCandidate = Candidate;
@@ -155,9 +161,11 @@ export function inferInput(
         const baseRef = (yield* defaultBase(run, ctx.cwd)) ?? "";
         const project = (yield* projectHere(ctx.cwd, run)) ?? undefined;
         const common = { ...base, candidates, base: baseRef, project };
-        // A directory that is not a checkout offers nothing to infer from, so the
-        // menu is one entry: type it.
-        if (candidates.length === 0) {
+        // A directory that is not a checkout offers nothing to infer from, and a
+        // list of only menu-only entries is the same answer: ask rather than review
+        // whichever unrelated merge request happens to sort first.
+        const inferred = candidates.find((c) => !c.menuOnly);
+        if (!inferred) {
           return {
             ...common,
             value: "",
@@ -166,7 +174,7 @@ export function inferInput(
             question: TARGET_QUESTION,
           };
         }
-        return { ...common, ...candidates[0]! };
+        return { ...common, ...inferred };
       }
 
       case "ticket": {
@@ -404,8 +412,9 @@ export function targetCandidates(
 
       const dirty = (yield* run("git", ["status", "--porcelain"], ctx.cwd)).stdout.trim() !== "";
       // Last, and always there when nothing else is: the working tree is the one
-      // target every checkout has, and inference already fell back to it.
-      if (dirty || out.length === 0) {
+      // target every checkout has, and inference already fell back to it. Menu-only
+      // entries do not count, or inference would have nothing left to land on.
+      if (dirty || out.every((c) => c.menuOnly)) {
         out.push({
           kind: "worktree",
           value: "worktree",
@@ -455,6 +464,7 @@ function myOpenMrs(
           value: mrTarget(project, key),
           source: title ? `open MR !${key} — ${title}` : `open MR !${key}`,
           label: `!${key}`,
+          menuOnly: true,
         });
       }
     }

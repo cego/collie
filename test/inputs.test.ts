@@ -613,7 +613,34 @@ test("with no MR for this branch, my own open MRs are offered instead", () =>
         ["branch", "branch:main...add-picker"],
         ["worktree", "worktree"],
       ]);
-      expect(resolved.value).toBe("mr:7");
+      // Offered, but never inferred: an unrelated merge request of mine is not what
+      // this branch is about, so inference takes the branch.
+      expect(resolved.value).toBe("branch:main...add-picker");
+    }),
+  ));
+
+test("my own open MRs are never what inference lands on by itself", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // The shape that reviewed the wrong merge request: standing on the default
+      // branch with a clean tree, so the only candidates are my open MRs, and the
+      // lowest iid is an unrelated one from months ago.
+      yield* bin.add(
+        "glab",
+        `case "$2" in
+      view) exit 1 ;;
+      list) echo '[{"iid": 41, "title": "something old"}, {"iid": 314, "title": "this work"}]' ;;
+    esac`,
+      );
+      yield* bin.add("git", gitOn("main", "origin/main", ""));
+
+      const resolved = yield* inferInput("target", "diff-target", ctx());
+
+      // Both are on the menu, in iid order, and the working tree is there to be
+      // inferred rather than !41.
+      expect(resolved.candidates?.map((c) => c.value)).toEqual(["mr:41", "mr:314", "worktree"]);
+      expect(resolved.value).toBe("worktree");
+      expect(resolved.needsAsking).toBeFalsy();
     }),
   ));
 
