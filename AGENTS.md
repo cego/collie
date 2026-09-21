@@ -68,6 +68,12 @@ doors: herdr actions, and the `collie` CLI.
   `src/native.ts` and `test/native-runtime.test.ts`. The two non-default cluster settings
   and the four upstream behaviours the proof measured are recorded there; an Effect
   upgrade rechecks them rather than assuming them.
+- **Changing where a workflow module is looked for, which layer wins, or when an edit
+  reaches new work** →
+  [ADR-0016](docs/adr/0016-a-workflow-module-is-found-where-it-was-saved.md) and
+  [`docs/sdk.md`](docs/sdk.md#where-a-module-lives), alongside `src/discovery.ts`,
+  `test/discovery.test.ts` and `test/autoload.test.ts`. The user's own directory is
+  ignored by this checkout on purpose: `collie upgrade` fast-forwards it.
 - **Changing who owns a state directory, how a client reaches the host, or what a
   mismatched build is told** →
   [ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md) and

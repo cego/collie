@@ -1111,11 +1111,17 @@ never adopted and never signalled.
 
 Clients talk to it over a unix socket in that same directory, with Effect's own RPC: the
 same schemas at both ends, and nothing listening off this machine. It answers `identity`,
-`load`, `registrations`, `start`, `status` and `answer` — the registry `collie native`
-drives, in front of as many clients as ask. Closing a client cancels nothing it started;
-stopping the host with `kill` leaves suspended work suspended, and the next client starts a
-host that picks it up. The operator controls the recovery proof measured — hold, release,
-stop, resume — are not on this protocol yet.
+`discover`, `load`, `registrations`, `start`, `status` and `answer` — the registry `collie
+native` drives, in front of as many clients as ask. Closing a client cancels nothing it
+started; stopping the host with `kill` leaves suspended work suspended, and the next client
+starts a host that picks it up. The operator controls the recovery proof measured — hold,
+release, stop, resume — are not on this protocol yet.
+
+`discover` and `start` name the project asking, because one host serves the machine and a
+project's own `.herdr/workflows` is its own: two projects can run different implementations
+of one public id at the same time, each on its own registration.
+[`sdk.md`](sdk.md#where-a-module-lives) is where a module is saved and when an edit takes
+effect.
 
 It says which build it is. A client of another build — after `collie upgrade` has replaced
 the binary under a host that is still running — is told which build is running and which

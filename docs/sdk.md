@@ -54,6 +54,33 @@ idempotency is the run alone, so a retried request is the same execution and a n
 is a new one. The error is `WorkflowError`, which carries a `reason`: a Run that ended
 badly is a Run, not a value another workflow destructures.
 
+## Where a module lives
+
+Three directories, nearest first:
+
+| Layer   | Where                                             |
+| ------- | ------------------------------------------------- |
+| project | `.herdr/workflows/*.workflow.ts`                  |
+| user    | `~/.collie/user/workflows/*.workflow.ts`          |
+| shipped | `workflows/*.workflow.ts` inside the installation |
+
+Save `echo.workflow.ts` in one of them and it is found: nothing to register it in, nothing
+to rebuild, no host to restart. Only entry files take part — a `helper.ts` or a `notes.md`
+beside one is reached because your entry imports it, not because it was found.
+
+The file name is what shadows. A project's `review.workflow.ts` overrides the user's, which
+overrides the shipped one; the `id` inside is the public name an operator types. Two files
+in one layer claiming one id are both refused, each naming the other, and an override that
+does not compile refuses its own id and says which file — it never falls through to the
+module it was written to replace, and the entries beside it keep working.
+
+An edit reaches the next run. Your entry, the helpers it imports and the Markdown it reads
+are one thing — the directory a generation is staged from — so editing any of them sends
+new work to a new registration while a run already going keeps the code it started on.
+Deleting a file takes its id away; putting it back brings it, and any run waiting on it,
+back. [ADR-0016](adr/0016-a-workflow-module-is-found-where-it-was-saved.md) is why each of
+those is the way it is.
+
 ## Replay, and what belongs in an Activity
 
 Recovery re-enters your workflow body from the top. What happened before is not repeated

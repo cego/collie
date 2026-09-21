@@ -24,6 +24,7 @@ import {
   Predicate,
   Schema,
   Scope,
+  Semaphore,
   Stream,
 } from "effect";
 import * as ClusterWorkflowEngine from "effect/unstable/cluster/ClusterWorkflowEngine";
@@ -256,37 +257,69 @@ const EntryContract = Schema.Struct({
  * agent or open a worktree; nothing here is a sandbox. The metadata is checked here, at
  * load, which is why a contradiction never reaches a Run.
  */
-export const loadEntry: (file: string) => Effect.Effect<WorkflowEntry, NativeEntryError> =
-  Effect.fn("Native.loadEntry")(function* (file: string) {
-    installSdk();
-    const loaded = yield* Effect.tryPromise({
-      try: () => import(file),
-      catch: (cause) => new NativeEntryError({ file, message: String(cause) }),
+export const loadEntry: (
+  file: string,
+  revision?: string,
+) => Effect.Effect<WorkflowEntry, NativeEntryError> = Effect.fn("Native.loadEntry")(function* (
+  file: string,
+  revision?: string,
+) {
+  installSdk();
+  // Bun's module registry has no invalidation, so an entry read twice at one path is the
+  // first read both times. A revision in the specifier is a path nothing has imported.
+  const loaded = yield* Effect.tryPromise({
+    try: () => import(revision === undefined ? file : `${file}?v=${revision}`),
+    catch: (cause) => new NativeEntryError({ file, message: String(cause) }),
+  });
+  const described = yield* Schema.decodeUnknownEffect(EntryContract)(loaded).pipe(
+    Effect.mapError(
+      () =>
+        new NativeEntryError({
+          file,
+          message: "a workflow entry exports id, title, description and input",
+        }),
+    ),
+  );
+  if (!Predicate.isFunction(loaded.make)) {
+    return yield* new NativeEntryError({
+      file,
+      message: "a workflow entry exports make(registrationName)",
     });
-    const described = yield* Schema.decodeUnknownEffect(EntryContract)(loaded).pipe(
-      Effect.mapError(
-        () =>
-          new NativeEntryError({
-            file,
-            message: "a workflow entry exports id, title, description and input",
-          }),
-      ),
-    );
-    if (!Predicate.isFunction(loaded.make)) {
-      return yield* new NativeEntryError({
-        file,
-        message: "a workflow entry exports make(registrationName)",
-      });
+  }
+  // SAFETY: the contract above decoded and `make` is a function. What the author's
+  // schemas and metadata hold is checked next, and what `make` returns is checked when
+  // the host builds its Layer.
+  const entry = { ...described, make: loaded.make } as WorkflowEntry;
+  const problems = checkEntry(entry);
+  if (problems.length > 0) {
+    return yield* new NativeEntryError({ file, message: problems.join("; ") });
+  }
+  return entry;
+});
+
+/**
+ * What a generation of an entry would be staged from, as one value. A generation is a copy
+ * of the whole directory, so an edited helper or Markdown prompt is as much a change as an
+ * edited entry — and a directory nothing has touched is the same code to run.
+ */
+export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
+  Effect.fn("Native.revisionOf")(function* (dir: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const names = yield* fs
+      .readDirectory(dir, { recursive: true })
+      .pipe(Effect.orElseSucceed((): Array<string> => []));
+    let read = "";
+    for (const name of names.sort()) {
+      // A directory reads as nothing, and what is inside it is in the list under a name
+      // of its own. An installed dependency counts by its name alone: the toolchain a
+      // module is typechecked against lives here too, and reading all of it would cost
+      // more than every start it is on the way of.
+      const content = name.startsWith("node_modules/")
+        ? ""
+        : yield* fs.readFileString(`${dir}/${name}`).pipe(Effect.orElseSucceed(() => ""));
+      read += `${name}:${Bun.hash(content).toString(16)}\n`;
     }
-    // SAFETY: the contract above decoded and `make` is a function. What the author's
-    // schemas and metadata hold is checked next, and what `make` returns is checked when
-    // the host builds its Layer.
-    const entry = { ...described, make: loaded.make } as WorkflowEntry;
-    const problems = checkEntry(entry);
-    if (problems.length > 0) {
-      return yield* new NativeEntryError({ file, message: problems.join("; ") });
-    }
-    return entry;
+    return Bun.hash(read).toString(16);
   });
 
 /**
@@ -317,6 +350,12 @@ export const stageGeneration: (options: {
     );
   return `${staged}${options.entry.slice(slash)}`;
 });
+
+const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
+
+/** A file and what was in its directory when it was read, as one value. */
+const sourceOf = (entry: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
+  revisionOf(directoryOf(entry)).pipe(Effect.map((revision) => `${entry}@${revision}`));
 
 /** Every generation a host staged, gone: a new host stages from the sources again. */
 export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
@@ -531,6 +570,8 @@ export interface Generation {
   readonly name: string;
   readonly title: string;
   readonly entry: string;
+  /** The file and the revision this was built from: what makes a later start the same code. */
+  readonly source: string;
   readonly metadata: Schema.Json;
   readonly registration: Registration;
 }
@@ -548,10 +589,19 @@ export type HostServices = WorkflowEngine.WorkflowEngine | NativeHost | FileSyst
  */
 export interface RegistryApi {
   readonly load: (entry: string) => Effect.Effect<Generation, NativeEntryError, HostServices>;
+  /**
+   * The generation new work goes to: the one already built from this file at this
+   * revision, or a new one. An edit is therefore a new generation and an unchanged file is
+   * not, without either being asked for.
+   */
+  readonly use: (options: {
+    readonly entry: string;
+    readonly revision: string;
+  }) => Effect.Effect<Generation, NativeEntryError, HostServices>;
   readonly registrations: Effect.Effect<typeof Registrations.Type>;
   readonly newest: (id: string) => Effect.Effect<Generation, HostRefused>;
   readonly start: (options: {
-    readonly id: string;
+    readonly generation: Generation;
     readonly runId: string;
     readonly input: Readonly<Record<string, Schema.Json>>;
   }) => Effect.Effect<
@@ -609,6 +659,7 @@ const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServi
         name: route.name,
         title: entry.title,
         entry: route.entry,
+        source: yield* sourceOf(route.entry),
         metadata: describeMetadata(entry.metadata),
         registration,
       };
@@ -653,21 +704,38 @@ const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServi
       return { generation, execution: route.execution };
     });
 
+    // One registration at a time. Two clients starting different modules of one id at the
+    // same moment would otherwise mint one name for both and stage over each other.
+    const registering = yield* Semaphore.make(1);
+
+    const mint = Effect.fn("Native.Registry.mint")(function* (file: string) {
+      // Read as it is now to learn the id this file claims, then register the next
+      // generation of that id.
+      const described = yield* loadEntry(file, yield* revisionOf(directoryOf(file)));
+      const route = {
+        id: described.id,
+        name: nextRegistrationName(routing, described.id),
+        entry: file,
+      };
+      const generation = yield* register(route);
+      routing = { ...routing, registrations: [...routing.registrations, route] };
+      yield* writeRouting(dir, routing);
+      return generation;
+    });
+
     return {
-      load: Effect.fn("Native.Registry.load")(function* (file: string) {
-        // Read once to learn the id this file claims, then register the next generation
-        // of that id.
-        const described = yield* loadEntry(file);
-        const route = {
-          id: described.id,
-          name: nextRegistrationName(routing, described.id),
-          entry: file,
-        };
-        const generation = yield* register(route);
-        routing = { ...routing, registrations: [...routing.registrations, route] };
-        yield* writeRouting(dir, routing);
-        return generation;
-      }),
+      load: (file: string) => registering.withPermits(1)(mint(file)),
+
+      use: (options: { readonly entry: string; readonly revision: string }) =>
+        registering.withPermits(1)(
+          Effect.gen(function* () {
+            const source = `${options.entry}@${options.revision}`;
+            for (const generation of live.values()) {
+              if (generation.source === source) return generation;
+            }
+            return yield* mint(options.entry);
+          }),
+        ),
 
       registrations: Effect.sync(() => ({
         live: [...live.keys()].sort(),
@@ -678,11 +746,11 @@ const makeRegistry: (dir: string) => Effect.Effect<RegistryApi, never, HostServi
       routed,
 
       start: Effect.fn("Native.Registry.start")(function* (options: {
-        readonly id: string;
+        readonly generation: Generation;
         readonly runId: string;
         readonly input: Readonly<Record<string, Schema.Json>>;
       }) {
-        const generation = yield* newest(options.id);
+        const generation = options.generation;
         // Settled before anything exists to clean up: an input the workflow's own schema
         // rejects names its field here, and no run, routing row or execution is created.
         const payload = yield* Schema.decodeUnknownEffect(

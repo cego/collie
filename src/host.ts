@@ -35,6 +35,8 @@ import {
   registryLayer,
   Registry,
 } from "./native";
+import { Catalogue, discover, searchPath } from "./discovery";
+import { currentEnv } from "./env";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
 /** What a host says it is. A client that is not this stops rather than guessing. */
@@ -88,8 +90,12 @@ export const HostRpcs = RpcGroup.make(
     error: NativeEntryError,
   }),
   Rpc.make("registrations", { success: Registrations }),
+  // Which project is asking, because the answer differs: an override is one project's
+  // and the host serves them all.
+  Rpc.make("discover", { payload: { project: Schema.String }, success: Catalogue }),
   Rpc.make("start", {
     payload: {
+      project: Schema.String,
       id: Schema.String,
       runId: Schema.String,
       input: Schema.Record(Schema.String, Schema.Json),
@@ -125,6 +131,36 @@ const handlers = (dir: string) =>
     Effect.gen(function* () {
       const registry = yield* Registry;
       const pid = yield* currentPid;
+      // The installation this host belongs to, which the client that started it named.
+      const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
+      const catalogue = (project: string) => discover(searchPath({ pluginRoot: install, project }));
+
+      /**
+       * The generation a start of this id in this project goes to. A file the search path
+       * refuses is refused here by name: what it was written to override is not what the
+       * author asked to run.
+       */
+      const resolve = Effect.fn("Host.resolve")(function* (project: string, id: string) {
+        const found = yield* catalogue(project);
+        const entry = found.entries.find((one) => one.id === id);
+        if (entry === undefined) {
+          const problem = found.problems.find((one) => one.id === id);
+          return yield* new HostRefused({
+            reason:
+              problem === undefined
+                ? `no workflow "${id}" is saved for ${project}`
+                : `${problem.path}: ${problem.message}`,
+          });
+        }
+        return yield* registry
+          .use({ entry: entry.path, revision: entry.revision })
+          .pipe(
+            Effect.mapError(
+              (failure) => new HostRefused({ reason: `${failure.file}: ${failure.message}` }),
+            ),
+          );
+      });
+
       return HostRpcs.of({
         identity: () => Effect.succeed({ build: BUILD, pid, dir }),
         load: ({ entry }) =>
@@ -136,7 +172,23 @@ const handlers = (dir: string) =>
             })),
           ),
         registrations: () => registry.registrations,
-        start: ({ id, runId, input }) => registry.start({ id, runId, input }),
+        discover: ({ project }) =>
+          catalogue(project).pipe(
+            Effect.map((found) => ({
+              // Without the revision: that is how this host decides a reload, not a caller.
+              entries: found.entries.map(({ id, title, layer, path }) => ({
+                id,
+                title,
+                layer,
+                path,
+              })),
+              problems: found.problems,
+            })),
+          ),
+        start: ({ project, id, runId, input }) =>
+          resolve(project, id).pipe(
+            Effect.flatMap((generation) => registry.start({ generation, runId, input })),
+          ),
         status: ({ runId }) => registry.status(runId),
         answer: ({ runId, decision, value }) => registry.answer({ runId, decision, value }),
       });
@@ -277,10 +329,14 @@ const diagnose = Effect.fn("Host.diagnose")(function* (dir: string) {
 const spawnHost = Effect.fn("Host.spawn")(function* (dir: string) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const command = yield* hostCommand;
+  // Which installation's workflows this host serves, decided by the client that needed
+  // it rather than guessed from wherever the host process happens to start.
+  const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
   yield* Effect.scoped(
     Effect.gen(function* () {
       const handle = yield* spawner.spawn(
         ChildProcess.make(command[0] ?? "collie", [...command.slice(1), "host", "--dir", dir], {
+          env: { HERDR_PLUGIN_ROOT: install },
           extendEnv: true,
           detached: true,
           stdin: "ignore",

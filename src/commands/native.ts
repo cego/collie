@@ -90,9 +90,14 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
         }
 
         case "start": {
-          const started = yield* registry
-            .start({ id: request.id, runId: request.runId, input: request.input })
-            .pipe(Effect.result);
+          // This host is the recovery proof's, and loads a file it is told to: the
+          // generation is the newest of that id rather than one looked up for a project.
+          const started = yield* registry.newest(request.id).pipe(
+            Effect.flatMap((generation) =>
+              registry.start({ generation, runId: request.runId, input: request.input }),
+            ),
+            Effect.result,
+          );
           if (started._tag === "Failure") {
             return yield* answer({
               ok: false,

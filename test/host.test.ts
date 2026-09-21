@@ -43,16 +43,17 @@ const proves = <A, E>(
     }),
   );
 
-/** A workflow directory of its own, and a state directory for the host to own. */
+/** A project with a workflow saved in it, and a state directory for the host to own. */
 const workspace = Effect.fn("HostTest.workspace")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix });
-  yield* fs.makeDirectory(`${dir}/wf`, { recursive: true });
+  const wf = `${dir}/project/.herdr/workflows`;
+  yield* fs.makeDirectory(wf, { recursive: true });
   yield* fs.makeDirectory(`${dir}/state`, { recursive: true });
   for (const name of ["proof.workflow.ts", "helper.ts", "notes.md"]) {
-    yield* fs.copyFile(`${fixtures}/${name}`, `${dir}/wf/${name}`);
+    yield* fs.copyFile(`${fixtures}/${name}`, `${wf}/${name}`);
   }
-  return { wf: `${dir}/wf`, state: `${dir}/state` };
+  return { wf, project: `${dir}/project`, state: `${dir}/state` };
 });
 
 /**
@@ -125,7 +126,7 @@ test(
   () =>
     proves(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-host-disconnect-");
+        const { wf, project, state } = yield* workspace("collie-host-disconnect-");
         const watching = yield* connect(state).pipe(Effect.orDie);
 
         // Another client's whole life: it loads a module, starts a run, and goes while
@@ -135,7 +136,12 @@ test(
             const client = yield* connect(state);
             const loaded = yield* client.load({ entry: `${wf}/proof.workflow.ts` });
             expect(loaded.registration).toBe("proof@1");
-            return yield* client.start({ id: "proof", runId: "r1", input: { note: "kept" } });
+            return yield* client.start({
+              project,
+              id: "proof",
+              runId: "r1",
+              input: { note: "kept" },
+            });
           }),
         ).pipe(Effect.orDie);
         expect(started.registration).toBe("proof@1");
@@ -167,12 +173,12 @@ test(
   () =>
     proves(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-host-restart-");
+        const { wf, project, state } = yield* workspace("collie-host-restart-");
         const first = yield* Effect.scoped(
           Effect.gen(function* () {
             const client = yield* connect(state);
             yield* client.load({ entry: `${wf}/proof.workflow.ts` });
-            yield* client.start({ id: "proof", runId: "r1", input: { note: "durable" } });
+            yield* client.start({ project, id: "proof", runId: "r1", input: { note: "durable" } });
             yield* until(
               () => client.status({ runId: "r1" }),
               (status) => status.status === "suspended",

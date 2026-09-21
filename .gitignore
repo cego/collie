@@ -1,6 +1,11 @@
 bin/
 node_modules/
 
+# Workflows written on this machine (`user/workflows/*.workflow.ts`). This checkout is an
+# installation, and `collie upgrade` fast-forwards it: what an author saved here is theirs
+# and is never something a pull has an opinion about.
+user/
+
 # One-off specs, plans, tickets and reports live in the Run directory (ADR-0002), never
 # here. What belongs in git is the durable stuff: the ADRs, CONTEXT.md, the design docs.
 .scratch/
