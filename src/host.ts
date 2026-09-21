@@ -15,19 +15,9 @@
 // is the way it is.
 
 import * as BunSocket from "@effect/platform-bun/BunSocket";
+import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import {
-  Config,
-  Crypto,
-  Data,
-  Effect,
-  FileSystem,
-  Layer,
-  Path,
-  Schedule,
-  Schema,
-  Scope,
-} from "effect";
+import { Config, Data, Effect, FileSystem, Layer, Schedule, Schema, Scope } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
@@ -47,6 +37,7 @@ import {
   registryLayer,
   Registry,
 } from "./native";
+import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { RequestConflict } from "./store";
 import { currentEnv } from "./env";
@@ -255,17 +246,7 @@ const handlers = (dir: string) =>
  * Losing the lock is not a failure. It means a host is already here, which is what the
  * caller wanted; the client that started this one connects to that host instead.
  */
-export const serve = (
-  dir: string,
-): Effect.Effect<
-  void,
-  never,
-  | FileSystem.FileSystem
-  | Path.Path
-  | Crypto.Crypto
-  | ChildProcessSpawner.ChildProcessSpawner
-  | Scope.Scope
-> =>
+export const serve = (dir: string): Effect.Effect<void, never, BunServices | Scope.Scope> =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.makeDirectory(dir, { recursive: true });
@@ -290,6 +271,7 @@ const own = (dir: string) =>
         Layer.provide(BunSocketServer.layer({ path: socketOf(dir) })),
         Layer.provide(hostLayer({ dir })),
         Layer.provide(nativeHostLayer(dir)),
+        Layer.provide(yield* configuredAgents(dir)),
       ),
     );
   }).pipe(Effect.orDie);

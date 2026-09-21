@@ -128,6 +128,7 @@ export const workspace = Effect.fn("NativeTest.workspace")(function* (prefix: st
     "echo.workflow.ts",
     "unwired.workflow.ts",
     "conflicted.workflow.ts",
+    "agent.workflow.ts",
     "helper.ts",
     "notes.md",
   ]) {

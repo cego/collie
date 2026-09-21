@@ -8,9 +8,10 @@
 // measured.
 
 import { BunServices } from "@effect/platform-bun";
-import { Console, Duration, Effect, FileSystem, Option, Schema, Stream } from "effect";
+import { Console, Duration, Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import { configuredAgents } from "../agents";
 import {
   typecheckEntry,
   type CrashPoint,
@@ -262,6 +263,7 @@ const serve = (
       hostLayer({ dir, registrationTimeout: registrationTimeoutOf(registrationTimeout) }),
     ),
     Effect.provide(nativeHostLayer(dir)),
+    Effect.provide(Layer.unwrap(configuredAgents(dir))),
     Effect.provide(BunServices.layer),
     Effect.scoped,
     Effect.orDie,

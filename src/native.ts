@@ -39,6 +39,8 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as WorkflowModules from "effect/unstable/workflow";
 import * as EffectRoot from "effect";
+import * as Agents from "./agents";
+import { NativeAgents } from "./agents";
 import * as Sdk from "./sdk";
 import {
   NativeHost,
@@ -91,7 +93,10 @@ const NAMESPACES = [
 ] as const;
 
 export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
-  const served: Array<readonly [string, object]> = [["collie/native", Sdk]];
+  // Two files, one module: `sdk.ts` is what a module declares about itself and `agents.ts`
+  // is what it does with an agent. They are apart because the second reaches for herdr
+  // and the first must not, and an author has no reason to know that.
+  const served: Array<readonly [string, object]> = [["collie/native", { ...Sdk, ...Agents }]];
   for (const [prefix, namespace] of NAMESPACES) {
     served.push([prefix, namespace]);
     for (const [name, member] of Object.entries(namespace))
@@ -116,7 +121,10 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   import type { Context, Effect, Layer, Schema } from "effect";
   import type { DurableDeferred } from "effect/unstable/workflow/DurableDeferred";
   import type { Workflow } from "effect/unstable/workflow/Workflow";
-  import type { WorkflowEngine } from "effect/unstable/workflow/WorkflowEngine";
+  import type {
+    WorkflowEngine,
+    WorkflowInstance,
+  } from "effect/unstable/workflow/WorkflowEngine";
 
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface NativeHostApi {
@@ -155,9 +163,104 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
 
   export interface Registration {
     readonly workflow: Workflow<string, any, any, typeof WorkflowError>;
-    readonly layer: Layer.Layer<never, never, WorkflowEngine | NativeHost>;
+    readonly layer: Layer.Layer<never, never, WorkflowEngine | NativeHost | NativeAgents>;
     readonly decisions: Readonly<Record<string, NativeDecision>>;
   }
+
+  /** A schema that decodes an agent's Output without services of its own. */
+  export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
+
+  /** One piece of agent work, named so that replaying it finds what it already did. */
+  export interface AgentAsk {
+    readonly runId: string;
+    readonly operation: string;
+    readonly role: string;
+    readonly workflow: string;
+    readonly cwd: string;
+    readonly prompt: string;
+    readonly output: string;
+    readonly harness: string | null;
+    readonly model: string | null;
+    readonly permissions: string | null;
+  }
+
+  /** The agent this work is on, as the launch recorded it. */
+  export interface Launched {
+    readonly agent: string;
+    readonly output: string;
+    readonly reused: boolean;
+    readonly runId: string;
+    readonly operation: string;
+    readonly role: string;
+    readonly workflow: string;
+    readonly harness: string;
+  }
+
+  /** Nobody can say whether the agent is there, so nothing was started. */
+  export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()(
+    "AgentUncertain",
+    { operation: Schema.String, reason: Schema.String },
+  ) {}
+
+  /** What a host lends a workflow that needs an agent. */
+  export interface AgentsApi {
+    readonly outputFor: (runId: string, operation: string) => string;
+    readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain>;
+    readonly collect: (
+      launched: Launched,
+      unless?: string | null,
+    ) => Effect.Effect<string | null, AgentUncertain>;
+    readonly repair: (
+      launched: Launched,
+      problem: string,
+    ) => Effect.Effect<boolean, AgentUncertain>;
+  }
+  export const NativeAgents: Context.Service<AgentsApi, AgentsApi>;
+  export type NativeAgents = AgentsApi;
+
+  /** What you ask for: the work, not the steps it takes. */
+  export interface AgentWork<Output extends OutputContract> {
+    readonly runId: string;
+    readonly operation: string;
+    readonly cwd: string;
+    readonly instructions: string;
+    readonly output: Output;
+    readonly inputs?: Readonly<Record<string, unknown>>;
+    readonly role?: string;
+    readonly workflow?: string;
+    readonly harness?: string;
+    readonly model?: string;
+    readonly permissions?: "bypass" | "harness";
+  }
+
+  /** One agent, once, and its Output as a value of your own type. */
+  export function agentWork<Output extends OutputContract>(
+    work: AgentWork<Output>,
+  ): Effect.Effect<
+    Output["Type"],
+    WorkflowError,
+    NativeAgents | WorkflowEngine | WorkflowInstance
+  >;
+
+  /** Everything a prompt is built from, none of which is an Activity. */
+  export interface PromptParts {
+    readonly role: string;
+    readonly instructions: string;
+    readonly output: string;
+    readonly contract: Projection;
+    readonly inputs?: Readonly<Record<string, unknown>>;
+    readonly cwd?: string;
+  }
+
+  /** The ask an agent is sent, built from decoded values and your Markdown. */
+  export function promptFor(parts: PromptParts): string;
+
+  /** An agent's file as your own type, or every reason it could not be used. */
+  export function decodeOutput<Output extends OutputContract>(
+    contract: Output,
+    text: string,
+  ): { readonly ok: true; readonly value: Output["Type"] }
+    | { readonly ok: false; readonly problem: string };
 
   export type Outcome =
     | "unspecified" | "feature" | "bug" | "refactor" | "investigation"
@@ -718,7 +821,11 @@ export interface Generation {
 }
 
 /** What the registry's own work takes, which is what a host holds already. */
-export type HostServices = WorkflowEngine.WorkflowEngine | NativeHost | FileSystem.FileSystem;
+export type HostServices =
+  | WorkflowEngine.WorkflowEngine
+  | NativeHost
+  | NativeAgents
+  | FileSystem.FileSystem;
 
 /**
  * Which modules a host holds and what it does with them, in front of one state directory.

@@ -1,9 +1,11 @@
 // What an author imports when they write a workflow: `collie/native`.
 //
-// A workflow module is ordinary TypeScript. This file is the whole of what Collie adds to
-// it — the payload envelope, the error contract, the metadata a card and a launch read,
-// and the schemas the shipped steps already write. Everything else an author reaches for
-// is Effect's: `Activity`, `DurableDeferred`, a Layer of their own, any operator at all.
+// A workflow module is ordinary TypeScript, and this is what Collie adds to it: the
+// payload envelope, the error contract, the metadata a card and a launch read, and the
+// schemas the shipped steps already write. `agents.ts` is served under the same specifier
+// and adds the one thing a module cannot write safely for itself — having an agent do the
+// work. Everything else an author reaches for is Effect's: `Activity`, `DurableDeferred`,
+// a Layer of their own, any operator at all.
 //
 // Two rules this file exists to keep. **Metadata is data, not control flow**: a hint, an
 // outcome and an action say what a workflow is, and nothing here decides what it does.
@@ -17,6 +19,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import type { WorkflowEngine } from "effect/unstable/workflow/WorkflowEngine";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
+import type { NativeAgents } from "./agents";
 import { INPUT_STRATEGIES, type InputStrategy } from "./definitions";
 import { exclusiveClashes } from "./strategies";
 import { KINDS, REQUESTABLE, isOutcome, type Outcome } from "./outcome";
@@ -105,7 +108,7 @@ export type HostWorkflow = Workflow.Workflow<string, HostPayload, HostCodec, typ
 /** What `make(registrationName)` hands back: the workflow, how to register it, its decisions. */
 export interface Registration {
   readonly workflow: HostWorkflow;
-  readonly layer: Layer.Layer<never, never, WorkflowEngine | NativeHost>;
+  readonly layer: Layer.Layer<never, never, WorkflowEngine | NativeHost | NativeAgents>;
   readonly decisions: Readonly<Record<string, NativeDecision>>;
 }
 

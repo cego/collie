@@ -576,7 +576,12 @@ test(
         const { wf, state } = yield* workspace("collie-native-sdk-types-");
         const host = yield* openHost(state);
         expect((yield* host.ask({ op: "provision", dir: wf })).ok).toBe(true);
-        for (const entry of ["echo.workflow.ts", "unwired.workflow.ts", "proof.workflow.ts"]) {
+        for (const entry of [
+          "echo.workflow.ts",
+          "unwired.workflow.ts",
+          "proof.workflow.ts",
+          "agent.workflow.ts",
+        ]) {
           const checked = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/${entry}` });
           expect([entry, checked.diagnostics]).toEqual([entry, []]);
         }

@@ -141,7 +141,63 @@ nothing, and the mistake is invisible until the body asks for the service — at
 the host reports `Service not found` against the file that asked. There is no dependency
 resolver and no registry: what your workflow needs, your Layer provides, explicitly.
 
-What the host provides is `NativeHost` and the workflow engine. Everything else is yours.
+What the host provides is `NativeHost`, `NativeAgents` and the workflow engine. Everything
+else is yours.
+
+## Having an agent do the work
+
+`agentWork` is one call for one piece of agent work: it builds the prompt, launches the
+agent, collects what it wrote, decodes it against your schema, and hands you a value of
+your own type.
+
+```ts
+const Verdict = Schema.Struct({
+  verdict: Schema.Literals(["clean", "findings"]).annotate({
+    description: "clean only when there is nothing left for the implementer",
+  }),
+  note: Schema.String.annotate({ description: "one sentence a human reads" }),
+});
+
+const verdict =
+  yield *
+  agentWork({
+    runId: payload.runId,
+    operation: "review",
+    role: "reviewer",
+    cwd: payload.input.cwd,
+    instructions: notes,
+    inputs: { target: payload.input.target },
+    output: Verdict,
+  });
+```
+
+- **`operation` is the identity.** The Activity names and the agent's name come from it, so
+  it has to be stable within the run and different from every other operation in it.
+- **`instructions` is your Markdown**, rendered with `{{inputs.x}}` from the values you
+  pass, plus `{{role}}`, `{{cwd}}` and `{{output_path}}`. The prompt then names where the
+  Output goes and carries the JSON Schema `output` draws to. A field's `description` is the
+  judgment being asked for, so write it as one.
+- **`output` decides.** A file that does not decode is unusable however plausible it reads,
+  and every issue with it is reported at once.
+- **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
+  schema's own issues. A second one fails the run with `output-unusable`.
+- **`cwd` is yours to say.** The host knows its own state directory, not which checkout
+  this piece of work belongs in.
+- **`role`, `harness`, `model` and `permissions`** default to the operation's name and to
+  the operator's configuration. The role is injected as a Step's persona is.
+
+Skipped work is work you do not ask for: return without calling `agentWork` and no tab
+opens, no agent starts and no Output is fabricated. Say why in what you return.
+
+A restart is safe in both directions. The launch is an Activity, so a replayed collection
+reattaches rather than starting a second agent; the repair is an Activity of its own, so a
+restart does not hand out another one. None of that makes an external launch exactly once —
+an agent already there by that name is reattached to, and a herdr that cannot say what it
+has stops the work with that as the reason rather than starting a second agent.
+[ADR-0020](adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) is why.
+
+`promptFor` builds the same prompt without launching anything, and `decodeOutput` reads a
+file against a contract. Both are plain functions, so a test of yours can use them.
 
 ## Metadata
 

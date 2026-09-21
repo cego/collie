@@ -99,6 +99,13 @@ doors: herdr actions, and the `collie` CLI.
   `src/inputs.ts`, `src/native.ts` and `test/strategies.test.ts`. What Collie does with an
   Input is the strategy's, never the field's name: read one with `workSourceOf`,
   `diffTargetOf` or `gitlabRepositoryOf` rather than by looking a name up.
+- **Changing how a native workflow runs an agent, builds its prompt or collects its
+  Output** →
+  [ADR-0020](docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) and
+  [`docs/sdk.md`](docs/sdk.md#having-an-agent-do-the-work), alongside `src/agents.ts` and
+  `test/agents.test.ts`. One launch, one collection, one repair, each its own Activity;
+  herdr is reached through `src/herdr.ts` and the prompt goes out through the Dispatcher,
+  as a Step's does.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

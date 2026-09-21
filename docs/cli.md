@@ -139,6 +139,15 @@ for it. [ADR-0018](adr/0018-a-native-run-is-a-run.md) and
 [ADR-0019](adr/0019-a-strategy-not-a-field-name.md) are why each of those is the way it
 is.
 
+A module that has an agent do its work opens a tab and starts one on the harness, model and
+permissions this installation is configured for, with the compaction controls a Step's
+agent gets. What it was actually sent and what it wrote are files under the host's state
+directory — `agents/<run>/<operation>.prompt.md` and `.json`, with the repair beside them —
+so a Run that ended `output-unusable` can be read rather than reconstructed. An Output the
+workflow's schema refuses buys exactly one rewrite from that same agent, and a second
+unusable one ends the Run with the reasons named.
+[ADR-0020](adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) is why.
+
 ### Tasks
 
 A **Task** is the work itself, and the Runs it takes: a plan, the implementation it chains
