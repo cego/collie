@@ -2,7 +2,7 @@
 // Collie vocabulary beyond the service the host lends it. The test copies this file, its
 // helper and its Markdown outside the checkout, so what runs it is the binary alone.
 
-import { NativeHost } from "collie/native";
+import { NativeHost, decision, defineWorkflow } from "collie/native";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
@@ -15,13 +15,11 @@ export const id = "proof";
 export const title = "A workflow that waits for a decision";
 export const description = "Records one launch, then waits to be answered.";
 
+export const input = { note: Schema.String };
+
 export const make = (registrationName: string) => {
-  const workflow = Workflow.make(registrationName, {
-    payload: { runId: Schema.String, note: Schema.String },
-    idempotencyKey: (payload) => payload.runId,
-    success: Schema.String,
-  });
-  const decision = DurableDeferred.make("decision", { success: Schema.String });
+  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
+  const answer = decision("decision");
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
@@ -34,7 +32,7 @@ export const make = (registrationName: string) => {
         name: "launch",
         success: Schema.String,
         execute: host
-          .record(payload.runId, `launch ${label(payload.note)} ${notes.length}`)
+          .record(payload.runId, `launch ${label(payload.input.note)} ${notes.length}`)
           .pipe(Effect.as("launched")),
       });
 
@@ -46,7 +44,7 @@ export const make = (registrationName: string) => {
         return yield* Workflow.suspend(run);
       }
 
-      const answer = yield* Activity.make({
+      const chosen = yield* Activity.make({
         name: "wait",
         success: Schema.String,
         execute: Effect.gen(function* () {
@@ -59,13 +57,13 @@ export const make = (registrationName: string) => {
             yield* host.record(payload.runId, "stopped");
             return yield* Workflow.suspend(wait);
           }
-          return yield* DurableDeferred.await(decision);
+          return yield* DurableDeferred.await(answer);
         }),
       });
 
-      return `${label(payload.note)}=${answer}`;
+      return `${label(payload.input.note)}=${chosen}`;
     }),
   );
 
-  return { workflow, layer, decisions: { decision } };
+  return { workflow, layer, decisions: { decision: answer } };
 };

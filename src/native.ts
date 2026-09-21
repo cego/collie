@@ -13,7 +13,6 @@ import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
   Cause,
-  Context,
   Data,
   Duration,
   Effect,
@@ -34,57 +33,10 @@ import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as WorkflowModules from "effect/unstable/workflow";
 import * as EffectRoot from "effect";
+import * as Sdk from "./sdk";
+import { NativeHost, checkEntry, type Registration, type WorkflowEntry } from "./sdk";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
-
-/**
- * What the host lends a workflow module. Hold and stop are files because an operator sets
- * them while the workflow is not running, and plain Effects because a workflow must read
- * the current one on every replay — an Activity would hand back the first attempt's.
- */
-export interface NativeHostApi {
-  /** Where this host keeps its state, and the only directory a module may write in. */
-  readonly dir: string;
-  readonly held: (runId: string) => Effect.Effect<boolean>;
-  readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
-  /** Appends one line to the run's effect log: what actually happened, once per real run. */
-  readonly record: (runId: string, event: string) => Effect.Effect<void>;
-}
-
-export class NativeHost extends Context.Service<NativeHost, NativeHostApi>()("collie/NativeHost") {}
-
-/**
- * A decision a run waits on. Every one this proof carries is answered with text, which
- * is what an operator types; typed decision payloads are a later slice's.
- */
-export type NativeDecision = DurableDeferred.DurableDeferred<typeof Schema.String>;
-
-/**
- * A workflow as the host sees one: any payload and any result, but nothing the host has
- * to supply to encode them, and no error of its own — `Workflow.make`'s own default. A
- * schema needing a service to encode reaches the host through the module's Layer, and a
- * workflow declaring a typed error is a later slice's, not this proof's.
- */
-type HostCodec = Schema.Codec<unknown, unknown, never, never>;
-interface HostPayload extends Schema.Struct<Schema.Struct.Fields> {
-  readonly DecodingServices: never;
-  readonly EncodingServices: never;
-}
-export type HostWorkflow = Workflow.Workflow<string, HostPayload, HostCodec, typeof Schema.Never>;
-
-/** A workflow module's entry file, as `make` hands its registration back. */
-export interface NativeRegistration {
-  readonly workflow: HostWorkflow;
-  readonly layer: Layer.Layer<never, never, WorkflowEngine.WorkflowEngine | NativeHost>;
-  readonly decisions: Readonly<Record<string, NativeDecision>>;
-}
-
-export interface NativeEntry {
-  readonly id: string;
-  readonly title: string;
-  readonly description: string;
-  readonly make: (registrationName: string) => NativeRegistration;
-}
 
 export class NativeEntryError extends Data.TaggedError("NativeEntryError")<{
   readonly file: string;
@@ -112,7 +64,7 @@ const NAMESPACES = [
 ] as const;
 
 export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
-  const served: Array<readonly [string, object]> = [["collie/native", { NativeHost }]];
+  const served: Array<readonly [string, object]> = [["collie/native", Sdk]];
   for (const [prefix, namespace] of NAMESPACES) {
     served.push([prefix, namespace]);
     for (const [name, member] of Object.entries(namespace))
@@ -128,9 +80,18 @@ export const TOOLCHAIN = {
   typescript: "^7.0.2",
 } as const;
 
-/** The declarations an author typechecks `collie/native` against. */
+/**
+ * The declarations an author typechecks `collie/native` against, kept in step with
+ * `src/sdk.ts` by `native-sdk.test.ts` — which typechecks a module using the whole
+ * surface, so a declaration that has drifted fails a test rather than an author's build.
+ */
 export const SDK_DECLARATIONS = `declare module "collie/native" {
-  import type { Context, Effect } from "effect";
+  import type { Context, Effect, Layer, Schema } from "effect";
+  import type { DurableDeferred } from "effect/unstable/workflow/DurableDeferred";
+  import type { Workflow } from "effect/unstable/workflow/Workflow";
+  import type { WorkflowEngine } from "effect/unstable/workflow/WorkflowEngine";
+
+  /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface NativeHostApi {
     readonly dir: string;
     readonly held: (runId: string) => Effect.Effect<boolean>;
@@ -139,6 +100,99 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   }
   export const NativeHost: Context.Service<NativeHostApi, NativeHostApi>;
   export type NativeHost = NativeHostApi;
+
+  /** How every native workflow reports a failure. */
+  export class WorkflowError extends Schema.TaggedError<WorkflowError>()(
+    "WorkflowError",
+    { reason: Schema.String },
+  ) {}
+
+  /** A workflow under Collie's envelope: the host supplies runId, you supply input. */
+  export function defineWorkflow<
+    Input extends Schema.Struct.Fields,
+    Success extends Schema.Top,
+  >(options: {
+    readonly name: string;
+    readonly input: Input;
+    readonly success: Success;
+  }): Workflow<
+    string,
+    Schema.Struct<{ runId: typeof Schema.String; input: Schema.Struct<Input> }>,
+    Success,
+    typeof WorkflowError
+  >;
+
+  /** A decision a run waits on, answered with the text an operator types. */
+  export function decision(name: string): DurableDeferred<typeof Schema.String>;
+  export type NativeDecision = DurableDeferred<typeof Schema.String>;
+
+  export interface Registration {
+    readonly workflow: Workflow<string, any, any, typeof WorkflowError>;
+    readonly layer: Layer.Layer<never, never, WorkflowEngine | NativeHost>;
+    readonly decisions: Readonly<Record<string, NativeDecision>>;
+  }
+
+  export type Outcome =
+    | "unspecified" | "feature" | "bug" | "refactor" | "investigation"
+    | "docs" | "migration" | "review" | "plan";
+
+  export type OutcomeContract =
+    | { readonly fixed: Outcome; readonly selectable?: undefined }
+    | { readonly fixed?: undefined; readonly selectable: ReadonlyArray<Outcome> };
+
+  export interface FollowUp {
+    readonly id: string;
+    readonly title: string;
+    readonly workflow: string;
+    readonly when: "succeeded" | "failed" | "always";
+  }
+
+  /** What an action decides eligibility from: facts, never a workflow's name. */
+  export interface ActionFacts {
+    readonly outcome: Outcome;
+    readonly succeeded: boolean;
+    readonly branch: string | null;
+    readonly mrUrl: string | null;
+    readonly planIssues: number;
+    readonly disposed: boolean;
+  }
+
+  export interface ActionProvider {
+    readonly id: string;
+    readonly title: string;
+    readonly workflow: string;
+    readonly arguments: Schema.Struct.Fields;
+    readonly eligible: (facts: ActionFacts) => boolean;
+  }
+
+  /** Data a card and a launch read; never anything a workflow body consults. */
+  export interface WorkflowMetadata {
+    readonly hints?: Readonly<Record<string, string>>;
+    readonly outcome?: OutcomeContract;
+    readonly followUps?: ReadonlyArray<FollowUp>;
+    readonly actions?: ReadonlyArray<ActionProvider>;
+  }
+
+  /** Names the host supplies at launch; an input of one of these is refused. */
+  export const RESERVED_INPUTS: Readonly<Record<string, string>>;
+  export const EXCLUSIVE_STRATEGIES: ReadonlyArray<string>;
+
+  /** The shapes the shipped steps write, shared so a step declares one contract. */
+  export const FindingSchema: Schema.Top;
+  export const FixedSchema: Schema.Top;
+  export const CheckSchema: Schema.Top;
+  export const ReviewOutputSchema: Schema.Top;
+  export const SynthesisSchema: Schema.Top;
+  export const FixOutputSchema: Schema.Top;
+  export const MrOutputSchema: Schema.Top;
+  export const PlanOutputSchema: Schema.Top;
+
+  /** The JSON Schema for a prompt, and what the drawing does not say. */
+  export interface Projection {
+    readonly document: unknown;
+    readonly limits: ReadonlyArray<string>;
+  }
+  export function jsonSchemaFor(schema: Schema.Top): Projection;
 }
 
 declare module "*.md" {
@@ -172,44 +226,53 @@ const EntryContract = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   description: Schema.String,
+  input: Schema.Record(Schema.String, Schema.Unknown),
+  metadata: Schema.optionalKey(Schema.Unknown),
 });
 
 /**
- * Imports a workflow entry file. A module that does not compile, does not exist or does
- * not export the contract fails naming its own file, so one broken entry says which one
- * it is and leaves every other entry loadable.
+ * Imports a workflow entry file and holds it to the published contract. A module that
+ * does not compile, does not exist, does not export the contract or contradicts itself
+ * fails naming its own file — so one bad entry says which one it is and leaves every
+ * other entry loadable.
  *
  * Importing runs the module's top level, which is the author's code — and deliberately
  * so, since `make` is a function it exports. It does not run a workflow body, acquire an
- * agent or open a worktree; nothing here is a sandbox.
+ * agent or open a worktree; nothing here is a sandbox. The metadata is checked here, at
+ * load, which is why a contradiction never reaches a Run.
  */
-export const loadEntry: (file: string) => Effect.Effect<NativeEntry, NativeEntryError> = Effect.fn(
-  "Native.loadEntry",
-)(function* (file: string) {
-  installSdk();
-  const loaded = yield* Effect.tryPromise({
-    try: () => import(file),
-    catch: (cause) => new NativeEntryError({ file, message: String(cause) }),
-  });
-  const described = yield* Schema.decodeUnknownEffect(EntryContract)(loaded).pipe(
-    Effect.mapError(
-      () =>
-        new NativeEntryError({
-          file,
-          message: "a workflow entry exports id, title and description",
-        }),
-    ),
-  );
-  if (!Predicate.isFunction(loaded.make)) {
-    return yield* new NativeEntryError({
-      file,
-      message: "a workflow entry exports make(registrationName)",
+export const loadEntry: (file: string) => Effect.Effect<WorkflowEntry, NativeEntryError> =
+  Effect.fn("Native.loadEntry")(function* (file: string) {
+    installSdk();
+    const loaded = yield* Effect.tryPromise({
+      try: () => import(file),
+      catch: (cause) => new NativeEntryError({ file, message: String(cause) }),
     });
-  }
-  // SAFETY: the shape above decoded, and `make` is a function; what it returns is the
-  // author's, and a registration that is not one fails when the host builds its Layer.
-  return { ...described, make: loaded.make } as NativeEntry;
-});
+    const described = yield* Schema.decodeUnknownEffect(EntryContract)(loaded).pipe(
+      Effect.mapError(
+        () =>
+          new NativeEntryError({
+            file,
+            message: "a workflow entry exports id, title, description and input",
+          }),
+      ),
+    );
+    if (!Predicate.isFunction(loaded.make)) {
+      return yield* new NativeEntryError({
+        file,
+        message: "a workflow entry exports make(registrationName)",
+      });
+    }
+    // SAFETY: the contract above decoded and `make` is a function. What the author's
+    // schemas and metadata hold is checked next, and what `make` returns is checked when
+    // the host builds its Layer.
+    const entry = { ...described, make: loaded.make } as WorkflowEntry;
+    const problems = checkEntry(entry);
+    if (problems.length > 0) {
+      return yield* new NativeEntryError({ file, message: problems.join("; ") });
+    }
+    return entry;
+  });
 
 /**
  * A generation's own copy of the directory the entry lives in, so an edited helper reaches
@@ -304,11 +367,13 @@ export const HostRequest = Schema.Union([
   Schema.Struct({ op: Schema.Literal("ping") }),
   Schema.Struct({ op: Schema.Literal("load"), entry: Schema.String }),
   Schema.Struct({ op: Schema.Literal("registrations") }),
+  // The author's own input, undecoded here: the workflow's schema is what settles it,
+  // and it does so before a run exists rather than after one has started.
   Schema.Struct({
     op: Schema.Literal("start"),
     id: Schema.String,
     runId: Schema.String,
-    note: Schema.String,
+    input: Schema.Record(Schema.String, Schema.Json),
   }),
   Schema.Struct({ op: Schema.Literal("poll"), id: Schema.String, runId: Schema.String }),
   Schema.Struct({
@@ -324,6 +389,7 @@ export const HostRequest = Schema.Union([
   Schema.Struct({ op: Schema.Literal("resume"), id: Schema.String, runId: Schema.String }),
   Schema.Struct({ op: Schema.Literal("provision"), dir: Schema.String }),
   Schema.Struct({ op: Schema.Literal("check"), dir: Schema.String, entry: Schema.String }),
+  Schema.Struct({ op: Schema.Literal("metadata"), id: Schema.String }),
 ]);
 
 export const HostReply = Schema.Struct({
@@ -336,6 +402,8 @@ export const HostReply = Schema.Struct({
   status: Schema.optionalKey(Schema.String),
   value: Schema.optionalKey(Schema.String),
   diagnostics: Schema.optionalKey(Schema.Array(Schema.String)),
+  /** What a module declares about itself, as a card and a launch would read it. */
+  metadata: Schema.optionalKey(Schema.Json),
 });
 
 /**
@@ -352,7 +420,13 @@ const Routing = Schema.Struct({
   registrations: Schema.Array(
     Schema.Struct({ id: Schema.String, name: Schema.String, entry: Schema.String }),
   ),
-  runs: Schema.Record(Schema.String, Schema.String),
+  // A run's registration and the execution it was admitted as. The execution id is
+  // recorded rather than recomputed: it is derived from the payload, and a later op has
+  // the run id and nothing else.
+  runs: Schema.Record(
+    Schema.String,
+    Schema.Struct({ registration: Schema.String, execution: Schema.String }),
+  ),
 });
 export type Routing = typeof Routing.Type;
 
@@ -385,7 +459,7 @@ export const nextRegistrationName = (routing: Routing, id: string): string =>
 
 /** The exit a decision is answered with, encoded by the decision's own schema. */
 export const answerDecision = (
-  registration: NativeRegistration,
+  registration: Registration,
   options: { readonly name: string; readonly executionId: string; readonly value: string },
 ): Effect.Effect<void, NativeEntryError, WorkflowEngine.WorkflowEngine> => {
   const decision = registration.decisions[options.name];
@@ -407,9 +481,11 @@ export const pollStatus = (result: Option.Option<Workflow.Result<unknown, unknow
   if (Option.isNone(result)) return { status: "pending" };
   const value = result.value;
   if (value._tag === "Suspended") return { status: "suspended" };
-  return Exit.isSuccess(value.exit)
-    ? { status: "complete", value: String(value.exit.value) }
-    : { status: "failed", value: Cause.pretty(value.exit.cause) };
+  if (Exit.isSuccess(value.exit)) return { status: "complete", value: String(value.exit.value) };
+  // The reason, not the stack under it: a service a module never provided reads as
+  // "Service not found: <its key>", which is the sentence somebody can act on.
+  const [reason = ""] = Cause.pretty(value.exit.cause).split("\n");
+  return { status: "failed", value: reason };
 };
 
 const encodeCheckProject = Schema.encodeSync(
@@ -486,14 +562,14 @@ export const provisionToolchain: (
  * diagnostic with the source it is in. Errors in one file say nothing about another, so
  * a host checking several reports each on its own.
  */
-export const checkEntry: (options: {
+export const typecheckEntry: (options: {
   readonly dir: string;
   readonly file: string;
 }) => Effect.Effect<
   ReadonlyArray<string>,
   ToolchainError,
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
-> = Effect.fn("Native.checkEntry")(function* (options: {
+> = Effect.fn("Native.typecheckEntry")(function* (options: {
   readonly dir: string;
   readonly file: string;
 }) {

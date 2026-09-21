@@ -57,6 +57,11 @@ doors: herdr actions, and the `collie` CLI.
   selected is an explicit input chat may read, never a filter over the reads
   ([ADR-0012](docs/adr/0012-the-boards-selection-is-an-explicit-chat-input.md), alongside
   `src/selection.ts` and `src/statusline.ts`).
+- **Changing what a workflow module exports, its metadata, or the schemas its steps
+  write** → [`docs/sdk.md`](docs/sdk.md), alongside `src/sdk.ts` (the contract and what it
+  refuses) and `src/output.ts` (the shared Output schemas, beside the parsers the engine
+  still reads them with). `docs/authoring.md` is the Markdown interpreter's, which the
+  five shipped workflows still use; the two are separate until those are converted.
 - **Changing how a workflow module is loaded, which Effect it gets, or what a host may
   assume about suspension and recovery** →
   [ADR-0014](docs/adr/0014-native-workflows-run-on-effects-own-engine.md), alongside

@@ -1,22 +1,62 @@
 // Step Outputs are JSON files in the run dir. Gates and loops read these,
 // never terminal text (CONTEXT.md, Output).
 
-import { Schema } from "effect";
+import { Effect, Schema, SchemaGetter } from "effect";
 import { isNumber, isString } from "./schema";
 import { staleAgainst, type Snapshot, type Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
 
+/** Present and not only whitespace: a required judgement nobody wrote is not one. */
+const said = (field: string) =>
+  Schema.refine<Schema.String, string>((value): value is string => value.trim() !== "", {
+    title: `${field} is required`,
+  });
+
+/**
+ * A list an Output may leave out; absent and null both read as none, which is what the
+ * parsers below have always done and what keeps an old Output readable.
+ */
+const optionalList = <S extends Schema.Top>(item: S) =>
+  Schema.NullOr(Schema.Array(item)).pipe(
+    Schema.decodeTo(Schema.Array(item), {
+      decode: SchemaGetter.transform((value) => value ?? []),
+      encode: SchemaGetter.passthrough(),
+    }),
+    Schema.withDecodingDefaultKey(Effect.succeed(null)),
+  );
+
+/** A verdict of `findings` with nothing in the list is a report that says nothing. */
+const listed = <
+  S extends Schema.Top & {
+    readonly Type: { readonly verdict: string; readonly findings: ReadonlyArray<unknown> };
+  },
+>() =>
+  Schema.refine<S, S["Type"]>(
+    (value): value is S["Type"] => value.verdict !== "findings" || value.findings.length > 0,
+    { title: 'verdict "findings" with an empty findings list' },
+  );
+
+/**
+ * A finding, as every Output that carries one writes it.
+ *
+ * `severity` is free text on purpose. `blocker`, `major` and `minor` are the vocabulary
+ * this repository's prompts ask for, but a fork's own word is a valid judgement and only
+ * `minor` is not blocking, so closing this to a literal union would throw away reviews
+ * rather than validate them. The judgement fields beside it are optional for the same
+ * reason: a reviewer who has no line number has still said something worth reading.
+ */
 export const FindingSchema = Schema.Struct({
   file: Schema.optionalKey(Schema.String),
   line: Schema.optionalKey(Schema.Number),
-  severity: Schema.String,
-  title: Schema.String,
+  severity: Schema.String.pipe(said("severity")),
+  title: Schema.String.pipe(said("title")),
   detail: Schema.optionalKey(Schema.String),
   /** A reviewer's answer to the implementer's reason for disputing this finding. */
   rebuttal: Schema.optionalKey(Schema.String),
   /** Why a synthesis dropped this finding; only a `dropped` entry carries one. */
   reason: Schema.optionalKey(Schema.String),
 });
+
 export interface Finding {
   file?: string;
   line?: number;
@@ -51,6 +91,76 @@ export interface Fixed {
   title: string;
   note?: string;
 }
+
+const VerdictSchema = Schema.Literals(["clean", "findings"]);
+
+/**
+ * The shapes a workflow's steps write, shared with an author through the SDK so a module
+ * declaring a review step declares the same contract the engine reads — one definition,
+ * not a copy per workflow. `output-schemas.test.ts` holds each of these to the parser
+ * below it, case for case, because two readings of one file is the bug they would
+ * otherwise be.
+ *
+ * None of them is closed against extra keys: an Output may say more than a gate reads.
+ */
+export const ReviewOutputSchema = Schema.Struct({
+  verdict: VerdictSchema,
+  findings: optionalList(FindingSchema),
+  disputed: optionalList(FindingSchema),
+}).pipe(listed());
+
+export const FixedSchema = Schema.Struct({
+  file: Schema.optionalKey(Schema.String),
+  title: Schema.String.pipe(said("title")),
+  note: Schema.optionalKey(Schema.String),
+});
+
+/** A finding a synthesis dropped says why, or it is a finding lost rather than resolved. */
+const DroppedSchema = FindingSchema.pipe(
+  Schema.refine<typeof FindingSchema, typeof FindingSchema.Type>(
+    (value): value is typeof FindingSchema.Type => (value.reason ?? "").trim() !== "",
+    { title: "reason is required" },
+  ),
+);
+
+export const SynthesisSchema = Schema.Struct({
+  verdict: VerdictSchema,
+  summary: Schema.String.pipe(said("summary")),
+  findings: optionalList(FindingSchema),
+  disputed: optionalList(FindingSchema),
+  dropped: optionalList(DroppedSchema),
+  fixed: optionalList(FixedSchema),
+}).pipe(listed());
+
+export const CheckSchema = Schema.Struct({
+  name: Schema.String.pipe(said("name")),
+  note: Schema.optionalKey(Schema.String),
+});
+
+export const FixOutputSchema = Schema.Struct({
+  verdict: VerdictSchema,
+  findings: optionalList(FindingSchema),
+  fixed: optionalList(FixedSchema),
+  disputed: optionalList(FindingSchema),
+  checks: optionalList(CheckSchema),
+}).pipe(listed());
+
+/**
+ * What the step that opens a merge request reports. `pushed: false` is a real answer —
+ * auto-merge on someone else's merge request is a reason not to push — so the url is
+ * optional rather than the proof.
+ */
+export const MrOutputSchema = Schema.Struct({
+  pushed: Schema.Boolean,
+  mr_url: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  note: Schema.optionalKey(Schema.String),
+});
+
+/** What a plan leaves behind: the directory of tickets a later Run is fanned out from. */
+export const PlanOutputSchema = Schema.Struct({
+  issues_dir: Schema.String.pipe(said("issues_dir")),
+  spec: Schema.optionalKey(Schema.String),
+});
 
 /** The human-facing review, written next to run.json. */
 export const REVIEW_FILE = "review.md";

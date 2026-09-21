@@ -22,7 +22,7 @@ import { Command, Flag } from "effect/unstable/cli";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import {
   answerDecision,
-  checkEntry,
+  typecheckEntry,
   clearGenerations,
   hostLayer,
   HostReply,
@@ -35,8 +35,8 @@ import {
   readRouting,
   stageGeneration,
   writeRouting,
-  type NativeRegistration,
 } from "../native";
+import { describeMetadata, type Registration } from "../sdk";
 
 const decodeRequest = Schema.decodeUnknownEffect(Schema.fromJsonString(HostRequest));
 const encodeReply = Schema.encodeSync(Schema.fromJsonString(HostReply));
@@ -45,7 +45,11 @@ const encodeReply = Schema.encodeSync(Schema.fromJsonString(HostReply));
 interface Loaded {
   readonly registrationName: string;
   readonly title: string;
-  readonly registration: NativeRegistration;
+  /** The file it came from, so a failure of the author's names what to open. */
+  readonly entry: string;
+  /** What the module declared about itself, as a card and a launch would read it. */
+  readonly metadata: Schema.Json;
+  readonly registration: Registration;
 }
 
 export const native = Command.make(
@@ -106,6 +110,8 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
       live.set(route.name, {
         registrationName: route.name,
         title: entry.success.title,
+        entry: route.entry,
+        metadata: describeMetadata(entry.success.metadata),
         registration,
       });
       unavailable.delete(route.name);
@@ -165,14 +171,32 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
           const name = newest.get(request.id);
           const entry = name ? live.get(name) : undefined;
           if (!entry) return yield* missing("start", request.id);
+          // Settled before anything exists to clean up: an input the workflow's own
+          // schema rejects names its field here, and no run, routing row or execution
+          // is created for it.
+          const payload = yield* Schema.decodeUnknownEffect(
+            entry.registration.workflow.payloadSchema,
+          )({ runId: request.runId, input: request.input }).pipe(Effect.result);
+          if (payload._tag === "Failure") {
+            return yield* answer({
+              ok: false,
+              op: "start",
+              id: request.id,
+              detail: `invalid_input: ${String(payload.failure)}`,
+            });
+          }
+          const execution = yield* entry.registration.workflow.executionId(payload.success);
           routing = {
             ...routing,
-            runs: { ...routing.runs, [request.runId]: entry.registrationName },
+            runs: {
+              ...routing.runs,
+              [request.runId]: { registration: entry.registrationName, execution },
+            },
           };
           yield* writeRouting(dir, routing);
           yield* engine.execute(entry.registration.workflow, {
-            executionId: yield* executionOf(entry, request.runId),
-            payload: { runId: request.runId, note: request.note },
+            executionId: execution,
+            payload: payload.success,
             discard: true,
           });
           return yield* answer({
@@ -184,21 +208,24 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
         }
 
         case "poll": {
-          const entry = yield* held("poll", request.runId);
-          if (!entry) return;
-          const result = yield* engine.poll(
-            entry.registration.workflow,
-            yield* executionOf(entry, request.runId),
-          );
-          return yield* answer({ ok: true, op: "poll", ...pollStatus(result) });
+          const found = yield* held("poll", request.runId);
+          if (!found) return;
+          const result = yield* engine.poll(found.entry.registration.workflow, found.execution);
+          const status = pollStatus(result);
+          // A run that failed names the module it failed in: a service the author never
+          // provided is not visible until the body asks for it, and this is that moment.
+          if (status.status === "failed") {
+            return yield* answer({ ok: true, op: "poll", ...status, id: found.entry.entry });
+          }
+          return yield* answer({ ok: true, op: "poll", ...status });
         }
 
         case "answer": {
-          const entry = yield* held("answer", request.runId);
-          if (!entry) return;
-          const done = yield* answerDecision(entry.registration, {
+          const found = yield* held("answer", request.runId);
+          if (!found) return;
+          const done = yield* answerDecision(found.entry.registration, {
             name: request.decision,
-            executionId: yield* executionOf(entry, request.runId),
+            executionId: found.execution,
             value: request.value,
           }).pipe(Effect.result);
           return yield* answer(
@@ -233,8 +260,21 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
           );
         }
 
+        case "metadata": {
+          const name = newest.get(request.id);
+          const entry = name ? live.get(name) : undefined;
+          if (!entry) return yield* missing("metadata", request.id);
+          return yield* answer({
+            ok: true,
+            op: "metadata",
+            id: request.id,
+            registration: entry.registrationName,
+            metadata: entry.metadata,
+          });
+        }
+
         case "check": {
-          const done = yield* checkEntry({ dir: request.dir, file: request.entry }).pipe(
+          const done = yield* typecheckEntry({ dir: request.dir, file: request.entry }).pipe(
             Effect.result,
           );
           return yield* answer(
@@ -252,22 +292,24 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
      * than reporting it as failed or running it on whatever code is loaded now.
      */
     const held = Effect.fn("Native.held")(function* (op: string, runId: string) {
-      const name = routeOf(runId);
-      if (!name) {
+      const route = routeOf(runId);
+      if (!route) {
         yield* answer({ ok: false, op, detail: `no run "${runId}" was started here` });
         return undefined;
       }
-      const entry = live.get(name);
+      const entry = live.get(route.registration);
       if (!entry) {
         yield* answer({
           ok: false,
           op,
-          registration: name,
-          detail: unavailable.get(name) ?? `${name} is not registered in this host`,
+          registration: route.registration,
+          detail:
+            unavailable.get(route.registration) ??
+            `${route.registration} is not registered in this host`,
         });
         return undefined;
       }
-      return entry;
+      return { entry, execution: route.execution };
     });
 
     const control = Effect.fn("Native.control")(function* (
@@ -275,10 +317,10 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
       name: string,
       set: boolean,
     ) {
-      const entry = yield* held(request.op, request.runId);
-      if (!entry) return;
+      const found = yield* held(request.op, request.runId);
+      if (!found) return;
       yield* flag(name, request.runId, set, false);
-      yield* engine.resume(entry.registration.workflow, yield* executionOf(entry, request.runId));
+      yield* engine.resume(found.entry.registration.workflow, found.execution);
       yield* answer({ ok: true, op: request.op });
     });
 
@@ -298,11 +340,6 @@ const serve = (dir: string, registrationTimeout: Option.Option<number>): Effect.
       );
       if (reply) yield* Console.log(encodeReply({ ok: true, op: name }));
     });
-
-    // The execution id is the idempotency key's, and this proof's workflows derive theirs
-    // from the run alone — so a caller that no longer has the note does not need it.
-    const executionOf = (entry: Loaded, runId: string) =>
-      entry.registration.workflow.executionId({ runId, note: "" });
 
     yield* Stream.fromReadableStream({
       evaluate: () => Bun.stdin.stream(),

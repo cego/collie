@@ -116,6 +116,9 @@ const workspace = Effect.fn("NativeTest.workspace")(function* (prefix: string) {
     "proof.workflow.ts",
     "plain.workflow.ts",
     "broken.workflow.ts",
+    "echo.workflow.ts",
+    "unwired.workflow.ts",
+    "conflicted.workflow.ts",
     "helper.ts",
     "notes.md",
   ]) {
@@ -163,7 +166,7 @@ test(
         // The public id, the native registration and the run are three separate names.
         expect(loaded.registration).toBe("proof@1");
 
-        yield* first.ask({ op: "start", id: "proof", runId: "r1", note: "first" });
+        yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "first" } });
         yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
         // The helper it imported and the Markdown it imported both ran: `note:` is the
         // helper's, and the number is the length of the prompt beside it.
@@ -208,7 +211,7 @@ test(
         const host = yield* openHost(state);
         yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         yield* host.ask({ op: "hold", runId: "r1" });
-        yield* host.ask({ op: "start", id: "proof", runId: "r1", note: "held" });
+        yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "held" } });
         yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
         // Held before the wait: the boundary read is a plain Effect, so it saw the flag
         // an operator set rather than a value cached from the first attempt.
@@ -244,7 +247,7 @@ test(
         const { wf, state } = yield* workspace("collie-native-stop-");
         const host = yield* openHost(state);
         yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* host.ask({ op: "start", id: "proof", runId: "r1", note: "stopped" });
+        yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "stopped" } });
         yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
 
         for (const cycle of [1, 2]) {
@@ -292,7 +295,7 @@ test(
         const first = yield* openHost(state);
         yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         yield* first.ask({ op: "load", entry: `${wf}/plain.workflow.ts` });
-        yield* first.ask({ op: "start", id: "proof", runId: "r1", note: "orphan" });
+        yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "orphan" } });
         yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
         yield* first.stop;
 
@@ -315,7 +318,7 @@ test(
         expect(refused.detail).toContain("proof.workflow.ts");
 
         // The workflow beside it is unaffected.
-        yield* second.ask({ op: "start", id: "plain", runId: "r2", note: "fine" });
+        yield* second.ask({ op: "start", id: "plain", runId: "r2", input: { note: "fine" } });
         const other = yield* second.until({ op: "poll", id: "plain", runId: "r2" }, complete);
         expect(other.value).toBe("plain:fine");
         yield* second.stop;
@@ -350,7 +353,7 @@ test(
         const { wf, state } = yield* workspace("collie-native-generations-");
         const host = yield* openHost(state);
         yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* host.ask({ op: "start", id: "proof", runId: "old", note: "before" });
+        yield* host.ask({ op: "start", id: "proof", runId: "old", input: { note: "before" } });
         yield* host.until({ op: "poll", id: "proof", runId: "old" }, suspended);
 
         // The helper and the prompt beside the entry are edited while work is running.
@@ -366,7 +369,12 @@ test(
         ]);
 
         // New work sees the edit; the run already going keeps the code it started on.
-        const started = yield* host.ask({ op: "start", id: "proof", runId: "new", note: "after" });
+        const started = yield* host.ask({
+          op: "start",
+          id: "proof",
+          runId: "new",
+          input: { note: "after" },
+        });
         expect(started.registration).toBe("proof@2");
         yield* host.until({ op: "poll", id: "proof", runId: "new" }, suspended);
         expect((yield* events(state, "new"))[0]).toContain("edited:after");
@@ -402,7 +410,7 @@ test(
         expect((yield* hostTwo.ask({ op: "registrations" })).registrations).toEqual(["plain@1"]);
 
         // A run started in one project is not a run the other has.
-        yield* hostOne.ask({ op: "start", id: "proof", runId: "shared", note: "one" });
+        yield* hostOne.ask({ op: "start", id: "proof", runId: "shared", input: { note: "one" } });
         const elsewhere = yield* hostTwo.ask({ op: "poll", id: "proof", runId: "shared" });
         expect(elsewhere.ok).toBe(false);
         yield* hostOne.stop;
@@ -507,7 +515,7 @@ test(
         const { wf, state } = yield* workspace("collie-native-deadline-");
         const first = yield* openHost(state);
         yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* first.ask({ op: "start", id: "proof", runId: "r1", note: "patient" });
+        yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "patient" } });
         yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
         yield* first.stop;
 
@@ -546,7 +554,7 @@ test(
         const { wf, state } = yield* workspace("collie-native-crash-");
         const first = yield* openHost(state);
         yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* first.ask({ op: "start", id: "proof", runId: "r1", note: "crashed" });
+        yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "crashed" } });
         yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
 
         // No shutdown at all, which is the case a host that is stopped preemptively would
@@ -575,4 +583,140 @@ test(
       }).pipe(Effect.scoped),
     ),
   180_000,
+);
+
+test(
+  "a typed module registers, runs on a service of its own and returns its typed result",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { wf, state } = yield* workspace("collie-native-echo-");
+        const host = yield* openHost(state);
+        const loaded = yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
+        expect(loaded.ok).toBe(true);
+
+        // What the module declared about itself, as a card would read it: ids and titles
+        // and the projection of the action's arguments, and none of the closures.
+        const declared = yield* host.ask({ op: "metadata", id: "echo" });
+        expect(declared.metadata).toMatchObject({
+          hints: { text: "work-source" },
+          selectable: ["feature", "docs"],
+          followUps: [{ id: "echo-again", workflow: "echo", when: "succeeded" }],
+          actions: [{ id: "echo-louder", title: "Echo it louder", workflow: "echo" }],
+        });
+
+        yield* host.ask({
+          op: "start",
+          id: "echo",
+          runId: "e1",
+          input: { text: "hi", times: 2 },
+        });
+        yield* host.until({ op: "poll", id: "echo", runId: "e1" }, suspended);
+        yield* host.ask({ op: "answer", id: "echo", runId: "e1", decision: "keep", value: "yes" });
+        const done = yield* host.until({ op: "poll", id: "echo", runId: "e1" }, complete);
+        // `<hi>` is the module's own service; `#1 #2` is an ordinary Effect operator over
+        // its own typed input. Collie supplied neither.
+        expect(done.value).toBe("<hi>#1 <hi>#2|yes");
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "an input the workflow's own schema rejects names the field, and starts nothing",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { wf, state } = yield* workspace("collie-native-invalid-");
+        const host = yield* openHost(state);
+        yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
+        const refused = yield* host.ask({
+          op: "start",
+          id: "echo",
+          runId: "e1",
+          input: { text: "hi", times: "two" },
+        });
+        expect(refused.ok).toBe(false);
+        expect(refused.detail).toContain("invalid_input");
+        expect(refused.detail).toContain("times");
+
+        // Settled before anything exists: there is no run to poll, not a failed one.
+        const polled = yield* host.ask({ op: "poll", id: "echo", runId: "e1" });
+        expect(polled.ok).toBe(false);
+        expect(polled.detail).toContain('no run "e1" was started here');
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a module that contradicts itself is refused at load, with every conflict named",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { wf, state } = yield* workspace("collie-native-conflicted-");
+        const host = yield* openHost(state);
+        const refused = yield* host.ask({ op: "load", entry: `${wf}/conflicted.workflow.ts` });
+        expect(refused.ok).toBe(false);
+        for (const conflict of [
+          "is not an identity",
+          'input "branch" collides with a host option',
+          "both claim work-source",
+          "either fixed or selectable",
+          'no outcome called "vibes"',
+          "is not an identity for an offer",
+        ]) {
+          expect(refused.detail).toContain(conflict);
+        }
+        // Nothing of it was registered, and the workflow beside it still loads.
+        expect((yield* host.ask({ op: "registrations" })).registrations).toEqual([]);
+        yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
+        expect((yield* host.ask({ op: "registrations" })).registrations).toEqual(["echo@1"]);
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "a service a module never provided is reported against the file that asks for it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { wf, state } = yield* workspace("collie-native-unwired-");
+        const host = yield* openHost(state);
+        yield* host.ask({ op: "load", entry: `${wf}/unwired.workflow.ts` });
+        yield* host.ask({ op: "start", id: "unwired", runId: "u1", input: { text: "x" } });
+        const failed = yield* host.until(
+          { op: "poll", id: "unwired", runId: "u1" },
+          (reply) => reply.status === "failed",
+        );
+        // Merging a Layer beside a workflow supplies it nothing, and the host can only
+        // know that when the body asks — so it says which file to open.
+        expect(failed.value).toContain("Service not found: unwired/Missing");
+        expect(failed.id).toContain("unwired.workflow.ts");
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
+  "the example module typechecks against the declarations an author is given",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { wf, state } = yield* workspace("collie-native-sdk-types-");
+        const host = yield* openHost(state);
+        expect((yield* host.ask({ op: "provision", dir: wf })).ok).toBe(true);
+        for (const entry of ["echo.workflow.ts", "unwired.workflow.ts", "proof.workflow.ts"]) {
+          const checked = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/${entry}` });
+          expect([entry, checked.diagnostics]).toEqual([entry, []]);
+        }
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  300_000,
 );

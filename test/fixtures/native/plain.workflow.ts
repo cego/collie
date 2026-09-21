@@ -1,20 +1,17 @@
 // A second entry, so a host proves one broken or missing module leaves the others usable.
 
-import { NativeHost } from "collie/native";
+import { NativeHost, defineWorkflow } from "collie/native";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
-import * as Workflow from "effect/unstable/workflow/Workflow";
 
 export const id = "plain";
 export const title = "A workflow that just finishes";
 export const description = "Records one line and completes.";
 
+export const input = { note: Schema.String };
+
 export const make = (registrationName: string) => {
-  const workflow = Workflow.make(registrationName, {
-    payload: { runId: Schema.String, note: Schema.String },
-    idempotencyKey: (payload) => payload.runId,
-    success: Schema.String,
-  });
+  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
       const host = yield* NativeHost;
@@ -23,7 +20,7 @@ export const make = (registrationName: string) => {
         success: Schema.String,
         execute: host.record(payload.runId, "plain").pipe(Effect.as("done")),
       });
-      return `plain:${payload.note}`;
+      return `plain:${payload.input.note}`;
     }),
   );
   return { workflow, layer, decisions: {} };

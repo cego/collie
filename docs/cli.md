@@ -1078,7 +1078,11 @@ The fixture host from
 directory, one JSON line of request in and one of reply out. It loads a workflow module
 written in TypeScript outside this repository, runs it on Effect's workflow engine over
 SQLite in that directory, and answers `load`, `start`, `poll`, `answer`, `hold`, `release`,
-`stop`, `resume`, `registrations`, `provision` and `check`.
+`stop`, `resume`, `registrations`, `metadata`, `provision` and `check`.
+
+`start` carries the author's own `input`, which the workflow's schema settles before a run,
+a routing row or an execution exists: an input it rejects comes back as `invalid_input`
+naming the field. [`docs/sdk.md`](sdk.md) is what a module declares and what is refused.
 
 It exists so the proof that a packaged workflow survives a real restart can be run against
 the packaged executable, and it will be superseded by the host Collie ships. It is not a
