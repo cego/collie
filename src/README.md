@@ -48,6 +48,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `tools.ts`         | The bounded Herd-wide reads native chat may make, and nothing else                       |
 | `mcp.ts`           | Those same reads over MCP on stdio, which is how Claude Code reaches them                |
 | `native.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live |
+| `host.ts`          | The one local host per state directory: who owns it, how a client reaches it             |
 | `sdk.ts`           | `collie/native`: what a workflow module exports, declares, and is refused for            |
 | `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                 |
 | `news.ts`          | What it noticed and nobody has read: deduped, batched, and sent is never read            |

@@ -249,6 +249,13 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
       why: "the native-runtime proof's own host: a protocol on stdio, not an operation",
     },
   ],
+  [
+    "host",
+    {
+      route: "human-only",
+      why: "the process the work runs in, started for whoever needs one; not a thing to ask for",
+    },
+  ],
   ["upgrade", { route: "propose", kind: "upgrade", action: { kind: "upgrade" } }],
   ["doctor", { route: "read", tool: "collie_installation" }],
   // Not commands: the board's own operations, and the flags that change what a command

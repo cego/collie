@@ -156,6 +156,16 @@ const inspectAndBreak = Effect.fn("inspectAndBreak")((lock: string) =>
   ),
 );
 
+/** Who holds this lock, as the claim records it, or null when nobody does. */
+export const lockHolder: (
+  lock: string,
+) => Effect.Effect<LockHolder | null, never, FileSystem.FileSystem> = Effect.fn("lockHolder")(
+  function* (lock: string) {
+    const claim = yield* readClaim(lock).pipe(Effect.orElseSucceed(() => null));
+    return claim === null ? null : validHolder(claim);
+  },
+);
+
 /** Whether the lock still carries this process's own claim. */
 export const holdsLock = Effect.fn("holdsLock")(function* (lock: string) {
   const fs = yield* FileSystem.FileSystem;

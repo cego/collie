@@ -1092,6 +1092,41 @@ front door for work: it opens no tab, acquires no agent, and knows nothing about
 whose module is missing waits indefinitely, which is what keeps a module that has gone
 from turning recoverable work into a failed result.
 
+## The local workflow host
+
+```sh
+collie host --dir <state-dir>
+```
+
+The process durable work runs in. Nobody is expected to type this: a client that needs a
+host and finds none starts one, detached, and leaves it running — so the work outlives the
+command, the board or the chat turn that asked for it. Typing it is how you watch one in a
+terminal.
+
+One host owns one state directory, and the pid lock beside its SQLite decides which. Start
+four clients at once and they converge on one owner; the three hosts that lost the lock
+exit without touching anything. A lock left by a host that crashed is broken and taken
+over — by its recorded start time, so a pid that now belongs to an unrelated process is
+never adopted and never signalled.
+
+Clients talk to it over a unix socket in that same directory, with Effect's own RPC: the
+same schemas at both ends, and nothing listening off this machine. It answers `identity`,
+`load`, `registrations`, `start`, `status` and `answer` — the registry `collie native`
+drives, in front of as many clients as ask. Closing a client cancels nothing it started;
+stopping the host with `kill` leaves suspended work suspended, and the next client starts a
+host that picks it up. The operator controls the recovery proof measured — hold, release,
+stop, resume — are not on this protocol yet.
+
+It says which build it is. A client of another build — after `collie upgrade` has replaced
+the binary under a host that is still running — is told which build is running and which
+pid to stop, and sends nothing else: no takeover, and no drain-and-upgrade service manager.
+A host that cannot be started at all is `HostUnavailable`, with whether anything owns the
+directory. [ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md) is why each of
+those is the way it is.
+
+`COLLIE_HOST` names the command a client starts a host with — one path, or a JSON array —
+the way `COLLIE_DRIVER` names the Driver's. Unset, it is this executable.
+
 ## Authoring against the native SDK
 
 `provision` writes `package.json`, `tsconfig.json` and `collie-native.d.ts` into a workflow

@@ -68,6 +68,12 @@ doors: herdr actions, and the `collie` CLI.
   `src/native.ts` and `test/native-runtime.test.ts`. The two non-default cluster settings
   and the four upstream behaviours the proof measured are recorded there; an Effect
   upgrade rechecks them rather than assuming them.
+- **Changing who owns a state directory, how a client reaches the host, or what a
+  mismatched build is told** →
+  [ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md) and
+  [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `src/host.ts` and
+  `test/host.test.ts`. The lock is `src/lock.ts`'s, so ownership is decided the same way
+  it is for a Run's persistence and a Driver takeover.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

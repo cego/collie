@@ -81,10 +81,11 @@ Four things the proof measured rather than assumed. Each is a test.
 
 ## What this does not decide
 
-The shape of the public module contract, where a user's workflows live, the host Collie
-ships, typed inputs, cards, and converting the five Markdown workflows. `collie native` is
-a fixture host for this proof, not that host: one process, one state directory, one client,
-and a JSON line each way.
+The shape of the public module contract, where a user's workflows live, typed inputs,
+cards, and converting the five Markdown workflows. `collie native` is a fixture host for
+this proof: one process, one state directory, one client, and a JSON line each way. The
+host Collie ships is [ADR-0015](0015-one-local-host-owns-a-state-directory.md), which runs
+the same registry for as many clients as ask.
 
 ## Consequences
 
