@@ -941,10 +941,10 @@ effectTest("a question left behind by a Driver that is gone is not offered as on
   expect(view.active[0]!.needsYou).toBe(false);
 });
 
-effectTest("a run awaiting a step with nothing to answer is not one that needs you", function* () {
-  // `awaiting` is set for a gate the run is holding at, and for an agent answering a
-  // prompt in its own pane: there is nothing on the board to answer for either, so
-  // "1 need you" used to send a human to a row with no question under it.
+effectTest("a run awaiting a step needs you, even with nothing to answer on the row", function* () {
+  // `awaiting` is set for a gate the run is holding at and for an agent answering a
+  // prompt in its own pane. Neither can be answered under the row — but both stop the
+  // run dead, and Enter on the row reaches the pane where the answer has to be typed.
   const run = yield* seed({
     workflow: "plan",
     namedAfter: "add-a-picker",
@@ -955,11 +955,44 @@ effectTest("a run awaiting a step with nothing to answer is not one that needs y
 
   const view = yield* board([]);
 
-  expect(view.active[0]!.needsYou).toBe(false);
-  // What it is waiting for is still what the row says; it just does not claim to be
-  // your turn, and it is still one of the runs that are going.
+  expect(view.active[0]!.needsYou).toBe(true);
+  // What it is waiting for is still what the row says; there is just no question drawn
+  // under it, because this board has none to draw.
   expect(view.active[0]!.detail).toBe("next");
   expect(view.active[0]!.choice).toBeNull();
+});
+
+effectTest("an agent herdr reports blocked needs you, with nothing in the record", function* () {
+  // A permission prompt part-way through a step: the Driver is still polling for the
+  // Output and has recorded nothing, so herdr's word for the pane is the only signal.
+  const run = yield* seed({
+    workflow: "plan",
+    namedAfter: "add-a-picker",
+    stepIds: ["grill", "next"],
+  });
+  run.step("grill").variants.push(variant("impl-1", "1-4", "plan-add-a-picker/grill"));
+  yield* run.save();
+
+  const view = yield* board([live("impl-1", "1-4", "blocked")]);
+
+  expect(view.active[0]!.needsYou).toBe(true);
+  // And an agent that is simply working leaves it working.
+  const busy = yield* board([live("impl-1", "1-4", "working")]);
+  expect(busy.active[0]!.needsYou).toBe(false);
+});
+
+effectTest("a hold is not a question: nothing is waiting for the human to answer", function* () {
+  const run = yield* seed({
+    workflow: "plan",
+    namedAfter: "add-a-picker",
+    stepIds: ["grill", "next"],
+  });
+  run.record.awaiting = "hold";
+  yield* run.save();
+
+  const view = yield* board([]);
+
+  expect(view.active[0]!.needsYou).toBe(false);
 });
 
 effectTest("an empty state dir renders the board rather than nothing", function* () {

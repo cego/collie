@@ -250,7 +250,7 @@ test("the board opens on three sections under one sentence about the herd", () =
       const said = app.said();
 
       expect(said).toContain("collie");
-      expect(said).toContain("One decision is waiting on you. 2 working, 1 gone quiet.");
+      expect(said).toContain("One task is waiting on you. 2 working, 1 gone quiet.");
       expect(said).toContain("Needs you");
       expect(said).toContain("Working · 2");
       // Finished is one line until someone asks for it.
@@ -359,7 +359,7 @@ test("the search narrows the sections and offers a way back", () =>
       expect(app.said()).toContain("Docs run");
       expect(app.said()).not.toContain("Strapi prod seeder");
       // The header counts the whole herd: a decision the search hides still waits.
-      expect(app.said()).toContain("One decision is waiting on you.");
+      expect(app.said()).toContain("One task is waiting on you.");
 
       void app.mockInput.typeText("zzzz");
       yield* app.flush;

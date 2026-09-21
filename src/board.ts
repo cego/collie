@@ -13,7 +13,14 @@ import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
 import { displayName, oneLine, runLabel } from "./naming";
 import { pendingFor, proposalsPath, read as readProposals, type ProposalLine } from "./proposals";
-import { fanoutRepos, RunStore, type Run, type RunRecord, type StepStatus } from "./run";
+import {
+  fanoutRepos,
+  needsHuman,
+  RunStore,
+  type Run,
+  type RunRecord,
+  type StepStatus,
+} from "./run";
 import { herdOf } from "./steering";
 import { listTasks, type TaskRecord } from "./task";
 import { ago, agoShort, atClock, spanned } from "./time";
@@ -202,6 +209,12 @@ export interface Sentence {
   disposition: { kind: string; ref: string; ago: string; by: string } | null;
   /** The merge request the work opened or was pointed at, where there is one. */
   mr: string | null;
+  /**
+   * Where a human is being waited for, when no Decision says: the pane of the agent
+   * herdr will not prompt, or the step the Driver recorded itself waiting on. Null
+   * when nothing is waiting — or when nothing named which pane it is in.
+   */
+  stalled: string | null;
 }
 
 /** What a step is doing, for every step whose definition names no `summary` of its own. */
@@ -309,6 +322,14 @@ function failedSentence(facts: Sentence): string {
   return facts.note === null ? "Stopped without finishing." : `Stopped: ${facts.note}.`;
 }
 
+/**
+ * A Task waiting on a human with nothing on the card to answer: the answer is in the
+ * agent's own pane. Named, because "needs you" over four cards is four panes to find.
+ */
+function stalledSentence(facts: Sentence): string {
+  return `Waiting for you in ${facts.stalled ?? "its pane"}.`;
+}
+
 function workingSentence(facts: Sentence): string {
   if (facts.resumed !== null) return `Resumed with “${facts.resumed}”.`;
   if (facts.wave !== null) {
@@ -335,6 +356,9 @@ export function sentenceFor(facts: Sentence): string {
       return alsoBecame("Stopped by you.", facts.disposition);
     case "abandoned":
       return alsoBecame(`Its Driver died ${facts.abandoned ?? "a while ago"}.`, facts.disposition);
+    // Only reachable with no Decision: one above would have answered already.
+    case "blocked":
+      return stalledSentence(facts);
     default:
       return workingSentence(facts);
   }
@@ -370,8 +394,11 @@ export function heldLine(until: string | null): string {
  */
 export type Section = "needs-you" | "working" | "waiting" | "finished";
 
-export function sectionOf(view: Pick<TaskView, "state" | "decision" | "landed">): Section {
-  if (view.decision !== null) return "needs-you";
+export function sectionOf(view: Pick<TaskView, "state" | "landed">): Section {
+  // Read off the state alone, because a Decision is not the only way to stop for a
+  // human: an agent at its harness's own dialog is one too, and a section derived from
+  // the Decision could not see it. `stateOf` is where the two become one word.
+  if (view.state === "blocked") return "needs-you";
   if (view.state === "active" || view.state === "quiet") return "working";
   return view.landed ? "finished" : "waiting";
 }
@@ -431,18 +458,29 @@ function stepsOf(runs: ReadonlyArray<Run>, decision: Decision | null): BoardStep
   }));
 }
 
+/** The step whichever Run of this Task stopped on for a human, or null when none did. */
+function stepAwaited(records: ReadonlyArray<RunRecord>): string | null {
+  const step = records.find(needsHuman)?.awaiting ?? null;
+  return step === null ? null : `the ${step} step`;
+}
+
 /** What a Run is, in the board's words. A decision outranks whatever it was doing. */
 function stateOf(
   status: string,
   silent: boolean,
   decision: Decision | null,
   abandoned: boolean,
+  /** Something is waiting for the human in a pane, with no Decision to say so. */
+  stalled: boolean,
 ): TaskState {
   if (decision !== null) return "blocked";
   if (abandoned) return "abandoned";
   if (status === "stopped") return "stopped";
   if (status === "failed") return "failed";
   if (status === "succeeded") return "done";
+  // Under the endings, because only a Run still going can be waiting for anyone: a Run
+  // someone stopped while its agent sat at a prompt was stopped, and says so.
+  if (stalled) return "blocked";
   return silent ? "quiet" : "active";
 }
 
@@ -909,7 +947,20 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             Effect.catch(() => Effect.succeed("unknown" as const)),
           )) === "live";
     const abandoned = going && !driverLive && !agentAlive && silentFor > ABANDONED_MS;
-    const state = stateOf(status, silent !== null, decision, abandoned);
+    const agents = agentsOf(runs, live);
+    // Stopped for a human with no Decision to answer. Two sources, because neither sees
+    // the other: the Driver records `awaiting` when it is the one waiting, and herdr
+    // reports `blocked` for an agent sitting at its harness's own dialog — a permission
+    // prompt mid-step, which the Driver never learns about and writes no record for.
+    // herdr's name for the pane first: it is the one a human has to go to.
+    const blocked = agents.find((agent) => agent.status === "blocked");
+    // No second check that a Driver is still there to consume the answer: `abandoned`
+    // is this board's one verdict on that, with the grace a fresh or resumed Run is
+    // owed, and `stateOf` already puts it above this. A stricter gate here would be the
+    // same judgement made twice, to different thresholds.
+    const stalled =
+      (blocked ? `${blocked.name}'s pane` : null) ?? stepAwaited(runs.map((run) => run.record));
+    const state = stateOf(status, silent !== null, decision, abandoned, stalled !== null);
 
     // Whichever Run of this Task is held: a Task is held when any of its Runs is.
     const holding = runs.find((run) => run.record.held !== null)?.record.held ?? null;
@@ -982,6 +1033,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         failure,
         note: noteOf(record),
         resumed: resumedWith(record),
+        stalled,
         disposition:
           disposition === null
             ? null
@@ -1006,7 +1058,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
           : heldLine(holding.until === null ? null : atClock(holding.until, now)),
       heldBy: holding === null ? null : { by: holding.by, reason: holding.reason },
       decision,
-      agents: agentsOf(runs, live),
+      agents,
       children,
       mr,
       branch,
@@ -1092,7 +1144,9 @@ export function headerSentence(views: ReadonlyArray<TaskView>, now?: number): He
   const opening =
     needs === 0
       ? "Nothing needs you."
-      : `${needs === 1 ? "One decision is" : `${needs} decisions are`} waiting on you.`;
+      : // Not "decisions": an agent at its harness's own dialog is counted here too, and
+        // it is a pane to go to rather than anything this board can answer.
+        `${needs === 1 ? "One task is" : `${needs} tasks are`} waiting on you.`;
   const gone = quiet === 0 ? "" : `, ${quiet} gone quiet`;
   const waitingAll = views.filter((view) => sectionOf(view) === "waiting");
   const waiting =

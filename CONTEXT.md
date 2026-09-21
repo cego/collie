@@ -162,11 +162,18 @@ live agents and the run directories, so the Home's cards, the one-screen text vi
 `collie --json board` are the same model rather than three readings of it. A Run belonging
 to no Task is a TaskView of its own.
 
-**Decision** — What a Task is waiting on a human for, and the one thing that puts it in
-**Needs you**: a **question** a Run asked, a **Proposal** Collie made, or an evidence
+**Decision** — What a Task is waiting on a human for, and one of the two things that put
+it in **Needs you**: a **question** a Run asked, a **Proposal** Collie made, or an evidence
 **gate** asking which verifications this Run is to be held to. All three live in the Run
 directory, are answered on the card, from the CLI or from chat, and survive the board
 closing. One answered ahead of the step that would ask is **decided at launch**.
+
+**Stalled** — The other way into **Needs you**, and the one with nothing on the card to
+answer: an agent is waiting for a human in its own pane, either at its harness's own
+dialog (which herdr reports as a `blocked` agent, and which no Driver ever learns about)
+or having gone idle without producing its Output (which the Driver records as the Run's
+`awaiting`). Either way the work has stopped, so the card says which pane to go to rather
+than what the step was doing. A Run nothing drives is **Abandoned** first.
 
 **Working** — A Task something is actually doing: a Run with a Driver that owns it, or an
 agent herdr still has. A Run whose record says `running` but which nothing drives and no
