@@ -31,6 +31,8 @@ const admission = (
   workflow: "proof",
   project: "/work/thing",
   input,
+  provenance: Object.fromEntries(Object.keys(input).map((name) => [name, "typed"])),
+  options: {},
   generation: "proof@1",
   execution: `execution-${run}`,
   task: belongs?.task ?? null,

@@ -6,7 +6,8 @@ import { FALLBACK_DEFAULTS } from "../src/config";
 import { skillsIn } from "../src/template";
 import { layerSet } from "./support/defs";
 import { loadDefinitions, resolveWorkflow, validateWorkflow } from "../src/definitions";
-import { REPOSITORY_INPUT, mutates, roams } from "../src/worktree";
+import { mutates, roams } from "../src/worktree";
+import { fieldsWithStrategy } from "../src/strategies";
 
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
@@ -228,8 +229,9 @@ test("renovate names the checkout it roams in and waits for Helle before it touc
       const defs = yield* baseline();
       const wf = resolveWorkflow("renovate", defs, FALLBACK_DEFAULTS);
 
-      // The checkout is cut from this input; ticket 02's allocation reads the same name.
-      expect(wf.inputs[REPOSITORY_INPUT]).toBe("gitlab-repository");
+      // The checkout is cut from whichever input declares the strategy, so the field's
+      // own name is the author's to choose.
+      expect(fieldsWithStrategy(wf.inputs, "gitlab-repository")).toEqual(["repository"]);
       // A roaming checkout has no branch to name, so it is offered no branch input.
       expect(wf.checkout).toBe("roaming");
       expect(roams(wf.checkout)).toBe(true);
@@ -241,7 +243,7 @@ test("renovate names the checkout it roams in and waits for Helle before it touc
       // `implement`'s differently purposed input is left alone.
       const implement = resolveWorkflow("implement", defs, FALLBACK_DEFAULTS);
       expect(implement.inputs.repo).toBe("optional");
-      expect(implement.inputs[REPOSITORY_INPUT]).toBeUndefined();
+      expect(fieldsWithStrategy(implement.inputs, "gitlab-repository")).toEqual([]);
 
       // One gate, on the first step that touches anything shared — the stage deploy —
       // and before every merge; never on the Linear bookkeeping or the read-only

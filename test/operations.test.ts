@@ -508,6 +508,7 @@ const reviewed = Effect.fn("operationsTest.reviewed")(function* (
     workspaceLabel: "test",
     inputs: { target },
     inputSources: {},
+    inputStrategies: { target: "diff-target" },
     stepIds: ["review"],
     maxIterations: 1,
     namedAfter: "target",

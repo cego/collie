@@ -28,6 +28,13 @@ import type {
   Variant,
 } from "./definitions";
 import { gateSteps, roundVariant, stepSummaries, stepVariants, variantKeys } from "./definitions";
+import {
+  diffTargetOf,
+  fieldsWithStrategy,
+  recorded,
+  workSourceOf,
+  type Settled,
+} from "./strategies";
 import type { Defaults } from "./config";
 import { configValue, readConfig, writeConfigValue } from "./config";
 import type { PluginEnv } from "./env";
@@ -608,7 +615,7 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
         const facts = yield* mrFacts(
           {
             cwd: run.record.cwd,
-            inputs: run.record.inputs,
+            ...recorded(run.record),
             configuredAssignee: configValue(yield* readConfig(o.env.configDir), "gitlab.assignee"),
           },
           runShell,
@@ -693,7 +700,11 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
         // review is printed where the human is looking, and asking for a review of a
         // merge request still makes whoever asked its reviewer.
         yield* printReview(o);
-        yield* claimMrRole(o, parseMrTarget(run.record.inputs.target ?? ""), "reviewer");
+        yield* claimMrRole(
+          o,
+          parseMrTarget(diffTargetOf(recorded(run.record))?.value ?? ""),
+          "reviewer",
+        );
         const next = yield* afterStep(o, ctx, viewSource, repeats, index, source);
         if (next.kind === "finish") return next.status;
         index = next.index;
@@ -768,7 +779,11 @@ export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOpt
     if (step.fanIn) yield* printReview(o);
     // A review of a merge request makes whoever asked for it its reviewer.
     if (step.fanIn && blocked.length === 0)
-      yield* claimMrRole(o, parseMrTarget(run.record.inputs.target ?? ""), "reviewer");
+      yield* claimMrRole(
+        o,
+        parseMrTarget(diffTargetOf(recorded(run.record))?.value ?? ""),
+        "reviewer",
+      );
 
     if (blocked.length > 0) {
       // The real reason, not "go and look": an unusable Output is often ten seconds
@@ -1434,12 +1449,9 @@ const recordFixedKindEvidence = Effect.fn("Engine.recordFixedKindEvidence")(func
  */
 const ticketsOf = Effect.fn("Engine.ticketsOf")(function* (o: EngineOptions) {
   const path = yield* Path.Path;
-  const { inputs } = o.run.record;
-  const planDir =
-    (inputs.plan_kind ?? "") === "plan-dir" && (inputs.plan ?? "") !== ""
-      ? inputs.plan!
-      : path.join(o.run.dir, "plan");
-  return yield* orderedTicketsOf(planDir, inputs.repo ?? "").pipe(
+  const work = workSourceOf(recorded(o.run.record));
+  const planDir = work?.kind === "plan-dir" ? work.value : path.join(o.run.dir, "plan");
+  return yield* orderedTicketsOf(planDir, o.run.record.inputs.repo ?? "").pipe(
     Effect.catch(() => Effect.succeed([])),
   );
 });
@@ -1522,9 +1534,9 @@ const runSlices = Effect.fn("Engine.runSlices")(function* (
   extras: YamlMap | undefined,
 ) {
   const { run, out } = o;
-  const source = run.record.inputs.plan ?? "";
-  if ((run.record.inputs.plan_kind ?? "") !== "plan-dir" || source === "") return null;
-  const tickets = yield* orderedTicketsOf(source, run.record.inputs.repo ?? "").pipe(
+  const work = workSourceOf(recorded(run.record));
+  if (work?.kind !== "plan-dir") return null;
+  const tickets = yield* orderedTicketsOf(work.value, run.record.inputs.repo ?? "").pipe(
     Effect.catch(() => Effect.succeed([])),
   );
   // One ticket is not a plan to slice: the hand-off would be empty and the loop would be
@@ -2483,6 +2495,7 @@ const chain = Effect.fn("Engine.chain")(function* (
     name: tail,
     inputs,
     sources,
+    strategies: child.inputs,
     // The Task's workspace, as the parent recorded it — not whatever is focused now.
     workspaceId: run.record.workspace ?? o.env.workspaceId,
     workspaceLabel: run.record.workspace_label,
@@ -2591,7 +2604,11 @@ const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (
   choice: ChoiceDef,
   ctx: RunCtx,
 ) {
-  const template = choice.inputs?.plan;
+  // Whatever the child calls its work source: the plan is the value this choice hands
+  // that field, and a child that renamed it is still handed a plan.
+  const child = resolveWorkflow(choice.run!, o.defs, o.defaults);
+  const field = fieldsWithStrategy(child.inputs, "work-source")[0];
+  const template = field === undefined ? undefined : choice.inputs?.[field];
   if (template === undefined) return null;
   // The same rendering `chain` will do with it, so the plan read here is the plan the
   // children are given.
@@ -2810,9 +2827,9 @@ const PLAN_ISSUES = "issues";
 const planTickets = Effect.fn("Engine.planTickets")(function* (o: EngineOptions) {
   const fs = yield* FileSystem.FileSystem;
   const pathService = yield* Path.Path;
-  const plan = o.run.record.inputs.plan ?? "";
-  if (o.run.record.inputs.plan_kind !== "plan-dir" || plan === "") return null;
-  const dir = pathService.join(plan, PLAN_ISSUES);
+  const work = workSourceOf(recorded(o.run.record));
+  if (work?.kind !== "plan-dir") return null;
+  const dir = pathService.join(work.value, PLAN_ISSUES);
   const there = yield* fs.exists(dir).pipe(Effect.catch(() => Effect.succeed(false)));
   return there ? dir : null;
 });
@@ -3406,7 +3423,7 @@ const previousReviewVars = Effect.fn("Engine.previousReviewVars")(function* (o: 
   // Empty, not "(none)": a first review should not read a heading for a review that
   // does not exist, and a template has no way to leave the section out itself.
   const none = { review: "", when: "never", run: "" };
-  const target = o.run.record.inputs.target ?? "";
+  const target = diffTargetOf(recorded(o.run.record))?.value ?? "";
   if (target === "") return none;
   const store = new RunStore(o.env.stateDir);
   const named = o.run.record.inputs.previous;
@@ -5299,10 +5316,16 @@ const reconcileTabs = Effect.fn("Engine.reconcileTabs")(function* (
  */
 export function runTarget(
   wf: { name: string; embeddedInputs: string[] },
-  record: { workflow: string; slug: string; inputs: Record<string, string> },
+  record: {
+    workflow: string;
+    slug: string;
+    inputs: Record<string, string>;
+    input_strategies: Record<string, string>;
+  },
 ): string {
-  const own = !wf.embeddedInputs.includes("target");
-  return targetLabel(record.workflow, record.slug, own ? record.inputs : {});
+  const target = diffTargetOf(recorded(record));
+  const own = target !== null && !wf.embeddedInputs.includes(target.name);
+  return targetLabel(record.workflow, record.slug, own ? target.value : "");
 }
 
 /** The MR step reports what it opened; the summary is where the human looks for it. */
@@ -5393,10 +5416,11 @@ function collectList(o: EngineOptions, key: "deferred", parsed: YamlValue): void
  * than the run, so the launch menu can ask about exactly the steps that will run.
  */
 export const unmetRequirementFor = Effect.fn("Engine.unmetRequirementFor")(function* (
-  where: { cwd: string; inputs: Record<string, string> },
+  where: { cwd: string } & Settled,
   requires: StepRequirement[],
 ) {
-  const target = where.inputs.target ?? "";
+  const change = diffTargetOf(where);
+  const target = change?.value ?? "";
   for (const need of requires) {
     if (need === "gitlab") {
       // A step pointed at a merge request needs glab for that project; a step that
@@ -5407,7 +5431,7 @@ export const unmetRequirementFor = Effect.fn("Engine.unmetRequirementFor")(funct
         : gitlabReadiness(where.cwd, runShell);
       if (!ready.ok) return ready.reason;
     }
-    if (need === "mr-target" && where.inputs.target_kind !== "mr") {
+    if (need === "mr-target" && change?.kind !== "mr") {
       return `${target || "this run"} is not a merge request`;
     }
     if (need === "someone-elses-mr") {
@@ -5422,7 +5446,7 @@ export const unmetRequirementFor = Effect.fn("Engine.unmetRequirementFor")(funct
 });
 
 const unmetRequirement = (o: EngineOptions, requires: StepRequirement[]) =>
-  unmetRequirementFor({ cwd: o.run.record.cwd, inputs: o.run.record.inputs }, requires);
+  unmetRequirementFor({ cwd: o.run.record.cwd, ...recorded(o.run.record) }, requires);
 
 /** Where Helle's credentials are read from, when a machine keeps them off the default. */
 const helleEnvFile = (o: EngineOptions) => o.env.raw.HELLE_ENV_FILE ?? null;
@@ -5652,9 +5676,9 @@ const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
     outputs: outputVars(outputs),
     findings: formatFindings(lastFindings(o, step, ctx)),
     // `--repo <project>` for an MR target, so a prompt can be followed from anywhere.
-    target_repo: repoArgs(parseMrTarget(o.run.record.inputs.target ?? "")?.project ?? null).join(
-      " ",
-    ),
+    target_repo: repoArgs(
+      parseMrTarget(diffTargetOf(recorded(o.run.record))?.value ?? "")?.project ?? null,
+    ).join(" "),
     fan_in: yield* fanInFiles(o, step, outputs),
     disputed: formatFindings(o.run.record.disputed),
     previous: { ...previous },

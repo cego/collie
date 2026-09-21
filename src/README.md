@@ -17,6 +17,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `journal.ts`       | Append-only JSONL: the read that survives a torn line, and the append that makes its dir |
 | `harness.ts`       | Per-harness start, model flag, effort flag and persona injection                         |
 | `inputs.ts`        | Input inference from branch, cwd, earlier runs and glab                                  |
+| `strategies.ts`    | Which Input carries which strategy, and how a settled Run is read through one            |
 | `engine.ts`        | Tabs, agents, prompts, waits, gates, choices and the fix loop                            |
 | `workspace.ts`     | The Control Plane: what the Session's board shows, and the text fallback that draws it   |
 | `ui/`              | The Collie tab: the card board and its drawer, plain state and commands, and the bridge  |

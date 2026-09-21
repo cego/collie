@@ -1324,6 +1324,7 @@ test("a Run named after a plan directory's path is named after the directory", (
       });
       run.record.named_after = null;
       run.record.inputs = { plan: "/home/mk/work/gitte2/collie-tui-plan", plan_kind: "plan-dir" };
+      run.record.input_strategies = { plan: "work-source" };
       yield* run.save();
 
       const [view] = yield* buildBoard({ stateDir: dir, now: Date.parse("2026-09-14T10:00:00Z") });

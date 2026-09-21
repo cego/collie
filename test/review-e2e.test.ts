@@ -207,6 +207,7 @@ function runWorkflowEffect(
         workspaceLabel: opts.workspaceLabel ?? "test",
         inputs: merged,
         inputSources: inputSources(inferred),
+        inputStrategies: wf.inputs,
         stepIds: wf.steps.map((s) => s.id),
         maxIterations: wf.maxIterations,
         namedAfter:

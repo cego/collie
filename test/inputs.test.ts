@@ -527,6 +527,7 @@ function makePlanRun(
       max_iterations: 1,
       inputs: {},
       input_sources: {},
+      input_strategies: {},
       steps: [],
       parent: null,
       children: [],
@@ -822,6 +823,7 @@ test("the targets this repo has already reviewed are offered without pasting the
           workflow: "review",
           slug: `review-${slug}`,
           inputs: { target, target_kind: targetKind(target) },
+          input_strategies: { target: "diff-target" },
           target_label: null,
           synthesis: "steps/synthesize/synthesized.json",
         });
@@ -863,6 +865,7 @@ test("the newest finished review of this target is the one a re-review is given"
           workflow: "review",
           slug: `review-${slug}`,
           inputs: { target: "mr:gitlab/x!7", target_kind: "mr" },
+          input_strategies: { target: "diff-target" },
           synthesis,
         });
       yield* reviewed("first", "2026-08-01T10:00:00Z", "done", "s.json");

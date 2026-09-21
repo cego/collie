@@ -121,7 +121,15 @@ test(
             layer: "user",
             path: `${world.user}/proof.workflow.ts`,
             // What it takes, so a caller can ask for it without loading the module.
-            inputs: ["note"],
+            inputs: [
+              {
+                name: "note",
+                required: true,
+                strategy: null,
+                schema: { type: "string", $defs: {} },
+                limits: [],
+              },
+            ],
           },
         ]);
 

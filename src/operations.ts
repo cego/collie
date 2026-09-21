@@ -7,6 +7,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { atClock, nowIso, untilFrom } from "./time";
+import { diffTargetOf, recorded } from "./strategies";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
 import {
@@ -52,6 +53,7 @@ import {
   classifyWorkSource,
   inferInputs,
   inputSources,
+  inputStrategies,
   inputValues,
   settle,
   type Resolution,
@@ -1001,6 +1003,7 @@ export const startRun = Effect.fn("operations.startRun")(function* (
     name: named.short,
     inputs: inputValues(resolutions),
     sources: inputSources(resolutions),
+    strategies: inputStrategies(resolutions),
     workspaceId: launchedIn,
     workspaceLabel: from?.label ?? workspace?.label ?? null,
     openLabel: label,
@@ -2309,7 +2312,7 @@ export const postReview = Effect.fn("operations.postReview")(function* (run: Run
   const file = pathService.join(run.dir, REVIEW_FILE);
   if (!(yield* fs.exists(file)))
     return { ok: false, message: `there is no ${REVIEW_FILE} to post` };
-  const target = run.record.inputs.target ?? "";
+  const target = diffTargetOf(recorded(run.record))?.value ?? "";
   const mr = parseMrTarget(target);
   if (!mr) return { ok: false, message: `${target || "this run"} is not a merge request` };
 
@@ -2383,6 +2386,7 @@ export const followUp = Effect.fn("operations.followUp")(function* (
     worktree,
     inputs: { plan: `followup:${parent.id}`, plan_kind: "followup" },
     inputSources: { plan: `follow-up of ${parent.id}` },
+    inputStrategies: { plan: "work-source" },
     definition: prepared.workflow,
     approvedVerifications: yield* approvedFrom({ cwd: env.cwd, configDir: env.configDir }),
     stepIds: prepared.workflow.steps.map((step) => step.id),

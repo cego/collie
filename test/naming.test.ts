@@ -22,30 +22,26 @@ import {
 } from "../src/naming";
 
 test("a review's target is short and human, and never a sha", () => {
-  expect(targetLabel("review", "review-x", { target: "mr:123" })).toBe("!123");
-  expect(targetLabel("review", "review-x", { target: "worktree" })).toBe("worktree");
-  expect(targetLabel("review", "review-x", { target: "branch:main...add-picker" })).toBe(
-    "add-picker",
-  );
+  expect(targetLabel("review", "review-x", "mr:123")).toBe("!123");
+  expect(targetLabel("review", "review-x", "worktree")).toBe("worktree");
+  expect(targetLabel("review", "review-x", "branch:main...add-picker")).toBe("add-picker");
 
   // The case that produced `review-branch-b5571dc-head` as a run name.
-  const opaque = targetLabel("review", "review-branch-b5571dc-head", {
-    target: "branch:b5571dc...HEAD",
-  });
+  const opaque = targetLabel("review", "review-branch-b5571dc-head", "branch:b5571dc...HEAD");
   expect(opaque).toBe("diff");
   expect(opaque).not.toMatch(/[0-9a-f]{7}/i);
   // A sha base with a real head still shows the head.
-  expect(targetLabel("review", "r", { target: "branch:b5571dc...add-picker" })).toBe("add-picker");
+  expect(targetLabel("review", "r", "branch:b5571dc...add-picker")).toBe("add-picker");
   // A real base with an opaque head falls back to the base rather than a sha.
-  expect(targetLabel("review", "r", { target: "branch:main...HEAD" })).toBe("main");
+  expect(targetLabel("review", "r", "branch:main...HEAD")).toBe("main");
 });
 
 test("workflows with no target are named by their slug, without repeating the workflow", () => {
-  expect(targetLabel("implement", "implement-add-picker", {})).toBe("add-picker");
-  expect(targetLabel("plan", "plan-add-picker", {})).toBe("add-picker");
-  expect(targetLabel("architecture", "architecture-run", {})).toBe("run");
+  expect(targetLabel("implement", "implement-add-picker", "")).toBe("add-picker");
+  expect(targetLabel("plan", "plan-add-picker", "")).toBe("add-picker");
+  expect(targetLabel("architecture", "architecture-run", "")).toBe("run");
   // A slug that does not carry the prefix is left alone.
-  expect(targetLabel("implement", "something-else", {})).toBe("something-else");
+  expect(targetLabel("implement", "something-else", "")).toBe("something-else");
 });
 
 test("a tab is a glyph and one Capitalized word: the workflow, or the step", () => {
@@ -189,6 +185,7 @@ function labelled(over: Partial<LabelledRun> = {}): LabelledRun {
     workflow: "implement",
     slug: "implement-control-plane-glass",
     inputs: { target: "branch:master...control-plane-glass" },
+    input_strategies: { target: "diff-target" },
     target_label: "control-plane-glass",
     status: "running",
     task: null,

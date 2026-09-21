@@ -93,6 +93,12 @@ doors: herdr actions, and the `collie` CLI.
   `src/commands/run.ts`, `src/flows.ts` and `test/lifecycle.test.ts`. What an id runs is
   decided by what is saved for the project, never by a flag, and a status is read from the
   engine rather than kept anywhere of Collie's.
+- **Changing how an Input is inferred, settled or read back — or adding a strategy** →
+  [ADR-0019](docs/adr/0019-a-strategy-not-a-field-name.md) and
+  [`docs/cli.md`](docs/cli.md#a-workflow-saved-as-a-module), alongside `src/strategies.ts`,
+  `src/inputs.ts`, `src/native.ts` and `test/strategies.test.ts`. What Collie does with an
+  Input is the strategy's, never the field's name: read one with `workSourceOf`,
+  `diffTargetOf` or `gitlabRepositoryOf` rather than by looking a name up.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

@@ -38,7 +38,8 @@ import {
 import { fanoutRepos, withRunLock, RunStore } from "../run";
 import {
   anyNativeRuns,
-  claimedByModule,
+  moduleFor,
+  neededInputs,
   describeRun,
   nativeRun,
   nativeRuns,
@@ -48,7 +49,8 @@ import {
   statusOf,
   watchNativeRun,
 } from "../lifecycle";
-import type { RunView } from "../native";
+import type { Given, RunView } from "../native";
+import { RESERVED_INPUTS } from "../sdk";
 import {
   EMPTY_DEFAULTS,
   amend,
@@ -93,6 +95,7 @@ import {
   actorNow,
   context,
   mutating,
+  asText,
   parseInput,
   readRun,
   requestIdFlag,
@@ -160,6 +163,33 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
     );
   return taken({ mode: "continue", task: here });
 });
+
+/**
+ * What the host supplies at launch, split from what the author declared. A module may not
+ * declare one of these names — `checkEntry` refuses that at load — so a value under one is
+ * the host's option and never an input, and nothing of the host's reaches the payload.
+ */
+function hostOptions(given: Given) {
+  return {
+    input: {
+      json: Object.fromEntries(Object.entries(given.json).filter(([name]) => !isOption(name))),
+      text: Object.fromEntries(Object.entries(given.text).filter(([name]) => !isOption(name))),
+    },
+    options: Object.fromEntries([
+      ...Object.entries(given.text).filter(([name]) => isOption(name)),
+      ...Object.entries(given.json)
+        .filter(([name]) => isOption(name))
+        .map(([name, value]) => [name, asOptionText(value)]),
+    ]),
+  };
+}
+
+const isOption = (name: string) => name in RESERVED_INPUTS;
+
+/** A host option is text; one that arrived as typed JSON is written back down as it came. */
+const asOptionText = (value: Schema.Json) => (isText(value) ? value : asJsonText(value));
+const isText = Schema.is(Schema.String);
+const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 
 /**
  * The launch flags a saved module does not take yet. Refused rather than dropped: a goal
@@ -267,13 +297,22 @@ const runStart = Command.make(
               // A workflow saved as a module is that module, wherever a Markdown
               // definition of the same name also is: what an id runs is decided by what
               // is saved for this project, never by a flag naming an engine.
-              if (yield* claimedByModule(resolved.env, workflow)) {
+              const saved = yield* moduleFor(resolved.env, workflow);
+              if (saved !== null) {
                 const unsupported = unsupportedFlags({ decide, goal, constraint });
                 if (unsupported !== null) return unsupported;
+                // The host's own options are settled apart from the author's payload, so
+                // nothing the host supplies is ever injected into a module's input.
+                const launch = hostOptions(explicit.given);
+                // What it declares and nobody gave, with the schemas to answer it by, so
+                // a caller can fill the gaps and retry under the same request id.
+                const needed = "inputs" in saved ? neededInputs(saved, launch.input) : null;
+                if (needed !== null) return needed;
                 const started = yield* startNativeRun(resolved.env, {
                   id: workflow,
                   request: requestId,
-                  input: explicit.inputs,
+                  input: launch.input,
+                  options: launch.options,
                   task: task.choice.mode === "continue" ? task.choice.task.id : null,
                 });
                 if (!started.ok) return started;
@@ -294,8 +333,10 @@ const runStart = Command.make(
                 task.choice.mode === "continue" ? task.choice.task : null,
               );
               if (!prepared.ok) return prepared;
+              const text = asText(explicit.given);
+              if (!text.ok) return text;
               const settled = yield* settleGiven(resolved.env, prepared, {
-                inputs: explicit.inputs,
+                inputs: text.inputs,
                 decide,
               });
               if (!settled.ok) return settled;
@@ -307,7 +348,7 @@ const runStart = Command.make(
                 // Not one of the Workflow's own Inputs: it names the checkout the Run
                 // works in, and the Workflow never sees it. (`workspace` is a declared
                 // Input, so it travels with the rest of them.)
-                branch: explicit.inputs.branch,
+                branch: text.inputs.branch,
                 intent: { goal: Option.getOrNull(goal), constraints: named.constraints },
                 task: task.choice,
               });

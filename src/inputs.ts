@@ -5,6 +5,7 @@ import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { InputStrategy } from "./definitions";
+import { diffTargetOf, recorded, targetKind, type TargetKind } from "./strategies";
 import { RunStore } from "./run";
 import { targetLabel } from "./naming";
 import { ago } from "./time";
@@ -41,8 +42,7 @@ export interface PickItem {
 /** Where the work to be done was described. */
 export type WorkSourceKind = "plan-dir" | "linear" | "text" | "review" | "followup";
 
-/** What a review is pointed at. */
-export type TargetKind = "mr" | "branch" | "worktree";
+export { targetKind, type TargetKind };
 
 export type CandidateKind = WorkSourceKind | TargetKind;
 
@@ -322,7 +322,7 @@ export function reviewedTargets(
     const seen = new Set<string>();
     for (const run of yield* new RunStore(stateDir).finished(cwd, task)) {
       if (found.length >= limit) break;
-      const target = run.record.inputs.target;
+      const target = diffTargetOf(recorded(run.record))?.value;
       if (!target) continue;
       if (seen.has(target)) continue;
       seen.add(target);
@@ -333,9 +333,7 @@ export function reviewedTargets(
         kind: targetKind(target),
         value: target,
         source: open > 0 ? `reviewed ${when} · ${open} finding(s) open` : `reviewed ${when}`,
-        label:
-          run.record.target_label ??
-          targetLabel(run.record.workflow, run.record.slug, run.record.inputs),
+        label: run.record.target_label ?? targetLabel(run.record.workflow, run.record.slug, target),
       });
     }
     return found;
@@ -539,13 +537,6 @@ export function classifyGivenTarget(
   });
 }
 
-/** A target's kind is its value's shape; both the picker and a resume read it back. */
-export function targetKind(value: string): CandidateKind {
-  if (value.startsWith("mr:")) return "mr";
-  if (value.startsWith("branch:")) return "branch";
-  return "worktree";
-}
-
 /** What the human typed: a plan directory, a Linear issue, or the work in their own words. */
 export function classifyWorkSource(
   typed: string,
@@ -734,6 +725,13 @@ export function inputSources(resolutions: Resolution[]) {
   const sources: Record<string, string> = {};
   for (const r of resolutions) sources[r.name] = r.source;
   return sources;
+}
+
+/** Which strategy settled each Input, which is how everything downstream finds one. */
+export function inputStrategies(resolutions: Resolution[]) {
+  const strategies: Record<string, string> = {};
+  for (const r of resolutions) strategies[r.name] = r.strategy;
+  return strategies;
 }
 
 /** True for the `<name>_kind` companion `inputValues` adds next to a kinded Input. */

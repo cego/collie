@@ -150,11 +150,23 @@ const fakeGitWithCheckouts = (
     },
   );
 
+/**
+ * What the shipped workflows declare, which is what these cases are written in. The
+ * strategy is what everything downstream reads; `test/strategies.test.ts` is where the
+ * same values under other names are proved to behave the same.
+ */
+const SHIPPED_STRATEGIES = {
+  plan: "work-source",
+  target: "diff-target",
+  repository: "gitlab-repository",
+};
+
 const plan = (inputs: Record<string, string>, explicit?: string, extra: Partial<BranchAsk> = {}) =>
   branchFor({
     cwd: rig.projectDir,
     name: "Add a picker",
     inputs,
+    strategies: SHIPPED_STRATEGIES,
     // The resolver only names a branch after an Input a human gave, so the default
     // here is what `--input` records — the cases about what Collie itself worked out
     // override it.
@@ -255,6 +267,7 @@ test("a review of a merge request takes that merge request's own branch", () =>
 
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/acme/app!42",
           target_kind: "mr",
@@ -270,13 +283,19 @@ test("a review of a branch diff takes its head, and a review of a tree the branc
 
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "branch:master...their-work",
           target_kind: "branch",
         }),
       ).toMatchObject({ branch: "their-work" });
       expect(
-        yield* plan({ plan_kind: "review", target: "worktree", target_kind: "worktree" }),
+        yield* plan({
+          plan: "/runs/review-1",
+          plan_kind: "review",
+          target: "worktree",
+          target_kind: "worktree",
+        }),
       ).toMatchObject({ branch: "on-this-one" });
     }),
   ));
@@ -691,7 +710,7 @@ test("a settled worktree is removed, and the board says why", () =>
 test("a Renovate Run's detached checkout is pruned by the same sweep, with no branch to delete", () =>
   runEffect(
     Effect.gen(function* () {
-      const at = join(rig.root, "worktrees", "project", "renovate");
+      const at = join(rig.root, "worktrees", "project", "roaming");
       // No branch, in the record and in herdr's listing alike: that is what a detached
       // checkout is, and it must still be a candidate.
       yield* collieWorktree("", { workflow: "renovate", at, managedBy: "git", workspaceId: null });
@@ -702,7 +721,7 @@ test("a Renovate Run's detached checkout is pruned by the same sweep, with no br
         "rev-list origin/master..HEAD": "",
       });
 
-      expect(yield* prune()).toEqual(["♻ removed renovate · its Run is over and it holds nothing"]);
+      expect(yield* prune()).toEqual(["♻ removed roaming · its Run is over and it holds nothing"]);
       expect(yield* asked()).toContain(`worktree remove ${at}`);
       // Nothing was ever bound to it, so nothing is deleted with it.
       expect((yield* asked()).some((command) => command.startsWith("branch -d"))).toBe(false);
@@ -712,11 +731,11 @@ test("a Renovate Run's detached checkout is pruned by the same sweep, with no br
 test("a Renovate checkout with work still in it is kept, like any other", () =>
   runEffect(
     Effect.gen(function* () {
-      const at = join(rig.root, "worktrees", "project", "renovate");
+      const at = join(rig.root, "worktrees", "project", "roaming");
       yield* collieWorktree("", { workflow: "renovate", at, managedBy: "git", workspaceId: null });
       yield* settledGit({ "status --porcelain": " M package.json" });
 
-      expect(yield* prune()).toEqual(["kept renovate · uncommitted changes"]);
+      expect(yield* prune()).toEqual(["kept roaming · uncommitted changes"]);
       expect((yield* asked()).some((command) => command.startsWith("worktree remove"))).toBe(false);
     }),
   ));
@@ -1057,6 +1076,7 @@ test("a review of a merge request whose branch is only on the remote is cut from
       // Not the default branch: a fix round has to continue the work it is fixing.
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/acme/app!42",
           target_kind: "mr",
@@ -1315,6 +1335,7 @@ const renovateCheckout = (inputs: Record<string, string> = {}, cwd = rig.project
     checkout: "roaming",
     name: "Renovate spilnu",
     inputs,
+    strategies: SHIPPED_STRATEGIES,
     workspaceId: "wTasks",
     workspaceLabel: "Tasks",
   });
@@ -1326,7 +1347,7 @@ test("a Renovate Run gets a detached checkout at the default branch, bound to no
 
       const checkout = yield* renovateCheckout();
 
-      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       expect(checkout).toMatchObject({
         cwd: at,
         workspaceId: "wTasks",
@@ -1371,7 +1392,7 @@ test("the repository input says which local checkout the Renovate worktree is cu
       // is cut from the repository it names.
       const checkout = yield* renovateCheckout({ repository: elsewhere });
 
-      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "spilnu", "renovate"));
+      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "spilnu", "roaming"));
       expect(yield* askedIn()).toContainEqual({
         cwd: elsewhere,
         command: `worktree add --detach ${checkout.cwd} origin/master`,
@@ -1426,8 +1447,8 @@ test("two Renovate Runs on different repositories do not collide on a checkout p
       yield* fakeGitWithCheckouts([{ path: other, branch: "master" }]);
       const there = yield* renovateCheckout({ repository: other });
 
-      expect(here.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "renovate"));
-      expect(there.cwd).toBe(join(rig.root, ".herdr", "worktrees", "happytiger", "renovate"));
+      expect(here.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "roaming"));
+      expect(there.cwd).toBe(join(rig.root, ".herdr", "worktrees", "happytiger", "roaming"));
       expect(here.cwd).not.toBe(there.cwd);
     }),
   ));
@@ -1438,7 +1459,7 @@ test("the repository a checkout belongs to is git's, never the directory's own n
       const fs = yield* FileSystem.FileSystem;
       // The two cases whose basename lies: a Renovate Run's checkout, always called
       // `renovate`, and a branch-owning one, called after its branch.
-      const roaming = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const roaming = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       const owned = join(rig.root, ".herdr", "worktrees", "project", "add-picker");
       for (const at of [roaming, owned]) yield* fs.makeDirectory(at, { recursive: true });
       yield* fakeGitWithCheckouts([
@@ -1468,7 +1489,7 @@ test("a linked worktree of a repository picks the same destination the repositor
       // the repository's, or one repository would get two Renovate checkouts.
       const checkout = yield* renovateCheckout({ repository: linked });
 
-      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "renovate"));
+      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "roaming"));
       expect(checkout.cwd).not.toContain("some-feature");
     }),
   ));
@@ -1510,7 +1531,7 @@ test("a repository with no remote-tracking default branch is detached at the loc
       const checkout = yield* renovateCheckout();
 
       expect(checkout.refused).toBe(null);
-      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       expect(yield* asked()).toContainEqual(`worktree add --detach ${at} master`);
     }),
   ));
@@ -1552,7 +1573,7 @@ const renovateRunAt = Effect.fn("worktreeTest.renovateRunAt")(function* (at: str
 test("a second Renovate Run on one repository is refused, never handed the first's tree", () =>
   runEffect(
     Effect.gen(function* () {
-      const taken = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
       // The earlier Run's own record, which is the only proof that this checkout is a
       // Renovate Run's rather than something that merely looks like one.
@@ -1591,7 +1612,7 @@ test("two repositories of the same name never share one Renovate checkout", () =
       // directory, because the path is named after the repository, not its location.
       const other = join(rig.root, "elsewhere", "project");
       yield* fs.makeDirectory(other, { recursive: true });
-      const taken = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
       yield* fakeGitWithCheckouts([{ path: other, branch: "master" }]);
 
@@ -1611,7 +1632,7 @@ test("a path in the way that will not say whose it is refuses, rather than being
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       // Something is there and nothing says what: the answer is a refusal naming it,
       // never a worktree added on top of whatever it is.
       yield* fs.makeDirectory(at, { recursive: true });
@@ -1632,7 +1653,7 @@ test("a destination another Run is claiming right now is refused, not looked at 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
-      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       // A live claim on the destination, as a Run starting at the same moment holds it.
       // Looking and creating happen under it, so the loser never finds the path free.
       yield* fs.writeFileString(
@@ -1706,7 +1727,12 @@ test("a merge request Collie cannot read is a run that does not start", () =>
       // Never `slugify(name)`: the fixes belong on the branch that was reviewed, and a
       // new branch named after the run would leave the merge request untouched.
       expect(
-        yield* plan({ plan_kind: "review", target: "mr:42", target_kind: "mr" }),
+        yield* plan({
+          plan: "/runs/review-1",
+          plan_kind: "review",
+          target: "mr:42",
+          target_kind: "mr",
+        }),
       ).toMatchObject({ refused: "glab could not read !42" });
     }),
   ));
@@ -1723,6 +1749,7 @@ test("a merge request in another project cannot be fixed from this checkout", ()
 
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/other/thing!7",
           target_kind: "mr",
@@ -1883,12 +1910,18 @@ test("a diff of two refs that are not branches has nothing to fix on", () =>
       // `branch:main...HEAD` is a perfectly good thing to review, and `HEAD` is not
       // even a legal branch name — so there is nothing to commit fixes to.
       expect(
-        yield* plan({ plan_kind: "review", target: "branch:main...HEAD", target_kind: "branch" }),
+        yield* plan({
+          plan: "/runs/review-1",
+          plan_kind: "review",
+          target: "branch:main...HEAD",
+          target_kind: "branch",
+        }),
       ).toMatchObject({
         refused: "HEAD is not a branch, so there is nothing to fix on it",
       });
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "branch:1a2b3c4...9f8e7d6",
           target_kind: "branch",
@@ -2039,6 +2072,7 @@ test("a reviewed branch that is not on the remote at all is refused", () =>
       // fail to push it, or push it over the branch that was reviewed.
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/acme/app!42",
           target_kind: "mr",
@@ -2063,6 +2097,7 @@ test("a checkout with no GitLab remote cannot be shown to be the reviewed projec
 
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/acme/app!42",
           target_kind: "mr",

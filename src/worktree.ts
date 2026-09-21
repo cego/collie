@@ -19,6 +19,7 @@ import {
   type WorktreeListing,
 } from "./herdr";
 import type { CheckoutKind } from "./definitions";
+import { diffTargetOf, gitlabRepositoryOf, workSourceOf } from "./strategies";
 import { defaultBase } from "./inputs";
 import { disambiguate, GLYPH, tabLabel } from "./naming";
 import {
@@ -61,13 +62,11 @@ export function roams(checkout: CheckoutKind): boolean {
 }
 
 /**
- * The Input naming which local checkout a roaming Run is cut from; empty is the cwd.
- * Not `repo`, which `implement` already declares for a plan's own `Repo:` value.
+ * What a roaming Run's checkout is called under the repository's worktrees directory. The
+ * workflow that first needed one was `renovate`, and naming the directory after it made
+ * every other roaming workflow look like that one.
  */
-export const REPOSITORY_INPUT = "repository";
-
-/** What a roaming Run's checkout is called under the repository's worktrees directory. */
-const ROAMING_DIR = "renovate";
+const ROAMING_DIR = "roaming";
 
 const remoteRepository = (value: string) =>
   /^(?:https?:\/\/|ssh:\/\/|[^@\s]+@)/.test(value) && projectFromRemote(value) !== null;
@@ -93,8 +92,10 @@ export interface BranchAsk {
   /** What this Run is called, which is what a new branch is named after. */
   name: string;
   inputs: Record<string, string>;
+  /** Which strategy settled each Input, which is how the work source and target are found. */
+  strategies?: Record<string, string> | undefined;
   /**
-   * Where each Input's value came from, which for `target` is the whole question: a
+   * Where each Input's value came from, which for a diff target is the whole question: a
    * target Collie inferred names the branch the caller is *standing on*, and building
    * that branch would hand the Run the checkout that branch already has — the
    * operator's own tree. Only a target a human gave names a branch to build.
@@ -297,23 +298,24 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   // has to be cut from that work, and a name for work that does not exist yet cannot be.
   // A review-source Run reads the target itself, and refuses a head that is not a
   // branch — so the target rule after this one is for Runs starting fresh work.
-  if (opts.inputs.plan_kind === "review") {
-    const reviewed = yield* reviewedBranch(opts.cwd, opts.inputs, run);
+  const work = workSourceOf(opts);
+  if (work?.kind === "review") {
+    const reviewed = yield* reviewedBranch(opts.cwd, opts, run);
     // Nothing the caller could say settles a review with no branch to fix: the work
     // being fixed is on a branch or it is not.
     if (reviewed.refused !== undefined) return refusedName(reviewed.refused);
     return verbatim(reviewed.branch, "from the reviewed branch", reviewed.reviewed);
   }
-  const fromTarget = said(opts, "target") ? targetBranch(opts.inputs.target ?? "") : null;
+  const target = diffTargetOf(opts);
+  const fromTarget = target && said(opts, target.name) ? targetBranch(target.value) : null;
   if (fromTarget) return verbatim(fromTarget, "from target");
   const task = opts.inputs[TASK_INPUT]?.trim();
   if (task) return generated(task, "from the task");
-  const work = workSource(opts.inputs);
   // The plan directory's own name, not the path to it: every plan under one `tasks/`
   // directory slugs the same way. Only one the operator named, though — a plan
   // directory Collie itself pointed at is `<run.dir>/plan`, from a chained Run or from
   // the picker's offer of a finished plan, and every one of those is called `plan`.
-  if (work?.kind === "plan-dir" && said(opts, "plan")) {
+  if (work?.kind === "plan-dir" && said(opts, work.name)) {
     return generated(path.basename(work.value), "from plan", work.value);
   }
   // The work itself where the operator described it — the whole of what they said, not
@@ -324,7 +326,7 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   // Two sources, because they are two answers: a description the operator typed is the
   // work itself, and the confirm line saying "from the run name" for it would name the
   // wrong thing as what decided.
-  const described = work !== null && said(opts, "plan");
+  const described = work !== null && said(opts, work.name);
   if (described) return generated(work.value, "from the work");
   // The Run's own name, told apart by the work behind it: a Workflow that declares no
   // Input naming the work — `architecture` — is called nothing at all, and two of those
@@ -428,26 +430,16 @@ function targetBranch(target: string): string | null {
 }
 
 /**
- * The work this Run was pointed at, and null for a Workflow that takes none. `plan` by
- * name, as `branchName`'s review rule reads `plan_kind`: a work source under any other
- * name is already invisible to both, and one of them quietly coping would only hide it.
- */
-function workSource(inputs: Record<string, string>): { kind: string; value: string } | null {
-  const value = inputs.plan?.trim();
-  return value ? { kind: inputs.plan_kind ?? "", value } : null;
-}
-
-/**
  * The branch the reviewed target lives on. Anything this cannot establish is a
  * refusal, not a guess: `glab` that would not answer, a merge request with no source
  * branch, a diff of two shas, a detached HEAD.
  */
 const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
   cwd: string,
-  inputs: Record<string, string>,
+  opts: BranchAsk,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  const target = inputs.target ?? "";
+  const target = diffTargetOf(opts)?.value ?? "";
   const mr = parseMrTarget(target);
   if (mr) {
     // A merge request in another project cannot be fixed from this checkout at all:
@@ -553,7 +545,7 @@ const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
 /**
  * The repository a checkout belongs to, by name — git's own main worktree, not the
  * directory the Run happens to be standing in. A mutating Run's cwd is named after its
- * branch, and a roaming one's is the literal `renovate`, so neither basename is the
+ * branch, and a roaming one's after nothing at all, so neither basename is the
  * repository's. Null where git will not say.
  */
 export const repositoryName = Effect.fn("worktree.repositoryName")(function* (
@@ -842,7 +834,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   if (!mutates(opts.checkout)) return here;
 
   if (roams(opts.checkout)) {
-    const repository = opts.inputs[REPOSITORY_INPUT]?.trim() || "";
+    const repository = gitlabRepositoryOf(opts)?.value ?? "";
     let from = repository || opts.cwd;
     const project = remoteRepository(repository)
       ? (projectFromRemote(repository)?.split("/-/")[0] ?? null)

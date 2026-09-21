@@ -7,6 +7,7 @@ import { choiceAnswerable } from "./attention";
 import { behindRemote } from "./doctor";
 import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
 import { COLLIE_TAB, displayName, GLYPH, runLabel, stepNow } from "./naming";
+import { diffTargetOf, recorded } from "./strategies";
 import type { Live } from "./live";
 import { boardLines, type TaskView } from "./board";
 import {
@@ -635,7 +636,7 @@ export const buildView = Effect.fn("buildView")(function* (
       title: runLabel(r.record),
       detail: yield* activeDetail(r, now, quietMs, choice),
       at: yield* touchedAt(r),
-      target: r.record.inputs.target ?? null,
+      target: diffTargetOf(recorded(r.record))?.value ?? null,
       children: repoRunsOf(r.record),
       // The same set the finished rows read: this used to stat every active run's dir a
       // second time, on the 3s poll and on every watch event and command.
@@ -662,7 +663,7 @@ export const buildView = Effect.fn("buildView")(function* (
       // The record's own word for when it ended; a run that never recorded one has
       // only its file's mtime to go on.
       at: r.record.finished_at ? Date.parse(r.record.finished_at) : 0,
-      target: r.record.inputs.target ?? null,
+      target: diffTargetOf(recorded(r.record))?.value ?? null,
       children: repoRunsOf(r.record),
       fixable: fixable.has(r.id),
       choice: null,

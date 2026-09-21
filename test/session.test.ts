@@ -105,6 +105,7 @@ const liveImplementer = Effect.fn("sessionTest.liveImplementer")(function* (
     workspaceLabel: "test",
     inputs: { plan: "p" },
     inputSources: { plan: "asked" },
+    inputStrategies: { plan: "work-source" },
     stepIds: ["build"],
     maxIterations: 5,
     namedAfter: "add-a-picker",

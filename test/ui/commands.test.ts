@@ -150,6 +150,7 @@ const seed = Effect.fn("commands.seed")(function* (opts: { target: string; revie
     workspaceLabel: "test",
     inputs: { target: opts.target },
     inputSources: {},
+    inputStrategies: { target: "diff-target" },
     stepIds: ["review"],
     maxIterations: 1,
     namedAfter: opts.target,

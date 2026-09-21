@@ -7,6 +7,7 @@ import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { YamlValue } from "./yaml";
 import { isString } from "./schema";
+import { workSourceOf, type Settled } from "./strategies";
 
 export type Runner<R = never> = (
   cmd: string,
@@ -489,7 +490,7 @@ export function templateFile(
  * human named one, the branch name, and whatever a `plan` run put on the board.
  */
 export function linearIssues<R>(
-  opts: { cwd: string; inputs: Record<string, string>; planInput?: string },
+  opts: { cwd: string } & Settled,
   run: Runner<R>,
 ): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path | R> {
   return Effect.gen(function* () {
@@ -499,16 +500,14 @@ export function linearIssues<R>(
       if (!found.includes(up)) found.push(up);
     };
 
-    const plan = opts.planInput ?? "plan";
-    if (opts.inputs[`${plan}_kind`] === "linear") {
-      for (const id of matchAll(opts.inputs[plan] ?? "")) add(id);
-    }
+    const work = workSourceOf(opts);
+    if (work?.kind === "linear") for (const id of matchAll(work.value)) add(id);
 
     const branch = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd);
     for (const id of matchAll(branch.stdout)) add(id);
 
-    if (opts.inputs[`${plan}_kind`] === "plan-dir") {
-      for (const id of yield* offloadedIssues(opts.inputs[plan] ?? "")) add(id);
+    if (work?.kind === "plan-dir") {
+      for (const id of yield* offloadedIssues(work.value)) add(id);
     }
     return found;
   });
@@ -570,10 +569,8 @@ function jsonFiles(
 export function mrFacts<R>(
   opts: {
     cwd: string;
-    inputs: Record<string, string>;
     configuredAssignee?: YamlValue;
-    planInput?: string;
-  },
+  } & Settled,
   run: Runner<R>,
 ): Effect.Effect<MrFacts, PlatformError, FileSystem.FileSystem | Path.Path | R> {
   return Effect.gen(function* () {

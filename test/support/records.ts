@@ -43,6 +43,7 @@ export function runRecord(over: Partial<RunRecord> = {}): RunRecord {
     max_iterations: 1,
     inputs: {},
     input_sources: {},
+    input_strategies: {},
     steps: [],
     parent: null,
     children: [],

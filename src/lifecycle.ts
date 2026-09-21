@@ -13,9 +13,9 @@ import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
-import { discover, searchPath, type Catalogued } from "./discovery";
+import { discover, searchPath, type Catalogued, type Fault, type Found } from "./discovery";
 import { connect, type HostClient, type HostUnavailable, type HostVersionMismatch } from "./host";
-import { REFUSED_INPUT, type HostRefused, type RunView } from "./native";
+import { REFUSED_INPUT, type Given, type HostRefused, type RunView } from "./native";
 import { err, type Failure, type OpResult } from "./operations";
 import type { RequestConflict } from "./store";
 
@@ -26,19 +26,49 @@ export const savedModules = (
   discover(searchPath({ pluginRoot: env.pluginRoot, project: env.cwd }));
 
 /**
- * Whether this id belongs to a saved module — including one whose file will not load.
- * A broken module is a file to fix, and running the Markdown workflow it was written to
- * replace would answer a question its author never asked.
+ * The inputs this module needs that nobody gave it, as the refusal an agent can fill in
+ * and retry with the same request id. Each carries what it will take, so a caller that
+ * has never seen the module can still answer it.
  */
-export const claimedByModule = (
+export const neededInputs = (entry: Found, given: Given): Failure | null => {
+  const missing = entry.inputs.filter(
+    (field) =>
+      field.required &&
+      given.text[field.name] === undefined &&
+      given.json[field.name] === undefined,
+  );
+  if (missing.length === 0) return null;
+  return err(
+    "needs_input",
+    `${entry.id} needs ${missing.map((field) => `"${field.name}"`).join(", ")}.`,
+    {
+      inputs: missing.map((field) => ({
+        name: field.name,
+        question: `${entry.title} — ${field.name}?`,
+        schema: field.schema,
+        limits: [...field.limits],
+      })),
+    },
+  );
+};
+
+/**
+ * The saved module this id names: the entry where one loads, the fault where the file
+ * will not, and null where no module claims it and a Markdown definition may.
+ *
+ * A broken module is a file to fix rather than nothing: running the Markdown workflow it
+ * was written to replace would answer a question its author never asked.
+ */
+export const moduleFor = (
   env: PluginEnv,
   id: string,
-): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
+): Effect.Effect<Found | Fault | null, never, FileSystem.FileSystem> =>
   savedModules(env).pipe(
     Effect.map(
       (found) =>
-        found.entries.some((entry) => entry.id === id) ||
-        found.problems.some((problem) => problem.id === id),
+        found.entries.find((entry) => entry.id === id) ??
+        found.problems.find((problem) => problem.id === id) ??
+        null,
     ),
   );
 
@@ -116,7 +146,10 @@ export const startNativeRun = (
   options: {
     readonly id: string;
     readonly request: string;
-    readonly input: Readonly<Record<string, string>>;
+    /** What the caller said, in the two halves the author's schemas settle differently. */
+    readonly input: Given;
+    /** The host's own launch options, kept out of the author's payload. */
+    readonly options?: Readonly<Record<string, string>>;
     readonly task?: string | null;
     readonly parent?: string | null;
   },
@@ -126,7 +159,9 @@ export const startNativeRun = (
       project: env.cwd,
       id: options.id,
       request: options.request,
-      input: options.input,
+      input: options.input.json,
+      text: options.input.text,
+      options: options.options,
       task: options.task ?? undefined,
       parent: options.parent ?? undefined,
     }),

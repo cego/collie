@@ -9,6 +9,7 @@ import { currentEnv, type PluginEnv } from "../env";
 import { Herdr, type WorkspaceInfo } from "../herdr";
 import { reason, unsafePathComponent } from "../naming";
 import { err, resolveWorkspace, runStatus, type Failure } from "../operations";
+import type { Given } from "../native";
 import { actorName, type Actor } from "../proposals";
 import { InvalidRunState, Run, RunStore } from "../run";
 import { taskOfWorkspace } from "../task";
@@ -16,7 +17,7 @@ import { branchListed } from "../worktree";
 import { attempt, mutation, type CollieError, type Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 
-const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
+const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 
 /** Everything on stdin, for `--inputs-json -`, through the Stdio service. */
 const stdinText = Effect.gen(function* () {
@@ -242,29 +243,48 @@ export const layerDir = Effect.fn("collie.layerDir")(function* (
   return available[layer].dir;
 });
 
-type ParsedInputs = { ok: true; inputs: Record<string, string> } | { ok: false; error: Result };
+type ParsedInputs = { ok: true; given: Given } | { ok: false; error: Result };
 
 export const parseInput = Effect.fn("collie.parseInput")(function* (
   values: ReadonlyArray<string>,
   json: Option.Option<string>,
 ): Effect.fn.Return<ParsedInputs, never, Stdio.Stdio> {
-  let parsed: Record<string, string> = {};
+  let typed: Record<string, Schema.Json> = {};
   if (Option.isSome(json)) {
     const raw = json.value === "-" ? yield* stdinText : json.value;
     try {
-      parsed = Schema.decodeUnknownSync(InputsJson)(raw);
+      typed = Schema.decodeUnknownSync(InputsJson)(raw);
     } catch {
       return { ok: false, error: err("invalid_input", "--inputs-json must be a JSON object.") };
     }
   }
+  const text: Record<string, string> = {};
   for (const entry of values) {
     const at = entry.indexOf("=");
     if (at <= 0)
       return { ok: false, error: err("invalid_input", `Input "${entry}" must be key=value.`) };
-    parsed[entry.slice(0, at)] = entry.slice(at + 1);
+    text[entry.slice(0, at)] = entry.slice(at + 1);
   }
-  return { ok: true, inputs: parsed };
+  return { ok: true, given: { json: typed, text } };
 });
+
+/**
+ * The same values as the strings a Markdown workflow's placeholders take. `--inputs-json`
+ * may carry any JSON, and a definition whose Inputs are text has nowhere to put the rest:
+ * saying so is better than rendering `[object Object]` into a prompt.
+ */
+export function asText(given: Given) {
+  const inputs = { ...given.text };
+  for (const [name, value] of Object.entries(given.json)) {
+    if (!isText(value)) {
+      return err("invalid_input", `"${name}" is not text, and this workflow's inputs are.`);
+    }
+    inputs[name] = value;
+  }
+  return { ok: true as const, inputs };
+}
+
+const isText = Schema.is(Schema.String);
 
 /** Every mutation takes one, and it means the same thing on all of them. */
 export const requestIdFlag = Flag.String("request-id").pipe(

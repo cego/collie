@@ -103,17 +103,41 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 An id a TypeScript module claims is that module's, and `run start` starts it on the local
 host rather than as an orchestration of agents — no flag says which, because what an id
 runs is what is saved for this project ([`sdk.md`](sdk.md#where-a-module-lives) is where
-that is). `--input k=v` carries the module's own inputs, and its schema settles them before
-a Run, a claim or an execution exists: what it refuses comes back as `invalid_input` naming
-the field. An id whose module will not load is refused by that file rather than falling
-back to a Markdown workflow of the same name.
+that is). An id whose module will not load is refused by that file rather than falling back
+to a Markdown workflow of the same name.
+
+A module's inputs are schemas rather than text, and they are settled before a Run, a claim
+or an execution exists — so a value one of them refuses costs nothing to refuse:
+
+- **`--input k=v` is what a human typed.** It is tried as text first and read as JSON only
+  where the schema will not take text. `--input count=3` is the number `3` for a number,
+  `--input labels='["a","b"]'` is the list for a list, and `--input ref=12` is the string
+  `"12"` for a string-or-number union, because text wins where both would do.
+- **`--inputs-json` is typed, and settles what text cannot.** `false`, `0`, `[]` and `null`
+  survive it; `--inputs-json '{"ref": 12}'` is the number where the text was the string.
+- **Missing is absent, not empty.** An input nobody gave is one the module never sees, so
+  an optional one stays optional and a required one is named back to you rather than
+  quietly becoming `""`.
+- **What it refuses names the field**: a value its schema will not take is `invalid_input`
+  saying which input and what it takes, and an input the module needs and nobody gave is
+  `needs_input` carrying each missing field's schema — fill them in and retry with the same
+  `--request-id`, and it is still one Run.
+- **The host's own names never reach a module's input.** `branch`, `task`, `workspace`,
+  `repo`, `outcome`, `risks` and `previous` are options Collie supplies; a module may not
+  declare one, and asking for an outcome a module always proves is refused rather than
+  recorded as something it will not deliver.
 
 The Run it starts is shown, listed and waited on by the same commands as any other, and
 `--request-id` deduplicates it the same way — the claim goes to the host, so the retry is
 the same Run there too. `--decide`, `--goal` and `--constraint` are refused on a module for
-now rather than accepted and dropped; the picker asks for what the module declares and
-nothing else. [ADR-0018](adr/0018-a-native-run-is-a-run.md) is why each of those is the way
-it is.
+now rather than accepted and dropped.
+
+The picker asks for exactly what the module declares, in the way its own schema allows: a
+closed set is a menu of the values it takes rather than a text box, and an input the module
+attached a strategy to is worked out from this checkout and its Task before anyone is asked
+for it. [ADR-0018](adr/0018-a-native-run-is-a-run.md) and
+[ADR-0019](adr/0019-a-strategy-not-a-field-name.md) are why each of those is the way it
+is.
 
 ### Tasks
 
@@ -1164,6 +1188,12 @@ project's own `.herdr/workflows` is its own: two projects can run different impl
 of one public id at the same time, each on its own registration.
 [`sdk.md`](sdk.md#where-a-module-lives) is where a module is saved and when an edit takes
 effect.
+
+`start` carries the author's input in two halves — `input` for values that already have a
+type and `text` for values as a human typed them — and `options` for the host's own names
+beside them. The module's own schemas settle all of it there, because that is where the
+module was loaded; what they refuse is `invalid_input` naming the field, and the row keeps
+what they settled rather than the text it arrived as.
 
 `start` also names the caller's `request` — its own id for the work it is asking for — and
 answers with the run that claim became. Sending it again is that same run rather than a

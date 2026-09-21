@@ -7,6 +7,7 @@ import { FindingSchema, type Finding } from "./output";
 import { writeSnapshot } from "./snapshot";
 import { VerifySpecSchema } from "./verify-spec";
 import type { ResolvedWorkflow } from "./definitions";
+import { diffTargetOf, recorded } from "./strategies";
 import type { VerifySpec } from "./verify-spec";
 import { slugify } from "./template";
 
@@ -278,6 +279,14 @@ const RunSchema = Schema.Struct({
   max_iterations: Schema.Number,
   inputs: Schema.Record(Schema.String, Schema.String.pipe(Schema.mutableKey)),
   input_sources: Schema.Record(Schema.String, Schema.String.pipe(Schema.mutableKey)),
+  /**
+   * Which strategy settled each Input. Recorded because everything that reads an Input
+   * downstream reads it by strategy: what a workflow calls its work source is its
+   * author's business, and the field's name says nothing about what Collie does with it.
+   */
+  input_strategies: Schema.Record(Schema.String, Schema.String.pipe(Schema.mutableKey)).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed({})),
+  ),
   steps: Schema.Array(StepRecordSchema).pipe(Schema.mutable),
   parent: Schema.NullOr(Schema.String),
   children: optionalList(Schema.String),
@@ -581,6 +590,8 @@ export interface CreateRunOptions {
   cwd: string;
   inputs: Record<string, string>;
   inputSources: Record<string, string>;
+  /** Which strategy settled each Input; taken from `definition` where one is given. */
+  inputStrategies?: Record<string, string>;
   /** What the human answered at launch for the Choice steps this Run will reach. */
   decisions?: Record<string, string>;
   /**
@@ -687,6 +698,7 @@ export class RunStore {
         max_iterations: opts.maxIterations,
         inputs: opts.inputs,
         input_sources: opts.inputSources,
+        input_strategies: opts.inputStrategies ?? opts.definition?.inputs ?? {},
         steps: opts.stepIds.map((id) => ({
           id,
           summary: opts.stepSummaries?.[id] ?? null,
@@ -858,7 +870,7 @@ export class RunStore {
       if (target === "") return null;
       for (const run of yield* finished) {
         if (run.id === before) continue;
-        if (run.record.inputs.target !== target || !run.record.synthesis) continue;
+        if (diffTargetOf(recorded(run.record))?.value !== target || !run.record.synthesis) continue;
         return run;
       }
       return null;

@@ -44,6 +44,9 @@ import {
   NativeHost,
   checkEntry,
   describeMetadata,
+  jsonSchemaFor,
+  type InputField,
+  type InputFields,
   type Registration,
   type WorkflowEntry,
 } from "./sdk";
@@ -536,6 +539,126 @@ const decodeInput = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
 );
 
+const decodeStrings = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+);
+
+/**
+ * What a caller said, in the two halves a front door keeps apart. `text` is what a human
+ * typed — `--input k=v`, an answer to a prompt — and `json` is what already has a type:
+ * `--inputs-json`, an action's arguments, a chained run's values.
+ */
+export interface Given {
+  readonly json: Readonly<Record<string, Schema.Json>>;
+  readonly text: Readonly<Record<string, string>>;
+}
+
+/** Where a settled value came from: already typed, or as text a human wrote. */
+export const GIVEN = "given";
+export const TYPED = "typed";
+
+/**
+ * The author's input, settled against the author's schemas before anything exists.
+ *
+ * Text is tried as text first and parsed as JSON only where the schema will not take the
+ * text, so `--input ref=12` is the string for a string-or-number union and `--input
+ * count=12` is the number for a number. A typed value is decoded as it came, which is how
+ * `--inputs-json` settles the same tie the other way. A field nobody gave is left out
+ * rather than given an empty string, so an optional one stays absent and a required one is
+ * the schema's own complaint.
+ */
+export const settleInput = (
+  fields: InputFields,
+  given: Given,
+): Effect.Effect<Settled, HostRefused> => {
+  const undeclared = [...Object.keys(given.json), ...Object.keys(given.text)]
+    .filter((name) => !(name in fields))
+    .sort();
+  if (undeclared.length > 0) {
+    const names = undeclared.map((name) => `"${name}"`).join(", ");
+    return refusedInput(
+      `${names} ${undeclared.length === 1 ? "is not an input" : "are not inputs"}`,
+    );
+  }
+  const input: Record<string, Schema.Json> = {};
+  const provenance: Record<string, string> = {};
+  for (const [name, field] of Object.entries(fields)) {
+    const typed = given.json[name];
+    if (typed !== undefined) {
+      input[name] = typed;
+      provenance[name] = GIVEN;
+      continue;
+    }
+    const text = given.text[name];
+    if (text === undefined) continue;
+    const settled = asText(field, text);
+    if (settled === undefined) {
+      return refusedInput(`"${name}" is not ${describe(field)}: ${text}`);
+    }
+    input[name] = settled.value;
+    provenance[name] = TYPED;
+  }
+  return Effect.succeed({ input, provenance });
+};
+
+/**
+ * The author's values as their own schemas settled them, and where each came from. Held
+ * encoded: the payload is decoded from this, and the row keeps the same JSON, so a value
+ * is written down exactly as it was admitted.
+ */
+export interface Settled {
+  readonly input: Record<string, Schema.Json>;
+  readonly provenance: Record<string, string>;
+}
+
+const asParsedJson = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json));
+const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+
+/** One field's value from what a human typed: as text, or as the JSON the text spells. */
+const asText = (field: InputField, text: string) => {
+  const decode = Schema.decodeUnknownResult(field);
+  if (decode(text)._tag === "Success") return { value: text };
+  const parsed = asParsedJson(text);
+  if (parsed._tag === "Failure") return undefined;
+  return decode(parsed.success)._tag === "Success" ? { value: parsed.success } : undefined;
+};
+
+/** What a field will take, as short as a refusal can say it. */
+const describe = (field: InputField): string => {
+  const drawn = jsonSchemaFor(field).document;
+  if (!isDrawn(drawn)) return "what this input takes";
+  const options = drawn.enum;
+  if (Array.isArray(options)) return `one of ${options.map(asWord).join(", ")}`;
+  const kind = drawn.type;
+  return isWord(kind) ? `a ${kind}` : "what this input takes";
+};
+
+const isWord = Schema.is(Schema.String);
+const asWord = (value: Schema.Json) => (isWord(value) ? value : asJsonText(value));
+
+const isDrawn = Schema.is(Schema.Record(Schema.String, Schema.Json));
+
+/** A refusal a front door turns into `invalid_input` and exit 2, rather than a failure. */
+const refusedInput = (reason: string) =>
+  Effect.fail(new HostRefused({ reason: `${REFUSED_INPUT}: ${reason}` }));
+
+/**
+ * The host's own launch options, checked against what the module says about itself. An
+ * outcome a workflow fixes is not one a caller may ask to be something else: a Run that
+ * promised evidence it cannot produce finds out at the gate before its merge request.
+ */
+const refuseOptions = (generation: Generation, options: Readonly<Record<string, string>>) => {
+  const asked = options.outcome?.trim();
+  if (asked === undefined || asked === "") return Effect.void;
+  const fixed = generation.fixedOutcome;
+  if (fixed !== null && fixed !== asked) {
+    return refusedInput(
+      `"${generation.id}" always proves ${fixed}, so it cannot be asked for ${asked}`,
+    );
+  }
+  return Effect.void;
+};
+
 /**
  * A run as a front door shows it: the identities it was admitted under, what it was
  * started with, and what the engine says about it now. The status is a projection read
@@ -551,6 +674,9 @@ export const RunView = Schema.Struct({
   /** The module file this run was admitted on, recorded so a deleted one is still named. */
   entry: Schema.String,
   input: Schema.Record(Schema.String, Schema.Json),
+  /** Where each of those values came from, and the host options it was launched with. */
+  provenance: Schema.Record(Schema.String, Schema.String),
+  options: Schema.Record(Schema.String, Schema.String),
   status: RunStatus,
   /** Why the engine could not be asked, or null when it was. */
   diagnostic: Schema.NullOr(Schema.String),
@@ -581,6 +707,10 @@ export interface Generation {
   readonly name: string;
   readonly title: string;
   readonly entry: string;
+  /** What the module declares it takes, which is what settles a launch. */
+  readonly fields: InputFields;
+  /** The outcome this module fixes, so asking it for another is refused. */
+  readonly fixedOutcome: string | null;
   /** The file and the revision this was built from: what makes a later start the same code. */
   readonly source: string;
   readonly metadata: Schema.Json;
@@ -622,7 +752,11 @@ export interface RegistryApi {
     readonly request: string;
     readonly project: string;
     readonly runId?: string;
+    /** What the caller said, in the two halves a front door keeps apart. */
     readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly text?: Readonly<Record<string, string>>;
+    /** The host's own launch options, which never reach the author's payload. */
+    readonly options?: Readonly<Record<string, string>>;
     /** What this work belongs to: a Task, and the run it came out of. */
     readonly task?: string | null;
     readonly parent?: string | null;
@@ -715,6 +849,8 @@ const makeRegistry: (
         name: route.name,
         title: entry.title,
         entry: route.entry,
+        fields: entry.input,
+        fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
         source: yield* sourceOf(route.entry),
         metadata: describeMetadata(entry.metadata),
         registration,
@@ -799,6 +935,10 @@ const makeRegistry: (
         registration: row.generation,
         entry: entryOf(row.generation),
         input,
+        provenance: yield* decodeStrings(row.provenance ?? "{}").pipe(
+          Effect.orElseSucceed(() => ({})),
+        ),
+        options: yield* decodeStrings(row.options ?? "{}").pipe(Effect.orElseSucceed(() => ({}))),
       };
       const generation = live.get(row.generation);
       // Not registered here is not a verdict on the work: the rows are all still there,
@@ -953,19 +1093,27 @@ const makeRegistry: (
         readonly project: string;
         readonly runId?: string;
         readonly input: Readonly<Record<string, Schema.Json>>;
+        readonly text?: Readonly<Record<string, string>>;
+        readonly options?: Readonly<Record<string, string>>;
         readonly task?: string | null;
         readonly parent?: string | null;
       }) {
         const generation = options.generation;
         const runId =
           options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
+        const launch = options.options ?? {};
+        yield* refuseOptions(generation, launch);
         // Settled before anything exists to clean up: an input the workflow's own schema
         // rejects names its field here, and no row, claim or execution is created.
+        const settled = yield* settleInput(generation.fields, {
+          json: options.input,
+          text: options.text ?? {},
+        });
         const payload = yield* Schema.decodeUnknownEffect(
           generation.registration.workflow.payloadSchema,
-        )({ runId, input: options.input }).pipe(
+        )({ runId, input: settled.input }).pipe(
           Effect.mapError(
-            (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${String(cause)}` }),
+            (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` }),
           ),
         );
         const claimed = yield* store.admit({
@@ -973,7 +1121,9 @@ const makeRegistry: (
           run: runId,
           workflow: generation.id,
           project: options.project,
-          input: options.input,
+          input: settled.input,
+          provenance: settled.provenance,
+          options: launch,
           generation: generation.name,
           execution: yield* generation.registration.workflow.executionId(payload),
           task: options.task ?? null,

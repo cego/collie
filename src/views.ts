@@ -27,6 +27,7 @@ import { displayName, reason, targetLabel } from "./naming";
 import type { MrPanel } from "./mr";
 import { REVIEW_FILE } from "./output";
 import { RunStore, type Run, type RunRecord } from "./run";
+import { diffTargetOf, recorded, workSourceOf } from "./strategies";
 import { isString } from "./schema";
 import { stepDuration, took } from "./time";
 import { claudeTrust } from "./trust";
@@ -40,7 +41,9 @@ import { branchListed } from "./worktree";
 const HISTORY = 200;
 
 function title(record: RunRecord): string {
-  const target = record.target_label ?? targetLabel(record.workflow, record.slug, record.inputs);
+  const target =
+    record.target_label ??
+    targetLabel(record.workflow, record.slug, diffTargetOf(recorded(record))?.value ?? "");
   const name = displayName(record.workflow);
   return target ? `${name} · ${target}` : name;
 }
@@ -88,7 +91,7 @@ export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
       title: title(record),
       detail: parts.join(" · "),
       at: record.finished_at ? Date.parse(record.finished_at) : 0,
-      target: record.inputs.target ?? null,
+      target: diffTargetOf(recorded(record))?.value ?? null,
       // History never nests: a finished run's repository runs are finished too, and
       // each is a row of its own in the record of everything before now.
       children: [],
@@ -331,9 +334,9 @@ const planDirOf = Effect.fn("Views.planDirOf")(function* (run: Run) {
   if (yield* fs.exists(own)) return own;
   // Then the directory it was started from, which is how an `implement` run reaches the
   // spec a `plan` run wrote for it.
-  if (run.record.inputs.plan_kind !== "plan-dir") return null;
-  const started = run.record.inputs.plan ?? "";
-  return started !== "" && (yield* fs.exists(started)) ? started : null;
+  const work = workSourceOf(recorded(run.record));
+  if (work?.kind !== "plan-dir") return null;
+  return (yield* fs.exists(work.value)) ? work.value : null;
 });
 
 /**

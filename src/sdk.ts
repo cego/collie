@@ -18,7 +18,10 @@ import type { WorkflowEngine } from "effect/unstable/workflow/WorkflowEngine";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import { INPUT_STRATEGIES, type InputStrategy } from "./definitions";
+import { exclusiveClashes } from "./strategies";
 import { KINDS, REQUESTABLE, isOutcome, type Outcome } from "./outcome";
+
+export { EXCLUSIVE_STRATEGIES } from "./strategies";
 
 export {
   CheckSchema,
@@ -107,6 +110,14 @@ export interface Registration {
 }
 
 /**
+ * A field the host settles on the author's behalf. An ordinary schema, with one
+ * requirement: it decodes without services of its own, because a launch is settled before
+ * any of the author's Layers have been built.
+ */
+export type InputField = Schema.Codec<unknown, unknown, never, never>;
+export type InputFields = Readonly<Record<string, InputField>>;
+
+/**
  * The workflow's public identity and what it declares about itself. `id` is what an
  * operator types and never the registration name, which is the host's and opaque.
  */
@@ -114,7 +125,7 @@ export interface WorkflowEntry {
   readonly id: string;
   readonly title: string;
   readonly description: string;
-  readonly input: Schema.Struct.Fields;
+  readonly input: InputFields;
   readonly metadata?: WorkflowMetadata;
   readonly make: (registrationName: string) => Registration;
 }
@@ -192,16 +203,6 @@ export const RESERVED_INPUTS = {
   previous: "Previous review context attached to the selected work",
 } as const;
 
-/**
- * Strategies only one field may carry. Two fields claiming to be the work source leaves
- * inference with no answer, and picking one by name is what renaming must not change.
- */
-export const EXCLUSIVE_STRATEGIES: ReadonlyArray<InputStrategy> = [
-  "work-source",
-  "diff-target",
-  "gitlab-repository",
-];
-
 const IDENTITY = /^[a-z][a-z0-9-]*$/;
 
 const isReserved = (name: string): name is keyof typeof RESERVED_INPUTS => name in RESERVED_INPUTS;
@@ -241,21 +242,13 @@ function hintProblems(
   fields: ReadonlySet<string>,
 ): ReadonlyArray<string> {
   const problems: string[] = [];
-  const claimed = new Map<string, string[]>();
   for (const [field, strategy] of Object.entries(hints)) {
     if (!fields.has(field)) problems.push(`hint for "${field}", which is not an input`);
     if (!KNOWN_STRATEGIES.has(strategy)) {
       problems.push(`input "${field}" has no strategy called "${strategy}"`);
-      continue;
-    }
-    if (!EXCLUSIVE_STRATEGIES.includes(strategy)) continue;
-    claimed.set(strategy, [...(claimed.get(strategy) ?? []), field]);
-  }
-  for (const [strategy, owners] of claimed) {
-    if (owners.length > 1) {
-      problems.push(`${owners.map((f) => `"${f}"`).join(" and ")} both claim ${strategy}`);
     }
   }
+  problems.push(...exclusiveClashes(hints));
   return problems;
 }
 
@@ -340,7 +333,7 @@ export interface Projection {
   readonly limits: ReadonlyArray<string>;
 }
 
-export function jsonSchemaFor(schema: Schema.Top): Projection {
+export function jsonSchemaFor(schema: Schema.Constraint): Projection {
   try {
     const drawn = Schema.toJsonSchemaDocument(schema);
     const document = asJson({ ...drawn.schema, $defs: drawn.definitions });

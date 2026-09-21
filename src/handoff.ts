@@ -8,6 +8,7 @@ import type { CompactionSettings } from "./compaction";
 import type { Herdr } from "./herdr";
 import { driverOwnership, STOPPED } from "./driver";
 import { REVIEW_FILE } from "./output";
+import { recorded, workSourceOf } from "./strategies";
 import { newRequestId, writeInbox } from "./operations";
 import {
   liveAgent,
@@ -256,7 +257,7 @@ export const implementerOfPlan = Effect.fn("Handoff.implementerOfPlan")(function
     .load(target.runId)
     .pipe(Effect.catch(() => Effect.succeed(null)));
   if (run) {
-    return run.record.inputs.plan === planDir ? target : null;
+    return workSourceOf(recorded(run.record))?.value === planDir ? target : null;
   }
   // Its run dir is gone; nothing can be said about what it is building.
   return null;

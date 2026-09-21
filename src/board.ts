@@ -12,6 +12,7 @@ import { describeAction } from "./lines";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
 import { displayName, oneLine, runLabel } from "./naming";
+import { diffTargetOf, recorded, workSourceOf } from "./strategies";
 import { pendingFor, proposalsPath, read as readProposals, type ProposalLine } from "./proposals";
 import {
   fanoutRepos,
@@ -561,9 +562,9 @@ function namesOf(label: string, record: RunRecord) {
 }
 
 function legacyPlanName(record: RunRecord): string | null {
-  if (record.named_after !== null || record.inputs.plan_kind !== "plan-dir") return null;
-  const plan = record.inputs.plan ?? "";
-  return plan === "" ? null : `${displayName(record.workflow)} · ${basename(plan)}`;
+  const work = workSourceOf(recorded(record));
+  if (record.named_after !== null || work?.kind !== "plan-dir") return null;
+  return `${displayName(record.workflow)} · ${basename(work.value)}`;
 }
 
 /** A Run named after a checkout's path — a renovate Run — is named after the checkout. */
@@ -695,7 +696,7 @@ function branchOf(run: Run): string | null {
 function nothingToFile(run: Run): boolean {
   return (
     run.record.mr_url === null &&
-    !isMrTarget(run.record.inputs.target ?? null) &&
+    !isMrTarget(diffTargetOf(recorded(run.record))?.value ?? null) &&
     branchOf(run) === null &&
     !(run.record.workflow === "plan" && run.record.status === "done")
   );
@@ -991,7 +992,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     // `review` is given one.
     const mr =
       runs.map((run) => run.record.mr_url).find((url) => url !== null) ??
-      runs.map((run) => run.record.inputs.target ?? null).find(isMrTarget) ??
+      runs.map((run) => diffTargetOf(recorded(run.record))?.value ?? null).find(isMrTarget) ??
       null;
     const mrState = mr === null ? null : (mrStates.get(mrLabel(mr)) ?? null);
     const planReady = status === "succeeded" && record.workflow === "plan" && disposition === null;

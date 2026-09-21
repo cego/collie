@@ -64,6 +64,7 @@ const seed = Effect.fn("viewsTest.seed")(function* (opts: {
     workspaceLabel: "test",
     inputs: opts.target ? { target: opts.target } : {},
     inputSources: {},
+    inputStrategies: { target: "diff-target" },
     stepIds: ["one"],
     maxIterations: 1,
     namedAfter: opts.target ?? "goal",
@@ -493,6 +494,7 @@ effectTest(
     const builder = yield* seed({ workflow: "implement" });
     builder.record.inputs.plan = dir;
     builder.record.inputs.plan_kind = "plan-dir";
+    builder.record.input_strategies.plan = "work-source";
     yield* builder.save();
 
     const started = yield* buildRunDetail({

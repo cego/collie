@@ -119,7 +119,11 @@ export const HostRpcs = RpcGroup.make(
       project: Schema.String,
       id: Schema.String,
       request: Schema.String,
+      /** Values that already have a type, and values as a human typed them. */
       input: Schema.Record(Schema.String, Schema.Json),
+      text: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+      /** The host's own launch options, which never reach the author's payload. */
+      options: Schema.optional(Schema.Record(Schema.String, Schema.String)),
       // What this work belongs to, which is the caller's to know and the host's to keep.
       // Left out by a caller that is neither continuing a Task nor inside another run.
       task: Schema.optional(Schema.String),
@@ -227,10 +231,10 @@ const handlers = (dir: string) =>
               problems: found.problems,
             })),
           ),
-        start: ({ project, id, request, input, task, parent }) =>
+        start: ({ project, id, request, input, text, options, task, parent }) =>
           resolve(project, id).pipe(
             Effect.flatMap((generation) =>
-              registry.start({ generation, project, request, input, task, parent }),
+              registry.start({ generation, project, request, input, text, options, task, parent }),
             ),
           ),
         status: ({ runId }) => registry.status(runId),

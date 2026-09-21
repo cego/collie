@@ -54,6 +54,24 @@ idempotency is the run alone, so a retried request is the same execution and a n
 is a new one. The error is `WorkflowError`, which carries a `reason`: a Run that ended
 badly is a Run, not a value another workflow destructures.
 
+## What a caller may put in your input
+
+Your schemas settle every launch, in the host, before a Run, a claim or an execution
+exists — so a value one of them refuses costs nothing to refuse, and your body is handed
+values of the types you declared.
+
+`--input k=v` is what a human typed. It is tried as text first and read as JSON only where
+your schema will not take text: `Schema.Int` takes `--input times=3` as the number,
+`Schema.Array(Schema.String)` takes `--input labels='["a","b"]'` as the list, and a
+`Schema.Union([Schema.String, Schema.Number])` takes `--input ref=12` as the string,
+because text wins where both would do. `--inputs-json` is typed and settles what text
+cannot — `false`, `0`, `[]` and `null` — and is how a caller says the number in that union.
+
+An input nobody gave is absent rather than empty, so `Schema.optionalKey` means what it
+says and a required field nobody gave is named back to the caller with its own schema
+beside it. Write your inputs as schemas that decode without services of their own: a launch
+is settled before any Layer of yours has been built, and `InputFields` says so in the type.
+
 ## Where a module lives
 
 Three directories, nearest first:
@@ -149,7 +167,8 @@ export const metadata: WorkflowMetadata = {
 
 - **`hints`** attach inference to a field. `work-source`, `diff-target` and
   `gitlab-repository` are exclusive: one field each, so renaming `plan` to `spec` changes
-  nothing about how it is inferred.
+  nothing about how it is inferred, what it names a branch after, which label its Run is
+  listed under, or which previous review it is given.
 - **`outcome`** is `fixed` or `selectable`, never both. `selectable` offers only the kinds
   a human may ask an implement Run for — `review` and `plan` are what a workflow proves.
 - **`followUps` and `actions`** carry an `id` that is stable and a `title` a human reads.

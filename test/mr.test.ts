@@ -135,7 +135,11 @@ test("Linear ids come from the work source, the branch and the plan run, dedupli
       // A plan dir contributes what the plan offloaded; the branch contributes its own.
       expect(
         yield* linearIssues(
-          { cwd: rig.projectDir, inputs: { plan: planDir, plan_kind: "plan-dir" } },
+          {
+            cwd: rig.projectDir,
+            inputs: { plan: planDir, plan_kind: "plan-dir" },
+            strategies: { plan: "work-source" },
+          },
           git,
         ),
       ).toEqual(["FRO-149", "ENG-42"]);
@@ -143,7 +147,11 @@ test("Linear ids come from the work source, the branch and the plan run, dedupli
       // A linear work source contributes itself, and is not repeated by the branch.
       expect(
         yield* linearIssues(
-          { cwd: rig.projectDir, inputs: { plan: "FRO-149", plan_kind: "linear" } },
+          {
+            cwd: rig.projectDir,
+            inputs: { plan: "FRO-149", plan_kind: "linear" },
+            strategies: { plan: "work-source" },
+          },
           git,
         ),
       ).toEqual(["FRO-149"]);

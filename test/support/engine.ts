@@ -161,6 +161,7 @@ export function plannedRun(rig: Rig, goal: string) {
       cwd: env.cwd,
       inputs: { goal },
       inputSources: { goal: "asked" },
+      inputStrategies: { goal: "goal" },
       stepIds: ["grill"],
       maxIterations: 5,
       namedAfter: goal,

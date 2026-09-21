@@ -4,6 +4,7 @@
 
 import { Cause, Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { currentReports, readDrift } from "./drift";
+import { diffTargetOf, recorded } from "./strategies";
 import { buildBoard, type MrState, type TaskView } from "./board";
 import { settleMerges } from "./merges";
 import { nowIso } from "./time";
@@ -56,8 +57,15 @@ import {
   type AsksAgents,
   type WorkspaceInfo,
 } from "./herdr";
-import { confirmLine, resolveCandidates, settle, type InputPrompts, type PickItem } from "./inputs";
-import type { Found } from "./discovery";
+import {
+  confirmLine,
+  inferInput,
+  resolveCandidates,
+  settle,
+  type InputPrompts,
+  type PickItem,
+} from "./inputs";
+import type { Declared, Found } from "./discovery";
 import { savedModules, startNativeRun } from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
@@ -617,22 +625,33 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   },
   module: Found,
 ) {
-  const input = { ...opts.given };
-  for (const name of module.inputs) {
-    if (input[name] !== undefined) continue;
-    const answer = yield* prompts.ask(`${module.title} — ${name}?`);
+  const text = { ...opts.given };
+  for (const field of module.inputs) {
+    if (text[field.name] !== undefined) continue;
+    // A field the module attached a strategy to is worked out the way every other Run's
+    // is — from this checkout, its Task and what finished here — and only asked for when
+    // that comes up empty. The strategy is the module's; the field's name is its own.
+    const strategy = field.strategy;
+    const inferred = strategy === null ? null : yield* infer(env, opts, field.name, strategy);
+    if (inferred !== null) {
+      text[field.name] = inferred;
+      continue;
+    }
+    // What it will take decides how it is asked for: a closed set is a menu, so nobody
+    // types a value the schema is about to refuse.
+    const answer = yield* offer(prompts, module, field);
     if (answer === null) return null;
-    const value = answer.trim();
-    if (value === "") {
-      yield* bail(prompts, `${module.id} needs an input for "${name}".`);
+    if (answer === "" && field.required) {
+      yield* bail(prompts, `${module.id} needs an input for "${field.name}".`);
       return null;
     }
-    input[name] = value;
+    // Absent, not empty: an optional input nobody answered is one the module never sees.
+    if (answer !== "") text[field.name] = answer;
   }
   const started = yield* startNativeRun(env, {
     id: module.id,
     request: yield* newRequestId(),
-    input,
+    input: { json: {}, text },
     task: opts.task.mode === "continue" ? opts.task.task.id : null,
     parent: opts.parent?.id ?? null,
   });
@@ -641,9 +660,58 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     return null;
   }
   if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
-  const given = Object.entries(input).map(([name, value]) => `${name}=${value}`);
+  const given = Object.entries(text).map(([name, value]) => `${name}=${value}`);
   return `${module.id}: ${given.join("  ")} → ${started.runId}`;
 });
+
+/** What the strategy a module attached to this field works out, or null for nothing. */
+const infer = Effect.fn("Flows.infer")(function* (
+  env: PluginEnv,
+  opts: { task: TaskChoice },
+  name: string,
+  strategy: string,
+) {
+  const settled = yield* inferInput(name, strategy, {
+    cwd: env.cwd,
+    stateDir: env.stateDir,
+    task: opts.task.mode === "continue" ? opts.task.task.id : null,
+  }).pipe(Effect.orElseSucceed(() => null));
+  if (settled === null || settled.needsAsking || settled.value === "") return null;
+  return settled.value;
+});
+
+/**
+ * One Input, asked the way its own schema allows: a menu where the values are a closed
+ * set, and the human's own words otherwise. Null is the human closing the picker; empty
+ * is an answer they declined to give.
+ */
+const offer = Effect.fn("Flows.offer")(function* (
+  prompts: FlowPrompts,
+  module: Found,
+  field: Declared,
+) {
+  const options = choicesOf(field);
+  if (options === null) {
+    const answer = yield* prompts.ask(`${module.title} — ${field.name}?`);
+    return answer === null ? null : answer.trim();
+  }
+  const picked = yield* prompts.menu(
+    options.map((value) => ({ id: value, title: value })),
+    { header: `${module.title} — ${field.name}` },
+  );
+  return picked === null ? null : picked.id;
+});
+
+/** The values a field will take where they are a closed set, and null where they are not. */
+function choicesOf(field: Declared): ReadonlyArray<string> | null {
+  const drawn = field.schema;
+  if (!isDrawing(drawn)) return null;
+  if (drawn.type === "boolean") return ["true", "false"];
+  const options = drawn.enum;
+  return Array.isArray(options) ? options.map((one) => String(one)) : null;
+}
+
+const isDrawing = Schema.is(Schema.Record(Schema.String, Schema.Json));
 
 /**
  * The same failure the CLI reports as one line plus `details`, as the several lines a
@@ -1485,7 +1553,7 @@ export function appState(
 function mrAbout(record: RunRecord | null): string | null {
   const opened = record?.mr_url ? parseMrUrl(record.mr_url) : null;
   if (opened !== null) return mrTarget(opened.project, opened.iid);
-  return record?.inputs.target ?? null;
+  return record === null ? null : (diffTargetOf(recorded(record))?.value ?? null);
 }
 
 /** One command, run against the Selection it names. The string becomes the footer note. */

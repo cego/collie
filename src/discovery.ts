@@ -12,6 +12,7 @@
 
 import { Effect, FileSystem, Schema } from "effect";
 import { loadEntry, revisionOf } from "./native";
+import { jsonSchemaFor, type WorkflowEntry } from "./sdk";
 
 export const ENTRY_SUFFIX = ".workflow.ts";
 
@@ -38,14 +39,31 @@ export const searchPath = (where: {
   { layer: "shipped", dir: `${where.pluginRoot}/workflows` },
 ];
 
+/**
+ * One Input a module declares, as a front door needs it: what to call it, whether it may
+ * be left out, how it is inferred, and what it will take. The drawing is what lets a
+ * picker offer a menu for a closed set or a yes/no for a boolean rather than a text box.
+ */
+export const Declared = Schema.Struct({
+  name: Schema.String,
+  required: Schema.Boolean,
+  /** The strategy that infers this one, from the module's own hints; null for neither. */
+  strategy: Schema.NullOr(Schema.String),
+  /** The field's schema as JSON Schema, or null where it would not draw. */
+  schema: Schema.NullOr(Schema.Json),
+  /** Each place the drawing says less than the schema does; the schema still holds. */
+  limits: Schema.Array(Schema.String),
+});
+export type Declared = typeof Declared.Type;
+
 /** An entry a caller may run, said as a consumer needs it: what, where, and from which layer. */
 export const Resolved = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
   layer: Schema.Literals(LAYERS),
   path: Schema.String,
-  /** What the module declares it takes, so a front door can ask for it by name. */
-  inputs: Schema.Array(Schema.String),
+  /** What the module declares it takes, so a front door can ask for it. */
+  inputs: Schema.Array(Declared),
 });
 
 /** An id nothing can be run under, and the file that is why. */
@@ -131,7 +149,7 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
               title: read.success.title,
               layer: root.layer,
               path,
-              inputs: Object.keys(read.success.input),
+              inputs: declaredBy(read.success),
               revision,
             },
           },
@@ -139,6 +157,19 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
   }
   return claims;
 });
+
+/** What one module declares it takes, in the order a front door should ask for it. */
+const declaredBy = (entry: WorkflowEntry): ReadonlyArray<Declared> =>
+  Object.entries(entry.input).map(([name, field]) => {
+    const drawn = jsonSchemaFor(field);
+    return {
+      name,
+      required: field.ast.context?.isOptional !== true,
+      strategy: entry.metadata?.hints?.[name] ?? null,
+      schema: drawn.document,
+      limits: drawn.limits,
+    };
+  });
 
 const byId = (claims: ReadonlyArray<Claim>): ReadonlyMap<string, ReadonlyArray<Claim>> => {
   const grouped = new Map<string, Array<Claim>>();

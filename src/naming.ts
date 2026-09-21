@@ -3,6 +3,7 @@
 
 import { DEFAULT_MODEL } from "./harness";
 import { parseMrTarget } from "./mr";
+import { diffTargetOf, recorded } from "./strategies";
 
 const MAX = 32;
 
@@ -118,12 +119,7 @@ export function runName(workflow: string, slug: string): string {
  * by name, the working tree, or — for the workflows that have no target — the
  * run's own slug without the workflow it already carries.
  */
-export function targetLabel(
-  workflow: string,
-  slug: string,
-  inputs: Record<string, string>,
-): string {
-  const target = inputs.target ?? "";
+export function targetLabel(workflow: string, slug: string, target: string): string {
   if (target === "worktree") return "worktree";
   // An MR target carries its project; only the iid belongs on a label.
   const mr = parseMrTarget(target);
@@ -231,6 +227,8 @@ export interface LabelledRun {
   workflow: string;
   slug: string;
   inputs: Record<string, string>;
+  /** Which strategy settled each Input, which is how the target among them is found. */
+  input_strategies: Record<string, string>;
   /** What the Run recorded itself as pointed at; derived again for an older record. */
   target_label: string | null;
   /** The Task this Run belongs to, whose workspace label already names the work. */
@@ -250,12 +248,14 @@ export interface LabelledRun {
 export function runLabel(run: {
   workflow: string;
   slug: string;
-  inputs: Record<string, string>;
   target_label: string | null;
+  inputs: Record<string, string>;
+  input_strategies: Record<string, string>;
 }): string {
   return disambiguate(
     displayName(run.workflow),
-    run.target_label ?? targetLabel(run.workflow, run.slug, run.inputs),
+    run.target_label ??
+      targetLabel(run.workflow, run.slug, diffTargetOf(recorded(run))?.value ?? ""),
   );
 }
 

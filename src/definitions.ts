@@ -3,6 +3,7 @@
 
 import { skillsIn } from "./template";
 import { unsafePathComponent } from "./naming";
+import { exclusiveClashes } from "./strategies";
 import { isYamlMap, parseDocument, YamlError, type YamlMap, type YamlValue } from "./yaml";
 import { Crypto, Data, Effect, FileSystem, Path, Result, type PlatformError } from "effect";
 import {
@@ -974,6 +975,9 @@ export const validateWorkflow = Effect.fn("Definitions.validateWorkflow")(functi
         `workflow "${wf.name}" input "${input}": unknown strategy "${strategy}" (known: ${INPUT_STRATEGIES.join(", ")})`,
       );
     }
+  }
+  for (const clash of exclusiveClashes(wf.inputs)) {
+    errors.push(`workflow "${wf.name}": ${clash}`);
   }
 
   if (wf.steps.length === 0) errors.push(`workflow "${wf.name}" has no steps`);
