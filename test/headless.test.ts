@@ -929,7 +929,7 @@ effectTest(
     const bin = yield* FakeBin.make(path.join(rig.root, "fakebin"));
     const marker = path.join(rig.root, "less-arg.txt");
     yield* bin.add("less", `printf '%s' "$2" > ${JSON.stringify(marker)}`);
-    const pathValue = yield* Config.string("PATH").pipe(Config.withDefault(""));
+    const pathValue = yield* Config.String("PATH").pipe(Config.withDefault(""));
     const exit = yield* spawner.exitCode(
       ChildProcess.make("sh", ["-c", command], {
         env: { PATH: `${bin.dir}:${pathValue}` },
@@ -1092,7 +1092,7 @@ effectTest("the Driver is spawned with a usable environment, not just herdr's ke
   // tell from "no GitLab here". The Driver gets the environment its parent had.
   expect(yield* fs.exists(seen)).toBe(true);
   expect(yield* fs.readFileString(seen)).toBe(
-    yield* Config.string("PATH").pipe(Config.withDefault("")),
+    yield* Config.String("PATH").pipe(Config.withDefault("")),
   );
 });
 

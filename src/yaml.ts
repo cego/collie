@@ -50,50 +50,7 @@ export function parseYaml(src: string): YamlValue {
   } catch (cause) {
     throw new YamlError({ message: cause instanceof Error ? cause.message : String(cause) });
   }
-  rejectUnindentedSequence(parsed, src);
   return parsed;
-}
-
-/**
- * A sequence has to be indented under its key. Two items in the same column as their key
- * are a duplicate-key error and one is not: `steps:` over `- id: a` parses as a mapping
- * with the key `- id`, so the definition silently loses its steps instead of failing.
- *
- * A decoded key opening with `- ` is the symptom, but `"- id": x` is a legal way to write
- * that key and decodes the same. The source settles which it was: only an unquoted dash
- * line reads back as `- id:` with nothing in front of it.
- */
-function rejectUnindentedSequence(value: YamlValue, src: string): void {
-  if (Array.isArray(value)) {
-    for (const item of value) rejectUnindentedSequence(item, src);
-    return;
-  }
-  if (!isYamlMap(value)) return;
-  for (const [key, nested] of Object.entries(value)) {
-    if (key.startsWith("- ") && writtenAsDashLine(key, src)) {
-      throw new YamlError({
-        message: `"${key}" is a sequence item that is not indented under its key`,
-      });
-    }
-    rejectUnindentedSequence(nested, src);
-  }
-}
-
-/**
- * Whether some line sets this key with the key text bare, dash and all, in the column its
- * own key sits in. The indent is what separates the mistake from a sequence that is
- * indented correctly and happens to share the item's text, and reaching this at all means
- * the parser produced a `- ` key — which a dash line inside a block scalar never does.
- */
-function writtenAsDashLine(key: string, src: string): boolean {
-  const lines = src.split("\n");
-  return lines.some((line, i) => {
-    const bare = line.trimStart();
-    if (!bare.startsWith(key) || !/^[ \t]*:/.test(bare.slice(key.length))) return false;
-    const indent = line.length - bare.length;
-    const owner = lines.slice(0, i).findLast((earlier) => earlier.trim() !== "");
-    return owner !== undefined && owner.length - owner.trimStart().length === indent;
-  });
 }
 
 const BARE = /^[A-Za-z0-9_](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;

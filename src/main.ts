@@ -40,7 +40,7 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
   Effect.fn("main.herdr")(function* (command: string, mode?: string) {
     const env = yield* currentEnv;
     const client = new Herdr(env);
-    const configuredMode = yield* Config.option(Config.string("COLLIE_MODE"));
+    const configuredMode = yield* Config.option(Config.String("COLLIE_MODE"));
     const selected = mode ?? (configuredMode._tag === "Some" ? configuredMode.value : "pick");
     const code = yield* (() => {
       switch (command) {

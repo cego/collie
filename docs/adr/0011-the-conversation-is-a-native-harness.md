@@ -43,11 +43,12 @@ bounded, Herd-wide, and built from the same shared operations the board draws it
 Five of its tools read; `collie_installation` also reads, and says it is not read-only
 because the installation checks fetch this checkout's refs. No second interpretation: the
 native agent expressed the request structurally, so nothing pays a model to re-read it.
-Claude reaches it through a local MCP server over stdio (`collie mcp`, the official SDK,
+Claude reaches it through Effect's native MCP server over stdio (`collie mcp`,
 started by the launch with `--mcp-config --strict-mcp-config`); Pi through a generated
 extension loaded with `-e`; a human through `collie tools call`. Two spellings of "what is
 going on" would be Collie and the row in front of a human telling different stories about
-one Run.
+one Run. The MCP server uses the latest adapter supplied by the pinned Effect version;
+Collie does not carry legacy protocol adapters or patch Effect to keep them working.
 
 **Chat may do what the human could do on the board.** An earlier version of this ADR said
 chat's write tools "carry nothing out" and that anything touching a Run had to be proposed

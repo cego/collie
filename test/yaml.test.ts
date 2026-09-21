@@ -52,18 +52,13 @@ test("flow maps and sequences", () => {
   });
 });
 
-test("a sequence must be indented under its key, one item or many", () => {
-  // The one-item case is the dangerous one: it parses as a map with the key "- id"
-  // rather than failing, so a definition would lose its only step in silence.
-  expect(() => parseYaml(`steps:\n- id: a\n`)).toThrow(YamlError);
-  expect(() => parseYaml(`steps:\n- id: a\n`)).toThrow("not indented under its key");
-  expect(() => parseYaml(`steps:\n- id: a\n- id: b\n`)).toThrow(YamlError);
+test("a sequence in its key's own column is that key's sequence, one item or many", () => {
+  expect(parseYaml(`steps:\n- id: a\n`)).toEqual({ steps: [{ id: "a" }] });
+  expect(parseYaml(`steps:\n- id: a\n- id: b\n`)).toEqual({ steps: [{ id: "a" }, { id: "b" }] });
   expect(parseYaml(`steps:\n  - id: a\n`)).toEqual({ steps: [{ id: "a" }] });
 });
 
 test("a key written quoted may begin with a dash", () => {
-  // Decodes to the same `- id` the guard above refuses, so only the source tells them
-  // apart: this one was never a sequence item.
   expect(parseYaml(`"- id": allowed\n`)).toEqual({ "- id": "allowed" });
   // Even beside a sequence whose items read the same once the indent is gone.
   expect(parseYaml(`"- id": x\nsteps:\n  - id: a\n`)).toEqual({
@@ -79,8 +74,8 @@ test("a dash line inside a block scalar is text, not a misplaced sequence", () =
   });
 });
 
-test("a sequence nested under a key must still be indented under it", () => {
-  expect(() => parseYaml(`outer:\n  steps:\n  - id: a\n`)).toThrow("not indented under its key");
+test("a nested sequence in its key's own column is that key's sequence", () => {
+  expect(parseYaml(`outer:\n  steps:\n  - id: a\n`)).toEqual({ outer: { steps: [{ id: "a" }] } });
 });
 
 test("a key set twice is an error rather than the last one winning", () => {
@@ -156,7 +151,7 @@ test("a block scalar keeps a leading comment line, a leading blank and its parag
 });
 
 test("a folded scalar folds each paragraph and keeps the break between them", () => {
-  expect(parseYaml(`note: >\n  a\n  b\n\n  c\n`)).toEqual({ note: "a b\n\nc\n" });
+  expect(parseYaml(`note: >\n  a\n  b\n\n  c\n`)).toEqual({ note: "a b\nc\n" });
 });
 
 test("frontmatter that sets no keys is an empty mapping", () => {

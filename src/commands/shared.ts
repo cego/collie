@@ -267,21 +267,21 @@ export const parseInput = Effect.fn("collie.parseInput")(function* (
 });
 
 /** Every mutation takes one, and it means the same thing on all of them. */
-export const requestIdFlag = Flag.string("request-id").pipe(
+export const requestIdFlag = Flag.String("request-id").pipe(
   Flag.withDescription("Idempotency key; retrying it returns the first result"),
   Flag.optional,
 );
 
 /** The Run a `run` subcommand acts on. */
-export const runIdArg = Argument.string("run-id").pipe(
+export const runIdArg = Argument.String("run-id").pipe(
   Argument.withDescription("The Run's id, as `run list` prints it"),
 );
 
 export const forkFlags = {
-  layer: Flag.choice("layer", ["user", "project"]).pipe(
+  layer: Flag.Literals("layer", ["user", "project"]).pipe(
     Flag.withDescription("Which Layer to fork into: your config dir, or this project's `.herdr/`"),
   ),
-  name: Flag.string("name").pipe(
+  name: Flag.String("name").pipe(
     Flag.withDescription("Name the fork takes; it wins over the one it forked from"),
   ),
   requestId: requestIdFlag,
@@ -289,13 +289,13 @@ export const forkFlags = {
 
 export const root = Command.make("collie").pipe(
   Command.withSharedFlags({
-    workspace: Flag.string("workspace").pipe(
+    workspace: Flag.String("workspace").pipe(
       Flag.withDescription(
         "Scope to this herdr workspace id, and root the run at that workspace's directory",
       ),
       Flag.optional,
     ),
-    json: Flag.boolean("json").pipe(
+    json: Flag.Boolean("json").pipe(
       Flag.withDescription("Emit one machine-readable envelope instead of text"),
       Flag.withDefault(false),
     ),

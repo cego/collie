@@ -177,7 +177,7 @@ const environmentKeys = [
 export const currentEnv = Effect.gen(function* () {
   const env: Record<string, string | undefined> = {};
   for (const key of environmentKeys) {
-    const value = yield* Config.option(Config.string(key));
+    const value = yield* Config.option(Config.String(key));
     if (Option.isSome(value)) env[key] = value.value;
   }
   return readEnv(env);

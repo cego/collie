@@ -151,46 +151,46 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
 const runStart = Command.make(
   "start",
   {
-    workflow: Argument.string("workflow").pipe(
+    workflow: Argument.String("workflow").pipe(
       Argument.withDescription("Which Workflow to run, as `workflow list` names it"),
     ),
-    input: Flag.string("input").pipe(
+    input: Flag.String("input").pipe(
       Flag.withDescription(
         "key=value, repeatable; the names a Workflow takes are what `workflow show` lists",
       ),
       Flag.atLeast(0),
     ),
-    inputsJson: Flag.string("inputs-json").pipe(
+    inputsJson: Flag.String("inputs-json").pipe(
       Flag.withDescription("Every Input at once, as one JSON object"),
       Flag.optional,
     ),
-    decide: Flag.string("decide").pipe(
+    decide: Flag.String("decide").pipe(
       Flag.withDescription(
         "step=title, repeatable; answers a Choice step now instead of stopping there",
       ),
       Flag.atLeast(0),
     ),
-    goal: Flag.string("goal").pipe(
+    goal: Flag.String("goal").pipe(
       Flag.withDescription("What this Run is for, in the human's own words"),
       Flag.optional,
     ),
-    constraint: Flag.string("constraint").pipe(
+    constraint: Flag.String("constraint").pipe(
       Flag.withDescription(
         "What the work must respect, repeatable; `rule:<kind>:<args>` for one Collie checks",
       ),
       Flag.atLeast(0),
     ),
-    severity: Flag.string("severity").pipe(
+    severity: Flag.String("severity").pipe(
       Flag.withDescription(
         "block or warn for the --constraint in the same position; warn where none is given",
       ),
       Flag.atLeast(0),
     ),
-    task: Flag.string("task").pipe(
+    task: Flag.String("task").pipe(
       Flag.withDescription("Continue this Task instead of starting a new one, by its id"),
       Flag.optional,
     ),
-    continueTask: Flag.boolean("continue-task").pipe(
+    continueTask: Flag.Boolean("continue-task").pipe(
       Flag.withDescription("Continue the Task whose workspace this is; fails outside one"),
       Flag.withDefault(false),
     ),
@@ -588,15 +588,15 @@ const runWait = Command.make(
   "wait",
   {
     runId: runIdArg,
-    follow: Flag.boolean("follow").pipe(
+    follow: Flag.Boolean("follow").pipe(
       Flag.withDescription("Print each Step's progress while waiting, instead of only the result"),
       Flag.withDefault(false),
     ),
-    timeout: Flag.string("timeout").pipe(
+    timeout: Flag.String("timeout").pipe(
       Flag.withDescription("Give up after this long, e.g. `30 seconds`, `10 minutes`"),
       Flag.optional,
     ),
-    until: Flag.string("until").pipe(
+    until: Flag.String("until").pipe(
       Flag.withDescription(
         "`terminal` (the default) waits for the Run to end; `attention` also returns on a question",
       ),
@@ -785,10 +785,10 @@ const runAnswer = Command.make(
   "answer",
   {
     runId: runIdArg,
-    answer: Argument.string("answer").pipe(
+    answer: Argument.String("answer").pipe(
       Argument.withDescription("The Choice to take, as `run show` titles it"),
     ),
-    expectChoice: Flag.string("expect-choice").pipe(
+    expectChoice: Flag.String("expect-choice").pipe(
       Flag.withDescription(
         "Only answer while this is still the pending Choice, as `run wait --until attention` returns its id",
       ),
@@ -813,17 +813,17 @@ const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
   ),
 ).pipe(Command.withDescription("Stop a Run and close only the panes it owns"));
 
-const reasonFlag = Flag.string("reason").pipe(
+const reasonFlag = Flag.String("reason").pipe(
   Flag.withDescription("Why, in your own words; it is shown wherever the hold is"),
   Flag.withDefault("no reason given"),
 );
 
-const untilFlag = Flag.string("until").pipe(
+const untilFlag = Flag.String("until").pipe(
   Flag.withDescription("When the hold lifts by itself: `14:00`, or a full timestamp"),
   Flag.optional,
 );
 
-const holdWorkspaceFlag = Flag.string("workspace").pipe(
+const holdWorkspaceFlag = Flag.String("workspace").pipe(
   Flag.withDescription("Hold every unfinished Run in this workspace instead of one Run"),
   Flag.optional,
 );
@@ -908,7 +908,7 @@ const runClearOverride = Command.make(
   "clear-override",
   {
     runId: runIdArg,
-    agent: Argument.string("agent").pipe(
+    agent: Argument.String("agent").pipe(
       Argument.withDescription("The agent, as `run show` names it"),
     ),
     requestId: requestIdFlag,
@@ -931,15 +931,15 @@ const runDisposition = Command.make(
   "disposition",
   {
     runId: runIdArg,
-    as: Flag.choice("as", ["merged", "abandoned", "superseded"]).pipe(
+    as: Flag.Literals("as", ["merged", "abandoned", "superseded"]).pipe(
       Flag.withDescription("Record what became of the work; without it, this only reads"),
       Flag.optional,
     ),
-    ref: Flag.string("ref").pipe(
+    ref: Flag.String("ref").pipe(
       Flag.withDescription("What backs it up: a merge request, a commit, or the Run that took it"),
       Flag.withDefault(""),
     ),
-    note: Flag.string("note").pipe(
+    note: Flag.String("note").pipe(
       Flag.withDescription("Anything a reader would need, in your own words"),
       Flag.optional,
     ),
@@ -1053,10 +1053,10 @@ const runFollowUp = Command.make(
   "follow-up",
   {
     runId: runIdArg,
-    text: Argument.string("text").pipe(
+    text: Argument.String("text").pipe(
       Argument.withDescription("What still needs doing, in your own words"),
     ),
-    allowDirty: Flag.boolean("allow-dirty").pipe(
+    allowDirty: Flag.Boolean("allow-dirty").pipe(
       Flag.withDescription("Build on the uncommitted changes already in that checkout"),
       Flag.withDefault(false),
     ),
@@ -1156,12 +1156,12 @@ const propagateToChildren = Effect.fn("run.propagateToChildren")(function* (
   return lines;
 });
 
-const severityFlag = Flag.string("severity").pipe(
+const severityFlag = Flag.String("severity").pipe(
   Flag.withDescription("block or warn; warn is the default"),
   Flag.withDefault("warn"),
 );
 
-const propagateFlag = Flag.boolean("propagate").pipe(
+const propagateFlag = Flag.Boolean("propagate").pipe(
   Flag.withDescription("Apply the amended Intent to every child Run that is still going"),
   Flag.withDefault(false),
 );
@@ -1200,7 +1200,7 @@ const intentSetGoal = Command.make(
   "set-goal",
   {
     runId: runIdArg,
-    goal: Argument.string("goal").pipe(Argument.withDescription("What this Run is for")),
+    goal: Argument.String("goal").pipe(Argument.withDescription("What this Run is for")),
     propagate: propagateFlag,
     requestId: requestIdFlag,
   },
@@ -1214,7 +1214,7 @@ const intentAdd = Command.make(
   "add-constraint",
   {
     runId: runIdArg,
-    text: Argument.string("text").pipe(
+    text: Argument.String("text").pipe(
       Argument.withDescription("The constraint, or `rule:<kind>:<args>` for one Collie checks"),
     ),
     severity: severityFlag,
@@ -1241,7 +1241,7 @@ const intentRemove = Command.make(
   "remove-constraint",
   {
     runId: runIdArg,
-    id: Argument.string("constraint-id").pipe(
+    id: Argument.String("constraint-id").pipe(
       Argument.withDescription("The constraint's id, as `run intent show` lists it"),
     ),
     propagate: propagateFlag,
@@ -1253,7 +1253,7 @@ const intentRemove = Command.make(
     }),
 ).pipe(Command.withDescription("Remove a constraint from a Run's Intent"));
 
-const authorityArgs = Argument.string("pair").pipe(
+const authorityArgs = Argument.String("pair").pipe(
   Argument.withDescription("k=v, repeatable; e.g. auto_correct=true"),
   Argument.variadic({ min: 1 }),
 );
@@ -1283,18 +1283,18 @@ const intentVerification = Command.make(
   "verification",
   {
     runId: runIdArg,
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("What to call it; the same name a `command_exit` rule refers to"),
     ),
-    cwd: Flag.string("cwd").pipe(
+    cwd: Flag.String("cwd").pipe(
       Flag.withDescription("`worktree`, or a path relative to the Run's cwd"),
       Flag.withDefault("worktree"),
     ),
-    remove: Flag.boolean("remove").pipe(
+    remove: Flag.Boolean("remove").pipe(
       Flag.withDescription("Withdraw the grant of this name instead of making one"),
       Flag.withDefault(false),
     ),
-    command: Argument.string("command").pipe(
+    command: Argument.String("command").pipe(
       Argument.withDescription("The executable and its arguments, after `--`"),
       Argument.variadic({ min: 0 }),
     ),
@@ -1361,7 +1361,7 @@ const defaultsShow = Command.make("show", {}, () =>
 const defaultsAdd = Command.make(
   "add-constraint",
   {
-    text: Argument.string("text").pipe(
+    text: Argument.String("text").pipe(
       Argument.withDescription("The constraint, or `rule:<kind>:<args>` for one Collie checks"),
     ),
     severity: severityFlag,
@@ -1385,7 +1385,7 @@ const defaultsAdd = Command.make(
 const defaultsRemove = Command.make(
   "remove-constraint",
   {
-    id: Argument.string("constraint-id").pipe(
+    id: Argument.String("constraint-id").pipe(
       Argument.withDescription("The constraint's id, as `defaults show` lists it"),
     ),
     requestId: requestIdFlag,

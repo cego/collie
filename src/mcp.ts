@@ -1,61 +1,67 @@
 // Collie as a local MCP server, which is how Claude Code reaches the tools in
 // `tools.ts`.
 //
-// A transport adapter and nothing more. It speaks the official SDK's protocol over this
+// A transport adapter and nothing more. Effect serves the MCP protocol over this
 // process's stdin and stdout, started by the chat launch with `--mcp-config`, and it
 // exposes exactly what `TOOLS` exposes. There is no port, no daemon and no second
 // orchestration service: the server lives as long as the chat that started it, and every
 // answer it gives is a read through the shared operations.
 
-import { BunServices } from "@effect/platform-bun";
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { Effect } from "effect";
+import type { BunServices } from "@effect/platform-bun/BunServices";
+import { Cause, Context, Effect, Exit, Fiber, Logger, Schema } from "effect";
+import { McpProtocol, McpSchema, McpServer } from "effect/unstable/ai";
 import manifest from "../herdr-plugin.toml";
 import { currentEnv } from "./env";
 import { isJsonObject } from "./schema";
-import { TOOLS, toolNamed } from "./tools";
+import { TOOLS } from "./tools";
 
 /**
  * Serve until stdin closes. Nothing is written to stdout but the protocol — a stray log
  * line there is a framing error that reads, to the harness, as Collie having no tools.
  */
-export const serveMcp = Effect.fn("Mcp.serve")(function* () {
-  const env = yield* currentEnv;
-  const server = new Server(
-    { name: "collie", version: manifest.version },
-    { capabilities: { tools: {} } },
-  );
-
-  server.setRequestHandler(ListToolsRequestSchema, () => ({
-    tools: TOOLS.map((tool) => ({
-      name: tool.name,
-      title: tool.title,
-      description: tool.description,
-      inputSchema: tool.input,
-      // Per tool, from the tool itself. A client uses this to decide what it may run
-      // without asking, so the two that write — reading the news settles it, proposing
-      // appends to the journal — must not claim otherwise.
-      annotations: { readOnlyHint: tool.readOnly },
-    })),
-  }));
-
-  server.setRequestHandler(CallToolRequestSchema, (request) => {
-    const tool = toolNamed(request.params.name);
-    if (tool === null)
-      return {
-        content: [{ type: "text" as const, text: `No tool "${request.params.name}".` }],
-        isError: true,
-      };
-    // The SDK validated the arguments against the tool's own JSON Schema before this,
-    // and every tool re-decodes what it reads; anything it does not name is ignored.
-    const given = request.params.arguments;
-    return Effect.runPromise(
-      tool.call(env, isJsonObject(given) ? given : {}).pipe(Effect.provide(BunServices.layer)),
-    ).then((text) => ({ content: [{ type: "text" as const, text }] }));
-  });
-
-  yield* Effect.promise(() => server.connect(new StdioServerTransport()));
-  return yield* Effect.never;
-});
+export const serveMcp = Effect.fn("Mcp.serve")(
+  function* () {
+    const env = yield* currentEnv;
+    const services = yield* Effect.context<BunServices>();
+    const server = yield* McpServer.McpServer;
+    for (const tool of TOOLS) {
+      const descriptor = yield* Schema.decodeUnknownEffect(McpSchema.Tool)({
+        name: tool.name,
+        title: tool.title,
+        description: tool.description,
+        inputSchema: tool.input,
+        // Clients use this to decide what they may run without asking. A tool that
+        // settles news or carries out an instruction must not claim to be read-only.
+        annotations: { readOnlyHint: tool.readOnly },
+      });
+      yield* server.addTool({
+        tool: descriptor,
+        annotations: Context.empty(),
+        handle: (input) =>
+          tool.call(env, isJsonObject(input) ? input : {}).pipe(
+            Effect.provideContext(services),
+            Effect.map(
+              (text) => new McpSchema.CallToolResult({ content: [{ type: "text", text }] }),
+            ),
+          ),
+      });
+    }
+    return yield* Effect.never;
+  },
+  Effect.provide(
+    McpServer.layerStdio({
+      name: "collie",
+      version: manifest.version,
+      protocols: [McpProtocol.v2025_11_25],
+    }),
+  ),
+  Effect.provideService(Logger.LogToStderr, true),
+  // Native stdio interrupts its owner at EOF. End this child cleanly without
+  // swallowing interruption of the caller or turning normal EOF into exit 130.
+  Effect.forkScoped,
+  Effect.flatMap(Fiber.await),
+  Effect.flatMap((exit) =>
+    Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause) ? Effect.void : exit,
+  ),
+  Effect.scoped,
+);

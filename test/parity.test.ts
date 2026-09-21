@@ -125,7 +125,7 @@ printf '%s\\n' "$COLLIE_RUN" >> "${path.join(dir, "drivers")}"
         { mode: 0o755 },
       );
       env = {
-        PATH: yield* Config.string("PATH").pipe(Config.withDefault("")),
+        PATH: yield* Config.String("PATH").pipe(Config.withDefault("")),
         HOME: dir,
         COLLIE_CWD: workspace,
         HERDR_PLUGIN_ROOT: plugin,

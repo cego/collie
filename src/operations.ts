@@ -229,7 +229,7 @@ export const writeInbox = Effect.fn("operations.writeInbox")(function* (
  * executable path.
  */
 export const driverCommand = Effect.fn("operations.driverCommand")(function* (env: PluginEnv) {
-  const override = yield* Config.option(Config.string("COLLIE_DRIVER"));
+  const override = yield* Config.option(Config.String("COLLIE_DRIVER"));
   if (override._tag === "None") return [`${env.pluginRoot}/bin/collie`] as const;
   const value = override.value;
   if (value.trimStart().startsWith("[")) {

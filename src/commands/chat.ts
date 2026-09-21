@@ -27,7 +27,6 @@ import {
   settle as settleNews,
   uncertain as uncertainNews,
 } from "../news";
-import { serveMcp } from "../mcp";
 import { claudeSettingsPath, installStatusLine, promptLineFor, statusLineFor } from "../statusline";
 import { err } from "../operations";
 import { herdOf } from "../steering";
@@ -89,7 +88,7 @@ const status = Command.make("status", {}, () =>
 const harness = Command.make(
   "harness",
   {
-    harness: Argument.string("harness").pipe(
+    harness: Argument.String("harness").pipe(
       Argument.withDescription(`Which native chat Collie opens with: ${CHAT_HARNESSES.join(", ")}`),
       Argument.optional,
     ),
@@ -127,11 +126,11 @@ const harness = Command.make(
 const news = Command.make(
   "news",
   {
-    sent: Flag.boolean("sent").pipe(
+    sent: Flag.Boolean("sent").pipe(
       Flag.withDescription("Mark the current batch as submitted to the harness, not as read"),
       Flag.withDefault(false),
     ),
-    uncertain: Flag.boolean("uncertain").pipe(
+    uncertain: Flag.Boolean("uncertain").pipe(
       Flag.withDescription("Mark it as a send nobody can account for; it stays pending"),
       Flag.withDefault(false),
     ),
@@ -167,7 +166,7 @@ const news = Command.make(
 const statusLine = Command.make(
   "status-line",
   {
-    install: Flag.boolean("install").pipe(
+    install: Flag.Boolean("install").pipe(
       Flag.withDescription("Configure Claude Code to print it (what setup.sh runs)"),
       Flag.withDefault(false),
     ),
@@ -222,10 +221,10 @@ const list = Command.make("list", {}, () =>
 const call = Command.make(
   "call",
   {
-    tool: Argument.string("tool").pipe(
+    tool: Argument.String("tool").pipe(
       Argument.withDescription("The tool, as `tools list` names it"),
     ),
-    input: Flag.string("input").pipe(
+    input: Flag.String("input").pipe(
       Flag.withDescription("The tool's arguments as JSON; omit for a tool that takes none"),
       Flag.optional,
     ),
@@ -259,7 +258,10 @@ export const chat = Command.make("chat").pipe(
 /**
  * The MCP server Claude Code is launched against. Not a command anyone types: it speaks
  * the protocol on stdin and stdout, so a human running it sees nothing happen.
+ * Load its protocol schemas only here, not for every unrelated CLI invocation.
  */
-export const mcp = Command.make("mcp", {}, () => serveMcp()).pipe(
+export const mcp = Command.make("mcp", {}, () =>
+  Effect.promise(() => import("../mcp")).pipe(Effect.flatMap(({ serveMcp }) => serveMcp())),
+).pipe(
   Command.withDescription("Serve Collie's reads over MCP on stdin/stdout (used by native chat)"),
 );

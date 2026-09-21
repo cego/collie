@@ -1,7 +1,7 @@
 ---
 name: review
 title: review — an MR, a branch diff, or the working tree
-description: You pick the target — an MR, a branch diff or the working tree — one complete review comes out, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to somebody else's merge request.
+description: "You pick the target — an MR, a branch diff or the working tree — one complete review comes out, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to somebody else's merge request."
 inputs:
   target: diff-target
   # Empty unless a workflow embedding this one has a spec to hold the change to.

@@ -537,8 +537,8 @@ collie workflow show review       # prints the resolved steps and inputs
 Frontmatter is parsed as YAML 1.2 — block and flow collections, quoted and block scalars,
 anchors and aliases. Four things to know:
 
-- A block sequence must be indented under its key. `steps:` followed by `- id: a` in the
-  same column is refused, naming the key, rather than read as a mapping.
+- A value with `: ` inside it has to be quoted, as YAML 1.2 requires. `description: your
+call: fix it` is refused; `description: "your call: fix it"` is the same text as a string.
 - A key may not be set twice in one mapping. `a: 1` over `a: 2` is an error where the
   parser Collie used before this took the last value, so a definition that relied on that
   needs the duplicate removed.

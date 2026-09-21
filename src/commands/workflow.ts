@@ -27,7 +27,7 @@ import {
 } from "./shared";
 
 /** The Workflow a `workflow` subcommand acts on. */
-const workflowArg = Argument.string("workflow").pipe(
+const workflowArg = Argument.String("workflow").pipe(
   Argument.withDescription("Which Workflow, as `workflow list` names it"),
 );
 
@@ -157,7 +157,7 @@ function brokeFile(workflow: string): (error: string) => boolean {
 const workflowCheck = Command.make(
   "check",
   {
-    workflow: Argument.string("workflow").pipe(
+    workflow: Argument.String("workflow").pipe(
       Argument.withDescription("Check only this Workflow; omit it to check every one"),
       Argument.optional,
     ),
@@ -279,12 +279,12 @@ const workflowFork = Command.make(
   {
     workflow: workflowArg,
     ...forkFlags,
-    mode: Flag.choice("mode", ["extends", "copy"]).pipe(
+    mode: Flag.Literals("mode", ["extends", "copy"]).pipe(
       Flag.withDescription(
         "`extends` changes only what the fork names; `copy` takes the whole definition",
       ),
     ),
-    step: Flag.string("step").pipe(
+    step: Flag.String("step").pipe(
       Flag.withDescription("Fork only this Step, leaving the rest following the parent"),
       Flag.optional,
     ),

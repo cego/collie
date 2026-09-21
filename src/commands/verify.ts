@@ -17,24 +17,24 @@ import { answering, readRun } from "./shared";
 export const verify = Command.make(
   "verify",
   {
-    runId: Flag.string("run").pipe(
+    runId: Flag.String("run").pipe(
       Flag.withDescription("The Run this is a verification of; its tree is what is fingerprinted"),
     ),
-    cwd: Flag.string("cwd").pipe(
+    cwd: Flag.String("cwd").pipe(
       Flag.withDescription("Where to run it; must be inside that Run's own checkout"),
       Flag.optional,
     ),
-    name: Flag.string("name").pipe(
+    name: Flag.String("name").pipe(
       Flag.withDescription("What to call it on a card; the executable by default"),
       Flag.optional,
     ),
-    expect: Flag.string("expect").pipe(
+    expect: Flag.String("expect").pipe(
       Flag.withDescription(
         "What a pass looks like: `pass` (default), or `fail` for a reproduction that must fail",
       ),
       Flag.optional,
     ),
-    command: Argument.string("command").pipe(
+    command: Argument.String("command").pipe(
       Argument.withDescription("The executable and its arguments, after `--`"),
       Argument.variadic({ min: 1 }),
     ),

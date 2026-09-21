@@ -208,7 +208,7 @@ export class Rig {
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectory({ prefix: "hw-test-" });
       const fakeHerdrPath = yield* path.fromFileUrl(new URL("./fake-herdr.ts", import.meta.url));
-      const pathValue = yield* Config.string("PATH").pipe(Config.withDefault(""));
+      const pathValue = yield* Config.String("PATH").pipe(Config.withDefault(""));
       const rig = new Rig(root, path, fakeHerdrPath, pathValue);
       yield* rig.setup();
       return rig;

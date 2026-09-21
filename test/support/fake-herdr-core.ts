@@ -233,7 +233,7 @@ function handle(
     const envString = (name: string, fallback = "") => {
       const value = environment[name];
       return value === undefined
-        ? Config.string(name).pipe(Config.withDefault(Bun.env[name] ?? fallback))
+        ? Config.String(name).pipe(Config.withDefault(Bun.env[name] ?? fallback))
         : Config.succeed(value);
     };
     const log = yield* envString("FAKE_HERDR_LOG");

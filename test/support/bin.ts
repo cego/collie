@@ -19,7 +19,7 @@ export class FakeBin {
   static make(dir: string) {
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const originalPath = yield* Config.string("PATH").pipe(Config.withDefault(""));
+      const originalPath = yield* Config.String("PATH").pipe(Config.withDefault(""));
       yield* fs.makeDirectory(dir, { recursive: true });
       Bun.env.PATH = `${dir}:${originalPath}`;
       return new FakeBin(dir, originalPath);

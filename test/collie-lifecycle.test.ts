@@ -133,7 +133,7 @@ printf '%s\n' "$COLLIE_RUN" >> "${path.join(dir, "drivers")}"
         { mode: 0o755 },
       );
       env = {
-        PATH: yield* Config.string("PATH").pipe(Config.withDefault("")),
+        PATH: yield* Config.String("PATH").pipe(Config.withDefault("")),
         GITLAB_USER_LOGIN: "tester",
         HOME: dir,
         HERDR_PLUGIN_ROOT: plugin,

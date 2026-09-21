@@ -734,7 +734,7 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
  * Everything it can say about a failure goes into `runner.log`.
  */
 export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, env: PluginEnv) {
-  const maybeRunId = yield* Config.option(Config.string("COLLIE_RUN"));
+  const maybeRunId = yield* Config.option(Config.String("COLLIE_RUN"));
   if (maybeRunId._tag === "None") {
     yield* Console.error("COLLIE_RUN is not set; a driver is started by the picker.");
     return 2;
@@ -894,7 +894,7 @@ const WIDTH_FLOOR = 40;
 /** Why the app cannot run here, or nothing when it can. */
 const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
   if (!process.stdout.isTTY || !process.stdin.isTTY) return "no terminal on this pane";
-  const term = yield* Config.option(Config.string("TERM"));
+  const term = yield* Config.option(Config.String("TERM"));
   if (term._tag === "Some" && term.value === "dumb") return "TERM is dumb";
   const width = process.stdout.columns ?? 0;
   if (width < WIDTH_FLOOR) return `the pane is ${width} columns, and the app needs ${WIDTH_FLOOR}`;
