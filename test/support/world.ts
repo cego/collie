@@ -25,7 +25,13 @@ const Envelope = Schema.fromJsonString(
   Schema.Struct({
     ok: Schema.Boolean,
     data: Schema.optional(Schema.Unknown),
-    error: Schema.optional(Schema.Struct({ code: Schema.String, message: Schema.String })),
+    error: Schema.optional(
+      Schema.Struct({
+        code: Schema.String,
+        message: Schema.String,
+        details: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+      }),
+    ),
   }),
 );
 const asEnvelope = Schema.decodeUnknownEffect(Envelope);

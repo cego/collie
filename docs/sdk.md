@@ -83,8 +83,10 @@ Three directories, nearest first:
 | shipped | `workflows/*.workflow.ts` inside the installation |
 
 Save `echo.workflow.ts` in one of them and it is found: nothing to register it in, nothing
-to rebuild, no host to restart. Only entry files take part — a `helper.ts` or a `notes.md`
-beside one is reached because your entry imports it, not because it was found.
+to rebuild, no host to restart. `collie workflow create <id>` writes one there for you, and
+`collie workflow fork <id> --name <yours>` writes one that keeps what it forked. Only entry
+files take part — a `helper.ts` or a `notes.md` beside one is reached because your entry
+imports it, not because it was found.
 
 The file name is what shadows. A project's `review.workflow.ts` overrides the user's, which
 overrides the shipped one; the `id` inside is the public name an operator types. Two files
@@ -658,16 +660,20 @@ is still held to the native one.
 ## Typechecking a module
 
 ```sh
-collie native --dir <state>        # then, on stdin:
-{"op":"provision","dir":"<your workflow directory>"}
-{"op":"check","dir":"<your workflow directory>","entry":"<…>/echo.workflow.ts"}
+collie workflow check echo
 ```
 
-`provision` writes `package.json`, `tsconfig.json` and `collie-native.d.ts` into a
-directory that has none — leaving any you already have alone — and installs the toolchain
-with the executable's own embedded Bun, so neither Bun nor Node has to be on the machine.
-The `effect` it pins is the one the host runs.
+It imports the module, constructs it and runs the compiler over it — no run, no agent, no
+worktree. Each diagnostic comes back with its file and line, one module at a time: an error
+in one says nothing about the one beside it.
 
-`check` reports each diagnostic with its file and line, one module at a time: an error in
-one says nothing about the one beside it. With nothing installed to check with, the answer
-is `toolchain_unavailable` rather than a module reported as fine.
+Three answers, kept apart. A **problem** stops it running: it would not load, its metadata
+contradicts itself, `make` threw, or it does not compile. **`drawn without:`** is a place
+the JSON Schema drawn for a prompt or a listing says less than your schema does — the
+native schema still holds. **`ok, not typechecked`** means no compiler is installed in that
+directory; nothing compiled it, and it says so rather than reading as fine.
+
+`collie workflow create <id>` writes the authoring setup — `package.json`, `tsconfig.json`
+and `collie-native.d.ts` — into the directory, leaving any you already have alone, and
+installs the toolchain with the executable's own embedded Bun, so neither Bun nor Node has
+to be on the machine. The `effect` it pins is the one the host runs.

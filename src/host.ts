@@ -239,9 +239,10 @@ const handlers = (dir: string) =>
           catalogue(project).pipe(
             Effect.map((found) => ({
               // Without the revision: that is how this host decides a reload, not a caller.
-              entries: found.entries.map(({ id, title, layer, path, inputs }) => ({
+              entries: found.entries.map(({ id, title, description, layer, path, inputs }) => ({
                 id,
                 title,
+                description,
                 layer,
                 path,
                 inputs,

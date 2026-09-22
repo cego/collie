@@ -581,6 +581,9 @@ export const RESERVED_INPUTS = {
 
 const IDENTITY = /^[a-z][a-z0-9-]*$/;
 
+/** What a public id may be, so a command that writes one can refuse before the file exists. */
+export const isWorkflowId = (id: string): boolean => IDENTITY.test(id);
+
 const isReserved = (name: string): name is keyof typeof RESERVED_INPUTS => name in RESERVED_INPUTS;
 const reservedMeaning = (name: string) => (isReserved(name) ? RESERVED_INPUTS[name] : "");
 const KNOWN_STRATEGIES: ReadonlySet<string> = new Set(INPUT_STRATEGIES);

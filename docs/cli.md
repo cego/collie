@@ -52,35 +52,77 @@ collie --json persona show implementer
 collie --json workflow check          # validate every layer, without starting a run
 ```
 
-`workflow show` prints the **resolved** workflow: the inputs and steps a run actually gets,
-including those inherited from an embedded workflow. `workflow check [<workflow>]` catches
-unknown models, missing personas and skills, malformed choices, and placeholders no
-declared input can fill, and exits non-zero when anything is wrong, so it fits a pre-commit
-hook.
+A workflow is a TypeScript module — see [the SDK](sdk.md) — and `list` returns those under
+`modules`, each read as `show` reads one. Where an id also has a Markdown definition in a
+layer below, the module is what a run gets, so the definition is not listed: what you are
+shown is what would start.
 
-`workflow list` returns each workflow's `name`, `title`, `description`, `inputs`, `steps`,
-`layer` and `path`, plus a top-level `errors` array for definitions that would not load:
+`workflow show <id>` gives the module's public id, the layer and file it came from, each
+input with its strategy and its schema, the names the host settles beside your input, the
+schemas of its result and its failure, and its metadata:
 
 ```json
 {
   "ok": true,
   "data": {
-    "workflows": [
-      {
-        "name": "implement",
-        "title": "implement — build the plan, tidy it, review it, fix until clean",
-        "description": "Builds from a plan dir, a Linear issue or a description, …",
-        "inputs": { "plan": "work-source" },
-        "steps": ["build", "architecture", "simplify", "review", "fix", "mr"],
-        "layer": "baseline",
-        "path": "/home/you/.collie/workflows/implement.md",
-        "extends": null
-      }
-    ],
-    "errors": []
+    "workflow": {
+      "id": "implement",
+      "title": "implement — build the plan, review it, fix until nothing blocks",
+      "layer": "shipped",
+      "path": "/home/you/.collie/workflows/implement.workflow.ts",
+      "inputs": [
+        {
+          "name": "plan",
+          "required": true,
+          "strategy": "work-source",
+          "schema": { "type": "string" },
+          "limits": []
+        }
+      ],
+      "options": [{ "name": "branch", "meaning": "Branch selection for mutating work, …" }],
+      "success": { "schema": { "type": "string" }, "limits": [] },
+      "error": { "schema": { "$ref": "#/$defs/WorkflowErrorEncoded" }, "limits": [] },
+      "metadata": { "hints": { "plan": "work-source" }, "selectable": ["feature", "…"] },
+      "broken": null
+    }
   }
 }
 ```
+
+`limits` names each place the drawn JSON Schema constrains less than the native schema
+does — a projection limit, not an invalid schema. `broken` is the sentence a module threw
+when it was constructed, and null when it did not.
+
+The same reading answers `collie_definitions` over MCP and Pi, and fills the `needs_input`
+refusal you get from `run start` when a required input was not given — so every door names
+the same file, the same schemas and the same diagnostics.
+
+`workflow check [<workflow>]` loads each module, constructs it and typechecks it against
+the SDK declarations, without starting a run, taking an agent or opening a worktree. It
+reports three different things and keeps them apart: `problem(s)` is what stops it running,
+`drawn without:` is a projection limit, and `ok, not typechecked` means no compiler was
+installed in that directory — never silence. It exits non-zero for problems, so it fits a
+pre-commit hook. For a Markdown definition it still catches unknown models, missing personas
+and skills, malformed choices, and placeholders no declared input can fill.
+
+## Write one
+
+```sh
+collie --json workflow create tally                 # your own layer
+collie --json workflow create tally --layer project # this project's
+collie --json workflow fork implement --layer user --name ours
+```
+
+Both write `<id>.workflow.ts` where a run will find it, return its path, and never write
+over a file that is already there. `create` writes the smallest module that runs; `fork`
+writes one that imports the original and hands `make` on, so everything it does not name is
+still the original's. Both then provision the authoring setup beside the file —
+`package.json`, `tsconfig.json`, `collie-native.d.ts` — leaving any you already have alone,
+and installing the toolchain with the executable's own embedded Bun. With no network on a
+first use the answer says `toolchain_unavailable`: the module still runs, and nothing was
+typechecked.
+
+Then: edit it, `collie workflow check <id>`, `collie run start <id> --input …`.
 
 ## Start a run
 
@@ -1035,20 +1077,23 @@ back — lifts that one and leaves the rest held.
 Both need a live Driver — the hold is a command to it, and a run with nobody driving has
 nothing to decline to start.
 
-## Fork a definition
+## Fork a workflow or a persona
 
 ```sh
-collie --json workflow fork review --layer user --mode extends --step review
+collie --json workflow fork implement --layer user --name ours
 collie --json persona fork reviewer --layer project --name strict-reviewer
 ```
 
-| Flag           | What it does                                                                                   |
-| -------------- | ---------------------------------------------------------------------------------------------- |
-| `--layer`      | `user` (your config dir) or `project` (this project's `.herdr/`).                              |
-| `--mode`       | `extends` changes only what the fork names; `copy` takes the whole definition. Workflows only. |
-| `--step`       | Fork only this step, leaving the rest following the parent. Workflows only.                    |
-| `--name`       | The name the fork takes; it wins over the one it forked from.                                  |
-| `--request-id` | Idempotency key.                                                                               |
+| Flag           | What it does                                                                                        |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| `--layer`      | `user` (where you save workflow modules) or `project` (this project's `.herdr/`).                   |
+| `--name`       | The id the fork takes; it wins over the one it forked from.                                         |
+| `--mode`       | Markdown definitions only: `extends` changes only what the fork names, `copy` takes the whole file. |
+| `--step`       | Markdown definitions only: fork one step, leaving the rest following the parent.                    |
+| `--request-id` | Idempotency key.                                                                                    |
+
+A module is forked by importing it, so there is nothing to merge and no step to name:
+`--mode` and `--step` on one are refused with what to do instead, rather than adapted.
 
 An existing file at the target path comes back as `target_exists` rather than being
 overwritten. See [Authoring](authoring.md) for what the resulting file means.

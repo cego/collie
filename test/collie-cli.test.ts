@@ -91,6 +91,25 @@ Fix what the review raised, then write the Output JSON.
 `;
 const withPanel = { "panel.md": PANEL };
 
+/** `workflow show` for a module: what a caller may give it, and what it gives back. */
+const ShownModule = Schema.fromJsonString(
+  Schema.Struct({
+    data: Schema.Struct({
+      workflow: Schema.Struct({
+        layer: Schema.String,
+        path: Schema.String,
+        broken: Schema.NullOr(Schema.String),
+        inputs: Schema.Array(
+          Schema.Struct({ name: Schema.String, strategy: Schema.NullOr(Schema.String) }),
+        ),
+        options: Schema.Array(Schema.Struct({ name: Schema.String, meaning: Schema.String })),
+        success: Schema.Struct({ schema: Schema.NullOr(Schema.Json) }),
+        error: Schema.Struct({ schema: Schema.NullOr(Schema.Json) }),
+      }),
+    }),
+  }),
+);
+
 /** `workflow list`, just far enough to read each workflow's inputs back. */
 const WorkflowRows = Schema.fromJsonString(
   Schema.Struct({
@@ -141,7 +160,7 @@ test("persona discovery uses the same command boundary", () =>
 test("human workflow show includes its steps and source", () =>
   runEffect(
     Effect.gen(function* () {
-      const shown = yield* cli(["workflow", "show", "architecture"]);
+      const shown = yield* cli(["workflow", "show", "panel"], {}, withPanel);
       expect(shown.exit).toBe(0);
       expect(shown.stdout).toContain("Steps:");
       expect(shown.stdout).toContain("Defined in:");
@@ -329,8 +348,12 @@ test(
         // The baseline is the acceptance test for the rule set: it must come out clean.
         const clean = yield* cli(["workflow", "check"], scratch);
         expect(clean.exit).toBe(0);
-        expect(clean.stdout).toContain("implement\tbaseline\tok");
-        expect(clean.stdout).toContain("review\tbaseline\tok");
+        expect(clean.stdout).toContain("implement\tshipped\tok");
+        expect(clean.stdout).toContain("review\tshipped\tok");
+        // Nothing here was compiled, and that is said rather than left to read as a
+        // compiler that was happy — once for the directory, not once per module.
+        expect(clean.stdout).toContain("ok, not typechecked");
+        expect(clean.stdout.match(/^not typechecked: /gm)).toHaveLength(1);
 
         const project = join(cwd, ".herdr", "workflows");
         yield* fs.makeDirectory(project, { recursive: true });
@@ -412,13 +435,13 @@ Grill me.
         expect(problems).toContain('"name":"unparseable"');
         expect(problems).toContain("has no steps");
         // And the workflows that are fine are still listed.
-        expect(problems).toContain('"name":"plan","layer":"baseline","problems":[]');
+        expect(problems).toContain('"id":"plan","layer":"shipped"');
 
         // Asked about one workflow, a broken file elsewhere is not its problem — the
         // targeted check has to stay usable while another definition is being edited.
         const named = yield* cli(["workflow", "check", "review"], scratch);
         expect(named.exit).toBe(0);
-        expect(named.stdout).toContain("review\tbaseline\tok");
+        expect(named.stdout).toContain("review\tshipped\tok");
         expect(named.stdout).not.toContain("broken");
 
         // Its own broken file is its problem, though: a project-layer `review.md` that
@@ -439,47 +462,170 @@ Grill me.
 test("workflow show prints what a run actually gets, not what was authored", () =>
   runEffect(
     Effect.gen(function* () {
-      const shown = yield* cli(["workflow", "show", "implement"]);
-
+      // A definition of this name is in the layer below, and a module claims the id: what
+      // a run gets is the module, so that is what `show` answers with.
+      const shown = yield* cli(["--json", "workflow", "show", "implement"]);
       expect(shown.exit).toBe(0);
-      // `target` reaches implement only through the embedded review; a run takes it,
-      // and this is the command an author checks that with.
-      expect(shown.stdout).toContain('"target":"diff-target"');
-      expect(shown.stdout).toContain("Inherited from an embedded workflow: target");
-      expect(shown.stdout).toContain("review.synthesize");
-      const steps = shown.stdout.split("Steps:")[1]!.split("Defined in:")[0]!.trim().split("\n");
-      // build, review, review.synthesize, fix, mr — the resolved shape, `use:` flattened.
-      expect(steps).toHaveLength(5);
+      const described = Schema.decodeUnknownSync(ShownModule)(shown.stdout).data.workflow;
+
+      expect(described.layer).toBe("shipped");
+      expect(described.path.endsWith("/workflows/implement.workflow.ts")).toBe(true);
+      expect(described.broken).toBeNull();
+      // Both ends, drawn from the author's own schemas rather than from a step list.
+      expect(described.inputs.map((one) => one.name)).toEqual(["plan"]);
+      expect(described.inputs[0]?.strategy).toBe("work-source");
+      expect(described.success.schema).not.toBeNull();
+      expect(described.error.schema).not.toBeNull();
+
+      // Where the id has no module, the definition is still what a run gets.
+      const definition = yield* cli(["workflow", "show", "panel"], {}, withPanel);
+      expect(definition.stdout).toContain("Steps:");
     }),
   ));
 
-test("a mutating workflow lists the branch input no workflow declares", () =>
+test("the names the host settles are published beside the ones a module declares", () =>
   runEffect(
     Effect.gen(function* () {
       // An agent driving Collie cannot pass an Input nothing names, and `branch` is
-      // the one that decides which checkout the run gets.
+      // the one that decides which checkout the run gets. A module never declares it —
+      // declaring it is refused — so it is published as the host's, with what it means.
       const implement = yield* cli(["--json", "workflow", "show", "implement"]);
-      expect(implement.stdout).toContain('"branch"');
+      const described = Schema.decodeUnknownSync(ShownModule)(implement.stdout).data.workflow;
+      expect(described.inputs.map((one) => one.name)).not.toContain("branch");
+      expect(described.options.map((one) => one.name)).toEqual([
+        "branch",
+        "task",
+        "workspace",
+        "repo",
+        "outcome",
+        "risks",
+        "previous",
+      ]);
+
+      // And for a human, the order `branch` is resolved in, which is the whole of it.
       const human = yield* cli(["workflow", "show", "implement"]);
       expect(human.stdout).toContain("branch:");
       expect(human.stdout).toContain("--input branch=");
 
-      // A declared strategy, never one invented here: an agent reading this map acts on
-      // the strategy, and `branch` is optional in exactly that sense.
-      expect(implement.stdout).toContain('"branch":"optional"');
-
-      // Wherever the inputs are listed, not only in `show`.
-      const listed = yield* cli(["--json", "workflow", "list"]);
+      // A definition's own `branch` input is still listed where a definition is what runs.
+      const listed = yield* cli(["--json", "workflow", "list"], {}, withPanel);
       const workflows = Schema.decodeUnknownSync(WorkflowRows)(listed.stdout).data.workflows;
-      const named = (name: string) => workflows.find((w) => w.name === name)!;
-      expect(Object.keys(named("implement").inputs)).toContain("branch");
-
-      // A workflow that changes nothing has no branch of its own to work on.
-      const review = yield* cli(["--json", "workflow", "show", "review"]);
-      expect(review.stdout).not.toContain('"branch"');
-      expect(Object.keys(named("review").inputs)).not.toContain("branch");
+      expect(Object.keys(workflows.find((w) => w.name === "panel")!.inputs)).not.toContain(
+        "branch",
+      );
     }),
   ));
+
+test(
+  "an agent saves a workflow, checks it and finds it, with nothing to register by hand",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        // The project layer, so nothing outside this scratch directory is written.
+        const cwd = yield* fs.makeTempDirectory({ prefix: "collie-authoring-" });
+        const scratch = { COLLIE_CWD: cwd };
+        const saved = join(cwd, ".herdr", "workflows");
+
+        const made = yield* cli(
+          ["--json", "workflow", "create", "tally", "--layer", "project"],
+          scratch,
+        );
+        expect(made.exit).toBe(0);
+        expect(yield* parseEnvelope(made.stdout)).toMatchObject({
+          ok: true,
+          data: { path: join(saved, "tally.workflow.ts"), toolchain: null },
+        });
+        // The setup to typecheck it is beside it, provisioned with the embedded Bun.
+        for (const name of ["package.json", "tsconfig.json", "collie-native.d.ts"]) {
+          expect(yield* fs.exists(join(saved, name))).toBe(true);
+        }
+
+        // Saving it is the whole of it: no registry to edit, no rebuild, no restart.
+        const listed = yield* cli(["workflow", "list"], scratch);
+        expect(listed.stdout).toContain("tally\tproject");
+
+        // And it compiles against the declarations it was written against.
+        const checked = yield* cli(["workflow", "check", "tally"], scratch);
+        expect(checked.exit).toBe(0);
+        expect(checked.stdout).toContain("tally\tproject\tok");
+        expect(checked.stdout).not.toContain("not typechecked");
+
+        // Never over a file that is already there — it is the one they already edited.
+        const before = yield* fs.readFileString(join(saved, "tally.workflow.ts"));
+        const again = yield* cli(
+          ["--json", "workflow", "create", "tally", "--layer", "project"],
+          scratch,
+        );
+        expect(again.exit).not.toBe(0);
+        expect(yield* parseEnvelope(again.stdout)).toMatchObject({
+          ok: false,
+          error: { code: "target_exists" },
+        });
+        expect(yield* fs.readFileString(join(saved, "tally.workflow.ts"))).toBe(before);
+
+        yield* fs.remove(cwd, { recursive: true, force: true });
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "forking a module writes a file that imports what it keeps, and the merge flags are a migration",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const cwd = yield* fs.makeTempDirectory({ prefix: "collie-forking-" });
+        const scratch = { COLLIE_CWD: cwd };
+
+        const forked = yield* cli(
+          ["--json", "workflow", "fork", "implement", "--layer", "project", "--name", "ours"],
+          scratch,
+        );
+        expect(forked.exit).toBe(0);
+        const path = join(cwd, ".herdr", "workflows", "ours.workflow.ts");
+        expect(yield* parseEnvelope(forked.stdout)).toMatchObject({ ok: true, data: { path } });
+        // Ordinary composition: it imports the original and hands `make` on.
+        const text = yield* fs.readFileString(path);
+        expect(text).toContain("workflows/implement.workflow.ts");
+        expect(text).toContain('export const id = "ours"');
+
+        // Both are runnable, each under its own id, and the fork takes what it inherited.
+        const shown = yield* cli(["--json", "workflow", "show", "ours"], scratch);
+        const described = Schema.decodeUnknownSync(ShownModule)(shown.stdout).data.workflow;
+        expect(described.layer).toBe("project");
+        expect(described.inputs.map((one) => one.name)).toEqual(["plan"]);
+
+        // There is nothing to merge in a module, so the flags that merged steps say so.
+        const merged = yield* cli(
+          [
+            "--json",
+            "workflow",
+            "fork",
+            "implement",
+            "--layer",
+            "project",
+            "--name",
+            "theirs",
+            "--mode",
+            "extends",
+          ],
+          scratch,
+        );
+        expect(yield* parseEnvelope(merged.stdout)).toMatchObject({
+          ok: false,
+          error: { code: "invalid_input", message: expect.stringContaining("--mode") },
+        });
+        expect(yield* fs.exists(join(cwd, ".herdr", "workflows", "theirs.workflow.ts"))).toBe(
+          false,
+        );
+
+        yield* fs.remove(cwd, { recursive: true, force: true });
+      }),
+    ),
+  120_000,
+);
 
 test("upgrade is a command of its own, and says what it would do", () =>
   runEffect(

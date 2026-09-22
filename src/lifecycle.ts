@@ -13,7 +13,7 @@ import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
-import { discover, searchPath, type Catalogued, type Fault, type Found } from "./discovery";
+import { savedModules, type Fault, type Found } from "./discovery";
 import { connect, type HostClient, type HostUnavailable, type HostVersionMismatch } from "./host";
 import {
   REFUSED_INPUT,
@@ -25,11 +25,7 @@ import {
 import { err, type Failure, type OpResult } from "./operations";
 import type { RequestConflict } from "./store";
 
-/** Where this project looks: its own workflows, then this machine's, then the shipped. */
-export const savedModules = (
-  env: PluginEnv,
-): Effect.Effect<Catalogued, never, FileSystem.FileSystem> =>
-  discover(searchPath({ pluginRoot: env.pluginRoot, project: env.cwd }));
+export { savedModules } from "./discovery";
 
 /**
  * The inputs this module needs that nobody gave it, as the refusal an agent can fill in
@@ -48,6 +44,10 @@ export const neededInputs = (entry: Found, given: Given): Failure | null => {
     "needs_input",
     `${entry.id} needs ${missing.map((field) => `"${field.name}"`).join(", ")}.`,
     {
+      workflow: entry.id,
+      // The file this is about, so a caller told to fill something in can read what it
+      // is filling in for — the same path `workflow show` and the definitions tool name.
+      path: entry.path,
       inputs: missing.map((field) => ({
         name: field.name,
         question: `${entry.title} — ${field.name}?`,

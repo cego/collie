@@ -14,6 +14,7 @@
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { loadDefaults } from "./config";
+import { savedModules } from "./discovery";
 import {
   DefinitionError,
   layers,
@@ -273,59 +274,37 @@ const count = Effect.fn("Doctor.count")(function* (
 });
 
 /**
- * The steps the bundled `implement` shed and the second reviewer `review` shed, so an
- * override that still carries them is recognisable as the old flow rather than as a
- * customisation. A user's own `architecture` step is their business; the report names
- * the edit and edits nothing.
- */
-const OLD_IMPLEMENT_STEPS = new Set(["architecture", "simplify"]);
-
-/**
- * What the effective `implement` and `review` resolve to on this machine, in this
- * project. A user or project override wins over the bundled definition, so a change to
- * the bundled flow is not in effect where one exists — and one that keeps the old flow
- * is what a Run here would actually run. Reported with the exact edit, never applied.
+ * What this machine answers a workflow id with, where that is not what Collie ships. A
+ * customisation is the operator's, so it is named and never judged: nothing here knows
+ * what any workflow is supposed to contain, and an id it recognised would be the start
+ * of a shipped workflow being privileged over one somebody wrote.
+ *
+ * A file that claims an id and will not load is the exception, because it answers for
+ * that id and cannot run — the layer below it is not consulted.
  */
 const overrides = Effect.fn("Doctor.overrides")(function* (env: PluginEnv) {
   const loaded = yield* layers(env).pipe(Effect.flatMap(loadDefinitions), Effect.result);
   if (Result.isFailure(loaded))
     return failed(`the definitions do not load: ${String(loaded.failure)}`, "");
-  const defs = loaded.success;
-  const defaults = yield* loadDefaults(env.configDir);
-  const kept: string[] = [];
-  const edits: string[] = [];
-  const own: string[] = [];
-  for (const name of ["implement", "review"] as const) {
-    let wf;
-    try {
-      wf = resolveWorkflow(name, defs, defaults);
-    } catch (cause) {
-      if (cause instanceof DefinitionError) return failed(`${name}: ${cause.message}`, "");
-      throw cause;
-    }
-    if (wf.layer === "baseline") continue;
-    own.push(`${name} (${wf.layer}, ${wf.path})`);
-    if (name === "implement") {
-      const old = wf.steps.filter((step) => OLD_IMPLEMENT_STEPS.has(step.id)).map((s) => s.id);
-      if (old.length > 0) {
-        kept.push(`${name} still runs ${old.join(" and ")}`);
-        edits.push(`remove the ${old.join(" and ")} step(s) from ${wf.path}`);
-      }
-    } else {
-      const review = wf.steps.find((step) => step.id === "review");
-      const reviewers = review ? stepVariants(review, defaults).length : 0;
-      if (reviewers > 1) {
-        kept.push(`${name} still runs ${reviewers} reviewers`);
-        edits.push(`keep one entry under \`parallel:\` of step review in ${wf.path}`);
-      }
-    }
+  const saved = yield* savedModules(env);
+  const claimed = new Set([...saved.entries, ...saved.problems].map((one) => one.id));
+  const own = [
+    ...saved.entries
+      .filter((one) => one.layer !== "shipped")
+      .map((one) => `${one.id} (${one.layer}, ${one.path})`),
+    ...[...loaded.success.workflows.values()]
+      .filter((wf) => wf.layer !== "baseline" && !claimed.has(wf.name))
+      .map((wf) => `${wf.name} (${wf.layer}, ${wf.path})`),
+  ].sort();
+  if (saved.problems.length > 0) {
+    return noted(
+      saved.problems.map((one) => `${one.id}: ${one.message}`).join("; "),
+      `fix ${saved.problems.map((one) => one.path).join(" and ")}, or delete it to take the workflow below it`,
+    );
   }
-  if (own.length === 0) return passed("implement and review are the bundled ones");
-  if (kept.length === 0) return passed(`overridden here, current flow: ${own.join("; ")}`);
-  return noted(
-    `${kept.join("; ")} — an override keeps the old flow, so the bundled change is not in effect here`,
-    `${edits.join("; ")} (or delete the override to take the bundled definition)`,
-  );
+  return own.length === 0
+    ? passed("every workflow here is the one Collie ships")
+    : passed(`overridden here: ${own.join("; ")}`);
 });
 
 /**

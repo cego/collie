@@ -59,6 +59,13 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["workflow show", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
   ["workflow check", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
   [
+    "workflow create",
+    {
+      route: "human-only",
+      why: "a new module is source code somebody then writes; chat proposes the fork of one that already exists, and an agent with an editor writes the file itself",
+    },
+  ],
+  [
     "workflow fork",
     {
       route: "propose",

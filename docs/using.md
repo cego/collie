@@ -1306,10 +1306,11 @@ finished.
 **A run says another Driver already owns it.** The ownership claim in the run directory is
 held by a live process. Stop it with `collie run stop <id>` before resuming.
 
-**A workflow fails validation before any tab opens.** That is by design — unknown models,
-missing personas and skills, malformed choices, and placeholders no declared input can
-fill are all caught up front. `collie workflow check` reports the same problems without
-starting a run, and names the file and the step.
+**A workflow fails validation before any tab opens.** That is by design — a module that
+will not load, will not construct or will not compile, and, for a Markdown definition,
+unknown models, missing personas and skills, malformed choices and placeholders no declared
+input can fill, are all caught up front. `collie workflow check` reports the same problems
+without starting a run, and names the file.
 
 **A skill is missing.** Skills are a prerequisite, like the harness binary. The error names
 the skill and the command that installs it, and `collie upgrade` reinstalls the whole set.

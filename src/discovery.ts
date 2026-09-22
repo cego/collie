@@ -39,6 +39,13 @@ export const searchPath = (where: {
   { layer: "shipped", dir: `${where.pluginRoot}/workflows` },
 ];
 
+/** Where this project looks: its own workflows, then this machine's, then the shipped. */
+export const savedModules = (where: {
+  readonly pluginRoot: string;
+  readonly cwd: string;
+}): Effect.Effect<Catalogued, never, FileSystem.FileSystem> =>
+  discover(searchPath({ pluginRoot: where.pluginRoot, project: where.cwd }));
+
 /**
  * One Input a module declares, as a front door needs it: what to call it, whether it may
  * be left out, how it is inferred, and what it will take. The drawing is what lets a
@@ -60,6 +67,7 @@ export type Declared = typeof Declared.Type;
 export const Resolved = Schema.Struct({
   id: Schema.String,
   title: Schema.String,
+  description: Schema.String,
   layer: Schema.Literals(LAYERS),
   path: Schema.String,
   /** What the module declares it takes, so a front door can ask for it. */
@@ -147,6 +155,7 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
             found: {
               id: read.success.id,
               title: read.success.title,
+              description: read.success.description,
               layer: root.layer,
               path,
               inputs: declaredBy(read.success),
@@ -159,7 +168,7 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
 });
 
 /** What one module declares it takes, in the order a front door should ask for it. */
-const declaredBy = (entry: WorkflowEntry): ReadonlyArray<Declared> =>
+export const declaredBy = (entry: WorkflowEntry): ReadonlyArray<Declared> =>
   Object.entries(entry.input).map(([name, field]) => {
     const drawn = jsonSchemaFor(field);
     return {
@@ -202,5 +211,6 @@ const entryFiles = Effect.fn("Discovery.entryFiles")(function* (dir: string) {
     .map((name) => `${dir}/${name}`);
 });
 
-const stem = (path: string) =>
+/** The id a file claims by its name, which is what an entry that will not load is known by. */
+export const stem = (path: string) =>
   path.slice(path.lastIndexOf("/") + 1, path.length - ENTRY_SUFFIX.length);

@@ -1019,3 +1019,32 @@ test("collie_hold holds a whole workspace, and refuses a time nobody can act on"
       expect(yield* call("collie_hold", {})).toContain("run");
     }),
   ));
+
+test("the definitions tool answers with the module an id runs, not the file below it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // This checkout as the installation, so the shipped modules are the ones it holds
+      // rather than whichever release the machine running the tests has installed.
+      const shipped = readEnv({
+        ...process.env,
+        HERDR_PLUGIN_ROOT: new URL("../", import.meta.url).pathname,
+        HERDR_PLUGIN_STATE_DIR: stateDir,
+        COLLIE_CWD: stateDir,
+      });
+      const ask = (input: JsonObject) =>
+        Effect.suspend(() => toolNamed("collie_definitions")!.call(shipped, input));
+
+      const listed = yield* ask({});
+      // A shipped id whose module claims it is listed once, under the layer it is in.
+      expect(listed).toContain("- implement (shipped):");
+
+      const shown = yield* ask({ workflow: "implement" });
+      expect(shown).toContain("implement (shipped)");
+      expect(shown).toContain("inputs: plan");
+      // The same names a launch settles beside the payload, and the same schemas a
+      // missing-input refusal asks by — one reading, whichever door asked.
+      expect(shown).toContain("the host also settles: branch, task");
+      expect(shown).toContain("result: ");
+      expect(shown).toContain("workflows/implement.workflow.ts");
+    }),
+  ));

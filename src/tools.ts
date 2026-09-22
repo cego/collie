@@ -81,6 +81,8 @@ import { scopeKey } from "./registry";
 import { readSelection, selectionPath } from "./selection";
 import { listTasks } from "./task";
 import { isString, type JsonObject } from "./schema";
+import { checkModule, readModule, type Checked as ModuleCheck, type Described } from "./authoring";
+import { savedModules } from "./discovery";
 
 export interface Tool {
   readonly name: string;
@@ -817,6 +819,7 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
   input: JsonObject,
 ) {
   const defs = yield* loadDefinitions(yield* layers(env));
+  const saved = yield* savedModules(env);
   const wanted = decodeDefinition(input);
   if (Result.isFailure(wanted))
     return refused(
@@ -832,6 +835,12 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
       : `${found.name} (${found.layer})\n${found.description}\n\n${found.body}`;
   }
   if (asked.workflow !== undefined) {
+    // A module is what its id runs, so it is what this answers with — the same reading
+    // `workflow show` gives, and the same schemas a refusal asks an input for.
+    const module = saved.entries.find((one) => one.id === asked.workflow);
+    if (module) return moduleFacts(yield* readModule(module), yield* checkModule(module));
+    const broken = saved.problems.find((one) => one.id === asked.workflow);
+    if (broken) return `${broken.path} will not load: ${broken.message}`;
     if (!defs.workflows.has(asked.workflow)) return `No Workflow "${asked.workflow}".`;
     const defaults = yield* loadDefaults(env.configDir);
     // Resolved, because a Run takes an embedded workflow's Inputs and runs its expanded
@@ -848,12 +857,20 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
         : `problems:\n${problems.map((p) => `- ${p}`).join("\n")}`,
     ].join("\n");
   }
+  // A definition an id's module claims is not what that id runs, so it is not offered.
+  const claimed = new Set([...saved.entries, ...saved.problems].map((one) => one.id));
   return [
     "### Workflows",
     "",
-    ...[...defs.workflows.values()]
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((wf) => `- ${wf.name} (${wf.layer}): ${wf.description}`),
+    ...[
+      ...saved.entries.map((one) => `- ${one.id} (${one.layer}): ${one.description}`),
+      ...[...defs.workflows.values()]
+        .filter((wf) => !claimed.has(wf.name))
+        .map((wf) => `- ${wf.name} (${wf.layer}): ${wf.description}`),
+    ].sort(),
+    ...(saved.problems.length > 0
+      ? ["", ...saved.problems.map((one) => `- ${one.id}: ${one.path} will not load`)]
+      : []),
     "",
     "### Personas",
     "",
@@ -865,6 +882,27 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
       : []),
   ].join("\n");
 });
+
+const asJson = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+
+/** One module as the tool says it: what it takes, what it gives back, and what is wrong. */
+const moduleFacts = (one: Described, checked: ModuleCheck): string =>
+  [
+    `${one.id} (${one.layer}): ${one.title}`,
+    one.description,
+    `inputs: ${one.inputs.map((input) => `${input.name}${input.required ? "" : "?"}`).join(", ") || "none"}`,
+    `the host also settles: ${one.options.map((option) => option.name).join(", ")}`,
+    `result: ${asJson(one.success.schema)}`,
+    `failure: ${asJson(one.error.schema)}`,
+    `metadata: ${asJson(one.metadata)}`,
+    checked.problems.length === 0
+      ? checked.toolchain === null
+        ? "checks out"
+        : `checks out, but nothing typechecked it: ${checked.toolchain}`
+      : `problems:\n${checked.problems.map((problem) => `- ${problem}`).join("\n")}`,
+    ...checked.limits.map((limit) => `drawn without: ${limit}`),
+    `defined in: ${one.path}`,
+  ].join("\n");
 
 /** What `collie_installation` answers with: everything that is not about a Run. */
 const installationFacts = Effect.fn("Tools.installation")(function* (env: PluginEnv) {

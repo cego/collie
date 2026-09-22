@@ -127,7 +127,7 @@ test("a healthy machine passes every check and says so", () =>
         "helle",
         "linear mcp",
       ]);
-      expect(check(result, "workflows").detail).toBe("implement and review are the bundled ones");
+      expect(check(result, "workflows").detail).toBe("every workflow here is the one Collie ships");
     }),
   ));
 
@@ -326,60 +326,59 @@ test("every failing check carries its fix, and the message lists them", () =>
     }),
   ));
 
-test("an override that keeps the old expensive flow is reported with the edit, and never edited", () =>
+test("what is overridden here is named, never judged and never edited", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* healthy();
       const project = `${rig.projectDir}/.herdr`;
-      const bundled = yield* fs.readFileString(`${rig.baselineDir}/workflows/implement.md`);
-      // The 0.7 shape: architecture and simplify between the build and the review.
-      const old = bundled.replace(
-        /^  - id: review$/m,
+
+      // A module of an author's own, claiming a shipped id — the customisation the whole
+      // search path exists for. It is named, with no opinion about what is in it.
+      const modules = `${project}/workflows`;
+      yield* fs.makeDirectory(modules, { recursive: true });
+      const mine = `${modules}/review.workflow.ts`;
+      yield* fs.writeFileString(
+        mine,
         [
-          "  - id: architecture",
-          "    persona: architect",
-          "    output: architecture.json",
-          "  - id: simplify",
-          "    persona: implementer",
-          "    agent: build",
-          "    output: simplify.json",
-          "  - id: review",
+          `export const id = "review";`,
+          `export const title = "Our review";`,
+          `export const description = "One reviewer, ours.";`,
+          `export const input = {};`,
+          `export const make = () => ({});`,
         ].join("\n"),
       );
-      yield* writeDef(project, "workflows", "implement", old);
-      const review = yield* fs.readFileString(`${rig.baselineDir}/workflows/review.md`);
+      // A definition of this project's own, which is an override just the same...
       yield* writeDef(
         project,
         "workflows",
-        "review",
-        review.replace(
-          /^    parallel:\n      - \{ harness: claude, model: opus, effort: medium \}$/m,
-          "    parallel:\n      - { harness: claude, model: opus, effort: medium }\n      - { harness: codex, model: gpt-5, effort: high }",
-        ),
+        "ours",
+        "---\nname: ours\nsteps:\n  - id: one\n    persona: planner\n    output: one.json\n---\nDo it.\n",
       );
-      const before = yield* fs.readFileString(`${project}/workflows/implement.md`);
+      // ...and one of an id a module claims, which is not what that id runs at all.
+      const bundled = yield* fs.readFileString(`${rig.baselineDir}/workflows/implement.md`);
+      yield* writeDef(project, "workflows", "implement", bundled);
 
-      const result = yield* report();
-
-      const found = check(result, "workflows");
+      const found = check(yield* report(), "workflows");
       // Not a failure: a customisation is the user's, and doctor still exits clean.
       expect(found.ok).toBe(true);
-      expect(found.detail).toContain("implement still runs architecture and simplify");
-      expect(found.detail).toContain("review still runs 2 reviewers");
-      expect(found.fix).toContain(
-        `remove the architecture and simplify step(s) from ${project}/workflows/implement.md`,
-      );
-      expect(found.fix).toContain("keep one entry under `parallel:` of step review");
-      expect(yield* fs.readFileString(`${project}/workflows/implement.md`)).toBe(before);
+      expect(found.detail).toContain(`review (project, ${mine})`);
+      expect(found.detail).toContain(`ours (project, ${project}/workflows/ours.md`);
+      expect(found.detail).not.toContain("implement (project");
+      expect(found.fix).toBe("");
+      // Nothing about what any of them contains: an id doctor recognised would be the
+      // start of a shipped workflow being privileged over one somebody wrote.
+      expect(found.detail).not.toContain("still runs");
 
-      // An override that already has the current flow is just named.
-      yield* writeDef(project, "workflows", "implement", bundled);
-      yield* fs.remove(`${project}/workflows/review.md`);
-      const current = check(yield* report(), "workflows");
-      expect(current.ok).toBe(true);
-      expect(current.detail).toContain("overridden here, current flow: implement (project");
-      expect(current.fix).toBe("");
+      // A module that answers for an id and will not load is the one exception: the
+      // layer below it is not consulted, so nothing would run that id at all.
+      yield* fs.writeFileString(mine, "export const id = 1;\n");
+      const broken = check(yield* report(), "workflows");
+      expect(broken.detail).toContain("review:");
+      expect(broken.fix).toContain(mine);
+      expect(yield* fs.readFileString(mine)).toBe("export const id = 1;\n");
+
+      yield* fs.remove(project, { recursive: true, force: true });
     }),
   ));
 

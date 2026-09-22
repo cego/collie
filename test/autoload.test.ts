@@ -118,6 +118,7 @@ test(
           {
             id: "proof",
             title: "A workflow that waits for a decision",
+            description: "Records one launch, then waits to be answered.",
             layer: "user",
             path: `${world.user}/proof.workflow.ts`,
             // What it takes, so a caller can ask for it without loading the module.

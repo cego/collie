@@ -1,39 +1,108 @@
 # Authoring workflows and personas
 
 Every workflow and persona Collie ships is a starting point, not a restriction. This page
-is the reference for changing them: where definitions live, how a fork follows or leaves
-its parent, and every key a definition file accepts.
+is where they live, how a fork follows its parent, and every key a persona or a Markdown
+definition accepts. For what a Workflow, Step, Persona, Layer or Override _is_, see
+[`CONTEXT.md`](../CONTEXT.md).
 
-A definition is one markdown file: YAML frontmatter, then a body of prompt sections. For
-what a Workflow, Step, Persona, Layer or Override _is_, see [`CONTEXT.md`](../CONTEXT.md).
+**A workflow is a TypeScript module.** Every workflow Collie ships is one, with its prompts
+in the Markdown beside it, and yours is the same kind of thing — [the SDK](sdk.md) is the
+reference for writing one, and the rest of this page is about personas and about the
+Markdown definitions still being read. Where an id has a module, the module is what runs.
 
-Every workflow Collie ships is now a TypeScript module with its prompts in the Markdown
-beside it — [the SDK](sdk.md) is their reference, and a module of an id is what runs where
-a definition of the same id also exists. This page is the reference for a definition you
-write yourself, and for the Markdown half of a shipped one. The personas are Markdown for
-both.
+## Writing one
+
+```sh
+collie workflow create tally           # a runnable module, in your own layer
+collie workflow check tally            # loaded, constructed and typechecked
+collie workflow list                   # it is there, with nothing registered by hand
+collie run start tally --input note=hi
+```
+
+`create` writes `~/.collie/user/workflows/tally.workflow.ts` — `--layer project` writes
+`.herdr/workflows/` instead — and provisions the setup to typecheck it beside the file:
+`package.json`, `tsconfig.json` and `collie-native.d.ts`, installed with the executable's
+own embedded Bun, so a machine with neither Bun nor Node can still compile a module. A
+`package.json` or `tsconfig.json` you already have is left exactly as it is, and nothing is
+ever written over a file that exists. With no network on a first use the answer is
+`toolchain_unavailable`: the module still runs, and nothing was typechecked.
+
+`check` is the loop's other half. It imports the module, constructs it and runs the
+compiler over it, and never starts a run, takes an agent or opens a worktree. It keeps
+three answers apart: a problem stops the module running, `drawn without:` is a place the
+JSON Schema drawn for a prompt says less than your schema does, and `ok, not typechecked`
+means no compiler is installed in that directory.
+
+Modules are ordinary executable code you chose to save. Importing one to describe it runs
+its top level, which is yours: this is trust, not a sandbox.
 
 ## Layers and lookup order
 
-Definitions come from three directories. The same name in a later layer wins:
+Three directories, nearest first. The same id in a nearer one wins:
 
-1. `workflows/`, `personas/` in the Collie repo — the team baseline.
-2. `$(herdr plugin config-dir cego.collie)/workflows`, `…/personas` — yours.
-3. `.herdr/workflows`, `.herdr/personas` in the project you're in.
+| Layer   | Workflow modules                         | Personas and Markdown definitions            |
+| ------- | ---------------------------------------- | -------------------------------------------- |
+| project | `.herdr/workflows/*.workflow.ts`         | `.herdr/workflows`, `.herdr/personas`        |
+| user    | `~/.collie/user/workflows/*.workflow.ts` | `$(herdr plugin config-dir cego.collie)/…`   |
+| shipped | `workflows/*.workflow.ts` in the install | `workflows/`, `personas/` in the Collie repo |
+
+Your own modules sit beside the installation rather than inside its shipped assets, because
+those are a git checkout an upgrade fast-forwards — a file of yours in there would be
+somebody else's to move.
+
+Only entry files take part. A helper or a Markdown prompt beside one is reached because
+your entry imports it, never because it was found. Two files in one layer claiming one id
+are both refused, each naming the other, and an override that does not compile refuses its
+own id rather than falling through to the module it was written to replace.
 
 `use:` resolves through the same lookup, so overriding a definition another one embeds
 changes that one too.
 
-`collie workflow list` prints the layer each definition came from, and
-`collie workflow check` validates every layer without starting a run.
+`collie workflow list` prints the layer each one came from, and `collie workflow check`
+validates every layer without starting a run.
+
+## Editing, and what a run in flight is on
+
+Save a file and new work uses it: nothing to register, no rebuild, no host to restart. Your
+entry, the helpers it imports and the Markdown it reads are one thing — the directory a
+generation is staged from — so editing any of them sends the next run to a new registration
+while a run already going keeps the code it started on. A run recovered in the same host
+resumes on its own registration; a host started again rebuilds registrations from the
+modules **as they are now**, so a file you fixed is the file it comes back on. Any staged
+copy is a cache, wiped on start, and never an archive a past run is recovered from.
+
+Deleting a file takes its id away, and putting it back brings it — and any run waiting on
+it — back.
+
+## Dependencies and services
+
+A module imports `collie/native` for what the host lends it, `effect` for everything else,
+and whatever else it needs through the same directory's `package.json` — the toolchain is
+Bun's, so `bun add <package>` in that directory is the whole of it. The `effect` version
+`create` pins is the one the host runs; they have to be the same Effect, or your types are
+about a different one.
+
+A service your module invents is supplied by your own Layer, explicitly provided. Merging
+siblings supplies nothing. Two projects with a module of the same id are two Layers that
+never meet, and a service is its key rather than the file that declared it — so an override
+in one project satisfies the same contract the original did, for the modules that asked for
+it and no others.
 
 ## Forking
 
 `prefix+shift+f`, the Control Plane's `f` key, and `collie workflow fork` /
-`collie persona fork` all do the same thing: copy a baseline definition into your layer
-(`--layer user`) or the project's (`--layer project`).
+`collie persona fork` all put a copy in your layer (`--layer user`) or the project's
+(`--layer project`), under the id `--name` gives it.
 
-There are two modes:
+Forking a **module** writes a file that imports the original and hands `make` on, so
+everything the fork does not name is still the original's and a baseline change reaches it.
+Where a shipped module expects to be varied it takes the varying parts as ordinary
+functions or a service, and your fork supplies its own; [the SDK](sdk.md) has a worked one.
+There is no step to merge, so `--mode` and `--step` are refused on a module with what to do
+instead.
+
+Forking a **Markdown workflow definition** has the two modes it always had; a persona is
+copied whole.
 
 - **`extends` (the default)** writes a small stub that declares `extends: <name>` and
   changes only what it names. Everything you leave out keeps following the parent, so a
@@ -45,9 +114,6 @@ There are two modes:
   baseline moves on, that hash no longer matches, and the picker marks the fork
   `(stale — the original has changed since this copy)`. A stale fork still works; the mark
   tells you a baseline change has passed it by.
-
-`--name` gives the fork a different name, which wins over the one it forked from, so you
-can keep both.
 
 ## `extends:` merge semantics
 

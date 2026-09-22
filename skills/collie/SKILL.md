@@ -1,6 +1,6 @@
 ---
 name: collie
-description: Operate Collie runs through its CLI. Use when the user wants to start a workflow (plan, implement, review, architecture), check or watch a run, answer a run's question, resume or stop a run, or fork a workflow or persona.
+description: Operate Collie runs through its CLI. Use when the user wants to start a workflow (plan, implement, review, architecture), check or watch a run, answer a run's question, resume or stop a run, or write, check or fork a workflow or persona.
 ---
 
 # Operating Collie
@@ -28,7 +28,11 @@ collie --json workflow list
 collie --json workflow show <workflow>
 ```
 
-`workflow show` prints the resolved workflow — the inputs and steps a Run actually gets.
+A workflow is a TypeScript module, and `workflow show` prints what a Run actually gets: its
+`layer` and `path`, each entry of `inputs` with its `strategy` and its JSON `schema`, the
+`options` the host settles beside your input, and the `success` and `error` schemas. A
+`limits` list is a place the drawn schema says less than the real one — not a fault. The
+same reading answers `collie_definitions` and fills a `needs_input` refusal, so ask it once.
 
 Done when you can name the workflow and every input it declares.
 
@@ -49,9 +53,10 @@ Inputs Collie can infer it will infer. What it cannot comes back as `needs_input
 `details.inputs` naming each missing input and its question — ask the user those questions,
 then retry with the same `--request-id`.
 
-`branch` is an input of every mutating workflow that no workflow declares: it names the
-branch the Run works on, is derived from the target or the plan directory when you leave it
-out, and comes back as `needs_input` when nothing names one.
+`branch` is one of the names the host settles rather than one a workflow declares —
+`workflow show` lists them under `options`, with what each means. It names the branch the
+Run works on, is derived from the target or the plan directory when you leave it out, and
+comes back as `needs_input` when nothing names one.
 
 Add `--decide <step>=<title>` for a Choice step you already know the answer to, so the Run
 does not stop there. `workflow show` lists each Choice step's titles.
@@ -132,26 +137,42 @@ you are in before you try.
 
 Done when `run show` reports the state the user asked for.
 
-## Fork a workflow or persona
+## Write, check or fork a workflow
+
+A workflow is a TypeScript module saved where a Run looks for one:
+`~/.collie/user/workflows/<id>.workflow.ts` for the user's own, `.herdr/workflows/` for a
+project's. Saving the file is the whole of it — there is no registry to edit, nothing to
+rebuild and no host to restart. Never write workflow YAML: it is not what runs.
 
 ```sh
-collie --json workflow fork <name> --layer user --mode extends --step <step-id> \
-  --request-id "$(uuidgen)"
-collie --json persona fork <name> --layer user --request-id "$(uuidgen)"
+collie --json workflow create <id> --request-id "$(uuidgen)"
+collie --json workflow fork <id> --layer user --name <yours> --request-id "$(uuidgen)"
+collie --json workflow check <id>
 ```
 
-`--layer user` is the user's own config directory; `--layer project` is this project's
-`.herdr/`. `--mode extends` keeps following the baseline and changes only what the fork
-names; `--mode copy` takes the whole definition and stops following. The result envelope
-carries the path — tell the user where the file landed, then `collie --json workflow check
-<name>` before they rely on it.
+`create` writes a runnable module and the setup to typecheck it beside it — an existing
+`package.json` or `tsconfig.json` is left alone, and nothing is written over a file that is
+already there. `fork` writes one that imports the original and hands `make` on, so
+everything it does not name is still the original's; there is no step to merge, so `--mode`
+and `--step` are refused on a module. Both return `data.path` — tell the user where the
+file landed. `data.toolchain` is not null when nothing could be installed to typecheck
+with: the module still runs, and say so rather than implying it was checked.
+
+Then edit the file with your editor and run `workflow check <id>` — it loads, constructs and
+typechecks the module without starting a Run. `problem(s)` is what stops it running,
+`drawn without:` is a projection limit and not a fault, and `ok, not typechecked` means
+nothing compiled it. Read `~/.collie/docs/sdk.md` before writing the body.
+
+`collie --json persona fork <name> --layer user --request-id "$(uuidgen)"` forks a persona,
+which is Markdown and is copied whole.
 
 Done when the file exists and `workflow check` passes.
 
 ## Retrying
 
-Every mutation — `run start`, `run answer`, `run stop`, `run resume`, both forks — takes
-`--request-id`. Generate one per intended action and reuse it for every retry of that
+Every mutation — `run start`, `run answer`, `run stop`, `run resume`, `workflow create` and
+both forks — takes `--request-id`. Generate one per intended action and reuse it for every
+retry of that
 action: Collie returns the first result instead of repeating the effect. Without one, a
 retried `run start` is a second Run. A failure carries the id back in
 `error.details.requestId`, so there is always something to retry with. Exit statuses and

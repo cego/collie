@@ -12,6 +12,11 @@ herdr actions, and the `collie` CLI.
 - **Which file owns what** → [`src/README.md`](src/README.md).
 - **Changing workflow or persona frontmatter, `extends:`/`use:` merge semantics, or layer
   lookup** → [`docs/authoring.md`](docs/authoring.md), alongside `src/definitions.ts`.
+- **Changing what an author is told a workflow is, or the commands that write and check
+  one** → [`docs/authoring.md`](docs/authoring.md) and [`docs/sdk.md`](docs/sdk.md),
+  alongside `src/authoring.ts` and `src/commands/workflow.ts`. One reading answers `list`,
+  `show`, `collie_definitions` and a `needs_input` refusal, and a check keeps a problem, a
+  projection limit and an absent toolchain apart.
 - **Changing the CLI surface, an error code, or a `--json` envelope** →
   [`docs/cli.md`](docs/cli.md), alongside `src/envelope.ts` and `src/operations.ts`.
 - **Claiming a change works, or reviewing one that claims to** →
