@@ -268,8 +268,101 @@ between attempts must not hand one item's child to another. `children.start` and
 `children.result` are the same thing in two halves, for starting several before waiting on
 any of them.
 
+`options` is the host's own — `repo`, `workspace`, `branch`, the names in
+`RESERVED_INPUTS` — and nothing else is taken: a parent cannot put a field into a child's
+payload that its author never declared. It is how a repository gets its share of a plan
+that spans several:
+
+```ts
+const plan = yield * planReposOf(asked.plan, asked.root);
+if (plan.refusal !== null) return yield * new WorkflowError({ reason: plan.refusal.message });
+for (const wave of plan.waves) {
+  yield *
+    Effect.forEach(
+      wave,
+      (repo) =>
+        child({
+          runId,
+          invocation: `repo-${repo}`,
+          workflow: "share",
+          input: { plan: asked.plan, tickets: ticketsFor(repo) },
+          options: { repo, workspace: `${asked.root}/${repo}` },
+        }),
+      { concurrency: "unbounded" },
+    );
+}
+```
+
+`readPlanRepos` (and `planReposOf`, against a directory) says which repositories a plan
+changes and in what order their Runs may start — a wave waits on the one before it — or
+refuses the whole plan: a cycle, a ticket number claimed twice, a repository with no
+checkout to work in. Refuse at the parent, where no child exists yet and there is nothing
+to clean up.
+
 [ADR-0022](adr/0022-a-workflow-is-made-of-workflows.md) is why each of those is the way it
 is, and why nothing here is a dependency resolver.
+
+## A list of work, one item at a time
+
+A list is `Effect.forEach` over whatever you enumerated; what Collie adds is the two things
+a list of _work_ needs, which are the same two a declared `each:` uses.
+
+- **An item is known by its own name.** `agentWork`'s `operation` is the identity: what it
+  launched, what it collected and what it wrote are all recorded under it, so replaying the
+  body reuses an item's result by name and never by where it sat in the list. Enumerate
+  again on every pass rather than freezing the list — a plan that gained a ticket has work
+  left, and one that was reordered has none — and let the identities decide what is done.
+  `identityProblem(keys)` refuses a list before any of it is started: an identity is a name
+  of its own, and two items nobody can tell apart would share one result.
+- **The item before it is a hand-off, not a transcript.** `renderProgress(done)` is what the
+  items already finished left behind — their work, their commits, what was verified while
+  they ran — for the next item's prompt. `agent` on `agentWork` puts several items on one
+  agent, which is what the baseline does: one implementer, each item its own prompt and its
+  own Output.
+
+```ts
+const tickets = yield * orderedTicketsOf(asked.plan);
+const problem = identityProblem(tickets.map((ticket) => ticket.file));
+if (problem !== null) return yield * new WorkflowError({ reason: problem });
+const handed: Handed[] = [];
+for (const [at, ticket] of tickets.entries()) {
+  if (ticket.checks.length === 0) {
+    yield * host.record(runId, `skipped ${ticket.file}: it names no checks`);
+    continue;
+  }
+  const built =
+    yield *
+    agentWork({
+      runId,
+      operation: ticket.file,
+      agent: "implementer",
+      cwd: asked.cwd,
+      instructions: INSTRUCTIONS,
+      inputs: {
+        ticket: ticket.file,
+        at: at + 1,
+        of: tickets.length,
+        progress: renderProgress(handed),
+      },
+      output: FixOutputSchema,
+    });
+  handed.push({
+    item: ticket.file,
+    title: ticket.title,
+    commits: built.fixed.map((one) => one.title),
+  });
+}
+```
+
+`orderedTickets` (and `orderedTicketsOf`) reads a plan directory as tickets in an order they
+can be built in — `Blocked by` before blocked, plan order among the rest — narrowed to one
+repository where you name one. Skipping is your own `continue` with a reason recorded: no
+agent, no tab and no Output written as though somebody had answered. An empty list is no
+work, and findings are yours to carry — nothing here ends a list because an item found
+something.
+
+[ADR-0024](adr/0024-a-list-of-work-is-known-by-its-names.md) is why an item is known by its
+name rather than its place.
 
 ## Reviewing and fixing, until it converges
 

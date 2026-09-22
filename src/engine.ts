@@ -218,6 +218,7 @@ import {
   runStatus,
 } from "./operations";
 import { isSingleRepo, orderedTicketsOf, planReposOf, type PlanRepos, type Slice } from "./plan";
+import { renderProgress } from "./slices";
 import { notify as notifyRun, type NotificationKind } from "./notify";
 import {
   gitlabForProject,
@@ -1542,7 +1543,7 @@ const runSlices = Effect.fn("Engine.runSlices")(function* (
     yield* run.save();
     yield* writeCheckpoint(o, slice, []);
 
-    ctx.slice = { ticket, progress: renderProgress(record.slices, ticket.file) };
+    ctx.slice = { ticket, progress: progressUpTo(record.slices, ticket.file) };
     yield* out(`  ▶ ${ticket.file} — ${ticket.title}`);
     // The slice's number keys its directory, so every slice keeps its own prompt and
     // Output under the step rather than overwriting the one before it.
@@ -1642,27 +1643,17 @@ function claimsOf(output: YamlValue | null, title: string): string[] {
   return named.length > 0 ? named : [title];
 }
 
-/** What the slices before this one left behind: their tickets, commits and evidence. */
-function renderProgress(slices: ReadonlyArray<SliceRecord>, upTo: string): string {
-  const before = slices.slice(
-    0,
-    slices.findIndex((entry) => entry.ticket === upTo),
+/** What the slices before this one left behind, in the hand-off every list uses. */
+function progressUpTo(slices: ReadonlyArray<SliceRecord>, upTo: string): string {
+  return renderProgress(
+    slices
+      .slice(
+        0,
+        slices.findIndex((entry) => entry.ticket === upTo),
+      )
+      .filter((entry) => entry.status === "done")
+      .map((entry) => ({ ...entry, item: entry.ticket })),
   );
-  const done = before.filter((entry) => entry.status === "done");
-  if (done.length === 0) return "(this is the first ticket)";
-  return done
-    .map((entry) => {
-      const commits =
-        entry.commits.length === 0
-          ? "    (no commit)"
-          : entry.commits.map((subject) => `    ${subject}`).join("\n");
-      const verified =
-        entry.verifications.length === 0
-          ? "    verified: nothing"
-          : `    verified: ${entry.verifications.join(", ")}`;
-      return `- ${entry.ticket} — ${entry.title}\n${commits}\n${verified}`;
-    })
-    .join("\n");
 }
 
 /**

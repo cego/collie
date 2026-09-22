@@ -46,6 +46,7 @@ import * as Sdk from "./sdk";
 import {
   NativeChildren,
   NativeHost,
+  RESERVED_INPUTS,
   WorkflowError,
   checkEntry,
   describeMetadata,
@@ -132,7 +133,7 @@ export const TOOLCHAIN = {
  * surface, so a declaration that has drifted fails a test rather than an author's build.
  */
 export const SDK_DECLARATIONS = `declare module "collie/native" {
-  import type { Context, Effect, Layer, Schema } from "effect";
+  import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
   import type { DurableDeferred } from "effect/unstable/workflow/DurableDeferred";
   import type { Workflow } from "effect/unstable/workflow/Workflow";
   import type {
@@ -235,6 +236,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly invocation: string;
     readonly workflow: string;
     readonly input: Readonly<Record<string, unknown>>;
+    /** The host's own options for the child; only the host's own names are taken. */
+    readonly options?: Readonly<Record<string, string>>;
   }
 
   /** A child as the host admitted it; fresh is false for one already admitted. */
@@ -260,10 +263,16 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
 
   export interface Registration {
     readonly workflow: Workflow<string, any, any, typeof WorkflowError>;
+    /** The host's own services, and the file system and paths a module reads work from. */
     readonly layer: Layer.Layer<
       never,
       never,
-      WorkflowEngine | NativeHost | NativeAgents | NativeChildren
+      | WorkflowEngine
+      | NativeHost
+      | NativeAgents
+      | NativeChildren
+      | FileSystem.FileSystem
+      | Path.Path
     >;
     readonly decisions: Readonly<Record<string, NativeDecision>>;
   }
@@ -276,6 +285,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly runId: string;
     readonly operation: string;
     readonly role: string;
+    /** The agent this work goes to; null gives this operation one of its own. */
+    readonly agent: string | null;
     readonly workflow: string;
     readonly cwd: string;
     readonly prompt: string;
@@ -345,6 +356,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly output: Output;
     readonly inputs?: Readonly<Record<string, unknown>>;
     readonly role?: string;
+    /** The agent this work goes to, where several operations are one agent's list. */
+    readonly agent?: string;
     readonly workflow?: string;
     readonly harness?: string;
     readonly model?: string;
@@ -575,6 +588,89 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     never,
     never
   >;
+
+  /** One item of work that finished, and what it left for the ones after it. */
+  export interface Handed {
+    readonly item: string;
+    readonly title: string;
+    readonly commits: ReadonlyArray<string>;
+    /** What was verified while it ran, as "name: result". */
+    readonly verifications?: ReadonlyArray<string>;
+  }
+
+  /** What the items before this one left behind: their work, commits and evidence. */
+  export function renderProgress(done: ReadonlyArray<Handed>): string;
+
+  /**
+   * Why these identities cannot key a list of work, or null where they can: an identity
+   * is a name of its own, and no two items may share one.
+   */
+  export function identityProblem(keys: ReadonlyArray<string>): string | null;
+
+  /** One ticket of a plan: where it is, what it is called, what it waits for. */
+  export interface Slice {
+    readonly file: string;
+    readonly number: string;
+    readonly title: string;
+    readonly blockedBy: ReadonlyArray<string>;
+    /** The verification names its **Checks:** line promised will prove it. */
+    readonly checks: ReadonlyArray<string>;
+  }
+
+  /** The verification names a ticket's **Checks:** line promises. */
+  export function checksIn(text: string): string[];
+
+  /** A plan's tickets in an order they can be built in, narrowed to one repository. */
+  export function orderedTickets(
+    tickets: ReadonlyArray<{ readonly file: string; readonly text: string }>,
+    repo?: string,
+  ): Slice[];
+
+  /** The same reading, against a plan directory on disk. */
+  export function orderedTicketsOf(
+    planDir: string,
+    repo?: string,
+  ): Effect.Effect<Slice[], never, FileSystem.FileSystem | Path.Path>;
+
+  /** One repository a plan changes, and the tickets that change it, in plan order. */
+  export interface PlanRepo {
+    readonly path: string;
+    readonly tickets: ReadonlyArray<string>;
+  }
+
+  /** Why this plan cannot be fanned out. The message is what the human is shown. */
+  export interface PlanRefusal {
+    readonly kind:
+      | "cycle"
+      | "missing-repo"
+      | "missing-checkout"
+      | "outside-root"
+      | "unknown-blocker"
+      | "duplicate-ticket";
+    readonly message: string;
+  }
+
+  export interface PlanRepos {
+    readonly repos: ReadonlyArray<PlanRepo>;
+    /** Repo paths in the order their runs may start; each wave waits on the one before. */
+    readonly waves: ReadonlyArray<ReadonlyArray<string>>;
+    readonly refusal: PlanRefusal | null;
+  }
+
+  /** What a fan-out would do with a plan: its repositories, its waves, or its refusal. */
+  export function readPlanRepos(
+    tickets: ReadonlyArray<{ readonly file: string; readonly text: string }>,
+    checkouts: ReadonlySet<string>,
+  ): PlanRepos;
+
+  /** The same reading, against a plan directory and the checkouts under a root. */
+  export function planReposOf(
+    planDir: string,
+    root: string,
+  ): Effect.Effect<PlanRepos, never, FileSystem.FileSystem | Path.Path>;
+
+  /** Whether this plan is one repository and that repository is the run's own root. */
+  export function isSingleRepo(plan: PlanRepos): boolean;
 
   /** The JSON Schema for a prompt, and what the drawing does not say. */
   export interface Projection {
@@ -1145,7 +1241,17 @@ const refusedInput = (reason: string) =>
  * outcome a workflow fixes is not one a caller may ask to be something else: a Run that
  * promised evidence it cannot produce finds out at the gate before its merge request.
  */
-const refuseOptions = (generation: Generation, options: Readonly<Record<string, string>>) => {
+const refuseOptions = (
+  generation: Generation,
+  options: Readonly<Record<string, string>>,
+): Effect.Effect<void, HostRefused> => {
+  const strange = Object.keys(options).filter((name) => !(name in RESERVED_INPUTS));
+  if (strange.length > 0) {
+    return refusedInput(
+      `no host option is called ${strange.map((name) => `"${name}"`).join(", ")}: ` +
+        `the host's own are ${Object.keys(RESERVED_INPUTS).join(", ")}`,
+    );
+  }
   const asked = options.outcome?.trim();
   if (asked === undefined || asked === "") return Effect.void;
   const fixed = generation.fixedOutcome;
@@ -1156,6 +1262,14 @@ const refuseOptions = (generation: Generation, options: Readonly<Record<string, 
   }
   return Effect.void;
 };
+
+/**
+ * What a launch records beside the author's own input: the caller's host options, and the
+ * outcome this Run has to prove — the module's own fixed kind, or the one the caller
+ * selected. A card reads this and never the workflow's id.
+ */
+const launchOptions = (generation: Generation, asked: Readonly<Record<string, string>>) =>
+  generation.fixedOutcome === null ? asked : { ...asked, outcome: generation.fixedOutcome };
 
 /**
  * A run as a front door shows it: the identities it was admitted under, what it was
@@ -1537,6 +1651,12 @@ const makeRegistry: (
         Effect.mapError((failure) => refused(failure.reason)),
       );
       const runId = childRunId(ask);
+      // The host's own options, held to the same rule a front door's are: a name that is
+      // not the host's would be a field the child's author never declared.
+      const asked = ask.options ?? {};
+      yield* refuseOptions(generation, asked).pipe(
+        Effect.mapError((failure) => refused(failure.reason)),
+      );
       const settled = yield* settleInput(generation.fields, { json: ask.input, text: {} }).pipe(
         Effect.mapError((failure) => refused(failure.reason)),
       );
@@ -1555,7 +1675,7 @@ const makeRegistry: (
           project: parent.project,
           input: settled.input,
           provenance: settled.provenance,
-          options: {},
+          options: launchOptions(generation, asked),
           generation: generation.name,
           execution: yield* generation.registration.workflow.executionId(payload),
           task: parent.task,
@@ -1563,6 +1683,14 @@ const makeRegistry: (
         })
         .pipe(Effect.mapError((conflict) => refused(conflict.reason)));
       remember(claimed.row);
+      // A child is a Run, so what it may verify is frozen with it rather than read when
+      // it asks: the same list, and the same moment, as the start of any other.
+      yield* freezeApproved({
+        dir,
+        runId: claimed.row.run,
+        project: parent.project,
+        configDir,
+      }).pipe(Effect.ignore);
       // The parent hands its own children over, so the receipt is written here: a host
       // sweep dispatching one would give the engine a child with no parent to wake.
       yield* store.accepted(claimed.row.run);
@@ -1921,10 +2049,7 @@ const makeRegistry: (
           options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
         const asked = options.options ?? {};
         yield* refuseOptions(generation, asked);
-        // What this Run has to prove, recorded as a fact on it: the module's own fixed
-        // kind, or the one the caller selected. A card reads this and never the id.
-        const launch =
-          generation.fixedOutcome === null ? asked : { ...asked, outcome: generation.fixedOutcome };
+        const launch = launchOptions(generation, asked);
         // Settled before anything exists to clean up: an input the workflow's own schema
         // rejects names its field here, and no row, claim or execution is created.
         const settled = yield* settleInput(generation.fields, {

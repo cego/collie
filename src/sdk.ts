@@ -15,7 +15,7 @@
 // `docs/sdk.md` is the guidance; `docs/adr/0014-native-workflows-run-on-effects-own-engine.md`
 // is why the engine underneath is Effect's.
 
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import type { CheckEvidence } from "./output";
 import type { Verification } from "./verify";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
@@ -70,6 +70,32 @@ export {
 } from "./output";
 
 export type { Snapshot, Verification } from "./verify";
+
+/**
+ * A list of work, and the hand-off between its items. The identities are the engine's own
+ * rule — an item is known by its name and never by where it sits — so a module that
+ * writes its own loop reuses what it has done after a reordering exactly as a declared
+ * list does.
+ */
+export { identityProblem, renderProgress, type Handed } from "./slices";
+
+/**
+ * A plan directory as the work it is: its tickets in an order they can be built in, and
+ * the repositories they change. Ordinary functions over text and a directory, so a module
+ * reads the plan it was given rather than being handed a reading of it.
+ */
+export {
+  checksIn,
+  isSingleRepo,
+  orderedTickets,
+  orderedTicketsOf,
+  planReposOf,
+  readPlanRepos,
+  type PlanRefusal,
+  type PlanRepo,
+  type PlanRepos,
+  type Slice,
+} from "./plan";
 
 /**
  * A workflow's failure, as every native workflow reports one. One shape rather than an
@@ -206,6 +232,12 @@ export interface ChildAsk {
   readonly invocation: string;
   readonly workflow: string;
   readonly input: Readonly<Record<string, Schema.Json>>;
+  /**
+   * The host's own launch options for the child — the repository it is for, the checkout
+   * it works in — as a front door supplies them. Only the host's own names are taken, so
+   * a parent cannot put a field into a child's payload that its author never declared.
+   */
+  readonly options?: Readonly<Record<string, string>>;
 }
 
 /** A child as the host admitted it. `fresh` is false for an invocation already admitted. */
@@ -251,10 +283,14 @@ export type HostWorkflow = Workflow.Workflow<string, HostPayload, HostCodec, typ
 /** What `make(registrationName)` hands back: the workflow, how to register it, its decisions. */
 export interface Registration {
   readonly workflow: HostWorkflow;
+  /**
+   * What the host builds this generation from. The services in it are the ones a host
+   * holds already: its own, and the file system and paths a module reads its work from.
+   */
   readonly layer: Layer.Layer<
     never,
     never,
-    WorkflowEngine | NativeHost | NativeAgents | NativeChildren
+    WorkflowEngine | NativeHost | NativeAgents | NativeChildren | FileSystem.FileSystem | Path.Path
   >;
   readonly decisions: Readonly<Record<string, NativeDecision>>;
 }

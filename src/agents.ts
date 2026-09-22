@@ -36,7 +36,7 @@ import {
   type PermissionMode,
 } from "./harness";
 import { Herdr } from "./herdr";
-import { agentName, reason, shellQuote } from "./naming";
+import { agentName, reason, shellQuote, unsafePathComponent } from "./naming";
 import { registerAgent, registryPath, scopeFor } from "./registry";
 import {
   jsonSchemaFor,
@@ -56,6 +56,8 @@ export interface AgentAsk {
   readonly operation: string;
   /** What this agent is being asked to be, stated rather than inferred from a name. */
   readonly role: string;
+  /** The agent this work goes to, where several pieces share one. Null gives it its own. */
+  readonly agent: string | null;
   readonly workflow: string;
   readonly cwd: string;
   readonly prompt: string;
@@ -159,6 +161,12 @@ export interface AgentWork<Output extends OutputContract> {
   readonly output: Output;
   readonly inputs?: Readonly<Record<string, Schema.Json>>;
   readonly role?: string;
+  /**
+   * The agent this work goes to. Several operations naming one agent are one agent's
+   * work in order — a list handed to one implementer, each item its own prompt — and
+   * leaving it out gives this operation an agent of its own.
+   */
+  readonly agent?: string;
   readonly workflow?: string;
   readonly harness?: string;
   readonly model?: string;
@@ -190,12 +198,21 @@ export const agentWork = <Output extends OutputContract>(
     if (yield* host.held(work.runId)) {
       return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
     }
+    // The operation is a name of its own before it is anything else: the Output, the
+    // prompt and the recorded launch are all kept under it.
+    const unsafe = unsafePathComponent(work.operation);
+    if (unsafe !== null) {
+      return yield* Effect.fail(
+        new WorkflowError({ reason: `operation "${work.operation}" ${unsafe}` }),
+      );
+    }
     const output = agents.outputFor(work.runId, work.operation);
     const role = work.role ?? work.operation;
     const ask: AgentAsk = {
       runId: work.runId,
       operation: work.operation,
       role,
+      agent: work.agent ?? null,
       workflow: work.workflow ?? work.operation,
       cwd: work.cwd,
       output,
@@ -520,7 +537,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       Effect.gen(function* () {
         // Derived, not minted: this is the name a replay looks for rather than starting
         // a second agent, and a run id is already unique.
-        const agent = agentName(ask.runId, ask.operation, null, 1);
+        const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, 1);
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
           // Nothing is started on a question nobody answered: a second agent on the same

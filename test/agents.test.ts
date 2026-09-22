@@ -491,3 +491,74 @@ test(
     ),
   120_000,
 );
+
+/** Two pieces of work on one agent: a list handed to one implementer, item by item. */
+const listing = defineWorkflow({
+  name: "agent-listing",
+  input: { items: Schema.String, agent: Schema.String },
+  success: Schema.String,
+});
+
+const listingBody = listing.toLayer(
+  Effect.fnUntraced(function* (payload) {
+    const notes: string[] = [];
+    for (const item of payload.input.items.split(",")) {
+      const done = yield* agentWork({
+        runId: payload.runId,
+        operation: item,
+        agent: payload.input.agent,
+        role: "implementer",
+        workflow: "agent-listing",
+        cwd: rig.projectDir,
+        instructions: "Do {{inputs.item}}.",
+        inputs: { item },
+        output: Verdict,
+      });
+      notes.push(`${item}:${done.note}`);
+    }
+    return notes.join("+");
+  }),
+);
+
+const listed = (runId: string, items: string, agent = "sweep") =>
+  listing
+    .execute({ runId, input: { items, agent } })
+    .pipe(
+      Effect.result,
+      Effect.provide(listingBody),
+      Effect.provide(agentsLayer(hostOf())),
+      Effect.provide(foundationLayer({ dir })),
+      Effect.scoped,
+      Effect.orDie,
+    );
+
+test("a list of work is one agent's, each item its own prompt and its own Output", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "clean", note: "first" },
+        { verdict: "clean", note: "second" },
+      ]);
+      const result = yield* listed("r1", "01-api,02-ui");
+      expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
+      // One agent for the whole list, which is what makes the second item a hand-off
+      // rather than an agent reading its way back in.
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      const start = (yield* rig.calls()).find((call) => call.cmd === "agent start")?.argv ?? [];
+      expect(start).toContain(agentName("r1", "sweep", null, 1));
+      // Kept apart all the same: an item's prompt and its Output are its own.
+      expect(yield* read(`${dir}/agents/r1/01-api.prompt.md`)).toContain("Do 01-api.");
+      expect(yield* read(`${dir}/agents/r1/02-ui.prompt.md`)).toContain("Do 02-ui.");
+    }),
+  ));
+
+test("an item whose identity is not a name of its own starts no agent at all", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const result = yield* listed("r1", "../escape");
+      expect(result._tag === "Failure" && result.failure.reason).toBe(
+        'operation "../escape" contains a path separator',
+      );
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toEqual([]);
+    }),
+  ));

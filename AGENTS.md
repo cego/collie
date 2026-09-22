@@ -124,6 +124,12 @@ doors: herdr actions, and the `collie` CLI.
   `src/output.ts`, `src/outcome.ts`, `src/verify.ts` and `test/rally.test.ts`. The engine
   and a module make the same decision through `settleRound`; a check is a claim until the
   verification journal has it on this revision, and the approved set is the human's.
+- **Changing how a list of work, a ticket slice or a repository fan-out recovers** →
+  [ADR-0024](docs/adr/0024-a-list-of-work-is-known-by-its-names.md) and
+  [`docs/sdk.md`](docs/sdk.md#a-list-of-work-one-item-at-a-time), alongside `src/slices.ts`,
+  `src/plan.ts`, `src/agents.ts` and `test/listing.test.ts`. An item is known by its own
+  name and the list is enumerated again on every pass, so a reordered or edited plan has
+  work left rather than work reassigned; a skip records a reason and opens no tab.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

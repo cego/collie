@@ -591,6 +591,10 @@ test(
           "rally.workflow.ts",
           "reviewed.workflow.ts",
           "graded.workflow.ts",
+          "roster.workflow.ts",
+          "sweep.workflow.ts",
+          "spread.workflow.ts",
+          "share.workflow.ts",
         ]) {
           const checked = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/${entry}` });
           expect([entry, checked.diagnostics]).toEqual([entry, []]);
