@@ -116,8 +116,8 @@ const WorkflowRows = Schema.fromJsonString(
     data: Schema.Struct({
       workflows: Schema.Array(
         Schema.Struct({
-          name: Schema.String,
-          inputs: Schema.Record(Schema.String, Schema.String),
+          id: Schema.String,
+          inputs: Schema.Array(Schema.Struct({ name: Schema.String })),
         }),
       ),
     }),
@@ -154,16 +154,6 @@ test("persona discovery uses the same command boundary", () =>
         ok: true,
         data: { personas: expect.any(Array) },
       });
-    }),
-  ));
-
-test("human workflow show includes its steps and source", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const shown = yield* cli(["workflow", "show", "panel"], {}, withPanel);
-      expect(shown.exit).toBe(0);
-      expect(shown.stdout).toContain("Steps:");
-      expect(shown.stdout).toContain("Defined in:");
     }),
   ));
 
@@ -220,22 +210,6 @@ test("a command group named with no subcommand is invalid input, not success", (
     }),
   ));
 
-test("a Driver that cannot be started fails the Run rather than orphaning it", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const started = yield* cli(
-        ["--json", "run", "start", "panel", "--input", "target=worktree", "--request-id", "r1"],
-        { COLLIE_DRIVER: "/nonexistent/collie-bin" },
-        withPanel,
-      );
-      expect(yield* parseEnvelope(started.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "operation_failed" },
-      });
-      expect(started.exit).toBe(1);
-    }),
-  ));
-
 test("discovery is global when an inherited workspace id no longer resolves", () =>
   runEffect(
     Effect.gen(function* () {
@@ -257,229 +231,6 @@ test("discovery is global when an inherited workspace id no longer resolves", ()
         error: { code: "workspace_not_found" },
       });
       expect(named.exit).toBe(1);
-    }),
-  ));
-
-test("--decide is validated against the workflow before any run exists", () =>
-  runEffect(
-    Effect.gen(function* () {
-      // A typo that degraded to "ask me then" would hang the unattended run this
-      // flag exists to make possible, so both halves are checked up front.
-      const step = yield* cli(
-        [
-          "--json",
-          "run",
-          "start",
-          "panel",
-          "--input",
-          "target=worktree",
-          "--decide",
-          "nope=Don't post",
-        ],
-        {},
-        withPanel,
-      );
-      expect(yield* parseEnvelope(step.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "invalid_input", message: expect.stringContaining("post") },
-      });
-
-      const title = yield* cli(
-        [
-          "--json",
-          "run",
-          "start",
-          "panel",
-          "--input",
-          "target=worktree",
-          "--decide",
-          "post=Ship it",
-        ],
-        {},
-        withPanel,
-      );
-      expect(yield* parseEnvelope(title.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "invalid_input", message: expect.stringContaining("Don't post") },
-      });
-
-      // And the titles are discoverable without reading the markdown.
-      const shown = yield* cli(["workflow", "show", "panel"], {}, withPanel);
-      expect(shown.stdout).toContain("post — decide one of: Fix findings");
-    }),
-  ));
-
-test("a previous review named by hand has to exist", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const unknown = yield* cli(
-        [
-          "--json",
-          "run",
-          "start",
-          "panel",
-          "--input",
-          "target=worktree",
-          "--input",
-          "previous=review-nope-20260101-000000",
-        ],
-        {},
-        withPanel,
-      );
-      expect(yield* parseEnvelope(unknown.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "invalid_input", message: expect.stringContaining("review-nope") },
-      });
-    }),
-  ));
-
-test(
-  "workflow check validates every layer without starting a run",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        // The project layer is `<cwd>/.herdr`, and a checkout's own is a human's forked
-        // workflows — never test data. This one is a scratch directory the run is
-        // rooted at with COLLIE_CWD, so nothing outside it is written or removed.
-        const cwd = yield* fs.makeTempDirectory({ prefix: "collie-project-" });
-        const scratch = { COLLIE_CWD: cwd };
-
-        // The baseline is the acceptance test for the rule set: it must come out clean.
-        const clean = yield* cli(["workflow", "check"], scratch);
-        expect(clean.exit).toBe(0);
-        expect(clean.stdout).toContain("implement\tshipped\tok");
-        expect(clean.stdout).toContain("review\tshipped\tok");
-        // Nothing here was compiled, and that is said rather than left to read as a
-        // compiler that was happy — once for the directory, not once per module.
-        expect(clean.stdout).toContain("ok, not typechecked");
-        expect(clean.stdout.match(/^not typechecked: /gm)).toHaveLength(1);
-
-        const project = join(cwd, ".herdr", "workflows");
-        yield* fs.makeDirectory(project, { recursive: true });
-        yield* fs.writeFileString(
-          join(project, "broken.md"),
-          `---
-name: broken
-inputs:
-  goal: goal
-steps:
-  - id: one
-    persona: planner
-    model: opus-9
-    output: one.json
----
-{{inputs.goal}} and {{inputs.nope}} and {{inputs.goal_kind}} and {{findings}} and {{skill:tdd}}
-`,
-        );
-        yield* fs.writeFileString(join(project, "unparseable.md"), "no frontmatter here\n");
-        // A Choice round drives a skill the same way a step does, and what a Choice
-        // forwards to the workflow it chains is rendered from the same variables.
-        yield* fs.writeFileString(
-          join(project, "chains.md"),
-          `---
-name: chains
-inputs:
-  goal: goal
-steps:
-  - id: next
-    choices:
-      - title: Grill it
-        prompt: grill
-        persona: planner
-        skill: not-a-real-skill
-        output: grill.json
-      - title: Build it
-        run: implement
-        inputs:
-          plan: "{{inputs.plna}}"
-          target: "{{target_repo}}"
-          task: "{{outputs.gril.slug}}"
----
-Goal: {{inputs.goal}}
-
-## grill
-Grill me.
-`,
-        );
-
-        const bad = yield* cli(["--json", "workflow", "check"], scratch);
-        const envelope = yield* parseEnvelope(bad.stdout);
-
-        expect(bad.exit).not.toBe(0);
-        const problems = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
-          envelope.error?.details ?? {},
-        );
-        expect(problems).toContain("opus-9");
-        // A placeholder no input can fill is reported; the ones the engine supplies at
-        // step time are not.
-        expect(problems).toContain("inputs.nope");
-        // A `goal` never carries a kind, so `goal_kind` is a placeholder the Run cannot
-        // fill either — only a work-source and a diff-target render one.
-        expect(problems).toContain("inputs.goal_kind");
-        // A round's `skill:` is a prerequisite like a step's...
-        expect(problems).toContain("not-a-real-skill");
-        // ...and a typo in what a Choice forwards would otherwise render empty, be
-        // treated as settled, and start the child without the Input it needed.
-        expect(problems).toContain("inputs.plna");
-        // A forwarded input is rendered with `run`, `inputs`, `cwd` and `outputs` and
-        // nothing else, so a family a step's prompt may name is still unresolvable here.
-        expect(problems).toContain("target_repo");
-        // An Output is named by the step that writes it, so a mistyped step id is caught
-        // too — it would otherwise render empty and chain the child without its task.
-        expect(problems).toContain("outputs.gril.slug");
-        expect(problems).not.toContain("findings");
-        expect(problems).not.toContain("skill:tdd");
-        // A file with nothing in it is reported rather than silently skipped by the
-        // loader, the way the picker's banner used to be the only place it showed.
-        expect(problems).toContain('"name":"unparseable"');
-        expect(problems).toContain("has no steps");
-        // And the workflows that are fine are still listed.
-        expect(problems).toContain('"id":"plan","layer":"shipped"');
-
-        // Asked about one workflow, a broken file elsewhere is not its problem — the
-        // targeted check has to stay usable while another definition is being edited.
-        const named = yield* cli(["workflow", "check", "review"], scratch);
-        expect(named.exit).toBe(0);
-        expect(named.stdout).toContain("review\tshipped\tok");
-        expect(named.stdout).not.toContain("broken");
-
-        // Its own broken file is its problem, though: a project-layer `review.md` that
-        // will not parse leaves the baseline answering for `review`, and an author who
-        // just broke it must not be told their workflow is fine.
-        yield* fs.writeFileString(join(project, "review.md"), "---\nname: [unclosed\n---\nbody\n");
-        const shadowed = yield* cli(["workflow", "check", "review"], scratch);
-        expect(shadowed.exit).not.toBe(0);
-        expect(shadowed.stdout).toContain("review.md");
-
-        yield* fs.remove(cwd, { recursive: true, force: true });
-      }),
-    ),
-  // Four real CLI startups: this checks validation, not a five-second startup SLO.
-  20_000,
-);
-
-test("workflow show prints what a run actually gets, not what was authored", () =>
-  runEffect(
-    Effect.gen(function* () {
-      // A definition of this name is in the layer below, and a module claims the id: what
-      // a run gets is the module, so that is what `show` answers with.
-      const shown = yield* cli(["--json", "workflow", "show", "implement"]);
-      expect(shown.exit).toBe(0);
-      const described = Schema.decodeUnknownSync(ShownModule)(shown.stdout).data.workflow;
-
-      expect(described.layer).toBe("shipped");
-      expect(described.path.endsWith("/workflows/implement.workflow.ts")).toBe(true);
-      expect(described.broken).toBeNull();
-      // Both ends, drawn from the author's own schemas rather than from a step list.
-      expect(described.inputs.map((one) => one.name)).toEqual(["plan"]);
-      expect(described.inputs[0]?.strategy).toBe("work-source");
-      expect(described.success.schema).not.toBeNull();
-      expect(described.error.schema).not.toBeNull();
-
-      // Where the id has no module, the definition is still what a run gets.
-      const definition = yield* cli(["workflow", "show", "panel"], {}, withPanel);
-      expect(definition.stdout).toContain("Steps:");
     }),
   ));
 
@@ -507,12 +258,11 @@ test("the names the host settles are published beside the ones a module declares
       expect(human.stdout).toContain("branch:");
       expect(human.stdout).toContain("--input branch=");
 
-      // A definition's own `branch` input is still listed where a definition is what runs.
-      const listed = yield* cli(["--json", "workflow", "list"], {}, withPanel);
+      // `branch` is the host's, not a module's: it is never among what a module declares.
+      const listed = yield* cli(["--json", "workflow", "list"]);
       const workflows = Schema.decodeUnknownSync(WorkflowRows)(listed.stdout).data.workflows;
-      expect(Object.keys(workflows.find((w) => w.name === "panel")!.inputs)).not.toContain(
-        "branch",
-      );
+      const row = workflows.find((w) => w.id === "implement")!;
+      expect(row.inputs.map((input) => input.name)).not.toContain("branch");
     }),
   ));
 
@@ -696,7 +446,12 @@ test("intent defaults round trip, and a Run's Intent is amended through the enve
         namedAfter: "steering",
       });
       yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
+      // What an older Collie recorded is read into a row before it can be amended: the
+      // command asks the host which Runs there are, and nothing else does.
+      expect((yield* cli(["--json", "history", "import"], shared)).exit).toBe(0);
 
+      // Work an older Collie recorded is history: its Intent is what it was held to,
+      // and there is nothing left to hold to an amended one.
       const amended = yield* cli(
         [
           "--json",
@@ -711,14 +466,13 @@ test("intent defaults round trip, and a Run's Intent is amended through the enve
         shared,
       );
       expect(yield* parseEnvelope(amended.stdout)).toMatchObject({
-        ok: true,
-        data: { version: 2 },
+        ok: false,
+        error: { code: "operation_failed", details: { history: true } },
       });
 
       const intent = yield* readIntent(run.dir);
-      expect(intent?.version).toBe(2);
-      expect(intent?.history).toHaveLength(1);
-      expect(intent?.constraints[0]?.severity).toBe("block");
+      expect(intent?.version).toBe(1);
+      expect(intent?.constraints).toEqual([]);
 
       yield* fs.remove(home, { recursive: true, force: true });
     }),
@@ -743,6 +497,8 @@ test("run metrics reports what a Run produced, and says so when it has produced 
         maxIterations: 1,
         namedAfter: "add a picker",
       });
+
+      expect((yield* cli(["--json", "history", "import"], env)).exit).toBe(0);
 
       const empty = yield* cli(["--json", "run", "metrics", run.id], env);
       expect(empty.exit).toBe(0);

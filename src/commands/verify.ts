@@ -5,10 +5,9 @@ import { err } from "../operations";
 import { nativeRun, treeOf } from "../lifecycle";
 import { noteVerification } from "../metrics";
 import { evidenceDir } from "../native";
-import { taskOfWorkspace } from "../task";
 import { collect, insideRun } from "../verify";
 import { printResult } from "../envelope";
-import { answering, readRun } from "./shared";
+import { answering } from "./shared";
 
 /** A Run to verify against: where its journal goes, and the tree it is about. */
 interface Target {
@@ -20,10 +19,7 @@ interface Target {
   readonly note: boolean;
 }
 
-/**
- * The same Run id, looked for among the ones the host owns. Null where it is neither, so
- * the caller reports what the Markdown store already said rather than a second sentence.
- */
+/** The Run this verification is about, as the host has it. Null where it has no such Run. */
 const nativeTarget = Effect.fn("collie.verify.native")(function* (env: PluginEnv, runId: string) {
   const view = yield* nativeRun(env, runId);
   if (view === null || !("runId" in view)) return null;
@@ -114,22 +110,10 @@ export const verify = Command.make(
     });
     return answering((env) =>
       Effect.gen(function* () {
-        const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
-        const found = yield* readRun(env, runId, here?.id ?? null);
-        // A Run the host owns is verified the same way, into a journal of its own: the
-        // collector is what makes a result evidence, and it is one collector.
-        if (found._tag === "RunFailure") {
-          const native = yield* nativeTarget(env, runId);
-          return native === null ? found.result : yield* verified(native);
-        }
-        const run = found.run;
-        return yield* verified({
-          id: run.id,
-          dir: run.dir,
-          cwd: run.record.cwd,
-          worktree: run.record.worktree?.path ?? null,
-          note: false,
-        });
+        const target = yield* nativeTarget(env, runId);
+        if (target === null)
+          return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
+        return yield* verified(target);
       }),
     );
   },

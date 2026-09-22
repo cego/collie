@@ -15,16 +15,7 @@ import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { loadDefaults } from "./config";
 import { savedModules } from "./discovery";
-import {
-  DefinitionError,
-  layers,
-  loadDefinitions,
-  requiredSkills,
-  resolveWorkflow,
-  skillDirs,
-  skillInstalled,
-  stepVariants,
-} from "./definitions";
+import { DefinitionError, layers, loadDefinitions, skillDirs, skillInstalled } from "./definitions";
 import type { PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
@@ -122,33 +113,37 @@ const minHerdrVersion = Effect.fn("Doctor.minHerdrVersion")(function* (root: str
 });
 
 /**
- * What the loaded Workflows need of this machine: the skills they name and the
- * harnesses they route steps to. Read from the definitions rather than hard-coded,
- * so a forked Workflow naming a new skill or harness is checked against that one.
+ * What this machine needs to run work: the skills the operator's own guidance names, and
+ * every harness the defaults may route an agent to. A workflow is a module now, so what
+ * it asks for is TypeScript rather than a list to read — what is checked here is what an
+ * installation needs whatever its workflows turn out to want.
  */
 const asked = Effect.fn("Doctor.asked")(function* (env: PluginEnv) {
-  const defs = yield* loadDefinitions(yield* layers(env));
   const defaults = yield* loadDefaults(env.configDir);
-  const skills = new Set<string>();
-  const harnesses = new Set<string>();
-  const waits = new Set<string>();
-  for (const name of defs.workflows.keys()) {
-    let workflow;
-    try {
-      workflow = resolveWorkflow(name, defs, defaults);
-    } catch (cause) {
-      // A Workflow that will not resolve is a definition error, which validation
-      // reports on its own terms; it is not a missing prerequisite.
-      if (cause instanceof DefinitionError) continue;
-      throw cause;
-    }
-    for (const skill of requiredSkills(workflow, defs).keys()) skills.add(skill);
-    for (const step of workflow.steps) {
-      for (const variant of stepVariants(step, defaults)) harnesses.add(variant.harness);
-      for (const wait of step.waits ?? []) waits.add(wait);
-    }
-  }
-  return { skills: [...skills].sort(), harnesses: [...harnesses].sort(), waits };
+  // Every harness a Run could be routed to: the default, and anything a variant may
+  // name. A module decides its own at runtime, so what is checked is what the machine
+  // would need whichever it picks.
+  return { harnesses: [defaults.harness] };
+});
+
+/**
+ * The Markdown workflows an older Collie left in the operator's own layer. Listed and
+ * never read: nothing interprets one any more, and an installation that still has them
+ * should be told what they are rather than have them silently ignored. Its `config.json`
+ * is the operator's and stays exactly where it is.
+ */
+const oldWorkflowFiles = Effect.fn("Doctor.oldWorkflowFiles")(function* (env: PluginEnv) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = path.join(env.configDir, "workflows");
+  const none: ReadonlyArray<string> = [];
+  const files = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed(none)));
+  const markdown = files.filter((name) => name.endsWith(".md")).sort();
+  if (markdown.length === 0) return passed("nothing an older Collie left behind");
+  return noted(
+    `${dir} still holds ${markdown.join(", ")}`,
+    "Collie runs TypeScript modules now and reads none of these. `collie workflow create <id>` writes one to start from, `collie workflow check` tells you whether it runs, and the Markdown is yours to keep or delete.",
+  );
 });
 
 /**
@@ -283,19 +278,11 @@ const count = Effect.fn("Doctor.count")(function* (
  * that id and cannot run — the layer below it is not consulted.
  */
 const overrides = Effect.fn("Doctor.overrides")(function* (env: PluginEnv) {
-  const loaded = yield* layers(env).pipe(Effect.flatMap(loadDefinitions), Effect.result);
-  if (Result.isFailure(loaded))
-    return failed(`the definitions do not load: ${String(loaded.failure)}`, "");
   const saved = yield* savedModules(env);
-  const claimed = new Set([...saved.entries, ...saved.problems].map((one) => one.id));
-  const own = [
-    ...saved.entries
-      .filter((one) => one.layer !== "shipped")
-      .map((one) => `${one.id} (${one.layer}, ${one.path})`),
-    ...[...loaded.success.workflows.values()]
-      .filter((wf) => wf.layer !== "baseline" && !claimed.has(wf.name))
-      .map((wf) => `${wf.name} (${wf.layer}, ${wf.path})`),
-  ].sort();
+  const own = saved.entries
+    .filter((one) => one.layer !== "shipped")
+    .map((one) => `${one.id} (${one.layer}, ${one.path})`)
+    .sort();
   if (saved.problems.length > 0) {
     return noted(
       saved.problems.map((one) => `${one.id}: ${one.message}`).join("; "),
@@ -400,17 +387,15 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
 
   const needs = yield* asked(env);
   const dirs = yield* skillDirs(env);
-  const missing: string[] = [];
-  for (const skill of needs.skills) {
-    if (!(yield* skillInstalled(dirs, skill))) missing.push(skill);
-  }
+  // What a module asks an agent for is decided while it runs, so there is no list to
+  // check against: what this says is whether the store is there at all, and the routine
+  // that fills it. The sources, the global store and the Claude Code target are
+  // `prepare.sh`'s to know.
   checks.push({
     name: "skills",
-    ...(missing.length === 0
-      ? passed(`${needs.skills.length} installed`)
-      : // The routine, not a bare `npx skills add`: the sources, the global store and
-        // the Claude Code target are its to know, and it puts back what is missing.
-        failed(`missing: ${missing.join(", ")}`, `sh ${root}/prepare.sh`)),
+    ...((yield* skillInstalled(dirs, "collie"))
+      ? passed(`the skill store is in place (${dirs.join(", ")})`)
+      : failed("the operator skill is not installed", `sh ${root}/prepare.sh`)),
   });
 
   const absent: string[] = [];
@@ -464,6 +449,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const glabDir = yield* onPath(search, "glab");
   const auth = glabDir ? yield* answered(run("glab", ["auth", "status"], root)) : null;
   checks.push({ name: "workflows", ...(yield* overrides(env)) });
+  checks.push({ name: "old workflow files", ...(yield* oldWorkflowFiles(env)) });
 
   checks.push({
     name: "glab",
@@ -479,10 +465,10 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
           : failed("installed, but not logged in", "glab auth login")),
   });
 
-  // Optional, and only where a loaded Workflow could reach for them: Helle for a step
-  // that waits on it, Linear for an agent Claude Code runs. Absent is a note; set up
-  // and broken is a warning, because that one fails a Run that nobody expected to.
-  if (needs.waits.has("helle")) checks.push({ name: "helle", ...optional(yield* probeHelle(env)) });
+  // Optional, and only where work could reach for them: Helle for a module that waits
+  // on it, Linear for an agent Claude Code runs. Absent is a note; set up and broken is
+  // a warning, because that one fails a Run that nobody expected to.
+  checks.push({ name: "helle", ...optional(yield* probeHelle(env)) });
   if (needs.harnesses.includes("claude"))
     checks.push({ name: "linear mcp", ...optional(yield* probeLinearMcp(env)) });
 

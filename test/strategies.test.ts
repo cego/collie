@@ -13,7 +13,6 @@ import { runEffect } from "./support/effect";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { branchFor, checkoutFor, type BranchAsk } from "../src/worktree";
-import { runTarget, unmetRequirementFor } from "../src/engine";
 import { linearIssues, shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 import { RunStore } from "../src/run";
@@ -129,48 +128,6 @@ test("a review is cut from the reviewed branch whatever the two fields are calle
 
       expect(shipped).toMatchObject({ branch: "fix-login", source: "from the reviewed branch" });
       expect(renamed).toEqual(shipped);
-    }),
-  ));
-
-test("the label a Run is listed under is its target's, whatever the target is called", () => {
-  const wf = { name: "review", embeddedInputs: [] };
-  const shipped = runTarget(wf, {
-    workflow: "review",
-    slug: "r1",
-    inputs: { target: "mr:acme/app!42" },
-    input_strategies: SHIPPED,
-  });
-  const renamed = runTarget(wf, {
-    workflow: "review",
-    slug: "r1",
-    inputs: { change: "mr:acme/app!42" },
-    input_strategies: RENAMED,
-  });
-
-  expect(shipped).toBe("!42");
-  expect(renamed).toBe(shipped);
-});
-
-test("a step that needs a merge request reads the field that carries one", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const shipped = yield* unmetRequirementFor(
-        { cwd: rig.projectDir, inputs: { target: "worktree" }, strategies: SHIPPED },
-        ["mr-target"],
-      );
-      const renamed = yield* unmetRequirementFor(
-        { cwd: rig.projectDir, inputs: { change: "worktree" }, strategies: RENAMED },
-        ["mr-target"],
-      );
-
-      expect(shipped).toBe("worktree is not a merge request");
-      expect(renamed).toBe(shipped);
-
-      const met = yield* unmetRequirementFor(
-        { cwd: rig.projectDir, inputs: { change: "mr:acme/app!42" }, strategies: RENAMED },
-        ["mr-target"],
-      );
-      expect(met).toBeNull();
     }),
   ));
 

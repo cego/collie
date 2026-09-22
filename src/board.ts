@@ -5,10 +5,9 @@
 // request has not been merged by anyone.
 
 import { Clock, Effect, FileSystem, Option, Path } from "effect";
-import { choiceAnswerable } from "./attention";
-import { driverOwnership, readChoice, type PendingChoice } from "./driver";
 import { openReports, readDrift } from "./drift";
 import { describeAction } from "./lines";
+import type { PickItem } from "./inputs";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
 import { displayName, oneLine, runLabel } from "./naming";
@@ -71,6 +70,23 @@ export const STEP_GLYPH_FOR: Readonly<Record<StepState, string>> = {
   failed: "✗",
   todo: "○",
 };
+
+/**
+ * A question put to the human, as every board renders one: the menu of a Choice, the
+ * free text of an ask, or the list a gate holds work against. The shape the rows and the
+ * drawer both draw, wherever the question came from.
+ */
+export interface PendingChoice {
+  id: string;
+  kind: "menu" | "ask" | "gate";
+  run: string;
+  step: string;
+  header: string;
+  footer: string;
+  items: readonly PickItem[];
+  /** A gate's list: the verifications this Run would be held to. */
+  verifications?: readonly string[];
+}
 
 export interface BoardStep {
   name: string;
@@ -630,13 +646,9 @@ function agentsOf(runs: ReadonlyArray<Run>, live: ReadonlyMap<string, AgentInfo>
   return [...found.values()];
 }
 
-/** The Run a card is about: the one asking, else the newest still going, else the newest. */
-function leaderOf(runs: ReadonlyArray<Run>, asking: ReadonlyMap<string, PendingChoice>): Run {
-  return (
-    runs.find((run) => asking.has(run.id)) ??
-    runs.find((run) => run.record.status === "running") ??
-    runs[0]!
-  );
+/** The Run a card is about: the newest still going, else the newest. */
+function leaderOf(runs: ReadonlyArray<Run>): Run {
+  return runs.find((run) => run.record.status === "running") ?? runs[0]!;
 }
 
 /** How long finished work stays on the board. A day, so an evening's work is still there
@@ -736,53 +748,6 @@ function childRuns(run: Run, byId: ReadonlyMap<string, Run>): Run[] {
     const found = entry.run === null ? undefined : byId.get(entry.run);
     return found === undefined ? [] : [found];
   });
-}
-
-/** The first of them holding a question open, with the Run whose answer it is. */
-const firstAsking = Effect.fn("Board.firstAsking")(function* (runs: ReadonlyArray<Run>) {
-  for (const run of runs) {
-    const choice = yield* questionOf(run);
-    if (choice !== null) return { run: run.id, choice };
-  }
-  return null;
-});
-
-/**
- * The question this Run is holding open, and null for one nobody can answer any more —
- * a Choice left behind by a Driver that has gone would take an answer nothing will read.
- * Asked only of a Run still going, so a Task's finished Runs cost the board no probe.
- */
-const questionOf = Effect.fn("Board.questionOf")(function* (run: Run) {
-  if (run.record.status !== "running") return null;
-  const choice = yield* readChoice(run.dir);
-  if (choice === null || !(yield* choiceAnswerable(run))) return null;
-  return choice;
-});
-
-function asQuestion(run: string, choice: PendingChoice): Question {
-  return {
-    kind: "question",
-    run,
-    id: choice.id,
-    step: choice.step,
-    topic: oneLine(choice.header).replace(/[?.]$/, ""),
-    text: choice.header,
-    options: choice.items.map((item) => ({
-      id: item.id,
-      title: item.title,
-      subtitle: item.subtitle ?? null,
-    })),
-  };
-}
-
-function asGate(run: string, choice: PendingChoice): Gate {
-  return {
-    kind: "gate",
-    run,
-    id: choice.id,
-    step: choice.step,
-    verifications: choice.verifications ?? [],
-  };
 }
 
 function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal {
@@ -899,29 +864,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       (yield* landedByRecord(runs))
     )
       continue;
-    const questions = new Map<string, PendingChoice>();
-    for (const run of runs) {
-      const choice = yield* questionOf(run);
-      if (choice !== null) questions.set(run.id, choice);
-    }
-    const leader = leaderOf(runs, questions);
+    const leader = leaderOf(runs);
     const record = leader.record;
-    // A repository run has no card of its own, so the plan's card is the only place its
-    // question can be answered: whichever Run is asking, the answer names that Run.
-    const asked = questions.get(leader.id) ?? null;
-    const askedBy = asked === null ? null : leader.id;
-    const child =
-      asked !== null ? null : yield* firstAsking(runs.flatMap((run) => childRuns(run, byId)));
-    const waiting = asked ?? child?.choice ?? null;
-    const asking = askedBy ?? child?.run ?? "";
     const proposed = pending[0];
-    const decision: Decision | null = waiting
-      ? waiting.kind === "gate"
-        ? asGate(asking, waiting)
-        : asQuestion(asking, waiting)
-      : proposed
-        ? asProposal(proposed)
-        : null;
+    const decision: Decision | null = proposed ? asProposal(proposed) : null;
 
     const status = statuses.get(leader.id)!;
     const touched = yield* lastActivityAt(leader.dir);
@@ -939,13 +885,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
     const agentAlive = runs.some((run) =>
       run.record.steps.some((step) => step.variants.some((v) => live.has(v.agent))),
     );
-    const driverLive = !going
-      ? false
-      : opts.driversLive
-        ? opts.driversLive.has(leader.id)
-        : (yield* driverOwnership(leader.dir).pipe(
-            Effect.catch(() => Effect.succeed("unknown" as const)),
-          )) === "live";
+    const driverLive = going && (opts.driversLive?.has(leader.id) ?? false);
     const abandoned = going && !driverLive && !agentAlive && silentFor > ABANDONED_MS;
     const agents = agentsOf(runs, live);
     // Stopped for a human with no Decision to answer. Two sources, because neither sees

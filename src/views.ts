@@ -12,17 +12,14 @@ import {
   isStale,
   layers,
   loadDefinitions,
-  resolveWorkflow,
   skillDirs,
-  validateWorkflow,
   type LayerName,
-  type ResolvedStep,
   type Provenance,
 } from "./definitions";
-import { RUNNER_LOG } from "./driver";
 import { readIntent } from "./intent";
+import { savedModules } from "./discovery";
+import { checkModule, readModule } from "./authoring";
 import type { PluginEnv } from "./env";
-import { choiceHint } from "./engine";
 import { displayName, reason, targetLabel } from "./naming";
 import type { MrPanel } from "./mr";
 import { REVIEW_FILE } from "./output";
@@ -118,32 +115,13 @@ function glyphOf(status: RunRecord["status"]): string {
 export interface DefinitionRow {
   name: string;
   title: string;
-  layer: LayerName;
-  /** `extends x`, `(stale …)`: where it came from and whether it has fallen behind. */
+  layer: string;
+  /** `(stale …)`: whether a fork has fallen behind what it forked. */
   provenance: string;
   path: string;
   inputs: string[];
-  /** The steps it runs, one line each: what a definition's execution shape actually is. */
-  steps: string[];
-  /** Every Choice step and the decision titles it can be answered with. */
-  decisions: Array<{ step: string; titles: string[]; hints: string[] }>;
-  /** What `validateWorkflow` says, so a broken fork is visible without running it. */
+  /** What checking it says, so a module that will not run is visible without running it. */
   problems: string[];
-}
-
-/** One step as the panel lists it: who runs it, and what shape the step has. */
-function stepLine(step: ResolvedStep): string {
-  const who = [step.harness, step.model].filter((part) => part !== undefined).join("/");
-  return [
-    step.id,
-    step.persona ?? "",
-    who,
-    step.parallel && step.parallel.length > 0 ? `${step.parallel.length} in parallel` : "",
-    step.fanIn ? `fan-in ${step.fanIn}` : "",
-    (step.choices ?? []).length > 0 ? "choice" : "",
-  ]
-    .filter((part) => part !== "")
-    .join(" · ");
 }
 
 function provenanceOf(def: Provenance): string {
@@ -163,56 +141,29 @@ function provenanceOf(def: Provenance): string {
  * the definitions, and `collie persona list` has its own.
  */
 export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: PluginEnv) {
-  const defs = yield* loadDefinitions(yield* layers(env));
-  const defaults = yield* loadDefaults(env.configDir);
-  const skills = yield* skillDirs(env);
+  const saved = yield* savedModules(env);
+  const described = yield* Effect.forEach(saved.entries, readModule);
+  const checked = yield* Effect.forEach(saved.entries, (one) =>
+    checkModule({ layer: one.layer, path: one.path }),
+  );
+  const problemsOf = new Map(checked.map((one) => [one.path, one.problems]));
+  const workflows: DefinitionRow[] = described
+    .map((one) => ({
+      name: one.id,
+      title: one.title,
+      layer: one.layer,
+      provenance: "",
+      path: one.path,
+      inputs: one.inputs.map((input) => input.name),
+      problems: [...(problemsOf.get(one.path) ?? []), ...(one.broken === null ? [] : [one.broken])],
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
 
-  const workflows: DefinitionRow[] = [];
-  for (const def of [...defs.workflows.values()].sort((a, b) => a.name.localeCompare(b.name))) {
-    // Resolving is where an `extends:` or `use:` that points at nothing shows up, and it
-    // throws rather than returning; a row that cannot resolve is still a row.
-    const attempt = yield* Effect.try(() => resolveWorkflow(def.name, defs, defaults)).pipe(
-      Effect.map((workflow) => ({ ok: true as const, workflow })),
-      Effect.catch((cause) => Effect.succeed({ ok: false as const, why: reason(cause) })),
-    );
-    if (!attempt.ok) {
-      workflows.push({
-        name: def.name,
-        title: def.title,
-        layer: def.layer,
-        provenance: provenanceOf(def),
-        path: def.path,
-        inputs: Object.keys(def.inputs),
-        // Unresolved is exactly the case where the steps cannot be listed: that is what
-        // the problem on this row says.
-        steps: [],
-        decisions: [],
-        problems: [attempt.why],
-      });
-      continue;
-    }
-    const resolved = attempt.workflow;
-    workflows.push({
-      name: resolved.name,
-      title: resolved.title,
-      layer: resolved.layer,
-      provenance: provenanceOf(def),
-      path: resolved.path,
-      inputs: Object.keys(branchListed(resolved.checkout, resolved.inputs)),
-      steps: resolved.steps.map(stepLine),
-      decisions: resolved.steps
-        .filter((step) => (step.choices ?? []).length > 0)
-        .map((step) => ({
-          step: step.id,
-          titles: (step.choices ?? []).map((c) => c.title),
-          hints: (step.choices ?? []).map((c) => choiceHint(c)),
-        })),
-      problems: [...(yield* validateWorkflow(resolved, defs, defaults, skills))],
-    });
-  }
-
-  // A layer that would not load at all is the view's problem too, not a silent gap.
-  return { workflows, errors: defs.errors };
+  // A module that will not load at all is the view's problem too, not a silent gap.
+  return {
+    workflows,
+    errors: saved.problems.map((one) => `${one.path}: ${one.message}`),
+  };
 });
 
 /** Text a panel read from a file, or why it has none. */
@@ -561,8 +512,8 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       metrics: metricsOf(yield* readMetrics(run.dir), record.created_at),
     },
     tail: opts.tail
-      ? ((yield* tailed(path.join(run.dir, RUNNER_LOG), TAIL_CAP)) ??
-        ({ _tag: "None", reason: `this run wrote no ${RUNNER_LOG}` } satisfies Panel))
+      ? ((yield* tailed(path.join(run.dir, "log.txt"), TAIL_CAP)) ??
+        ({ _tag: "None", reason: "this run wrote no log" } satisfies Panel))
       : null,
     finishedAt: record.finished_at ? Date.parse(record.finished_at) : 0,
     mr: opts.mr,

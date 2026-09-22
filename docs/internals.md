@@ -356,7 +356,7 @@ falls all the way through to the current directory.
 `definitions.ts` owns layer lookup, `extends:` overrides, `use:` embedding and validation;
 `yaml.ts` splits frontmatter from the body over Effect's YAML parser and writes a key back
 when forking. The merge semantics are canonical there and in
-[Authoring](authoring.md#extends-merge-semantics) — change both together.
+[Authoring](authoring.md#forking) — change both together.
 
 Validation runs before a single tab opens: unknown harnesses, models, efforts and
 permissions modes, a permissions mode on a step that continues another step's agent (the

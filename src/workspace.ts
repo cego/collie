@@ -3,13 +3,11 @@
 // what it finds, so deleting the tab loses nothing and the next Run recreates it.
 
 import { Clock, Effect, FileSystem, Option, Path } from "effect";
-import { choiceAnswerable } from "./attention";
 import { behindRemote } from "./doctor";
-import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
 import { COLLIE_TAB, displayName, GLYPH, runLabel, stepNow } from "./naming";
 import { diffTargetOf, recorded } from "./strategies";
 import type { Live } from "./live";
-import { boardLines, type TaskView } from "./board";
+import { boardLines, type PendingChoice, type TaskView } from "./board";
 import {
   asText,
   cardLines,
@@ -356,9 +354,6 @@ const activeDetail = Effect.fn("activeDetail")(function* (
   if (record.max_iterations > 1) {
     parts.push(`iteration ${record.iteration}/${record.max_iterations}`);
   }
-  // What the driver last said, which is what the runner pane used to show.
-  const said = yield* lastProgress(run.dir);
-  if (said) parts.push(said);
   const quiet = yield* quietFor(run.dir, now, quietMs);
   if (quiet) parts.push(quiet);
   return parts.join(" · ");
@@ -534,7 +529,6 @@ const abandonedRun = Effect.fn("abandonedRun")(function* (
   now: number,
 ) {
   if (run.record.status !== "running") return false;
-  if (yield* driverAlive(run.dir)) return false;
   if (agentsHere(run.record, hereNames).length > 0) return false;
   return now - (yield* touchedAt(run)) > STALE_MS;
 });
@@ -617,14 +611,7 @@ export const buildView = Effect.fn("buildView")(function* (
 
   const active: RunRow[] = [];
   for (const r of runs.filter((r) => r.record.status === "running" && !abandoned.has(r.id))) {
-    // Whatever the Driver stopped for is not shown as answerable once that Driver has
-    // gone: recovery already classifies a Choice it left behind as stale, and a board
-    // that still offered it would take an answer, report it sent, and have the next
-    // Driver discard it — and an `awaiting` it left behind is the same fact. Asked only
-    // where something has stopped at all, so an ordinary refresh costs no probe.
-    const pending = yield* readChoice(r.dir);
-    const answerable = (pending !== null || needsHuman(r.record)) && (yield* choiceAnswerable(r));
-    const choice = pending && answerable ? pending : null;
+    const choice = null;
     // herdr's own word for an agent sitting at its harness's dialog: a permission
     // prompt mid-step, which the Driver never learns about and records nothing for. No
     // Driver is needed for this one — the pane is there, asking.
@@ -645,7 +632,7 @@ export const buildView = Effect.fn("buildView")(function* (
       // A Choice to answer here, or an agent waiting for one in its own pane: both
       // stop the run dead, and Enter on the row reaches the pane either way. Only the
       // inline answer needs a Choice — the header counts what a human has to go to.
-      needsYou: answerable || blocked,
+      needsYou: blocked,
       ...outcomeOf(r.record),
       // A Run still going has not become anything yet.
       delivered: null,

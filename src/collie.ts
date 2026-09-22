@@ -8,6 +8,7 @@ import { run } from "./commands/run";
 import { task } from "./commands/task";
 import { root } from "./commands/shared";
 import { doctor } from "./commands/doctor";
+import { history } from "./commands/history";
 import { upgrade } from "./commands/upgrade";
 import { verify } from "./commands/verify";
 import { confirm, decline, proposal, steer } from "./commands/steer";
@@ -26,6 +27,7 @@ export const app = root.pipe(
     persona,
     run,
     task,
+    history,
     steer,
     confirm,
     decline,

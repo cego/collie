@@ -10,8 +10,9 @@ herdr actions, and the `collie` CLI.
 - **A term you are unsure of, or one you are about to redefine** → [`CONTEXT.md`](CONTEXT.md).
   It is canonical for vocabulary; docs pages link to it rather than restating a definition.
 - **Which file owns what** → [`src/README.md`](src/README.md).
-- **Changing workflow or persona frontmatter, `extends:`/`use:` merge semantics, or layer
-  lookup** → [`docs/authoring.md`](docs/authoring.md), alongside `src/definitions.ts`.
+- **Changing persona frontmatter or layer lookup** → [`docs/authoring.md`](docs/authoring.md),
+  alongside `src/definitions.ts` for personas and `src/discovery.ts` for where a module is
+  looked for.
 - **Changing what an author is told a workflow is, or the commands that write and check
   one** → [`docs/authoring.md`](docs/authoring.md) and [`docs/sdk.md`](docs/sdk.md),
   alongside `src/authoring.ts` and `src/commands/workflow.ts`. One reading answers `list`,
@@ -170,16 +171,18 @@ binary still starts.
 2. All herdr communication goes through `src/herdr.ts`. The one exception is
    `tools/herdr-schema.ts`, which runs a downloaded release offline to print its schema
    and never touches the session — see [`docs/internals.md`](docs/internals.md#the-herdr-boundary).
-3. One Driver owns a run's state. Mutate a run through the schema-validated inbox with
-   request ids ([ADR-0004](docs/adr/0004-coordinate-runs-through-the-filesystem.md)).
+3. One host owns a state directory and everything it is running
+   ([ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md)). Mutate a Run
+   through it, under a request id, and never by writing its files.
 4. Plan artefacts live in the run directory ([ADR-0002](docs/adr/0002-plan-artefacts-live-in-the-run-directory.md)).
    Glossary and ADR changes belong in the repository.
-5. Definition merge semantics (`extends:`, `use:`, layers) are canonical in
-   `src/definitions.ts` and `docs/authoring.md` — change both together.
+5. Collie has one engine, and what an older one recorded is imported once
+   ([ADR-0027](docs/adr/0027-one-engine-and-history-is-imported-once.md)). `src/history.ts`
+   is the only code that reads a `run.json`; nothing else may grow a second reader.
 6. Docs change in the same merge request as the behavior they describe.
-7. A Run proves its outcome ([ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md)): the
-   definition is frozen per Run, evidence is collected against a revision, and no gate is
-   satisfied by an Output field. Usage is recorded and never enforced.
+7. A Run proves its outcome ([ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md)):
+   evidence is collected against a revision, and no gate is satisfied by an Output field.
+   Usage is recorded and never enforced.
 8. Steering's design decisions are [ADR-0008](docs/adr/0008-collie-steers-through-the-driver.md)
    (the Driver is the only actor over agents) and
    [ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md) (one board per Herd, in the

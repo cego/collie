@@ -492,7 +492,7 @@ left is Skip by another name, which the gate refuses. The answer goes on the rec
 skipped gate is a decision somebody took rather than a check that quietly did not run.
 
 The sentence is the step's own words where its workflow gives it a `summary`
-([Authoring](authoring.md#step-keys)), and the step kind's own verb where it does not. A
+(the module says what it is doing), and the step kind's own verb where it does not. A
 step id never reaches it.
 
 A glyph says where the Task is: ✓ done, ● working, ◆ waiting on you, ○ not yet, ✗ failed,

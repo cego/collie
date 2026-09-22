@@ -43,7 +43,8 @@ import {
 } from "./native";
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
-import { RequestConflict } from "./store";
+import { Kept } from "./history";
+import { History, RequestConflict } from "./store";
 import { currentEnv } from "./env";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
@@ -139,6 +140,14 @@ export const HostRpcs = RpcGroup.make(
     payload: { task: Schema.NullOr(Schema.String) },
     success: Schema.Array(RunView),
   }),
+  // What the old engine recorded, imported once. Readable, and nothing else: no control
+  // here takes one of these, because there is nothing left to control.
+  Rpc.make("history", {
+    payload: { task: Schema.NullOr(Schema.String) },
+    success: Schema.Array(History),
+  }),
+  /** Reads whatever the old engine left that is not a row yet, and says what it found. */
+  Rpc.make("import", { success: Schema.Array(Kept) }),
   // The same run, again, whenever it changes — and current when the stream opens, so a
   // client that was away reads where the work is rather than what it missed.
   Rpc.make("watch", {
@@ -268,6 +277,8 @@ const handlers = (dir: string) =>
         status: ({ runId }) => registry.status(runId),
         run: ({ runId }) => registry.view(runId),
         runs: ({ task }) => registry.views(task),
+        history: ({ task }) => registry.history(task),
+        import: () => registry.importing,
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
         offers: ({ runId }) => registry.offers(runId),

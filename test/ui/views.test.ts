@@ -17,7 +17,6 @@ import {
   type PlanPanel,
 } from "../../src/views";
 import { REVIEW_FILE } from "../../src/output";
-import { RUNNER_LOG } from "../../src/driver";
 import { Herdr } from "../../src/herdr";
 import { RunStore, type Run } from "../../src/run";
 
@@ -124,40 +123,15 @@ effectTest("a run that can supply the work says so, and one that cannot does not
   expect(by(null).fixable).toBe(false);
 });
 
-effectTest("Workflows carry their layer, inputs, decisions and validation", function* () {
+effectTest("Workflows carry their layer, their inputs and what checking them says", function* () {
   const env = rig.pluginEnv();
-  yield* writeDef(
-    rig.baselineDir,
-    "workflows",
-    "broken",
-    `---
-name: broken
-title: broken — points at nothing
-inputs:
-  goal: goal
-steps:
-  - id: build
-    persona: no-such-persona
----
-Do {{inputs.goal}}.
-`,
-  );
 
   const { workflows } = yield* buildWorkflows(env);
 
   const review = workflows.find((w) => w.name === "review")!;
-  expect(review.layer).toBe("baseline");
+  expect(review.layer).toBe("shipped");
   expect(review.inputs).toContain("target");
-  expect(review.decisions.some((d) => d.titles.includes("Post to MR"))).toBe(true);
-  expect(review.problems).toEqual([]);
-  // Its execution shape, which is half of what "what does this workflow do" means.
-  expect(review.steps.some((line) => line.startsWith("review"))).toBe(true);
-  expect(review.steps.some((line) => line.includes("in parallel"))).toBe(true);
-  expect(review.steps.some((line) => line.includes("choice"))).toBe(true);
-
-  // A fork that cannot run is visible as broken without running it.
-  const broken = workflows.find((w) => w.name === "broken")!;
-  expect(broken.problems.join(" ")).toContain("no-such-persona");
+  expect(review.path).toContain("review.workflow.ts");
 
   // Workflows and nothing else: a persona cannot be run, so the view does not list one
   // and there is no row here to build from it.
@@ -383,7 +357,7 @@ effectTest("the log tail is the end of a long log, and only when it is asked for
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const lines = Array.from({ length: 20_000 }, (_, i) => `line ${i}`);
-  yield* fs.writeFileString(path.join(run.dir, RUNNER_LOG), `${lines.join("\n")}\n`);
+  yield* fs.writeFileString(path.join(run.dir, "log.txt"), `${lines.join("\n")}\n`);
 
   const off = yield* buildRunDetail({
     stateDir: env.stateDir,
@@ -421,7 +395,7 @@ effectTest("a run with no log says so where the tail would be", function* () {
     tail: true,
   });
 
-  expect(detail?.tail).toEqual({ _tag: "None", reason: "this run wrote no runner.log" });
+  expect(detail?.tail).toEqual({ _tag: "None", reason: "this run wrote no log" });
 });
 
 effectTest("a run that is not there has no detail rather than a failure", function* () {

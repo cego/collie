@@ -158,7 +158,7 @@ test("a fork is a file that imports what it keeps, and claims its own id", () =>
 
 /** What `workflow check` and `workflow list` carry, as far as these read them. */
 const Reported = Schema.Struct({
-  modules: Schema.Array(
+  workflows: Schema.Array(
     Schema.Struct({
       id: Schema.String,
       layer: Schema.String,
@@ -207,7 +207,7 @@ test(
           // nothing on PATH but the system's own binaries.
           const checked = yield* collie(world, ["workflow", "check", "tally"]);
           expect(checked.exit).toBe(0);
-          expect((yield* reportedIn(checked.envelope)).modules).toEqual([
+          expect((yield* reportedIn(checked.envelope)).workflows).toEqual([
             { id: "tally", layer: "user", problems: [], toolchain: null },
           ]);
 

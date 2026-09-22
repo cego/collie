@@ -72,6 +72,7 @@ import {
   waitForHelle,
   type HelleClaim,
 } from "./helle";
+import { Kept, describeKept, importHistory } from "./history";
 import { currentPid, signalProcess } from "./lock";
 import type { InputStrategy } from "./definitions";
 import { noteVerification } from "./metrics";
@@ -88,7 +89,7 @@ import { openFindingsIn } from "./output";
 import { planIssuesIn } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome } from "./outcome";
-import { RequestConflict, Store, storeLayer, type RunRow } from "./store";
+import { History, RequestConflict, Store, storeLayer, type RunRow } from "./store";
 import { repositoryName } from "./worktree";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
@@ -1798,6 +1799,8 @@ export const RunView = Schema.Struct({
    * is held to what it declared and to nothing its name suggests.
    */
   outcome: Schema.String,
+  /** When this Run was admitted, which is when it began. */
+  created: Schema.String,
   status: RunStatus,
   /** Every question this run has been asked, answered or not, oldest first. */
   waiting: Schema.Array(OpenDecision),
@@ -1948,6 +1951,22 @@ export interface RegistryApi {
   /** The same run, again, whenever anything about it changes. */
   readonly watch: (runId: string) => Stream.Stream<RunView | null>;
   /**
+   * The Runs the old engine recorded, imported once and readable ever after. They are
+   * history and nothing else: none of them can be answered, controlled or resumed, and
+   * the only thing to do with one is start a new Run of the same workflow.
+   */
+  readonly history: (task: string | null) => Effect.Effect<ReadonlyArray<typeof History.Type>>;
+  /**
+   * Reads whatever the old engine left that is not a row yet, and says what happened to
+   * each directory. A host does this once when it starts; this is the same pass on
+   * demand, for an installer that wants to show the operator what it found.
+   */
+  readonly importing: Effect.Effect<
+    ReadonlyArray<typeof Kept.Type>,
+    never,
+    HostServices | ChildProcessSpawner.ChildProcessSpawner | Store
+  >;
+  /**
    * Rebuilds what this host could not register from the modules as they are now and hands
    * over anything still outstanding. A repaired file is picked up without a restart.
    */
@@ -2023,8 +2042,11 @@ export interface RegistryOptions {
 export const registryLayer = (
   dir: string,
   options?: RegistryOptions,
-): Layer.Layer<Registry, never, HostServices | Store | Crypto.Crypto> =>
-  Layer.effect(Registry)(makeRegistry(dir, options));
+): Layer.Layer<
+  Registry,
+  never,
+  HostServices | Store | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+> => Layer.effect(Registry)(makeRegistry(dir, options));
 
 /**
  * One host's foundation: the engine, the rows beside it, and the run's own view of its
@@ -2048,722 +2070,744 @@ export const foundationLayer = (options: {
 const makeRegistry: (
   dir: string,
   options?: RegistryOptions,
-) => Effect.Effect<RegistryApi, never, HostServices | Store | Crypto.Crypto | Scope.Scope> =
-  Effect.fn("Native.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
-    const crashAt = options?.crashAt;
-    const locate = options?.locate;
-    const configDir = options?.configDir ?? dir;
-    const engine = yield* WorkflowEngine.WorkflowEngine;
-    const fs = yield* FileSystem.FileSystem;
-    const store = yield* Store;
-    const crypto = yield* Crypto.Crypto;
-    const hostScope = yield* Effect.scope;
-    /** Every generation this host is holding, by its native registration name. */
-    const live = new Map<string, Generation>();
-    /** Why a recorded generation is not holdable, so a caller hears the file, not a timeout. */
-    const unavailable = new Map<string, string>();
-    /** Which generation of an id new work goes to. */
-    const newestOf = new Map<string, string>();
-    let known = yield* store.generations;
-    // Staged copies last only as long as this host: every generation below is staged from
-    // the module as it is now, never restored.
-    yield* clearGenerations(dir);
+) => Effect.Effect<
+  RegistryApi,
+  never,
+  HostServices | Store | Crypto.Crypto | Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
+> = Effect.fn("Native.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
+  const crashAt = options?.crashAt;
+  const locate = options?.locate;
+  const configDir = options?.configDir ?? dir;
+  const engine = yield* WorkflowEngine.WorkflowEngine;
+  const fs = yield* FileSystem.FileSystem;
+  const store = yield* Store;
+  const crypto = yield* Crypto.Crypto;
+  const hostScope = yield* Effect.scope;
+  /** Every generation this host is holding, by its native registration name. */
+  const live = new Map<string, Generation>();
+  /** Why a recorded generation is not holdable, so a caller hears the file, not a timeout. */
+  const unavailable = new Map<string, string>();
+  /** Which generation of an id new work goes to. */
+  const newestOf = new Map<string, string>();
+  let known = yield* store.generations;
+  // Staged copies last only as long as this host: every generation below is staged from
+  // the module as it is now, never restored.
+  yield* clearGenerations(dir);
+  // What the old engine left in directories, read into rows once. Here because a host
+  // is the one owner of this state directory: an import that ran anywhere else would be
+  // a second writer, and one that ran on every command would be a read adapter by
+  // another name. Idempotent, so every start after the first keeps nothing.
+  yield* importHistory(dir).pipe(
+    Effect.flatMap((kept) =>
+      Effect.forEach(
+        kept.filter((item) => item.kind !== "already"),
+        (item) => Effect.logInfo(`history: ${describeKept(item)}`),
+      ),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning(`history: nothing was imported: ${Cause.pretty(cause)}`),
+    ),
+  );
 
-    const register = Effect.fn("Native.register")(function* (route: {
-      readonly workflow: string;
-      readonly name: string;
-      readonly entry: string;
-    }) {
-      const entry = yield* stageGeneration({ dir, name: route.name, entry: route.entry }).pipe(
-        Effect.flatMap(loadEntry),
-      );
-      const registration = entry.make(route.name);
-      // The composition root, and the only place a host binds anything into a module's
-      // own Layer: explicitly provided to this generation, never a table something looks
-      // itself up in. Everything else the module needs it provides for itself.
-      yield* Layer.buildWithScope(
-        registration.layer.pipe(Layer.provide(Layer.succeed(NativeChildren)(children))),
-        hostScope,
-      );
-      const generation: Generation = {
-        id: route.workflow,
-        name: route.name,
-        title: entry.title,
-        entry: route.entry,
-        fields: entry.input,
-        hints: entry.metadata?.hints ?? {},
-        fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
-        source: yield* sourceOf(route.entry),
-        metadata: describeMetadata(entry.metadata),
-        offers: declaredByModule(entry.metadata),
-        registration,
-      };
-      live.set(route.name, generation);
-      unavailable.delete(route.name);
-      newestOf.set(route.workflow, route.name);
-      return generation;
-    });
-
-    /**
-     * The host's own services, under whatever the caller already has. A child is executed
-     * on the parent's fiber, and merging this way is what leaves the parent's workflow
-     * instance and scope in place — which is the whole linkage between the two.
-     */
-    const hostServices = yield* Effect.context<HostServices>();
-    const lending = <A, E>(effect: Effect.Effect<A, E, HostServices>): Effect.Effect<A, E> =>
-      Effect.updateContext(effect, (caller: Context.Context<never>) =>
-        Context.merge(hostServices, caller),
-      );
-
-    /** A child's run id: its parent's, and what the parent called this invocation. */
-    const childRunId = (ask: ChildAsk) => `${ask.runId}.${ask.invocation}`;
-
-    const refused = (reason: string) => new WorkflowError({ reason });
-
-    /**
-     * Another workflow, as part of this one. Selected in the parent's own project and
-     * decoded against the child's own schema before a row exists, so input the child will
-     * not take is the parent's failure rather than a half-made Run.
-     */
-    const children: ChildrenApi = {
-      start: (ask: ChildAsk) => lending(admitChild(ask)),
-      result: (child: ChildRun) => lending(runChild(child)),
+  const register = Effect.fn("Native.register")(function* (route: {
+    readonly workflow: string;
+    readonly name: string;
+    readonly entry: string;
+  }) {
+    const entry = yield* stageGeneration({ dir, name: route.name, entry: route.entry }).pipe(
+      Effect.flatMap(loadEntry),
+    );
+    const registration = entry.make(route.name);
+    // The composition root, and the only place a host binds anything into a module's
+    // own Layer: explicitly provided to this generation, never a table something looks
+    // itself up in. Everything else the module needs it provides for itself.
+    yield* Layer.buildWithScope(
+      registration.layer.pipe(Layer.provide(Layer.succeed(NativeChildren)(children))),
+      hostScope,
+    );
+    const generation: Generation = {
+      id: route.workflow,
+      name: route.name,
+      title: entry.title,
+      entry: route.entry,
+      fields: entry.input,
+      hints: entry.metadata?.hints ?? {},
+      fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
+      source: yield* sourceOf(route.entry),
+      metadata: describeMetadata(entry.metadata),
+      offers: declaredByModule(entry.metadata),
+      registration,
     };
+    live.set(route.name, generation);
+    unavailable.delete(route.name);
+    newestOf.set(route.workflow, route.name);
+    return generation;
+  });
 
-    const admitChild = Effect.fn("Native.children.start")(function* (ask: ChildAsk) {
-      const parent = yield* store.run(ask.runId);
-      if (parent === null) {
-        return yield* refused(`no run "${ask.runId}" was started here`);
-      }
-      const generation = yield* resolve({ project: parent.project, id: ask.workflow }).pipe(
-        Effect.mapError((failure) => refused(failure.reason)),
-      );
-      const runId = childRunId(ask);
-      // The host's own options, held to the same rule a front door's are: a name that is
-      // not the host's would be a field the child's author never declared.
-      const asked = ask.options ?? {};
-      yield* refuseOptions(generation, asked).pipe(
-        Effect.mapError((failure) => refused(failure.reason)),
-      );
-      const settled = yield* settleInput(generation.fields, { json: ask.input, text: {} }).pipe(
-        Effect.mapError((failure) => refused(failure.reason)),
-      );
-      const payload = yield* Schema.decodeUnknownEffect(
-        generation.registration.workflow.payloadSchema,
-      )({ runId, input: settled.input }).pipe(
-        Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
-      );
-      const claimed = yield* store
-        .admit({
-          // The invocation is the claim, so replaying the parent admits nothing new and
-          // changing what an invocation is given is refused rather than run twice.
-          request: runId,
-          run: runId,
-          workflow: generation.id,
-          project: parent.project,
-          input: settled.input,
-          provenance: settled.provenance,
-          options: launchOptions(generation, asked),
-          generation: generation.name,
-          execution: yield* generation.registration.workflow.executionId(payload),
-          task: parent.task,
-          parent: ask.runId,
-        })
-        .pipe(Effect.mapError((conflict) => refused(conflict.reason)));
-      remember(claimed.row);
-      // A child is a Run, so what it may verify is frozen with it rather than read when
-      // it asks: the same list, and the same moment, as the start of any other.
-      yield* freezeApproved({
-        dir,
-        runId: claimed.row.run,
-        project: parent.project,
-        configDir,
-      }).pipe(Effect.ignore);
-      // The parent hands its own children over, so the receipt is written here: a host
-      // sweep dispatching one would give the engine a child with no parent to wake.
-      yield* store.accepted(claimed.row.run);
-      return {
-        runId: claimed.row.run,
-        workflow: generation.id,
-        invocation: ask.invocation,
-        fresh: claimed.fresh,
-      };
-    });
+  /**
+   * The host's own services, under whatever the caller already has. A child is executed
+   * on the parent's fiber, and merging this way is what leaves the parent's workflow
+   * instance and scope in place — which is the whole linkage between the two.
+   */
+  const hostServices = yield* Effect.context<HostServices>();
+  const lending = <A, E>(effect: Effect.Effect<A, E, HostServices>): Effect.Effect<A, E> =>
+    Effect.updateContext(effect, (caller: Context.Context<never>) =>
+      Context.merge(hostServices, caller),
+    );
 
-    const runChild = Effect.fn("Native.children.result")(function* (child: ChildRun) {
-      const found = yield* routed(child.runId).pipe(
-        Effect.mapError((failure) => refused(failure.reason)),
-      );
-      const row = yield* store.run(child.runId);
-      if (row === null) return yield* refused(`no run "${child.runId}" was started here`);
-      const payload = yield* payloadOf(found.generation, row).pipe(
-        Effect.mapError(() => refused(`${found.generation.entry} no longer takes ${row.input}`)),
-      );
-      // Executed on the parent's own fiber, which is what links the two: the engine
-      // reads the parent's instance from here, so the child's completion wakes the
-      // parent and interrupting the parent reaches the child.
-      return yield* found.generation.registration.workflow.execute(payload);
-    });
+  /** A child's run id: its parent's, and what the parent called this invocation. */
+  const childRunId = (ask: ChildAsk) => `${ask.runId}.${ask.invocation}`;
 
-    // What was registered before this host existed, rebuilt from the modules as they are
-    // now. A file that has gone leaves its generation unavailable and every other one
-    // registered, which is what keeps one broken module from stopping the rest.
-    for (const route of known) {
-      yield* register(route).pipe(
-        Effect.catchTag("NativeEntryError", (failure) =>
-          Effect.sync(() => unavailable.set(route.name, `${failure.file}: ${failure.message}`)),
-        ),
-      );
+  const refused = (reason: string) => new WorkflowError({ reason });
+
+  /**
+   * Another workflow, as part of this one. Selected in the parent's own project and
+   * decoded against the child's own schema before a row exists, so input the child will
+   * not take is the parent's failure rather than a half-made Run.
+   */
+  const children: ChildrenApi = {
+    start: (ask: ChildAsk) => lending(admitChild(ask)),
+    result: (child: ChildRun) => lending(runChild(child)),
+  };
+
+  const admitChild = Effect.fn("Native.children.start")(function* (ask: ChildAsk) {
+    const parent = yield* store.run(ask.runId);
+    if (parent === null) {
+      return yield* refused(`no run "${ask.runId}" was started here`);
     }
-
-    /** A host dying where the proof needs one to; nothing else ever sets this. */
-    const crash = (point: CrashPoint) =>
-      crashAt === point
-        ? currentPid.pipe(
-            Effect.flatMap((pid) => signalProcess(pid, "SIGKILL")),
-            Effect.asVoid,
-          )
-        : Effect.void;
-
-    const payloadOf = (generation: Generation, row: RunRow) =>
-      decodeInput(row.input).pipe(
-        Effect.flatMap((input) =>
-          Schema.decodeUnknownEffect(generation.registration.workflow.payloadSchema)({
-            runId: row.run,
-            input,
-          }),
-        ),
-      );
-
-    /**
-     * Gives the engine work that is recorded and not yet accepted, and writes the receipt.
-     * A start, a retry of one that crashed before the engine heard, and a host that starts
-     * with rows outstanding all come through here — under the identity the row was
-     * admitted with, so the engine's own idempotency makes a repeat a no-op rather than a
-     * second run.
-     *
-     * Nothing happens where it cannot be handed over: the module is not registered here,
-     * or no longer takes what it was started with. The row stays as it is, for a repair.
-     */
-    const handOver = Effect.fn("Native.handOver")(function* (row: RunRow) {
-      const generation = live.get(row.generation);
-      if (generation === undefined) return;
-      const payload = yield* payloadOf(generation, row).pipe(Effect.result);
-      if (payload._tag === "Failure") return;
-      yield* crash("admitted");
-      yield* engine
-        .execute(generation.registration.workflow, {
-          executionId: row.execution,
-          payload: payload.success,
-          discard: true,
-        })
-        .pipe(Effect.orDie);
-      yield* crash("executed");
-      yield* store.accepted(row.run);
-    });
-
-    // What a host admitted and did not live to hand over. Both crash windows end here.
-    for (const row of yield* store.pending) yield* handOver(row);
-
-    /** The file a generation was built from, which a row keeps naming after it has gone. */
-    const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
-
-    const viewOf = Effect.fn("Native.viewOf")(function* (row: RunRow) {
-      const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
-      const admitted = {
-        runId: row.run,
-        workflow: row.workflow,
-        project: row.project,
-        task: row.task,
-        parent: row.parent,
-        registration: row.generation,
-        entry: entryOf(row.generation),
-        input,
-        provenance: yield* decodeStrings(row.provenance ?? "{}").pipe(
-          Effect.orElseSucceed((): Record<string, string> => ({})),
-        ),
-        options: yield* decodeStrings(row.options ?? "{}").pipe(
-          Effect.orElseSucceed((): Record<string, string> => ({})),
-        ),
-      };
-      const outcome = admitted.options.outcome ?? UNSPECIFIED;
-      const generation = live.get(row.generation);
-      const about = {
-        ...admitted,
-        outcome,
-        waiting: yield* asked(row.run),
-        controls: yield* controlsOf(row.run),
-      };
-      // Not registered here is not a verdict on the work: the rows are all still there,
-      // and what is missing is the module, named so somebody can put it back.
-      if (generation === undefined) {
-        return {
-          ...about,
-          status: { status: "pending" as const },
-          diagnostic:
-            unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
-        };
-      }
-      const result = yield* engine.poll(generation.registration.workflow, row.execution);
-      return { ...about, status: pollStatus(result, generation.entry), diagnostic: null };
-    });
-
-    const setControl = Effect.fn("Native.setControl")(function* (
-      runId: string,
-      control: string,
-      set: boolean,
-    ) {
-      const path = controlPath(dir, control, runId);
-      yield* (set ? fs.writeFileString(path, "") : fs.remove(path).pipe(Effect.ignore)).pipe(
-        Effect.orDie,
-      );
-    });
-
-    /** Which controls an operator has set over this run. */
-    const controlsOf = Effect.fn("Native.controlsOf")(function* (runId: string) {
-      const set: string[] = [];
-      for (const control of [HOLD, STOP]) {
-        const on = yield* fs
-          .exists(controlPath(dir, control, runId))
-          .pipe(Effect.orElseSucceed(() => false));
-        if (on) set.push(control);
-      }
-      return set;
-    });
-
-    /**
-     * Wakes a run and waits for it to settle where it is going next.
-     *
-     * A woken run runs before it parks again, and a completion that arrives inside that
-     * window is delivered to a run that is not waiting on anything yet — so it is lost,
-     * and resuming afterwards does not bring it back. Returning only once the run has
-     * settled is what makes the next thing an operator does land on it.
-     */
-    const wake = Effect.fn("Native.wake")(function* (found: {
-      readonly generation: Generation;
-      readonly execution: string;
-    }) {
-      const workflow = found.generation.registration.workflow;
-      yield* engine.resume(workflow, found.execution);
-      yield* engine.poll(workflow, found.execution).pipe(
-        Effect.map((result) => pollStatus(result, found.generation.entry).status),
-        Effect.flatMap((status) =>
-          status === "pending" ? Effect.fail(new Error("still running")) : Effect.void,
-        ),
-        Effect.retry({ times: WAKE_TRIES, schedule: Schedule.spaced(WAKE_INTERVAL) }),
-        Effect.ignore,
-      );
-    });
-
-    /** Every question this run has been asked, with the answers its options allow. */
-    const asked = Effect.fn("Native.asked")(function* (runId: string) {
-      const rows = yield* store.asked(runId);
-      const none: ReadonlyArray<string> = [];
-      return yield* Effect.forEach(rows, (row) =>
-        decodeOptions(row.options).pipe(
-          Effect.orElseSucceed(() => none),
-          Effect.map((options) => ({
-            name: row.decision,
-            prompt: row.prompt,
-            options,
-            answer: row.answer,
-          })),
-        ),
-      );
-    });
-
-    const view = (runId: string) =>
-      store
-        .run(runId)
-        .pipe(Effect.flatMap((row) => (row === null ? Effect.succeed(null) : viewOf(row))));
-
-    /**
-     * What the engine last said about each run it may still change. Upstream's tables are
-     * upstream's: a write there invalidates nothing of Collie's, so one fiber asks on a
-     * schedule every client shares and says so once — rather than each client looping.
-     */
-    const watched = new Map<string, { readonly row: RunRow; said: string }>();
-    const remember = (row: RunRow) => watched.set(row.run, { row, said: "" });
-    for (const row of yield* store.runs) remember(row);
-    /** How many clients are listening. A host nobody is watching asks nothing at all. */
-    let watchers = 0;
-
-    const sweep = Effect.gen(function* () {
-      if (watchers === 0) return;
-      let changed = false;
-      for (const [runId, entry] of watched) {
-        const status = (yield* viewOf(entry.row)).status;
-        const said = encodeStatus(status);
-        if (said === entry.said) continue;
-        entry.said = said;
-        changed = true;
-        // A run the engine has finished with cannot change again, so nothing asks after.
-        if (status.status === "complete" || status.status === "failed") watched.delete(runId);
-      }
-      if (changed) yield* store.announce;
-    });
-    yield* Effect.forkScoped(sweep.pipe(Effect.repeat(Schedule.spaced(SWEEP_INTERVAL))));
-
-    /** What this host is holding, as a caller may see it. */
-    const held = Effect.sync(() => ({
-      live: [...live.keys()].sort(),
-      unavailable: [...unavailable.entries()].map(([name, why]) => `${name}: ${why}`).sort(),
-    }));
-
-    const newest = Effect.fn("Native.newest")(function* (id: string) {
-      const generation = live.get(newestOf.get(id) ?? "");
-      if (!generation) {
-        return yield* new HostRefused({ reason: `no workflow "${id}" is loaded here` });
-      }
-      return generation;
-    });
-
-    const routed = Effect.fn("Native.routed")(function* (runId: string) {
-      const row = yield* store.run(runId);
-      if (row === null) {
-        return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
-      }
-      const generation = live.get(row.generation);
-      if (!generation) {
-        return yield* new HostRefused({
-          reason:
-            unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
-        });
-      }
-      return { generation, execution: row.execution };
-    });
-
-    // One registration at a time. Two clients starting different modules of one id at the
-    // same moment would otherwise mint one name for both and stage over each other.
-    const registering = yield* Semaphore.make(1);
-
-    const mint = Effect.fn("Native.Registry.mint")(function* (file: string) {
-      // Read as it is now to learn the id this file claims, then register the next
-      // generation of that id.
-      const described = yield* loadEntry(file, yield* revisionOf(directoryOf(file)));
-      const route = {
-        workflow: described.id,
-        name: nextRegistrationName(known, described.id),
-        entry: file,
-      };
-      const generation = yield* register(route);
-      known = [...known, route];
-      yield* store.remember(route);
-      return generation;
-    });
-
-    const useEntry = (options: { readonly entry: string; readonly revision: string }) =>
-      registering.withPermits(1)(
-        Effect.gen(function* () {
-          const source = `${options.entry}@${options.revision}`;
-          for (const generation of live.values()) {
-            if (generation.source === source) return generation;
-          }
-          return yield* mint(options.entry);
-        }),
-      );
-
-    const resolve = Effect.fn("Native.Registry.resolve")(function* (options: {
-      readonly project: string;
-      readonly id: string;
-    }) {
-      if (locate === undefined) return yield* newest(options.id);
-      const found = yield* locate(options);
-      return yield* useEntry(found).pipe(
-        Effect.mapError(
-          (failure) => new HostRefused({ reason: `${failure.file}: ${failure.message}` }),
-        ),
-      );
-    });
-
-    /**
-     * A Run, the module it would be offered from now, and the facts those offers are
-     * decided on. The generation is resolved in the Run's own project rather than taken
-     * from the row: what is offered is the current code's to say, and a module that has
-     * been edited away leaves the Run readable and its offers refused with the reason.
-     */
-    const offeredBy = Effect.fn("Native.Registry.offeredBy")(function* (runId: string) {
-      const row = yield* store.run(runId);
-      if (row === null) {
-        return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
-      }
-      const generation = yield* resolve({ project: row.project, id: row.workflow });
-      const options = yield* decodeStrings(row.options ?? "{}").pipe(
-        Effect.orElseSucceed((): Record<string, string> => ({})),
-      );
-      const found = yield* routed(runId);
-      const state = pollStatus(
-        yield* engine.poll(found.generation.registration.workflow, found.execution),
-        found.generation.entry,
-      );
-      const asked = options.outcome ?? UNSPECIFIED;
-      const where = runDir(dir, runId);
-      // The facts a host has about a native Run. What it was launched with and how it
-      // ended are the row's; the tickets it wrote and the findings it left are read from
-      // its own directory, because producing them is the only way a Run can have them.
-      const facts: ActionFacts = {
-        outcome: isOutcome(asked) ? asked : "unspecified",
-        succeeded: state.status === "complete",
-        branch: options.branch ?? null,
-        mrUrl: null,
-        planIssues: yield* planIssuesIn(where),
-        disposed: false,
-        openFindings: yield* openFindingsIn(where),
-        diffTarget: pointedAt(
-          generation,
-          yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
-        ),
-      };
-      return { row, generation, facts, where };
-    });
-
-    const startWork = Effect.fn("Native.Registry.start")(function* (options: {
-      readonly generation: Generation;
-      readonly request: string;
-      readonly project: string;
-      readonly runId?: string;
-      readonly input: Readonly<Record<string, Schema.Json>>;
-      readonly text?: Readonly<Record<string, string>>;
-      readonly options?: Readonly<Record<string, string>>;
-      readonly task?: string | null;
-      readonly parent?: string | null;
-    }) {
-      const generation = options.generation;
-      const runId =
-        options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
-      const asked = options.options ?? {};
-      yield* refuseOptions(generation, asked);
-      const launch = launchOptions(generation, asked);
-      // Settled before anything exists to clean up: an input the workflow's own schema
-      // rejects names its field here, and no row, claim or execution is created.
-      const settled = yield* settleInput(generation.fields, {
-        json: options.input,
-        text: options.text ?? {},
-      });
-      const payload = yield* Schema.decodeUnknownEffect(
-        generation.registration.workflow.payloadSchema,
-      )({ runId, input: settled.input }).pipe(
-        Effect.mapError(
-          (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` }),
-        ),
-      );
-      const claimed = yield* store.admit({
-        request: options.request,
+    const generation = yield* resolve({ project: parent.project, id: ask.workflow }).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    const runId = childRunId(ask);
+    // The host's own options, held to the same rule a front door's are: a name that is
+    // not the host's would be a field the child's author never declared.
+    const asked = ask.options ?? {};
+    yield* refuseOptions(generation, asked).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    const settled = yield* settleInput(generation.fields, { json: ask.input, text: {} }).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    const payload = yield* Schema.decodeUnknownEffect(
+      generation.registration.workflow.payloadSchema,
+    )({ runId, input: settled.input }).pipe(
+      Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
+    );
+    const claimed = yield* store
+      .admit({
+        // The invocation is the claim, so replaying the parent admits nothing new and
+        // changing what an invocation is given is refused rather than run twice.
+        request: runId,
         run: runId,
         workflow: generation.id,
-        project: options.project,
+        project: parent.project,
         input: settled.input,
         provenance: settled.provenance,
-        options: launch,
+        options: launchOptions(generation, asked),
         generation: generation.name,
         execution: yield* generation.registration.workflow.executionId(payload),
-        task: options.task ?? null,
-        parent: options.parent ?? null,
-      });
-      remember(claimed.row);
-      // Frozen with the Run, so editing the project's list changes the next one.
-      yield* freezeApproved({
-        dir,
-        runId: claimed.row.run,
-        project: options.project,
-        configDir,
-      }).pipe(Effect.ignore);
-      // A retry of work the engine already has is nothing more to do; one that crashed
-      // before it heard is handed over now, under the identity it was admitted with.
-      if (claimed.row.accepted === null) yield* handOver(claimed.row);
-      return {
-        runId: claimed.row.run,
-        registration: claimed.row.generation,
-        execution: claimed.row.execution,
-        fresh: claimed.fresh,
-      };
-    });
-
+        task: parent.task,
+        parent: ask.runId,
+      })
+      .pipe(Effect.mapError((conflict) => refused(conflict.reason)));
+    remember(claimed.row);
+    // A child is a Run, so what it may verify is frozen with it rather than read when
+    // it asks: the same list, and the same moment, as the start of any other.
+    yield* freezeApproved({
+      dir,
+      runId: claimed.row.run,
+      project: parent.project,
+      configDir,
+    }).pipe(Effect.ignore);
+    // The parent hands its own children over, so the receipt is written here: a host
+    // sweep dispatching one would give the engine a child with no parent to wake.
+    yield* store.accepted(claimed.row.run);
     return {
-      load: (file: string) => registering.withPermits(1)(mint(file)),
+      runId: claimed.row.run,
+      workflow: generation.id,
+      invocation: ask.invocation,
+      fresh: claimed.fresh,
+    };
+  });
 
-      use: useEntry,
-      resolve,
+  const runChild = Effect.fn("Native.children.result")(function* (child: ChildRun) {
+    const found = yield* routed(child.runId).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    const row = yield* store.run(child.runId);
+    if (row === null) return yield* refused(`no run "${child.runId}" was started here`);
+    const payload = yield* payloadOf(found.generation, row).pipe(
+      Effect.mapError(() => refused(`${found.generation.entry} no longer takes ${row.input}`)),
+    );
+    // Executed on the parent's own fiber, which is what links the two: the engine
+    // reads the parent's instance from here, so the child's completion wakes the
+    // parent and interrupting the parent reaches the child.
+    return yield* found.generation.registration.workflow.execute(payload);
+  });
 
-      registrations: held,
+  // What was registered before this host existed, rebuilt from the modules as they are
+  // now. A file that has gone leaves its generation unavailable and every other one
+  // registered, which is what keeps one broken module from stopping the rest.
+  for (const route of known) {
+    yield* register(route).pipe(
+      Effect.catchTag("NativeEntryError", (failure) =>
+        Effect.sync(() => unavailable.set(route.name, `${failure.file}: ${failure.message}`)),
+      ),
+    );
+  }
 
-      waiting: asked,
-      view,
-      views: (task: string | null) =>
-        store.runs.pipe(
-          Effect.flatMap((rows) =>
-            Effect.forEach(task === null ? rows : rows.filter((row) => row.task === task), viewOf),
-          ),
+  /** A host dying where the proof needs one to; nothing else ever sets this. */
+  const crash = (point: CrashPoint) =>
+    crashAt === point
+      ? currentPid.pipe(
+          Effect.flatMap((pid) => signalProcess(pid, "SIGKILL")),
+          Effect.asVoid,
+        )
+      : Effect.void;
+
+  const payloadOf = (generation: Generation, row: RunRow) =>
+    decodeInput(row.input).pipe(
+      Effect.flatMap((input) =>
+        Schema.decodeUnknownEffect(generation.registration.workflow.payloadSchema)({
+          runId: row.run,
+          input,
+        }),
+      ),
+    );
+
+  /**
+   * Gives the engine work that is recorded and not yet accepted, and writes the receipt.
+   * A start, a retry of one that crashed before the engine heard, and a host that starts
+   * with rows outstanding all come through here — under the identity the row was
+   * admitted with, so the engine's own idempotency makes a repeat a no-op rather than a
+   * second run.
+   *
+   * Nothing happens where it cannot be handed over: the module is not registered here,
+   * or no longer takes what it was started with. The row stays as it is, for a repair.
+   */
+  const handOver = Effect.fn("Native.handOver")(function* (row: RunRow) {
+    const generation = live.get(row.generation);
+    if (generation === undefined) return;
+    const payload = yield* payloadOf(generation, row).pipe(Effect.result);
+    if (payload._tag === "Failure") return;
+    yield* crash("admitted");
+    yield* engine
+      .execute(generation.registration.workflow, {
+        executionId: row.execution,
+        payload: payload.success,
+        discard: true,
+      })
+      .pipe(Effect.orDie);
+    yield* crash("executed");
+    yield* store.accepted(row.run);
+  });
+
+  // What a host admitted and did not live to hand over. Both crash windows end here.
+  for (const row of yield* store.pending) yield* handOver(row);
+
+  /** The file a generation was built from, which a row keeps naming after it has gone. */
+  const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
+
+  const viewOf = Effect.fn("Native.viewOf")(function* (row: RunRow) {
+    const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
+    const admitted = {
+      runId: row.run,
+      workflow: row.workflow,
+      project: row.project,
+      task: row.task,
+      parent: row.parent,
+      registration: row.generation,
+      entry: entryOf(row.generation),
+      input,
+      provenance: yield* decodeStrings(row.provenance ?? "{}").pipe(
+        Effect.orElseSucceed((): Record<string, string> => ({})),
+      ),
+      options: yield* decodeStrings(row.options ?? "{}").pipe(
+        Effect.orElseSucceed((): Record<string, string> => ({})),
+      ),
+    };
+    const outcome = admitted.options.outcome ?? UNSPECIFIED;
+    const generation = live.get(row.generation);
+    const about = {
+      ...admitted,
+      outcome,
+      created: row.admitted,
+      waiting: yield* asked(row.run),
+      controls: yield* controlsOf(row.run),
+    };
+    // Not registered here is not a verdict on the work: the rows are all still there,
+    // and what is missing is the module, named so somebody can put it back.
+    if (generation === undefined) {
+      return {
+        ...about,
+        status: { status: "pending" as const },
+        diagnostic:
+          unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
+      };
+    }
+    const result = yield* engine.poll(generation.registration.workflow, row.execution);
+    return { ...about, status: pollStatus(result, generation.entry), diagnostic: null };
+  });
+
+  const setControl = Effect.fn("Native.setControl")(function* (
+    runId: string,
+    control: string,
+    set: boolean,
+  ) {
+    const path = controlPath(dir, control, runId);
+    yield* (set ? fs.writeFileString(path, "") : fs.remove(path).pipe(Effect.ignore)).pipe(
+      Effect.orDie,
+    );
+  });
+
+  /** Which controls an operator has set over this run. */
+  const controlsOf = Effect.fn("Native.controlsOf")(function* (runId: string) {
+    const set: string[] = [];
+    for (const control of [HOLD, STOP]) {
+      const on = yield* fs
+        .exists(controlPath(dir, control, runId))
+        .pipe(Effect.orElseSucceed(() => false));
+      if (on) set.push(control);
+    }
+    return set;
+  });
+
+  /**
+   * Wakes a run and waits for it to settle where it is going next.
+   *
+   * A woken run runs before it parks again, and a completion that arrives inside that
+   * window is delivered to a run that is not waiting on anything yet — so it is lost,
+   * and resuming afterwards does not bring it back. Returning only once the run has
+   * settled is what makes the next thing an operator does land on it.
+   */
+  const wake = Effect.fn("Native.wake")(function* (found: {
+    readonly generation: Generation;
+    readonly execution: string;
+  }) {
+    const workflow = found.generation.registration.workflow;
+    yield* engine.resume(workflow, found.execution);
+    yield* engine.poll(workflow, found.execution).pipe(
+      Effect.map((result) => pollStatus(result, found.generation.entry).status),
+      Effect.flatMap((status) =>
+        status === "pending" ? Effect.fail(new Error("still running")) : Effect.void,
+      ),
+      Effect.retry({ times: WAKE_TRIES, schedule: Schedule.spaced(WAKE_INTERVAL) }),
+      Effect.ignore,
+    );
+  });
+
+  /** Every question this run has been asked, with the answers its options allow. */
+  const asked = Effect.fn("Native.asked")(function* (runId: string) {
+    const rows = yield* store.asked(runId);
+    const none: ReadonlyArray<string> = [];
+    return yield* Effect.forEach(rows, (row) =>
+      decodeOptions(row.options).pipe(
+        Effect.orElseSucceed(() => none),
+        Effect.map((options) => ({
+          name: row.decision,
+          prompt: row.prompt,
+          options,
+          answer: row.answer,
+        })),
+      ),
+    );
+  });
+
+  const view = (runId: string) =>
+    store
+      .run(runId)
+      .pipe(Effect.flatMap((row) => (row === null ? Effect.succeed(null) : viewOf(row))));
+
+  /**
+   * What the engine last said about each run it may still change. Upstream's tables are
+   * upstream's: a write there invalidates nothing of Collie's, so one fiber asks on a
+   * schedule every client shares and says so once — rather than each client looping.
+   */
+  const watched = new Map<string, { readonly row: RunRow; said: string }>();
+  const remember = (row: RunRow) => watched.set(row.run, { row, said: "" });
+  for (const row of yield* store.runs) remember(row);
+  /** How many clients are listening. A host nobody is watching asks nothing at all. */
+  let watchers = 0;
+
+  const sweep = Effect.gen(function* () {
+    if (watchers === 0) return;
+    let changed = false;
+    for (const [runId, entry] of watched) {
+      const status = (yield* viewOf(entry.row)).status;
+      const said = encodeStatus(status);
+      if (said === entry.said) continue;
+      entry.said = said;
+      changed = true;
+      // A run the engine has finished with cannot change again, so nothing asks after.
+      if (status.status === "complete" || status.status === "failed") watched.delete(runId);
+    }
+    if (changed) yield* store.announce;
+  });
+  yield* Effect.forkScoped(sweep.pipe(Effect.repeat(Schedule.spaced(SWEEP_INTERVAL))));
+
+  /** What this host is holding, as a caller may see it. */
+  const held = Effect.sync(() => ({
+    live: [...live.keys()].sort(),
+    unavailable: [...unavailable.entries()].map(([name, why]) => `${name}: ${why}`).sort(),
+  }));
+
+  const newest = Effect.fn("Native.newest")(function* (id: string) {
+    const generation = live.get(newestOf.get(id) ?? "");
+    if (!generation) {
+      return yield* new HostRefused({ reason: `no workflow "${id}" is loaded here` });
+    }
+    return generation;
+  });
+
+  const routed = Effect.fn("Native.routed")(function* (runId: string) {
+    const row = yield* store.run(runId);
+    if (row === null) {
+      return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
+    }
+    const generation = live.get(row.generation);
+    if (!generation) {
+      return yield* new HostRefused({
+        reason:
+          unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
+      });
+    }
+    return { generation, execution: row.execution };
+  });
+
+  // One registration at a time. Two clients starting different modules of one id at the
+  // same moment would otherwise mint one name for both and stage over each other.
+  const registering = yield* Semaphore.make(1);
+
+  const mint = Effect.fn("Native.Registry.mint")(function* (file: string) {
+    // Read as it is now to learn the id this file claims, then register the next
+    // generation of that id.
+    const described = yield* loadEntry(file, yield* revisionOf(directoryOf(file)));
+    const route = {
+      workflow: described.id,
+      name: nextRegistrationName(known, described.id),
+      entry: file,
+    };
+    const generation = yield* register(route);
+    known = [...known, route];
+    yield* store.remember(route);
+    return generation;
+  });
+
+  const useEntry = (options: { readonly entry: string; readonly revision: string }) =>
+    registering.withPermits(1)(
+      Effect.gen(function* () {
+        const source = `${options.entry}@${options.revision}`;
+        for (const generation of live.values()) {
+          if (generation.source === source) return generation;
+        }
+        return yield* mint(options.entry);
+      }),
+    );
+
+  const resolve = Effect.fn("Native.Registry.resolve")(function* (options: {
+    readonly project: string;
+    readonly id: string;
+  }) {
+    if (locate === undefined) return yield* newest(options.id);
+    const found = yield* locate(options);
+    return yield* useEntry(found).pipe(
+      Effect.mapError(
+        (failure) => new HostRefused({ reason: `${failure.file}: ${failure.message}` }),
+      ),
+    );
+  });
+
+  /**
+   * A Run, the module it would be offered from now, and the facts those offers are
+   * decided on. The generation is resolved in the Run's own project rather than taken
+   * from the row: what is offered is the current code's to say, and a module that has
+   * been edited away leaves the Run readable and its offers refused with the reason.
+   */
+  const offeredBy = Effect.fn("Native.Registry.offeredBy")(function* (runId: string) {
+    const row = yield* store.run(runId);
+    if (row === null) {
+      return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
+    }
+    const generation = yield* resolve({ project: row.project, id: row.workflow });
+    const options = yield* decodeStrings(row.options ?? "{}").pipe(
+      Effect.orElseSucceed((): Record<string, string> => ({})),
+    );
+    const found = yield* routed(runId);
+    const state = pollStatus(
+      yield* engine.poll(found.generation.registration.workflow, found.execution),
+      found.generation.entry,
+    );
+    const asked = options.outcome ?? UNSPECIFIED;
+    const where = runDir(dir, runId);
+    // The facts a host has about a native Run. What it was launched with and how it
+    // ended are the row's; the tickets it wrote and the findings it left are read from
+    // its own directory, because producing them is the only way a Run can have them.
+    const facts: ActionFacts = {
+      outcome: isOutcome(asked) ? asked : "unspecified",
+      succeeded: state.status === "complete",
+      branch: options.branch ?? null,
+      mrUrl: null,
+      planIssues: yield* planIssuesIn(where),
+      disposed: false,
+      openFindings: yield* openFindingsIn(where),
+      diffTarget: pointedAt(
+        generation,
+        yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
+      ),
+    };
+    return { row, generation, facts, where };
+  });
+
+  const startWork = Effect.fn("Native.Registry.start")(function* (options: {
+    readonly generation: Generation;
+    readonly request: string;
+    readonly project: string;
+    readonly runId?: string;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly text?: Readonly<Record<string, string>>;
+    readonly options?: Readonly<Record<string, string>>;
+    readonly task?: string | null;
+    readonly parent?: string | null;
+  }) {
+    const generation = options.generation;
+    const runId =
+      options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
+    const asked = options.options ?? {};
+    yield* refuseOptions(generation, asked);
+    const launch = launchOptions(generation, asked);
+    // Settled before anything exists to clean up: an input the workflow's own schema
+    // rejects names its field here, and no row, claim or execution is created.
+    const settled = yield* settleInput(generation.fields, {
+      json: options.input,
+      text: options.text ?? {},
+    });
+    const payload = yield* Schema.decodeUnknownEffect(
+      generation.registration.workflow.payloadSchema,
+    )({ runId, input: settled.input }).pipe(
+      Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
+    );
+    const claimed = yield* store.admit({
+      request: options.request,
+      run: runId,
+      workflow: generation.id,
+      project: options.project,
+      input: settled.input,
+      provenance: settled.provenance,
+      options: launch,
+      generation: generation.name,
+      execution: yield* generation.registration.workflow.executionId(payload),
+      task: options.task ?? null,
+      parent: options.parent ?? null,
+    });
+    remember(claimed.row);
+    // Frozen with the Run, so editing the project's list changes the next one.
+    yield* freezeApproved({
+      dir,
+      runId: claimed.row.run,
+      project: options.project,
+      configDir,
+    }).pipe(Effect.ignore);
+    // A retry of work the engine already has is nothing more to do; one that crashed
+    // before it heard is handed over now, under the identity it was admitted with.
+    if (claimed.row.accepted === null) yield* handOver(claimed.row);
+    return {
+      runId: claimed.row.run,
+      registration: claimed.row.generation,
+      execution: claimed.row.execution,
+      fresh: claimed.fresh,
+    };
+  });
+
+  return {
+    load: (file: string) => registering.withPermits(1)(mint(file)),
+
+    use: useEntry,
+    resolve,
+
+    registrations: held,
+
+    waiting: asked,
+    view,
+    views: (task: string | null) =>
+      store.runs.pipe(
+        Effect.flatMap((rows) =>
+          Effect.forEach(task === null ? rows : rows.filter((row) => row.task === task), viewOf),
         ),
-      watch: (runId: string) =>
-        store
-          .watching(view(runId))
-          .pipe(
-            Stream.onStart(Effect.sync(() => (watchers += 1))),
-            Stream.ensuring(Effect.sync(() => (watchers -= 1))),
-          ),
+      ),
+    importing: importHistory(dir).pipe(Effect.orDie),
+    history: (task: string | null) =>
+      store.history.pipe(
+        Effect.map((rows) => (task === null ? rows : rows.filter((row) => row.task === task))),
+      ),
+    watch: (runId: string) =>
+      store
+        .watching(view(runId))
+        .pipe(
+          Stream.onStart(Effect.sync(() => (watchers += 1))),
+          Stream.ensuring(Effect.sync(() => (watchers -= 1))),
+        ),
 
-      recover: Effect.gen(function* () {
-        yield* registering.withPermits(1)(
-          Effect.forEach(known, (route) =>
-            live.has(route.name)
-              ? Effect.void
-              : register(route).pipe(
-                  Effect.catchTag("NativeEntryError", (failure) =>
-                    Effect.sync(() =>
-                      unavailable.set(route.name, `${failure.file}: ${failure.message}`),
-                    ),
+    recover: Effect.gen(function* () {
+      yield* registering.withPermits(1)(
+        Effect.forEach(known, (route) =>
+          live.has(route.name)
+            ? Effect.void
+            : register(route).pipe(
+                Effect.catchTag("NativeEntryError", (failure) =>
+                  Effect.sync(() =>
+                    unavailable.set(route.name, `${failure.file}: ${failure.message}`),
                   ),
                 ),
-          ),
-        );
-        for (const row of yield* store.pending) yield* handOver(row);
-        return yield* held;
-      }),
-
-      newest,
-      routed,
-
-      offers: (runId: string) =>
-        offeredBy(runId).pipe(
-          Effect.map(({ generation, facts }) =>
-            offersFrom(generation.offers, facts, {
-              self: generation.id,
-              keepUnavailable: true,
-            }),
-          ),
+              ),
         ),
+      );
+      for (const row of yield* store.pending) yield* handOver(row);
+      return yield* held;
+    }),
 
-      invoke: Effect.fn("Native.Registry.invoke")(function* (options: {
-        readonly runId: string;
-        readonly offer: string;
-        readonly input: Readonly<Record<string, Schema.Json>>;
-        readonly request: string;
-      }) {
-        const { row, generation, facts, where } = yield* offeredBy(options.runId);
-        // Asked again here, of the module as it is now: the card this was read from may
-        // have been drawn before the file was edited, and a card is not authority.
-        const offer = offersFrom(generation.offers, facts, { self: generation.id }).find(
-          (one) => one.id === options.offer,
-        );
-        if (offer === undefined) {
-          return yield* new HostRefused({
-            reason: `run "${options.runId}" does not offer "${options.offer}" now`,
-          });
-        }
-        const starting = yield* resolve({ project: row.project, id: offer.workflow });
-        // What the offer said Collie fills in, filled from the Run it is about. The
-        // caller's own values win: an offer names where a value comes from, and a caller
-        // that has a better one for the same field is not overruled by a default.
-        const filled = { ...inputsFor(offer, { runDir: where, facts }), ...options.input };
-        // The offer's own workflow settles what it was given, so arguments it will not
-        // take are refused here and nothing is started.
-        return yield* startWork({
-          generation: starting,
-          request: options.request,
-          project: row.project,
-          input: filled,
-          task: row.task,
-          parent: row.run,
+    newest,
+    routed,
+
+    offers: (runId: string) =>
+      offeredBy(runId).pipe(
+        Effect.map(({ generation, facts }) =>
+          offersFrom(generation.offers, facts, {
+            self: generation.id,
+            keepUnavailable: true,
+          }),
+        ),
+      ),
+
+    invoke: Effect.fn("Native.Registry.invoke")(function* (options: {
+      readonly runId: string;
+      readonly offer: string;
+      readonly input: Readonly<Record<string, Schema.Json>>;
+      readonly request: string;
+    }) {
+      const { row, generation, facts, where } = yield* offeredBy(options.runId);
+      // Asked again here, of the module as it is now: the card this was read from may
+      // have been drawn before the file was edited, and a card is not authority.
+      const offer = offersFrom(generation.offers, facts, { self: generation.id }).find(
+        (one) => one.id === options.offer,
+      );
+      if (offer === undefined) {
+        return yield* new HostRefused({
+          reason: `run "${options.runId}" does not offer "${options.offer}" now`,
         });
-      }),
+      }
+      const starting = yield* resolve({ project: row.project, id: offer.workflow });
+      // What the offer said Collie fills in, filled from the Run it is about. The
+      // caller's own values win: an offer names where a value comes from, and a caller
+      // that has a better one for the same field is not overruled by a default.
+      const filled = { ...inputsFor(offer, { runDir: where, facts }), ...options.input };
+      // The offer's own workflow settles what it was given, so arguments it will not
+      // take are refused here and nothing is started.
+      return yield* startWork({
+        generation: starting,
+        request: options.request,
+        project: row.project,
+        input: filled,
+        task: row.task,
+        parent: row.run,
+      });
+    }),
 
-      start: startWork,
+    start: startWork,
 
-      status: Effect.fn("Native.Registry.status")(function* (runId: string) {
-        const found = yield* routed(runId);
-        const result = yield* engine.poll(found.generation.registration.workflow, found.execution);
-        return pollStatus(result, found.generation.entry);
-      }),
+    status: Effect.fn("Native.Registry.status")(function* (runId: string) {
+      const found = yield* routed(runId);
+      const result = yield* engine.poll(found.generation.registration.workflow, found.execution);
+      return pollStatus(result, found.generation.entry);
+    }),
 
-      answer: Effect.fn("Native.Registry.answer")(function* (options: {
-        readonly runId: string;
-        readonly decision: string | null;
-        readonly value: string;
-        readonly request: string;
-      }) {
-        const found = yield* routed(options.runId);
-        const asks = yield* asked(options.runId);
-        const open = asks.filter((one) => one.answer === null);
-        const sole = options.decision === null ? soleOpen(options.runId, open) : null;
-        if (sole !== null) return yield* sole;
-        const name = options.decision ?? open[0]?.name ?? "";
-        // Every question, not only the open ones: one already answered and one never
-        // asked are different refusals, and an operator is owed the difference.
-        const question = asks.find((one) => one.name === name);
-        if (question === undefined) {
-          return yield* new HostRefused({
-            reason: `run "${options.runId}" is not waiting on a decision called "${name}"`,
-          });
-        }
-        if (question.options.length > 0 && !question.options.includes(options.value)) {
-          return yield* new HostRefused({
-            reason: `"${options.value}" is not one of ${question.options.join(", ")}`,
-          });
-        }
-        // Checked before the answer is recorded: an answer the module has no deferred for
-        // would otherwise close the question against a run nothing could ever resume.
-        if (!found.generation.registration.decisions[name]) {
-          return yield* new HostRefused({
-            reason: `${found.generation.entry} declares no decision called "${name}"`,
-          });
-        }
-        // Recorded first, and only the caller the write hands the row to completes the
-        // deferred: two answers racing are separated by the database, not by timing.
-        const settled = yield* store.settle({
-          run: options.runId,
-          decision: name,
-          value: options.value,
-          request: options.request,
+    answer: Effect.fn("Native.Registry.answer")(function* (options: {
+      readonly runId: string;
+      readonly decision: string | null;
+      readonly value: string;
+      readonly request: string;
+    }) {
+      const found = yield* routed(options.runId);
+      const asks = yield* asked(options.runId);
+      const open = asks.filter((one) => one.answer === null);
+      const sole = options.decision === null ? soleOpen(options.runId, open) : null;
+      if (sole !== null) return yield* sole;
+      const name = options.decision ?? open[0]?.name ?? "";
+      // Every question, not only the open ones: one already answered and one never
+      // asked are different refusals, and an operator is owed the difference.
+      const question = asks.find((one) => one.name === name);
+      if (question === undefined) {
+        return yield* new HostRefused({
+          reason: `run "${options.runId}" is not waiting on a decision called "${name}"`,
         });
-        if (settled._tag === "refused") {
-          return yield* new HostRefused({ reason: settled.reason });
-        }
-        if (settled._tag === "repeat") {
-          return { runId: options.runId, decision: name, value: options.value, fresh: false };
-        }
-        yield* answerDecision(found.generation.registration, {
-          name,
-          executionId: found.execution,
-          value: options.value,
-        }).pipe(Effect.mapError((failure) => new HostRefused({ reason: failure.message })));
+      }
+      if (question.options.length > 0 && !question.options.includes(options.value)) {
+        return yield* new HostRefused({
+          reason: `"${options.value}" is not one of ${question.options.join(", ")}`,
+        });
+      }
+      // Checked before the answer is recorded: an answer the module has no deferred for
+      // would otherwise close the question against a run nothing could ever resume.
+      if (!found.generation.registration.decisions[name]) {
+        return yield* new HostRefused({
+          reason: `${found.generation.entry} declares no decision called "${name}"`,
+        });
+      }
+      // Recorded first, and only the caller the write hands the row to completes the
+      // deferred: two answers racing are separated by the database, not by timing.
+      const settled = yield* store.settle({
+        run: options.runId,
+        decision: name,
+        value: options.value,
+        request: options.request,
+      });
+      if (settled._tag === "refused") {
+        return yield* new HostRefused({ reason: settled.reason });
+      }
+      if (settled._tag === "repeat") {
+        return { runId: options.runId, decision: name, value: options.value, fresh: false };
+      }
+      yield* answerDecision(found.generation.registration, {
+        name,
+        executionId: found.execution,
+        value: options.value,
+      }).pipe(Effect.mapError((failure) => new HostRefused({ reason: failure.message })));
 
-        return { runId: options.runId, decision: name, value: options.value, fresh: true };
-      }),
+      return { runId: options.runId, decision: name, value: options.value, fresh: true };
+    }),
 
-      control: Effect.fn("Native.Registry.control")(function* (options: {
-        readonly runId: string;
-        readonly control: string;
-        readonly set: boolean;
-      }) {
-        // Written before anything is woken, so a run that wakes up never finds the
-        // request that stopped it still there.
-        yield* setControl(options.runId, options.control, options.set);
-        const found = yield* routed(options.runId).pipe(Effect.result);
-        const recorded = { runId: options.runId, control: options.control, set: options.set };
-        if (found._tag === "Failure") {
-          return { ...recorded, applied: false, detail: found.failure.reason };
-        }
-        // A hold is read at the next boundary and needs no waking. Everything else does:
-        // a run parked on its question has nothing that would make it look again.
-        if (!(options.control === HOLD && options.set)) yield* wake(found.success);
-        return { ...recorded, applied: true, detail: "" };
-      }),
+    control: Effect.fn("Native.Registry.control")(function* (options: {
+      readonly runId: string;
+      readonly control: string;
+      readonly set: boolean;
+    }) {
+      // Written before anything is woken, so a run that wakes up never finds the
+      // request that stopped it still there.
+      yield* setControl(options.runId, options.control, options.set);
+      const found = yield* routed(options.runId).pipe(Effect.result);
+      const recorded = { runId: options.runId, control: options.control, set: options.set };
+      if (found._tag === "Failure") {
+        return { ...recorded, applied: false, detail: found.failure.reason };
+      }
+      // A hold is read at the next boundary and needs no waking. Everything else does:
+      // a run parked on its question has nothing that would make it look again.
+      if (!(options.control === HOLD && options.set)) yield* wake(found.success);
+      return { ...recorded, applied: true, detail: "" };
+    }),
 
-      steer: Effect.fn("Native.Registry.steer")(function* (options: {
-        readonly runId: string;
-        readonly text: string;
-        readonly request: string;
-        readonly operation?: string;
-        readonly mode?: Agents.DeliveryMode;
-      }) {
-        // Routed first: a run this host is not holding has no agent it can vouch for.
-        yield* routed(options.runId);
-        const agents = yield* NativeAgents;
-        return yield* agents.steer(options);
-      }),
-    } satisfies RegistryApi;
-  });
+    steer: Effect.fn("Native.Registry.steer")(function* (options: {
+      readonly runId: string;
+      readonly text: string;
+      readonly request: string;
+      readonly operation?: string;
+      readonly mode?: Agents.DeliveryMode;
+    }) {
+      // Routed first: a run this host is not holding has no agent it can vouch for.
+      yield* routed(options.runId);
+      const agents = yield* NativeAgents;
+      return yield* agents.steer(options);
+    }),
+  } satisfies RegistryApi;
+});
 
 const decodeOptions = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(Schema.String)),

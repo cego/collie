@@ -28,14 +28,14 @@ import {
   carryOutAsked,
   carryOutProposal,
   declineProposal,
-  holdRun,
-  holdWorkspace,
   newRequestId,
   request,
   runFacts,
   workspaceCwdFromPanes,
 } from "./operations";
 import { ActionSchema, type Action } from "./evaluator";
+import { nativeRuns, nativeSettled } from "./lifecycle";
+import { taskOfWorkspace } from "./task";
 import {
   actorName,
   pendingFor,
@@ -65,14 +65,7 @@ import { RunStore, type Run } from "./run";
 import { nowIso, untilFrom } from "./time";
 import { attentionFor } from "./attention";
 import { deliveriesOf, herdOf } from "./steering";
-import { inboxFiles, InboxCommandJson } from "./driver";
-import {
-  loadDefinitions,
-  layers,
-  resolveWorkflow,
-  skillDirs,
-  validateWorkflow,
-} from "./definitions";
+import { loadDefinitions, layers, skillDirs } from "./definitions";
 import { chatHarnessOf, chatPath, pushable, readChat, whyUnavailable } from "./chat";
 import { closable, decide, homePath, readHome, UNREADABLE } from "./home";
 import { doctor } from "./doctor";
@@ -699,17 +692,30 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObjec
   const why = reason ?? "asked in chat";
   const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
 
-  if (workspace !== undefined) {
-    const answered = yield* holdWorkspace(env.stateDir, workspace, why, requestId, ends, "chat");
-    return answered.ok ? answered.human : answered.error.message;
-  }
-  const found = yield* new RunStore(env.stateDir)
-    .load(run!)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
-  if (found === null) return `Collie has no Run "${run}". Read collie_herd and name one of those.`;
-  const answered = yield* holdRun(found, why, requestId, ends, "chat");
+  // One channel for every control, so what chat can do to a Run is exactly what the
+  // board and the CLI can do to it — including which Runs there are to do it to.
+  const oneRun: Action =
+    ends === null ? { kind: "hold", run: run! } : { kind: "hold", run: run!, until: ends };
+  const held = yield* carryOutAsked(
+    env,
+    workspace === undefined ? [oneRun] : yield* holdsFor(env, workspace),
+    { origin: "chat", requestId },
+  );
   const about = on === null ? "" : `On the board's selection, "${on.name}": `;
-  return about + (answered.ok ? answered.human : answered.error.message);
+  return (
+    about +
+    (held.length === 0
+      ? `Nothing here is running${why === "" ? "" : ` (${why})`}.`
+      : held.map((result) => `${result.kind}: ${result.state} ${result.note}`.trim()).join("\n"))
+  );
+});
+
+/** Every Run of the Task this workspace belongs to, as one hold each. */
+const holdsFor = Effect.fn("Tools.holdsFor")(function* (env: PluginEnv, workspace: string) {
+  const task = yield* taskOfWorkspace(env.stateDir, workspace);
+  if (task === null) return [];
+  const runs = (yield* nativeRuns(env, task.id)).runs.filter((view) => !nativeSettled(view));
+  return runs.map((view) => ({ kind: "hold" as const, run: view.runId }));
 });
 
 /** What `collie_workspaces` answers with: where a Run could go, and what could start. */
@@ -717,9 +723,7 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
   const herdr = new Herdr(env);
   const all = yield* herdr.workspaceList().pipe(Effect.catch(() => Effect.succeed([])));
   const panes = yield* herdr.paneList().pipe(Effect.catch(() => Effect.succeed([])));
-  const defs = yield* loadDefinitions(yield* layers(env)).pipe(
-    Effect.catch(() => Effect.succeed({ workflows: new Map<string, unknown>() })),
-  );
+  const saved = (yield* savedModules(env)).entries;
   const lines = all.map((workspace) => {
     const cwd =
       workspace.cwd !== "" ? workspace.cwd : workspaceCwdFromPanes(workspace.workspaceId, panes);
@@ -734,7 +738,12 @@ const workspaceFacts = Effect.fn("Tools.workspaces")(function* (env: PluginEnv) 
     ...tasks.map((task) => `- task ${task.id} (${task.label}) in workspace ${task.workspace}`),
     ...(tasks.length === 0 ? ["- (no Tasks)"] : []),
     "",
-    `workflows: ${[...defs.workflows.keys()].sort().join(", ") || "none"}`,
+    `workflows: ${
+      saved
+        .map((one) => one.id)
+        .sort()
+        .join(", ") || "none"
+    }`,
     "",
     "a start may name a workspace id, its label, or the path of a checkout — a directory",
     "with no workspace open on it gets one.",
@@ -770,32 +779,13 @@ const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run:
       ? []
       : pendingFor(yield* readProposals(yield* proposalsPath(env.stateDir, key)), run, now);
   const deliveries = yield* deliveriesOf(env.stateDir, run);
-  // A boundary delivery the Driver has not read yet is in the Run's inbox and on no
-  // ledger. It is the one place a steer can sit without a line, so it is listed too.
-  const fs = yield* FileSystem.FileSystem;
+  // Every delivery is on the ledger now: the one sender writes there before it sends,
+  // so there is no second place a steer can be sitting unrecorded.
   const unread: string[] = [];
-  for (const file of yield* inboxFiles(found.dir).pipe(Effect.catch(() => Effect.succeed([])))) {
-    const command = yield* fs.readFileString(file).pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(InboxCommandJson)),
-      Effect.catch(() => Effect.succeed(null)),
-    );
-    if (command?.type === "deliver" && command.deliver)
-      unread.push(
-        `- ${command.deliver.deliveryId}: in the inbox, not yet read by the Driver, for ${command.deliver.cause.kind}`,
-      );
-  }
-  const attention = yield* attentionFor(found, new Herdr(env));
-  const question = attention.choice;
   return [
     "### Waiting on the human",
     "",
-    ...(question === null
-      ? []
-      : [
-          `- Question ${question.id}: ${question.header}`,
-          ...question.items.map((item) => `  - ${item.title}`),
-        ]),
-    ...(proposals.length === 0 && question === null
+    ...(proposals.length === 0
       ? ["- nothing"]
       : proposals.map(
           (p) => `- ${p.id} (${p.content_hash}): ${p.interpretation} — expires ${p.expires_at}`,
@@ -841,33 +831,12 @@ const definitionFacts = Effect.fn("Tools.definitions")(function* (
     if (module) return moduleFacts(yield* readModule(module), yield* checkModule(module));
     const broken = saved.problems.find((one) => one.id === asked.workflow);
     if (broken) return `${broken.path} will not load: ${broken.message}`;
-    if (!defs.workflows.has(asked.workflow)) return `No Workflow "${asked.workflow}".`;
-    const defaults = yield* loadDefaults(env.configDir);
-    // Resolved, because a Run takes an embedded workflow's Inputs and runs its expanded
-    // Steps: what the file says is not what starts.
-    const wf = resolveWorkflow(asked.workflow, defs, defaults);
-    const problems = yield* validateWorkflow(wf, defs, defaults, yield* skillDirs(env));
-    return [
-      `${wf.name} (${wf.layer}): ${wf.title}`,
-      wf.description,
-      `inputs: ${Object.keys(wf.inputs).join(", ") || "none"}`,
-      `steps: ${wf.steps.map((step) => step.id).join(", ")}`,
-      problems.length === 0
-        ? "checks out"
-        : `problems:\n${problems.map((p) => `- ${p}`).join("\n")}`,
-    ].join("\n");
+    return `No Workflow "${asked.workflow}".`;
   }
-  // A definition an id's module claims is not what that id runs, so it is not offered.
-  const claimed = new Set([...saved.entries, ...saved.problems].map((one) => one.id));
   return [
     "### Workflows",
     "",
-    ...[
-      ...saved.entries.map((one) => `- ${one.id} (${one.layer}): ${one.description}`),
-      ...[...defs.workflows.values()]
-        .filter((wf) => !claimed.has(wf.name))
-        .map((wf) => `- ${wf.name} (${wf.layer}): ${wf.description}`),
-    ].sort(),
+    ...saved.entries.map((one) => `- ${one.id} (${one.layer}): ${one.description}`).sort(),
     ...(saved.problems.length > 0
       ? ["", ...saved.problems.map((one) => `- ${one.id}: ${one.path} will not load`)]
       : []),

@@ -8,9 +8,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { readEnv, type PluginEnv } from "../src/env";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { RunStore } from "../src/run";
-import { inboxFiles } from "../src/driver";
 import { latest, readDispositions } from "../src/disposition";
-import { CHOICE, RUNNER_PID } from "../src/driver";
 import { TOOLS, toolNamed } from "../src/tools";
 import { resetExecutors } from "../src/executors";
 import { mutation } from "../src/envelope";
@@ -182,46 +180,6 @@ test("one Run's detail names what it is for and what bounds it", () =>
       const said = yield* call("collie_run", { run: run.id });
       expect(said).toContain("add a picker");
       expect(said).toContain("build");
-    }),
-  ));
-
-test("chat reads expose the pending question and the legacy launch goal", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const run = yield* aRun("add a picker");
-      yield* writeIntent(run.dir, seedIntent(run.id, {}));
-      run.record.inputs.goal = "redesign the control panel";
-      yield* run.save();
-      yield* fs.writeFileString(
-        `${run.dir}/${RUNNER_PID}`,
-        encodeJson({
-          pid: process.pid,
-          start: null,
-          at: "2026-09-15T12:00:00.000Z",
-        }),
-      );
-      yield* fs.writeFileString(
-        `${run.dir}/${CHOICE}`,
-        encodeJson({
-          id: "trust-question",
-          run: run.id,
-          step: "",
-          kind: "menu",
-          header: "Claude has not worked here before",
-          footer: "Choose",
-          items: [{ id: "trust", title: "Trust it now", subtitle: "Record trust" }],
-        }),
-      );
-
-      const detail = yield* call("collie_run", { run: run.id });
-      expect(detail).toContain("Goal: redesign the control panel");
-      expect(detail).toContain("Claude has not worked here before");
-      expect(detail).toContain("trust-question");
-      expect(detail).toContain("Trust it now");
-      expect(detail).toContain(stateDir);
-      expect(yield* call("collie_herd")).toContain("Claude has not worked here before");
-      expect(yield* call("collie_receipts", { run: run.id })).toContain("Trust it now");
     }),
   ));
 
@@ -795,30 +753,6 @@ test("news is built from the record, and carries no transcripts or diffs", () =>
     }),
   ));
 
-test("collie_hold holds a Run the human asked to hold, and says until when", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const run = yield* aRun("add a picker");
-
-      const said = yield* call("collie_hold", { run: run.id, until: "14:00", reason: "lunch" });
-
-      // Carried out, not proposed: a human's own instruction in chat is theirs, and
-      // sending them to the board for it is chat obstructing the person it serves.
-      expect(said).toContain(run.id);
-      expect(said).toContain("14:00");
-      const files = yield* inboxFiles(run.dir);
-      expect(files).toHaveLength(1);
-      const fs = yield* FileSystem.FileSystem;
-      expect(decodeInbox(yield* fs.readFileString(files[0]!))).toMatchObject({
-        type: "hold",
-        reason: "lunch",
-        by: "chat",
-      });
-      // Nothing was proposed: there is nothing for the human to confirm afterwards.
-      expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual([]);
-    }),
-  ));
-
 test("collie_do carries out what the human asked for, and says what happened", () =>
   runEffect(
     Effect.gen(function* () {
@@ -973,50 +907,6 @@ test("collie_do records what became of the work, and starts a Run when asked to"
       });
       expect(launched).not.toContain("collie_propose");
       expect(launched).toContain("no-such-workflow");
-    }),
-  ));
-
-test("collie_do refuses what is Collie's to propose and the human's to decide", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const run = yield* aRun("add a picker");
-
-      // Its own initiative is a proposal, whatever it calls the tool.
-      const correction = yield* call("collie_do", {
-        actions: [
-          { kind: "update_intent", run: run.id, change: "set-goal", patch: "x", base_version: 1 },
-        ],
-      });
-      expect(correction).toContain("collie_propose");
-      expect(yield* inboxFiles(run.dir)).toHaveLength(0);
-
-      // And nothing here confirms: a yes to a payload is the human's, on the board.
-      expect(yield* call("collie_do", { actions: [] })).toContain("action");
-    }),
-  ));
-
-test("collie_hold holds a whole workspace, and refuses a time nobody can act on", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const one = yield* aRun("add a picker");
-      const two = yield* aRun("fix the parser");
-      for (const run of [one, two]) {
-        run.record.workspace = "w1";
-        yield* run.save();
-      }
-
-      const said = yield* call("collie_hold", { workspace: "w1", until: "14:00" });
-      expect(said).toContain("2");
-      for (const run of [one, two]) expect(yield* inboxFiles(run.dir)).toHaveLength(1);
-
-      // A time the Driver could not read would be a hold that never lifts, so it is
-      // refused here rather than written as words.
-      const refused = yield* call("collie_hold", { run: one.id, until: "soon" });
-      expect(refused).toContain("soon");
-      expect(yield* inboxFiles(one.dir)).toHaveLength(1);
-
-      // Neither a Run nor a workspace is nothing to hold, and it says so.
-      expect(yield* call("collie_hold", {})).toContain("run");
     }),
   ));
 

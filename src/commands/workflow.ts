@@ -14,15 +14,7 @@ import type { PluginEnv } from "../env";
 import { savedModules } from "../lifecycle";
 import { loadEntry } from "../native";
 import { isWorkflowId } from "../sdk";
-import { forkResolvedDefinition } from "../fork";
 import { loadDefaults } from "../config";
-import {
-  resolveWorkflow,
-  skillDirs,
-  validateWorkflow,
-  type ResolvedWorkflow,
-} from "../definitions";
-import { CHAIN_SUPPLIED, ENGINE_SUPPLIED } from "../engine";
 import { KINDED_STRATEGIES } from "../inputs";
 import { reason } from "../naming";
 import { branchListed, mutates, roams } from "../worktree";
@@ -39,7 +31,6 @@ import {
   mutating,
   requestIdFlag,
   root,
-  workflowData,
 } from "./shared";
 
 /** The Workflow a `workflow` subcommand acts on. */
@@ -56,21 +47,10 @@ const workflowList = Command.make("list", {}, () =>
         if (resolved._tag === "ContextFailure") return resolved.result;
         const saved = yield* savedModules(resolved.env);
         const modules = yield* Effect.forEach(saved.entries, readModule);
-        const defs = yield* definitions(resolved.env);
-        // A definition whose id a module claims is not what that id runs, so it is not
-        // listed as if it were — the same rule a launch decides by.
-        const claimed = claimedIds(saved);
-        const workflows = [...defs.workflows.values()]
-          .filter((wf) => !claimed.has(wf.name))
-          .sort((a, b) => a.name.localeCompare(b.name))
-          .map(workflowData);
-        const rows = [
-          ...modules.map((one) => `${one.id}\t${one.layer}\t${one.description}`),
-          ...workflows.map((item) => `${item.name}\t${item.layer}\t${item.description}`),
-        ].sort();
+        const rows = modules.map((one) => `${one.id}\t${one.layer}\t${one.description}`).sort();
         return {
           ok: true,
-          data: { workflows, modules, errors: defs.errors, problems: saved.problems },
+          data: { workflows: modules, problems: saved.problems },
           human: rows.join("\n") || "No workflows found.",
         };
       }),
@@ -119,65 +99,6 @@ const limitLines = (one: Described): ReadonlyArray<string> =>
         "The drawings above say less than the schemas do:",
         ...[...one.success.limits, ...one.error.limits].map((limit) => `  ${limit}`),
       ];
-
-/**
- * Placeholders this workflow can never resolve. The engine already reports these —
- * into the run log, after the Run has started; rendering each step against the
- * workflow's own declared inputs says it before anyone waits for an agent.
- */
-function unresolvable(wf: ResolvedWorkflow): string[] {
-  const inputs: Record<string, string> = {};
-  for (const [name, strategy] of Object.entries(wf.inputs)) {
-    inputs[name] = "";
-    // Only the strategies that carry a kind render a `<name>_kind` companion; adding
-    // one for every Input would pass a placeholder the Run then renders empty.
-    if (KINDED_STRATEGIES.has(strategy)) inputs[`${name}_kind`] = "";
-  }
-  const problems: string[] = [];
-  const stepIds = new Set(wf.steps.map((step) => step.id));
-  for (const step of wf.steps) {
-    // A body, where it is, and which engine-supplied families reach it: a step's
-    // prompt is rendered with all of them, a forwarded Choice input with two.
-    const bodies: Array<[string, string, ReadonlySet<string>]> = [
-      [`step "${step.id}"`, `${step.preamble}\n${step.prompt}`, ENGINE_SUPPLIED],
-    ];
-    for (const choice of step.choices ?? []) {
-      for (const round of [choice.round, choice.followUp]) {
-        if (round) {
-          bodies.push([
-            `step "${step.id}" choice "${choice.title}"`,
-            round.prompt,
-            ENGINE_SUPPLIED,
-          ]);
-        }
-      }
-      // What a Choice forwards to the workflow it chains is rendered from the same
-      // variables. A typo there renders empty, is forwarded as a settled value, and
-      // starts the child without the Input it needed — silently.
-      for (const [name, value] of Object.entries(choice.inputs ?? {})) {
-        bodies.push([
-          `step "${step.id}" choice "${choice.title}" input "${name}"`,
-          value,
-          CHAIN_SUPPLIED,
-        ]);
-      }
-    }
-    for (const [where, body, supplied] of bodies) {
-      for (const key of renderTemplate(body, { inputs }).missing) {
-        const [family = key, step = ""] = key.split(".");
-        // An Output is named by the step that writes it, so a mistyped step id is a
-        // supplied family too — reported here rather than rendered empty.
-        if (family === "outputs" && supplied.has(family)) {
-          if (!stepIds.has(step)) problems.push(`${where}: {{${key}}} names no step here`);
-          continue;
-        }
-        if (supplied.has(family)) continue;
-        problems.push(`${where}: {{${key}}} is not an input this workflow takes`);
-      }
-    }
-  }
-  return problems;
-}
 
 /**
  * What `branch` is, wherever a mutating Workflow's Inputs are listed. Its resolution
@@ -258,52 +179,22 @@ const workflowCheck = Command.make(
         Effect.gen(function* () {
           const resolved = yield* discoveryContext(global);
           if (resolved._tag === "ContextFailure") return resolved.result;
-          const defs = yield* definitions(resolved.env);
-          const defaults = yield* loadDefaults(resolved.env.configDir);
-          const dirs = yield* skillDirs(resolved.env);
           const saved = yield* savedModules(resolved.env);
           const claimed = claimedIds(saved);
           const named = Option.isSome(workflow) ? workflow.value : null;
-          if (named !== null && !claimed.has(named) && !defs.workflows.has(named)) {
+          if (named !== null && !claimed.has(named)) {
             return err("workflow_not_found", `Workflow "${named}" was not found.`);
           }
-          // Modules first, and each on its own: a module that will not load, will not
-          // construct or will not typecheck says so without a Run, an agent or a worktree.
+          // Each on its own: a module that will not load, will not construct or will not
+          // typecheck says so without a Run, an agent or a worktree.
           const modules = yield* Effect.forEach(
             [...saved.entries, ...saved.problems].filter(
               (one) => named === null || one.id === named,
             ),
             (one) => checkModule({ layer: one.layer, path: one.path }),
           );
-          const names = (named !== null ? [named] : [...defs.workflows.keys()]).filter(
-            (name) => !claimed.has(name),
-          );
-
-          const checked: Checked[] = [];
-          for (const name of names.sort()) {
-            const def = defs.workflows.get(name)!;
-            // A workflow that will not resolve — a cycle, an embedded workflow that is
-            // not there — has that as its one problem, and the rest are still checked.
-            const wf = yield* Effect.try(() => resolveWorkflow(name, defs, defaults)).pipe(
-              Effect.catch((cause) => Effect.succeed({ failed: reason(cause) })),
-            );
-            const problems =
-              "failed" in wf
-                ? [wf.failed]
-                : [...(yield* validateWorkflow(wf, defs, defaults, dirs)), ...unresolvable(wf)];
-            checked.push({ name, layer: def.layer, problems });
-          }
-
-          const errors = named !== null ? defs.errors.filter(brokeFile(named)) : defs.errors;
-          const bad =
-            checked.filter((item) => item.problems.length > 0).length +
-            modules.filter((item) => item.problems.length > 0).length +
-            errors.length;
-          const report = [
-            ...modules.map(moduleReport),
-            checkReport(checked, errors),
-            ...toolchainNotes(modules),
-          ]
+          const bad = modules.filter((item) => item.problems.length > 0).length;
+          const report = [...modules.map(moduleReport), ...toolchainNotes(modules)]
             .filter((part) => part !== "")
             .join("\n");
 
@@ -311,11 +202,9 @@ const workflowCheck = Command.make(
           // envelope prints its message and nothing else for a human, and what is
           // wrong with which workflow is the whole reason to run this.
           return bad === 0
-            ? { ok: true, data: { workflows: checked, modules, errors }, human: report }
+            ? { ok: true, data: { workflows: modules }, human: report }
             : err("operation_failed", `${bad} workflow(s) are not runnable.\n${report}`, {
-                workflows: checked,
-                modules,
-                errors,
+                workflows: modules,
               });
         }),
         global.json,
@@ -354,54 +243,14 @@ const workflowShow = Command.make(
               path: broken.path,
             });
           }
-          const defs = yield* definitions(resolved.env);
-          if (!defs.workflows.has(workflow)) {
-            return err("workflow_not_found", `Workflow "${workflow}" was not found.`);
-          }
-          // Resolved, not as authored: a Run takes an embedded workflow's inputs and
-          // runs its expanded steps, and `show` is the command you check that with.
-          const defaults = yield* loadDefaults(resolved.env.configDir);
-          const wf = resolveWorkflow(workflow, defs, defaults);
-          const inherited = new Set(wf.embeddedInputs);
-          const inputs = branchListed(wf.checkout, wf.inputs);
-          return {
-            ok: true,
-            data: {
-              workflow: {
-                name: wf.name,
-                title: wf.title,
-                description: wf.description,
-                inputs,
-                inherited: wf.embeddedInputs,
-                steps: wf.steps.map((step) => step.id),
-                layer: wf.layer,
-                path: wf.path,
-              },
-            },
-            human: [
-              wf.title,
-              wf.description,
-              `Inputs: ${Schema.encodeSync(UnknownJson)(inputs)}`,
-              ...(mutates(wf.checkout) && !roams(wf.checkout) ? [BRANCH_HELP] : []),
-              ...(wf.embeddedInputs.length > 0
-                ? [`Inherited from an embedded workflow: ${[...inherited].join(", ")}`]
-                : []),
-              "Steps:",
-              // A Choice step's titles are what `run start --decide` takes.
-              ...wf.steps.map((step) => {
-                const titles = [...new Set((step.choices ?? []).map((c) => c.title))];
-                return titles.length > 0
-                  ? `  ${step.id} — decide one of: ${titles.join(", ")}`
-                  : `  ${step.id}`;
-              }),
-              `Defined in: ${wf.path}`,
-            ].join("\n"),
-          };
+          return err("workflow_not_found", `Workflow "${workflow}" was not found.`);
         }),
         global.json,
       );
     }),
-).pipe(Command.withDescription("Show one Workflow: its Steps, its Inputs and where it is defined"));
+).pipe(
+  Command.withDescription("Show one Workflow: what it takes, what it gives back, where it is"),
+);
 
 /**
  * Forking a module: a file that imports what it keeps. There is nothing to merge, so the
@@ -529,46 +378,9 @@ const workflowFork = Command.make(
                   ],
                 });
               }
-              // The workspace a project-layer fork needs is resolved inside the
-              // mutation, so replaying a receipt returns the recorded result rather
-              // than needing that workspace to still be open.
-              const resolved = yield* context(global, layer === "project", layer === "project");
-              if (resolved._tag === "ContextFailure") return resolved.result;
-              const wf = (yield* definitions(resolved.env)).workflows.get(workflow);
-              if (!wf) return err("workflow_not_found", `Workflow "${workflow}" was not found.`);
-              const pickedStep = Option.isSome(step) ? step.value : undefined;
-              const result = yield* forkResolvedDefinition(
-                {
-                  path: wf.path,
-                  kind: "workflows",
-                  steps: wf.steps.map((item) => item.id),
-                  body: wf.body,
-                },
-                yield* layerDir(resolved.env, layer),
-                {
-                  name,
-                  full: Option.isSome(mode) && mode.value === "copy",
-                  step: pickedStep,
-                },
-              );
-              if (!result.ok)
-                return err(
-                  result.code,
-                  result.code === "invalid_input"
-                    ? `Workflow "${workflow}" has no Step "${pickedStep}".`
-                    : result.message,
-                  result.path ? { path: result.path } : undefined,
-                );
-              return {
-                ok: true,
-                data: {
-                  path: result.path,
-                  name,
-                  layer,
-                  mode: Option.getOrElse(mode, () => "extends"),
-                },
-                human: `Forked ${workflow} to ${result.path}.`,
-              };
+              return err("workflow_not_found", `Workflow "${workflow}" was not found.`, {
+                workflow,
+              });
             }),
           );
         }),

@@ -86,6 +86,11 @@ test(
         const file = join(run.dir, "run.json");
         const before = yield* fs.readFileString(file);
 
+        // The Run an older Collie left is read into a row once; the directory it wrote
+        // is untouched by that, and is still where its evidence goes.
+        const imported = yield* cli(["--json", "history", "import"], env);
+        expect(imported.exit).toBe(0);
+
         // Reading before anything is recorded reads, and writes nothing.
         const empty = yield* cli(["--json", "run", "disposition", run.id], env);
         expect(empty.exit).toBe(0);

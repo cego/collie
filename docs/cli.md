@@ -145,8 +145,8 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 An id a TypeScript module claims is that module's, and `run start` starts it on the local
 host rather than as an orchestration of agents — no flag says which, because what an id
 runs is what is saved for this project ([`sdk.md`](sdk.md#where-a-module-lives) is where
-that is). An id whose module will not load is refused by that file rather than falling back
-to a Markdown workflow of the same name.
+that is). An id whose module will not load is refused by that file, and an id no module claims is a
+workflow this installation does not have.
 
 A module's inputs are schemas rather than text, and they are settled before a Run, a claim
 or an execution exists — so a value one of them refuses costs nothing to refuse:
@@ -263,9 +263,7 @@ Checkouts are unchanged: a mutating run still gets a worktree of its own, keyed 
 branch. A task workspace groups the work; it does not isolate files or branches.
 
 `--input branch=<name>` is the one input no workflow declares, and `workflow show` lists it
-for every workflow whose frontmatter says `checkout: branch`
-([Checkout](authoring.md#checkout)) — not for a `roaming` one, which owns a checkout but
-no branch. It names the branch the run works on, and so which worktree it gets. Nobody is ever asked for one: a branch nobody named is resolved in this order:
+beside every module's own inputs as one of the names the host settles. It names the branch the run works on, and so which worktree it gets. Nobody is ever asked for one: a branch nobody named is resolved in this order:
 
 1. `--input branch=<name>`, which wins over everything below.
 2. The branch the reviewed work is already on, for a run fixing a review.
@@ -351,7 +349,6 @@ collie --json run wait <run-id> --timeout "10 minutes"
 collie --json run wait <run-id> --until attention
 collie --json run show <run-id>
 collie --json run list
-collie --json run logs <run-id>
 collie --json run output <run-id>
 ```
 
@@ -821,24 +818,15 @@ What has been sent to a run's agents. Explicitly settle an unknown delivery once
 checked whether it arrived; a timeout alone never authorizes a resend — see
 [Delivery](steering.md#delivery).
 
-## Follow up a finished run
+## Carry on from a finished run
+
+A finished run is immutable — there is no mode that reopens one. What it offers to do next
+is its own declaration, so carrying on is one of its offers:
 
 ```sh
-collie --json run follow-up <run-id> "the docs change is still outside src/"
-collie --json run follow-up <run-id> "<text>" --allow-dirty
+collie --json run actions <run-id>
+collie --json run action <run-id> follow-up --input text="the docs change is still outside src/"
 ```
-
-A finished run is immutable — there is no mode that reopens one. A follow-up is a **child
-run** of workflow `implement`, on the same branch, updating the same merge request: it
-inherits the parent's Intent as its own v1, and its spec is what you wrote plus whatever
-drift was still open when the parent finished.
-
-It reuses the parent's checkout, so each guard on that is checked and each refusal names
-which one failed: the checkout must still be on the branch that run built, nothing else
-may be working in it, and it must be clean unless you pass `--allow-dirty`.
-
-The only thing written to the parent is its `children` list — without that the follow-up
-would be invisible from the thing it follows up.
 
 ## What became of the work
 
@@ -1206,6 +1194,27 @@ per preparation step saying whether it was done, was already in place, or was sk
 so "nothing to do" reads differently from "the runner updated but the skills step could
 not run". A skipped step is not a failure: `upgrade` still succeeds. Under `--json` the
 same steps are in `data.steps`.
+
+## What an older Collie recorded
+
+Collie used to run Markdown workflows from a process of its own, and a machine that ran
+that version has its Runs in directories. They are read into this installation once:
+
+```sh
+collie --json history import   # safe to run again; every run after the first keeps nothing
+collie --json history list     # what was imported, newest first
+```
+
+`prepare.sh` runs the import, so an upgrade does it for you, and so does the host when it
+starts. What it found that a human should know about is said out loud: a `run.json` nobody
+can decode is reported and left exactly where it is, and a Run something is still working
+on is skipped until that finishes — nothing is adopted, signalled or rewritten.
+
+Imported work is readable and nothing else. It cannot be answered, controlled, resumed or
+amended, and every command says the same thing about it: its record and everything it
+produced are still here, and `collie run start <workflow>` begins new work. Its directory
+is untouched, so its cards, its drift, its verifications and its outputs are where they
+have always been.
 
 ## Checking an installation
 

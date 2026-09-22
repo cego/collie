@@ -23,7 +23,6 @@ import {
 } from "../src/board";
 import { recordDisposition } from "../src/disposition";
 import type { AgentInfo } from "../src/herdr";
-import { RUNNER_PID, STOPPED, writeChoice } from "../src/driver";
 import type { ProposalLine } from "../src/proposals";
 import { RunStore, type Run } from "../src/run";
 import { writeTask } from "../src/task";
@@ -373,36 +372,6 @@ test("the pipeline is the Task's Runs' steps in order, each shown once", () =>
     }),
   ));
 
-test("a question puts the Task in Needs you and blocks the step it is asked from", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const dir = yield* stateDir();
-      const run = yield* seed({
-        stateDir: dir,
-        workflow: "implement",
-        steps: ["build", "review"],
-        task: "task-1",
-      });
-      yield* writeChoice(run.dir, {
-        id: "c1",
-        kind: "menu",
-        run: run.id,
-        step: "review",
-        header: "the failing specs",
-        footer: "",
-        items: [{ id: "pin", title: "Pin the CI image" }],
-      });
-
-      const board = yield* buildBoard({ stateDir: dir, now: Date.parse("2026-09-14T10:05:00Z") });
-
-      expect(board[0]!.state).toBe("blocked");
-      expect(sectionOf(board[0]!)).toBe("needs-you");
-      expect(board[0]!.sentence).toBe("Waiting on your answer about the failing specs.");
-      expect(board[0]!.steps).toContainEqual({ name: "review", state: "blocked" });
-      expect(board[0]!.decision).toMatchObject({ kind: "question", id: "c1", run: run.id });
-    }),
-  ));
-
 test("a Run waiting on the human in a pane is Needs you, not Working", () =>
   runEffect(
     Effect.gen(function* () {
@@ -496,75 +465,6 @@ test("a hold is held, not a question: nothing is waiting for an answer", () =>
     }),
   ));
 
-test("a Run stopped while its agent sat at a prompt was stopped, and waits on nobody", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const dir = yield* stateDir();
-      const run = yield* seed({
-        stateDir: dir,
-        workflow: "implement",
-        steps: ["build"],
-        task: "task-1",
-      });
-      run.record.awaiting = "build";
-      run.record.steps[0]!.variants.push(variant("impl-1"));
-      yield* run.save();
-      // The human answered the question by stopping the Run; the pane it was asked in
-      // may well still be sitting there.
-      yield* fs.writeFileString(path.join(run.dir, STOPPED), "by me");
-
-      const board = yield* buildBoard({
-        stateDir: dir,
-        now: Date.parse("2026-09-14T10:05:00Z"),
-        alive: [agent("impl-1", "blocked")],
-      });
-
-      expect(board[0]!.state).toBe("stopped");
-      expect(sectionOf(board[0]!)).not.toBe("needs-you");
-    }),
-  ));
-
-test("a gate is a decision card of its own, with the list it is about", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const dir = yield* stateDir();
-      const run = yield* seed({
-        stateDir: dir,
-        workflow: "implement",
-        steps: ["build", "mr"],
-        task: "task-1",
-      });
-      yield* writeChoice(run.dir, {
-        id: "g1",
-        kind: "gate",
-        run: run.id,
-        step: "mr",
-        header: "Approve what proves this run: tests, lint",
-        footer: "",
-        items: [
-          { id: "approve", title: "Approve" },
-          { id: "skip", title: "Skip" },
-        ],
-        verifications: ["tests", "lint"],
-      });
-
-      const board = yield* buildBoard({ stateDir: dir, now: Date.parse("2026-09-14T10:05:00Z") });
-
-      expect(board[0]!.state).toBe("blocked");
-      expect(sectionOf(board[0]!)).toBe("needs-you");
-      expect(board[0]!.sentence).toBe("Holding at the mr gate until you approve the list.");
-      expect(board[0]!.decision).toEqual({
-        kind: "gate",
-        run: run.id,
-        id: "g1",
-        step: "mr",
-        verifications: ["tests", "lint"],
-      });
-    }),
-  ));
-
 test("a plan that spans repositories is one card with its repositories as children", () =>
   runEffect(
     Effect.gen(function* () {
@@ -610,33 +510,6 @@ test("a plan that spans repositories is one card with its repositories as childr
       expect(board[0]!.sentence).toBe(
         "Wave 2 of 3. frontend-core landed, happytiger is building, spilnu is next.",
       );
-    }),
-  ));
-
-test("the board is ordered by section, then by state", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const dir = yield* stateDir();
-      yield* seed({ stateDir: dir, workflow: "implement", steps: ["build"], status: "done" });
-      yield* seed({ stateDir: dir, workflow: "implement", steps: ["build"] });
-      // Not backdated: a Choice is only answerable while a Driver could still claim the
-      // Run, which is what keeps the board from offering an answer nothing will read.
-      const asking = yield* seed({ stateDir: dir, workflow: "implement", steps: ["build"] });
-      yield* writeChoice(asking.dir, {
-        id: "c1",
-        kind: "menu",
-        run: asking.id,
-        step: "build",
-        header: "what next",
-        footer: "",
-        items: [],
-      });
-
-      const board = yield* buildBoard({ stateDir: dir });
-
-      // An implement that succeeded and nobody disposed of is waiting on you, not finished.
-      expect(board.map((view) => view.state)).toEqual(["blocked", "active", "done"]);
-      expect(board.map(sectionOf)).toEqual(["needs-you", "working", "waiting"]);
     }),
   ));
 
@@ -711,60 +584,6 @@ test("`collie --json board` prints the TaskView list", () =>
       expect(envelope.data.tasks[0]!.id).toBe(run.id);
       expect(envelope.data.tasks[0]!.sentence).toBe("Opening the merge request.");
       expect(envelope.data.tasks[0]!.steps.map((step) => step.name)).toEqual(["build", "mr"]);
-    }),
-  ));
-
-test("`collie --json board` reads the quiet threshold the pane reads", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const home = yield* fs.makeTempDirectory({ prefix: "collie-board-quiet-" });
-      const state = path.join(home, "state");
-      yield* fs.makeDirectory(path.join(home, "config"), { recursive: true });
-      // An hour, so a Run untouched for ten minutes is working in the pane — and must be
-      // working here too, or the two disagree about what a Task is doing.
-      yield* fs.writeFileString(
-        path.join(home, "config", "config.json"),
-        `{"board_quiet_ms": 3600000}\n`,
-      );
-      const run = yield* seed({ stateDir: state, workflow: "implement", steps: ["build"] });
-      run.step("build").status = "running";
-      yield* run.save();
-      // A Driver that is alive — this process — or ten silent minutes would read as a Run
-      // nothing drives, which is Abandoned whatever the threshold says.
-      yield* fs.writeFileString(
-        path.join(run.dir, RUNNER_PID),
-        `{"pid":${process.pid},"start":null,"at":"2026-09-08T09:00:00.000Z"}\n`,
-      );
-      // Ten minutes ago, which is quiet under the five-minute default and not under this.
-      // Every file in the directory: what the board reads is the newest of them.
-      const when = ((yield* Clock.currentTimeMillis) - 10 * 60 * 1000) / 1000;
-      for (const name of yield* fs.readDirectory(run.dir))
-        yield* fs.utimes(path.join(run.dir, name), when, when);
-
-      const root = new URL("../", import.meta.url).pathname;
-      const proc = Bun.spawn(
-        [Bun.argv[0] ?? "bun", path.join(root, "src/main.ts"), "--json", "board"],
-        {
-          cwd: root,
-          env: {
-            HERDR_PLUGIN_ROOT: root,
-            HERDR_PLUGIN_CONFIG_DIR: path.join(home, "config"),
-            HERDR_PLUGIN_STATE_DIR: state,
-            HOME: home,
-            PWD: root,
-          },
-          stdout: "pipe",
-          stderr: "pipe",
-        },
-      );
-      const stdout = yield* Effect.promise(() => new Response(proc.stdout).text());
-      yield* Effect.promise(() => proc.exited);
-      yield* fs.remove(home, { recursive: true, force: true });
-
-      const envelope = yield* Schema.decodeUnknownEffect(BoardEnvelope)(stdout);
-      expect(envelope.data.tasks[0]!.state).toBe("active");
     }),
   ));
 
@@ -1182,54 +1001,6 @@ test("a held Task says until when, and who held it, from the record", () =>
       run.record.held = { reason: "the branch is wrong", by: "mk", until: null };
       yield* run.save();
       expect((yield* buildBoard({ stateDir: dir, now }))[0]!.held).toBe("⏸ Held.");
-    }),
-  ));
-
-test("a child Run's gate is the plan's own decision, answerable on the parent's card", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const dir = yield* stateDir();
-      const child = yield* seed({
-        stateDir: dir,
-        workflow: "implement",
-        steps: ["build", "mr"],
-        task: null,
-        label: "collie | Core",
-      });
-      const parent = yield* seed({
-        stateDir: dir,
-        workflow: "implement",
-        steps: ["build", "next"],
-        task: "task-1",
-      });
-      parent.record.fanout = {
-        step: "next",
-        title: "implement everywhere",
-        waves: [["core"]],
-        runs: { core: child.id },
-        mrs: {},
-        wave: 1,
-        blocked: null,
-      };
-      yield* parent.save();
-      yield* writeChoice(child.dir, {
-        id: "g1",
-        kind: "gate",
-        run: child.id,
-        step: "mr",
-        header: "Approve what proves this run: tests",
-        footer: "",
-        items: [{ id: "approve", title: "Approve" }],
-        verifications: ["tests"],
-      });
-
-      const board = yield* buildBoard({ stateDir: dir, now: Date.parse("2026-09-14T10:05:00Z") });
-
-      // One card for the plan, and the child's gate is what it is waiting on: a
-      // repository run has no card of its own to answer it from.
-      expect(board).toHaveLength(1);
-      expect(sectionOf(board[0]!)).toBe("needs-you");
-      expect(board[0]!.decision).toMatchObject({ kind: "gate", id: "g1", run: child.id });
     }),
   ));
 

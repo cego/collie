@@ -7,7 +7,6 @@ import { Herdr, herdrFailureReason } from "./herdr";
 import {
   boardFlow,
   continueFlow,
-  driveFlow,
   forkFlow,
   openPicker,
   pickFlow,
@@ -53,8 +52,6 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
           return popup(client, env, selected);
         case "board":
           return boardFlow(client, env);
-        case "drive":
-          return driveFlow(client, env);
         case "workspace":
           return workspaceFlow(client, env);
         default:

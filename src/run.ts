@@ -4,9 +4,7 @@ import { currentPid, withLock } from "./lock";
 import { IncarnationSchema } from "./registry";
 import { unsafePathComponent } from "./naming";
 import { FindingSchema, type Finding } from "./output";
-import { writeSnapshot } from "./snapshot";
 import { VerifySpecSchema } from "./verify-spec";
-import type { ResolvedWorkflow } from "./definitions";
 import { diffTargetOf, recorded } from "./strategies";
 import type { VerifySpec } from "./verify-spec";
 import { slugify } from "./template";
@@ -311,11 +309,7 @@ const RunSchema = Schema.Struct({
   unpushed: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   /** How many of the previous review's findings this one found fixed. */
   fixed: Schema.Number.pipe(Schema.withDecodingDefaultKey(Effect.succeed(0))),
-  /**
-   * The workflow this Run is running, frozen in its own directory at creation. A Run
-   * recorded before this existed has `null` and resolves from the layers as it always
-   * did — under a step-id guard, because what those layers say may have moved since.
-   */
+  /** The definition an old Run was frozen against; nothing writes one any more. */
   definition: Schema.NullOr(
     Schema.Struct({
       hash: Schema.String,
@@ -581,17 +575,10 @@ export interface CreateRunOptions {
   cwd: string;
   inputs: Record<string, string>;
   inputSources: Record<string, string>;
-  /** Which strategy settled each Input; taken from `definition` where one is given. */
+  /** Which strategy settled each Input. */
   inputStrategies?: Record<string, string>;
   /** What the human answered at launch for the Choice steps this Run will reach. */
   decisions?: Record<string, string>;
-  /**
-   * The resolved workflow this Run will execute. Given it, `create` freezes it in the
-   * run directory and takes the step ids from it, so a Run can never record the steps of
-   * one definition beside a snapshot of another. Omitted only by callers that have no
-   * workflow to freeze — a fixture standing a Run up to be read, never one to be driven.
-   */
-  definition?: ResolvedWorkflow;
   /** What Collie may run itself for this Run; seeded from the layers, then fixed. */
   approvedVerifications?: ReadonlyArray<VerifySpec>;
   stepIds: string[];
@@ -689,7 +676,7 @@ export class RunStore {
         max_iterations: opts.maxIterations,
         inputs: opts.inputs,
         input_sources: opts.inputSources,
-        input_strategies: opts.inputStrategies ?? opts.definition?.inputs ?? {},
+        input_strategies: opts.inputStrategies ?? {},
         steps: opts.stepIds.map((id) => ({
           id,
           summary: opts.stepSummaries?.[id] ?? null,
@@ -716,15 +703,10 @@ export class RunStore {
         unpushed: null,
         fixed: 0,
         definition: null,
-        // The Run's own Input, read once here: every front door and every chain settles
-        // Inputs before creating the Run, and a second place to read this from is a
-        // second place for it to disagree with what the Run was started with.
-        // The kind nobody chooses, where the Workflow says it always proves one — a plan
-        // proves it wrote tickets, a review proves it wrote a review. Declared by the
-        // definition rather than known here, so a fork that renames it keeps it. Read
-        // once, at creation, like a chosen one: a second place to read it from is a
-        // second place for it to disagree with what the Run was started with.
-        outcome: opts.definition?.outcome ?? (opts.inputs.outcome?.trim() || null),
+        // Read once here: every front door settles Inputs before creating the Run, and
+        // a second place to read this from is a second place for it to disagree with
+        // what the Run was started with.
+        outcome: opts.inputs.outcome?.trim() || null,
         evidence_gaps: [],
         obstacle: null,
         approved_verifications: (opts.approvedVerifications ?? []).map((spec) => ({
@@ -743,9 +725,6 @@ export class RunStore {
         summary: null,
       };
       const run = new Run(path.join(root, id), record);
-      // Before the first save, so a Run is never on disk without the definition it
-      // records — a reader that found one would have to guess which way round they are.
-      if (opts.definition) record.definition = yield* writeSnapshot(run.dir, opts.definition);
       yield* run.save();
       return run;
     }).pipe(Effect.withSpan("RunStore.create"));

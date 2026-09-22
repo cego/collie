@@ -287,7 +287,7 @@ A finished run is immutable, so `finish` settles rather than acts:
 ## Follow-ups
 
 A finished run is immutable, and there is no mode that reopens one. Where its outcome
-needs more work, that work is a **child run** ([CLI](cli.md#follow-up-a-finished-run)):
+needs more work, that work is a **child run** ([CLI](cli.md#carry-on-from-a-finished-run)):
 workflow `implement`, on the same branch, updating the same merge request, with the
 parent's Intent inherited as its own v1 and the parent's open drift written into its spec.
 

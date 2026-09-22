@@ -216,7 +216,7 @@ branch it merges. Your own checkout is never touched or switched. See
 checklist unchecked, then assesses the whole batch of Renovate merge requests, read only,
 and decides whether the repository is a package or an application. Once it has said there is
 something to land it blocks — at no token cost — until it holds the repository in
-[Helle](authoring.md#waits); a repository that is already up to date takes nobody's turn.
+Helle; a repository that is already up to date takes nobody's turn.
 For an application it then gathers every update into one batch branch and merge request,
 deploys the batch to stage and proves it there — rolling stage back to the latest stable
 release, reading the logs `renovate.logs` names, fixing the batch and redeploying, on its

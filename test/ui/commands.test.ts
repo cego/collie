@@ -172,27 +172,6 @@ const seed = Effect.fn("commands.seed")(function* (opts: {
   return run;
 });
 
-effectTest("send review acts on the run it names, and says so when it cannot", function* () {
-  const withReview = yield* seed({ target: "worktree", review: "# Review\n" });
-  // Newer than the one with a review, and without one of its own: the hand-off used to
-  // take whichever review was newest, so a selection with nothing to send silently sent
-  // another run's review.
-  const selected = yield* seed({ target: "mr:gitlab.example.com/g/p!7" });
-  // The two runs have to be tellable apart in the note, which names the slug.
-  expect(selected.record.slug).not.toBe(withReview.record.slug);
-
-  const note = yield* runCommand(
-    session(),
-    rig.pluginEnv(),
-    { _tag: "SendReview", runId: selected.id },
-    prompts,
-  );
-
-  expect(note).toContain(selected.record.slug);
-  expect(note).toContain(`no ${REVIEW_FILE} to send`);
-  expect(note).not.toContain(withReview.record.slug);
-});
-
 effectTest("a default is written without the whitespace around it", function* () {
   // `codex ` is displayed as `codex` and then fails harness validation, because the
   // trim was only ever used for the checks and the original string was written.
@@ -200,21 +179,6 @@ effectTest("a default is written without the whitespace around it", function* ()
 
   expect(note).toBe("harness is now codex");
   expect((yield* loadDefaults(rig.pluginEnv().configDir)).harness).toBe("codex");
-});
-
-effectTest("send review with no run selected sends nothing at all", function* () {
-  // `s` is on the footer in every View, so it is pressed with a Settings or Workflows
-  // row selected: that must not start a fix round for whichever review is newest.
-  yield* seed({ target: "worktree", review: "# Review\n" });
-
-  const note = yield* runCommand(
-    session(),
-    rig.pluginEnv(),
-    { _tag: "SendReview", runId: null },
-    prompts,
-  );
-
-  expect(note).toBe("select the run whose review should be sent");
 });
 
 effectTest("the log opens for a History row the board no longer keeps", function* () {
@@ -317,46 +281,6 @@ effectTest("Enter on an Elsewhere row says so and asks herdr nothing", function*
   expect(yield* rig.cmds()).toEqual([]);
 });
 
-effectTest("a run in another workspace is stopped and logged from the wide board", function* () {
-  yield* rig.startSocket();
-  yield* rig.addWorkspace("w9", "Implement · glass", rig.projectDir);
-  const run = yield* elsewhere({ workspaceId: "w9" });
-  // The register its Driver wrote: keyed by the Run's own session, workspace and
-  // checkout, which is not the one this board is in.
-  const env = rig.pluginEnv();
-  yield* registerAgent(yield* registryPath(env.stateDir, scopeOfRun(run.record)), {
-    role: "implementer",
-    agent: "impl-9",
-    paneId: "w9:p1",
-    workspaceId: "w9",
-    runId: run.id,
-    workflow: "implement",
-    at: "t",
-  });
-
-  // The board of this workspace does not list it, so the lookup used to answer "has
-  // gone" for a run whose row the human was looking at.
-  const stopped = yield* runCommand(
-    session(),
-    rig.pluginEnv(),
-    { _tag: "StopRun", runId: run.id },
-    prompts,
-  );
-  expect(stopped).not.toContain("has gone");
-  // And its agents are stopped, not just its Driver: closing the panes they are in is
-  // the only thing that does that, and they are in another workspace's register.
-  expect(
-    (yield* rig.calls()).filter((c) => c.cmd === "pane close").map((c) => c.argv!.at(-1)),
-  ).toEqual(["w9:p1"]);
-  const logged = yield* runCommand(
-    session(),
-    rig.pluginEnv(),
-    { _tag: "OpenLog", runId: run.id },
-    prompts,
-  );
-  expect(logged).not.toContain("has gone");
-});
-
 effectTest("w on another workspace's run opens its merge request, not this repo's", function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -404,141 +328,6 @@ function scripted(answers: ReadonlyArray<string | null>) {
   };
 }
 
-effectTest("a workflow run from a row asks for its own inputs, in the tab", function* () {
-  yield* writeDef(
-    rig.baselineDir,
-    "workflows",
-    "goalful",
-    `---
-name: goalful
-title: goalful — needs a goal
-inputs:
-  goal: goal
-steps:
-  - id: build
-    persona: implementer
-    output: build.json
----
-## build
-
-Do {{inputs.goal}}.
-`,
-  );
-  const { asked, prompts: scriptedPrompts } = scripted(["Add a picker"]);
-
-  yield* withDriver(
-    runCommand(
-      session(),
-      rig.pluginEnv(),
-      { _tag: "RunWorkflow", workflow: "goalful" },
-      scriptedPrompts,
-    ),
-  );
-
-  // The row already named the workflow, so the only question is its Input. Asking
-  // "which workflow?" again could start a different one from the row that was clicked,
-  // and it asked in a pane of its own rather than in the tab.
-  expect(asked).toEqual(["What is the goal?"]);
-  const runs = yield* new RunStore(rig.pluginEnv().stateDir).list();
-  expect(runs.map((r) => r.record.workflow)).toEqual(["goalful"]);
-  expect(runs[0]!.record.inputs.goal).toBe("Add a picker");
-});
-
-effectTest("a workflow run from a row with nothing to ask starts straight away", function* () {
-  // A workflow that needs no Input has nothing between the click and the Run: what it
-  // asks its human, it asks when it reaches the question.
-  yield* writeDef(
-    rig.baselineDir,
-    "workflows",
-    "askless",
-    `---
-name: askless
-title: askless — needs nothing
-steps:
-  - id: build
-    persona: implementer
-    output: build.json
----
-## build
-
-Look at what is here.
-`,
-  );
-  const { asked, prompts: scriptedPrompts } = scripted([]);
-
-  yield* withDriver(
-    runCommand(
-      session(),
-      rig.pluginEnv(),
-      { _tag: "RunWorkflow", workflow: "askless" },
-      scriptedPrompts,
-    ),
-  );
-
-  expect(asked).toEqual([]);
-  const runs = yield* new RunStore(rig.pluginEnv().stateDir).list();
-  expect(runs.map((r) => r.record.workflow)).toEqual(["askless"]);
-  expect(runs[0]!.record.decisions).toEqual({});
-});
-
-effectTest("a fix round is not asked again for the plan the row settled", function* () {
-  const reviewed = yield* seed({
-    target: "worktree",
-    review: "# Review\n",
-    outstanding: [{ severity: "blocker", title: "the empty list" }],
-  });
-  const { asked, prompts: scriptedPrompts } = scripted([]);
-
-  yield* withDriver(
-    runCommand(
-      session(),
-      rig.pluginEnv(),
-      { _tag: "InvokeOffer", runId: reviewed.id, offer: "fix-open" },
-      scriptedPrompts,
-    ),
-  );
-
-  // The row named the work source by being clicked; asking for it again would let the
-  // answer contradict the row, and `implement` has no Choice step to decide either.
-  expect(asked).toEqual([]);
-  const runs = yield* new RunStore(rig.pluginEnv().stateDir).list();
-  const started = runs.find((r) => r.record.workflow === "implement");
-  if (!started) throw new Error("expected an implement run");
-  expect(started.record.inputs.plan).toBe(reviewed.dir);
-  // The review is the spec and its findings are the tickets: `implement`'s build step
-  // branches on the kind, so a run dir with a review in it has to arrive classified.
-  expect(started.record.inputs.plan_kind).toBe("review");
-  // Traceable both ways, using the same fields a chained Run uses.
-  expect(started.record.parent).toBe(reviewed.id);
-  const parent = yield* new RunStore(rig.pluginEnv().stateDir).load(reviewed.id);
-  expect(parent.record.children).toContain(started.id);
-});
-
-effectTest("reviewing a target again names it, classified, and asks nothing", function* () {
-  const { asked, prompts: scriptedPrompts } = scripted([]);
-  // The offer is the review Workflow's own, and the target comes off the Run it is made
-  // about rather than out of the row that drew the key.
-  const reviewed = yield* seed({ target: "mr:gitlab.example.com/g/p!12", review: "# Review\n" });
-
-  yield* withDriver(
-    runCommand(
-      session(),
-      rig.pluginEnv(),
-      { _tag: "InvokeOffer", runId: reviewed.id, offer: "run-again" },
-      scriptedPrompts,
-    ),
-  );
-
-  // Nothing to paste: the row carried the target, and `review`'s own Choice is asked
-  // when the Run reaches it rather than before it exists.
-  expect(asked).toEqual([]);
-  const runs = yield* new RunStore(rig.pluginEnv().stateDir).list();
-  const started = runs.find((r) => r.record.workflow === "review");
-  expect(started?.record.inputs.target).toBe("mr:gitlab.example.com/g/p!12");
-  expect(started?.record.inputs.target_kind).toBe("mr");
-  expect(started?.record.decisions).toEqual({});
-});
-
 effectTest("questions is refused unless it is a way of presenting one", function* () {
   const note = yield* set("questions", "shout");
 
@@ -546,27 +335,4 @@ effectTest("questions is refused unless it is a way of presenting one", function
   expect(yield* readConfig(rig.pluginEnv().configDir)).not.toHaveProperty("questions");
   expect(yield* set("questions", "notify")).toContain("notify");
   expect((yield* loadDefaults(rig.pluginEnv().configDir)).questions).toBe("notify");
-});
-
-effectTest("a run that finished inside the stop's grace is not stopped after it", function* () {
-  yield* rig.addWorkspace("w9", "Implement · glass", rig.projectDir);
-  // Over by the time the five seconds were up, which is the race the grace opens: the
-  // board asked for a stop on a run that was still going when it was asked for.
-  const run = yield* elsewhere({ workspaceId: "w9" });
-  run.record.status = "failed";
-  yield* run.save();
-
-  const note = yield* runCommand(
-    session(),
-    rig.pluginEnv(),
-    { _tag: "StopRun", runId: run.id },
-    prompts,
-  );
-
-  expect(note).toContain("finished on its own");
-  // Nothing was signalled and nothing was written: no inbox entry, no stopped marker.
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  expect(yield* fs.exists(path.join(run.dir, "stopped"))).toBe(false);
-  expect(yield* fs.exists(path.join(run.dir, "inbox"))).toBe(false);
 });

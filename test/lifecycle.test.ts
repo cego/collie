@@ -30,7 +30,7 @@ const OTHER = ["plain.workflow.ts"] as const;
 const Payload = Schema.Struct({
   runId: Schema.optional(Schema.String),
   run: Schema.optional(Schema.Struct({ runId: Schema.String, status: Schema.Unknown })),
-  native: Schema.optional(Schema.Array(Schema.Struct({ runId: Schema.String }))),
+  runs: Schema.optional(Schema.Array(Schema.Struct({ runId: Schema.String }))),
 });
 const payloadOf = (envelope: { readonly data?: unknown }) =>
   Schema.decodeUnknownEffect(Payload)(envelope.data).pipe(Effect.orDie);
@@ -240,9 +240,7 @@ test(
         expect(view?.runId).toBe(runId);
 
         const listed = yield* collie(world, ["run", "list"]);
-        expect((yield* payloadOf(listed.envelope)).native?.map((one) => one.runId)).toEqual([
-          runId,
-        ]);
+        expect((yield* payloadOf(listed.envelope)).runs?.map((one) => one.runId)).toEqual([runId]);
 
         // A wait that ends on the question, and then one that ends on the answer.
         const asked = yield* collie(world, ["run", "wait", runId, "--until", "attention"]);

@@ -2,14 +2,7 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Clock, Effect, FileSystem, Path } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
-import {
-  claimExists,
-  driverOwnership,
-  pendingResumeAt,
-  readChoice,
-  type Ownership,
-  type PendingChoice,
-} from "./driver";
+import { ownerOf, type Ownership } from "./history";
 import type { AgentsAlive, AsksAgents } from "./herdr";
 import { runSettled, runStatus } from "./operations";
 import { runningAgents, type Run } from "./run";
@@ -33,7 +26,7 @@ export interface Attention {
   readonly step: string | null;
   /** The `run` subcommands that make sense here, by name. */
   readonly actions: ReadonlyArray<string>;
-  readonly choice: PendingChoice | null;
+  readonly choice: null;
   /** Whether a Driver owns this Run, has conclusively gone, or could not be read. */
   readonly driver: Ownership;
   /** The Steps a resume keeps, by id. Nothing already done is redone. */
@@ -78,7 +71,7 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | BunServices
 > {
   const status = yield* runStatus(run);
-  const driver = yield* driverOwnership(run.dir);
+  const driver = yield* ownerOf(run.dir);
   const facts: Pick<Attention, "driver" | "preserved" | "agents" | "agentsAlive"> = {
     driver,
     preserved: run.record.steps.filter((step) => step.status === "done").map((step) => step.id),
@@ -86,24 +79,7 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (
     // Overridden only where a resume could be offered; nothing else asks herdr.
     agentsAlive: "unasked",
   };
-  const choice = yield* readChoice(run.dir);
-  // Worked out before the Choice is trusted: a Driver killed while holding a question
-  // leaves `choice.json` behind, and the next Driver clears it as stale for exactly
-  // that reason. Answering one has nobody to consume the answer, so a question outlives
-  // its Driver as a fact about the past, not as something to do. Whether the Run has
-  // since been stopped makes no difference — a stop does not remove the file, and a
-  // Choice a live Driver is still holding stays answerable however its record reads.
   const gone = yield* orphaned(run, driver);
-  if (choice && !gone)
-    return {
-      ...facts,
-      category: "question",
-      reason: "choice_pending",
-      explanation: `${run.id} is asking: ${choice.header}`,
-      step: choice.step,
-      actions: ["answer", "show", "stop"],
-      choice,
-    };
   // Drift Collie could not settle. Below a pending question, because a question is the
   // human being waited on and this is the human being told; above `completed`, because a
   // Run that finished having drifted is one whose result is not what was asked for.
@@ -185,23 +161,6 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (
     actions: recoveryActions(driver, agentsAlive),
     choice: null,
   };
-});
-
-/**
- * Whether a pending Choice can still be answered. Only a Driver consumes an answer, so
- * a question left behind by one that is gone is no longer a question: the inbox entry
- * would be discarded by the next Driver as stale, after the human had been told it was
- * sent. The same judgement `attentionFor` makes, exported so the board's rows and the
- * classification cannot offer different answers about one Run.
- */
-export const choiceAnswerable = Effect.fn("attention.choiceAnswerable")(function* (
-  run: Run,
-): Effect.fn.Return<
-  boolean,
-  PlatformError,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> {
-  return !(yield* orphaned(run, yield* driverOwnership(run.dir)));
 });
 
 interface Stopped {
@@ -294,10 +253,7 @@ function whyInterrupted(run: Run, status: string, gone: boolean): Stopped | null
  */
 const stillClaiming = Effect.fn("attention.stillClaiming")(function* (run: Run) {
   const now = yield* Clock.currentTimeMillis;
-  if (!(yield* claimExists(run.dir)))
-    return now - Date.parse(run.record.created_at) < CLAIM_GRACE_MS;
-  const asked = yield* pendingResumeAt(run.dir);
-  return asked !== null && now - asked < CLAIM_GRACE_MS;
+  return now - Date.parse(run.record.created_at) < CLAIM_GRACE_MS;
 });
 
 /** Who else may be working on this Run, as the sentence a human reads after the cause. */

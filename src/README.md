@@ -11,25 +11,22 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `flows.ts`         | What each action and pane entrypoint does                                                |
 | `env.ts`           | The plugin environment herdr provides                                                    |
 | `herdr.ts`         | The only channel to herdr: CLI at `HERDR_BIN_PATH`, socket for the rest, and its config  |
-| `definitions.ts`   | Layers, `extends:` overrides, `use:` embedding, validation                               |
+| `definitions.ts`   | Layers, personas, and the `extends:` override a persona fork writes                      |
 | `yaml.ts`          | Frontmatter split and write-back over Effect's YAML parser                               |
 | `schema.ts`        | Shared Schema predicates used across boundary decoders                                   |
 | `journal.ts`       | Append-only JSONL: the read that survives a torn line, and the append that makes its dir |
 | `harness.ts`       | Per-harness start, model flag, effort flag and persona injection                         |
 | `inputs.ts`        | Input inference from branch, cwd, earlier runs and glab                                  |
 | `strategies.ts`    | Which Input carries which strategy, and how a settled Run is read through one            |
-| `engine.ts`        | Tabs, agents, prompts, waits, gates, choices and the fix loop                            |
 | `workspace.ts`     | The Control Plane: what the Session's board shows, and the text fallback that draws it   |
 | `ui/`              | The Collie tab: the card board and its drawer, plain state and commands, and the bridge  |
 | `views.ts`         | History, Workflows, Settings and a Run's detail, as state the app renders                |
 | `board.ts`         | The board's model: one TaskView per Task, its pipeline, sections, and a card's sentence  |
-| `driver.ts`        | The run dir as the channel to a detached driver: progress, pid and questions             |
 | `attention.ts`     | Why a run wants a human, what a resume would keep, and which actions are safe            |
 | `registry.ts`      | Which long-lived agents this Session still has, per workspace + repo                     |
 | `handoff.ts`       | Giving one Run's result to another Run's live agent                                      |
 | `output.ts`        | The Output and Synthesis schemas, `review.md`, and which findings the loop still owns    |
 | `run.ts`           | The run directory: audit trail and resume state                                          |
-| `snapshot.ts`      | The resolved workflow a Run is running, frozen in its run directory at creation          |
 | `intent.ts`        | What a Run is for, what bounds it, and what Collie may do about it without asking        |
 | `steering.ts`      | The delivery ledger per live agent, and the Herd's model-call budget                     |
 | `dispatcher.ts`    | The only sender: one transaction per agent, reserved before the send, ordered            |
@@ -52,7 +49,9 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `host.ts`          | The one local host per state directory: who owns it, how a client reaches it             |
 | `discovery.ts`     | Where a workflow module is looked for, which layer wins, and what counts as an edit      |
 | `authoring.ts`     | What a module says about itself, how it is checked, and the file an author starts from   |
-| `store.ts`         | Rows beside Effect's: request claims, run identity, generations, open questions          |
+| `store.ts`         | Rows beside Effect's: request claims, run identity, generations, questions, history      |
+| `history.ts`       | What an older Collie left in directories, read once into rows. The only reader of one    |
+| `run-actions.ts`   | What a confirmed action does to a Run, and the one place each kind is carried out        |
 | `lifecycle.ts`     | A native Run from both front doors: start it, watch it, and pick it up again             |
 | `sdk.ts`           | `collie/native`: what a module exports, declares, waits on, and starts as a child        |
 | `agents.ts`        | What a native workflow does with an agent: one launch, one collection, one repair        |
@@ -67,7 +66,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `tasknames.ts`     | What a task workspace is called, from the work and the session's own live labels         |
 | `naming.ts`        | herdr-legal agent names vs readable tab and pane labels                                  |
 | `keys.ts`          | Raw keypresses, for the text board a pane falls back to when the renderer will not start |
-| `fork.ts`          | Take a definition into a later layer: an `extends:` stub, or a full copy                 |
+| `fork.ts`          | Take a persona into a later layer: an `extends:` stub, or a full copy                    |
 | `trust.ts`         | Whether a harness will work in a directory, or stop and ask first                        |
 | `worktree.ts`      | The checkout a mutating Run owns, keyed by its branch, and pruning the settled ones      |
 | `helle.ts`         | Helle as a client, and the gate a Step blocks on until it holds the project              |

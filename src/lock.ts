@@ -182,6 +182,22 @@ const releaseOwnLock = Effect.fn("releaseOwnLock")(function* (lock: string) {
   if (yield* holdsLock(lock)) yield* fs.remove(lock, { force: true });
 });
 
+/**
+ * One directory's own lock, held for the length of one write. Every writer of a Run's
+ * files takes it, so two amendments that both read the same version cannot both write.
+ */
+export function withDirLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>) {
+  return Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const lock = path.join(dir, "run.json.lock");
+    return yield* withLock(
+      lock,
+      Effect.fail(new Error(`${lock} could not be acquired; not writing unlocked`)),
+      effect,
+    );
+  });
+}
+
 /** When this pid's process started, as an opaque token. Null means the identity cannot be read. */
 export const processStartTime = Effect.fn("processStartTime")(function* (id: number) {
   const fs = yield* FileSystem.FileSystem;

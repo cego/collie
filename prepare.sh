@@ -180,3 +180,24 @@ skills_step() {
 }
 
 skills_step
+
+# What an older Collie recorded, read into this installation once. Idempotent by Run
+# identity, so every run after the first keeps nothing and says so — which is what makes
+# it safe on every install, upgrade and plugin rebuild. A Run something is still working
+# on is skipped and imports when that finishes; nothing here touches a run directory.
+history_step() {
+  if [ ! -x "$ROOT/bin/collie" ]; then
+    step history "skipped — no runner to read it with"
+    return 0
+  fi
+  if ! out=$(HERDR_PLUGIN_ROOT="$ROOT" "$ROOT/bin/collie" history import 2>&1); then
+    printf '%s\n' "$out" | tail -3 >&2
+    step history "skipped — the import did not run; run \`collie history import\` to see why"
+    return 0
+  fi
+  step history "$(printf '%s' "$out" | head -1)"
+  # Only the lines a human can act on: a record nobody can decode, and one still owned.
+  printf '%s\n' "$out" | sed -n '2,$p' | sed -n 's/^/  /p'
+}
+
+history_step

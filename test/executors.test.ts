@@ -19,7 +19,6 @@ import { executorFor, resetExecutors } from "../src/executors";
 import { LEGACY_PANE_TOKEN } from "../src/home";
 import { registerRunExecutors } from "../src/operations";
 import { scopeKey } from "../src/registry";
-import { inboxFiles } from "../src/driver";
 import { RunStore } from "../src/run";
 import { ledgerPath, readLedger, type Delivery } from "../src/steering";
 import { FakeBin } from "./support/bin";
@@ -189,20 +188,34 @@ test("a removal names the constraint's id, and prose removes nothing and says so
     }),
   ));
 
-test("a fork writes the definition into the layer it named", () =>
+test("a persona fork writes into the layer it named", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      const done = yield* carry({
+        kind: "fork_definition",
+        what: "persona",
+        name: "implementer",
+        as: "implementer-ours",
+      });
+      expect(done.state).toBe("applied");
+      const written = done.note?.replace("forked to ", "") ?? "";
+      expect(yield* fs.exists(written)).toBe(true);
+      expect(written).toContain("implementer-ours");
+    }),
+  ));
+
+test("a workflow is not forked by copying a file, and says what does fork one", () =>
+  runEffect(
+    Effect.gen(function* () {
       const done = yield* carry({
         kind: "fork_definition",
         what: "workflow",
         name: "implement",
         as: "implement-ours",
       });
-      expect(done.state).toBe("applied");
-      const written = done.note?.replace("forked to ", "") ?? "";
-      expect(yield* fs.exists(written)).toBe(true);
-      expect(written).toContain("implement-ours");
+      expect(done.state).toBe("failed");
+      expect(done.note).toContain("collie workflow fork");
     }),
   ));
 
@@ -292,61 +305,3 @@ const runWithAgent = Effect.fn("test.runWithAgent")(function* (harness: string) 
   );
   return run;
 });
-
-test("a `now` deliver goes into the pane from here, on the ledger, and not into the inbox", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const path = yield* Path.Path;
-      // The gate asks the installed harness its version; this test's claude is a stub
-      // newer than the recorded floor, so the answer does not depend on the machine.
-      const bin = yield* FakeBin.make(path.join(stateDir, "bin"));
-      yield* bin.add("claude", 'echo "9.0.0"');
-      const run = yield* runWithAgent("claude");
-
-      const done = yield* carry({
-        kind: "deliver",
-        run: run.id,
-        agent: "impl-1",
-        text: "merge !1351 first",
-        mode: "now",
-      }).pipe(Effect.ensuring(bin.restore()));
-
-      expect([done.state, done.note]).toEqual([
-        "applied",
-        expect.stringMatching(/^sent to impl-1 now/),
-      ]);
-      const ledger = (yield* readLedger(yield* ledgerPath(stateDir, "term-impl-1"))).filter(
-        (line): line is Delivery => "state" in line,
-      );
-      expect(ledger.map((line) => [line.state, line.mode, line.cause.kind])).toEqual([
-        ["reserved", "now", "steer"],
-        ["submitted", "now", "steer"],
-      ]);
-      expect(yield* inboxFiles(run.dir)).toEqual([]);
-    }),
-  ));
-
-test("a `now` deliver to a harness with no proven `now` is queued for the boundary, and says so", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const run = yield* runWithAgent("pi");
-
-      const done = yield* carry({
-        kind: "deliver",
-        run: run.id,
-        agent: "impl-1",
-        text: "merge !1351 first",
-        mode: "now",
-      });
-
-      expect(done.state).toBe("applied");
-      expect(done.note).toStartWith("queued for");
-      const files = yield* inboxFiles(run.dir);
-      expect(files).toHaveLength(1);
-      expect(yield* fs.readFileString(files[0]!)).toContain('"mode":"boundary"');
-      const log = yield* fs.readFileString(path.join(run.dir, "log.txt"));
-      expect(log).toContain("capability_unproven:pi:now, queued instead");
-    }),
-  ));

@@ -8,7 +8,7 @@
 // transitive graph: the value imports below reach `effect` through their own imports, and
 // what matters is that nothing in this file or the components can run an Effect.
 
-import type { PendingChoice } from "../driver";
+import type { PendingChoice } from "../board";
 import type { PickItem } from "../inputs";
 import { GLYPH } from "../naming";
 import { markFor, marksOf, NO_MARKS, worstOf, type Marks } from "../lines";

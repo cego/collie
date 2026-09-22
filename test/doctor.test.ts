@@ -123,6 +123,7 @@ test("a healthy machine passes every check and says so", () =>
         "status line",
         "up to date",
         "workflows",
+        "old workflow files",
         "glab",
         "helle",
         "linear mcp",
@@ -164,22 +165,20 @@ test("a shim whose directory is not on PATH is its own state, not 'installed'", 
     }),
   ));
 
-test("a removed skill is named, from the definitions rather than a list in the code", () =>
+test("a skill store that is not there is named, with the routine that fills it", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
-      yield* remove(`${rig.root}/.agents/skills/tdd`);
+      yield* remove(`${rig.root}/.agents/skills/collie`);
 
       const result = yield* report();
 
       expect(result.ok).toBe(false);
       const skills = check(result, "skills");
-      expect(skills.detail).toContain("tdd");
+      expect(skills.detail).toContain("operator skill");
       // The fix is the routine that owns the sources and the store, not a bare
       // `npx skills add`, which would install a name into neither reliably.
       expect(skills.fix).toBe(`sh ${rig.baselineDir}/prepare.sh`);
-      // The ones that are still there are not reported as missing.
-      expect(skills.detail).not.toContain("code-review");
     }),
   ));
 
@@ -348,23 +347,10 @@ test("what is overridden here is named, never judged and never edited", () =>
           `export const make = () => ({});`,
         ].join("\n"),
       );
-      // A definition of this project's own, which is an override just the same...
-      yield* writeDef(
-        project,
-        "workflows",
-        "ours",
-        "---\nname: ours\nsteps:\n  - id: one\n    persona: planner\n    output: one.json\n---\nDo it.\n",
-      );
-      // ...and one of an id a module claims, which is not what that id runs at all.
-      const bundled = yield* fs.readFileString(`${rig.baselineDir}/workflows/implement.md`);
-      yield* writeDef(project, "workflows", "implement", bundled);
-
       const found = check(yield* report(), "workflows");
       // Not a failure: a customisation is the user's, and doctor still exits clean.
       expect(found.ok).toBe(true);
       expect(found.detail).toContain(`review (project, ${mine})`);
-      expect(found.detail).toContain(`ours (project, ${project}/workflows/ours.md`);
-      expect(found.detail).not.toContain("implement (project");
       expect(found.fix).toBe("");
       // Nothing about what any of them contains: an id doctor recognised would be the
       // start of a shipped workflow being privileged over one somebody wrote.

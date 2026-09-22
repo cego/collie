@@ -35,7 +35,7 @@ import {
 import { NO_MARKS } from "../../src/lines";
 import { DateTime } from "effect";
 import { ago, agoShort, took } from "../../src/time";
-import type { PendingChoice } from "../../src/driver";
+import type { PendingChoice } from "../../src/board";
 import type { WideGroup, WideView, WorkspaceView } from "../../src/workspace";
 import { NO_OUTCOME } from "../../src/workspace";
 import { focus } from "../support/focus";

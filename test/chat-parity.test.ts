@@ -55,6 +55,14 @@ const RUN = "r-does-not-exist";
 
 /** `collie <this>`, as the command tree spells it, and what chat does about it. */
 const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
+  ["history list", { route: "read", tool: "collie_herd" }],
+  [
+    "history import",
+    {
+      route: "human-only",
+      why: "reading what an older Collie left is something an installation does once, on its own; a conversation has nothing to decide about it",
+    },
+  ],
   ["workflow list", { route: "read", tool: "collie_definitions" }],
   ["workflow show", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
   ["workflow check", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
@@ -119,7 +127,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run cards", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run actions", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run action", { route: "write", tool: "collie_do" }],
-  ["run follow-up", { route: "write", tool: "collie_do" }],
   ["run intent show", { route: "read", tool: "collie_run", input: { run: RUN } }],
   [
     "run intent set-goal",
@@ -210,7 +217,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     "run intent defaults set-authority",
     { route: "human-only", why: "the same grant, standing for every Run that follows" },
   ],
-  ["run logs", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["task list", { route: "read", tool: "collie_workspaces" }],
   ["run output", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["steer", { route: "write", tool: "collie_do" }],
