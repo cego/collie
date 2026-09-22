@@ -278,7 +278,9 @@ test("renovate never lets a merge request end unaccounted for, and never takes a
       // A broken stage is rolled back to the stable release before anything is debugged,
       // and the fix-and-redeploy loop runs on its own until stage is good.
       expect(prompt("stage")).toContain("Roll stage back");
-      expect(prompt("stage")).toContain("Kibana");
+      // Where the logs are is this installation's own configuration, not a hostname the
+      // baseline knows: a fork of Collie elsewhere reads its own and needs no edit here.
+      expect(prompt("stage")).toContain("{{config.renovate.logs}}");
       expect(prompt("stage")).toContain("Never leave stage on a broken batch");
       expect(prompt("approval")).toContain("another team member");
       expect(prompt("approval")).toContain("never approve it yourself");

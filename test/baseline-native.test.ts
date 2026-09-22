@@ -13,19 +13,22 @@ import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
+import { FakeBin } from "./support/bin";
 import { installFakeSkills } from "./support/defs";
 import { NativeAgents, agentsLayer, type AgentHost } from "../src/agents";
 import { NativeChildren, NativeHost, type ActionFacts, type ChildAsk } from "../src/sdk";
 import {
   answerDecision,
   declaredByModule,
+  evidenceDir,
   foundationLayer,
   loadEntry,
   runDir,
 } from "../src/native";
+import { VerifySpecSchema } from "../src/verify-spec";
 import { offersFrom } from "../src/offers";
 import { Store } from "../src/store";
-import { until } from "./support/native";
+import { fixtures, until } from "./support/native";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 const shipped = (name: string) => `${ROOT}workflows/${name}.workflow.ts`;
@@ -82,6 +85,9 @@ const children = Layer.succeed(NativeChildren)(
   }),
 );
 
+/** A host layer a test may wrap, for the one capability it has no service to answer with. */
+type HostOverride = Layer.Layer<NativeHost, never, NativeHost>;
+
 const session = <A, E>(
   run: Effect.Effect<
     A,
@@ -94,11 +100,16 @@ const session = <A, E>(
     | FileSystem.FileSystem
     | Path.Path
   >,
+  override?: HostOverride,
 ) =>
   run.pipe(
     Effect.provide(agentsLayer(hostOf())),
     Effect.provide(children),
-    Effect.provide(foundationLayer({ dir })),
+    Effect.provide(
+      override === undefined
+        ? foundationLayer({ dir, configDir: rig.configDir })
+        : override.pipe(Layer.provideMerge(foundationLayer({ dir, configDir: rig.configDir }))),
+    ),
     Effect.scoped,
     Effect.orDie,
   );
@@ -712,3 +723,565 @@ test(
     ),
   120_000,
 );
+
+/** A Run of a shipped module that asks nothing, run to the end it reaches on its own. */
+const ran = (options: {
+  readonly entry: string;
+  readonly runId: string;
+  readonly input: Readonly<Record<string, Schema.Json>>;
+  readonly options?: Readonly<Record<string, string>>;
+  readonly host?: HostOverride;
+}) =>
+  session(
+    Effect.gen(function* () {
+      const made = yield* loaded(options.entry, options.runId);
+      yield* admit({
+        runId: options.runId,
+        workflow: made.workflow.name,
+        input: options.input,
+        options: options.options,
+      });
+      const payload = { runId: options.runId, input: options.input };
+      return yield* made.workflow.execute(payload).pipe(Effect.result, Effect.provide(made.layer));
+    }),
+    options.host,
+  );
+
+const asApproved = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
+const asJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Any));
+
+/** What a human approved Collie to run for this Run, frozen where a start would freeze it. */
+const approve = (runId: string, names: ReadonlyArray<string>) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs
+        .makeDirectory(evidenceDir(dir, runId), { recursive: true })
+        .pipe(
+          Effect.andThen(
+            fs.writeFileString(
+              `${evidenceDir(dir, runId)}/approved.json`,
+              asApproved(
+                names.map((name) => ({ name, executable: "true", argv: [], cwd: rig.projectDir })),
+              ),
+            ),
+          ),
+        ),
+    ),
+    Effect.orDie,
+  );
+
+/**
+ * A real repository with a GitLab remote. What binds a verification is the tree it ran
+ * on, and a directory git knows nothing about has no tree to move.
+ */
+const repository = () =>
+  Effect.sync(() => {
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.email", "t@example.com"],
+      ["config", "user.name", "t"],
+      ["remote", "add", "origin", "https://gitlab.example.com/group/project.git"],
+    ]) {
+      Bun.spawnSync(["git", ...args], { cwd: rig.projectDir });
+    }
+    Bun.spawnSync(["git", "commit", "-qm", "first", "--allow-empty"], { cwd: rig.projectDir });
+  });
+
+/** A plan of tickets on disk, which is the only thing that makes a build a list. */
+const planOf = (tickets: ReadonlyArray<{ file: string; title: string; checks: string }>) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const where = `${rig.root}/plan`;
+    yield* fs.makeDirectory(`${where}/issues`, { recursive: true });
+    yield* fs.writeFileString(`${where}/SPEC.md`, "# The spec\n");
+    for (const ticket of tickets) {
+      yield* fs.writeFileString(
+        `${where}/issues/${ticket.file}`,
+        `# ${ticket.title}\n\n**Checks:** ${ticket.checks}\n`,
+      );
+    }
+    return where;
+  });
+
+const BUILT = {
+  verdict: "clean",
+  findings: [],
+  branch: "mk/one-registry",
+  pushed: true,
+  tickets_done: ["the first one"],
+  commits: ["made the registry one"],
+  tests: "unit: pass",
+};
+const CLEAN_REVIEW = { verdict: "clean", findings: [] };
+const CLEAN_SYNTHESIS = {
+  verdict: "clean",
+  summary: "It merges the two registries. Nothing is wrong with it.",
+  findings: [],
+  dropped: [],
+  fixed: [],
+  scope_met: true,
+};
+const OPENED = {
+  verdict: "clean",
+  findings: [],
+  mr_url: "https://gitlab.example.com/group/project/-/merge_requests/7",
+  linear_issues: [],
+  branch: "mk/one-registry",
+  pushed: true,
+};
+
+test(
+  "implement builds a plan one ticket at a time on one implementer, then reviews what it built",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-impl", ["unit"]);
+        yield* rig.queueOutputs([BUILT, BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl",
+          input: { plan },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        // One implementer for the build, the fixes and the merge request; the reviewer and
+        // the synthesis are their own, because neither may vouch for the change.
+        const starts = yield* rig
+          .cmds()
+          .pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start")));
+        expect(starts).toHaveLength(3);
+        // The second ticket is handed what the first left, not the whole transcript.
+        const second = yield* asked("r-impl", "02-second.md");
+        expect(second).toContain("Ticket: 02-second.md — the second one");
+        expect(second).toContain("- 01-first.md — the first one");
+        expect(second).toContain("made the registry one");
+        // What this Run will be held to, named before it starts rather than guessed at.
+        expect(second).toContain(`- unit: true (in ${rig.projectDir})`);
+        // And the card a slice landing leaves, whether or not the agent wrote its own.
+        const fs = yield* FileSystem.FileSystem;
+        expect(
+          yield* fs.readFileString(`${runDir(dir, "r-impl")}/steering/progress/01-first.json`),
+        ).toContain(`"status":"done"`);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "the merge request says what was verified, and is assigned to whoever the config names",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${rig.configDir}/config.json`,
+          asJson({ gitlab: { assignee: "someone-else" } }),
+        );
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-mr", ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+
+        yield* ran({ entry: shipped("implement"), runId: "r-impl-mr", input: { plan } });
+        yield* bin.restore();
+
+        const opening = yield* asked("r-impl-mr", "mr");
+        expect(opening).toContain("- Assignee: `someone-else`");
+        // What was collected, by whom — Collie ran it, so it is not the agent's claim.
+        expect(opening).toContain("unit");
+        expect(opening).toContain("by collie");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a blocking finding goes back to the agent that built it, and the next review ends the rally",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-fix", ["unit"]);
+        const finding = {
+          severity: "blocker",
+          title: "the guard is on the wrong side",
+          file: "src/a.ts",
+          detail: "an empty list goes through it",
+        };
+        yield* rig.queueOutputs([
+          BUILT,
+          { verdict: "findings", findings: [finding] },
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [finding], scope_met: true },
+          { verdict: "clean", fixed: [{ title: finding.title, file: finding.file }], checks: [] },
+          CLEAN_REVIEW,
+          { ...CLEAN_SYNTHESIS },
+          OPENED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-fix",
+          input: { plan },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        // The fix is told what was found and where the round stands, and the second review
+        // is a fresh reviewer rather than the one that wrote the first.
+        const fixing = yield* asked("r-impl-fix", "fix-1");
+        expect(fixing).toContain("the guard is on the wrong side");
+        expect(fixing).toContain("Iteration 1 of at most 4");
+        expect(yield* asked("r-impl-fix", "review-2-1")).toContain("Iteration 2 of at most 4");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a native review's own directory is a review to build from, not a wall of text",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        // What a native review leaves behind: the prose a human reads and the findings a
+        // card counts. There is no engine run record beside it, and there never will be.
+        const fs = yield* FileSystem.FileSystem;
+        const reviewed = `${rig.root}/reviewed`;
+        yield* fs.makeDirectory(reviewed, { recursive: true });
+        yield* fs.writeFileString(`${reviewed}/review.md`, "# Review\n\nThe guard is wrong.\n");
+        yield* fs.writeFileString(`${reviewed}/findings.json`, "[]");
+        yield* approve("r-impl-review", ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+
+        yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-review",
+          input: { plan: reviewed },
+        });
+        yield* bin.restore();
+
+        const building = yield* asked("r-impl-review", "build");
+        expect(building).toContain(`Work source (review): ${reviewed}`);
+        expect(building).toContain("Do the one that matches\n`review`");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "no merge request where the evidence is not there, and the reason is what the Run says",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        // Approved, and it fails: an Output that says the tests pass is a claim, and the
+        // journal is what the gate reads.
+        yield* approve("r-impl-gate", ["unit"]);
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${evidenceDir(dir, "r-impl-gate")}/approved.json`,
+          asApproved([{ name: "unit", executable: "false", argv: [], cwd: rig.projectDir }]),
+        );
+        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-gate",
+          input: { plan },
+          options: { outcome: "feature" },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toContain("no merge request");
+        expect(said(result)).toContain("unit failed");
+        // The reviewer said the scope was met, and that judgement survived being decoded:
+        // a feature Run held to it is not told it is missing when a reviewer gave it.
+        expect(said(result)).not.toContain("scope_met");
+        // Nothing was opened, so nobody was asked to open it.
+        expect(yield* prompts()).toHaveLength(3);
+      }),
+    ),
+  120_000,
+);
+
+/**
+ * A host with no Helle to ask. The claim is a service this machine has no credentials
+ * for; what the workflow does with it — take it before anything shared, give it back once
+ * the work is done — is what these tests are about.
+ */
+const claimed: string[] = [];
+const withoutHelle: HostOverride = Layer.effect(NativeHost)(
+  Effect.gen(function* () {
+    const host = yield* NativeHost;
+    return NativeHost.of({
+      ...host,
+      claim: (options) =>
+        Effect.as(
+          options
+            .say("holding the claim")
+            .pipe(Effect.tap(() => Effect.sync(() => claimed.push(`claim ${options.runId}`)))),
+          { slug: "project" },
+        ),
+      release: (runId) => Effect.sync(() => void claimed.push(`release ${runId}`)),
+    });
+  }),
+);
+
+/** Everything a renovation needs from the machine: glab, a GitLab remote, a config. */
+const renovatable = () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.writeFileString(
+      `${rig.configDir}/config.json`,
+      asJson({
+        gitlab: { assignee: "whoever-is-configured" },
+        linear: { team: "Platform" },
+        renovate: { logs: "the logs are at logs.example.invalid" },
+      }),
+    );
+    const bin = yield* FakeBin.make(`${rig.root}/bin`);
+    yield* bin.add("glab", `exit 0`);
+    yield* repository();
+    return bin;
+  });
+
+const TRACKED = {
+  verdict: "clean",
+  findings: [],
+  issue: "REN-1",
+  issue_url: "https://linear.app/team/issue/REN-1",
+  team: "Platform",
+  repository: "project",
+  created_issue: false,
+};
+const BUMPS = [{ iid: 12, title: "Update effect", bumps: "effect 3 -> 4", risk: "routine" }];
+const MERGED = {
+  verdict: "clean",
+  findings: [],
+  outcomes: [{ iid: 12, url: "https://gitlab.example.com/x!12", outcome: "merged" }],
+};
+const RELEASED = { verdict: "clean", findings: [], version: "1.2.0", tagged: true };
+const RECORDED = { verdict: "clean", findings: [], checked_off: true, status: "renovated" };
+
+test(
+  "a package never reaches batch, stage or approval: no agent, no Output, and a reason on the record",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* renovatable();
+        yield* rig.queueOutputs([
+          TRACKED,
+          { verdict: "clean", up_to_date: false, is_package: true, merge_requests: BUMPS },
+          MERGED,
+          RELEASED,
+          RECORDED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("renovate"),
+          runId: "r-pkg",
+          input: {},
+          host: withoutHelle,
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe("REN-1: renovated 1.2.0");
+        // Five pieces of work, not eight: the three an application needs were not asked
+        // for, so nothing wrote `"skipped": "package"` to say it had nothing to do.
+        expect(yield* prompts()).toHaveLength(5);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${dir}/agents/r-pkg/batch.prompt.md`)).toBe(false);
+        expect(yield* fs.readFileString(`${dir}/events.r-pkg.log`)).toContain(
+          "a package has no batch branch: skipped batch, stage, approval",
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "nothing to renovate: no claim is taken, nothing is merged, and the repository is checked off",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* renovatable();
+        claimed.length = 0;
+        yield* rig.queueOutputs([
+          TRACKED,
+          { verdict: "clean", up_to_date: true, is_package: false },
+          { verdict: "clean", tagged: false, up_to_date: true },
+          { ...RECORDED, status: "up to date" },
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("renovate"),
+          runId: "r-empty",
+          input: {},
+          host: withoutHelle,
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe("REN-1: up to date");
+        // A repository with nothing to land takes nobody's turn: the claim is the
+        // expensive prerequisite, and eligibility was decided before it.
+        expect(claimed).toEqual([]);
+        expect(yield* prompts()).toHaveLength(4);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "an application batches under the claim, proves it on stage and waits for a teammate",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* renovatable();
+        claimed.length = 0;
+        yield* rig.queueOutputs([
+          TRACKED,
+          { verdict: "clean", up_to_date: false, is_package: false, merge_requests: BUMPS },
+          { verdict: "clean", mr_url: "https://gitlab.example.com/x!99", branch: "renovate/batch" },
+          { verdict: "clean", verified: true, verified_by: "e2e-stage" },
+          { verdict: "clean", approved_by: ["a-teammate"], head_sha: "abc" },
+          MERGED,
+          RELEASED,
+          RECORDED,
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("renovate"),
+          runId: "r-app",
+          input: {},
+          host: withoutHelle,
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe("REN-1: renovated 1.2.0");
+        expect(yield* prompts()).toHaveLength(8);
+        // Taken before the first thing that touches anything shared, given back after the
+        // last one — and not before, so nobody deploys on a half-finished renovation.
+        expect(claimed).toEqual(["claim r-app", "release r-app"]);
+        // Nothing personal and nothing company-specific in the content: who the batch is
+        // assigned to and where the logs are are this installation's own configuration.
+        const batching = yield* asked("r-app", "batch");
+        expect(batching).toContain("glab mr create --assignee whoever-is-configured");
+        expect(yield* asked("r-app", "stage")).toContain("logs.example.invalid");
+        expect(yield* persona("r-app", "track")).toContain("You are renovating one repository");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a stage that was not proved merges nothing, and says so rather than carrying on",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* renovatable();
+        yield* rig.queueOutputs([
+          TRACKED,
+          { verdict: "clean", up_to_date: false, is_package: false, merge_requests: BUMPS },
+          { verdict: "clean", mr_url: "https://gitlab.example.com/x!99" },
+          { verdict: "findings", verified: false, findings: [] },
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("renovate"),
+          runId: "r-stage",
+          input: {},
+          host: withoutHelle,
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe("REN-1: stage was not verified");
+        expect(yield* prompts()).toHaveLength(4);
+      }),
+    ),
+  120_000,
+);
+
+const PACKAGE = { verdict: "clean", up_to_date: false, is_package: true, merge_requests: BUMPS };
+
+test(
+  "a fork changes what lands and keeps everything that decides whether it should",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const fork = `${rig.root}/fork`;
+        yield* fs.makeDirectory(fork, { recursive: true });
+        for (const name of ["renovate.workflow.ts", "renovate.md"]) {
+          yield* fs.copyFile(`${ROOT}workflows/${name}`, `${fork}/${name}`);
+        }
+        yield* fs.copyFile(`${fixtures}/landing.workflow.ts`, `${fork}/landing.workflow.ts`);
+        const bin = yield* renovatable();
+        // The shipped workflow first, then the fork, out of one queue: both are packages
+        // with the same batch, so the only thing that can differ is the workflow itself.
+        yield* rig.queueOutputs([
+          TRACKED,
+          PACKAGE,
+          MERGED,
+          RELEASED,
+          RECORDED,
+          TRACKED,
+          PACKAGE,
+          MERGED,
+          { verdict: "clean", version: "deploy-7", tagged: false },
+          RECORDED,
+        ]);
+        yield* ran({
+          entry: shipped("renovate"),
+          runId: "r-shipped",
+          input: {},
+          host: withoutHelle,
+        });
+
+        const result = yield* ran({
+          entry: `${fork}/landing.workflow.ts`,
+          runId: "r-fork",
+          input: {},
+          host: withoutHelle,
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe("REN-1: renovated deploy-7");
+        // Under an unrelated name, from another directory: everything up to the landing is
+        // word for word what the shipped workflow asked, and only the Run it is about
+        // differs. A fork that had copied the orchestration would drift from this.
+        for (const step of ["track", "assess"]) {
+          expect(byRun(yield* asked("r-fork", step))).toBe(byRun(yield* asked("r-shipped", step)));
+        }
+        // And the landing is the fork's own: the shipped rules for what may be merged,
+        // with its own way of merging, and a deploy where the baseline tags.
+        const merging = yield* asked("r-fork", "merge");
+        expect(merging).toContain("Every relevant merge request ends with exactly one outcome");
+        expect(merging).toContain("merge fast-forward only");
+        expect(yield* asked("r-fork", "release")).toContain("Nothing is tagged here");
+        expect(yield* asked("r-fork", "release")).not.toContain("Tag annotated");
+      }),
+    ),
+  120_000,
+);
+
+/** A prompt with the Run it is about taken out, so two Runs' prompts can be compared. */
+const byRun = (prompt: string) => prompt.replaceAll(/r-(fork|shipped)/g, "<run>");

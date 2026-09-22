@@ -33,6 +33,12 @@ export interface HelleClaim {
   claim: "mine" | "adopted";
 }
 
+/** The same, for a host that keeps it in a file of its own rather than in a Run record. */
+export const HelleClaimSchema = Schema.Struct({
+  slug: Schema.String,
+  claim: Schema.Literals(["mine", "adopted"]),
+});
+
 const Me = Schema.Struct({ user_id: Schema.String });
 const Member = Schema.Struct({ user_id: Schema.String });
 const Project = Schema.Struct({

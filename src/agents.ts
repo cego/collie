@@ -38,7 +38,8 @@ import {
 } from "./harness";
 import { Herdr } from "./herdr";
 import { agentName, reason, shellQuote, unsafePathComponent } from "./naming";
-import { registerAgent, registryPath, scopeFor } from "./registry";
+import { askRouteTo } from "./handoff";
+import { liveAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
 import {
   contentOf,
   jsonSchemaFor,
@@ -114,6 +115,12 @@ export interface AgentsApi {
    * path that is not there.
    */
   readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
+  /**
+   * What an agent is told about asking for a decision its work does not cover: the pane
+   * of whoever is live in that role, and otherwise to stop and ask the human. A role, not
+   * a bare route: who may be asked is the workflow's own declaration.
+   */
+  readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain>;
@@ -770,6 +777,17 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   return {
     outputFor,
     skills: (names) => under(skills(names)),
+    askRoute: (role, cwd) =>
+      under(
+        Effect.gen(function* () {
+          const alive = yield* host.herdr.agentList();
+          const file = yield* registryPath(host.env.stateDir, scopeFor(host.env, cwd));
+          const entry = yield* liveAgent(file, alive, role);
+          // A register entry with no incarnation names a pane, and whatever is in that
+          // pane now is not the agent it was written about.
+          return askRouteTo(entry !== null && verifyIncarnation(entry, alive).ok ? entry : null);
+        }).pipe(Effect.orElseSucceed(() => askRouteTo(null))),
+      ),
     pollMs: host.pollMs ?? DEFAULT_POLL_MS,
     launch,
     collect,

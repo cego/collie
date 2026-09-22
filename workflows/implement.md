@@ -205,13 +205,10 @@ ignore the others; an empty outcome means only the approved verifications have t
 
 {{session.ask}}
 
-Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what is not
-built or not passing, as findings — each with a "severity" of `blocker|major|minor`, a
-"title", and the "file" and "detail" it is about; a failure that pre-dates this branch is
-`minor`>], "branch": "<branch>", "pushed": true, "tickets_done":
-["ticket title", ...], "commits": ["<subject>", ...], "tests": "what you ran and what it
-said"}`, plus whichever of the outcome fields above applies. `clean` means the whole scope is built and the tests pass; anything else is
-`findings`, with one entry per thing that is not.
+Then write your Output, plus whichever of the outcome fields above applies. `clean` means
+the whole scope is built and the tests pass; anything else is `findings`, one entry per
+thing that is not, each with a `severity` of `blocker`, `major` or `minor` — a failure
+that pre-dates this branch is `minor`.
 
 ## fix
 
@@ -260,15 +257,11 @@ Push the fixups before you finish — `git push -u origin HEAD -o ci.skip` — e
 iteration: the next round reviews the remote, and a fix it cannot see is a finding it
 raises again. A push that fails is reported as `"pushed": false`, not fatal.
 
-Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what you
-could not finish>], "fixed": [{"file": "path", "title": "the finding", "note": "what you
-changed"}], "disputed": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
-"title": "the finding", "detail": "why I disagree"}], "checks": [{"name": "the verification
-name you ran it under", "note": "what it said"}], "pushed": true}`. `file` and `title` in
-`fixed` and `disputed` are exactly as the finding above gives them, so Collie can match
-them; `checks` names every test and lint command you ran, one entry each, by the name
-`collie verify` recorded it under (the command's first word, unless you gave `--name`). A
-check with no record on this tree is not a passing check, whatever the note says.
+Then write your Output. `file` and `title` in `fixed` and `disputed` are exactly as the
+finding above gives them, so Collie can match them; `checks` names every test and lint
+command you ran, one entry each, by the name `collie verify` recorded it under (the
+command's first word, unless you gave `--name`). A check with no record on this tree is
+not a passing check, whatever the note says.
 
 ## mr
 
@@ -348,7 +341,6 @@ Linear MCP. If the MCP is not configured, skip it and say so in your Output.
 Never write the company package scope with a leading at-sign — in the MR, in a commit
 message, or anywhere else. Write it as a bare name.
 
-Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [], "mr_url":
-"<url>", "linear_issues": [<the ids you linked>], "branch": "<what you pushed>", "pushed":
-true}`. `clean` means the merge request exists or was updated; a push or `glab` that failed
-is `findings`, saying what.
+Then write your Output, naming the merge request and the issues you linked. `clean` means
+the merge request exists or was updated; a push or `glab` that failed is `findings`, saying
+what.

@@ -35,6 +35,7 @@ import * as SingleRunner from "effect/unstable/cluster/SingleRunner";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { ConfigError } from "effect/Config";
 import type { PlatformError } from "effect/PlatformError";
+import { FetchHttpClient } from "effect/unstable/http";
 import * as Reactivity from "effect/unstable/reactivity/Reactivity";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
@@ -61,15 +62,34 @@ import {
   type Registration,
   type WorkflowEntry,
 } from "./sdk";
+import { configValue, readConfig } from "./config";
+import { currentEnv } from "./env";
+import {
+  HelleClaimSchema,
+  HelleError,
+  credentials,
+  releaseClaim,
+  waitForHelle,
+  type HelleClaim,
+} from "./helle";
 import { currentPid, signalProcess } from "./lock";
 import type { InputStrategy } from "./definitions";
 import { noteVerification } from "./metrics";
-import { postNote, shell as runShell } from "./mr";
+import {
+  gitlabForProject,
+  gitlabReadiness,
+  mrFacts,
+  parseMrTarget,
+  postNote,
+  projectHere,
+  shell as runShell,
+} from "./mr";
 import { openFindingsIn } from "./output";
 import { planIssuesIn } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome } from "./outcome";
 import { RequestConflict, Store, storeLayer, type RunRow } from "./store";
+import { repositoryName } from "./worktree";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
   collect as collectVerification,
@@ -188,6 +208,26 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly message: string;
   }
 
+  /** One command a human approved Collie to run for this Run. */
+  export interface VerifySpec {
+    readonly name: string;
+    readonly executable: string;
+    readonly argv: ReadonlyArray<string>;
+    readonly cwd: string;
+  }
+
+  /** What opening a merge request from here needs, and what it would be filled in with. */
+  export interface MrReady {
+    readonly ok: boolean;
+    /** Why it cannot be done here. Empty where it can. */
+    readonly reason: string;
+    /** The configured assignee, else whoever glab is logged in as; empty for neither. */
+    readonly assignee: string;
+    /** The repository's merge request template, relative to the checkout; empty for none. */
+    readonly template: string;
+    readonly issues: ReadonlyArray<string>;
+  }
+
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface NativeHostApi {
     readonly dir: string;
@@ -217,6 +257,29 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
       readonly cwd: string;
       readonly file: string;
     }) => Effect.Effect<Posted>;
+    /** What this Run may have Collie run for it; a workflow cannot add to the list. */
+    readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
+    /** One value from the operator's own configuration, by dotted name; empty for none. */
+    readonly config: (dotted: string) => Effect.Effect<string>;
+    /** Whether a merge request can be opened from here, and what it would carry. */
+    readonly mr: (options: {
+      readonly cwd: string;
+      readonly target?: string;
+      readonly source?: { readonly value: string; readonly kind: string };
+    }) => Effect.Effect<MrReady>;
+    /**
+     * Blocks until this Run holds the shared claim on the repository it works in, and
+     * answers null where that repository has none. Waiting here costs wall clock and no
+     * model tokens. adopting is asked only where the claim was already the operator's.
+     */
+    readonly claim: <E, R>(options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly adopting: Effect.Effect<boolean, E, R>;
+      readonly say: (line: string) => Effect.Effect<void, E, R>;
+    }) => Effect.Effect<{ readonly slug: string } | null, WorkflowError | E, R>;
+    /** Gives the claim back. Only a Run that finished its work releases. */
+    readonly release: (runId: string) => Effect.Effect<void>;
   }
   export const NativeHost: Context.Service<NativeHostApi, NativeHostApi>;
   export type NativeHost = NativeHostApi;
@@ -361,6 +424,11 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly skills: (
       names: ReadonlyArray<string>,
     ) => Effect.Effect<ReadonlyMap<string, string>>;
+    /**
+     * What an agent is told about asking for a decision its work does not cover: the
+     * pane of whoever is live in that role, and otherwise to stop and ask the human.
+     */
+    readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
     readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain>;
     readonly collect: (
       launched: Launched,
@@ -467,6 +535,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly when: "succeeded" | "failed" | "always";
     /** What Collie fills in from the Run itself; the rest is the caller's to give. */
     readonly inputs?: Readonly<Record<string, Source>>;
+    /** A further condition on the facts, where how it ended is not the whole of it. */
+    readonly eligible?: (facts: ActionFacts) => boolean;
   }
 
   /** What an action decides eligibility from: facts, never a workflow's name. */
@@ -518,7 +588,19 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     reason?: string;
   }
 
-  export interface ReviewOutput {
+  /**
+   * The one judgement a reviewer gives that nothing else can, named by the kind of result
+   * the change was for. One applies and the rest do not, so all are optional.
+   */
+  export interface Judgement {
+    scope_met?: boolean;
+    behavior_preserved?: boolean;
+    supported?: boolean;
+    accurate?: boolean;
+    compatible?: boolean;
+  }
+
+  export interface ReviewOutput extends Judgement {
     verdict: "clean" | "findings";
     findings: Finding[];
     disputed: Finding[];
@@ -651,7 +733,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   export function repoArgs(project: string | null): string[];
 
   /** A decoded review: the lists are the decoder's, not the reader's to change. */
-  export interface ReviewReport {
+  export interface ReviewReport extends Judgement {
     readonly verdict: "clean" | "findings";
     readonly findings: ReadonlyArray<Finding>;
     readonly disputed: ReadonlyArray<Finding>;
@@ -778,6 +860,51 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   /** Whether this plan is one repository and that repository is the run's own root. */
   export function isSingleRepo(plan: PlanRepos): boolean;
 
+  /** The approved commands as a human would type them, for a prompt to name them. */
+  export function renderApproved(approved: ReadonlyArray<VerifySpec>): string;
+
+  /** What was actually collected, and by whom, for a merge request to say what it proved. */
+  export function renderEvidence(
+    got: { readonly verifications: ReadonlyArray<Verification>; readonly final: Snapshot },
+  ): string;
+
+  /**
+   * Everything still missing before this Run may say it proved its kind of result, one
+   * sentence each. Empty means the evidence is there. An Output is a claim whatever it
+   * says; what decides a check is the journal, on the tree in front of it.
+   */
+  /** Whether this is one of the kinds of result a Run can be for. */
+  export function isOutcome(value: string): value is Outcome;
+
+  export function evidenceGapsOf(options: {
+    readonly kind: Outcome;
+    readonly evidence: CheckEvidence;
+    readonly approved: ReadonlyArray<VerifySpec>;
+    /** What each piece of work reported, by the name it was done under. */
+    readonly outputs: Readonly<Record<string, unknown>>;
+    /** Which of those are a reviewer's judgement rather than the implementer's claim. */
+    readonly reviewed: ReadonlyArray<string>;
+    /** The directories this Run owns, which a reference it gives has to point inside. */
+    readonly roots: ReadonlyArray<string>;
+    readonly tickets: ReadonlyArray<{
+      readonly file: string;
+      readonly checks: ReadonlyArray<string>;
+    }>;
+  }): ReadonlyArray<string>;
+
+  /** Where the work to be done was described. */
+  export interface WorkSource {
+    readonly kind: "plan-dir" | "linear" | "text" | "review" | "followup" | "mr" | "branch" | "worktree";
+    readonly value: string;
+    readonly source: string;
+    readonly label?: string;
+  }
+
+  /** What a work source turned out to be: a plan, a review, an issue, a follow-up, text. */
+  export function classifyWorkSource(
+    typed: string,
+  ): Effect.Effect<WorkSource, unknown, FileSystem.FileSystem | Path.Path>;
+
   /** The JSON Schema for a prompt, and what the drawing does not say. */
   export interface Projection {
     readonly document: unknown;
@@ -824,7 +951,8 @@ export function declaredByModule(metadata: WorkflowMetadata | undefined): Declar
     kind: "follow-up" as const,
     inputs: offer.inputs ?? {},
     eligible: (facts: ActionFacts) =>
-      offer.when === "always" || (offer.when === "succeeded") === facts.succeeded,
+      (offer.when === "always" || (offer.when === "succeeded") === facts.succeeded) &&
+      (offer.eligible?.(facts) ?? true),
   }));
   return [...actions, ...followUps];
 }
@@ -1072,6 +1200,22 @@ const approvedOf = Effect.fn("Native.approvedOf")(function* (dir: string, runId:
   return yield* decodeApproved(text).pipe(Effect.orElseSucceed(() => none));
 });
 
+/** Where a host keeps what a Run claimed, so a resume knows whose the claim was. */
+const claimPath = (dir: string, runId: string) => `${runDir(dir, runId)}/helle.json`;
+
+const decodeClaim = Schema.decodeUnknownEffect(Schema.fromJsonString(HelleClaimSchema));
+const encodeClaim = Schema.encodeSync(Schema.fromJsonString(HelleClaimSchema));
+
+/** What this Run already claimed, and null where it has claimed nothing yet. */
+const recordedClaim = (
+  file: string,
+): Effect.Effect<HelleClaim | null, never, FileSystem.FileSystem> =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(file)),
+    Effect.flatMap(decodeClaim),
+    Effect.orElseSucceed((): HelleClaim | null => null),
+  );
+
 export const nativeHostLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
@@ -1178,6 +1322,106 @@ export const nativeHostLayer = (options: {
               }),
             ),
           ),
+        approved: (runId) => under(approvedOf(dir, runId)),
+        config: (dotted) =>
+          under(
+            readConfig(options.configDir ?? dir).pipe(
+              Effect.map((raw) => {
+                const value = configValue(raw, dotted);
+                return Schema.is(Schema.String)(value) ? value : "";
+              }),
+              Effect.orElseSucceed(() => ""),
+            ),
+          ),
+        mr: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const project = parseMrTarget(asked.target ?? "")?.project ?? null;
+              const ready = yield* asked.target === undefined
+                ? gitlabReadiness(asked.cwd, runShell)
+                : gitlabForProject(project, asked.cwd, runShell);
+              if (!ready.ok) {
+                return { ok: false, reason: ready.reason, assignee: "", template: "", issues: [] };
+              }
+              const facts = yield* mrFacts(
+                {
+                  cwd: asked.cwd,
+                  inputs: {
+                    source: asked.source?.value ?? "",
+                    source_kind: asked.source?.kind ?? "",
+                  },
+                  strategies: { source: "work-source" },
+                  configuredAssignee: configValue(
+                    yield* readConfig(options.configDir ?? dir),
+                    "gitlab.assignee",
+                  ),
+                },
+                runShell,
+              );
+              return {
+                ok: true,
+                reason: "",
+                assignee: facts.assignee ?? "",
+                template: facts.template ?? "",
+                issues: facts.issues,
+              };
+            }).pipe(
+              Effect.orElseSucceed(() => ({
+                ok: false,
+                reason: "this checkout could not be read",
+                assignee: "",
+                template: "",
+                issues: [],
+              })),
+            ),
+          ),
+        claim: <E, R>(asked: {
+          readonly runId: string;
+          readonly cwd: string;
+          readonly adopting: Effect.Effect<boolean, E, R>;
+          readonly say: (line: string) => Effect.Effect<void, E, R>;
+        }): Effect.Effect<{ readonly slug: string } | null, WorkflowError | E, R> =>
+          Effect.gen(function* () {
+            const env = yield* currentEnv.pipe(Effect.orDie);
+            const file = claimPath(dir, asked.runId);
+            return yield* waitForHelle({
+              home: env.home,
+              envFile: env.raw.HELLE_ENV_FILE ?? null,
+              gitlabPath: yield* projectHere(asked.cwd, runShell),
+              // git's repository, never the checkout's basename: a roaming Run's directory
+              // is named after the workflow, and a Helle project under that name is a
+              // project that does not exist for a repository that has one.
+              repoName:
+                (yield* repositoryName(runShell, asked.cwd)) ??
+                (yield* Path.Path).basename(asked.cwd),
+              claimed: yield* recordedClaim(file),
+              record: (claim) => fs.writeFileString(file, encodeClaim(claim)).pipe(Effect.orDie),
+              out: asked.say,
+              // The question is the workflow's, so it is durable and asked once; this only
+              // turns the answer into the word the gate reads.
+              ask: () => asked.adopting.pipe(Effect.map((yes) => (yes ? "yes" : null))),
+            });
+          }).pipe(
+            Effect.provide(FetchHttpClient.layer),
+            Effect.provideContext(services),
+            // Helle refusing to answer is this Run being unable to take the claim; the
+            // author's own failures pass through untouched.
+            Effect.mapError((cause: HelleError | E) =>
+              cause instanceof HelleError ? new WorkflowError({ reason: cause.message }) : cause,
+            ),
+          ),
+        release: (runId) =>
+          Effect.gen(function* () {
+            const env = yield* currentEnv.pipe(Effect.orDie);
+            const file = claimPath(dir, runId);
+            const held = yield* recordedClaim(file);
+            if (held === null) return;
+            yield* credentials({ home: env.home, envFile: env.raw.HELLE_ENV_FILE ?? null }).pipe(
+              Effect.flatMap((creds) => releaseClaim(creds, held.slug)),
+              Effect.provide(FetchHttpClient.layer),
+            );
+            yield* fs.remove(file, { force: true });
+          }).pipe(Effect.provideContext(services), Effect.ignore),
         post: (asked) =>
           under(
             fs.readFileString(asked.file).pipe(

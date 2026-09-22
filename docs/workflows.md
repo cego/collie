@@ -2,12 +2,9 @@
 
 Collie ships five workflows. This page is the "which one do I want" level: what each is
 for, what it needs from you, and how they chain. The files under
-[`workflows/`](../workflows) are canonical for step-by-step behavior: `plan`, `review` and
-`architecture` are TypeScript modules with their Markdown beside them as content
-([the SDK](sdk.md)), and `implement` and `renovate` are Markdown definitions, for which
-`collie workflow show <name>` prints the resolved version — inputs and steps included,
-including those inherited from an embedded workflow. Any of them is a fork away from being
-yours; see [Authoring](authoring.md).
+[`workflows/`](../workflows) are canonical for step-by-step behavior: each is a TypeScript
+module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
+away from being yours; see [Authoring](authoring.md).
 
 For what a Workflow, Step, Choice or Run _is_, see [`CONTEXT.md`](../CONTEXT.md).
 
@@ -93,7 +90,8 @@ documentation for a feature's evidence would ask for tickets that do not exist.
 **Ends:** with the merge request, or with the reason the `mr` step was skipped. There is no
 menu.
 
-Definition: [`workflows/implement.md`](../workflows/implement.md).
+Module: [`workflows/implement.workflow.ts`](../workflows/implement.workflow.ts), with its
+content in [`workflows/implement.md`](../workflows/implement.md).
 
 ## Plans that span repositories
 
@@ -216,13 +214,16 @@ branch it merges. Your own checkout is never touched or switched. See
 
 **What happens:** the run binds the team's Renovate issue and appends the repository to its
 checklist unchecked, then assesses the whole batch of Renovate merge requests, read only,
-and decides whether the repository is a package or an application. For an application it
-gathers every update into one batch branch and merge request, then blocks — in the runner,
-at no token cost — until it holds the repository in [Helle](authoring.md#waits), deploys the
-batch to stage and proves it there — rolling stage back to the latest stable release, reading
-the Kibana logs, fixing the batch and redeploying, on its own, when it does not — and waits
-for another team member's approval before merging the batch. A package's merge requests are merged one at a time, under the same
-claim, fixing conflicts and routine dependency fallout on each merge request's own branch.
+and decides whether the repository is a package or an application. Once it has said there is
+something to land it blocks — at no token cost — until it holds the repository in
+[Helle](authoring.md#waits); a repository that is already up to date takes nobody's turn.
+For an application it then gathers every update into one batch branch and merge request,
+deploys the batch to stage and proves it there — rolling stage back to the latest stable
+release, reading the logs `renovate.logs` names, fixing the batch and redeploying, on its
+own, when it does not — and waits for another team member's approval before merging the
+batch. A package never reaches those three steps at all, and its merge requests are merged
+one at a time under the same claim, fixing conflicts and routine dependency fallout on each
+merge request's own branch.
 Either way it then chooses a version from the whole diff since the previous tag, tags
 annotated with changelog-style notes (and creates a GitLab release only where the repository
 is a package), waits for the tag pipeline to publish or deploy, and checks the repository
@@ -236,7 +237,8 @@ date, creates no tag, and still leaves the checklist correct.
 
 **Ends:** with the repository checked off, or with what stopped it. There is no menu.
 
-Definition: [`workflows/renovate.md`](../workflows/renovate.md).
+Module: [`workflows/renovate.workflow.ts`](../workflows/renovate.workflow.ts), with its
+content in [`workflows/renovate.md`](../workflows/renovate.md).
 
 ## `architecture`
 

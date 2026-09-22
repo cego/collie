@@ -297,7 +297,16 @@ export const sendPlanChange = Effect.fn("Handoff.sendPlanChange")(function* (
  * the planner's own pane when one is live, and otherwise to stop and ask the human.
  */
 export const askRoute = Effect.fn("Handoff.askRoute")(function* (session: Session) {
-  const planner = yield* liveRole(session, "planner");
+  return askRouteTo(yield* liveRole(session, "planner"));
+});
+
+/**
+ * The same sentence, from whoever was found rather than from a Session. A host that keeps
+ * its own register answers the question with this, so both say one thing.
+ */
+export function askRouteTo(
+  planner: { readonly agent: string; readonly paneId: string } | null,
+): string {
   if (!planner) {
     return [
       "There is no planner live for this work. If you need a decision the plan does not",
@@ -314,7 +323,7 @@ export const askRoute = Effect.fn("Handoff.askRoute")(function* (session: Sessio
     "pane answer may be narrower than what it wrote, so where it says it changed a ticket,",
     "re-read that ticket and build from it.",
   ].join(" ");
-});
+}
 
 /** The board's own version: the newest review in this Session, to its implementer. */
 export const sendReviewToImplementer = Effect.fn("Handoff.sendReviewToImplementer")(function* (

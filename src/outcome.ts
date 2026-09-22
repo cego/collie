@@ -155,6 +155,18 @@ function names(value: YamlValue | undefined): string[] {
 }
 
 /**
+ * Whether a reference an Output gives points inside the work this Run owns. A relative
+ * one does by construction; an absolute one has to be under a root the Run holds, and a
+ * `..` in either is a path nobody can answer for.
+ */
+export function refInside(roots: ReadonlyArray<string>, ref: string): boolean {
+  const value = ref.trim();
+  if (value === "" || value.includes("..")) return false;
+  if (!value.startsWith("/")) return true;
+  return roots.some((root) => root !== "" && (value === root || value.startsWith(`${root}/`)));
+}
+
+/**
  * What is missing before this Run can claim its outcome. Empty means the evidence is
  * there; every entry is one sentence a human can act on.
  */

@@ -1,8 +1,8 @@
 # Collie
 
 Collie codifies agent workflows for herdr — `plan`, `implement`, `review`, `architecture`,
-`renovate` — as markdown definitions executed by one Effect v4 program with two front
-doors: herdr actions, and the `collie` CLI.
+`renovate` — as TypeScript modules run by one Effect v4 program with two front doors:
+herdr actions, and the `collie` CLI.
 
 ## Where to look
 
@@ -137,12 +137,14 @@ doors: herdr actions, and the `collie` CLI.
   branch, the merge request, the tickets and the disposition; what to do next is the
   workflow's own declaration, decided again — eligibility and arguments both — at the
   moment it is invoked.
-- **Changing what a shipped workflow does — `plan`, `review` or `architecture`** →
+- **Changing what a shipped workflow does** →
   [ADR-0026](docs/adr/0026-a-shipped-workflow-is-a-module-like-any-other.md) and
   [`docs/sdk.md`](docs/sdk.md), alongside `workflows/*.workflow.ts`, their Markdown beside
-  them and `test/baseline-native.test.ts`. They are modules loaded through the public
+  them and `test/baseline-native.test.ts`. All five are modules loaded through the public
   contract: the Markdown is content, what happens is TypeScript, and what each one proves
-  and offers is its own declaration rather than its name.
+  and offers is its own declaration rather than its name. One that expects to be varied —
+  `renovate` — takes the varying steps as ordinary functions, so a fork supplies three and
+  keeps the rest (`test/fixtures/native/landing.workflow.ts`).
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

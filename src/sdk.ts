@@ -18,13 +18,14 @@
 import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import type { CheckEvidence } from "./output";
 import type { Verification } from "./verify";
+import type { VerifySpec } from "./verify-spec";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import type { NativeAgents } from "./agents";
 import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
 import { exclusiveClashes } from "./strategies";
-import { KINDS, REQUESTABLE, isOutcome, type Outcome } from "./outcome";
+import { KINDS, REQUESTABLE, evidenceGaps, isOutcome, refInside, type Outcome } from "./outcome";
 import type { Source } from "./offers";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
@@ -87,6 +88,22 @@ export {
 export { FINDINGS_FILE, REVIEW_FILE, leaveReview, openFindingsIn, riskLine } from "./output";
 
 export type { Snapshot, Verification } from "./verify";
+export type { VerifySpec } from "./verify-spec";
+
+/** The approved commands as a human would type them, for a prompt to name what it faces. */
+export { renderApproved } from "./verify-spec";
+
+/**
+ * What kind of result a Run is for, and what the journal says it actually collected —
+ * for a merge request to say what was proved rather than what an Output claimed.
+ */
+export { isOutcome, renderEvidence, type Outcome } from "./outcome";
+
+/**
+ * Which of the five kinds of work a work source is. A workflow that reads a plan
+ * directory differently from a Linear issue asks here rather than guessing from the text.
+ */
+export { classifyWorkSource } from "./inputs";
 
 /**
  * A list of work, and the hand-off between its items. The identities are the engine's own
@@ -128,6 +145,41 @@ export function contentOf(markdown: string): {
 }
 
 const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
+
+/**
+ * Everything still missing before this Run may say it proved its kind of result, one
+ * sentence each. Empty means the evidence is there.
+ *
+ * The same table a declared workflow's gate is judged by, asked for what a module has:
+ * its own Outputs rather than a step record, and the directories it owns rather than a
+ * Run record to read them from. A claim in an Output is still only ever a claim — what
+ * decides a check is the journal, bound to the tree in front of it.
+ */
+export function evidenceGapsOf(options: {
+  readonly kind: Outcome;
+  readonly evidence: CheckEvidence;
+  readonly approved: ReadonlyArray<VerifySpec>;
+  /** What each piece of work reported, by the name it was done under. */
+  readonly outputs: Readonly<Record<string, Schema.Json>>;
+  /** Which of those are a reviewer's judgement rather than the implementer's claim. */
+  readonly reviewed: ReadonlyArray<string>;
+  /** The directories this Run owns, which a reference it gives has to point inside. */
+  readonly roots: ReadonlyArray<string>;
+  readonly tickets: ReadonlyArray<{
+    readonly file: string;
+    readonly checks: ReadonlyArray<string>;
+  }>;
+}): ReadonlyArray<string> {
+  return evidenceGaps(options.kind, {
+    verifications: options.evidence.verifications,
+    final: options.evidence.final,
+    approved: options.approved,
+    outputs: new Map(Object.entries(options.outputs)),
+    reviewed: new Set(options.reviewed),
+    insideRun: (ref) => refInside(options.roots, ref),
+    tickets: options.tickets,
+  });
+}
 
 /**
  * A workflow's failure, as every native workflow reports one. One shape rather than an
@@ -212,6 +264,49 @@ export interface NativeHostApi {
     readonly expect?: "pass" | "fail";
   }) => Effect.Effect<Verification, WorkflowError>;
   /**
+   * What this Run may have Collie run for it. A prompt names them so an agent knows what
+   * its work is going to be held to, and the gate before a merge request reads the same
+   * list. A workflow cannot add to it: it is a human's, read when the Run started.
+   */
+  readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
+  /**
+   * One value from the operator's own configuration, by its dotted name, and empty where
+   * they have set none. What a shipped workflow must not hard-code — which team files its
+   * issues, where its logs are — is asked for here rather than written into its content.
+   */
+  readonly config: (dotted: string) => Effect.Effect<string>;
+  /**
+   * Whether a merge request can be opened from this checkout, and what it would carry —
+   * the configured assignee, the repository's own template, the issues this branch
+   * answers. One question rather than two: a step that cannot reach GitLab has nothing to
+   * fill in, and asking separately is how the two stop agreeing.
+   */
+  readonly mr: (options: {
+    readonly cwd: string;
+    /** What this Run was pointed at, where that is a merge request. */
+    readonly target?: string;
+    /** The work it is building, so the issues it answers can be found. */
+    readonly source?: { readonly value: string; readonly kind: string };
+  }) => Effect.Effect<MrReady>;
+  /**
+   * Blocks until this Run holds the shared claim on the repository it works in, and
+   * answers null where that repository has none. Waiting here costs wall clock and no
+   * model tokens, which is the point of claiming before an agent starts rather than
+   * after. `adopting` is asked only where the claim was already the operator's own, so
+   * the question is the workflow's — durable, and answered once.
+   */
+  readonly claim: <E, R>(options: {
+    readonly runId: string;
+    readonly cwd: string;
+    readonly adopting: Effect.Effect<boolean, E, R>;
+    readonly say: (line: string) => Effect.Effect<void, E, R>;
+  }) => Effect.Effect<{ readonly slug: string } | null, WorkflowError | E, R>;
+  /**
+   * Gives the claim back. Only a Run that has finished its work releases: holding it
+   * across a consultation is what stops anyone deploying on a half-finished change.
+   */
+  readonly release: (runId: string) => Effect.Effect<void>;
+  /**
    * Puts a note on the merge request a Run was pointed at, sent by Collie rather than
    * written out again by an agent — asking for a file to be repeated verbatim is how
    * verbatim stops being true. The refusal is the message: a target that is not a merge
@@ -236,6 +331,19 @@ export interface Place {
    * fields, and this is where a workflow that wants one reads it.
    */
   readonly options: Readonly<Record<string, string>>;
+}
+
+/** What opening a merge request from here needs, and what it would be filled in with. */
+export interface MrReady {
+  readonly ok: boolean;
+  /** Why it cannot be done here. Empty where it can. */
+  readonly reason: string;
+  /** The configured assignee, else whoever glab is logged in as; empty for neither. */
+  readonly assignee: string;
+  /** The repository's merge request template, relative to the checkout; empty for none. */
+  readonly template: string;
+  /** The Linear issues this branch answers. */
+  readonly issues: ReadonlyArray<string>;
 }
 
 /** What became of a note: whether it landed, and the sentence a human reads either way. */
@@ -420,6 +528,8 @@ export interface FollowUp {
   readonly when: "succeeded" | "failed" | "always";
   /** What Collie fills in from the Run itself; the rest is the caller's to give. */
   readonly inputs?: Readonly<Record<string, Source>>;
+  /** A further condition on the facts, where how it ended is not the whole of it. */
+  readonly eligible?: (facts: ActionFacts) => boolean;
 }
 
 /**

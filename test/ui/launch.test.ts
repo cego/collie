@@ -172,16 +172,16 @@ Update dependencies.
 });
 
 effectTest("a branch nothing names is worked out, and the picker never asks for one", function* () {
-  // `implement` by name: that is the workflow Collie knows changes the repository, and
-  // so the one that needs a branch before it can start.
+  // Any workflow that declares `checkout: branch`, under a name nothing has heard of:
+  // needing a branch is what the declaration says, never what the workflow is called.
   yield* writeDef(
     rig.baselineDir,
     "workflows",
-    "implement",
+    "mutating",
     `---
-name: implement
+name: mutating
 checkout: branch
-title: implement — needs somewhere to work
+title: mutating — needs somewhere to work
 inputs:
   goal: goal
 steps:
@@ -198,7 +198,7 @@ Do {{inputs.goal}}.
   // Too long to slug, so nothing the run was given names a branch short enough to be
   // one — which used to be a question put to whoever was standing at the picker.
   const goal = "Fix the parser so a diff of two refs with no branch on either side works";
-  const { asked } = yield* answering(["implement", goal], (prompts) =>
+  const { asked } = yield* answering(["mutating", goal], (prompts) =>
     pickFlow(new Herdr(env()), env(), prompts),
   );
 

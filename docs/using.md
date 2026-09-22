@@ -1033,6 +1033,14 @@ checkout there is no branch and no working tree to review, so the target menu is
 }
 ```
 
+Three more keys are what a shipped workflow asks this installation rather than assuming:
+`"gitlab": {"assignee": "<user>"}` is who a merge request is assigned to — whoever `glab`
+is logged in as when it is unset — `"linear": {"team": "<team>"}` is the team `renovate`
+files its checklist with, and `"renovate": {"logs": "<where and how>"}` is a sentence
+naming where this installation keeps its application logs, for a stage deploy that has to
+be debugged. Leave any of them out and the workflow asks, or works from what the pipeline
+itself can tell it.
+
 `chat_harness` is which native chat the Home opens with, `claude` or `pi`. It is
 independent of `harness`, which is what runs your work, and it is a preference for the
 **next** launch rather than a switch: see

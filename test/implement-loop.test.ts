@@ -398,9 +398,10 @@ test("implement takes an optional repo, and the build prompt builds only its tic
       expect(wf.steps[0]!.preamble).toContain("{{inputs.repo}}");
       expect(wf.steps[0]!.prompt).toContain("**Repo:**");
       // A build Output is read as a review Output, where a finding without a severity is
-      // refused — so the prompt has to say so, or a build that reports one blocks the run.
-      expect(wf.steps[0]!.prompt).toContain('"severity"');
-      expect(wf.steps[0]!.prompt).toContain("blocker|major|minor");
+      // refused and an unknown one blocks — so the prompt names the three, whether or not
+      // the contract the Output is decoded against is carried with it.
+      expect(wf.steps[0]!.prompt).toContain("`severity`");
+      expect(wf.steps[0]!.prompt).toContain("`blocker`, `major` or `minor`");
     }),
   ));
 
@@ -1584,9 +1585,9 @@ test("the prompts ask for complete scope, a thorough first review, a focused fol
       // Ceiling, not target.
       expect(fix).toContain("ceiling, not a target");
       // Dispositions by key, checks as run, no unapproved deferral.
-      expect(fix).toContain('"fixed": [{"file"');
-      expect(fix).toContain('"checks": [{"name"');
-      expect(fix).toContain("exactly as the finding above gives them");
+      expect(fix).toContain("`file` and `title` in `fixed` and `disputed`");
+      expect(fix).toContain("`checks` names every test and lint");
+      expect(fix).toContain("so Collie can match them");
       expect(fix).toContain("not re-reviewed");
       expect(fix).toContain("Never defer");
       // First review thorough, later ones focused.

@@ -138,6 +138,7 @@ export const workspace = Effect.fn("NativeTest.workspace")(function* (prefix: st
     "share.workflow.ts",
     "listing.ts",
     "offered.workflow.ts",
+    "landing.workflow.ts",
     "capability.ts",
     "house.ts",
     "helper.ts",
@@ -154,6 +155,11 @@ export const workspace = Effect.fn("NativeTest.workspace")(function* (prefix: st
     "review.md",
     "architecture.workflow.ts",
     "architecture.md",
+    "implement.workflow.ts",
+    "implement.md",
+    "renovate.workflow.ts",
+    "renovate.md",
+    "reviewing.ts",
   ]) {
     yield* fs.copyFile(`${root}workflows/${name}`, `${dir}/wf/${name}`);
   }

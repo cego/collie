@@ -1,11 +1,10 @@
 # Writing a workflow in TypeScript
 
 This is the native contract: a workflow as a TypeScript module that Collie loads and
-Effect runs. `plan`, `review` and `architecture` are written this way — they are modules in
-`workflows/`, held to everything below, with their Markdown beside them as content.
-[`authoring.md`](authoring.md) is the Markdown contract, which `implement` and `renovate`
-are still written against; the two do not mix, and a module of an id wins over a definition
-of the same one.
+Effect runs. Every workflow Collie ships is written this way — modules in `workflows/`,
+held to everything below, with their Markdown beside them as content.
+[`authoring.md`](authoring.md) is the Markdown contract a definition is still written
+against; the two do not mix, and a module of an id wins over a definition of the same one.
 
 Everything here is `collie/native`, which the executable serves from its own bundle — so
 the `Effect` your module imports is the one running it, and a service the host declares is
@@ -161,6 +160,52 @@ Two copies of a contract in two directories are two modules and one service, bec
 service is its key and not the file that declared it. Keep the key stable and an override
 satisfies the same contract its original did.
 
+### Forking a shipped workflow
+
+A fork that changes part of a workflow imports the rest. Where a shipped module expects to
+be varied it takes the varying parts as ordinary functions, and a fork is a file that
+supplies its own and re-exports everything else:
+
+```ts
+import {
+  Merged,
+  Released,
+  Recorded,
+  renovateText,
+  renovation,
+  type Landing,
+} from "./renovate.workflow.ts";
+export { input, metadata } from "./renovate.workflow.ts";
+
+export const id = "landing";
+const landing: Landing = {
+  merge: (at) =>
+    agentWork({ ...asMine(at, "merge"), instructions: renovateText("merge"), output: Merged }),
+  release: (at) =>
+    agentWork({
+      ...asMine(at, "release"),
+      instructions: "Deploy it rather than tag it.",
+      output: Released,
+    }),
+  record: (at) =>
+    agentWork({
+      ...asMine(at, "record"),
+      instructions: "Write it off on our own board.",
+      output: Recorded,
+    }),
+};
+export const make = (name: string) => renovation({ name, landing });
+```
+
+Everything the fork did not write — what it assesses, what it batches, the claim it takes,
+the teammate's approval it waits for — is the shipped orchestration, and a baseline change
+to any of it reaches the fork. `renovateText` is how a fork keeps a shipped section's
+words and adds its own sentence to them.
+
+Nothing was added to Collie to make that possible, and nothing needs to be. A workflow
+that wants to be varied takes functions, or takes a service and lets a fork provide a
+different Layer for it. There is no step to patch and no engine to copy.
+
 ## Having an agent do the work
 
 `agentWork` is one call for one piece of agent work: it builds the prompt, launches the
@@ -216,6 +261,11 @@ const verdict =
 Skipped work is work you do not ask for: return without calling `agentWork` and no tab
 opens, no agent starts and no Output is fabricated. Say why in what you return.
 
+`agents.askRoute(role, cwd)` is what an agent is told about asking for a decision its work
+does not cover: the pane of whoever is live in that role, and otherwise to stop and ask the
+human. You name the role — who may be asked is your workflow's declaration, not an
+assumption Collie makes about it.
+
 The work itself is written to `<state>/agents/<run>/<operation>.prompt.md` and the message
 names that file. One send is one message and not a transcript: a step's prompt carries a
 whole contract, and what the agent is asked is a file it reads rather than a wall of text
@@ -257,6 +307,23 @@ an earlier Run to compare against is doing it there, and this is where you read 
 rather than an agent writes out again. Its refusal is its message: not a merge request, no
 `glab` for that project, or one assigned to whoever is running this — whose findings are
 theirs to fix rather than to post to themselves.
+
+`host.config(dotted)` is one value from the operator's own configuration, and empty where
+they have set none. What a workflow must not hard-code — which team it files issues with,
+where this installation keeps its logs — is asked for here rather than written into its
+prose, so the same workflow is usable by somebody else.
+
+`host.mr({ cwd, target?, source? })` is whether a merge request can be opened from here and
+what it would carry: the configured assignee, the repository's own template, the issues the
+branch answers. One question rather than two, because a step that cannot reach GitLab has
+nothing to fill in — check it before you start an agent, and say the reason where it is no.
+
+`host.claim({ runId, cwd, adopting, say })` blocks until this Run holds the shared claim on
+the repository it works in, and answers `null` where that repository has none. Waiting here
+costs wall clock and no model tokens, which is the point of claiming before an agent starts
+rather than after. `adopting` is your own durable question, asked only where the claim was
+already the operator's; `host.release(runId)` gives it back, and only a Run that finished
+its work should.
 
 ## Markdown as content
 
@@ -457,6 +524,28 @@ authority of, and records what it did. The list is `.herdr/verify.json`, read wh
 started — a name nobody approved is refused, and a workflow cannot add to it. Anyone else
 collects the same way from outside: `collie verify --run <your run id> -- <command>`.
 
+`host.approved(runId)` is that list, for a prompt to name what the work will be held to
+before it starts — `renderApproved` writes it out — and `renderEvidence(host.evidence(...))`
+is what was actually collected and by whom, for a merge request to say what it proved.
+
+`evidenceGapsOf` is the gate itself: what a Run of this kind still has no evidence for, one
+sentence each, and empty where the evidence is there. It reads the journal, the approved
+list, the Outputs you hold and the tickets you built — and it will not take a reviewer's
+judgement from an implementer's Output, because the agent that wrote the change cannot
+vouch for its own scope.
+
+```ts
+const gaps = evidenceGapsOf({
+  kind: isOutcome(place.options.outcome ?? "") ? place.options.outcome : "unspecified",
+  evidence: yield * host.evidence(runId, cwd),
+  approved: yield * host.approved(runId),
+  outputs: { build, synthesize },
+  reviewed: ["synthesize"],
+  roots: [place.dir, cwd],
+  tickets,
+});
+```
+
 [ADR-0023](adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md) is why the rally is a
 loop and why a claim is not proof.
 
@@ -513,7 +602,9 @@ export const metadata: WorkflowMetadata = {
   declaring it; `inputs` names what Collie fills in from the Run — `run-dir`, `plan-dir`,
   `diff-target`, `branch`, `merge-request` — so a card makes the offer without asking a
   human to type a path. `arguments` is the child's schema; eligibility is decided from
-  facts, never from a workflow's name.
+  facts, never from a workflow's name. A follow-up says `when` — `succeeded`, `failed` or
+  `always` — and may add an `eligible` of its own where how it ended is not the whole of
+  it: an offer to carry on with a branch is not an offer where there is no branch.
 
 Both are what a finished Run offers to do next, and both front doors make the same offer:
 `collie run actions <run>` lists them and `collie run action <run> <id> --input k=v` does

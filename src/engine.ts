@@ -161,6 +161,7 @@ import {
   endsWithoutPatch,
   evidenceGaps,
   isOutcome,
+  refInside as inside,
   renderEvidence,
   type Collected,
   type Outcome,
@@ -1442,11 +1443,7 @@ function outcomeOf(recorded: string | null): Outcome {
  * and a path that escapes with `..` is refused rather than resolved for it.
  */
 function refInside(o: EngineOptions, ref: string): boolean {
-  const value = ref.trim();
-  if (value === "" || value.includes("..")) return false;
-  if (!value.startsWith("/")) return true;
-  const roots = [o.run.dir, o.run.record.cwd, o.run.record.worktree?.path ?? ""];
-  return roots.some((root) => root !== "" && (value === root || value.startsWith(`${root}/`)));
+  return inside([o.run.dir, o.run.record.cwd, o.run.record.worktree?.path ?? ""], ref);
 }
 
 const reloadOutcomes = Effect.fn("Engine.reloadOutcomes")(function* (

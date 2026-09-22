@@ -1,29 +1,23 @@
-// One complete review of a target, reconciled into the one review a human reads, and then
-// what to do about it.
+// One complete review of a target, and then what to do about it.
 //
-// A reviewer per declared axis — the baseline is one, and a second is a list entry rather
-// than a new primitive — then the synthesis that reconciles them, written to this Run's
-// own directory as prose for the human and findings for the card. The menu after it comes
-// back until something terminal happens: a note that did not land is not an answer.
+// The pass itself is `reviewing.ts`, shared with the workflow that builds: the same
+// reviewers, the same synthesis, the same review left behind. What is here is what a
+// standalone review adds — the menu after it, which comes back until something terminal
+// happens, because a note that did not land is not an answer.
 //
 // The Markdown beside this file is the content: how to read each kind of target, what a
 // reviewer is asked for, and what the fix is told about where it stands.
 
 import {
   FixOutputSchema,
-  NativeAgents,
   NativeChildren,
   NativeHost,
   REVIEW_FILE,
-  ReviewOutputSchema,
-  SynthesisSchema,
   agentWork,
   ask,
-  contentOf,
   decision,
   defineWorkflow,
   formatFindings,
-  leaveReview,
   parseMrTarget,
   repoArgs,
   riskLine,
@@ -31,7 +25,7 @@ import {
   type WorkflowMetadata,
 } from "collie/native";
 import { Effect, FileSystem, Schema } from "effect";
-import markdown from "./review.md" with { type: "text" };
+import { reviewPass, reviewText } from "./reviewing.ts";
 
 export const id = "review";
 export const title = "review — an MR, a branch diff, or the working tree";
@@ -76,18 +70,6 @@ export const metadata: WorkflowMetadata = {
   ],
 };
 
-const content = contentOf(markdown);
-const prompt = (section: string) =>
-  [content.preamble, content.sections.get(section) ?? ""]
-    .filter((part) => part !== "")
-    .join("\n\n");
-
-/**
- * One complete review. A second reviewer and the model that reconciles them are what a
- * specialist axis or a layer override is for, not what every change gets.
- */
-const REVIEWERS = [{ harness: "claude", model: "opus", effort: "medium" }];
-
 const FIX = "Fix findings";
 const IMPLEMENT = "Fix findings in a full implement run";
 const POST = "Post to MR";
@@ -105,7 +87,6 @@ export const make = (registrationName: string) => {
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
       const host = yield* NativeHost;
-      const agents = yield* NativeAgents;
       const children = yield* NativeChildren;
       const fs = yield* FileSystem.FileSystem;
       const runId = payload.runId;
@@ -124,18 +105,32 @@ export const make = (registrationName: string) => {
               .readFileString(`${(yield* host.place(previous)).dir}/${REVIEW_FILE}`)
               .pipe(Effect.orElseSucceed(() => ""));
 
+      // A standalone review is one round of one review: the rally belongs to whoever
+      // embeds this, and the numbers say what is true here rather than what is usual.
+      const synthesis = yield* reviewPass({
+        runId,
+        workflow: id,
+        cwd: place.cwd,
+        dir: place.dir,
+        target: asked.target,
+        plan: asked.plan ?? "",
+        proves: asked.proves ?? "",
+        previous: before,
+        risks: place.options.risks ?? "",
+        at: 1,
+        of: 1,
+        disputed: [],
+      });
+
       const inputs = {
         target: asked.target,
         target_kind: kind,
         plan: asked.plan ?? "",
-        // What the change has to prove, under the name the prose asks for it by.
         outcome: asked.proves ?? "",
       };
       const vars = {
         run: { dir: place.dir, id: runId },
         previous: { review: before },
-        // A standalone review is one round of one review: the rally belongs to whoever
-        // embeds this, and the numbers say what is true here rather than what is usual.
         iteration: "1",
         max_iterations: "1",
         disputed: formatFindings([]),
@@ -143,42 +138,6 @@ export const make = (registrationName: string) => {
         target_repo: repoArgs(parseMrTarget(asked.target)?.project ?? null).join(" "),
         obstacle: "",
       };
-
-      const reviews = yield* Effect.forEach(REVIEWERS, (reviewer, at) =>
-        agentWork({
-          runId,
-          operation: `review-${at + 1}`,
-          role: "reviewer",
-          workflow: id,
-          harness: reviewer.harness,
-          model: reviewer.model,
-          effort: reviewer.effort,
-          cwd: place.cwd,
-          instructions: prompt("review"),
-          inputs,
-          vars,
-          output: ReviewOutputSchema,
-        }),
-      );
-
-      const synthesis = yield* agentWork({
-        runId,
-        operation: "synthesize",
-        role: "reviewer",
-        workflow: id,
-        cwd: place.cwd,
-        instructions: prompt("synthesize"),
-        inputs,
-        vars: {
-          ...vars,
-          fan_in: reviews
-            .map((_, at) => `- ${agents.outputFor(runId, `review-${at + 1}`)}`)
-            .join("\n"),
-        },
-        output: SynthesisSchema,
-      });
-      // The prose a human reads and the findings a card counts, where both are looked for.
-      yield* leaveReview(place.dir, synthesis);
 
       let fixes = 0;
       for (const question of menu) {
@@ -225,7 +184,7 @@ export const make = (registrationName: string) => {
           role: "implementer",
           workflow: id,
           cwd: place.cwd,
-          instructions: prompt("fix"),
+          instructions: reviewText("fix"),
           inputs,
           vars,
           output: FixOutputSchema,

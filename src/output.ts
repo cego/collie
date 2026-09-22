@@ -48,7 +48,11 @@ const listed = <
 export const FindingSchema = Schema.Struct({
   file: Schema.optionalKey(Schema.String),
   line: Schema.optionalKey(Schema.Number),
-  severity: Schema.String.pipe(said("severity")),
+  // Free text, because a fork's own word is a judgement and not an error — and named
+  // here, because every Output that carries a finding is read by `isBlocking`.
+  severity: Schema.String.annotate({
+    description: "blocker, major or minor; any other word is treated as blocking",
+  }).pipe(said("severity")),
   title: Schema.String.pipe(said("title")),
   detail: Schema.optionalKey(Schema.String),
   /** A reviewer's answer to the implementer's reason for disputing this finding. */
@@ -73,6 +77,12 @@ export interface ReviewOutput {
   verdict: "clean" | "findings";
   findings: Finding[];
   disputed: Finding[];
+  /** The one judgement only a reviewer can give, named by the kind of result. */
+  scope_met?: boolean;
+  behavior_preserved?: boolean;
+  supported?: boolean;
+  accurate?: boolean;
+  compatible?: boolean;
 }
 
 /** The one review that comes out of several, and the file a human reads it in. */
@@ -103,10 +113,25 @@ const VerdictSchema = Schema.Literals(["clean", "findings"]);
  *
  * None of them is closed against extra keys: an Output may say more than a gate reads.
  */
+/**
+ * The one judgement a reviewer gives that nothing else can, named by the kind of result
+ * the change was for. One of them applies and the rest do not, so all are optional — and
+ * the gate reads it from a reviewer's Output alone, because the agent that wrote the
+ * change cannot vouch for its own scope.
+ */
+const JUDGEMENTS = {
+  scope_met: Schema.optionalKey(Schema.Boolean),
+  behavior_preserved: Schema.optionalKey(Schema.Boolean),
+  supported: Schema.optionalKey(Schema.Boolean),
+  accurate: Schema.optionalKey(Schema.Boolean),
+  compatible: Schema.optionalKey(Schema.Boolean),
+};
+
 export const ReviewOutputSchema = Schema.Struct({
   verdict: VerdictSchema,
   findings: optionalList(FindingSchema),
   disputed: optionalList(FindingSchema),
+  ...JUDGEMENTS,
 }).pipe(listed());
 
 export const FixedSchema = Schema.Struct({
@@ -130,6 +155,7 @@ export const SynthesisSchema = Schema.Struct({
   disputed: optionalList(FindingSchema),
   dropped: optionalList(DroppedSchema),
   fixed: optionalList(FixedSchema),
+  ...JUDGEMENTS,
 }).pipe(listed());
 
 export const CheckSchema = Schema.Struct({
