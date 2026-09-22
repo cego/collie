@@ -69,8 +69,9 @@ import {
   parseReviewOutput,
   parseSynthesis,
   unsubstantiated,
-  renderReview,
+  leaveReview,
   REVIEW_FILE,
+  riskLine,
   settleFinalFix,
   settleRound,
   splitDisputed,
@@ -5117,7 +5118,7 @@ const collect = Effect.fn("Engine.collect")(function* (
       return { record, output: parsed, review: null, problem: record.error };
     }
     review = result.value;
-    yield* fs.writeFileString(pathService.join(o.run.dir, REVIEW_FILE), renderReview(result.value));
+    yield* leaveReview(o.run.dir, result.value);
     // A hand-off gives the implementer both the prose and the findings it came from.
     o.run.record.synthesis = record.output;
     // What this review leaves open, and what it found already fixed, so a Run that
@@ -5610,18 +5611,6 @@ export const ENGINE_SUPPLIED: ReadonlySet<string> = new Set([
   "progress",
   "obstacle",
 ]);
-
-/** The extra axes a human asked for, as a paragraph, or nothing where they asked for none. */
-function riskLine(risks: string): string {
-  const asked = risks.trim();
-  if (asked === "") return "";
-  return (
-    `Additional axes requested for this change: ${asked}. Apply the matching skill where ` +
-    `one is installed (\`security-and-hardening\`, \`performance-optimization\`) and say in ` +
-    `your review which of them you applied. These are on top of the complete review, not ` +
-    `instead of it.`
-  );
-}
 
 const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
   o: EngineOptions,

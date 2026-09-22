@@ -19,6 +19,7 @@ import {
 import type { Defaults } from "./config";
 import { isBoolean, isNumber, isString } from "./schema";
 import { SELF, isNeed, isSource, type OfferDef, type Source } from "./offers";
+import { KINDS, isOutcome } from "./outcome";
 
 export type LayerName = "baseline" | "user" | "project";
 
@@ -192,6 +193,12 @@ export interface WorkflowDef extends Provenance {
   title: string;
   description: string;
   inputs: Record<string, InputStrategy>;
+  /**
+   * The kind of result every Run of this Workflow proves, where it always proves one —
+   * a plan proves it wrote tickets, a review proves it wrote a review. Null is a
+   * Workflow whose outcome the human chooses, or none at all.
+   */
+  outcome: string | null;
   maxIterations: number | null;
   steps: StepDef[];
   /** What a finished Run of this Workflow offers to do next; none unless it says so. */
@@ -368,6 +375,7 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
     title: str(data.title, str(data.name, stem)),
     description: str(data.description),
     inputs,
+    outcome: isString(data.outcome) ? data.outcome : null,
     maxIterations: isNumber(data.max_iterations) ? data.max_iterations : null,
     steps,
     offers: parseOffers(data.offers),
@@ -601,6 +609,7 @@ function mergeWorkflow(parent: WorkflowDef, child: WorkflowDef): WorkflowDef {
     title: child.title && child.title !== child.name ? child.title : parent.title,
     description: child.description || parent.description,
     inputs: { ...parent.inputs, ...child.inputs },
+    outcome: child.outcome ?? parent.outcome,
     maxIterations: child.maxIterations ?? parent.maxIterations,
     steps,
     // A fork that declares none keeps what it forked: the offers are part of what the
@@ -710,6 +719,8 @@ export interface ResolvedWorkflow {
   inputs: Record<string, InputStrategy>;
   /** Inputs that arrived only from an embedded workflow, so this run must not ask for them. */
   embeddedInputs: string[];
+  /** The kind of result this Workflow always proves, or null where a human chooses. */
+  outcome: string | null;
   maxIterations: number;
   steps: ResolvedStep[];
   /** What a finished Run of this Workflow offers to do next. */
@@ -855,6 +866,7 @@ export function resolveWorkflow(
     inputs,
     embeddedInputs: Object.keys(inherited).filter((key) => !(key in wf.inputs)),
     offers: wf.offers,
+    outcome: wf.outcome,
     maxIterations: wf.maxIterations ?? defaults.maxIterations,
     steps,
     layer: wf.layer,
@@ -999,6 +1011,11 @@ export const validateWorkflow = Effect.fn("Definitions.validateWorkflow")(functi
   // The workflow's own name becomes the Run directory, so it is held to the same
   // rule as every other Workflow-controlled name.
   errors.push(...nameErrors(`workflow "${wf.name}"`, "name", wf.name, "the Run directory"));
+
+  // A misspelled outcome would record a kind nothing closes on, so it fails the file.
+  if (wf.outcome !== null && !isOutcome(wf.outcome)) {
+    errors.push(`workflow "${wf.name}": no outcome called "${wf.outcome}" (${KINDS.join(", ")})`);
+  }
 
   for (const step of wf.steps) {
     for (const need of step.requires ?? []) {

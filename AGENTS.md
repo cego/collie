@@ -137,6 +137,12 @@ doors: herdr actions, and the `collie` CLI.
   branch, the merge request, the tickets and the disposition; what to do next is the
   workflow's own declaration, decided again — eligibility and arguments both — at the
   moment it is invoked.
+- **Changing what a shipped workflow does — `plan`, `review` or `architecture`** →
+  [ADR-0026](docs/adr/0026-a-shipped-workflow-is-a-module-like-any-other.md) and
+  [`docs/sdk.md`](docs/sdk.md), alongside `workflows/*.workflow.ts`, their Markdown beside
+  them and `test/baseline-native.test.ts`. They are modules loaded through the public
+  contract: the Markdown is content, what happens is TypeScript, and what each one proves
+  and offers is its own declaration rather than its name.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

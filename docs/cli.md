@@ -842,6 +842,10 @@ merge request, tickets it wrote, something it was pointed at. The first eligible
 marked as the obvious thing to do, and one that cannot be made is listed with the reason
 rather than hidden.
 
+An offer says where its inputs come from — the Run's own directory, its plan, what it was
+pointed at, its branch, its merge request — and Collie fills those in, so `--input` is for
+what only you know. What you pass wins where both have an answer.
+
 Everything is decided again when you invoke one. The declaration is re-read from the code
 as it is now, its eligibility is asked about the facts as they are now, and the arguments
 are decoded by the workflow it starts — so an offer edited away, one whose facts have

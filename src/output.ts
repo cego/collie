@@ -1,7 +1,7 @@
 // Step Outputs are JSON files in the run dir. Gates and loops read these,
 // never terminal text (CONTEXT.md, Output).
 
-import { Effect, Schema, SchemaGetter } from "effect";
+import { Effect, FileSystem, Schema, SchemaGetter } from "effect";
 import { isNumber, isString } from "./schema";
 import { staleAgainst, type Snapshot, type Verification } from "./verify";
 import { isYamlMap, YamlValueJsonSchema, type YamlValue } from "./yaml";
@@ -164,6 +164,62 @@ export const PlanOutputSchema = Schema.Struct({
 
 /** The human-facing review, written next to run.json. */
 export const REVIEW_FILE = "review.md";
+
+/**
+ * The findings that review left, beside it, as the JSON a reader can count. The prose is
+ * for the human and this is for the card: what a Run left open is a fact about it, and a
+ * card that had to read `review.md` would be reading a summary for one.
+ */
+export const FINDINGS_FILE = "findings.json";
+
+const FindingsJson = Schema.fromJsonString(Schema.Array(FindingSchema));
+const decodeFindings = Schema.decodeUnknownEffect(FindingsJson);
+const encodeFindings = Schema.encodeSync(FindingsJson);
+
+/**
+ * What a Run leaves behind about a review: the prose a human reads, and the findings
+ * beside it for whatever reads them next. Written together because they are one answer —
+ * a review with no findings file is a review nothing can count.
+ */
+export const leaveReview = (
+  dir: string,
+  synthesis: Synthesis,
+): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      Effect.all([
+        fs.writeFileString(`${dir}/${REVIEW_FILE}`, renderReview(synthesis)),
+        fs.writeFileString(`${dir}/${FINDINGS_FILE}`, encodeFindings(synthesis.findings)),
+      ]),
+    ),
+    Effect.asVoid,
+    Effect.orDie,
+  );
+
+/** The extra axes a human asked for, as a paragraph, or nothing where they asked for none. */
+export function riskLine(risks: string): string {
+  const asked = risks.trim();
+  if (asked === "") return "";
+  return (
+    `Additional axes requested for this change: ${asked}. Apply the matching skill where ` +
+    `one is installed (\`security-and-hardening\`, \`performance-optimization\`) and say in ` +
+    `your review which of them you applied. These are on top of the complete review, not ` +
+    `instead of it.`
+  );
+}
+
+/**
+ * How many findings this Run left for somebody to fix. A finding still open *and* the
+ * review that holds it: a Run with findings and no review wrote no review, and one with
+ * a review and no findings came back clean.
+ */
+export const openFindingsIn = (dir: string): Effect.Effect<number, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    if (!(yield* fs.exists(`${dir}/${REVIEW_FILE}`))) return 0;
+    const found = yield* decodeFindings(yield* fs.readFileString(`${dir}/${FINDINGS_FILE}`));
+    return found.length;
+  }).pipe(Effect.orElseSucceed(() => 0));
 
 export type Parsed<T> = { ok: true; value: T } | { ok: false; error: string };
 

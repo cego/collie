@@ -15,6 +15,8 @@ const facts = (over: Partial<ActionFacts> = {}): ActionFacts => ({
   mrUrl: null,
   planIssues: 0,
   disposed: false,
+  openFindings: 0,
+  diffTarget: null,
   ...over,
 });
 
@@ -24,6 +26,7 @@ const offer = (over: Partial<Declared> = {}): Declared => ({
   workflow: "implement",
   arguments: null,
   kind: "action",
+  inputs: {},
   eligible: () => true,
   ...over,
 });

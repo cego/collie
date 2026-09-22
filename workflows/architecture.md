@@ -43,13 +43,9 @@ If we agree on work worth doing, write it up the way the planner would — a spe
 `{{run.dir}}/plan/SPEC.md` and tickets at `{{run.dir}}/plan/issues/NN-<slug>.md` — so
 that Implement now has a plan to build from.
 
-Then write the Output JSON as your persona describes, with everything we agreed not to
-do now under `deferred`, and two more keys. `"slug":
-"<short-kebab-case-name-for-the-work-we-agreed-on>"` is what the branch an Implement now
-would build is named after, so make it name the work rather than the repository.
-`"outcome"` is what kind of result building it would be — usually `refactor`, because
-architectural work is judged on behaviour surviving it, and `feature` only where we agreed
-to build something that is not there yet.
+Then write your Output, with everything we agreed not to do now under `deferred`. The
+`slug` is what the branch an Implement now would build is named after, so make it name the
+work we agreed on rather than the repository.
 
 ## unattended
 

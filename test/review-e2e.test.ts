@@ -208,6 +208,9 @@ function runWorkflowEffect(
         inputs: merged,
         inputSources: inputSources(inferred),
         inputStrategies: wf.inputs,
+        // As a real start does: what a Run proves is the Workflow's own declaration, and
+        // a fixture that withheld the definition would record a Run that proves nothing.
+        definition: wf,
         stepIds: wf.steps.map((s) => s.id),
         maxIterations: wf.maxIterations,
         namedAfter:

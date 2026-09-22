@@ -572,13 +572,29 @@ test("a run with no review, or no merge request, says which and posts nothing", 
 test("a glab that refuses is reported rather than reported as posted", () =>
   runEffect(
     Effect.gen(function* () {
-      yield* bin.add("glab", `exit 3`);
+      // Reachable, and refusing the note itself: what the human is owed is the exit.
+      yield* bin.add("glab", `case "$1" in\n  mr) exit 3 ;;\n  *) exit 0 ;;\nesac`);
       const run = yield* reviewed("mr:gitlab.example.com/g/p!12", "# Review\n");
 
       expect(yield* postReview(run)).toEqual({
         ok: false,
         message: "glab mr note gitlab.example.com/g/p!12 failed (exit 3)",
       });
+    }),
+  ));
+
+test("a GitLab this machine cannot reach is said before anything is sent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const notes = `${rig.root}/bin/notes.txt`;
+      yield* bin.add("glab", `printf '%s\\n' "$@" > ${notes}\nexit 3`);
+      const run = yield* reviewed("mr:gitlab.example.com/g/p!12", "# Review\n");
+
+      // The same check the step that posts is gated on, made where the note is sent:
+      // the host, the Choice and the panel are three callers of one refusal.
+      expect(yield* postReview(run)).toEqual({ ok: false, message: "glab is not installed" });
+      const fs = yield* FileSystem.FileSystem;
+      expect(yield* fs.readFileString(notes)).toBe("--version\n");
     }),
   ));
 

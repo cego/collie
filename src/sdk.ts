@@ -22,11 +22,21 @@ import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import type { NativeAgents } from "./agents";
-import { INPUT_STRATEGIES, type InputStrategy } from "./definitions";
+import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
 import { exclusiveClashes } from "./strategies";
 import { KINDS, REQUESTABLE, isOutcome, type Outcome } from "./outcome";
+import type { Source } from "./offers";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
+
+/** Where an offer's input comes from, as the Run it is offered about knows it. */
+export { SOURCES, SOURCE_NAMES, isSource, type Source } from "./offers";
+
+/**
+ * What a review is about its target: which kind of change it names, and the glab
+ * arguments that point a command at its project from anywhere.
+ */
+export { parseMrTarget, repoArgs, targetKind, type MrRef } from "./mr";
 
 export {
   CheckSchema,
@@ -69,6 +79,13 @@ export {
   type Synthesis,
 } from "./output";
 
+/**
+ * What a Run leaves behind about a review, and where. `leaveReview` writes both halves —
+ * the prose a human reads and the findings whatever comes next counts — and `riskLine` is
+ * the paragraph an extra axis adds to what a reviewer is asked.
+ */
+export { FINDINGS_FILE, REVIEW_FILE, leaveReview, openFindingsIn, riskLine } from "./output";
+
 export type { Snapshot, Verification } from "./verify";
 
 /**
@@ -96,6 +113,21 @@ export {
   type PlanRepos,
   type Slice,
 } from "./plan";
+
+/**
+ * A Markdown file as the content it is: what stands above the first heading, and one
+ * entry per `## name` section below it. A module reads the file it ships beside rather
+ * than carrying the same prose twice, and what a definition put in front matter is not
+ * content — so it is left out rather than rendered at an agent.
+ */
+export function contentOf(markdown: string): {
+  readonly preamble: string;
+  readonly sections: ReadonlyMap<string, string>;
+} {
+  return bodySections(markdown.replace(FRONT_MATTER, ""));
+}
+
+const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
 
 /**
  * A workflow's failure, as every native workflow reports one. One shape rather than an
@@ -149,6 +181,13 @@ export const defineWorkflow = <
  */
 export interface NativeHostApi {
   readonly dir: string;
+  /**
+   * This Run as the host admitted it. The checkout is the one it was started for — its
+   * own workspace where a caller named one — the directory is this Run's, where a plan, a
+   * review and anything else a card reads is looked for, and the options are what the
+   * host itself was given beside the author's input.
+   */
+  readonly place: (runId: string) => Effect.Effect<Place>;
   readonly held: (runId: string) => Effect.Effect<boolean>;
   readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
   readonly record: (runId: string, event: string) => Effect.Effect<void>;
@@ -172,6 +211,37 @@ export interface NativeHostApi {
     /** What a pass looks like; `fail` is how a reproduction is proved to reproduce. */
     readonly expect?: "pass" | "fail";
   }) => Effect.Effect<Verification, WorkflowError>;
+  /**
+   * Puts a note on the merge request a Run was pointed at, sent by Collie rather than
+   * written out again by an agent — asking for a file to be repeated verbatim is how
+   * verbatim stops being true. The refusal is the message: a target that is not a merge
+   * request, no `glab` for that project, or one assigned to whoever is running this.
+   */
+  readonly post: (options: {
+    readonly runId: string;
+    readonly target: string;
+    readonly cwd: string;
+    /** The file to send, as the Run wrote it. */
+    readonly file: string;
+  }) => Effect.Effect<Posted>;
+}
+
+/** A Run as the host admitted it: where it works, where its work belongs, and what it was given. */
+export interface Place {
+  readonly cwd: string;
+  readonly dir: string;
+  /**
+   * The host's own launch options for this Run — the `RESERVED_INPUTS` names — as a front
+   * door supplied them. They are not in the payload because they are not the author's
+   * fields, and this is where a workflow that wants one reads it.
+   */
+  readonly options: Readonly<Record<string, string>>;
+}
+
+/** What became of a note: whether it landed, and the sentence a human reads either way. */
+export interface Posted {
+  readonly ok: boolean;
+  readonly message: string;
 }
 
 export class NativeHost extends Context.Service<NativeHost, NativeHostApi>()("collie/NativeHost") {}
@@ -208,10 +278,12 @@ export const decision = (
 export const ask = (
   runId: string,
   question: NativeDecision,
+  /** What it takes this time, where a menu offers less than it declares. */
+  options?: ReadonlyArray<string>,
 ): Effect.Effect<string, never, NativeHost | WorkflowEngine | WorkflowInstance> =>
   Effect.gen(function* () {
     const host = yield* NativeHost;
-    yield* host.asking(runId, question.asks);
+    yield* host.asking(runId, options ? { ...question.asks, options } : question.asks);
     return yield* DurableDeferred.await(question);
   });
 
@@ -346,6 +418,8 @@ export interface FollowUp {
   readonly title: string;
   readonly workflow: string;
   readonly when: "succeeded" | "failed" | "always";
+  /** What Collie fills in from the Run itself; the rest is the caller's to give. */
+  readonly inputs?: Readonly<Record<string, Source>>;
 }
 
 /**
@@ -359,6 +433,10 @@ export interface ActionFacts {
   readonly mrUrl: string | null;
   readonly planIssues: number;
   readonly disposed: boolean;
+  /** Findings it left for somebody to fix, which is what a fix is offered over. */
+  readonly openFindings: number;
+  /** What it was pointed at, where it was pointed at anything. */
+  readonly diffTarget: string | null;
 }
 
 /**
@@ -372,6 +450,8 @@ export interface ActionProvider {
   readonly workflow: string;
   readonly arguments: Schema.Struct.Fields;
   readonly eligible: (facts: ActionFacts) => boolean;
+  /** What Collie fills in from the Run itself; the rest is the caller's to give. */
+  readonly inputs?: Readonly<Record<string, Source>>;
 }
 
 /**

@@ -62,8 +62,12 @@ import {
   type WorkflowEntry,
 } from "./sdk";
 import { currentPid, signalProcess } from "./lock";
+import type { InputStrategy } from "./definitions";
 import { noteVerification } from "./metrics";
-import { offersFrom, type Declared, type Offer } from "./offers";
+import { postNote, shell as runShell } from "./mr";
+import { openFindingsIn } from "./output";
+import { planIssuesIn } from "./plan";
+import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome } from "./outcome";
 import { RequestConflict, Store, storeLayer, type RunRow } from "./store";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
@@ -170,9 +174,25 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly final: Snapshot;
   }
 
+  /** A Run as the host admitted it: where it works, where its work belongs, what it was given. */
+  export interface Place {
+    readonly cwd: string;
+    readonly dir: string;
+    /** The host's own launch options — the RESERVED_INPUTS names — as a caller gave them. */
+    readonly options: Readonly<Record<string, string>>;
+  }
+
+  /** What became of a note: whether it landed, and the sentence a human reads either way. */
+  export interface Posted {
+    readonly ok: boolean;
+    readonly message: string;
+  }
+
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface NativeHostApi {
     readonly dir: string;
+    /** This Run as the host admitted it; its directory is made as this is answered. */
+    readonly place: (runId: string) => Effect.Effect<Place>;
     readonly held: (runId: string) => Effect.Effect<boolean>;
     readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
     readonly record: (runId: string, event: string) => Effect.Effect<void>;
@@ -186,6 +206,17 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
       readonly cwd: string;
       readonly expect?: "pass" | "fail";
     }) => Effect.Effect<Verification, WorkflowError>;
+    /**
+     * Puts a file on the merge request a Run was pointed at, as one note Collie sends.
+     * The refusal is the message: not a merge request, no glab for it, or one assigned
+     * to whoever is running this — whose findings are theirs to fix rather than to post.
+     */
+    readonly post: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly cwd: string;
+      readonly file: string;
+    }) => Effect.Effect<Posted>;
   }
   export const NativeHost: Context.Service<NativeHostApi, NativeHostApi>;
   export type NativeHost = NativeHostApi;
@@ -231,6 +262,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   export function ask(
     runId: string,
     question: NativeDecision,
+    /** What it takes this time, where a menu offers less than it declares. */
+    options?: ReadonlyArray<string>,
   ): Effect.Effect<string, never, NativeHost | WorkflowEngine | WorkflowInstance>;
 
   /** What a parent asks for when part of its own work is another workflow. */
@@ -295,8 +328,11 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly cwd: string;
     readonly prompt: string;
     readonly output: string;
+    /** A skill this work is started with, as the human channel invokes one. */
+    readonly skill: string | null;
     readonly harness: string | null;
     readonly model: string | null;
+    readonly effort: string | null;
     readonly permissions: string | null;
   }
 
@@ -321,6 +357,10 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   /** What a host lends a workflow that needs an agent. */
   export interface AgentsApi {
     readonly outputFor: (runId: string, operation: string) => string;
+    /** Where each named skill is installed, for the mentions a prompt carries. */
+    readonly skills: (
+      names: ReadonlyArray<string>,
+    ) => Effect.Effect<ReadonlyMap<string, string>>;
     readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain>;
     readonly collect: (
       launched: Launched,
@@ -363,9 +403,14 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     /** The agent this work goes to, where several operations are one agent's list. */
     readonly agent?: string;
     readonly workflow?: string;
+    /** The skill this work is started with, where the work is one a skill describes. */
+    readonly skill?: string;
     readonly harness?: string;
     readonly model?: string;
+    readonly effort?: string;
     readonly permissions?: "bypass" | "harness";
+    /** What the instructions render beside the inputs, for Markdown that names its own. */
+    readonly vars?: Readonly<Record<string, unknown>>;
   }
 
   /** One agent, once, and its Output as a value of your own type. */
@@ -384,6 +429,9 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly output: string;
     readonly contract: Projection;
     readonly inputs?: Readonly<Record<string, unknown>>;
+    readonly vars?: Readonly<Record<string, unknown>>;
+    /** Where each mentioned skill is installed; a mention of one that is not says so. */
+    readonly skills?: ReadonlyMap<string, string>;
     readonly cwd?: string;
   }
 
@@ -405,11 +453,20 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     | { readonly fixed: Outcome; readonly selectable?: undefined }
     | { readonly fixed?: undefined; readonly selectable: ReadonlyArray<Outcome> };
 
+  /**
+   * Where an offer's input comes from, as the Run it is offered about knows it. A closed
+   * list: Collie fills these in, and anything else is the caller's to give.
+   */
+  export type Source = "run-dir" | "plan-dir" | "diff-target" | "branch" | "merge-request";
+
   export interface FollowUp {
     readonly id: string;
     readonly title: string;
+    /** A public workflow id, or "self" for the one declaring it. */
     readonly workflow: string;
     readonly when: "succeeded" | "failed" | "always";
+    /** What Collie fills in from the Run itself; the rest is the caller's to give. */
+    readonly inputs?: Readonly<Record<string, Source>>;
   }
 
   /** What an action decides eligibility from: facts, never a workflow's name. */
@@ -420,14 +477,21 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly mrUrl: string | null;
     readonly planIssues: number;
     readonly disposed: boolean;
+    /** Findings it left for somebody to fix, which is what a fix is offered over. */
+    readonly openFindings: number;
+    /** What it was pointed at, where it was pointed at anything. */
+    readonly diffTarget: string | null;
   }
 
   export interface ActionProvider {
     readonly id: string;
     readonly title: string;
+    /** A public workflow id, or "self" for the one declaring it. */
     readonly workflow: string;
     readonly arguments: Schema.Struct.Fields;
     readonly eligible: (facts: ActionFacts) => boolean;
+    /** What Collie fills in from the Run itself; the rest is the caller's to give. */
+    readonly inputs?: Readonly<Record<string, Source>>;
   }
 
   /** Data a card and a launch read; never anything a workflow body consults. */
@@ -557,6 +621,35 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   export function renderReview(synthesis: Synthesis): string;
   export function formatFindings(findings: ReadonlyArray<Finding>): string;
 
+  /** The prose a human reads, and the findings a card counts, where both are looked for. */
+  export const REVIEW_FILE: string;
+  export const FINDINGS_FILE: string;
+  export function leaveReview(
+    dir: string,
+    synthesis: SynthesisReport,
+  ): Effect.Effect<void, never, FileSystem.FileSystem>;
+
+  /** How many findings the Run that owns this directory left for somebody to fix. */
+  export function openFindingsIn(
+    dir: string,
+  ): Effect.Effect<number, never, FileSystem.FileSystem>;
+
+  /** The extra axes a human asked for, as a paragraph, or nothing where they asked for none. */
+  export function riskLine(risks: string): string;
+
+  /** A merge request a target names: its project, where it carries one, and its iid. */
+  export interface MrRef {
+    readonly project: string | null;
+    readonly iid: string;
+  }
+  export function parseMrTarget(target: string): MrRef | null;
+
+  /** Which of the three kinds of change a settled diff target names. */
+  export function targetKind(target: string): "mr" | "branch" | "worktree" | "";
+
+  /** The glab arguments that point a command at a project rather than at the cwd. */
+  export function repoArgs(project: string | null): string[];
+
   /** A decoded review: the lists are the decoder's, not the reader's to change. */
   export interface ReviewReport {
     readonly verdict: "clean" | "findings";
@@ -592,6 +685,15 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     never,
     never
   >;
+
+  /**
+   * A Markdown file as the content it is: what stands above the first heading, and one
+   * entry per "## name" section below it. Front matter is not content and is left out.
+   */
+  export function contentOf(markdown: string): {
+    readonly preamble: string;
+    readonly sections: ReadonlyMap<string, string>;
+  };
 
   /** One item of work that finished, and what it left for the ones after it. */
   export interface Handed {
@@ -696,26 +798,31 @@ let sdkInstalled = false;
  * Registers the SDK with Bun's module resolver, once per process. A virtual module per
  * specifier, so `import "effect"` from anywhere in the author's imports lands here.
  */
+/** `self` is the workflow that declared the offer, whatever a fork has renamed it to. */
+const itself = (workflow: string) => (workflow === "self" ? SELF : workflow);
+
 /**
  * What a module declares, as offers. The eligibility functions are the author's own and
  * are kept as they are: the module is the only thing that can answer for its own actions,
  * and a projection of one would be a copy that stops agreeing with it.
  */
-function declaredByModule(metadata: WorkflowMetadata | undefined): Declared[] {
+export function declaredByModule(metadata: WorkflowMetadata | undefined): Declared[] {
   const actions = (metadata?.actions ?? []).map((action) => ({
     id: action.id,
     title: action.title,
-    workflow: action.workflow,
+    workflow: itself(action.workflow),
     arguments: jsonSchemaFor(Schema.Struct(action.arguments)).document,
     kind: "action" as const,
+    inputs: action.inputs ?? {},
     eligible: action.eligible,
   }));
   const followUps = (metadata?.followUps ?? []).map((offer) => ({
     id: offer.id,
     title: offer.title,
-    workflow: offer.workflow,
+    workflow: itself(offer.workflow),
     arguments: null,
     kind: "follow-up" as const,
+    inputs: offer.inputs ?? {},
     eligible: (facts: ActionFacts) =>
       offer.when === "always" || (offer.when === "succeeded") === facts.succeeded,
   }));
@@ -922,6 +1029,13 @@ export const controlPath = (dir: string, control: string, runId: string): string
  */
 export const evidenceDir = (dir: string, runId: string): string => `${dir}/evidence/${runId}`;
 
+/**
+ * Where one native Run's own work belongs: the plan it wrote, the review it left, and
+ * anything else a card reads back. A directory per Run rather than a column, because what
+ * a Run produces is files and the things that read them are ordinary readers of files.
+ */
+export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
+
 const approvedPath = (dir: string, runId: string) => `${evidenceDir(dir, runId)}/approved.json`;
 
 const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
@@ -982,6 +1096,38 @@ export const nativeHostLayer = (options: {
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
       return NativeHost.of({
         dir,
+        place: (runId) =>
+          under(
+            store.run(runId).pipe(
+              Effect.flatMap((row): Effect.Effect<Record<string, string>> =>
+                row === null
+                  ? Effect.succeed({})
+                  : decodeStrings(row.options ?? "{}").pipe(
+                      Effect.map((options) => ({
+                        ...options,
+                        workspace: options.workspace ?? row.project,
+                      })),
+                      Effect.orElseSucceed(() => ({ workspace: row.project })),
+                    ),
+              ),
+              // A Run nobody has a row for works nowhere in particular; its own directory
+              // is still its own, so what it writes is not written into somebody else's.
+              // Made for a Run there is one, so a workflow writes what it produces into
+              // its own directory without first asking whether it is there — and asking
+              // about a run that was never started leaves nothing behind.
+              Effect.tap((options) =>
+                "workspace" in options
+                  ? fs.makeDirectory(runDir(dir, runId), { recursive: true })
+                  : Effect.void,
+              ),
+              Effect.map((options) => ({
+                cwd: options.workspace ?? dir,
+                dir: runDir(dir, runId),
+                options,
+              })),
+              Effect.orElseSucceed(() => ({ cwd: dir, dir: runDir(dir, runId), options: {} })),
+            ),
+          ),
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),
         record: (runId, event) =>
@@ -1016,8 +1162,8 @@ export const nativeHostLayer = (options: {
                     }),
                   );
                 }
-                const runDir = evidenceDir(dir, asked.runId);
-                return collectVerification(runDir, {
+                const journal = evidenceDir(dir, asked.runId);
+                return collectVerification(journal, {
                   run: asked.runId,
                   name: spec.name,
                   executable: spec.executable,
@@ -1026,10 +1172,22 @@ export const nativeHostLayer = (options: {
                   by: "collie",
                   expect: asked.expect ?? "pass",
                 }).pipe(
-                  Effect.tap((record) => noteVerification(runDir, record)),
+                  Effect.tap((record) => noteVerification(journal, record)),
                   Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
                 );
               }),
+            ),
+          ),
+        post: (asked) =>
+          under(
+            fs.readFileString(asked.file).pipe(
+              Effect.flatMap((body) =>
+                postNote({ target: asked.target, cwd: asked.cwd, body }, runShell),
+              ),
+              Effect.orElseSucceed(() => ({
+                ok: false,
+                message: `there is no ${asked.file} to post`,
+              })),
             ),
           ),
       });
@@ -1157,6 +1315,22 @@ const reasonOf = (cause: Cause.Cause<unknown>): string => {
   const [reason = ""] = Cause.pretty(cause).split("\n");
   return reason;
 };
+
+/**
+ * What this Run was pointed at, from whichever field carries the diff-target inference.
+ * The field's own name is the author's, so a module that calls it `change` is read the
+ * same as one that calls it `target`.
+ */
+const pointedAt = (
+  generation: Generation,
+  input: Readonly<Record<string, Schema.Json>>,
+): string | null => {
+  const field = Object.entries(generation.hints).find(([, hint]) => hint === "diff-target")?.[0];
+  const value = field === undefined ? undefined : input[field];
+  return isText(value) && value !== "" ? value : null;
+};
+
+const isText = Schema.is(Schema.String);
 
 /** The input a run was admitted with, as the row keeps it. */
 const decodeInput = Schema.decodeUnknownEffect(
@@ -1420,6 +1594,8 @@ export interface Generation {
   readonly entry: string;
   /** What the module declares it takes, which is what settles a launch. */
   readonly fields: InputFields;
+  /** Which input carries which inference, as the module attached it. */
+  readonly hints: Readonly<Record<string, InputStrategy>>;
   /** The outcome this module fixes, so asking it for another is refused. */
   readonly fixedOutcome: string | null;
   /** The file and the revision this was built from: what makes a later start the same code. */
@@ -1671,6 +1847,7 @@ const makeRegistry: (
         title: entry.title,
         entry: route.entry,
         fields: entry.input,
+        hints: entry.metadata?.hints ?? {},
         fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
         source: yield* sourceOf(route.entry),
         metadata: describeMetadata(entry.metadata),
@@ -2076,18 +2253,24 @@ const makeRegistry: (
         found.generation.entry,
       );
       const asked = options.outcome ?? UNSPECIFIED;
-      // The facts a host has about a native Run. A branch it was launched onto and how it
-      // ended are its own; a merge request, tickets and a disposition are recorded by the
-      // work itself, and a Run that has produced none has none.
+      const where = runDir(dir, runId);
+      // The facts a host has about a native Run. What it was launched with and how it
+      // ended are the row's; the tickets it wrote and the findings it left are read from
+      // its own directory, because producing them is the only way a Run can have them.
       const facts: ActionFacts = {
         outcome: isOutcome(asked) ? asked : "unspecified",
         succeeded: state.status === "complete",
         branch: options.branch ?? null,
         mrUrl: null,
-        planIssues: 0,
+        planIssues: yield* planIssuesIn(where),
         disposed: false,
+        openFindings: yield* openFindingsIn(where),
+        diffTarget: pointedAt(
+          generation,
+          yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
+        ),
       };
-      return { row, generation, facts };
+      return { row, generation, facts, where };
     });
 
     const startWork = Effect.fn("Native.Registry.start")(function* (options: {
@@ -2213,7 +2396,7 @@ const makeRegistry: (
         readonly input: Readonly<Record<string, Schema.Json>>;
         readonly request: string;
       }) {
-        const { row, generation, facts } = yield* offeredBy(options.runId);
+        const { row, generation, facts, where } = yield* offeredBy(options.runId);
         // Asked again here, of the module as it is now: the card this was read from may
         // have been drawn before the file was edited, and a card is not authority.
         const offer = offersFrom(generation.offers, facts, { self: generation.id }).find(
@@ -2225,13 +2408,17 @@ const makeRegistry: (
           });
         }
         const starting = yield* resolve({ project: row.project, id: offer.workflow });
+        // What the offer said Collie fills in, filled from the Run it is about. The
+        // caller's own values win: an offer names where a value comes from, and a caller
+        // that has a better one for the same field is not overruled by a default.
+        const filled = { ...inputsFor(offer, { runDir: where, facts }), ...options.input };
         // The offer's own workflow settles what it was given, so arguments it will not
         // take are refused here and nothing is started.
         return yield* startWork({
           generation: starting,
           request: options.request,
           project: row.project,
-          input: options.input,
+          input: filled,
           task: row.task,
           parent: row.run,
         });

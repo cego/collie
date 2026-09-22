@@ -145,6 +145,18 @@ export const workspace = Effect.fn("NativeTest.workspace")(function* (prefix: st
   ]) {
     yield* fs.copyFile(`${fixtures}/${name}`, `${dir}/wf/${name}`);
   }
+  // The shipped modules and the Markdown they read, beside the fixtures: what an author
+  // is given has to hold the workflows Collie ships as well as the ones a test invents.
+  for (const name of [
+    "plan.workflow.ts",
+    "plan.md",
+    "review.workflow.ts",
+    "review.md",
+    "architecture.workflow.ts",
+    "architecture.md",
+  ]) {
+    yield* fs.copyFile(`${root}workflows/${name}`, `${dir}/wf/${name}`);
+  }
   return { dir, wf: `${dir}/wf`, state: `${dir}/state` };
 });
 

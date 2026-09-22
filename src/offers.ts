@@ -27,6 +27,8 @@ export interface Declared {
   /** A follow-up is hidden once somebody has said what became of the work; an action is not. */
   readonly kind: "action" | "follow-up";
   readonly eligible: (facts: ActionFacts) => boolean;
+  /** The inputs Collie fills from the Run: input name to the fact it comes from. */
+  readonly inputs: Readonly<Record<string, Source>>;
 }
 
 /** One offer as a front door shows it. */
@@ -36,6 +38,8 @@ export interface Offer {
   readonly workflow: string;
   readonly arguments: Schema.Json | null;
   readonly kind: Declared["kind"];
+  /** What Collie fills in from the Run, so a front door asks only for the rest. */
+  readonly inputs: Readonly<Record<string, Source>>;
   /** The first eligible one, which a front door may present as the obvious thing to do. */
   readonly primary: boolean;
   /** Why this offer cannot be made, where it is listed at all. */
@@ -70,6 +74,7 @@ export function offersFrom(
       workflow: one.workflow === SELF ? (options.self ?? SELF) : one.workflow,
       arguments: one.arguments,
       kind: one.kind,
+      inputs: one.inputs,
       primary: false,
       unavailable,
     });
@@ -149,24 +154,23 @@ export interface OfferDef {
   inputs: Readonly<Record<string, Source>>;
 }
 
-/** The facts an offer is decided from, beyond what a module's own action reads. */
-export interface OfferFacts extends ActionFacts {
-  /** Findings this Run left open, which is what a fix is for. */
-  readonly openFindings: number;
-  /** What it was pointed at, where anything was. */
-  readonly diffTarget: string | null;
-}
+/**
+ * The facts an offer is decided from. The same facts a module's own action reads: what a
+ * declared `needs:` asks about and what an author's `eligible` is given are one list, so
+ * a definition and a module offer on the same evidence.
+ */
+export type OfferFacts = ActionFacts;
 
 /**
  * Whether one fact is there. A caller that has no record of a fact at all answers no to
  * it: an offer is made on what is known, never on what is missing.
  */
-const met = (need: Need, facts: ActionFacts & Partial<OfferFacts>): boolean => {
+const met = (need: Need, facts: ActionFacts): boolean => {
   switch (need) {
     case "findings":
-      return (facts.openFindings ?? 0) > 0;
+      return facts.openFindings > 0;
     case "diff-target":
-      return (facts.diffTarget ?? null) !== null;
+      return facts.diffTarget !== null;
     case "branch":
       return facts.branch !== null;
     case "merge-request":
@@ -186,13 +190,14 @@ export function declaredIn(offers: ReadonlyArray<OfferDef>): Declared[] {
     workflow: one.workflow,
     arguments: null,
     kind: one.kind,
+    inputs: one.inputs,
     eligible: (facts) => one.needs.every((need) => met(need, facts)),
   }));
 }
 
 /** What an offer passes, filled from the Run it is being made about. */
 export function inputsFor(
-  offer: OfferDef,
+  offer: { readonly inputs: Readonly<Record<string, Source>> },
   from: { readonly runDir: string; readonly facts: OfferFacts },
 ) {
   const value = (source: Source): string | null => {

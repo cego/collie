@@ -170,6 +170,13 @@ const failed = (result: { readonly _tag: string; readonly failure?: { reason?: s
 const prompts = () =>
   rig.calls().pipe(Effect.map((calls) => calls.filter((call) => call.cmd === "agent prompt")));
 
+/** What an operation was actually asked, which is the file its message named. */
+const promptFile = (runId: string, operation: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(`${dir}/agents/${runId}/${operation}.prompt.md`)),
+    Effect.orDie,
+  );
+
 const starts = () =>
   rig.cmds().pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start")));
 
@@ -206,7 +213,8 @@ test(
         expect(yield* starts()).toHaveLength(1);
         const asked = yield* prompts();
         expect(asked).toHaveLength(3);
-        const third = (asked[2]?.argv ?? [])[3] ?? "";
+        // The message names the file the work is in; the work is what was written there.
+        const third = yield* promptFile("r-three", "03-docs.md");
         expect(third).toContain("item 3 of 3");
         expect(third).toContain("- 01-api.md — Serve the thing");
         expect(third).toContain("    api");

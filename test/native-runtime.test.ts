@@ -596,6 +596,11 @@ test(
           "spread.workflow.ts",
           "share.workflow.ts",
           "offered.workflow.ts",
+          // The shipped three, held to the same declarations: a workflow Collie ships is
+          // a module an author could have written, or the contract is two contracts.
+          "plan.workflow.ts",
+          "review.workflow.ts",
+          "architecture.workflow.ts",
         ]) {
           const checked = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/${entry}` });
           expect([entry, checked.diagnostics]).toEqual([entry, []]);

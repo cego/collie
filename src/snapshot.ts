@@ -108,6 +108,9 @@ const WorkflowSchema = Schema.Struct({
   description: Schema.String,
   inputs: Schema.Record(Schema.String, Schema.String),
   embeddedInputs: Schema.Array(Schema.String),
+  // What this Workflow always proves, where it proves one. Null for the Workflows whose
+  // outcome a human chooses, and for a snapshot written before it was declared.
+  outcome: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed(null))),
   maxIterations: Schema.Number,
   // Frozen with the rest of the definition: what a Run offers when it ends is decided
   // from current code, but a Run resumed from a snapshot must still decode.

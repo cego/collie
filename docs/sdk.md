@@ -1,9 +1,11 @@
 # Writing a workflow in TypeScript
 
 This is the native contract: a workflow as a TypeScript module that Collie loads and
-Effect runs. [`authoring.md`](authoring.md) is the Markdown one, and the five shipped
-workflows are still written that way; the two do not mix, and neither supersedes the other
-until the shipped ones are converted.
+Effect runs. `plan`, `review` and `architecture` are written this way — they are modules in
+`workflows/`, held to everything below, with their Markdown beside them as content.
+[`authoring.md`](authoring.md) is the Markdown contract, which `implement` and `renovate`
+are still written against; the two do not mix, and a module of an id wins over a definition
+of the same one.
 
 Everything here is `collie/native`, which the executable serves from its own bundle — so
 the `Effect` your module imports is the one running it, and a service the host declares is
@@ -198,11 +200,26 @@ const verdict =
   schema's own issues. A second one fails the run with `output-unusable`.
 - **`cwd` is yours to say.** The host knows its own state directory, not which checkout
   this piece of work belongs in.
-- **`role`, `harness`, `model` and `permissions`** default to the operation's name and to
-  the operator's configuration. The role is injected as a Step's persona is.
+- **`role`, `harness`, `model`, `effort` and `permissions`** default to the operation's name
+  and to the operator's configuration. The role is injected as a Step's persona is, and
+  where `personas/<role>.md` exists in the project, on this machine or in the installation,
+  that persona is what the agent is started as. A role nobody wrote a persona for is stated
+  in one line.
+- **`skill` starts one.** A skill a workflow names is invoked the way a human invokes one,
+  with the first message — which is the only way to reach a skill that refuses to be called
+  by a model. A skill _mentioned_ in your Markdown as `{{skill:name}}` renders as the path
+  to read instead, so a prompt never spells one harness's syntax.
+- **`vars` is what your Markdown names.** `{{inputs.x}}` comes from `inputs`, and everything
+  else a body asks for — `{{run.dir}}`, `{{findings}}`, `{{iteration}}` — is yours to supply.
+  A variable nobody supplied renders empty rather than failing.
 
 Skipped work is work you do not ask for: return without calling `agentWork` and no tab
 opens, no agent starts and no Output is fabricated. Say why in what you return.
+
+The work itself is written to `<state>/agents/<run>/<operation>.prompt.md` and the message
+names that file. One send is one message and not a transcript: a step's prompt carries a
+whole contract, and what the agent is asked is a file it reads rather than a wall of text
+in a chat.
 
 A restart is safe in both directions. The launch is an Activity, so a replayed collection
 reattaches rather than starting a second agent; the repair is an Activity of its own, so a
@@ -213,6 +230,47 @@ has stops the work with that as the reason rather than starting a second agent.
 
 `promptFor` builds the same prompt without launching anything, and `decodeOutput` reads a
 file against a contract. Both are plain functions, so a test of yours can use them.
+
+## Where your Run is, and what it was given
+
+`host.place(runId)` is the Run as the host admitted it, and it is how a module that was not
+handed a path still knows where to work.
+
+```ts
+const place = yield * host.place(payload.runId);
+// place.cwd     — the checkout this Run was started for
+// place.dir     — this Run's own directory, made as you ask for it
+// place.options — the host's own launch options: branch, task, workspace, repo, outcome,
+//                 risks, previous
+```
+
+`place.dir` is where what a Run produces belongs, and where the things that read a Run look:
+a plan's tickets under `plan/issues/`, a review's prose in `review.md` and its findings in
+`findings.json` — `leaveReview` writes both. A card counts those; nothing counts a Run's
+prose.
+
+`place.options` is the other half of the launch. The names in `RESERVED_INPUTS` are the
+host's, so they are never in your payload — a caller asking for extra review axes or naming
+an earlier Run to compare against is doing it there, and this is where you read it.
+
+`host.post` puts a file on the merge request a Run was pointed at, as one note Collie sends
+rather than an agent writes out again. Its refusal is its message: not a merge request, no
+`glab` for that project, or one assigned to whoever is running this — whose findings are
+theirs to fix rather than to post to themselves.
+
+## Markdown as content
+
+`contentOf(markdown)` reads a Markdown file as what stands above its first heading and one
+entry per `## name` section below it. A module that ships beside its prose imports the file
+and picks the section each piece of work is about, so there is one copy of the words and the
+code decides what happens to them:
+
+```ts
+import markdown from "./review.md" with { type: "text" };
+const content = contentOf(markdown);
+const prompt = (section: string) =>
+  [content.preamble, content.sections.get(section) ?? ""].join("\n\n");
+```
 
 ## Waiting for a human
 
@@ -451,8 +509,11 @@ export const metadata: WorkflowMetadata = {
   a human may ask an implement Run for — `review` and `plan` are what a workflow proves.
 - **`followUps` and `actions`** carry an `id` that is stable and a `title` a human reads.
   Two fields, because a retitled action is the same action and a card matching on the
-  title would start a different one. `arguments` is the child's schema; eligibility is
-  decided from facts, never from a workflow's name.
+  title would start a different one. `workflow` is a public id or `"self"` for the one
+  declaring it; `inputs` names what Collie fills in from the Run — `run-dir`, `plan-dir`,
+  `diff-target`, `branch`, `merge-request` — so a card makes the offer without asking a
+  human to type a path. `arguments` is the child's schema; eligibility is decided from
+  facts, never from a workflow's name.
 
 Both are what a finished Run offers to do next, and both front doors make the same offer:
 `collie run actions <run>` lists them and `collie run action <run> <id> --input k=v` does

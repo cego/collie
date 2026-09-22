@@ -1,8 +1,10 @@
 # Workflows
 
 Collie ships five workflows. This page is the "which one do I want" level: what each is
-for, what it needs from you, and how they chain. The definition files under
-[`workflows/`](../workflows) are canonical for step-by-step behavior, and
+for, what it needs from you, and how they chain. The files under
+[`workflows/`](../workflows) are canonical for step-by-step behavior: `plan`, `review` and
+`architecture` are TypeScript modules with their Markdown beside them as content
+([the SDK](sdk.md)), and `implement` and `renovate` are Markdown definitions, for which
 `collie workflow show <name>` prints the resolved version — inputs and steps included,
 including those inherited from an embedded workflow. Any of them is a fork away from being
 yours; see [Authoring](authoring.md).
@@ -37,15 +39,18 @@ handoff. Plans never enter the repository
 "proceed", "implement", "build" or "go" makes it answer the menu with
 `collie run answer <run id> "Implement now"` — it starts nothing itself.
 
-- **Implement now** — chains `implement` with this run's `plan/` as the work source.
+- **Implement now** — starts `implement` with this run's `plan/` as the work source, as a
+  child of this run: stopping the plan reaches the build, and the build is its own Run with
+  its own card.
 - **Second opinion** — one reviewer round over the plan, then the menu again; where it
   reports findings, the planner gets a follow-up round to revise.
 - **Offload to Linear** — the planner files the tickets as Linear issues. It asks once
-  which team they go to and remembers the answer in `config.json`.
+  which team they go to, and that answer stands for the rest of the run.
 - **Refine** — another planner round, as often as you like.
 - **Finish planning** — finish without starting implementation or another planning round.
 
-Definition: [`workflows/plan.md`](../workflows/plan.md).
+Module: [`workflows/plan.workflow.ts`](../workflows/plan.workflow.ts), with its prompts in
+[`workflows/plan.md`](../workflows/plan.md).
 
 ## `implement`
 
@@ -177,16 +182,17 @@ change breaks is exactly the blocker worth raising. Minor findings are exempt.
 
 **Ends with a menu:**
 
-- **Fix findings** — exactly one of two shapes, never both. When an implementer is live in
-  this session it is a hand-off to that agent; when none is, it chains a fresh `implement`
-  run on the reviewed target.
+- **Fix findings** — an implementer of this run's own, given the findings and the target,
+  which fixes them where the review was pointed. Offered once: a second round of it would
+  be the same findings again.
 - **Fix findings in a full implement run** — chains `implement` with this run as the work
   source, regardless.
 - **Post to MR** — sends `review.md` to the merge request it reviewed, verbatim and as a
   single note. Offered only where the target is a merge request and `glab` can reach it.
 - **Don't post** — ends the run.
 
-Definition: [`workflows/review.md`](../workflows/review.md).
+Module: [`workflows/review.workflow.ts`](../workflows/review.workflow.ts), with its prompts
+in [`workflows/review.md`](../workflows/review.md).
 
 ## `renovate`
 
@@ -249,7 +255,8 @@ is the work you agreed on: `architecture` takes no input that names the work, so
 every architecture run in a repo would be handed the same branch
 ([how the branch is chosen](cli.md#start-a-run)).
 
-Definition: [`workflows/architecture.md`](../workflows/architecture.md).
+Module: [`workflows/architecture.workflow.ts`](../workflows/architecture.workflow.ts), with
+its prompts in [`workflows/architecture.md`](../workflows/architecture.md).
 
 ## How they chain
 
@@ -260,8 +267,7 @@ Definition: [`workflows/architecture.md`](../workflows/architecture.md).
 - `plan` → `architecture`, for a plan whose tickets need architectural decisions. It is a
   Choice a human takes, not a pass every build makes: `architecture` and `simplify` used to
   run after every build and after every fix whether or not the work needed them, and they
-  cost a quarter of a run's wall time. `architecture` is still embeddable with `use:`, and
-  its menu step is marked `standalone:` so it does not run when it is.
+  cost a quarter of a run's wall time.
 - `review` → `implement`, or a hand-off to a live implementer. See
   [Hand-offs](using.md#hand-offs-between-runs).
 

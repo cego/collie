@@ -27,6 +27,7 @@ import {
 import { COMPACTION_PORTS } from "./compactors";
 import { FALLBACK_DEFAULTS, loadDefaults } from "./config";
 import * as dispatch from "./dispatcher";
+import { layers, skillDirs } from "./definitions";
 import { currentEnv, type PluginEnv } from "./env";
 import {
   HARNESSES,
@@ -39,13 +40,14 @@ import { Herdr } from "./herdr";
 import { agentName, reason, shellQuote, unsafePathComponent } from "./naming";
 import { registerAgent, registryPath, scopeFor } from "./registry";
 import {
+  contentOf,
   jsonSchemaFor,
   NativeHost,
   WorkflowError,
   type NativeHostApi,
   type Projection,
 } from "./sdk";
-import { renderTemplate } from "./template";
+import { renderTemplate, skillMention, skillsIn } from "./template";
 
 /** A schema that decodes an agent's Output without services of the author's own. */
 export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
@@ -62,9 +64,12 @@ export interface AgentAsk {
   readonly cwd: string;
   readonly prompt: string;
   readonly output: string;
+  /** A skill this work is started with, invoked the way the human channel invokes one. */
+  readonly skill: string | null;
   /** Null takes the host's own configured default, which is the operator's. */
   readonly harness: string | null;
   readonly model: string | null;
+  readonly effort: string | null;
   readonly permissions: string | null;
 }
 
@@ -103,6 +108,12 @@ export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()("AgentU
 export interface AgentsApi {
   /** Where this operation's Output goes — known before anything starts, so a prompt can name it. */
   readonly outputFor: (runId: string, operation: string) => string;
+  /**
+   * Where each of these skills is installed, for the mentions a prompt carries. A name
+   * nobody has installed is left out, and the mention says so rather than pointing at a
+   * path that is not there.
+   */
+  readonly skills: (names: ReadonlyArray<string>) => Effect.Effect<ReadonlyMap<string, string>>;
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain>;
@@ -168,9 +179,17 @@ export interface AgentWork<Output extends OutputContract> {
    */
   readonly agent?: string;
   readonly workflow?: string;
+  /** The skill this work is started with, where the work is one a skill describes. */
+  readonly skill?: string;
   readonly harness?: string;
   readonly model?: string;
+  readonly effort?: string;
   readonly permissions?: PermissionMode;
+  /**
+   * What the instructions render beside `inputs` — the round it is in, the review before
+   * it, what a human disputed — so Markdown keeps the variable names it was written with.
+   */
+  readonly vars?: Readonly<Record<string, Schema.Json>>;
 }
 
 /**
@@ -208,6 +227,9 @@ export const agentWork = <Output extends OutputContract>(
     }
     const output = agents.outputFor(work.runId, work.operation);
     const role = work.role ?? work.operation;
+    // Where each skill the instructions mention lives, so a mention is the path to read
+    // rather than a name the agent has to go looking for.
+    const skills = yield* agents.skills(skillsIn(work.instructions));
     const ask: AgentAsk = {
       runId: work.runId,
       operation: work.operation,
@@ -220,12 +242,16 @@ export const agentWork = <Output extends OutputContract>(
         role,
         instructions: work.instructions,
         inputs: work.inputs,
+        vars: work.vars,
+        skills,
         cwd: work.cwd,
         output,
         contract: jsonSchemaFor(work.output),
       }),
+      skill: work.skill ?? null,
       harness: work.harness ?? null,
       model: work.model ?? null,
+      effort: work.effort ?? null,
       permissions: work.permissions ?? null,
     };
 
@@ -344,6 +370,10 @@ export interface PromptParts {
   readonly output: string;
   readonly contract: Projection;
   readonly inputs?: Readonly<Record<string, Schema.Json>>;
+  /** What the instructions render beside `inputs`, as the module supplies them. */
+  readonly vars?: Readonly<Record<string, Schema.Json>>;
+  /** Where each mentioned skill is installed; a mention of one that is not says so. */
+  readonly skills?: ReadonlyMap<string, string>;
   readonly cwd?: string;
 }
 
@@ -354,12 +384,17 @@ export interface PromptParts {
  * Step's is, and reaches a body here as `{{role}}`.
  */
 export function promptFor(parts: PromptParts): string {
-  const rendered = renderTemplate(parts.instructions, {
-    inputs: { ...parts.inputs },
-    role: parts.role,
-    cwd: parts.cwd ?? "",
-    output_path: parts.output,
-  });
+  const rendered = renderTemplate(
+    parts.instructions,
+    {
+      ...parts.vars,
+      inputs: { ...parts.inputs },
+      role: parts.role,
+      cwd: parts.cwd ?? "",
+      output_path: parts.output,
+    },
+    { skill: skillMention(parts.skills ?? new Map()) },
+  );
   return [
     rendered.text.trim(),
     `When you are done, write your result as JSON to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
@@ -426,6 +461,50 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     `${dirFor(runId)}/${operation}${LAUNCH_SUFFIX}`;
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
   const log = (runId: string, line: string) => append(`${dirFor(runId)}/agents.log`, line);
+
+  /**
+   * Where each named skill is installed. Resolved from the directories the operator's own
+   * skills live in, so a mention is the path a harness can actually read and one nobody
+   * installed is left out for `skillMention` to say so.
+   */
+  const skills = Effect.fn("Agents.skills")(function* (names: ReadonlyArray<string>) {
+    const found = new Map<string, string>();
+    if (names.length === 0) return found;
+    const fs = yield* FileSystem.FileSystem;
+    const dirs = yield* skillDirs(host.env);
+    for (const name of names) {
+      if (unsafePathComponent(name) !== null) continue;
+      for (const dir of dirs) {
+        const file = `${dir}/${name}/SKILL.md`;
+        if (yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))) {
+          found.set(name, file);
+          break;
+        }
+      }
+    }
+    return found;
+  });
+
+  /**
+   * What this role is, as the persona Markdown for it says — the project's, then this
+   * machine's, then the installation's. A role nobody wrote a persona for is still a role:
+   * it is stated in one line rather than left blank.
+   */
+  const personaOf = Effect.fn("Agents.personaOf")(function* (role: string) {
+    if (unsafePathComponent(role) !== null) return roleBody(role);
+    const fs = yield* FileSystem.FileSystem;
+    const where = yield* layers(host.env);
+    for (const layer of [...where.all].reverse()) {
+      const file = `${layer.dir}/personas/${role}.md`;
+      if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
+      const markdown = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+      const body = contentOf(markdown).preamble;
+      if (body.trim() === "") continue;
+      const named = yield* skills(skillsIn(body));
+      return renderTemplate(body, {}, { skill: skillMention(named) }).text;
+    }
+    return roleBody(role);
+  });
 
   const deps: dispatch.DispatcherDeps = {
     stateDir: host.env.stateDir,
@@ -494,7 +573,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     const wanted = ask.permissions ?? undefined;
     const permissions = isPermissionMode(wanted) ? wanted : host.permissions;
     const persona = `${dirFor(ask.runId)}/${ask.operation}.persona.md`;
-    yield* write(persona, `${roleBody(ask.role)}\n`);
+    yield* write(persona, `${yield* personaOf(ask.role)}\n`);
     yield* withControlLock(
       host.env.stateDir,
       agent,
@@ -513,7 +592,13 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           kind: adapter.kind,
           paneId: tab.paneId,
           args: [
-            ...startArgs(adapter, ask.model ?? host.model, persona, undefined, permissions),
+            ...startArgs(
+              adapter,
+              ask.model ?? host.model,
+              persona,
+              ask.effort ?? undefined,
+              permissions,
+            ),
             ...controls,
           ],
         });
@@ -560,15 +645,24 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           harness: ask.harness ?? host.harness,
         };
         const adapter = adapterFor(launched.harness);
-        const prefix = personaPrefix(adapter, roleBody(ask.role));
-        const text = prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`;
+        const prefix = personaPrefix(adapter, yield* personaOf(ask.role));
+        const file = `${dirFor(ask.runId)}/${ask.operation}.prompt.md`;
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
-        yield* write(`${dirFor(ask.runId)}/${ask.operation}.prompt.md`, text);
+        yield* write(file, prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`);
         // Beside it, the agent this work landed on, so a human steering this run later
         // reaches the agent that has it rather than one derived from a name again.
         yield* write(launchPath(ask.runId, ask.operation), encodeLaunched(launched));
-        const asked = yield* deliver(launched, text, { kind: "step", ref: ask.operation });
+        // The work is the file, and the message says where it is: one send is one
+        // message and not a transcript, and a step's prompt carries a whole contract.
+        // A skill marked `disable-model-invocation` refuses an agent that invokes it
+        // itself; this is the human's channel, so a slash command here runs.
+        const started = ask.skill === null ? "" : `${adapter.skillCommand(ask.skill)} `;
+        const asked = yield* deliver(
+          launched,
+          `${started}Your task for this step is in ${file} — read it and follow it.`,
+          { kind: "step", ref: ask.operation },
+        );
         if (!asked.sent) {
           return yield* new AgentUncertain({
             operation: ask.operation,
@@ -673,7 +767,15 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     );
 
-  return { outputFor, pollMs: host.pollMs ?? DEFAULT_POLL_MS, launch, collect, repair, steer };
+  return {
+    outputFor,
+    skills: (names) => under(skills(names)),
+    pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+    launch,
+    collect,
+    repair,
+    steer,
+  };
 };
 
 const LAUNCH_SUFFIX = ".launch.json";

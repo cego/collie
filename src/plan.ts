@@ -22,6 +22,19 @@ export function checksIn(text: string): string[] {
     .filter((part) => part !== "");
 }
 
+/**
+ * How many tickets a Run wrote. The plan a Run was *given* is somebody else's work, so
+ * only its own directory is counted: writing tickets is what leaves a plan to build from.
+ */
+export const planIssuesIn = Effect.fn("Plan.planIssuesIn")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const names = yield* fs
+    .readDirectory(path.join(dir, "plan", "issues"))
+    .pipe(Effect.catch(() => Effect.succeed([])));
+  return names.filter((name) => name.endsWith(".md")).length;
+});
+
 /** One repository the plan changes, and the tickets that change it, in plan order. */
 export interface PlanRepo {
   path: string;

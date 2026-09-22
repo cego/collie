@@ -7,6 +7,11 @@ its parent, and every key a definition file accepts.
 A definition is one markdown file: YAML frontmatter, then a body of prompt sections. For
 what a Workflow, Step, Persona, Layer or Override _is_, see [`CONTEXT.md`](../CONTEXT.md).
 
+`implement` and `renovate` are written this way. `plan`, `review` and `architecture` are
+TypeScript modules with their prompts in the Markdown beside them — [the SDK](sdk.md) is
+their reference, and a module of an id is what runs where a definition of the same id also
+exists. The personas are Markdown for both.
+
 ## Layers and lookup order
 
 Definitions come from three directories. The same name in a later layer wins:
@@ -15,8 +20,8 @@ Definitions come from three directories. The same name in a later layer wins:
 2. `$(herdr plugin config-dir cego.collie)/workflows`, `…/personas` — yours.
 3. `.herdr/workflows`, `.herdr/personas` in the project you're in.
 
-`use:` resolves through the same lookup, so overriding `workflows/review.md` in your layer
-changes every workflow that embeds it — including `implement`.
+`use:` resolves through the same lookup, so overriding a definition another one embeds
+changes that one too — `implement` embeds `review`'s definition this way.
 
 `collie workflow list` prints the layer each definition came from, and
 `collie workflow check` validates every layer without starting a run.

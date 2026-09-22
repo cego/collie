@@ -50,7 +50,7 @@ import {
   stopDriver,
   type InboxCommandValue,
 } from "./driver";
-import { parseMrTarget, repoArgs, shell, type Runner } from "./mr";
+import { postNote, shell, type Runner } from "./mr";
 import {
   classifyGivenTarget,
   classifyWorkSource,
@@ -2303,11 +2303,14 @@ export const resumeRun = Effect.fn("operations.resumeRun")(function* (
   );
 });
 
+const runShell: Runner<ChildProcessSpawner.ChildProcessSpawner> = shell;
+
 /**
  * The review reaches the merge request as one note, and Collie sends it: asking an
  * agent to repeat a file it has already written is how "verbatim" stops being true.
  * Here rather than in the engine because the Choice and the app's merge-request panel
- * are two callers of one behaviour.
+ * are two callers of one behaviour — and the host is a third, so what refuses a post
+ * is `postNote` rather than three readings of when a note may be sent.
  */
 export const postReview = Effect.fn("operations.postReview")(function* (run: Run) {
   const fs = yield* FileSystem.FileSystem;
@@ -2315,20 +2318,14 @@ export const postReview = Effect.fn("operations.postReview")(function* (run: Run
   const file = pathService.join(run.dir, REVIEW_FILE);
   if (!(yield* fs.exists(file)))
     return { ok: false, message: `there is no ${REVIEW_FILE} to post` };
-  const target = diffTargetOf(recorded(run.record))?.value ?? "";
-  const mr = parseMrTarget(target);
-  if (!mr) return { ok: false, message: `${target || "this run"} is not a merge request` };
-
-  // `--repo` is what lets this work from a directory that is not that checkout.
-  const note = yield* shell(
-    "glab",
-    ["mr", "note", mr.iid, ...repoArgs(mr.project), "--message", yield* fs.readFileString(file)],
-    run.record.cwd,
+  return yield* postNote(
+    {
+      target: diffTargetOf(recorded(run.record))?.value ?? "",
+      cwd: run.record.cwd,
+      body: yield* fs.readFileString(file),
+    },
+    runShell,
   );
-  const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
-  return note.code === 0
-    ? { ok: true, message: `posted the review to ${where}` }
-    : { ok: false, message: `glab mr note ${where} failed (exit ${note.code})` };
 });
 
 /**

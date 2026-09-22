@@ -12,6 +12,7 @@ import { describeAction } from "./lines";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
 import { displayName, oneLine, runLabel } from "./naming";
+import { planIssuesIn } from "./plan";
 import { diffTargetOf, recorded, workSourceOf } from "./strategies";
 import { pendingFor, proposalsPath, read as readProposals, type ProposalLine } from "./proposals";
 import {
@@ -699,19 +700,6 @@ const filedBy = Effect.fn("Board.filedBy")(function* (run: Run) {
     mr: mrOf(run),
     planIssues: yield* planIssuesIn(run.dir),
   });
-});
-
-/**
- * How many tickets this Run wrote. The plan a Run was *given* is somebody else's work, so
- * only its own directory is counted: writing tickets is what leaves a plan to build from.
- */
-const planIssuesIn = Effect.fn("Board.planIssuesIn")(function* (dir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const names = yield* fs
-    .readDirectory(path.join(dir, "plan", "issues"))
-    .pipe(Effect.catch(() => Effect.succeed([])));
-  return names.filter((name) => name.endsWith(".md")).length;
 });
 
 /**

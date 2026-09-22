@@ -109,8 +109,62 @@ export function assignedTo<R>(
   });
 }
 
+/** What became of a note: whether it landed, and the sentence a human reads either way. */
+export interface Posted {
+  readonly ok: boolean;
+  readonly message: string;
+}
+
+/**
+ * A review on the merge request it is about, as one note that Collie sends.
+ *
+ * Every refusal is the message rather than an error: a target that is not a merge
+ * request, a GitLab this machine cannot reach, and — the one worth saying out loud — a
+ * merge request assigned to whoever is running this, whose findings are theirs to fix
+ * rather than to write to themselves.
+ */
+export function postNote<R>(
+  options: { readonly target: string; readonly cwd: string; readonly body: string },
+  run: Runner<R>,
+): Effect.Effect<Posted, never, R> {
+  return Effect.gen(function* () {
+    const mr = parseMrTarget(options.target);
+    if (!mr)
+      return { ok: false, message: `${options.target || "this run"} is not a merge request` };
+    const ready = yield* gitlabForProject(mr.project, options.cwd, run);
+    if (!ready.ok) return { ok: false, message: ready.reason };
+    const me = yield* glabLogin(options.cwd, run);
+    if (me !== null && (yield* assignedTo(mr, me, options.cwd, run))) {
+      return {
+        ok: false,
+        message: `${options.target} is assigned to you, so its findings are yours to fix rather than to post`,
+      };
+    }
+    const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
+    // `--repo` is what lets this work from a directory that is not that checkout.
+    const note = yield* run(
+      "glab",
+      ["mr", "note", mr.iid, ...repoArgs(mr.project), "--message", options.body],
+      options.cwd,
+    );
+    return note.code === 0
+      ? { ok: true, message: `posted the review to ${where}` }
+      : { ok: false, message: `glab mr note ${where} failed (exit ${note.code})` };
+  });
+}
+
 export function mrTarget(project: string | null, iid: string): string {
   return project ? `mr:${project}!${iid}` : `mr:${iid}`;
+}
+
+/**
+ * Which of the three kinds of change a settled diff target names, and empty for a target
+ * nothing can be made of. What a reviewer is told to run to see the change depends on it.
+ */
+export function targetKind(target: string): "mr" | "branch" | "worktree" | "" {
+  if (parseMrTarget(target) !== null) return "mr";
+  if (branchTargetHead(target) !== null) return "branch";
+  return target.trim() === "worktree" ? "worktree" : "";
 }
 
 /** The glab arguments that point a command at a project rather than at the cwd. */

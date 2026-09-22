@@ -576,15 +576,6 @@ export function withRunLock<A, E, R>(dir: string, effect: Effect.Effect<A, E, R>
   });
 }
 
-/**
- * The kinds nobody chooses: a `plan` proves it wrote tickets and a `review` proves it wrote
- * a review a human can read. Recorded at creation, like a chosen one, so the board, `run
- * show` and the finish read one field for every Run.
- */
-function fixedOutcome(workflow: string): string | null {
-  return workflow === "plan" || workflow === "review" ? workflow : null;
-}
-
 export interface CreateRunOptions {
   workflow: string;
   cwd: string;
@@ -728,7 +719,12 @@ export class RunStore {
         // The Run's own Input, read once here: every front door and every chain settles
         // Inputs before creating the Run, and a second place to read this from is a
         // second place for it to disagree with what the Run was started with.
-        outcome: fixedOutcome(opts.workflow) ?? (opts.inputs.outcome?.trim() || null),
+        // The kind nobody chooses, where the Workflow says it always proves one — a plan
+        // proves it wrote tickets, a review proves it wrote a review. Declared by the
+        // definition rather than known here, so a fork that renames it keeps it. Read
+        // once, at creation, like a chosen one: a second place to read it from is a
+        // second place for it to disagree with what the Run was started with.
+        outcome: opts.definition?.outcome ?? (opts.inputs.outcome?.trim() || null),
         evidence_gaps: [],
         obstacle: null,
         approved_verifications: (opts.approvedVerifications ?? []).map((spec) => ({

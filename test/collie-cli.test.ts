@@ -26,11 +26,19 @@ const CliEnvelope = Schema.fromJsonString(
 const cli = Effect.fn("test.cli")(function* (
   args: string[],
   extraEnv: Record<string, string> = {},
+  /** Workflow definitions to install in this call's user layer, by file name. */
+  defs: Record<string, string> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectory({ prefix: "collie-cli-" });
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
   yield* installFakeSkills(dir);
+  if (Object.keys(defs).length > 0) {
+    yield* fs.makeDirectory(join(dir, "config", "workflows"), { recursive: true });
+    for (const [name, text] of Object.entries(defs)) {
+      yield* fs.writeFileString(join(dir, "config", "workflows", name), text);
+    }
+  }
   const proc = Bun.spawn([Bun.argv[0] ?? "bun", join(root, "src/main.ts"), ...args], {
     cwd: root,
     env: {
@@ -52,6 +60,36 @@ const cli = Effect.fn("test.cli")(function* (
 });
 
 const parseEnvelope = Schema.decodeUnknownEffect(CliEnvelope);
+
+/**
+ * A Markdown workflow with a menu and a previous-review input. The shipped three are
+ * modules now, and what these tests are about is the engine that runs a definition: the
+ * Driver it spawns, the Choices a launch may decide, and the run a `previous` has to name.
+ */
+const PANEL = `---
+name: panel
+title: panel — a definition with a menu
+description: What the engine does with a Choice, for the tests that are about the engine.
+inputs:
+  target: diff-target
+  previous: optional
+steps:
+  - id: post
+    standalone: true
+    choices:
+      - title: Fix findings
+        prompt: fix
+        persona: implementer
+        output: fix.json
+      - title: Don't post
+        stop: true
+---
+
+## fix
+
+Fix what the review raised, then write the Output JSON.
+`;
+const withPanel = { "panel.md": PANEL };
 
 /** `workflow list`, just far enough to read each workflow's inputs back. */
 const WorkflowRows = Schema.fromJsonString(
@@ -166,9 +204,11 @@ test("a command group named with no subcommand is invalid input, not success", (
 test("a Driver that cannot be started fails the Run rather than orphaning it", () =>
   runEffect(
     Effect.gen(function* () {
-      const started = yield* cli(["--json", "run", "start", "architecture", "--request-id", "r1"], {
-        COLLIE_DRIVER: "/nonexistent/collie-bin",
-      });
+      const started = yield* cli(
+        ["--json", "run", "start", "panel", "--input", "target=worktree", "--request-id", "r1"],
+        { COLLIE_DRIVER: "/nonexistent/collie-bin" },
+        withPanel,
+      );
       expect(yield* parseEnvelope(started.stdout)).toMatchObject({
         ok: false,
         error: { code: "operation_failed" },
@@ -206,38 +246,46 @@ test("--decide is validated against the workflow before any run exists", () =>
     Effect.gen(function* () {
       // A typo that degraded to "ask me then" would hang the unattended run this
       // flag exists to make possible, so both halves are checked up front.
-      const step = yield* cli([
-        "--json",
-        "run",
-        "start",
-        "review",
-        "--input",
-        "target=worktree",
-        "--decide",
-        "nope=Don't post",
-      ]);
+      const step = yield* cli(
+        [
+          "--json",
+          "run",
+          "start",
+          "panel",
+          "--input",
+          "target=worktree",
+          "--decide",
+          "nope=Don't post",
+        ],
+        {},
+        withPanel,
+      );
       expect(yield* parseEnvelope(step.stdout)).toMatchObject({
         ok: false,
         error: { code: "invalid_input", message: expect.stringContaining("post") },
       });
 
-      const title = yield* cli([
-        "--json",
-        "run",
-        "start",
-        "review",
-        "--input",
-        "target=worktree",
-        "--decide",
-        "post=Ship it",
-      ]);
+      const title = yield* cli(
+        [
+          "--json",
+          "run",
+          "start",
+          "panel",
+          "--input",
+          "target=worktree",
+          "--decide",
+          "post=Ship it",
+        ],
+        {},
+        withPanel,
+      );
       expect(yield* parseEnvelope(title.stdout)).toMatchObject({
         ok: false,
         error: { code: "invalid_input", message: expect.stringContaining("Don't post") },
       });
 
       // And the titles are discoverable without reading the markdown.
-      const shown = yield* cli(["workflow", "show", "review"]);
+      const shown = yield* cli(["workflow", "show", "panel"], {}, withPanel);
       expect(shown.stdout).toContain("post — decide one of: Fix findings");
     }),
   ));
@@ -245,16 +293,20 @@ test("--decide is validated against the workflow before any run exists", () =>
 test("a previous review named by hand has to exist", () =>
   runEffect(
     Effect.gen(function* () {
-      const unknown = yield* cli([
-        "--json",
-        "run",
-        "start",
-        "review",
-        "--input",
-        "target=worktree",
-        "--input",
-        "previous=review-nope-20260101-000000",
-      ]);
+      const unknown = yield* cli(
+        [
+          "--json",
+          "run",
+          "start",
+          "panel",
+          "--input",
+          "target=worktree",
+          "--input",
+          "previous=review-nope-20260101-000000",
+        ],
+        {},
+        withPanel,
+      );
       expect(yield* parseEnvelope(unknown.stdout)).toMatchObject({
         ok: false,
         error: { code: "invalid_input", message: expect.stringContaining("review-nope") },

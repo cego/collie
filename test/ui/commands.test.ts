@@ -445,22 +445,39 @@ Do {{inputs.goal}}.
 });
 
 effectTest("a workflow run from a row with nothing to ask starts straight away", function* () {
-  // `architecture` needs no Input and its one Choice is asked when the Run reaches it,
-  // so there is nothing between the click and the Run.
+  // A workflow that needs no Input has nothing between the click and the Run: what it
+  // asks its human, it asks when it reaches the question.
+  yield* writeDef(
+    rig.baselineDir,
+    "workflows",
+    "askless",
+    `---
+name: askless
+title: askless — needs nothing
+steps:
+  - id: build
+    persona: implementer
+    output: build.json
+---
+## build
+
+Look at what is here.
+`,
+  );
   const { asked, prompts: scriptedPrompts } = scripted([]);
 
   yield* withDriver(
     runCommand(
       session(),
       rig.pluginEnv(),
-      { _tag: "RunWorkflow", workflow: "architecture" },
+      { _tag: "RunWorkflow", workflow: "askless" },
       scriptedPrompts,
     ),
   );
 
   expect(asked).toEqual([]);
   const runs = yield* new RunStore(rig.pluginEnv().stateDir).list();
-  expect(runs.map((r) => r.record.workflow)).toEqual(["architecture"]);
+  expect(runs.map((r) => r.record.workflow)).toEqual(["askless"]);
   expect(runs[0]!.record.decisions).toEqual({});
 });
 
