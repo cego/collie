@@ -140,8 +140,24 @@ nothing, and the mistake is invisible until the body asks for the service — at
 the host reports `Service not found` against the file that asked. There is no dependency
 resolver and no registry: what your workflow needs, your Layer provides, explicitly.
 
-What the host provides is `NativeHost`, `NativeAgents` and the workflow engine. Everything
-else is yours.
+What the host provides is `NativeHost`, `NativeAgents`, `NativeChildren` and the workflow
+engine. Everything else is yours.
+
+### Two projects, two implementations
+
+A shared contract with more than one implementation is an ordinary service with more than
+one Layer. Which one a Run gets is decided by which module it is running, and a module is
+found by where it was saved — so a project that keeps its own copy of a module keeps its
+own copy of what that module provides.
+
+Nothing looks anything up for you. There is no binding table, no override registry and
+nothing a service is resolved through at run time: the host builds each module's Layer as
+that module wrote it, once per loaded generation, and two projects running at the same
+moment are two Layers that never meet.
+
+Two copies of a contract in two directories are two modules and one service, because a
+service is its key and not the file that declared it. Keep the key stable and an override
+satisfies the same contract its original did.
 
 ## Having an agent do the work
 
@@ -213,6 +229,47 @@ module that awaits a deferred directly gets a Run nobody can answer.
   same answer rather than another.
 - **The question survives a restart**, and so does its answer. What is waiting is in
   `run show`, and `run answer <run> <value> --decision <name>` settles it.
+
+## A workflow made of other workflows
+
+`child({ runId, invocation, workflow, input })` starts another workflow as part of this one
+and waits for it. `workflow` is a public id, selected in your Run's own project, so a
+project that overrides that module overrides it here too. Importing a function from a file
+beside yours does the opposite on purpose: the file decides, and no lookup happens at all.
+
+- **`invocation` is the identity.** The child's Run id is your Run id and this name, so
+  replaying your body asks for the child you already have rather than a second one, and a
+  different name is a different child. Giving one invocation different input later is
+  refused, not run twice.
+- **The child's schema decides.** Your input is decoded against the child before anything
+  exists. A value it will not take is your workflow's failure, naming the field, with no
+  child Run and nothing to clean up.
+- **It belongs to you.** The child carries your Run as its parent and your Task as its Task,
+  it shows up in `run list` beside you, and interrupting you reaches it. It does not belong
+  to whatever client asked for your Run — that can go, and neither of you notices.
+
+How many children there are, and in what order, is TypeScript:
+
+```ts
+const graded =
+  yield *
+  Effect.forEach(payload.input.notes.split(","), (note) =>
+    child({
+      runId: payload.runId,
+      invocation: `grade-${note}`,
+      workflow: "graded",
+      input: { note },
+    }),
+  );
+```
+
+Name the invocation after the work, not its position in a list: a list that is reordered
+between attempts must not hand one item's child to another. `children.start` and
+`children.result` are the same thing in two halves, for starting several before waiting on
+any of them.
+
+[ADR-0022](adr/0022-a-workflow-is-made-of-workflows.md) is why each of those is the way it
+is, and why nothing here is a dependency resolver.
 
 ## What an operator can do to your Run
 

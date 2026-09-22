@@ -43,10 +43,15 @@ import * as Agents from "./agents";
 import { NativeAgents } from "./agents";
 import * as Sdk from "./sdk";
 import {
+  NativeChildren,
   NativeHost,
+  WorkflowError,
   checkEntry,
   describeMetadata,
   jsonSchemaFor,
+  type ChildAsk,
+  type ChildRun,
+  type ChildrenApi,
   type InputField,
   type InputFields,
   type Registration,
@@ -180,9 +185,43 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     question: NativeDecision,
   ): Effect.Effect<string, never, NativeHost | WorkflowEngine | WorkflowInstance>;
 
+  /** What a parent asks for when part of its own work is another workflow. */
+  export interface ChildAsk {
+    readonly runId: string;
+    /** Stable within the parent: the same one twice is the same child. */
+    readonly invocation: string;
+    readonly workflow: string;
+    readonly input: Readonly<Record<string, unknown>>;
+  }
+
+  /** A child as the host admitted it; fresh is false for one already admitted. */
+  export interface ChildRun {
+    readonly runId: string;
+    readonly workflow: string;
+    readonly invocation: string;
+    readonly fresh: boolean;
+  }
+
+  /** What a host lends a workflow that is made of other workflows. */
+  export interface ChildrenApi {
+    readonly start: (ask: ChildAsk) => Effect.Effect<ChildRun, WorkflowError>;
+    readonly result: (child: ChildRun) => Effect.Effect<unknown, WorkflowError>;
+  }
+  export const NativeChildren: Context.Service<ChildrenApi, ChildrenApi>;
+  export type NativeChildren = ChildrenApi;
+
+  /** One child workflow, started and waited on. */
+  export function child(
+    ask: ChildAsk,
+  ): Effect.Effect<unknown, WorkflowError, NativeChildren>;
+
   export interface Registration {
     readonly workflow: Workflow<string, any, any, typeof WorkflowError>;
-    readonly layer: Layer.Layer<never, never, WorkflowEngine | NativeHost | NativeAgents>;
+    readonly layer: Layer.Layer<
+      never,
+      never,
+      WorkflowEngine | NativeHost | NativeAgents | NativeChildren
+    >;
     readonly decisions: Readonly<Record<string, NativeDecision>>;
   }
 
@@ -695,10 +734,22 @@ export const pollStatus = (
   const value = result.value;
   if (value._tag === "Suspended") return { status: "suspended" };
   if (Exit.isSuccess(value.exit)) return { status: "complete", value: String(value.exit.value) };
-  // The reason, not the stack under it: a service a module never provided reads as
-  // "Service not found: <its key>", which is the sentence somebody can act on.
-  const [reason = ""] = Cause.pretty(value.exit.cause).split("\n");
-  return { status: "failed", reason, entry };
+  return { status: "failed", reason: reasonOf(value.exit.cause), entry };
+};
+
+const isWorkflowError = Schema.is(WorkflowError);
+
+/**
+ * Why a run failed, in one sentence. A workflow that reported its own failure said it in
+ * `reason`, and that is what an operator is owed — a child refusing input names the field
+ * there. Anything else is a defect, where the first line is the sentence: a service a
+ * module never provided reads as "Service not found: <its key>".
+ */
+const reasonOf = (cause: Cause.Cause<unknown>): string => {
+  const failure = Cause.findErrorOption(cause);
+  if (Option.isSome(failure) && isWorkflowError(failure.value)) return failure.value.reason;
+  const [reason = ""] = Cause.pretty(cause).split("\n");
+  return reason;
 };
 
 /** The input a run was admitted with, as the row keeps it. */
@@ -961,6 +1012,15 @@ export interface RegistryApi {
   readonly registrations: Effect.Effect<typeof Registrations.Type>;
   readonly newest: (id: string) => Effect.Effect<Generation, HostRefused>;
   /**
+   * The generation a start of this id in this project goes to, through whatever search
+   * path the host was built with. A host with none has only what was loaded into it, so
+   * this is `newest` there.
+   */
+  readonly resolve: (options: {
+    readonly project: string;
+    readonly id: string;
+  }) => Effect.Effect<Generation, HostRefused, HostServices>;
+  /**
    * Admits work and hands it to the engine. The request id is the claim: the same one
    * twice is the same run, and one whose arguments have changed is refused rather than
    * quietly becoming something else. A caller that already has an identity for the work
@@ -1046,14 +1106,36 @@ export interface Admitted {
  */
 export type CrashPoint = "admitted" | "executed";
 
+/**
+ * How a host turns a public workflow id into the module this project should run. It is
+ * the host's own search path, passed in rather than reached for: the registry decides
+ * which generation a run is on, and where a module was saved is somebody else's question.
+ *
+ * A parent starting a child asks this too, so a project's override is what its parents'
+ * work gets — rather than whichever generation of that id this host loaded last.
+ */
+export type Locate = (options: {
+  readonly project: string;
+  readonly id: string;
+}) => Effect.Effect<
+  { readonly entry: string; readonly revision: string },
+  HostRefused,
+  FileSystem.FileSystem
+>;
+
 /** The registry a host holds, as a service its handlers ask for. */
 export class Registry extends Context.Service<Registry, RegistryApi>()("collie/native/Registry") {}
 
+export interface RegistryOptions {
+  readonly crashAt?: CrashPoint;
+  readonly locate?: Locate;
+}
+
 export const registryLayer = (
   dir: string,
-  options?: { readonly crashAt?: CrashPoint },
+  options?: RegistryOptions,
 ): Layer.Layer<Registry, never, HostServices | Store | Crypto.Crypto> =>
-  Layer.effect(Registry)(makeRegistry(dir, options?.crashAt));
+  Layer.effect(Registry)(makeRegistry(dir, options));
 
 /**
  * One host's foundation: the engine, the rows beside it, and the run's own view of its
@@ -1074,9 +1156,11 @@ export const foundationLayer = (options: {
 
 const makeRegistry: (
   dir: string,
-  crashAt?: CrashPoint,
+  options?: RegistryOptions,
 ) => Effect.Effect<RegistryApi, never, HostServices | Store | Crypto.Crypto | Scope.Scope> =
-  Effect.fn("Native.makeRegistry")(function* (dir: string, crashAt?: CrashPoint) {
+  Effect.fn("Native.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
+    const crashAt = options?.crashAt;
+    const locate = options?.locate;
     const engine = yield* WorkflowEngine.WorkflowEngine;
     const fs = yield* FileSystem.FileSystem;
     const store = yield* Store;
@@ -1102,7 +1186,13 @@ const makeRegistry: (
         Effect.flatMap(loadEntry),
       );
       const registration = entry.make(route.name);
-      yield* Layer.buildWithScope(registration.layer, hostScope);
+      // The composition root, and the only place a host binds anything into a module's
+      // own Layer: explicitly provided to this generation, never a table something looks
+      // itself up in. Everything else the module needs it provides for itself.
+      yield* Layer.buildWithScope(
+        registration.layer.pipe(Layer.provide(Layer.succeed(NativeChildren)(children))),
+        hostScope,
+      );
       const generation: Generation = {
         id: route.workflow,
         name: route.name,
@@ -1118,6 +1208,93 @@ const makeRegistry: (
       unavailable.delete(route.name);
       newestOf.set(route.workflow, route.name);
       return generation;
+    });
+
+    /**
+     * The host's own services, under whatever the caller already has. A child is executed
+     * on the parent's fiber, and merging this way is what leaves the parent's workflow
+     * instance and scope in place — which is the whole linkage between the two.
+     */
+    const hostServices = yield* Effect.context<HostServices>();
+    const lending = <A, E>(effect: Effect.Effect<A, E, HostServices>): Effect.Effect<A, E> =>
+      Effect.updateContext(effect, (caller: Context.Context<never>) =>
+        Context.merge(hostServices, caller),
+      );
+
+    /** A child's run id: its parent's, and what the parent called this invocation. */
+    const childRunId = (ask: ChildAsk) => `${ask.runId}.${ask.invocation}`;
+
+    const refused = (reason: string) => new WorkflowError({ reason });
+
+    /**
+     * Another workflow, as part of this one. Selected in the parent's own project and
+     * decoded against the child's own schema before a row exists, so input the child will
+     * not take is the parent's failure rather than a half-made Run.
+     */
+    const children: ChildrenApi = {
+      start: (ask: ChildAsk) => lending(admitChild(ask)),
+      result: (child: ChildRun) => lending(runChild(child)),
+    };
+
+    const admitChild = Effect.fn("Native.children.start")(function* (ask: ChildAsk) {
+      const parent = yield* store.run(ask.runId);
+      if (parent === null) {
+        return yield* refused(`no run "${ask.runId}" was started here`);
+      }
+      const generation = yield* resolve({ project: parent.project, id: ask.workflow }).pipe(
+        Effect.mapError((failure) => refused(failure.reason)),
+      );
+      const runId = childRunId(ask);
+      const settled = yield* settleInput(generation.fields, { json: ask.input, text: {} }).pipe(
+        Effect.mapError((failure) => refused(failure.reason)),
+      );
+      const payload = yield* Schema.decodeUnknownEffect(
+        generation.registration.workflow.payloadSchema,
+      )({ runId, input: settled.input }).pipe(
+        Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
+      );
+      const claimed = yield* store
+        .admit({
+          // The invocation is the claim, so replaying the parent admits nothing new and
+          // changing what an invocation is given is refused rather than run twice.
+          request: runId,
+          run: runId,
+          workflow: generation.id,
+          project: parent.project,
+          input: settled.input,
+          provenance: settled.provenance,
+          options: {},
+          generation: generation.name,
+          execution: yield* generation.registration.workflow.executionId(payload),
+          task: parent.task,
+          parent: ask.runId,
+        })
+        .pipe(Effect.mapError((conflict) => refused(conflict.reason)));
+      remember(claimed.row);
+      // The parent hands its own children over, so the receipt is written here: a host
+      // sweep dispatching one would give the engine a child with no parent to wake.
+      yield* store.accepted(claimed.row.run);
+      return {
+        runId: claimed.row.run,
+        workflow: generation.id,
+        invocation: ask.invocation,
+        fresh: claimed.fresh,
+      };
+    });
+
+    const runChild = Effect.fn("Native.children.result")(function* (child: ChildRun) {
+      const found = yield* routed(child.runId).pipe(
+        Effect.mapError((failure) => refused(failure.reason)),
+      );
+      const row = yield* store.run(child.runId);
+      if (row === null) return yield* refused(`no run "${child.runId}" was started here`);
+      const payload = yield* payloadOf(found.generation, row).pipe(
+        Effect.mapError(() => refused(`${found.generation.entry} no longer takes ${row.input}`)),
+      );
+      // Executed on the parent's own fiber, which is what links the two: the engine
+      // reads the parent's instance from here, so the child's completion wakes the
+      // parent and interrupting the parent reaches the child.
+      return yield* found.generation.registration.workflow.execute(payload);
     });
 
     // What was registered before this host existed, rebuilt from the modules as they are
@@ -1363,19 +1540,35 @@ const makeRegistry: (
       return generation;
     });
 
+    const useEntry = (options: { readonly entry: string; readonly revision: string }) =>
+      registering.withPermits(1)(
+        Effect.gen(function* () {
+          const source = `${options.entry}@${options.revision}`;
+          for (const generation of live.values()) {
+            if (generation.source === source) return generation;
+          }
+          return yield* mint(options.entry);
+        }),
+      );
+
+    const resolve = Effect.fn("Native.Registry.resolve")(function* (options: {
+      readonly project: string;
+      readonly id: string;
+    }) {
+      if (locate === undefined) return yield* newest(options.id);
+      const found = yield* locate(options);
+      return yield* useEntry(found).pipe(
+        Effect.mapError(
+          (failure) => new HostRefused({ reason: `${failure.file}: ${failure.message}` }),
+        ),
+      );
+    });
+
     return {
       load: (file: string) => registering.withPermits(1)(mint(file)),
 
-      use: (options: { readonly entry: string; readonly revision: string }) =>
-        registering.withPermits(1)(
-          Effect.gen(function* () {
-            const source = `${options.entry}@${options.revision}`;
-            for (const generation of live.values()) {
-              if (generation.source === source) return generation;
-            }
-            return yield* mint(options.entry);
-          }),
-        ),
+      use: useEntry,
+      resolve,
 
       registrations: held,
 

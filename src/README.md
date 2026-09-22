@@ -53,7 +53,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `discovery.ts`     | Where a workflow module is looked for, which layer wins, and what counts as an edit      |
 | `store.ts`         | Rows beside Effect's: request claims, run identity, generations, open questions          |
 | `lifecycle.ts`     | A native Run from both front doors: start it, watch it, and pick it up again             |
-| `sdk.ts`           | `collie/native`: what a workflow module exports, declares, and is refused for            |
+| `sdk.ts`           | `collie/native`: what a module exports, declares, waits on, and starts as a child        |
 | `agents.ts`        | What a native workflow does with an agent: one launch, one collection, one repair        |
 | `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                 |
 | `news.ts`          | What it noticed and nobody has read: deduped, batched, and sent is never read            |

@@ -9,7 +9,7 @@
 // Real hosts, real SQLite, real processes: none of those questions has an answer in a map.
 
 import { expect, test } from "bun:test";
-import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope, Stream } from "effect";
+import { Effect, FileSystem, Option, Schema, Scope, Stream } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
@@ -17,67 +17,14 @@ import { Herdr } from "../src/herdr";
 import { connect } from "../src/host";
 import { nativeRun, nativeRuns } from "../src/lifecycle";
 import type { RunView } from "../src/native";
-import { runEffect } from "./support/effect";
-import { events, fixtures, root, stopHost, until } from "./support/native";
+import { events, stopHost, until } from "./support/native";
+import { collie, proves as provesWith, save, type World } from "./support/world";
 
 /** A module, its helper and its prompt, as an author has them beside each other. */
 const MODULE = ["proof.workflow.ts", "helper.ts", "notes.md"] as const;
 
 /** A second entry, so a missing module is shown to cost only its own Runs. */
 const OTHER = ["plain.workflow.ts"] as const;
-
-const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
-
-interface World {
-  /** The installation whose user directory an author saves into. */
-  readonly install: string;
-  readonly user: string;
-  readonly state: string;
-  readonly config: string;
-  readonly home: string;
-  readonly project: string;
-}
-
-const Envelope = Schema.fromJsonString(
-  Schema.Struct({
-    ok: Schema.Boolean,
-    data: Schema.optional(Schema.Unknown),
-    error: Schema.optional(Schema.Struct({ code: Schema.String, message: Schema.String })),
-  }),
-);
-const asEnvelope = Schema.decodeUnknownEffect(Envelope);
-
-/** The command itself, run as an operator runs it: another process, one JSON envelope. */
-const collie = Effect.fn("LifecycleTest.collie")(function* (
-  world: World,
-  args: ReadonlyArray<string>,
-) {
-  const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-  const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
-  const child = Bun.spawn([...command, "--json", ...args], {
-    cwd: world.project,
-    env: {
-      PATH: "/usr/bin:/bin",
-      HOME: world.home,
-      HERDR_PLUGIN_ROOT: world.install,
-      HERDR_PLUGIN_STATE_DIR: world.state,
-      HERDR_PLUGIN_CONFIG_DIR: world.config,
-      COLLIE_CWD: world.project,
-      // The host a client starts is this same program, as an installation's would be.
-      COLLIE_HOST: asCommand(command),
-    },
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const [stdout, , exit] = yield* Effect.promise(() =>
-    Promise.all([
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-      child.exited,
-    ]),
-  );
-  return { exit, envelope: yield* asEnvelope(stdout).pipe(Effect.orDie) };
-});
 
 /** What a `--json` envelope carries for a native Run, as these tests read it. */
 const Payload = Schema.Struct({
@@ -88,65 +35,10 @@ const Payload = Schema.Struct({
 const payloadOf = (envelope: { readonly data?: unknown }) =>
   Schema.decodeUnknownEffect(Payload)(envelope.data).pipe(Effect.orDie);
 
-const save = (into: string, names: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    for (const name of names) yield* fs.copyFile(`${fixtures}/${name}`, `${into}/${name}`);
-  }).pipe(Effect.orDie);
-
-/**
- * An installation with a workflow saved in it, a project to run it for, and a state
- * directory for the host that serves both. Exercised against the compiled binary when
- * `COLLIE_TEST_BINARY` names one, and the sources otherwise.
- */
 const proves = <A, E>(
   prefix: string,
   body: (world: World) => Effect.Effect<A, E, BunServices | Scope.Scope>,
-) =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const dir = yield* fs.makeTempDirectoryScoped({ prefix });
-      const world: World = {
-        install: `${dir}/install`,
-        user: `${dir}/install/user/workflows`,
-        state: `${dir}/state`,
-        config: `${dir}/config`,
-        home: `${dir}/home`,
-        project: `${dir}/project`,
-      };
-      for (const made of [
-        world.user,
-        `${world.install}/workflows`,
-        world.state,
-        world.config,
-        world.home,
-        world.project,
-      ]) {
-        yield* fs.makeDirectory(made, { recursive: true }).pipe(Effect.orDie);
-      }
-      yield* save(world.user, [...MODULE, ...OTHER]);
-      const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
-      const command = Option.isSome(binary)
-        ? [binary.value]
-        : [process.execPath, `${root}src/main.ts`];
-      return yield* body(world).pipe(
-        Effect.scoped,
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromUnknown({
-              COLLIE_HOST: asCommand(command),
-              HERDR_PLUGIN_ROOT: world.install,
-              HERDR_PLUGIN_STATE_DIR: world.state,
-              HERDR_PLUGIN_CONFIG_DIR: world.config,
-              HOME: world.home,
-              COLLIE_CWD: world.project,
-            }),
-          ),
-        ),
-      );
-    }).pipe(Effect.scoped),
-  );
+) => provesWith(prefix, body, [...MODULE, ...OTHER]);
 
 test(
   "a run carries what it was started on and what it belongs to, for whoever asks the host",

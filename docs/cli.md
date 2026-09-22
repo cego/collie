@@ -127,6 +127,12 @@ or an execution exists — so a value one of them refuses costs nothing to refus
   declare one, and asking for an outcome a module always proves is refused rather than
   recorded as something it will not deliver.
 
+A module may be made of other modules. A child is a Run of its own — `run list` has it,
+`run show` says whose it is, and the Task it belongs to is its parent's — and it is started
+by the same lookup a front door uses, so a project that overrides that module overrides
+what its parents run. [`sdk.md`](sdk.md#a-workflow-made-of-other-workflows) is how one is
+written.
+
 The Run it starts is shown, listed and waited on by the same commands as any other, and
 `--request-id` deduplicates it the same way — the claim goes to the host, so the retry is
 the same Run there too. `--decide`, `--goal` and `--constraint` are refused on a module for

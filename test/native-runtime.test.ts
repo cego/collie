@@ -588,6 +588,8 @@ test(
           "unwired.workflow.ts",
           "proof.workflow.ts",
           "agent.workflow.ts",
+          "reviewed.workflow.ts",
+          "graded.workflow.ts",
         ]) {
           const checked = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/${entry}` });
           expect([entry, checked.diagnostics]).toEqual([entry, []]);

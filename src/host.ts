@@ -38,6 +38,7 @@ import {
   foundationLayer,
   registryLayer,
   Registry,
+  type Locate,
 } from "./native";
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
@@ -204,32 +205,6 @@ const handlers = (dir: string) =>
       const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
       const catalogue = (project: string) => discover(searchPath({ pluginRoot: install, project }));
 
-      /**
-       * The generation a start of this id in this project goes to. A file the search path
-       * refuses is refused here by name: what it was written to override is not what the
-       * author asked to run.
-       */
-      const resolve = Effect.fn("Host.resolve")(function* (project: string, id: string) {
-        const found = yield* catalogue(project);
-        const entry = found.entries.find((one) => one.id === id);
-        if (entry === undefined) {
-          const problem = found.problems.find((one) => one.id === id);
-          return yield* new HostRefused({
-            reason:
-              problem === undefined
-                ? `no workflow "${id}" is saved for ${project}`
-                : `${problem.path}: ${problem.message}`,
-          });
-        }
-        return yield* registry
-          .use({ entry: entry.path, revision: entry.revision })
-          .pipe(
-            Effect.mapError(
-              (failure) => new HostRefused({ reason: `${failure.file}: ${failure.message}` }),
-            ),
-          );
-      });
-
       return HostRpcs.of({
         identity: () => Effect.succeed({ build: BUILD, pid, dir }),
         load: ({ entry }) =>
@@ -256,9 +231,18 @@ const handlers = (dir: string) =>
             })),
           ),
         start: ({ project, id, request, input, text, options, task, parent }) =>
-          resolve(project, id).pipe(
+          registry.resolve({ project, id }).pipe(
             Effect.flatMap((generation) =>
-              registry.start({ generation, project, request, input, text, options, task, parent }),
+              registry.start({
+                generation,
+                project,
+                request,
+                input,
+                text,
+                options,
+                task,
+                parent,
+              }),
             ),
           ),
         status: ({ runId }) => registry.status(runId),
@@ -294,15 +278,44 @@ export const serve = (dir: string): Effect.Effect<void, never, BunServices | Sco
     return yield* withLock(lock, Effect.void, own(dir), 0);
   }).pipe(Effect.orDie);
 
+/**
+ * Which module this project runs for this id, as the search path answers it. The registry
+ * is given this rather than reaching for discovery itself, so a parent starting a child
+ * selects in the parent's own project exactly as a start from a front door does.
+ */
+const locateIn =
+  (install: string): Locate =>
+  ({ project, id }) =>
+    discover(searchPath({ pluginRoot: install, project })).pipe(
+      Effect.flatMap((found) => {
+        const entry = found.entries.find((one) => one.id === id);
+        if (entry !== undefined) {
+          return Effect.succeed({ entry: entry.path, revision: entry.revision });
+        }
+        // A file the search path refuses is refused here by name: what it was written to
+        // override is not what the author asked to run.
+        const problem = found.problems.find((one) => one.id === id);
+        return new HostRefused({
+          reason:
+            problem === undefined
+              ? `no workflow "${id}" is saved for ${project}`
+              : `${problem.path}: ${problem.message}`,
+        });
+      }),
+    );
+
 const own = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
     return yield* Layer.launch(
       RpcServer.layer(HostRpcs).pipe(
-        Layer.provide(handlers(dir).pipe(Layer.provide(registryLayer(dir)))),
+        Layer.provide(
+          handlers(dir).pipe(Layer.provide(registryLayer(dir, { locate: locateIn(install) }))),
+        ),
         Layer.provide(RpcServer.layerProtocolSocketServer),
         Layer.provide(serialization),
         Layer.provide(BunSocketServer.layer({ path: socketOf(dir) })),

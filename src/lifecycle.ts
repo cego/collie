@@ -369,6 +369,7 @@ const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(
 export const describeRun = (view: RunView): ReadonlyArray<string> => [
   `${view.runId}\t${statusOf(view)}\t${view.workflow}`,
   view.entry,
+  ...(view.parent === null ? [] : [`part of ${view.parent}`]),
   ...(view.controls.length === 0 ? [] : [`under ${view.controls.join(", ")}`]),
   ...describeWaiting(view),
   ...(view.diagnostic === null ? [] : [view.diagnostic]),

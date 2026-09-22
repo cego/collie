@@ -138,6 +138,54 @@ export const ask = (
   });
 
 /**
+ * What a parent asks for when part of its own work is another workflow.
+ *
+ * The child is named by its public id and selected in the parent's own project, so a
+ * project that overrides a module gets that override in the work its parents start too.
+ * `invocation` is the identity: the same one twice is the same child, which is what makes
+ * replaying a parent reuse the child it already has rather than admit a second one.
+ *
+ * `input` is encoded, as every front door's is. The child's own schema decodes it before
+ * anything exists, so a value it will not take is the parent's failure and not a child.
+ */
+export interface ChildAsk {
+  /** The parent's run id: what the child belongs to, and half of its identity. */
+  readonly runId: string;
+  readonly invocation: string;
+  readonly workflow: string;
+  readonly input: Readonly<Record<string, Schema.Json>>;
+}
+
+/** A child as the host admitted it. `fresh` is false for an invocation already admitted. */
+export interface ChildRun {
+  readonly runId: string;
+  readonly workflow: string;
+  readonly invocation: string;
+  readonly fresh: boolean;
+}
+
+/**
+ * What a host lends a workflow that is made of other workflows. Two operations rather
+ * than one, so fanning out is ordinary TypeScript: start what you want, then wait for it.
+ */
+export interface ChildrenApi {
+  readonly start: (ask: ChildAsk) => Effect.Effect<ChildRun, WorkflowError>;
+  /** Runs the child under this parent, which is what makes an interrupt reach both. */
+  readonly result: (child: ChildRun) => Effect.Effect<unknown, WorkflowError>;
+}
+
+export class NativeChildren extends Context.Service<NativeChildren, ChildrenApi>()(
+  "collie/NativeChildren",
+) {}
+
+/** One child workflow, started and waited on. Anything else is Effect's own operators. */
+export const child = (ask: ChildAsk): Effect.Effect<unknown, WorkflowError, NativeChildren> =>
+  Effect.gen(function* () {
+    const children = yield* NativeChildren;
+    return yield* children.result(yield* children.start(ask));
+  });
+
+/**
  * A workflow as the host sees one: any input and any result, no service of the host's to
  * encode them, and the one error contract above.
  */
@@ -151,7 +199,11 @@ export type HostWorkflow = Workflow.Workflow<string, HostPayload, HostCodec, typ
 /** What `make(registrationName)` hands back: the workflow, how to register it, its decisions. */
 export interface Registration {
   readonly workflow: HostWorkflow;
-  readonly layer: Layer.Layer<never, never, WorkflowEngine | NativeHost | NativeAgents>;
+  readonly layer: Layer.Layer<
+    never,
+    never,
+    WorkflowEngine | NativeHost | NativeAgents | NativeChildren
+  >;
   readonly decisions: Readonly<Record<string, NativeDecision>>;
 }
 
