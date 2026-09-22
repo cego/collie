@@ -18,6 +18,7 @@ import {
 } from "./harness";
 import type { Defaults } from "./config";
 import { isBoolean, isNumber, isString } from "./schema";
+import { SELF, isNeed, isSource, type OfferDef, type Source } from "./offers";
 
 export type LayerName = "baseline" | "user" | "project";
 
@@ -193,6 +194,8 @@ export interface WorkflowDef extends Provenance {
   inputs: Record<string, InputStrategy>;
   maxIterations: number | null;
   steps: StepDef[];
+  /** What a finished Run of this Workflow offers to do next; none unless it says so. */
+  offers: OfferDef[];
   body: string;
 }
 
@@ -258,6 +261,42 @@ const markdownFiles = Effect.fn("Definitions.markdownFiles")(function* (dir: str
 
 function str(value: YamlValue | undefined, fallback = ""): string {
   return value !== undefined && isString(value) ? value : fallback;
+}
+
+/**
+ * What a Workflow says a finished Run of it offers to do next. Declared rather than known
+ * here: "fix what is open" is what a reviewing Workflow offers, and Collie has no opinion
+ * about which Workflow that is or what it is called.
+ *
+ * Anything malformed is left out rather than failing the file: an offer nobody can make
+ * is a card with one fewer button, and the Runs are still readable.
+ */
+function parseOffers(raw: YamlValue | undefined): OfferDef[] {
+  if (!Array.isArray(raw)) return [];
+  const offers: OfferDef[] = [];
+  for (const entry of raw) {
+    const data = isYamlMap(entry) ? entry : {};
+    const id = str(data.id);
+    const workflow = str(data.workflow);
+    if (id === "" || workflow === "") continue;
+    const needs = (Array.isArray(data.needs) ? data.needs : [])
+      .filter(isString)
+      .filter((need) => isNeed(need));
+    const inputs: Record<string, Source> = {};
+    for (const [name, source] of Object.entries(isYamlMap(data.inputs) ? data.inputs : {})) {
+      if (isString(source) && isSource(source)) inputs[name] = source;
+    }
+    offers.push({
+      id,
+      title: str(data.title, id),
+      // `self` is the Workflow that declared it, whatever a fork has renamed it to.
+      workflow: workflow === "self" ? SELF : workflow,
+      kind: str(data.kind) === "follow-up" ? "follow-up" : "action",
+      needs,
+      inputs,
+    });
+  }
+  return offers;
 }
 
 const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
@@ -331,6 +370,7 @@ const parseWorkflow = Effect.fn("Definitions.parseWorkflow")(function* (
     inputs,
     maxIterations: isNumber(data.max_iterations) ? data.max_iterations : null,
     steps,
+    offers: parseOffers(data.offers),
     body,
     path: file,
     layer,
@@ -563,6 +603,9 @@ function mergeWorkflow(parent: WorkflowDef, child: WorkflowDef): WorkflowDef {
     inputs: { ...parent.inputs, ...child.inputs },
     maxIterations: child.maxIterations ?? parent.maxIterations,
     steps,
+    // A fork that declares none keeps what it forked: the offers are part of what the
+    // Workflow is, exactly as its steps are.
+    offers: child.offers.length > 0 ? child.offers : parent.offers,
     body: mergeBody(parent.body, child.body),
   };
 }
@@ -669,6 +712,8 @@ export interface ResolvedWorkflow {
   embeddedInputs: string[];
   maxIterations: number;
   steps: ResolvedStep[];
+  /** What a finished Run of this Workflow offers to do next. */
+  offers: OfferDef[];
   layer: LayerName;
   path: string;
 }
@@ -809,6 +854,7 @@ export function resolveWorkflow(
     description: wf.description,
     inputs,
     embeddedInputs: Object.keys(inherited).filter((key) => !(key in wf.inputs)),
+    offers: wf.offers,
     maxIterations: wf.maxIterations ?? defaults.maxIterations,
     steps,
     layer: wf.layer,

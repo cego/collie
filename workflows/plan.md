@@ -7,6 +7,14 @@ inputs:
   ticket: ticket
   # Forwarded to the implement this chains into, which is where it means anything.
   workspace: optional
+# What a finished plan offers: the tickets it wrote, built by the Workflow that builds.
+offers:
+  - id: implement-now
+    title: Implement now
+    workflow: implement
+    needs: [plan]
+    inputs:
+      plan: plan-dir
 steps:
   - id: grill
     persona: planner

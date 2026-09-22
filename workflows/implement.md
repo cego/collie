@@ -25,6 +25,14 @@ inputs:
 # A ceiling, not a target: at most four review rounds and four fix passes after the
 # build. The run leaves the loop at the first review with nothing blocking.
 max_iterations: 4
+# What a finished Run of this offers next. A follow-up builds on the same branch, so it
+# is this Workflow again rather than another one.
+offers:
+  - id: follow-up
+    title: Keep going on this
+    workflow: self
+    kind: follow-up
+    needs: [branch]
 steps:
   - id: build
     persona: implementer

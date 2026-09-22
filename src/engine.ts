@@ -167,6 +167,7 @@ import {
 import {
   appendCard,
   buildCard,
+  kindForRole,
   encodeCheckpoint,
   inspectFor,
   readCards,
@@ -3367,7 +3368,7 @@ const collectWatched = Effect.fn("Engine.collectWatched")(function* (
   // boundary, and a fact Collie can check itself is one it should never pay to have judged.
   yield* checkDrift(o, ctx, `${step.id} collected`);
   yield* writeCard(o, ctx, {
-    kind: step.id.startsWith("review") ? "review" : "slice",
+    kind: kindForRole(step.persona),
     step: step.id,
     claims: outcome.record.output === null ? [] : [`wrote ${outcome.record.output}`],
   });

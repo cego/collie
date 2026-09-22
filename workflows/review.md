@@ -14,6 +14,21 @@ inputs:
   # What kind of result the change under review has to prove — forwarded by `implement`,
   # empty for a review started on its own. Decides which one judgement field is asked for.
   outcome: optional
+# What a finished review offers to do next. Declared here because it is this Workflow
+# that knows a review can be fixed and re-run — Collie only carries the offer.
+offers:
+  - id: fix-open
+    title: Fix what is open
+    workflow: implement
+    needs: [findings]
+    inputs:
+      plan: run-dir
+  - id: run-again
+    title: Review again
+    workflow: self
+    needs: [diff-target]
+    inputs:
+      target: diff-target
 steps:
   - id: review
     persona: reviewer

@@ -28,6 +28,7 @@ import { ago, agoShort, atClock, spanned } from "./time";
 import { readVerifications, type Verification } from "./verify";
 import { runStatus } from "./operations";
 import { readMrStates } from "./merges";
+import { filed, standingOf } from "./standing";
 
 /** How a card reads, and the order Tasks take inside a section. */
 export type TaskState =
@@ -643,9 +644,6 @@ const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
 
 const SETTLED: ReadonlySet<string> = new Set(["succeeded", "failed", "stopped"]);
 
-/** Workflows whose success leaves something to land: a branch to merge, a plan to build. */
-const PRODUCES_WORK: ReadonlySet<string> = new Set(["implement", "plan"]);
-
 /** How long a `running` Run with no Driver and no agent has to have been silent. */
 const ABANDONED_MS = 60_000;
 
@@ -688,28 +686,41 @@ function branchOf(run: Run): string | null {
   return branch === null || branch === "" ? null : branch;
 }
 
-/**
- * Whether a settled Run left nothing anyone could file: no branch, no merge request
- * opened or pointed at, and not a finished plan (whose output is the plan itself — a plan
- * that failed wrote none).
- */
-function nothingToFile(run: Run): boolean {
-  return (
-    run.record.mr_url === null &&
-    !isMrTarget(diffTargetOf(recorded(run.record))?.value ?? null) &&
-    branchOf(run) === null &&
-    !(run.record.workflow === "plan" && run.record.status === "done")
-  );
+/** The merge request this Run opened, or the one it was pointed at; null for neither. */
+function mrOf(run: Run): string | null {
+  const target = diffTargetOf(recorded(run.record))?.value ?? null;
+  return run.record.mr_url ?? (isMrTarget(target) ? target : null);
 }
 
+/** Whether this Run left anything anyone has to file, read from the Run and not its name. */
+const filedBy = Effect.fn("Board.filedBy")(function* (run: Run) {
+  return filed({
+    branch: branchOf(run),
+    mr: mrOf(run),
+    planIssues: yield* planIssuesIn(run.dir),
+  });
+});
+
 /**
- * Whether settled Runs' work landed, from the record: a disposition, nothing to land, or
- * nothing to file.
+ * How many tickets this Run wrote. The plan a Run was *given* is somebody else's work, so
+ * only its own directory is counted: writing tickets is what leaves a plan to build from.
+ */
+const planIssuesIn = Effect.fn("Board.planIssuesIn")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const names = yield* fs
+    .readDirectory(path.join(dir, "plan", "issues"))
+    .pipe(Effect.catch(() => Effect.succeed([])));
+  return names.filter((name) => name.endsWith(".md")).length;
+});
+
+/**
+ * Whether settled Runs' work landed, from the record: a disposition, or nothing that
+ * anyone has to file in the first place.
  */
 const landedByRecord = Effect.fn("Board.landedByRecord")(function* (runs: ReadonlyArray<Run>) {
   for (const run of runs) {
-    if (run.record.status === "done" && !PRODUCES_WORK.has(run.record.workflow)) continue;
-    if (nothingToFile(run)) continue;
+    if (!(yield* filedBy(run))) continue;
     const seen = latest(
       yield* readDispositions(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
     );
@@ -995,19 +1006,21 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       runs.map((run) => diffTargetOf(recorded(run.record))?.value ?? null).find(isMrTarget) ??
       null;
     const mrState = mr === null ? null : (mrStates.get(mrLabel(mr)) ?? null);
-    const planReady = status === "succeeded" && record.workflow === "plan" && disposition === null;
     const branch = runs.map(branchOf).find((b) => b !== null) ?? null;
-    // Ended with nothing anyone could file: no branch, no merge request, no plan and no
-    // question. Fifty such cards read as fifty obligations and are none.
-    const unfiled = settled && mr === null && branch === null && !planReady && decision === null;
-    // Landed: someone said what became of it, GitLab says it merged, the Workflow produces
-    // nothing to land, or there is nothing to file. An implement with an open merge
-    // request has not.
-    const landed =
-      disposition !== null ||
-      (mrState !== null && LANDED_STATES.has(mrState)) ||
-      (status === "succeeded" && !PRODUCES_WORK.has(record.workflow)) ||
-      unfiled;
+    // What the Task left behind, and nothing about what ran it: the tickets are whichever
+    // of its Runs wrote any, exactly as the branch and the merge request are.
+    let issues = 0;
+    for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
+    const { planReady, landed } = standingOf({
+      settled,
+      succeeded: status === "succeeded",
+      branch,
+      mr,
+      mrLanded: mrState !== null && LANDED_STATES.has(mrState),
+      planIssues: issues,
+      disposed: disposition !== null,
+      asking: decision !== null,
+    });
     const ended =
       settled && leader.record.finished_at !== null
         ? Date.parse(leader.record.finished_at)

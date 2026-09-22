@@ -243,6 +243,8 @@ const seed = Effect.fn("board.seed")(function* (opts: {
   createdAt?: string;
   /** `false` for an implement with no checkout, which is what an ended one has nothing to file for. */
   branch?: boolean;
+  /** Tickets this Run wrote into its own plan directory: work somebody can build from. */
+  issues?: number;
 }) {
   const run = yield* new RunStore(opts.stateDir).create({
     workflow: opts.workflow,
@@ -275,6 +277,15 @@ const seed = Effect.fn("board.seed")(function* (opts: {
   run.record.status = opts.status ?? "running";
   if (opts.createdAt) run.record.created_at = opts.createdAt;
   yield* run.save();
+  if (opts.issues) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const issues = path.join(run.dir, "plan", "issues");
+    yield* fs.makeDirectory(issues, { recursive: true });
+    for (let at = 1; at <= opts.issues; at++) {
+      yield* fs.writeFileString(path.join(issues, `0${at}-thing.md`), `# ${at}\n`);
+    }
+  }
   return run;
 });
 
@@ -957,7 +968,7 @@ test("a Run that ended with nothing to file is finished, not waiting", () =>
     }),
   ));
 
-test("landed is a disposition, a merge GitLab reports, or a Workflow with nothing to land", () =>
+test("landed is a disposition, a merge the forge reports, or work with nothing to land", () =>
   runEffect(
     Effect.gen(function* () {
       const dir = yield* stateDir();
@@ -968,12 +979,31 @@ test("landed is a disposition, a merge GitLab reports, or a Workflow with nothin
         status: "done",
         task: "t-review",
       });
+      // Tickets and nothing else: work somebody can build from, whatever wrote them.
       yield* seed({
         stateDir: dir,
         workflow: "plan",
         steps: ["spec"],
         status: "done",
         task: "t-plan",
+        issues: 3,
+      });
+      // The same facts under a name that shares nothing with the shipped one.
+      yield* seed({
+        stateDir: dir,
+        workflow: "shape-the-work",
+        steps: ["spec"],
+        status: "done",
+        task: "t-renamed",
+        issues: 2,
+      });
+      // Named `plan` and wrote none: there is nothing to build from, so nothing is owed.
+      yield* seed({
+        stateDir: dir,
+        workflow: "plan",
+        steps: ["spec"],
+        status: "done",
+        task: "t-empty",
       });
       const merged = yield* seed({
         stateDir: dir,
@@ -1001,16 +1031,17 @@ test("landed is a disposition, a merge GitLab reports, or a Workflow with nothin
           ["mk/collie!66", "closed"],
         ]),
       });
-      const of = (workflow: string) => board.find((view) => view.runs[0]!.startsWith(workflow))!;
-      expect(sectionOf(of("review"))).toBe("finished");
-      expect(sectionOf(of("plan"))).toBe("waiting");
-      expect(of("plan").sentence).toBe("Plan ready to implement.");
-      const mrViews = board.filter((view) => view.mr !== null);
-      const mergedView = mrViews.find((view) => view.mr!.endsWith("/65"))!;
-      const closedView = mrViews.find((view) => view.mr!.endsWith("/66"))!;
-      expect(sectionOf(mergedView)).toBe("finished");
-      expect(sectionOf(closedView)).toBe("waiting");
-      expect(closedView.sentence).toBe("Merge request mk/collie!66 closed without merging.");
+      const by = (task: string) => board.find((view) => view.id === task)!;
+      expect(sectionOf(by("t-review"))).toBe("finished");
+      expect(sectionOf(by("t-empty"))).toBe("finished");
+      // Identical cards, under two names that share nothing.
+      for (const task of ["t-plan", "t-renamed"]) {
+        expect([task, sectionOf(by(task))]).toEqual([task, "waiting"]);
+        expect([task, by(task).sentence]).toEqual([task, "Plan ready to implement."]);
+      }
+      expect(sectionOf(by("t-merged"))).toBe("finished");
+      expect(sectionOf(by("t-closed"))).toBe("waiting");
+      expect(by("t-closed").sentence).toBe("Merge request mk/collie!66 closed without merging.");
     }),
   ));
 

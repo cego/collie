@@ -8,14 +8,20 @@
 // What a Run is and what became of it stays Collie's; what a workflow has done stays
 // Effect's. Nothing here copies the second into the first.
 
-import { Effect, FileSystem, Stream } from "effect";
+import { Effect, FileSystem, Stream, type Schema } from "effect";
 import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
 import { discover, searchPath, type Catalogued, type Fault, type Found } from "./discovery";
 import { connect, type HostClient, type HostUnavailable, type HostVersionMismatch } from "./host";
-import { REFUSED_INPUT, type Given, type HostRefused, type RunView } from "./native";
+import {
+  REFUSED_INPUT,
+  type Given,
+  type HostRefused,
+  type OfferView,
+  type RunView,
+} from "./native";
 import { err, type Failure, type OpResult } from "./operations";
 import type { RequestConflict } from "./store";
 
@@ -407,3 +413,62 @@ export const statusOf = (view: RunView): string => {
 /** Whether the engine can still change this Run's state. */
 export const nativeSettled = (view: RunView): boolean =>
   view.status.status === "complete" || view.status.status === "failed";
+
+/**
+ * What a native Run offers to do next. The host answers, because only it holds the module
+ * that declared them: an offer is the author's own eligibility asked of the facts as they
+ * are now, and a Run whose module has gone is readable with its offers refused by name.
+ */
+export const nativeOffers = (
+  env: PluginEnv,
+  runId: string,
+): Effect.Effect<OpResult, never, Client> =>
+  asks(env, (client) => client.offers({ runId })).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? {
+            ok: true as const,
+            data: { run: runId, offers: answered.value.map((offer) => ({ ...offer })) },
+            human:
+              answered.value.length === 0 ? "Nothing is offered." : describeOffers(answered.value),
+          }
+        : answered,
+    ),
+  );
+
+const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
+  offers
+    .map((offer) => {
+      const why = offer.unavailable === null ? "" : ` — unavailable: ${offer.unavailable}`;
+      return `${offer.primary ? "▸" : " "} ${offer.id}  ${offer.title} (${offer.workflow})${why}`;
+    })
+    .join("\n");
+
+/** Carries out one of them, under the caller's own claim so a retry is one Run. */
+export const invokeNativeOffer = (
+  env: PluginEnv,
+  options: {
+    readonly runId: string;
+    readonly offer: string;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(env, (client) =>
+    client.invoke({
+      runId: options.runId,
+      offer: options.offer,
+      input: options.input,
+      request: options.request,
+    }),
+  ).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? {
+            ok: true as const,
+            data: { run: answered.value.runId, from: options.runId, offer: options.offer },
+            human: `Started run ${answered.value.runId} from ${options.runId}'s "${options.offer}".`,
+          }
+        : answered,
+    ),
+  );

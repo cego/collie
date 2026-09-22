@@ -31,6 +31,7 @@ import {
   Controlled,
   HostRefused,
   NativeEntryError,
+  OfferView,
   Registrations,
   RunStatus,
   RunView,
@@ -160,6 +161,24 @@ export const HostRpcs = RpcGroup.make(
     success: Answered,
     error: HostRefused,
   }),
+  // What a finished Run offers to do next, and carrying one out. Both go through the
+  // host because only it holds the module that declared them: an offer is decided by the
+  // author's own code against the facts as they are now, never by a card's memory of it.
+  Rpc.make("offers", {
+    payload: { runId: Schema.String },
+    success: Schema.Array(OfferView),
+    error: HostRefused,
+  }),
+  Rpc.make("invoke", {
+    payload: {
+      runId: Schema.String,
+      offer: Schema.String,
+      input: Schema.Record(Schema.String, Schema.Json),
+      request: Schema.String,
+    },
+    success: Started,
+    error: Schema.Union([HostRefused, RequestConflict]),
+  }),
   /** A hold or a stop over one run, set or cleared. It reaches no other run and no host. */
   Rpc.make("control", {
     payload: {
@@ -250,6 +269,9 @@ const handlers = (dir: string) =>
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
+        offers: ({ runId }) => registry.offers(runId),
+        invoke: ({ runId, offer, input, request }) =>
+          registry.invoke({ runId, offer, input, request }),
         answer: ({ runId, decision, value, request }) =>
           registry.answer({ runId, decision, value, request }),
         control: ({ runId, control, set }) => registry.control({ runId, control, set }),

@@ -570,7 +570,7 @@ test("starting a workflow is this Session's, so a wide row is not offered one", 
   // And the keys go with the buttons, so neither can be pressed from a wide board.
   expect(keyIntent(keys({ row, filter: HERE }), press("x"))).toEqual({
     _tag: "Do",
-    command: { _tag: "FixFindings", runId: "r0" },
+    command: { _tag: "InvokeOffer", runId: "r0", offer: "fix-open" },
   });
   expect(keyIntent(keys({ row, filter: EVERYWHERE }), press("x"))).toBeNull();
 });

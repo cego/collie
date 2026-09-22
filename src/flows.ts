@@ -106,6 +106,7 @@ import {
   declineProposal,
   evaluationDeps,
   followUp,
+  invokeRunOffer,
   steer,
   registerRunExecutors,
   workspaceCwdFromPanes,
@@ -1644,27 +1645,16 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     }
 
     /**
-     * A run that stopped with findings, as the next run's work source. `implement`
-     * already reads a run directory with a review in it as the spec and its findings as
-     * the tickets, so the whole action is one settled Input.
+     * One of the things the Run's own Workflow says it offers. Nothing here knows what
+     * that is: the offer names the workflow, the facts decide whether it is still on the
+     * table, and both are asked again now rather than taken from the card.
      */
-    case "FixFindings": {
+    case "InvokeOffer": {
       const run = yield* runOf(command.runId);
       if (!run) return `${command.runId} has gone`;
-      return yield* launch(session, env, prompts, {
-        workflow: "implement",
-        inputs: { plan: run.dir },
-        note: `fixing what ${run.id} left open`,
-        parent: run,
-      });
+      const done = yield* invokeRunOffer(env, run, command.offer);
+      return done.ok ? done.human : done.error.message;
     }
-
-    case "ReviewAgain":
-      return yield* launch(session, env, prompts, {
-        workflow: "review",
-        inputs: { target: command.target },
-        note: `reviewing ${command.target} again`,
-      });
 
     case "RunWorkflow":
       return yield* launch(session, env, prompts, {
@@ -1786,18 +1776,6 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     }
 
     /** A finished plan, built: the same launch "Implement now" runs, from the card. */
-    case "ImplementNow": {
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
-      const path = yield* Path.Path;
-      return yield* launch(session, env, prompts, {
-        workflow: "implement",
-        inputs: { plan: path.join(run.dir, "plan") },
-        note: `implementing ${runLabel(run.record)}'s plan`,
-        parent: run,
-      });
-    }
-
     /**
      * A child Run on a finished one's outcome. What it should do is asked for here rather
      * than guessed from the parent: a follow-up with no words is a Run with no spec.

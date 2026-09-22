@@ -140,7 +140,12 @@ effectTest("scope is refused unless it is a board the tab can open on", function
 });
 
 /** A finished run of this session, with a review beside it only if one is asked for. */
-const seed = Effect.fn("commands.seed")(function* (opts: { target: string; review?: string }) {
+const seed = Effect.fn("commands.seed")(function* (opts: {
+  target: string;
+  review?: string;
+  /** A finding left open, which is what makes "fix what is open" something to offer. */
+  outstanding?: ReadonlyArray<{ severity: string; title: string }>;
+}) {
   const env = rig.pluginEnv();
   const run = yield* new RunStore(env.stateDir).create({
     workflow: "review",
@@ -157,6 +162,7 @@ const seed = Effect.fn("commands.seed")(function* (opts: { target: string; revie
   });
   run.record.status = "done";
   run.record.finished_at = run.record.created_at;
+  if (opts.outstanding) run.record.outstanding = [...opts.outstanding];
   yield* run.save();
   if (opts.review !== undefined) {
     const fs = yield* FileSystem.FileSystem;
@@ -459,14 +465,18 @@ effectTest("a workflow run from a row with nothing to ask starts straight away",
 });
 
 effectTest("a fix round is not asked again for the plan the row settled", function* () {
-  const reviewed = yield* seed({ target: "worktree", review: "# Review\n" });
+  const reviewed = yield* seed({
+    target: "worktree",
+    review: "# Review\n",
+    outstanding: [{ severity: "blocker", title: "the empty list" }],
+  });
   const { asked, prompts: scriptedPrompts } = scripted([]);
 
   yield* withDriver(
     runCommand(
       session(),
       rig.pluginEnv(),
-      { _tag: "FixFindings", runId: reviewed.id },
+      { _tag: "InvokeOffer", runId: reviewed.id, offer: "fix-open" },
       scriptedPrompts,
     ),
   );
@@ -489,12 +499,15 @@ effectTest("a fix round is not asked again for the plan the row settled", functi
 
 effectTest("reviewing a target again names it, classified, and asks nothing", function* () {
   const { asked, prompts: scriptedPrompts } = scripted([]);
+  // The offer is the review Workflow's own, and the target comes off the Run it is made
+  // about rather than out of the row that drew the key.
+  const reviewed = yield* seed({ target: "mr:gitlab.example.com/g/p!12", review: "# Review\n" });
 
   yield* withDriver(
     runCommand(
       session(),
       rig.pluginEnv(),
-      { _tag: "ReviewAgain", target: "mr:gitlab.example.com/g/p!12" },
+      { _tag: "InvokeOffer", runId: reviewed.id, offer: "run-again" },
       scriptedPrompts,
     ),
   );

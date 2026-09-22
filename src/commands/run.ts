@@ -31,6 +31,8 @@ import {
   runStatus,
   runSettled,
   startRun,
+  invokeRunOffer,
+  offersForRun,
   stopRun,
   writeInbox,
   type Failure,
@@ -40,6 +42,8 @@ import {
   answerNativeRun,
   anyNativeRuns,
   controlNativeRun,
+  invokeNativeOffer,
+  nativeOffers,
   steerNativeRun,
   moduleFor,
   neededInputs,
@@ -1315,6 +1319,77 @@ const runCards = Command.make("cards", { runId: runIdArg }, ({ runId }) =>
   ),
 );
 
+/**
+ * What a finished Run offers to do next. The offers are the Workflow's own declaration,
+ * decided against the facts as they are now — so what this prints is what invoking one
+ * would actually do, not what a card said a minute ago.
+ */
+const runActions = Command.make("actions", { runId: runIdArg }, ({ runId }) =>
+  Effect.gen(function* () {
+    const global = yield* root;
+    yield* attempt(
+      Effect.gen(function* () {
+        const resolved = yield* resolveCommandRun(global, runId);
+        if (resolved._tag === "RunFailure") {
+          const env = yield* context(global, false);
+          if (env._tag === "ContextFailure") return env.result;
+          if (!(yield* anyNativeRuns(env.env))) return resolved.result;
+          return yield* nativeOffers(env.env, runId);
+        }
+        const offers = yield* offersForRun(resolved.env, resolved.run);
+        if (!offers.ok) return offers;
+        return {
+          ok: true,
+          data: { run: runId, offers: offers.offers },
+          human:
+            offers.offers
+              .map(
+                (offer) =>
+                  `${offer.primary ? "▸" : " "} ${offer.id}\t${offer.title}\t${offer.workflow}` +
+                  (offer.unavailable === null ? "" : `\tunavailable: ${offer.unavailable}`),
+              )
+              .join("\n") || "Nothing is offered.",
+        };
+      }),
+      global.json,
+    );
+  }),
+).pipe(Command.withDescription("What this Run offers to do next, and why each one is there"));
+
+const runAction = Command.make(
+  "action",
+  {
+    runId: runIdArg,
+    offer: Argument.String("offer").pipe(
+      Argument.withDescription("The offer's id, as `run actions` lists it"),
+    ),
+    input: Flag.String("input").pipe(
+      Flag.withDescription("key=value, repeatable: what the offer's own arguments take"),
+      Flag.atLeast(0),
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ runId, offer, input, requestId }) =>
+    runMutationCommand(
+      "run-action",
+      runId,
+      requestId,
+      (env, run) => invokeRunOffer(env, run, offer),
+      (env, id) =>
+        invokeNativeOffer(env, {
+          runId,
+          offer,
+          input: Object.fromEntries(
+            input.flatMap((pair) => {
+              const at = pair.indexOf("=");
+              return at === -1 ? [] : [[pair.slice(0, at), pair.slice(at + 1)] as const];
+            }),
+          ),
+          request: id,
+        }),
+    ),
+).pipe(Command.withDescription("Do one of the things this Run offers, if it still offers it"));
+
 const runFollowUp = Command.make(
   "follow-up",
   {
@@ -1738,6 +1813,8 @@ export const run = Command.make("run").pipe(
     runMetrics,
     runDrift,
     runCards,
+    runActions,
+    runAction,
     runFollowUp,
     runIntent,
     runLogs,

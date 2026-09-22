@@ -246,8 +246,7 @@ export type Command =
    * asks the operation directly rather than through a command.
    */
   | { _tag: "SendReview"; runId: string | null }
-  | { _tag: "FixFindings"; runId: string }
-  | { _tag: "ReviewAgain"; target: string }
+  | { _tag: "InvokeOffer"; runId: string; offer: string }
   | { _tag: "PostReview"; runId: string }
   /**
    * The merge request in a browser. It names the run as well as the target, because
@@ -299,7 +298,6 @@ export type Command =
       ref: string;
     }
   /** Start `implement` on a finished plan's own plan directory, in the plan's Task. */
-  | { _tag: "ImplementNow"; runId: string }
   /**
    * Go to the next unanswered question. The app answers this itself, like
    * `EditSetting`: it moves the Selection and clears a filter hiding the row, neither
@@ -1013,16 +1011,22 @@ export function actionsFor(row: Row | null, filter: Filter): Action[] {
   if (row.kind === "active") {
     actions.push({ key: "k", label: "stop", command: { _tag: "StopRun", runId } });
   } else if (row.fixable && sessionLocal(filter)) {
-    // Only for a run that has stopped: a fix round over a run still writing its own
-    // review would build from half of it.
-    actions.push({ key: "x", label: "fix what is open", command: { _tag: "FixFindings", runId } });
+    // What the Run's own Workflow offers first. Only for a run that has stopped: a fix
+    // round over one still writing its review would build from half of it. Which
+    // workflow that starts, and whether it is still on the table, is decided when the
+    // key is pressed — by the offer, never here.
+    actions.push({
+      key: "x",
+      label: "fix what is open",
+      command: { _tag: "InvokeOffer", runId, offer: FIX_OFFER },
+    });
   }
   if (row.target) {
     if (sessionLocal(filter)) {
       actions.push({
         key: "a",
         label: "review again",
-        command: { _tag: "ReviewAgain", target: row.target },
+        command: { _tag: "InvokeOffer", runId, offer: AGAIN_OFFER },
       });
     }
     if (row.target.startsWith("mr:")) {
@@ -1041,6 +1045,16 @@ export function actionsFor(row: Row | null, filter: Filter): Action[] {
   }
   return actions;
 }
+
+/**
+ * The two offers the board has keys for, by the id a Workflow declares them under. The
+ * board shows a key when the Run's own facts say there is something to act on; what the
+ * offer starts, and whether it is still offered at all, is the Workflow's to answer when
+ * the key is pressed.
+ */
+const FIX_OFFER = "fix-open";
+const AGAIN_OFFER = "run-again";
+const PLAN_OFFER = "implement-now";
 
 /**
  * What the tab's keyboard is on. Three things have to agree about it — which keys act, a
@@ -1180,7 +1194,11 @@ export function primaryFor(view: TaskView): MenuItem | null {
     return { key: "g", label: "Go to tab", command: goToTab(view) };
   if (view.landed) return null;
   if (view.planReady)
-    return { key: "i", label: "Implement now", command: { _tag: "ImplementNow", runId } };
+    return {
+      key: "i",
+      label: "Implement now",
+      command: { _tag: "InvokeOffer", runId, offer: PLAN_OFFER },
+    };
   if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned")
     return { key: "u", label: "Resume", command: { _tag: "ResumeRun", runId } };
   if (view.mrState === "closed")
@@ -1221,7 +1239,11 @@ export function menuFor(view: TaskView): MenuItem[] {
     });
   }
   if (view.planReady) {
-    items.push({ key: "i", label: "Implement now", command: { _tag: "ImplementNow", runId } });
+    items.push({
+      key: "i",
+      label: "Implement now",
+      command: { _tag: "InvokeOffer", runId, offer: PLAN_OFFER },
+    });
   }
   if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned") {
     items.push({ key: "u", label: "Resume run", command: { _tag: "ResumeRun", runId } });

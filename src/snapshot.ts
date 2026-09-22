@@ -17,6 +17,7 @@
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
 import { contentHash, type ResolvedWorkflow } from "./definitions";
+import { NEEDS_NAMES, SOURCE_NAMES } from "./offers";
 
 /**
  * Absent, or present and undefined. `expand` builds a resolved step by spreading and
@@ -108,6 +109,18 @@ const WorkflowSchema = Schema.Struct({
   inputs: Schema.Record(Schema.String, Schema.String),
   embeddedInputs: Schema.Array(Schema.String),
   maxIterations: Schema.Number,
+  // Frozen with the rest of the definition: what a Run offers when it ends is decided
+  // from current code, but a Run resumed from a snapshot must still decode.
+  offers: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      title: Schema.String,
+      workflow: Schema.String,
+      kind: Schema.Literals(["action", "follow-up"]),
+      needs: Schema.Array(Schema.Literals(NEEDS_NAMES)),
+      inputs: Schema.Record(Schema.String, Schema.Literals(SOURCE_NAMES)),
+    }),
+  ).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
   steps: Schema.Array(StepSchema),
   layer: Schema.Literals(["baseline", "user", "project"]),
   path: Schema.String,

@@ -54,13 +54,17 @@ import {
   type ChildAsk,
   type ChildRun,
   type ChildrenApi,
+  type ActionFacts,
   type InputField,
   type InputFields,
+  type WorkflowMetadata,
   type Registration,
   type WorkflowEntry,
 } from "./sdk";
 import { currentPid, signalProcess } from "./lock";
 import { noteVerification } from "./metrics";
+import { offersFrom, type Declared, type Offer } from "./offers";
+import { isOutcome } from "./outcome";
 import { RequestConflict, Store, storeLayer, type RunRow } from "./store";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
@@ -692,6 +696,32 @@ let sdkInstalled = false;
  * Registers the SDK with Bun's module resolver, once per process. A virtual module per
  * specifier, so `import "effect"` from anywhere in the author's imports lands here.
  */
+/**
+ * What a module declares, as offers. The eligibility functions are the author's own and
+ * are kept as they are: the module is the only thing that can answer for its own actions,
+ * and a projection of one would be a copy that stops agreeing with it.
+ */
+function declaredByModule(metadata: WorkflowMetadata | undefined): Declared[] {
+  const actions = (metadata?.actions ?? []).map((action) => ({
+    id: action.id,
+    title: action.title,
+    workflow: action.workflow,
+    arguments: jsonSchemaFor(Schema.Struct(action.arguments)).document,
+    kind: "action" as const,
+    eligible: action.eligible,
+  }));
+  const followUps = (metadata?.followUps ?? []).map((offer) => ({
+    id: offer.id,
+    title: offer.title,
+    workflow: offer.workflow,
+    arguments: null,
+    kind: "follow-up" as const,
+    eligible: (facts: ActionFacts) =>
+      offer.when === "always" || (offer.when === "succeeded") === facts.succeeded,
+  }));
+  return [...actions, ...followUps];
+}
+
 export function installSdk(): void {
   if (sdkInstalled) return;
   sdkInstalled = true;
@@ -1316,6 +1346,21 @@ export const Steered = Schema.Struct({
   detail: Schema.String,
 });
 
+/** One offer as a front door shows it, over the wire. */
+export const OfferView = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  /** The workflow it starts, by public id. */
+  workflow: Schema.String,
+  /** What it takes, as JSON Schema; null where it takes nothing. */
+  arguments: Schema.NullOr(Schema.Json),
+  kind: Schema.Literals(["action", "follow-up"]),
+  primary: Schema.Boolean,
+  /** Why it cannot be made now, or null when it can. */
+  unavailable: Schema.NullOr(Schema.String),
+});
+export type OfferView = typeof OfferView.Type;
+
 export const RunView = Schema.Struct({
   runId: Schema.String,
   workflow: Schema.String,
@@ -1380,6 +1425,8 @@ export interface Generation {
   /** The file and the revision this was built from: what makes a later start the same code. */
   readonly source: string;
   readonly metadata: Schema.Json;
+  /** What a finished Run of this module offers next, with the author's own eligibility. */
+  readonly offers: ReadonlyArray<Declared>;
   readonly registration: Registration;
 }
 
@@ -1485,6 +1532,25 @@ export interface RegistryApi {
    * over anything still outstanding. A repaired file is picked up without a restart.
    */
   readonly recover: Effect.Effect<typeof Registrations.Type, never, HostServices>;
+  /**
+   * What this Run offers to do next, decided by the module as it is now rather than as it
+   * was when the Run started: an author who edits their actions changes what is offered.
+   * An offer that cannot be made is listed with the reason rather than left out.
+   */
+  readonly offers: (
+    runId: string,
+  ) => Effect.Effect<ReadonlyArray<Offer>, HostRefused, HostServices>;
+  /**
+   * Carries one out. The offer is looked up again, its eligibility asked again and its
+   * arguments decoded again, so one that has gone, stopped being eligible or was given
+   * something it will not take starts nothing at all.
+   */
+  readonly invoke: (options: {
+    readonly runId: string;
+    readonly offer: string;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly request: string;
+  }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   /** The generation a run is on and the execution it was admitted as. */
   readonly routed: (
     runId: string,
@@ -1608,6 +1674,7 @@ const makeRegistry: (
         fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
         source: yield* sourceOf(route.entry),
         metadata: describeMetadata(entry.metadata),
+        offers: declaredByModule(entry.metadata),
         registration,
       };
       live.set(route.name, generation);
@@ -1988,6 +2055,103 @@ const makeRegistry: (
       );
     });
 
+    /**
+     * A Run, the module it would be offered from now, and the facts those offers are
+     * decided on. The generation is resolved in the Run's own project rather than taken
+     * from the row: what is offered is the current code's to say, and a module that has
+     * been edited away leaves the Run readable and its offers refused with the reason.
+     */
+    const offeredBy = Effect.fn("Native.Registry.offeredBy")(function* (runId: string) {
+      const row = yield* store.run(runId);
+      if (row === null) {
+        return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
+      }
+      const generation = yield* resolve({ project: row.project, id: row.workflow });
+      const options = yield* decodeStrings(row.options ?? "{}").pipe(
+        Effect.orElseSucceed((): Record<string, string> => ({})),
+      );
+      const found = yield* routed(runId);
+      const state = pollStatus(
+        yield* engine.poll(found.generation.registration.workflow, found.execution),
+        found.generation.entry,
+      );
+      const asked = options.outcome ?? UNSPECIFIED;
+      // The facts a host has about a native Run. A branch it was launched onto and how it
+      // ended are its own; a merge request, tickets and a disposition are recorded by the
+      // work itself, and a Run that has produced none has none.
+      const facts: ActionFacts = {
+        outcome: isOutcome(asked) ? asked : "unspecified",
+        succeeded: state.status === "complete",
+        branch: options.branch ?? null,
+        mrUrl: null,
+        planIssues: 0,
+        disposed: false,
+      };
+      return { row, generation, facts };
+    });
+
+    const startWork = Effect.fn("Native.Registry.start")(function* (options: {
+      readonly generation: Generation;
+      readonly request: string;
+      readonly project: string;
+      readonly runId?: string;
+      readonly input: Readonly<Record<string, Schema.Json>>;
+      readonly text?: Readonly<Record<string, string>>;
+      readonly options?: Readonly<Record<string, string>>;
+      readonly task?: string | null;
+      readonly parent?: string | null;
+    }) {
+      const generation = options.generation;
+      const runId =
+        options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
+      const asked = options.options ?? {};
+      yield* refuseOptions(generation, asked);
+      const launch = launchOptions(generation, asked);
+      // Settled before anything exists to clean up: an input the workflow's own schema
+      // rejects names its field here, and no row, claim or execution is created.
+      const settled = yield* settleInput(generation.fields, {
+        json: options.input,
+        text: options.text ?? {},
+      });
+      const payload = yield* Schema.decodeUnknownEffect(
+        generation.registration.workflow.payloadSchema,
+      )({ runId, input: settled.input }).pipe(
+        Effect.mapError(
+          (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` }),
+        ),
+      );
+      const claimed = yield* store.admit({
+        request: options.request,
+        run: runId,
+        workflow: generation.id,
+        project: options.project,
+        input: settled.input,
+        provenance: settled.provenance,
+        options: launch,
+        generation: generation.name,
+        execution: yield* generation.registration.workflow.executionId(payload),
+        task: options.task ?? null,
+        parent: options.parent ?? null,
+      });
+      remember(claimed.row);
+      // Frozen with the Run, so editing the project's list changes the next one.
+      yield* freezeApproved({
+        dir,
+        runId: claimed.row.run,
+        project: options.project,
+        configDir,
+      }).pipe(Effect.ignore);
+      // A retry of work the engine already has is nothing more to do; one that crashed
+      // before it heard is handed over now, under the identity it was admitted with.
+      if (claimed.row.accepted === null) yield* handOver(claimed.row);
+      return {
+        runId: claimed.row.run,
+        registration: claimed.row.generation,
+        execution: claimed.row.execution,
+        fresh: claimed.fresh,
+      };
+    });
+
     return {
       load: (file: string) => registering.withPermits(1)(mint(file)),
 
@@ -2033,67 +2197,47 @@ const makeRegistry: (
       newest,
       routed,
 
-      start: Effect.fn("Native.Registry.start")(function* (options: {
-        readonly generation: Generation;
-        readonly request: string;
-        readonly project: string;
-        readonly runId?: string;
-        readonly input: Readonly<Record<string, Schema.Json>>;
-        readonly text?: Readonly<Record<string, string>>;
-        readonly options?: Readonly<Record<string, string>>;
-        readonly task?: string | null;
-        readonly parent?: string | null;
-      }) {
-        const generation = options.generation;
-        const runId =
-          options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
-        const asked = options.options ?? {};
-        yield* refuseOptions(generation, asked);
-        const launch = launchOptions(generation, asked);
-        // Settled before anything exists to clean up: an input the workflow's own schema
-        // rejects names its field here, and no row, claim or execution is created.
-        const settled = yield* settleInput(generation.fields, {
-          json: options.input,
-          text: options.text ?? {},
-        });
-        const payload = yield* Schema.decodeUnknownEffect(
-          generation.registration.workflow.payloadSchema,
-        )({ runId, input: settled.input }).pipe(
-          Effect.mapError(
-            (cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` }),
+      offers: (runId: string) =>
+        offeredBy(runId).pipe(
+          Effect.map(({ generation, facts }) =>
+            offersFrom(generation.offers, facts, {
+              self: generation.id,
+              keepUnavailable: true,
+            }),
           ),
+        ),
+
+      invoke: Effect.fn("Native.Registry.invoke")(function* (options: {
+        readonly runId: string;
+        readonly offer: string;
+        readonly input: Readonly<Record<string, Schema.Json>>;
+        readonly request: string;
+      }) {
+        const { row, generation, facts } = yield* offeredBy(options.runId);
+        // Asked again here, of the module as it is now: the card this was read from may
+        // have been drawn before the file was edited, and a card is not authority.
+        const offer = offersFrom(generation.offers, facts, { self: generation.id }).find(
+          (one) => one.id === options.offer,
         );
-        const claimed = yield* store.admit({
+        if (offer === undefined) {
+          return yield* new HostRefused({
+            reason: `run "${options.runId}" does not offer "${options.offer}" now`,
+          });
+        }
+        const starting = yield* resolve({ project: row.project, id: offer.workflow });
+        // The offer's own workflow settles what it was given, so arguments it will not
+        // take are refused here and nothing is started.
+        return yield* startWork({
+          generation: starting,
           request: options.request,
-          run: runId,
-          workflow: generation.id,
-          project: options.project,
-          input: settled.input,
-          provenance: settled.provenance,
-          options: launch,
-          generation: generation.name,
-          execution: yield* generation.registration.workflow.executionId(payload),
-          task: options.task ?? null,
-          parent: options.parent ?? null,
+          project: row.project,
+          input: options.input,
+          task: row.task,
+          parent: row.run,
         });
-        remember(claimed.row);
-        // Frozen with the Run, so editing the project's list changes the next one.
-        yield* freezeApproved({
-          dir,
-          runId: claimed.row.run,
-          project: options.project,
-          configDir,
-        }).pipe(Effect.ignore);
-        // A retry of work the engine already has is nothing more to do; one that crashed
-        // before it heard is handed over now, under the identity it was admitted with.
-        if (claimed.row.accepted === null) yield* handOver(claimed.row);
-        return {
-          runId: claimed.row.run,
-          registration: claimed.row.generation,
-          execution: claimed.row.execution,
-          fresh: claimed.fresh,
-        };
       }),
+
+      start: startWork,
 
       status: Effect.fn("Native.Registry.status")(function* (runId: string) {
         const found = yield* routed(runId);

@@ -454,6 +454,14 @@ export const metadata: WorkflowMetadata = {
   title would start a different one. `arguments` is the child's schema; eligibility is
   decided from facts, never from a workflow's name.
 
+Both are what a finished Run offers to do next, and both front doors make the same offer:
+`collie run actions <run>` lists them and `collie run action <run> <id> --input k=v` does
+one. Everything is decided again at that moment — that your module still declares the
+offer, what your `eligible` says about the facts as they are now, and whether the child
+takes the arguments — so an offer edited away, one whose facts have moved, and arguments
+the child refuses each start nothing at all. A `followUp` is hidden once somebody has said
+what became of the work; an `action` is given `disposed` and decides for itself.
+
 A conflict is refused at load — before a Run, a worktree or an agent exists — and the
 refusal names every one of them rather than the first:
 

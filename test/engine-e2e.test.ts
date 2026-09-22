@@ -1977,3 +1977,29 @@ test(
     ),
   20_000,
 );
+
+test("a card is the kind its step's role makes it, not the kind its name suggests", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // `look` is a reviewer's step and `build` is an implementer's; neither id says so.
+      const planDir = yield* plannedRun(rig, "add-picker");
+      yield* rig.queueOutputs([
+        { verdict: "clean", findings: [] },
+        { verdict: "clean", findings: [] },
+      ]);
+
+      const { run, status } = yield* runWorkflowEffect(
+        rig,
+        "builder",
+        { plan: planDir },
+        { outputPollMs: 20 },
+      );
+
+      expect(status).toBe("done");
+      const kinds = new Map(
+        (yield* readCards(run.dir)).map((card) => [card.step, card.kind] as const),
+      );
+      expect(kinds.get("look")).toBe("review");
+      expect(kinds.get("build")).toBe("slice");
+    }),
+  ));

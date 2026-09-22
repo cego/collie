@@ -34,7 +34,10 @@ import {
 } from "./definitions";
 import { readSnapshot, stepDifference, stepsDiffer } from "./snapshot";
 import { approvedFrom } from "./verify-spec";
-import { REQUESTABLE } from "./outcome";
+import { REQUESTABLE, isOutcome } from "./outcome";
+import { latest, readDispositions } from "./disposition";
+import { fixableRun } from "./workspace";
+import { SELF, declaredIn, inputsFor, offersFrom, type OfferFacts } from "./offers";
 import {
   CHOICE,
   driverAlive,
@@ -2370,13 +2373,28 @@ export const followUp = Effect.fn("operations.followUp")(function* (
   const reports = yield* readDrift(parent.dir).pipe(Effect.catch(() => Effect.succeed([])));
   const open = openReports(reports);
 
-  // The steps `implement` has, not a copy: a workflow that later gains or loses one would
+  // Which Workflow carries a follow-up is the parent Workflow's own declaration — the
+  // one it marks `kind: follow-up` — never a name known here. A Workflow that declares
+  // none has nothing to follow up with, and says so rather than starting something the
+  // human did not ask for.
+  const declared = yield* declaredFor(env, parent);
+  if (!declared.ok) return declared;
+  const offered = declared.offers.find((one) => one.kind === "follow-up");
+  if (offered === undefined) {
+    return err(
+      "invalid_state",
+      `"${parent.record.workflow}" declares no follow-up, so there is nothing to carry on with.`,
+      { run: parent.id },
+    );
+  }
+  const carries = offered.workflow === SELF ? parent.record.workflow : offered.workflow;
+  // The steps that Workflow has, not a copy: one that later gains or loses a step would
   // give the follow-up a status, cards and a board row naming steps nobody ran.
-  const prepared = yield* prepareWorkflow(env, "implement");
+  const prepared = yield* prepareWorkflow(env, carries);
   if (!prepared.ok) return prepared;
 
   const child = yield* new RunStore(env.stateDir).create({
-    workflow: "implement",
+    workflow: carries,
     cwd,
     session: env.socketPath,
     workspace: parent.record.workspace,
@@ -2825,4 +2843,118 @@ export const registerRunExecutors = Effect.fn("operations.registerRunExecutors")
     ),
   );
   yield* Effect.void;
+});
+
+/**
+ * The facts a Run's offers are decided from: what it left behind, and what has been said
+ * about it since. Read from the Run, never from what it was called.
+ */
+const offerFacts = Effect.fn("operations.offerFacts")(function* (run: Run) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const status = yield* runStatus(run);
+  const issues = yield* fs
+    .readDirectory(path.join(run.dir, "plan", "issues"))
+    .pipe(Effect.catch(() => Effect.succeed([])));
+  const disposition = latest(
+    yield* readDispositions(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
+  );
+  const asked = run.record.inputs.outcome ?? "";
+  return {
+    outcome: isOutcome(asked) ? asked : "unspecified",
+    succeeded: status === "succeeded",
+    branch: run.record.worktree?.branch ?? null,
+    mrUrl: run.record.mr_url,
+    planIssues: issues.filter((name) => name.endsWith(".md")).length,
+    disposed: disposition !== null,
+    // A finding still open *and* the review that holds it: a review that came back clean
+    // has an artifact and nothing to fix.
+    openFindings: (yield* fixableRun(run)) ? run.record.outstanding.length : 0,
+    diffTarget: diffTargetOf(recorded(run.record))?.value ?? null,
+  } satisfies OfferFacts;
+});
+
+/**
+ * What a Run of a Markdown-defined Workflow offers, read from the definitions as they are
+ * on disk now. A Workflow that has been edited since offers what it says today, and one
+ * that has gone offers nothing rather than what it used to.
+ */
+export const offersForRun = Effect.fn("operations.offersForRun")(function* (
+  env: PluginEnv,
+  run: Run,
+) {
+  const declared = yield* declaredFor(env, run);
+  if (!declared.ok) return declared;
+  const facts = yield* offerFacts(run);
+  return {
+    ok: true as const,
+    offers: offersFrom(declaredIn(declared.offers), facts, {
+      self: run.record.workflow,
+      keepUnavailable: true,
+    }),
+  };
+});
+
+/** The offers this Run's Workflow declares now, or why they cannot be read at all. */
+const declaredFor = Effect.fn("operations.declaredFor")(function* (env: PluginEnv, run: Run) {
+  const definitions = yield* loadDefinitions(yield* layers(env));
+  const defaults = yield* loadDefaults(env.configDir);
+  try {
+    const workflow = resolveWorkflow(run.record.workflow, definitions, defaults);
+    return { ok: true as const, offers: workflow.offers };
+  } catch (cause) {
+    if (cause instanceof DefinitionError) {
+      return err("workflow_not_found", `${run.id}: ${cause.message}`, { run: run.id });
+    }
+    throw cause;
+  }
+});
+
+/**
+ * Carries out one of them. Everything is decided again here — that the Workflow still
+ * declares this offer, that its facts are still met, and what it passes — because the
+ * card it was read from may have been drawn before any of that changed.
+ */
+export const invokeRunOffer = Effect.fn("operations.invokeRunOffer")(function* (
+  env: PluginEnv,
+  run: Run,
+  offerId: string,
+) {
+  const declared = yield* declaredFor(env, run);
+  if (!declared.ok) return declared;
+  const facts = yield* offerFacts(run);
+  const live = offersFrom(declaredIn(declared.offers), facts, { self: run.record.workflow });
+  const offer = live.find((one) => one.id === offerId);
+  const definition = declared.offers.find((one) => one.id === offerId);
+  if (offer === undefined || definition === undefined) {
+    return err("invalid_state", `Run "${run.id}" does not offer "${offerId}" now.`, {
+      run: run.id,
+      offer: offerId,
+    });
+  }
+  const prepared = yield* prepareWorkflow(env, offer.workflow);
+  if (!prepared.ok) return prepared;
+  const given = yield* settleGiven(env, prepared, {
+    inputs: inputsFor(definition, { runDir: run.dir, facts }),
+    decide: [],
+  });
+  if (!given.ok) return given;
+  const started = yield* startRun(env, {
+    workflow: prepared.workflow,
+    resolutions: prepared.resolutions,
+    decisions: given.decisions,
+    workspace: null,
+    note: `${run.id}: ${offer.title}`,
+    parent: run.id,
+  });
+  if (started._tag === "Rejected") return started.result;
+  // Traceable both ways, as every chained Run is: the child names its parent and the
+  // parent lists the child.
+  run.record.children.push(started.run.id);
+  yield* run.save();
+  return {
+    ok: true as const,
+    data: { run: started.run.id, from: run.id, offer: offerId },
+    human: `Started run ${started.run.id} from ${run.id}'s "${offer.title}".`,
+  };
 });

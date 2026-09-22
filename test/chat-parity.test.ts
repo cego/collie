@@ -110,6 +110,8 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run metrics", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run drift", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run cards", { route: "read", tool: "collie_run", input: { run: RUN } }],
+  ["run actions", { route: "read", tool: "collie_run", input: { run: RUN } }],
+  ["run action", { route: "write", tool: "collie_do" }],
   ["run follow-up", { route: "write", tool: "collie_do" }],
   ["run intent show", { route: "read", tool: "collie_run", input: { run: RUN } }],
   [

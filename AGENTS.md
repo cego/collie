@@ -130,6 +130,13 @@ doors: herdr actions, and the `collie` CLI.
   `src/plan.ts`, `src/agents.ts` and `test/listing.test.ts`. An item is known by its own
   name and the list is enumerated again on every pass, so a reordered or edited plan has
   work left rather than work reassigned; a skip records a reason and opens no tab.
+- **Changing what a card says a Run became, or what it offers to do next** →
+  [ADR-0025](docs/adr/0025-a-card-is-facts-and-an-offer-is-a-declaration.md) and
+  [`docs/sdk.md`](docs/sdk.md#metadata), alongside `src/standing.ts`, `src/offers.ts`,
+  `src/cards.ts` and `test/actions.test.ts`. What became of the work is read from the
+  branch, the merge request, the tickets and the disposition; what to do next is the
+  workflow's own declaration, decided again — eligibility and arguments both — at the
+  moment it is invoked.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

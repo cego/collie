@@ -828,6 +828,30 @@ readable. The most recent one is what `run show` reports.
 This is integrated here and not yet on the board: the Home's rows and Live region do not
 read it, so a Run whose work shipped still reads as a plain failure there.
 
+## What a finished Run offers next
+
+```sh
+collie --json run actions <run-id>
+collie run action <run-id> <offer-id> --input k=v
+```
+
+What to do next is the Workflow's own declaration — a module's `actions` and `followUps`,
+a definition's `offers:` — never something Collie knows about a particular workflow. An
+offer is listed when the Run's facts meet what it needs: a finding left open, a branch, a
+merge request, tickets it wrote, something it was pointed at. The first eligible one is
+marked as the obvious thing to do, and one that cannot be made is listed with the reason
+rather than hidden.
+
+Everything is decided again when you invoke one. The declaration is re-read from the code
+as it is now, its eligibility is asked about the facts as they are now, and the arguments
+are decoded by the workflow it starts — so an offer edited away, one whose facts have
+moved and arguments the child will not take each start nothing at all. The board's keys
+carry the same offer ids into the same operation, so both doors refuse in the same words.
+
+Once somebody has recorded what became of the work, its follow-ups are no longer offered.
+Actions are given that fact and decide for themselves: looking at what was merged is still
+worth offering.
+
 ## Drift
 
 ```sh
