@@ -106,6 +106,12 @@ doors: herdr actions, and the `collie` CLI.
   `test/agents.test.ts`. One launch, one collection, one repair, each its own Activity;
   herdr is reached through `src/herdr.ts` and the prompt goes out through the Dispatcher,
   as a Step's does.
+- **Changing what a human can do to a native Run — a decision, a hold, a stop, steering** →
+  [ADR-0021](docs/adr/0021-one-host-answers-for-a-run.md) and
+  [`docs/cli.md`](docs/cli.md#answering-holding-and-steering-one), alongside `src/native.ts`,
+  `src/lifecycle.ts` and `test/control.test.ts`. The host settles it whichever door it came
+  in; a question is asked with `ask` so the host knows it is open, and a control says
+  whether it reached the run rather than confirming what it could not.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

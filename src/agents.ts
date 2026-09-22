@@ -16,7 +16,8 @@
 import { Context, Duration, Effect, FileSystem, Layer, Path, Schedule, Schema } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as Activity from "effect/unstable/workflow/Activity";
-import type * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as Workflow from "effect/unstable/workflow/Workflow";
+import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import {
   COMPACTION_WAIT_MS,
   installControls,
@@ -37,7 +38,13 @@ import {
 import { Herdr } from "./herdr";
 import { agentName, reason, shellQuote } from "./naming";
 import { registerAgent, registryPath, scopeFor } from "./registry";
-import { jsonSchemaFor, WorkflowError, type Projection } from "./sdk";
+import {
+  jsonSchemaFor,
+  NativeHost,
+  WorkflowError,
+  type NativeHostApi,
+  type Projection,
+} from "./sdk";
 import { renderTemplate } from "./template";
 
 /** A schema that decodes an agent's Output without services of the author's own. */
@@ -94,6 +101,8 @@ export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()("AgentU
 export interface AgentsApi {
   /** Where this operation's Output goes — known before anything starts, so a prompt can name it. */
   readonly outputFor: (runId: string, operation: string) => string;
+  /** How often anything here looks again, which a workflow's own watch for a stop shares. */
+  readonly pollMs: number;
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain>;
   /**
    * What the agent wrote, or null where it has written nothing in the time allowed.
@@ -106,6 +115,32 @@ export interface AgentsApi {
   ) => Effect.Effect<string | null, AgentUncertain>;
   /** Hands one unusable Output back to the agent that wrote it. False where it could not be asked. */
   readonly repair: (launched: Launched, problem: string) => Effect.Effect<boolean, AgentUncertain>;
+  /**
+   * Says something of a human's to the agent this run has. The request is the claim on
+   * the delivery: the same one twice is one message, which is what the ledger refuses a
+   * second copy of.
+   */
+  readonly steer: (options: {
+    readonly runId: string;
+    readonly text: string;
+    readonly request: string;
+    /** Which of the run's agents; the newest launch where a caller names none. */
+    readonly operation?: string;
+    readonly mode?: DeliveryMode;
+  }) => Effect.Effect<Steered>;
+}
+
+export type DeliveryMode = "boundary" | "now" | "interrupt";
+
+/**
+ * What became of one delivery. `delivered` is what could be got out of herdr about it and
+ * never "it was accepted for sending": a queue taking a message is not the agent having
+ * been given it.
+ */
+export interface Steered {
+  readonly agent: string;
+  readonly delivered: boolean;
+  readonly detail: string;
 }
 
 export class NativeAgents extends Context.Service<NativeAgents, AgentsApi>()(
@@ -144,10 +179,17 @@ export const agentWork = <Output extends OutputContract>(
 ): Effect.Effect<
   Output["Type"],
   WorkflowError,
-  NativeAgents | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+  NativeAgents | NativeHost | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
 > =>
   Effect.gen(function* () {
     const agents = yield* NativeAgents;
+    const host = yield* NativeHost;
+    // A boundary, and the last one before money is spent: a held run parks here rather
+    // than starting an agent. Read as a plain Effect because an operator sets a hold
+    // between attempts, and an Activity would hand back what the first attempt saw.
+    if (yield* host.held(work.runId)) {
+      return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
+    }
     const output = agents.outputFor(work.runId, work.operation);
     const role = work.role ?? work.operation;
     const ask: AgentAsk = {
@@ -180,7 +222,7 @@ export const agentWork = <Output extends OutputContract>(
       name: `${work.operation}.collect`,
       success: Schema.NullOr(Schema.String),
       error: AgentUncertain,
-      execute: agents.collect(launched),
+      execute: stoppable(agents.collect(launched), host, work.runId, agents.pollMs),
     });
     if (first === null) {
       return yield* unusable(launched, `wrote nothing to ${output}`);
@@ -216,6 +258,38 @@ export const agentWork = <Output extends OutputContract>(
         }),
       ),
     ),
+  );
+
+/**
+ * A collection an operator can stop while it is out, and resume back into.
+ *
+ * The suspension is the wait's own instance, never the workflow's: suspending the run
+ * from in here would abandon the collection rather than park it, and the next attempt
+ * would have nothing to re-enter. The launch is a separate Activity and is already
+ * recorded, so what comes back reattaches instead of starting a second agent.
+ */
+const stoppable = <A, E>(
+  collecting: Effect.Effect<A, E>,
+  host: NativeHostApi,
+  runId: string,
+  pollMs: number,
+): Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance> =>
+  Effect.gen(function* () {
+    const wait = yield* WorkflowEngine.WorkflowInstance;
+    const raced = yield* Effect.race(
+      collecting.pipe(Effect.map((value) => ({ collected: true as const, value }))),
+      untilStopped(host, runId, pollMs).pipe(Effect.as({ collected: false as const })),
+    );
+    if (!raced.collected) return yield* Workflow.suspend(wait);
+    return raced.value;
+  });
+
+/** Waits for an operator to stop this run, and for nothing else. */
+const untilStopped = (host: NativeHostApi, runId: string, pollMs: number) =>
+  host.stopRequested(runId).pipe(
+    Effect.flatMap((stop) => (stop ? Effect.void : Effect.fail(new Error("not stopped")))),
+    Effect.retry({ schedule: Schedule.spaced(Duration.millis(pollMs)) }),
+    Effect.orDie,
   );
 
 const unusable = (launched: Launched, what: string) =>
@@ -331,6 +405,8 @@ type Under = <A, E>(effect: Effect.Effect<A, E, AgentServices>) => Effect.Effect
 
 const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   const dirFor = (runId: string) => `${host.dir}/agents/${runId}`;
+  const launchPath = (runId: string, operation: string) =>
+    `${dirFor(runId)}/${operation}${LAUNCH_SUFFIX}`;
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
   const log = (runId: string, line: string) => append(`${dirFor(runId)}/agents.log`, line);
 
@@ -356,14 +432,20 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     });
 
   /**
-   * The one sender, for the first prompt and for a repair alike. A delivery the ledger
-   * already holds about this work is refused rather than sent a second time, which is
-   * what makes a launch that may already have happened safe to reconcile onto.
+   * The one sender: the first prompt, a repair and a human's own words all go out here.
+   * A delivery the ledger already holds under the same claim is refused rather than sent
+   * a second time, which is what makes a launch that may already have happened safe to
+   * reconcile onto and a retried steer one message rather than two.
    */
   const deliver = Effect.fn("Agents.deliver")(function* (
     about: Launched,
     text: string,
-    kind: "step" | "repair",
+    delivery: {
+      readonly kind: "step" | "repair" | "steer";
+      /** What this delivery is about; the ledger's causal key is built from it. */
+      readonly ref: string;
+      readonly mode?: DeliveryMode;
+    },
   ) {
     const found = yield* entryFor(about, about.agent, null);
     if (found.entry === null) return { sent: false, why: found.reason ?? "no such agent" };
@@ -372,13 +454,13 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         channel.submit(text, {
           run: about.runId,
           harness: adapterFor(about.harness).id,
-          cause: { kind, ref: about.operation },
-          mode: "boundary",
+          cause: { kind: delivery.kind, ref: delivery.ref },
+          mode: delivery.mode ?? "boundary",
           // A native run has no Intent yet, so every delivery about one piece of work
           // shares a causal key: that is what makes the second copy refusable.
           intentVersion: 0,
           attempt: 1,
-          requestId: `${about.runId}-${about.operation}-${kind}`,
+          requestId: `${about.runId}-${delivery.ref}-${delivery.kind}`,
         }),
       )
       .pipe(Effect.catch((cause) => Effect.succeed(undeliverable(cause))));
@@ -466,7 +548,10 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
         yield* write(`${dirFor(ask.runId)}/${ask.operation}.prompt.md`, text);
-        const asked = yield* deliver(launched, text, "step");
+        // Beside it, the agent this work landed on, so a human steering this run later
+        // reaches the agent that has it rather than one derived from a name again.
+        yield* write(launchPath(ask.runId, ask.operation), encodeLaunched(launched));
+        const asked = yield* deliver(launched, text, { kind: "step", ref: ask.operation });
         if (!asked.sent) {
           return yield* new AgentUncertain({
             operation: ask.operation,
@@ -494,7 +579,10 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       Effect.gen(function* () {
         const text = repairText(launched.output, problem);
         yield* write(`${dirFor(launched.runId)}/${launched.operation}.repair.md`, text);
-        const sent = yield* deliver(launched, text, "repair");
+        const sent = yield* deliver(launched, text, {
+          kind: "repair",
+          ref: launched.operation,
+        });
         yield* log(
           launched.runId,
           sent.sent
@@ -512,8 +600,72 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     );
 
-  return { outputFor, launch, collect, repair };
+  /** Every agent this run has launched, oldest first, as the launches recorded them. */
+  const launchesOf = (runId: string) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const names = yield* fs.readDirectory(dirFor(runId)).pipe(Effect.orElseSucceed(() => []));
+      const launches: Launched[] = [];
+      for (const name of names.filter((one) => one.endsWith(LAUNCH_SUFFIX)).sort()) {
+        const text = yield* fs
+          .readFileString(`${dirFor(runId)}/${name}`)
+          .pipe(Effect.orElseSucceed(() => ""));
+        const read = decodeLaunched(text);
+        if (read._tag === "Success") launches.push(read.success);
+      }
+      return launches;
+    });
+
+  const steer = (options: {
+    readonly runId: string;
+    readonly text: string;
+    readonly request: string;
+    readonly operation?: string;
+    readonly mode?: DeliveryMode;
+  }) =>
+    under(
+      Effect.gen(function* () {
+        const launches = yield* launchesOf(options.runId);
+        const wanted = options.operation;
+        const launched =
+          wanted === undefined ? launches.at(-1) : launches.find((one) => one.operation === wanted);
+        if (launched === undefined) {
+          const about = wanted === undefined ? "" : ` on "${wanted}"`;
+          return {
+            agent: "",
+            delivered: false,
+            detail: `${options.runId} has launched no agent${about}`,
+          };
+        }
+        const sent = yield* deliver(launched, options.text, {
+          kind: "steer",
+          ref: options.request,
+          mode: options.mode,
+        });
+        yield* log(
+          options.runId,
+          sent.sent
+            ? `${launched.agent}: told "${firstLine(options.text)}"`
+            : `${launched.agent}: could not be told "${firstLine(options.text)}" (${sent.why})`,
+        );
+        return { agent: launched.agent, delivered: sent.sent, detail: sent.why };
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.succeed({ agent: "", delivered: false, detail: reason(cause) }),
+        ),
+      ),
+    );
+
+  return { outputFor, pollMs: host.pollMs ?? DEFAULT_POLL_MS, launch, collect, repair, steer };
 };
+
+const LAUNCH_SUFFIX = ".launch.json";
+const LaunchedJson = Schema.fromJsonString(Launched);
+const encodeLaunched = Schema.encodeSync(LaunchedJson);
+const decodeLaunched = Schema.decodeUnknownResult(LaunchedJson);
+
+/** What a delivery is called in a log: one line of it, so the log stays readable. */
+const firstLine = (text: string) => text.split("\n")[0] ?? "";
 
 /** Anything a launch failed on, said as what it means: nobody can be sure what happened. */
 const isUncertain = Schema.is(AgentUncertain);

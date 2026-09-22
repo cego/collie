@@ -132,6 +132,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly held: (runId: string) => Effect.Effect<boolean>;
     readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
     readonly record: (runId: string, event: string) => Effect.Effect<void>;
+    readonly asking: (runId: string, question: DecisionSpec) => Effect.Effect<void>;
   }
   export const NativeHost: Context.Service<NativeHostApi, NativeHostApi>;
   export type NativeHost = NativeHostApi;
@@ -157,9 +158,27 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     typeof WorkflowError
   >;
 
+  /** A question as the host records it: its identity, what it asks, what it takes. */
+  export interface DecisionSpec {
+    readonly name: string;
+    readonly prompt: string;
+    readonly options: ReadonlyArray<string>;
+  }
+
   /** A decision a run waits on, answered with the text an operator types. */
-  export function decision(name: string): DurableDeferred<typeof Schema.String>;
-  export type NativeDecision = DurableDeferred<typeof Schema.String>;
+  export interface NativeDecision extends DurableDeferred<typeof Schema.String> {
+    readonly asks: DecisionSpec;
+  }
+  export function decision(
+    name: string,
+    asks?: { readonly prompt?: string; readonly options?: ReadonlyArray<string> },
+  ): NativeDecision;
+
+  /** Waits for this question to be answered, having told the host it is open. */
+  export function ask(
+    runId: string,
+    question: NativeDecision,
+  ): Effect.Effect<string, never, NativeHost | WorkflowEngine | WorkflowInstance>;
 
   export interface Registration {
     readonly workflow: Workflow<string, any, any, typeof WorkflowError>;
@@ -214,6 +233,23 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
       launched: Launched,
       problem: string,
     ) => Effect.Effect<boolean, AgentUncertain>;
+    readonly steer: (options: {
+      readonly runId: string;
+      readonly text: string;
+      readonly request: string;
+      readonly operation?: string;
+      readonly mode?: DeliveryMode;
+    }) => Effect.Effect<Steered>;
+    readonly pollMs: number;
+  }
+
+  export type DeliveryMode = "boundary" | "now" | "interrupt";
+
+  /** What became of one delivery; delivered is never "it was accepted for sending". */
+  export interface Steered {
+    readonly agent: string;
+    readonly delivered: boolean;
+    readonly detail: string;
   }
   export const NativeAgents: Context.Service<AgentsApi, AgentsApi>;
   export type NativeAgents = AgentsApi;
@@ -239,7 +275,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   ): Effect.Effect<
     Output["Type"],
     WorkflowError,
-    NativeAgents | WorkflowEngine | WorkflowInstance
+    NativeAgents | NativeHost | WorkflowEngine | WorkflowInstance
   >;
 
   /** Everything a prompt is built from, none of which is an Activity. */
@@ -509,24 +545,48 @@ export function hostLayer(options: {
   return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster), Layer.provideMerge(sql));
 }
 
-/** Files are the hold and stop flags because an operator sets them between runs. */
+export const HOLD = "hold";
+export const STOP = "stop";
+
+/**
+ * What a workflow reads about its own run: the controls an operator has set over it, and
+ * the question it is waiting on.
+ *
+ * A control is one file in the host's own directory, and the host is its only writer —
+ * no client writes one and nothing consumes it as a command. It stays a file rather than
+ * a row because a workflow reads it at its boundaries, from the engine's own fiber:
+ * answering that read out of this process's memory or its database settles the boundary
+ * fast enough to race a resume, and the run parks again before the resume has landed.
+ * `docs/adr/0021-one-host-answers-for-a-run.md` has the measurement.
+ */
+export const controlPath = (dir: string, control: string, runId: string): string =>
+  `${dir}/${control}.${runId}`;
+
 export const nativeHostLayer = (
   dir: string,
-): Layer.Layer<NativeHost, never, FileSystem.FileSystem> =>
+): Layer.Layer<NativeHost, never, Store | FileSystem.FileSystem> =>
   Layer.effect(NativeHost)(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const flag = (name: string, runId: string) =>
-        fs.exists(`${dir}/${name}.${runId}`).pipe(Effect.orElseSucceed(() => false));
+      const store = yield* Store;
+      const set = (control: string, runId: string) =>
+        fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
       return NativeHost.of({
         dir,
-        held: (runId) => flag("hold", runId),
-        stopRequested: (runId) => flag("stop", runId),
+        held: (runId) => set(HOLD, runId),
+        stopRequested: (runId) => set(STOP, runId),
         record: (runId, event) =>
           fs
             .writeFileString(`${dir}/events.${runId}.log`, `${event}\n`, { flag: "a" })
             .pipe(Effect.orDie),
+        asking: (runId, question) =>
+          store.asking({
+            run: runId,
+            decision: question.name,
+            prompt: question.prompt,
+            options: question.options,
+          }),
       });
     }),
   );
@@ -553,9 +613,13 @@ export const HostRequest = Schema.Union([
     op: Schema.Literal("answer"),
     id: Schema.String,
     runId: Schema.String,
-    decision: Schema.String,
+    /** Null means the one question this run is waiting on. */
+    decision: Schema.NullOr(Schema.String),
     value: Schema.String,
+    /** The claim this answer arrives under, so the same one twice is one answer. */
+    request: Schema.optional(Schema.String),
   }),
+  Schema.Struct({ op: Schema.Literal("waiting"), runId: Schema.String }),
   Schema.Struct({ op: Schema.Literal("hold"), runId: Schema.String }),
   Schema.Struct({ op: Schema.Literal("release"), id: Schema.String, runId: Schema.String }),
   Schema.Struct({ op: Schema.Literal("stop"), id: Schema.String, runId: Schema.String }),
@@ -767,6 +831,46 @@ const refuseOptions = (generation: Generation, options: Readonly<Record<string, 
  * started with, and what the engine says about it now. The status is a projection read
  * from the engine when asked — never a second record of what the work has done.
  */
+/** A question a run has been asked, as a front door shows it. */
+export const OpenDecision = Schema.Struct({
+  name: Schema.String,
+  prompt: Schema.String,
+  /** The answers it takes; empty is a question answered in the operator's own words. */
+  options: Schema.Array(Schema.String),
+  /** What settled it, or null while it is still open. */
+  answer: Schema.NullOr(Schema.String),
+});
+export type OpenDecision = typeof OpenDecision.Type;
+
+/** What an accepted answer became. `fresh` is false for the same claim arriving twice. */
+export const Answered = Schema.Struct({
+  runId: Schema.String,
+  decision: Schema.String,
+  value: Schema.String,
+  fresh: Schema.Boolean,
+});
+
+/**
+ * What a control did. `applied` is whether the run was actually told: a control recorded
+ * over work no host is running is an intent, and saying otherwise would be a confirmation
+ * nobody can stand behind.
+ */
+export const Controlled = Schema.Struct({
+  runId: Schema.String,
+  control: Schema.String,
+  set: Schema.Boolean,
+  applied: Schema.Boolean,
+  detail: Schema.String,
+});
+
+/** What became of one delivery to a run's agent. */
+export const Steered = Schema.Struct({
+  agent: Schema.String,
+  /** What could be got out of herdr about it, never "it was accepted for sending". */
+  delivered: Schema.Boolean,
+  detail: Schema.String,
+});
+
 export const RunView = Schema.Struct({
   runId: Schema.String,
   workflow: Schema.String,
@@ -781,6 +885,10 @@ export const RunView = Schema.Struct({
   provenance: Schema.Record(Schema.String, Schema.String),
   options: Schema.Record(Schema.String, Schema.String),
   status: RunStatus,
+  /** Every question this run has been asked, answered or not, oldest first. */
+  waiting: Schema.Array(OpenDecision),
+  /** The controls an operator has set over it: a hold, a stop, or neither. */
+  controls: Schema.Array(Schema.String),
   /** Why the engine could not be asked, or null when it was. */
   diagnostic: Schema.NullOr(Schema.String),
 });
@@ -794,6 +902,10 @@ const encodeStatus = Schema.encodeSync(Schema.fromJsonString(RunStatus));
  * every client, so watching costs the same whether nobody or the whole board is looking.
  */
 const SWEEP_INTERVAL = "500 millis";
+
+/** How long a woken run is given to settle before a caller is told it was woken. */
+const WAKE_INTERVAL = "250 millis";
+const WAKE_TRIES = 8;
 
 /** What a host is holding, as a caller may see it: live names and unloadable ones. */
 export const Registrations = Schema.Struct({
@@ -871,11 +983,36 @@ export interface RegistryApi {
   readonly status: (
     runId: string,
   ) => Effect.Effect<typeof RunStatus.Type, HostRefused, HostServices>;
+  /**
+   * Settles the question a run is waiting on. A name the run is not asking, one it has
+   * already answered, and a value the question does not take are all refused before
+   * anything is completed — so nothing an operator sends twice becomes work twice.
+   * A null name means the one open question, which is refused where there is not exactly one.
+   */
   readonly answer: (options: {
     readonly runId: string;
-    readonly decision: string;
+    readonly decision: string | null;
     readonly value: string;
-  }) => Effect.Effect<void, HostRefused, HostServices>;
+    /** The caller's claim on this answer, so the same one arriving twice is one answer. */
+    readonly request: string;
+  }) => Effect.Effect<typeof Answered.Type, HostRefused, HostServices>;
+  /** Sets or clears one durable control over one run, and says whether it reached it. */
+  readonly control: (options: {
+    readonly runId: string;
+    readonly control: string;
+    readonly set: boolean;
+  }) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
+  /** Says something to the agent this run has, through the one sender. */
+  readonly steer: (options: {
+    readonly runId: string;
+    readonly text: string;
+    /** The caller's claim on the delivery, so the same message twice is one message. */
+    readonly request: string;
+    readonly operation?: string;
+    readonly mode?: Agents.DeliveryMode;
+  }) => Effect.Effect<typeof Steered.Type, HostRefused, HostServices>;
+  /** Every question this run has been asked, answered or not, oldest first. */
+  readonly waiting: (runId: string) => Effect.Effect<ReadonlyArray<OpenDecision>>;
   /** One run as a front door shows it, or null where nothing was admitted under that id. */
   readonly view: (runId: string) => Effect.Effect<RunView | null>;
   /** Every run this host has rows for, newest last, narrowed to one Task where named. */
@@ -915,11 +1052,25 @@ export class Registry extends Context.Service<Registry, RegistryApi>()("collie/n
 export const registryLayer = (
   dir: string,
   options?: { readonly crashAt?: CrashPoint },
-): Layer.Layer<
-  Registry,
-  never,
-  HostServices | Crypto.Crypto | SqlClient.SqlClient | Reactivity.Reactivity
-> => Layer.effect(Registry)(makeRegistry(dir, options?.crashAt)).pipe(Layer.provide(storeLayer));
+): Layer.Layer<Registry, never, HostServices | Store | Crypto.Crypto> =>
+  Layer.effect(Registry)(makeRegistry(dir, options?.crashAt));
+
+/**
+ * One host's foundation: the engine, the rows beside it, and the run's own view of its
+ * controls and questions. Composed here so there is one SQLite client and one Store
+ * behind all three, rather than a second connection reading what the first wrote.
+ */
+export const foundationLayer = (options: {
+  readonly dir: string;
+  readonly registrationTimeout?: Duration.Input;
+}): Layer.Layer<
+  NativeHost | Store | WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
+  ConfigError,
+  FileSystem.FileSystem
+> =>
+  nativeHostLayer(options.dir).pipe(
+    Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(hostLayer(options)))),
+  );
 
 const makeRegistry: (
   dir: string,
@@ -927,6 +1078,7 @@ const makeRegistry: (
 ) => Effect.Effect<RegistryApi, never, HostServices | Store | Crypto.Crypto | Scope.Scope> =
   Effect.fn("Native.makeRegistry")(function* (dir: string, crashAt?: CrashPoint) {
     const engine = yield* WorkflowEngine.WorkflowEngine;
+    const fs = yield* FileSystem.FileSystem;
     const store = yield* Store;
     const crypto = yield* Crypto.Crypto;
     const hostScope = yield* Effect.scope;
@@ -1048,18 +1200,87 @@ const makeRegistry: (
         options: yield* decodeStrings(row.options ?? "{}").pipe(Effect.orElseSucceed(() => ({}))),
       };
       const generation = live.get(row.generation);
+      const about = {
+        ...admitted,
+        waiting: yield* asked(row.run),
+        controls: yield* controlsOf(row.run),
+      };
       // Not registered here is not a verdict on the work: the rows are all still there,
       // and what is missing is the module, named so somebody can put it back.
       if (generation === undefined) {
         return {
-          ...admitted,
+          ...about,
           status: { status: "pending" as const },
           diagnostic:
             unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
         };
       }
       const result = yield* engine.poll(generation.registration.workflow, row.execution);
-      return { ...admitted, status: pollStatus(result, generation.entry), diagnostic: null };
+      return { ...about, status: pollStatus(result, generation.entry), diagnostic: null };
+    });
+
+    const setControl = Effect.fn("Native.setControl")(function* (
+      runId: string,
+      control: string,
+      set: boolean,
+    ) {
+      const path = controlPath(dir, control, runId);
+      yield* (set ? fs.writeFileString(path, "") : fs.remove(path).pipe(Effect.ignore)).pipe(
+        Effect.orDie,
+      );
+    });
+
+    /** Which controls an operator has set over this run. */
+    const controlsOf = Effect.fn("Native.controlsOf")(function* (runId: string) {
+      const set: string[] = [];
+      for (const control of [HOLD, STOP]) {
+        const on = yield* fs
+          .exists(controlPath(dir, control, runId))
+          .pipe(Effect.orElseSucceed(() => false));
+        if (on) set.push(control);
+      }
+      return set;
+    });
+
+    /**
+     * Wakes a run and waits for it to settle where it is going next.
+     *
+     * A woken run runs before it parks again, and a completion that arrives inside that
+     * window is delivered to a run that is not waiting on anything yet — so it is lost,
+     * and resuming afterwards does not bring it back. Returning only once the run has
+     * settled is what makes the next thing an operator does land on it.
+     */
+    const wake = Effect.fn("Native.wake")(function* (found: {
+      readonly generation: Generation;
+      readonly execution: string;
+    }) {
+      const workflow = found.generation.registration.workflow;
+      yield* engine.resume(workflow, found.execution);
+      yield* engine.poll(workflow, found.execution).pipe(
+        Effect.map((result) => pollStatus(result, found.generation.entry).status),
+        Effect.flatMap((status) =>
+          status === "pending" ? Effect.fail(new Error("still running")) : Effect.void,
+        ),
+        Effect.retry({ times: WAKE_TRIES, schedule: Schedule.spaced(WAKE_INTERVAL) }),
+        Effect.ignore,
+      );
+    });
+
+    /** Every question this run has been asked, with the answers its options allow. */
+    const asked = Effect.fn("Native.asked")(function* (runId: string) {
+      const rows = yield* store.asked(runId);
+      const none: ReadonlyArray<string> = [];
+      return yield* Effect.forEach(rows, (row) =>
+        decodeOptions(row.options).pipe(
+          Effect.orElseSucceed(() => none),
+          Effect.map((options) => ({
+            name: row.decision,
+            prompt: row.prompt,
+            options,
+            answer: row.answer,
+          })),
+        ),
+      );
     });
 
     const view = (runId: string) =>
@@ -1158,6 +1379,7 @@ const makeRegistry: (
 
       registrations: held,
 
+      waiting: asked,
       view,
       views: (task: string | null) =>
         store.runs.pipe(
@@ -1256,18 +1478,111 @@ const makeRegistry: (
 
       answer: Effect.fn("Native.Registry.answer")(function* (options: {
         readonly runId: string;
-        readonly decision: string;
+        readonly decision: string | null;
         readonly value: string;
+        readonly request: string;
       }) {
         const found = yield* routed(options.runId);
+        const asks = yield* asked(options.runId);
+        const open = asks.filter((one) => one.answer === null);
+        const sole = options.decision === null ? soleOpen(options.runId, open) : null;
+        if (sole !== null) return yield* sole;
+        const name = options.decision ?? open[0]?.name ?? "";
+        // Every question, not only the open ones: one already answered and one never
+        // asked are different refusals, and an operator is owed the difference.
+        const question = asks.find((one) => one.name === name);
+        if (question === undefined) {
+          return yield* new HostRefused({
+            reason: `run "${options.runId}" is not waiting on a decision called "${name}"`,
+          });
+        }
+        if (question.options.length > 0 && !question.options.includes(options.value)) {
+          return yield* new HostRefused({
+            reason: `"${options.value}" is not one of ${question.options.join(", ")}`,
+          });
+        }
+        // Checked before the answer is recorded: an answer the module has no deferred for
+        // would otherwise close the question against a run nothing could ever resume.
+        if (!found.generation.registration.decisions[name]) {
+          return yield* new HostRefused({
+            reason: `${found.generation.entry} declares no decision called "${name}"`,
+          });
+        }
+        // Recorded first, and only the caller the write hands the row to completes the
+        // deferred: two answers racing are separated by the database, not by timing.
+        const settled = yield* store.settle({
+          run: options.runId,
+          decision: name,
+          value: options.value,
+          request: options.request,
+        });
+        if (settled._tag === "refused") {
+          return yield* new HostRefused({ reason: settled.reason });
+        }
+        if (settled._tag === "repeat") {
+          return { runId: options.runId, decision: name, value: options.value, fresh: false };
+        }
         yield* answerDecision(found.generation.registration, {
-          name: options.decision,
+          name,
           executionId: found.execution,
           value: options.value,
         }).pipe(Effect.mapError((failure) => new HostRefused({ reason: failure.message })));
+
+        return { runId: options.runId, decision: name, value: options.value, fresh: true };
+      }),
+
+      control: Effect.fn("Native.Registry.control")(function* (options: {
+        readonly runId: string;
+        readonly control: string;
+        readonly set: boolean;
+      }) {
+        // Written before anything is woken, so a run that wakes up never finds the
+        // request that stopped it still there.
+        yield* setControl(options.runId, options.control, options.set);
+        const found = yield* routed(options.runId).pipe(Effect.result);
+        const recorded = { runId: options.runId, control: options.control, set: options.set };
+        if (found._tag === "Failure") {
+          return { ...recorded, applied: false, detail: found.failure.reason };
+        }
+        // A hold is read at the next boundary and needs no waking. Everything else does:
+        // a run parked on its question has nothing that would make it look again.
+        if (!(options.control === HOLD && options.set)) yield* wake(found.success);
+        return { ...recorded, applied: true, detail: "" };
+      }),
+
+      steer: Effect.fn("Native.Registry.steer")(function* (options: {
+        readonly runId: string;
+        readonly text: string;
+        readonly request: string;
+        readonly operation?: string;
+        readonly mode?: Agents.DeliveryMode;
+      }) {
+        // Routed first: a run this host is not holding has no agent it can vouch for.
+        yield* routed(options.runId);
+        const agents = yield* NativeAgents;
+        return yield* agents.steer(options);
       }),
     } satisfies RegistryApi;
   });
+
+const decodeOptions = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+
+/**
+ * Why a caller who named no question cannot be given one, or null where exactly one is
+ * open. Nothing is guessed at: an answer landing on the wrong question is the mistake
+ * this exists to prevent.
+ */
+const soleOpen = (runId: string, open: ReadonlyArray<OpenDecision>): HostRefused | null => {
+  if (open.length === 1) return null;
+  return new HostRefused({
+    reason:
+      open.length === 0
+        ? `run "${runId}" is not waiting on a decision`
+        : `run "${runId}" is waiting on ${open.map((one) => `"${one.name}"`).join(", ")}: say which`,
+  });
+};
 
 const encodeCheckProject = Schema.encodeSync(
   Schema.fromJsonString(

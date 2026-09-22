@@ -139,6 +139,38 @@ for it. [ADR-0018](adr/0018-a-native-run-is-a-run.md) and
 [ADR-0019](adr/0019-a-strategy-not-a-field-name.md) are why each of those is the way it
 is.
 
+#### Answering, holding and steering one
+
+`run show` says what a module's Run is waiting on and what is set over it, and the ordinary
+commands do the rest — whichever door you come in, it is the host that settles it:
+
+```bash
+collie --json run answer <run-id> yes --decision keep --request-id "$(uuidgen)"
+collie --json run hold <run-id> --request-id "$(uuidgen)"
+collie --json run release <run-id> --request-id "$(uuidgen)"
+collie --json run stop <run-id> --request-id "$(uuidgen)"
+collie --json run resume <run-id> --request-id "$(uuidgen)"
+collie --json run steer <run-id> "check the migration too" --request-id "$(uuidgen)"
+```
+
+- **`--decision` names the question** where a module is waiting on more than one; leave it
+  out and the one open question is answered, and being asked for is refused where that is
+  not exactly one. A value the question does not take is refused with what it does take.
+- **One answer settles it.** A second is refused with what the Run already has; the same
+  `--request-id` again is the same answer rather than another.
+- **A control reaches one Run.** Its siblings and the host carry on. A control over a Run
+  whose module is not loaded here is recorded and says so, naming the file to repair,
+  rather than reporting a success nothing can stand behind.
+- **`run stop` parks the Run, not its agent.** The agent keeps what it is holding; stopping
+  the harness is its own action. `run resume` clears the stop and picks the Run up again.
+- **`run steer` says something to the Run's agent** through the one sender, with the same
+  incarnation and harness-capability checks as every other delivery, and tells you whether
+  it was delivered rather than that it was accepted for sending. It carries out nothing:
+  `collie steer` is still the only thing that proposes an action, and a proposal still
+  names its exact payload to be confirmed.
+
+[ADR-0021](adr/0021-one-host-answers-for-a-run.md) is why each of those is the way it is.
+
 A module that has an agent do its work opens a tab and starts one on the harness, model and
 permissions this installation is configured for, with the compaction controls a Step's
 agent gets. What it was actually sent and what it wrote are files under the host's state

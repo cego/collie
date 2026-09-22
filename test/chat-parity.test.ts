@@ -91,6 +91,13 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run hold", { route: "write", tool: "collie_hold" }],
   ["run release", { route: "write", tool: "collie_do" }],
   [
+    "run steer",
+    {
+      route: "human-only",
+      why: "a human's own words, typed into the agent a workflow module's Run has; a model asking Collie to type into a pane is the boundary this file exists to hold",
+    },
+  ],
+  [
     "run clear-override",
     {
       route: "propose",

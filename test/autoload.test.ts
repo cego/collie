@@ -146,7 +146,9 @@ test(
           () => client.status({ runId }),
           (status) => status.status === "suspended",
         );
-        yield* client.answer({ runId, decision: "decision", value: "yes" }).pipe(Effect.orDie);
+        yield* client
+          .answer({ runId, decision: "decision", value: "yes", request: "answer-yes" })
+          .pipe(Effect.orDie);
         expect(
           yield* until(
             () => client.status({ runId }),
@@ -199,7 +201,9 @@ test(
             () => client.status({ runId }),
             (status) => status.status === "suspended",
           );
-          yield* client.answer({ runId, decision: "decision", value: "ok" }).pipe(Effect.orDie);
+          yield* client
+            .answer({ runId, decision: "decision", value: "ok", request: "answer-ok" })
+            .pipe(Effect.orDie);
         }
         expect(
           yield* until(
@@ -271,7 +275,9 @@ test(
         );
 
         for (const runId of [before.runId, after.runId]) {
-          yield* client.answer({ runId, decision: "decision", value: "x" }).pipe(Effect.orDie);
+          yield* client
+            .answer({ runId, decision: "decision", value: "x", request: "answer-x" })
+            .pipe(Effect.orDie);
         }
         expect(
           yield* until(
@@ -407,7 +413,9 @@ test(
               .pipe(Effect.orDie);
             expect(started.registration).toBe("proof@1");
 
-            yield* client.answer({ runId, decision: "decision", value: "back" }).pipe(Effect.orDie);
+            yield* client
+              .answer({ runId, decision: "decision", value: "back", request: "answer-back" })
+              .pipe(Effect.orDie);
             expect(
               yield* until(
                 () => client.status({ runId }),

@@ -16,6 +16,9 @@ import { events, fixtures, openHost, root, until, workspace } from "./support/na
 const stopsIn = (log: ReadonlyArray<string>) => log.filter((line) => line === "stopped").length;
 
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
+
+/** The run has reached its question and the host knows it, so an answer has one to land on. */
+const asking = (reply: typeof HostReply.Type) => (reply.diagnostics ?? []).includes("decision");
 const complete = (reply: typeof HostReply.Type) => reply.status === "complete";
 
 test(
@@ -86,6 +89,9 @@ test(
         expect(paused[1]).toBe("held");
 
         yield* host.ask({ op: "release", id: "proof", runId: "r1" });
+        // Released work reaches its question before there is anything to answer: the host
+        // says what a run is waiting on, and that is what an operator answers.
+        yield* host.until({ op: "waiting", runId: "r1" }, asking);
         yield* host.ask({
           op: "answer",
           id: "proof",
@@ -121,12 +127,13 @@ test(
             () => events(state, "r1"),
             (log) => stopsIn(log) === cycle,
           );
-          expect((yield* host.ask({ op: "poll", id: "proof", runId: "r1" })).status).toBe(
-            "suspended",
-          );
+          // Asked until rather than once: the run logs that it is stopping before it has
+          // finished suspending, so reading the engine on that line is reading it mid-attempt.
+          yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
           yield* host.ask({ op: "resume", id: "proof", runId: "r1" });
         }
 
+        yield* host.until({ op: "waiting", runId: "r1" }, asking);
         yield* host.ask({
           op: "answer",
           id: "proof",

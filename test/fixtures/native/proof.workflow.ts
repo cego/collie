@@ -2,10 +2,9 @@
 // Collie vocabulary beyond the service the host lends it. The test copies this file, its
 // helper and its Markdown outside the checkout, so what runs it is the binary alone.
 
-import { NativeHost, decision, defineWorkflow } from "collie/native";
+import { NativeHost, ask, decision, defineWorkflow } from "collie/native";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
-import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { label } from "./helper.ts";
@@ -19,7 +18,7 @@ export const input = { note: Schema.String };
 
 export const make = (registrationName: string) => {
   const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const answer = decision("decision");
+  const answer = decision("decision", { prompt: "What should this run do?" });
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
@@ -57,7 +56,9 @@ export const make = (registrationName: string) => {
             yield* host.record(payload.runId, "stopped");
             return yield* Workflow.suspend(wait);
           }
-          return yield* DurableDeferred.await(answer);
+          // Asked through the host, not awaited directly: a host that does not know
+          // what a run is waiting on cannot refuse an answer to a question nobody asked.
+          return yield* ask(payload.runId, answer);
         }),
       });
 

@@ -27,13 +27,15 @@ import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 import manifest from "../herdr-plugin.toml";
 import {
+  Answered,
+  Controlled,
   HostRefused,
   NativeEntryError,
   Registrations,
   RunStatus,
   RunView,
-  hostLayer,
-  nativeHostLayer,
+  Steered,
+  foundationLayer,
   registryLayer,
   Registry,
 } from "./native";
@@ -144,8 +146,39 @@ export const HostRpcs = RpcGroup.make(
   }),
   /** Registers what current files now allow and hands over what is outstanding. */
   Rpc.make("recover", { success: Registrations }),
+  // The decision is named where a caller knows which question it is answering, and null
+  // where it means "the one this run is waiting on" — refused where that is not one.
+  // The request is the claim: the same one twice is one answer, not a second.
   Rpc.make("answer", {
-    payload: { runId: Schema.String, decision: Schema.String, value: Schema.String },
+    payload: {
+      runId: Schema.String,
+      decision: Schema.NullOr(Schema.String),
+      value: Schema.String,
+      request: Schema.String,
+    },
+    success: Answered,
+    error: HostRefused,
+  }),
+  /** A hold or a stop over one run, set or cleared. It reaches no other run and no host. */
+  Rpc.make("control", {
+    payload: {
+      runId: Schema.String,
+      control: Schema.Literals(["hold", "stop"]),
+      set: Schema.Boolean,
+    },
+    success: Controlled,
+    error: HostRefused,
+  }),
+  /** A human's own words to the agent this run has, through the one sender. */
+  Rpc.make("steer", {
+    payload: {
+      runId: Schema.String,
+      text: Schema.String,
+      request: Schema.String,
+      operation: Schema.optional(Schema.String),
+      mode: Schema.optional(Schema.Literals(["boundary", "now", "interrupt"])),
+    },
+    success: Steered,
     error: HostRefused,
   }),
 );
@@ -233,7 +266,11 @@ const handlers = (dir: string) =>
         runs: ({ task }) => registry.views(task),
         watch: ({ runId }) => registry.watch(runId),
         recover: () => registry.recover,
-        answer: ({ runId, decision, value }) => registry.answer({ runId, decision, value }),
+        answer: ({ runId, decision, value, request }) =>
+          registry.answer({ runId, decision, value, request }),
+        control: ({ runId, control, set }) => registry.control({ runId, control, set }),
+        steer: ({ runId, text, request, operation, mode }) =>
+          registry.steer({ runId, text, request, operation, mode }),
       });
     }),
   );
@@ -269,8 +306,7 @@ const own = (dir: string) =>
         Layer.provide(RpcServer.layerProtocolSocketServer),
         Layer.provide(serialization),
         Layer.provide(BunSocketServer.layer({ path: socketOf(dir) })),
-        Layer.provide(hostLayer({ dir })),
-        Layer.provide(nativeHostLayer(dir)),
+        Layer.provide(foundationLayer({ dir })),
         Layer.provide(yield* configuredAgents(dir)),
       ),
     );

@@ -8,19 +8,17 @@
 // measured.
 
 import { BunServices } from "@effect/platform-bun";
-import { Console, Duration, Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
+import { Console, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
-import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { configuredAgents } from "../agents";
 import {
   typecheckEntry,
   type CrashPoint,
-  hostLayer,
+  foundationLayer,
   HostReply,
   HostRequest,
   Registry,
   registryLayer,
-  nativeHostLayer,
   provisionToolchain,
 } from "../native";
 
@@ -57,7 +55,6 @@ const serve = (
   crashAt: Option.Option<CrashPoint>,
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
-    const engine = yield* WorkflowEngine.WorkflowEngine;
     // Built in this command's scope, which is the host's: a registration outlives the
     // request that asked for one and is finalized when the host goes, never before.
     const registry = yield* Registry;
@@ -161,28 +158,45 @@ const serve = (
 
         case "answer": {
           const done = yield* registry
-            .answer({ runId: request.runId, decision: request.decision, value: request.value })
+            .answer({
+              runId: request.runId,
+              decision: request.decision,
+              value: request.value,
+              // A fixture host has no front door to mint one, so the answer is its
+              // own claim: the same value twice is still a second answer.
+              request: request.request ?? `${request.runId}-${request.decision}-${request.value}`,
+            })
             .pipe(Effect.result);
           return yield* done._tag === "Success"
-            ? answer({ ok: true, op: "answer" })
+            ? answer({ ok: true, op: "answer", value: done.success.value })
             : refused("answer", done.failure.reason);
         }
 
-        case "hold":
-          return yield* flag("hold", request.runId, true);
+        case "waiting": {
+          const open = yield* registry.waiting(request.runId);
+          return yield* answer({
+            ok: true,
+            op: "waiting",
+            diagnostics: open.filter((one) => one.answer === null).map((one) => one.name),
+            metadata: open.map((one) => ({ ...one, options: [...one.options] })),
+          });
+        }
 
-        // Setting the flag is not enough: a run parked on its decision has nothing that
-        // would make it read the flag, so stopping wakes it and the wait suspends itself.
-        // Releasing and resuming clear the flag first, so the run that wakes up does not
-        // find the request that stopped it still there.
+        // Setting a control is not enough on its own: a run parked on its question has
+        // nothing that would make it look again, so everything but a hold wakes it — a
+        // stop so the wait suspends itself, a release or a resume so it carries on. The
+        // registry clears the control first, so what wakes up does not find it still set.
+        case "hold":
+          return yield* control(request.op, request.runId, "hold", true);
+
         case "stop":
-          return yield* control(request, "stop", true);
+          return yield* control(request.op, request.runId, "stop", true);
 
         case "release":
-          return yield* control(request, "hold", false);
+          return yield* control(request.op, request.runId, "hold", false);
 
         case "resume":
-          return yield* control(request, "stop", false);
+          return yield* control(request.op, request.runId, "stop", false);
 
         case "provision": {
           const done = yield* provisionToolchain(request.dir).pipe(Effect.result);
@@ -215,29 +229,16 @@ const serve = (
     });
 
     const control = Effect.fn("Native.control")(function* (
-      request: { readonly op: string; readonly id: string; readonly runId: string },
-      name: string,
-      set: boolean,
-    ) {
-      const found = yield* registry.routed(request.runId).pipe(Effect.result);
-      if (found._tag === "Failure") return yield* refused(request.op, found.failure.reason);
-      yield* flag(name, request.runId, set, false);
-      yield* engine.resume(found.success.generation.registration.workflow, found.success.execution);
-      yield* answer({ ok: true, op: request.op });
-    });
-
-    const flag = Effect.fn("Native.flag")(function* (
-      name: string,
+      op: string,
       runId: string,
+      name: "hold" | "stop",
       set: boolean,
-      reply = true,
     ) {
-      const fs = yield* FileSystem.FileSystem;
-      const path = `${dir}/${name}.${runId}`;
-      yield* (set ? fs.writeFileString(path, "") : fs.remove(path).pipe(Effect.ignore)).pipe(
-        Effect.orDie,
-      );
-      if (reply) yield* Console.log(encodeReply({ ok: true, op: name }));
+      const done = yield* registry.control({ runId, control: name, set }).pipe(Effect.result);
+      if (done._tag === "Failure") return yield* refused(op, done.failure.reason);
+      // Recorded either way, and the reply says which: a control over work no host is
+      // running is an intent, never a confirmation.
+      yield* answer({ ok: true, op, detail: done.success.detail });
     });
 
     yield* Stream.fromReadableStream({
@@ -260,9 +261,8 @@ const serve = (
   }).pipe(
     Effect.provide(registryLayer(dir, { crashAt: Option.getOrUndefined(crashAt) })),
     Effect.provide(
-      hostLayer({ dir, registrationTimeout: registrationTimeoutOf(registrationTimeout) }),
+      foundationLayer({ dir, registrationTimeout: registrationTimeoutOf(registrationTimeout) }),
     ),
-    Effect.provide(nativeHostLayer(dir)),
     Effect.provide(Layer.unwrap(configuredAgents(dir))),
     Effect.provide(BunServices.layer),
     Effect.scoped,

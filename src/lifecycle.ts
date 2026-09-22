@@ -273,12 +273,115 @@ export const recoverNativeRun = (
     }),
   );
 
+/**
+ * Settles the question a native Run is waiting on. The decision is named where the caller
+ * knows which one, and null where it means "the one it is waiting on" — the host refuses
+ * that where it is not exactly one, rather than choosing for anybody.
+ */
+export const answerNativeRun = (
+  env: PluginEnv,
+  options: {
+    readonly runId: string;
+    readonly decision: string | null;
+    readonly value: string;
+    readonly request: string;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(env, (client) =>
+    client.answer({
+      runId: options.runId,
+      decision: options.decision,
+      value: options.value,
+      request: options.request,
+    }),
+  ).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? {
+            ok: true as const,
+            data: { run: options.runId, ...answered.value },
+            human: answered.value.fresh
+              ? `Answered ${options.runId}: ${answered.value.decision} = ${answered.value.value}.`
+              : `${options.runId} already had that answer to ${answered.value.decision}.`,
+          }
+        : answered,
+    ),
+  );
+
+/**
+ * Sets or clears one control over one native Run. A control the host recorded but could
+ * not apply says so: work no host is running is held in intent, and calling that done
+ * would be a confirmation nobody can stand behind.
+ */
+export const controlNativeRun = (
+  env: PluginEnv,
+  options: {
+    readonly runId: string;
+    readonly control: "hold" | "stop";
+    readonly set: boolean;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(env, (client) => client.control(options)).pipe(
+    Effect.map((answered) => {
+      if (!answered.ok) return answered;
+      const done = answered.value;
+      const what = `${done.set ? done.control : `un${done.control}`} ${done.runId}`;
+      return {
+        ok: true as const,
+        data: { run: done.runId, ...done },
+        human: done.applied
+          ? `${capitalised(what)}.`
+          : `Recorded ${what}, but nothing here is running it: ${done.detail}`,
+      };
+    }),
+  );
+
+/** Says something of a human's to the agent a native Run has, through the host. */
+export const steerNativeRun = (
+  env: PluginEnv,
+  options: {
+    readonly runId: string;
+    readonly text: string;
+    readonly request: string;
+    readonly operation?: string;
+    readonly mode?: "boundary" | "now" | "interrupt";
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(env, (client) => client.steer(options)).pipe(
+    Effect.map((answered) => {
+      if (!answered.ok) return answered;
+      const sent = answered.value;
+      // Not delivered is not a failure of the command: it is what is known about the
+      // delivery, and the caller is told rather than left to assume it landed.
+      return {
+        ok: true as const,
+        data: { run: options.runId, ...sent },
+        human: sent.delivered
+          ? `Told ${sent.agent}.`
+          : `Nothing was delivered: ${sent.detail || "no agent to tell"}.`,
+      };
+    }),
+  );
+
+const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
 /** A Run as a human reads one: what it is, where its module is, and what is wrong. */
 export const describeRun = (view: RunView): ReadonlyArray<string> => [
   `${view.runId}\t${statusOf(view)}\t${view.workflow}`,
   view.entry,
+  ...(view.controls.length === 0 ? [] : [`under ${view.controls.join(", ")}`]),
+  ...describeWaiting(view),
   ...(view.diagnostic === null ? [] : [view.diagnostic]),
 ];
+
+/** The questions a Run is still waiting on, with what each will take. */
+export const describeWaiting = (view: RunView): ReadonlyArray<string> =>
+  view.waiting
+    .filter((one) => one.answer === null)
+    .map(
+      (one) =>
+        `waiting on "${one.name}": ${one.prompt}${one.options.length === 0 ? "" : ` (${one.options.join(" | ")})`}`,
+    );
 
 /** The one word a listing gives a Run, and the sentence behind it where there is one. */
 export const statusOf = (view: RunView): string => {

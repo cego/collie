@@ -11,13 +11,20 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Duration, Effect, FileSystem, Schema } from "effect";
-import type * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
+import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith } from "./support/live";
-import { agentWork, agentsLayer, decodeOutput, promptFor, type AgentHost } from "../src/agents";
+import {
+  NativeAgents,
+  agentWork,
+  agentsLayer,
+  decodeOutput,
+  promptFor,
+  type AgentHost,
+} from "../src/agents";
 import { defineWorkflow, jsonSchemaFor } from "../src/sdk";
-import { hostLayer } from "../src/native";
+import { controlPath, foundationLayer } from "../src/native";
 import { agentName } from "../src/naming";
 
 let rig: Rig;
@@ -84,13 +91,13 @@ const hostOf = (): AgentHost => ({
 
 /** One host's lifetime: a fresh engine on the same directory is what a restart is. */
 const session = <A, E>(
-  run: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine>,
+  run: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | NativeAgents>,
   over?: Partial<AgentHost>,
 ) =>
   run.pipe(
     Effect.provide(body),
     Effect.provide(agentsLayer({ ...hostOf(), ...over })),
-    Effect.provide(hostLayer({ dir })),
+    Effect.provide(foundationLayer({ dir })),
     Effect.scoped,
     Effect.orDie,
   );
@@ -99,6 +106,20 @@ const started = (runId: string, skip = false) =>
   work.execute({ runId, input: { skip } }).pipe(Effect.result);
 
 const agentFor = (runId: string) => agentName(runId, "review", null, 1);
+
+/**
+ * A parked Run picked up again, as a host's control does it: the execution is resumed and
+ * then waited on. Nothing re-enters a suspended workflow on its own.
+ */
+const releasedInto = (runId: string) =>
+  session(
+    Effect.gen(function* () {
+      const engine = yield* WorkflowEngine.WorkflowEngine;
+      const payload = { runId, input: { skip: false } };
+      yield* engine.resume(work, yield* work.executionId(payload));
+      return yield* work.execute(payload).pipe(Effect.result);
+    }),
+  );
 
 const outputPath = (runId: string) => `${dir}/agents/${runId}/review.json`;
 const promptPath = (runId: string) => `${dir}/agents/${runId}/review.prompt.md`;
@@ -340,3 +361,133 @@ test("a herdr that cannot say what it has blocks the work rather than starting a
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(0);
     }),
   ));
+
+/** The controls an operator sets, as the host keeps them beside the run. */
+const control = (name: string, runId: string, set: boolean) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => {
+      const path = controlPath(dir, name, runId);
+      return set ? fs.writeFileString(path, "") : fs.remove(path).pipe(Effect.ignore);
+    }),
+    Effect.orDie,
+  );
+
+/** What was typed into an agent's pane, in the order herdr was asked to type it. */
+const prompts = (calls: ReadonlyArray<Call>) =>
+  calls
+    .filter((call) => (call.argv ?? [])[0] === "agent" && (call.argv ?? [])[1] === "prompt")
+    .map((call) => (call.argv ?? [])[3] ?? "");
+
+/** One thing an operator says to the run's agent, through the host's own service. */
+const say = (runId: string, text: string, request: string, mode?: "boundary" | "now") =>
+  NativeAgents.pipe(Effect.flatMap((agents) => agents.steer({ runId, text, request, mode })));
+
+test("what a human says reaches the run's agent through the one sender, in the order they said it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+
+      const told = yield* session(
+        Effect.all([
+          say("r1", "first thing", "steer-1"),
+          say("r1", "second thing", "steer-2"),
+          say("r1", "third thing", "steer-3"),
+        ]),
+      );
+      expect(told.map((one) => one.agent)).toEqual([
+        agentFor("r1"),
+        agentFor("r1"),
+        agentFor("r1"),
+      ]);
+      expect(told.every((one) => one.delivered)).toBe(true);
+
+      // Said once each and in order: the dispatcher is the only sender and it holds one
+      // agent's ledger while it sends.
+      const said = prompts(yield* rig.calls()).filter((text) => text.endsWith(" thing"));
+      expect(said).toEqual(["first thing", "second thing", "third thing"]);
+    }),
+  ));
+
+test("the same thing said twice under one claim is one delivery, not two", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      yield* session(
+        Effect.all([say("r1", "again", "steer-1"), say("r1", "again", "steer-1")], {
+          concurrency: 1,
+        }),
+      );
+      expect(prompts(yield* rig.calls()).filter((text) => text === "again")).toHaveLength(1);
+    }),
+  ));
+
+test("a delivery this harness has not been shown to take is refused rather than sent and hoped for", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { harness: "codex" });
+      const told = yield* session(say("r1", "stop what you are doing", "steer-now", "now"), {
+        harness: "codex",
+      });
+      expect(told.delivered).toBe(false);
+      expect(told.detail).toContain("capability_unproven");
+      // Nothing was typed at it: the gate is in the sender, not in front of it.
+      expect(prompts(yield* rig.calls())).not.toContain("stop what you are doing");
+    }),
+  ));
+
+test("a run that has launched no agent is told so rather than told its message landed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const told = yield* session(say("r-nothing", "hello", "steer-1"));
+      expect(told).toMatchObject({ agent: "", delivered: false });
+      expect(told.detail).toContain("has launched no agent");
+    }),
+  ));
+
+test(
+  "a held run parks before it starts an agent, and carries on once it is released",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* control("hold", "r1", true);
+        yield* rig.queueOutputs([{ verdict: "clean", note: "after the hold" }]);
+        // Submitted rather than awaited: held work parks, so there is nothing to wait for.
+        yield* interrupted("r1", 400);
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(0);
+
+        yield* control("hold", "r1", false);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("after the hold");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a stop while the collection is out parks the wait, and what comes back reattaches to the launch",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        // Nothing written, so the collection is still out when the stop arrives.
+        yield* rig.queueOutputs([null]);
+        yield* control("stop", "r1", true);
+        yield* interrupted("r1", 900);
+        // The agent was launched and is still holding the work: stopping a Run is not
+        // halting its agent, which is its own action.
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+
+        yield* control("stop", "r1", false);
+        yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"resumed"}`);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("resumed");
+        // One launch across the stop: the wait came back to the agent that was recorded.
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);

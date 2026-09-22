@@ -13,10 +13,9 @@ is why.
 ## A module
 
 ```ts
-import { NativeHost, decision, defineWorkflow, type WorkflowMetadata } from "collie/native";
+import { NativeHost, ask, decision, defineWorkflow, type WorkflowMetadata } from "collie/native";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
-import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 
 export const id = "echo";
 export const title = "Repeat a line, then ask whether to keep it";
@@ -26,7 +25,7 @@ export const input = { text: Schema.String, times: Schema.Int };
 
 export const make = (registrationName: string) => {
   const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const keep = decision("keep");
+  const keep = decision("keep", { prompt: "Keep this result?", options: ["yes", "no"] });
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
       const host = yield* NativeHost;
@@ -37,7 +36,7 @@ export const make = (registrationName: string) => {
           .record(payload.runId, payload.input.text)
           .pipe(Effect.as(payload.input.text.repeat(payload.input.times))),
       });
-      return `${line}|${yield* DurableDeferred.await(keep)}`;
+      return `${line}|${yield* ask(payload.runId, keep)}`;
     }),
   );
   return { workflow, layer, decisions: { keep } };
@@ -198,6 +197,41 @@ has stops the work with that as the reason rather than starting a second agent.
 
 `promptFor` builds the same prompt without launching anything, and `decodeOutput` reads a
 file against a contract. Both are plain functions, so a test of yours can use them.
+
+## Waiting for a human
+
+`decision(name, { prompt, options })` is a question, and `ask(runId, question)` is how you
+wait for it. Wait with `ask` and not with `DurableDeferred.await`: `ask` tells the host what
+the run is waiting on, and a host that does not know that cannot show the question, cannot
+refuse an answer to one nobody asked, and cannot tell a second answer from the first. A
+module that awaits a deferred directly gets a Run nobody can answer.
+
+- **`options` is what it takes.** An answer outside them is refused before your workflow is
+  told anything. Leave it out for a question answered in the operator's own words.
+- **One answer, whoever sends it.** Two answers racing make one piece of work; the second is
+  refused with what the run already has, and retrying one under the same request id is the
+  same answer rather than another.
+- **The question survives a restart**, and so does its answer. What is waiting is in
+  `run show`, and `run answer <run> <value> --decision <name>` settles it.
+
+## What an operator can do to your Run
+
+None of it is yours to implement, but it decides where your workflow can be interrupted.
+
+- **A hold parks the Run at its next boundary.** Read it with `host.held(runId)` as a plain
+  Effect and suspend the run's own instance; `agentWork` already does this before it starts
+  an agent. It must not be an Activity: an operator sets a hold between attempts, and an
+  Activity would hand back what the first attempt saw.
+- **A stop parks a wait.** Read `host.stopRequested(runId)` inside the Activity that waits
+  and suspend _that_ Activity's own instance, never the workflow's — suspending the run from
+  inside an Activity abandons the wait rather than parking it. `agentWork` does this while it
+  is collecting, so a stop lands even mid-collection and what resumes reattaches to the
+  launch already recorded.
+- **Stopping a Run does not stop its agent.** The agent keeps what it is holding; halting a
+  harness is its own action. Steering — `run steer` — says something to that agent through
+  the one sender, and says whether it was delivered.
+
+[ADR-0021](adr/0021-one-host-answers-for-a-run.md) is why each of those is the way it is.
 
 ## Metadata
 

@@ -16,7 +16,7 @@
 // is why the engine underneath is Effect's.
 
 import { Context, Effect, Layer, Schema } from "effect";
-import type { WorkflowEngine } from "effect/unstable/workflow/WorkflowEngine";
+import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import type { NativeAgents } from "./agents";
@@ -80,19 +80,62 @@ export const defineWorkflow = <
     error: WorkflowError,
   });
 
-/** What the host lends a workflow module; ticket 01's proof host provides it. */
+/**
+ * What the host lends a workflow module; ticket 01's proof host provides it.
+ *
+ * `held` and `stopRequested` are plain Effects rather than Activities on purpose: an
+ * operator sets a control between attempts, and an Activity would hand back the answer
+ * from the attempt that first ran.
+ */
 export interface NativeHostApi {
   readonly dir: string;
   readonly held: (runId: string) => Effect.Effect<boolean>;
   readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
   readonly record: (runId: string, event: string) => Effect.Effect<void>;
+  /** Records the question this run is waiting on, so the host can say what may answer it. */
+  readonly asking: (runId: string, question: DecisionSpec) => Effect.Effect<void>;
 }
 
 export class NativeHost extends Context.Service<NativeHost, NativeHostApi>()("collie/NativeHost") {}
 
+/** A question as the host records it: its identity, what it asks, and what it takes. */
+export interface DecisionSpec {
+  readonly name: string;
+  readonly prompt: string;
+  /** The answers it takes. Empty is a question answered in the operator's own words. */
+  readonly options: ReadonlyArray<string>;
+}
+
 /** A decision a run waits on. Answered with text, which is what an operator types. */
-export const decision = (name: string) => DurableDeferred.make(name, { success: Schema.String });
-export type NativeDecision = ReturnType<typeof decision>;
+export interface NativeDecision extends DurableDeferred.DurableDeferred<typeof Schema.String> {
+  readonly asks: DecisionSpec;
+}
+
+export const decision = (
+  name: string,
+  asks?: { readonly prompt?: string; readonly options?: ReadonlyArray<string> },
+): NativeDecision =>
+  Object.assign(DurableDeferred.make(name, { success: Schema.String }), {
+    asks: { name, prompt: asks?.prompt ?? name, options: asks?.options ?? [] },
+  });
+
+/**
+ * Waits for this question to be answered, having told the host it is open.
+ *
+ * Both halves matter. Waiting is Effect's — the answer is durable and a restart comes
+ * back to it. Saying so is Collie's: a host that does not know what a run is asking
+ * cannot show the question, cannot refuse an answer to one nobody asked, and cannot tell
+ * a second answer from the first.
+ */
+export const ask = (
+  runId: string,
+  question: NativeDecision,
+): Effect.Effect<string, never, NativeHost | WorkflowEngine | WorkflowInstance> =>
+  Effect.gen(function* () {
+    const host = yield* NativeHost;
+    yield* host.asking(runId, question.asks);
+    return yield* DurableDeferred.await(question);
+  });
 
 /**
  * A workflow as the host sees one: any input and any result, no service of the host's to

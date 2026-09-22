@@ -50,6 +50,30 @@ const Run = Schema.Struct({
 });
 export type RunRow = typeof Run.Type;
 
+/**
+ * A question one run is waiting on: what was asked, what may answer it, and the answer it
+ * has if it has one. One row per run and decision, which is what makes a second answer a
+ * thing the database refuses rather than a thing a reader has to notice.
+ */
+const Decision = Schema.Struct({
+  run: Schema.String,
+  decision: Schema.String,
+  prompt: Schema.String,
+  /** The answers this question takes, as JSON; empty is a question answered in words. */
+  options: Schema.String,
+  answer: Schema.NullOr(Schema.String),
+  /** The claim the answer arrived under, so the same request twice is one answer. */
+  request: Schema.NullOr(Schema.String),
+});
+export type DecisionRow = typeof Decision.Type;
+
+/** What became of an answer. Only `accepted` completes anything. */
+export type Answered =
+  | { readonly _tag: "accepted"; readonly row: DecisionRow }
+  /** The same claim again: the answer already landed, and this is not a second one. */
+  | { readonly _tag: "repeat"; readonly row: DecisionRow }
+  | { readonly _tag: "refused"; readonly reason: string };
+
 /** A generation a host registered, so the next host can rebuild it from current files. */
 const Generation = Schema.Struct({
   name: Schema.String,
@@ -77,6 +101,29 @@ export interface Admission {
 
 export interface StoreApi {
   readonly remember: (generation: GenerationRow) => Effect.Effect<void>;
+  /**
+   * Records that this run is waiting on this question. Replaying the wait says it again
+   * and changes nothing: the row that is already there carries the answer.
+   */
+  readonly asking: (question: {
+    readonly run: string;
+    readonly decision: string;
+    readonly prompt: string;
+    readonly options: ReadonlyArray<string>;
+  }) => Effect.Effect<void>;
+  /** Every question this run has been asked, answered or not, in the order they were. */
+  readonly asked: (run: string) => Effect.Effect<ReadonlyArray<DecisionRow>>;
+  /**
+   * Settles one open question, or says why this answer is not the one that settles it.
+   * The write is the decision: one UPDATE over the unanswered row, so two answers racing
+   * are separated by the database rather than by whoever reads first.
+   */
+  readonly settle: (answer: {
+    readonly run: string;
+    readonly decision: string;
+    readonly value: string;
+    readonly request: string;
+  }) => Effect.Effect<Answered>;
   readonly generations: Effect.Effect<ReadonlyArray<GenerationRow>>;
   /**
    * Claims a request id for a run, or hands back the run that already has it. `fresh` is
@@ -141,6 +188,22 @@ const MIGRATIONS = {
     yield* sql`ALTER TABLE collie_runs ADD COLUMN provenance TEXT`;
     yield* sql`ALTER TABLE collie_runs ADD COLUMN options TEXT`;
   }),
+  "4_decisions": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      CREATE TABLE collie_decisions (
+        run TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        options TEXT NOT NULL,
+        asked TEXT NOT NULL,
+        answer TEXT,
+        request TEXT,
+        answered TEXT,
+        PRIMARY KEY (run, decision)
+      )
+    `;
+  }),
 };
 
 function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | Reactivity.Reactivity> {
@@ -181,6 +244,20 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         sql`SELECT ${columns} FROM collie_runs WHERE accepted IS NULL ORDER BY admitted, run`,
     });
 
+    const decisionsOf = SqlSchema.findAll({
+      Request: Schema.String,
+      Result: Decision,
+      execute: (run) =>
+        sql`SELECT run, decision, prompt, options, answer, request FROM collie_decisions WHERE run = ${run} ORDER BY asked, decision`,
+    });
+
+    const decisionRow = SqlSchema.findAll({
+      Request: Schema.Struct({ run: Schema.String, decision: Schema.String }),
+      Result: Decision,
+      execute: (key) =>
+        sql`SELECT run, decision, prompt, options, answer, request FROM collie_decisions WHERE run = ${key.run} AND decision = ${key.decision}`,
+    });
+
     const everyGeneration = SqlSchema.findAll({
       Request: Schema.Void,
       Result: Generation,
@@ -201,6 +278,54 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         }).pipe(Effect.orDie),
 
       generations: everyGeneration().pipe(Effect.orDie),
+
+      asking: (question) =>
+        Effect.gen(function* () {
+          const at = yield* nowIso();
+          yield* sql`
+              INSERT INTO collie_decisions (run, decision, prompt, options, asked)
+              VALUES (
+                ${question.run}, ${question.decision}, ${question.prompt},
+                ${asJsonText([...question.options])}, ${at}
+              )
+              ON CONFLICT(run, decision) DO NOTHING
+            `;
+          yield* reactivity.invalidate(RUNS);
+        }).pipe(Effect.orDie),
+
+      asked: (run: string) => decisionsOf(run).pipe(Effect.orDie),
+
+      settle: Effect.fn("Store.settle")(function* (answer) {
+        const at = yield* nowIso();
+        // One write over the row while it is still unanswered. Whoever it returns a row
+        // to is the answer; everybody else reads what landed and is told so.
+        const settled = yield* reactivity
+          .mutation(
+            RUNS,
+            sql`
+              UPDATE collie_decisions
+              SET answer = ${answer.value}, request = ${answer.request}, answered = ${at}
+              WHERE run = ${answer.run} AND decision = ${answer.decision} AND answer IS NULL
+              RETURNING decision
+            `,
+          )
+          .pipe(Effect.orDie);
+        const [row] = yield* decisionRow({ run: answer.run, decision: answer.decision }).pipe(
+          Effect.orDie,
+        );
+        if (row === undefined) {
+          return {
+            _tag: "refused" as const,
+            reason: `run "${answer.run}" is not waiting on a decision called "${answer.decision}"`,
+          };
+        }
+        if (settled.length > 0) return { _tag: "accepted" as const, row };
+        if (row.request === answer.request) return { _tag: "repeat" as const, row };
+        return {
+          _tag: "refused" as const,
+          reason: `"${answer.decision}" was already answered "${row.answer}"`,
+        };
+      }),
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {
         const input = canonical(admission.input);

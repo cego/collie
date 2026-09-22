@@ -16,6 +16,7 @@ import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { connect } from "../src/host";
 import { nativeRun, nativeRuns } from "../src/lifecycle";
+import type { RunView } from "../src/native";
 import { runEffect } from "./support/effect";
 import { events, fixtures, root, stopHost, until } from "./support/native";
 
@@ -243,7 +244,9 @@ test(
         const recovered = yield* client.recover().pipe(Effect.orDie);
         expect(recovered.live).toContain("proof@1");
         expect(recovered.unavailable).toEqual([]);
-        yield* client.answer({ runId, decision: "decision", value: "back" }).pipe(Effect.orDie);
+        yield* client
+          .answer({ runId, decision: "decision", value: "back", request: "answer-back" })
+          .pipe(Effect.orDie);
         expect(
           (yield* until(
             () => client.run({ runId }),
@@ -288,7 +291,9 @@ test(
 
         // The work is where it was left: nothing was cancelled with the client.
         const client = yield* connect(world.state).pipe(Effect.orDie);
-        yield* client.answer({ runId, decision: "decision", value: "again" }).pipe(Effect.orDie);
+        yield* client
+          .answer({ runId, decision: "decision", value: "again", request: "answer-again" })
+          .pipe(Effect.orDie);
         // The first thing a stream says is the current state, so a client that was not
         // listening when it changed is not waiting for an update that has been and gone.
         const first = yield* Stream.runHead(client.watch({ runId }));
@@ -355,7 +360,9 @@ test(
         });
 
         const client = yield* connect(world.state).pipe(Effect.orDie);
-        yield* client.answer({ runId, decision: "decision", value: "done" }).pipe(Effect.orDie);
+        yield* client
+          .answer({ runId, decision: "decision", value: "done", request: "answer-done" })
+          .pipe(Effect.orDie);
         const finished = yield* collie(world, ["run", "wait", runId]);
         expect((yield* payloadOf(finished.envelope)).run?.status).toEqual({
           status: "complete",
@@ -452,6 +459,114 @@ test(
             (view) => view !== null && "status" in view && view.status.status === "suspended",
           ),
         ).toMatchObject({ runId, workflow: "proof", input: { note: "picked" } });
+        yield* stopHost(world.state);
+      }),
+    ),
+  240_000,
+);
+
+/** The question this run is waiting on, as the read model both doors show it. */
+const waitingOn = (view: RunView | null) =>
+  (view?.waiting ?? []).filter((one) => one.answer === null).map((one) => one.name);
+
+test(
+  "two answers racing settle the question once, and both front doors refuse the loser alike",
+  () =>
+    proves("collie-lifecycle-answer-", (world) =>
+      Effect.gen(function* () {
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const started = yield* client
+          .start({ project: world.project, id: "proof", request: "req-1", input: { note: "race" } })
+          .pipe(Effect.orDie);
+        const runId = started.runId;
+        // The read model says what it is waiting on before anybody answers it.
+        yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => waitingOn(view).includes("decision"),
+        );
+
+        // Two answers, each with its own claim, in flight at once. The database settles
+        // which one the run gets; the other is told what landed rather than overwriting it.
+        const [first, second] = yield* Effect.all(
+          [
+            client
+              .answer({ runId, decision: "decision", value: "left", request: "ans-left" })
+              .pipe(Effect.result),
+            client
+              .answer({ runId, decision: "decision", value: "right", request: "ans-right" })
+              .pipe(Effect.result),
+          ],
+          { concurrency: "unbounded" },
+        ).pipe(Effect.orDie);
+        const outcomes = [first, second];
+        expect(outcomes.filter((one) => one._tag === "Success")).toHaveLength(1);
+        const refused = outcomes.find((one) => one._tag === "Failure");
+        expect(refused?._tag === "Failure" && refused.failure.reason).toContain("already answered");
+
+        const won = outcomes.find((one) => one._tag === "Success");
+        const value = won?._tag === "Success" ? won.success.value : "";
+        expect(
+          yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete",
+          ),
+        ).toMatchObject({ status: { status: "complete", value: `note:race=${value}` } });
+
+        // The command line is the other door onto the same host, and a late answer there
+        // is refused with the host's own sentence rather than a second one of its own.
+        const late = yield* collie(world, [
+          "run",
+          "answer",
+          runId,
+          "late",
+          "--decision",
+          "decision",
+        ]);
+        expect(late.envelope.ok).toBe(false);
+        expect(late.envelope.error?.message).toContain("already answered");
+        yield* stopHost(world.state);
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "a held Run says so wherever it is read, and releasing it from the command line lets it on",
+  () =>
+    proves("collie-lifecycle-hold-", (world) =>
+      Effect.gen(function* () {
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const started = yield* client
+          .start({ project: world.project, id: "proof", request: "req-1", input: { note: "held" } })
+          .pipe(Effect.orDie);
+        const runId = started.runId;
+        yield* until(
+          () => client.run({ runId }).pipe(Effect.orDie),
+          (view) => waitingOn(view).includes("decision"),
+        );
+
+        const held = yield* client
+          .control({ runId, control: "hold", set: true })
+          .pipe(Effect.orDie);
+        expect(held).toMatchObject({ applied: true, detail: "" });
+        // The control is part of what the Run is, not a fact only the host that set it has.
+        expect((yield* client.run({ runId }).pipe(Effect.orDie))?.controls).toEqual(["hold"]);
+        const shown = yield* collie(world, ["run", "show", runId]);
+        expect(shown.envelope.ok).toBe(true);
+
+        const released = yield* collie(world, ["run", "release", runId]);
+        expect(released.envelope.ok).toBe(true);
+        expect((yield* client.run({ runId }).pipe(Effect.orDie))?.controls).toEqual([]);
+
+        yield* client
+          .answer({ runId, decision: "decision", value: "on", request: "ans" })
+          .pipe(Effect.orDie);
+        expect(
+          yield* until(
+            () => client.run({ runId }).pipe(Effect.orDie),
+            (view) => view?.status.status === "complete",
+          ),
+        ).toMatchObject({ status: { status: "complete", value: "note:held=on" } });
         yield* stopHost(world.state);
       }),
     ),

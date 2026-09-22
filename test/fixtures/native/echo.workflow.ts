@@ -2,10 +2,9 @@
 // its own supplied by its own Layer, an ordinary Effect operator Collie knows nothing
 // about, and a typed result. Collie's whole contribution is the four imports below.
 
-import { NativeHost, decision, defineWorkflow, type WorkflowMetadata } from "collie/native";
+import { NativeHost, ask, decision, defineWorkflow, type WorkflowMetadata } from "collie/native";
 import { Context, Effect, Layer, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
-import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 
 export const id = "echo";
 export const title = "Repeat a line, then ask whether to keep it";
@@ -42,7 +41,7 @@ export const metadata: WorkflowMetadata = {
 
 export const make = (registrationName: string) => {
   const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const keep = decision("keep");
+  const keep = decision("keep", { prompt: "Keep this result?", options: ["yes", "no"] });
 
   const layer = workflow
     .toLayer(
@@ -64,7 +63,7 @@ export const make = (registrationName: string) => {
           ),
         });
 
-        return `${line}|${yield* DurableDeferred.await(keep)}`;
+        return `${line}|${yield* ask(payload.runId, keep)}`;
       }),
     )
     // Explicitly provided, because merging siblings supplies nothing: the service this

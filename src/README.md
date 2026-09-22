@@ -51,7 +51,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `native.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live |
 | `host.ts`          | The one local host per state directory: who owns it, how a client reaches it             |
 | `discovery.ts`     | Where a workflow module is looked for, which layer wins, and what counts as an edit      |
-| `store.ts`         | The rows a host keeps beside Effect's: request claims, run identity, generations         |
+| `store.ts`         | Rows beside Effect's: request claims, run identity, generations, open questions          |
 | `lifecycle.ts`     | A native Run from both front doors: start it, watch it, and pick it up again             |
 | `sdk.ts`           | `collie/native`: what a workflow module exports, declares, and is refused for            |
 | `agents.ts`        | What a native workflow does with an agent: one launch, one collection, one repair        |

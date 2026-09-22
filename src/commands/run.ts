@@ -37,7 +37,10 @@ import {
 } from "../operations";
 import { fanoutRepos, withRunLock, RunStore } from "../run";
 import {
+  answerNativeRun,
   anyNativeRuns,
+  controlNativeRun,
+  steerNativeRun,
   moduleFor,
   neededInputs,
   describeRun,
@@ -944,6 +947,11 @@ function runMutationCommand(
   runId: string,
   requestId: Option.Option<string>,
   apply: (env: PluginEnv, run: Run, id: string) => Effect.Effect<Result, CollieError, BunServices>,
+  /**
+   * What the same command means for a Run the host owns. Both front doors settle one
+   * through the host, so a refusal is the host's own sentence whichever door it came in.
+   */
+  native?: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, BunServices>,
 ) {
   return Effect.gen(function* () {
     const global = yield* root;
@@ -955,8 +963,9 @@ function runMutationCommand(
         return yield* mutation(resolved.env, operation, requestId, (id) =>
           Effect.gen(function* () {
             const found = yield* readRun(resolved.env, runId, task);
-            if (found._tag === "RunFailure") return found.result;
-            return yield* apply(resolved.env, found.run, id);
+            if (found._tag !== "RunFailure") return yield* apply(resolved.env, found.run, id);
+            if (native === undefined || !(yield* anyNativeRuns(resolved.env))) return found.result;
+            return yield* native(resolved.env, id);
           }),
         );
       }),
@@ -978,13 +987,70 @@ const runAnswer = Command.make(
       ),
       Flag.optional,
     ),
+    decision: Flag.String("decision").pipe(
+      Flag.withDescription(
+        "Which question, for a workflow module waiting on more than one; `run show` names them",
+      ),
+      Flag.optional,
+    ),
     requestId: requestIdFlag,
   },
-  ({ runId, answer, expectChoice, requestId }) =>
-    runMutationCommand("run-answer", runId, requestId, (_env, run, id) =>
-      answerRun(run, answer, id, Option.getOrNull(expectChoice)),
+  ({ runId, answer, expectChoice, decision, requestId }) =>
+    runMutationCommand(
+      "run-answer",
+      runId,
+      requestId,
+      (_env, run, id) => answerRun(run, answer, id, Option.getOrNull(expectChoice)),
+      (env, id) =>
+        answerNativeRun(env, {
+          runId,
+          decision: Option.getOrNull(decision),
+          value: answer,
+          request: id,
+        }),
     ),
-).pipe(Command.withDescription("Answer the Choice a waiting Run is asking"));
+).pipe(Command.withDescription("Answer the Choice or the decision a waiting Run is asking"));
+
+const runSteer = Command.make(
+  "steer",
+  {
+    runId: runIdArg,
+    text: Argument.String("text").pipe(
+      Argument.withDescription("What to say to the agent this Run has, in your own words"),
+    ),
+    operation: Flag.String("operation").pipe(
+      Flag.withDescription("Which of the Run's agents; the one most recently launched by default"),
+      Flag.optional,
+    ),
+    requestId: requestIdFlag,
+  },
+  ({ runId, text, operation, requestId }) =>
+    Effect.gen(function* () {
+      const global = yield* root;
+      yield* attempt(
+        Effect.gen(function* () {
+          const resolved = yield* context(global, false);
+          if (resolved._tag === "ContextFailure") return resolved.result;
+          if (!(yield* anyNativeRuns(resolved.env))) {
+            return err("run_not_found", `No workflow host has a Run "${runId}".`, { run: runId });
+          }
+          return yield* mutation(resolved.env, "run-steer", requestId, (id) =>
+            steerNativeRun(resolved.env, {
+              runId,
+              text,
+              request: id,
+              operation: Option.getOrNull(operation) ?? undefined,
+            }),
+          );
+        }),
+        global.json,
+      );
+    }),
+).pipe(
+  Command.withDescription(
+    "Say something to the agent a workflow module's Run has, through the one sender",
+  ),
+);
 
 const mutationFlags = {
   runId: runIdArg,
@@ -992,8 +1058,14 @@ const mutationFlags = {
 };
 
 const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
-  runMutationCommand("run-stop", runId, requestId, (env, run, id) =>
-    stopRun(env.stateDir, new Herdr(env), run, id),
+  runMutationCommand(
+    "run-stop",
+    runId,
+    requestId,
+    (env, run, id) => stopRun(env.stateDir, new Herdr(env), run, id),
+    // A native Run stops where it next looks, and its agent keeps whatever it is holding:
+    // halting a harness is its own action, not something a stopped Run implies.
+    (env) => controlNativeRun(env, { runId, control: "stop", set: true }),
   ),
 ).pipe(Command.withDescription("Stop a Run and close only the panes it owns"));
 
@@ -1067,8 +1139,14 @@ const runHold = Command.make(
           return yield* mutation(resolved.env, "run-hold", requestId, (request) =>
             Effect.gen(function* () {
               const found = yield* readRun(resolved.env, id, task);
-              if (found._tag === "RunFailure") return found.result;
-              return yield* holdRun(found.run, reason, request, ends.until);
+              if (found._tag !== "RunFailure")
+                return yield* holdRun(found.run, reason, request, ends.until);
+              if (!(yield* anyNativeRuns(resolved.env))) return found.result;
+              return yield* controlNativeRun(resolved.env, {
+                runId: id,
+                control: "hold",
+                set: true,
+              });
             }),
           );
         }),
@@ -1083,8 +1161,12 @@ const runRelease = Command.make(
   "release",
   { runId: runIdArg, reason: reasonFlag, requestId: requestIdFlag },
   ({ runId, reason, requestId }) =>
-    runMutationCommand("run-release", runId, requestId, (_env, run, id) =>
-      releaseRun(run, reason, id),
+    runMutationCommand(
+      "run-release",
+      runId,
+      requestId,
+      (_env, run, id) => releaseRun(run, reason, id),
+      (env) => controlNativeRun(env, { runId, control: "hold", set: false }),
     ),
 ).pipe(Command.withDescription("Let a held Run carry on"));
 
@@ -1266,12 +1348,17 @@ const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =
           Effect.gen(function* () {
             const found = yield* readRun(resolved.env, runId, task);
             if (found._tag !== "RunFailure") return yield* resumeRun(resolved.env, found.run, id);
-            // A native Run has no Driver to start: what picks it up is the host
+            // A native Run has no Driver to start. What picks it up is the host
             // registering the modules as they are now and handing over what is still
-            // outstanding, which is also what a repaired file needs.
-            return (yield* anyNativeRuns(resolved.env))
-              ? yield* recoverNativeRun(resolved.env, runId)
-              : found.result;
+            // outstanding — which a repaired file needs — and then the stop being
+            // cleared, so work that was stopped is not stopped again by it.
+            if (!(yield* anyNativeRuns(resolved.env))) return found.result;
+            const recovered = yield* recoverNativeRun(resolved.env, runId);
+            if (!recovered.ok) return recovered;
+            // Cleared after the module is registered again, so the run that wakes up is
+            // one this host can run and does not find the stop that parked it still set.
+            yield* controlNativeRun(resolved.env, { runId, control: "stop", set: false });
+            return recovered;
           }),
         );
       }),
@@ -1644,6 +1731,7 @@ export const run = Command.make("run").pipe(
     runAnswer,
     runHold,
     runRelease,
+    runSteer,
     runClearOverride,
     runDeliveries,
     runDisposition,

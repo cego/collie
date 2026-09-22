@@ -122,7 +122,9 @@ test(
           () => watching.status({ runId }),
           (status) => status.status === "suspended",
         );
-        yield* watching.answer({ runId, decision: "decision", value: "yes" }).pipe(Effect.orDie);
+        yield* watching
+          .answer({ runId, decision: "decision", value: "yes", request: "answer-yes" })
+          .pipe(Effect.orDie);
         const done = yield* until(
           () => watching.status({ runId }),
           (status) => status.status === "complete",
@@ -213,7 +215,12 @@ test(
             expect((yield* client.registrations()).live).toEqual(["proof@1"]);
             expect((yield* client.status({ runId: first.runId })).status).toBe("suspended");
 
-            yield* client.answer({ runId: first.runId, decision: "decision", value: "still here" });
+            yield* client.answer({
+              runId: first.runId,
+              decision: "decision",
+              value: "still here",
+              request: "answer-still-here",
+            });
             const done = yield* until(
               () => client.status({ runId: first.runId }),
               (status) => status.status === "complete",
