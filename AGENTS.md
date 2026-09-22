@@ -118,6 +118,12 @@ doors: herdr actions, and the `collie` CLI.
   `src/native.ts` and `test/children.test.ts`. A module provides what it needs with
   `Layer.provide` and there is nothing to look a service up in; a child is selected by its
   public id in the parent's own project, and its invocation name is its identity.
+- **Changing how a review/fix rally converges, or what counts as proof of a Run** →
+  [ADR-0023](docs/adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md) and
+  [`docs/sdk.md`](docs/sdk.md#reviewing-and-fixing-until-it-converges), alongside
+  `src/output.ts`, `src/outcome.ts`, `src/verify.ts` and `test/rally.test.ts`. The engine
+  and a module make the same decision through `settleRound`; a check is a claim until the
+  verification journal has it on this revision, and the approved set is the human's.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

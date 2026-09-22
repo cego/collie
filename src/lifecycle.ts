@@ -200,6 +200,13 @@ export const nativeRun = (
   );
 
 /**
+ * The checkout a native Run's verifications are about: the workspace it was given, or
+ * the project it was started for. A verification collected anywhere else would bind a
+ * real result to a tree nobody is looking at.
+ */
+export const treeOf = (view: RunView): string => view.options.workspace ?? view.project;
+
+/**
  * Every native Run this state directory has rows for, and why they could not be read
  * where they could not be: a host that will not start costs the caller the native Runs,
  * never the listing it asked for.
@@ -369,6 +376,7 @@ const capitalised = (text: string) => text.charAt(0).toUpperCase() + text.slice(
 export const describeRun = (view: RunView): ReadonlyArray<string> => [
   `${view.runId}\t${statusOf(view)}\t${view.workflow}`,
   view.entry,
+  `proves ${view.outcome}`,
   ...(view.parent === null ? [] : [`part of ${view.parent}`]),
   ...(view.controls.length === 0 ? [] : [`under ${view.controls.join(", ")}`]),
   ...describeWaiting(view),

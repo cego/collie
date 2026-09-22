@@ -1,10 +1,41 @@
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
+import type { PluginEnv } from "../env";
 import { err } from "../operations";
+import { nativeRun, treeOf } from "../lifecycle";
+import { noteVerification } from "../metrics";
+import { evidenceDir } from "../native";
 import { taskOfWorkspace } from "../task";
 import { collect, insideRun } from "../verify";
 import { printResult } from "../envelope";
 import { answering, readRun } from "./shared";
+
+/** A Run to verify against: where its journal goes, and the tree it is about. */
+interface Target {
+  readonly id: string;
+  readonly dir: string;
+  readonly cwd: string;
+  readonly worktree: string | null;
+  /** Whether the collector records the metric: a Run with steps does it at its gate. */
+  readonly note: boolean;
+}
+
+/**
+ * The same Run id, looked for among the ones the host owns. Null where it is neither, so
+ * the caller reports what the Markdown store already said rather than a second sentence.
+ */
+const nativeTarget = Effect.fn("collie.verify.native")(function* (env: PluginEnv, runId: string) {
+  const view = yield* nativeRun(env, runId);
+  if (view === null || !("runId" in view)) return null;
+  const target: Target = {
+    id: view.runId,
+    dir: evidenceDir(env.stateDir, view.runId),
+    cwd: treeOf(view),
+    worktree: null,
+    note: true,
+  };
+  return target;
+});
 
 /**
  * A command whose result Collie watched, bound to the tree it ran on. Not a mutation:
@@ -49,46 +80,56 @@ export const verify = Command.make(
         err("invalid_input", `--expect is "pass" or "fail", not "${wanted}".`),
         true,
       );
+    const verified = Effect.fn("collie.verify.collect")(function* (target: Target) {
+      const where = Option.getOrElse(cwd, () => target.worktree ?? target.cwd);
+      if (!(yield* insideRun(where, { cwd: target.cwd, worktree: target.worktree })))
+        return err(
+          "invalid_input",
+          `"${where}" is not inside run ${target.id}; a verification names the tree it ran on.`,
+        );
+      return yield* collect(target.dir, {
+        run: target.id,
+        name: Option.getOrElse(name, () => executable),
+        executable,
+        argv,
+        cwd: where,
+        by: "agent",
+        expect: wanted,
+      }).pipe(
+        Effect.tap((record) => (target.note ? noteVerification(target.dir, record) : Effect.void)),
+        Effect.map((record) => {
+          // The command's own exit, passed through: a wrapper around this must behave
+          // the way it would around the command itself.
+          process.exitCode = record.exit;
+          return {
+            ok: true as const,
+            data: { verification: record },
+            human: `${record.name}: ${record.result} (exit ${record.exit})`,
+          };
+        }),
+        Effect.catchTag("VerifyRefused", (cause) =>
+          Effect.succeed(err("invalid_input", cause.why)),
+        ),
+      );
+    });
     return answering((env) =>
       Effect.gen(function* () {
         const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
         const found = yield* readRun(env, runId, here?.id ?? null);
-        if (found._tag === "RunFailure") return found.result;
+        // A Run the host owns is verified the same way, into a journal of its own: the
+        // collector is what makes a result evidence, and it is one collector.
+        if (found._tag === "RunFailure") {
+          const native = yield* nativeTarget(env, runId);
+          return native === null ? found.result : yield* verified(native);
+        }
         const run = found.run;
-        const where = Option.getOrElse(cwd, () => run.record.worktree?.path ?? run.record.cwd);
-        if (
-          !(yield* insideRun(where, {
-            cwd: run.record.cwd,
-            worktree: run.record.worktree?.path ?? null,
-          }))
-        )
-          return err(
-            "invalid_input",
-            `"${where}" is not inside run ${run.id}; a verification names the tree it ran on.`,
-          );
-        return yield* collect(run.dir, {
-          run: run.id,
-          name: Option.getOrElse(name, () => executable),
-          executable,
-          argv,
-          cwd: where,
-          by: "agent",
-          expect: wanted,
-        }).pipe(
-          Effect.map((record) => {
-            // The command's own exit, passed through: a wrapper around this must behave
-            // the way it would around the command itself.
-            process.exitCode = record.exit;
-            return {
-              ok: true as const,
-              data: { verification: record },
-              human: `${record.name}: ${record.result} (exit ${record.exit})`,
-            };
-          }),
-          Effect.catchTag("VerifyRefused", (cause) =>
-            Effect.succeed(err("invalid_input", cause.why)),
-          ),
-        );
+        return yield* verified({
+          id: run.id,
+          dir: run.dir,
+          cwd: run.record.cwd,
+          worktree: run.record.worktree?.path ?? null,
+          note: false,
+        });
       }),
     );
   },

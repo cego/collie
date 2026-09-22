@@ -307,19 +307,23 @@ const locateIn =
 const own = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
+    const env = yield* currentEnv.pipe(Effect.orDie);
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
     return yield* Layer.launch(
       RpcServer.layer(HostRpcs).pipe(
         Layer.provide(
-          handlers(dir).pipe(Layer.provide(registryLayer(dir, { locate: locateIn(install) }))),
+          handlers(dir).pipe(
+            Layer.provide(
+              registryLayer(dir, { locate: locateIn(env.pluginRoot), configDir: env.configDir }),
+            ),
+          ),
         ),
         Layer.provide(RpcServer.layerProtocolSocketServer),
         Layer.provide(serialization),
         Layer.provide(BunSocketServer.layer({ path: socketOf(dir) })),
-        Layer.provide(foundationLayer({ dir })),
+        Layer.provide(foundationLayer({ dir, configDir: env.configDir })),
         Layer.provide(yield* configuredAgents(dir)),
       ),
     );

@@ -49,6 +49,28 @@ export const appendMetric = Effect.fn("Metrics.append")(function* (
   yield* appendJournal(yield* metricsPath(runDir), MetricJson, line).pipe(Effect.orDie);
 });
 
+/**
+ * One verification as a card reads it. Recorded where this Run's metrics are, so what a
+ * card counts is the same fact whichever kind of Run collected it. It records and nothing
+ * else: a command that keeps failing earns a sentence, never a limit.
+ */
+export const noteVerification = (
+  runDir: string,
+  record: {
+    readonly id: string;
+    readonly at: string;
+    readonly result: string;
+    readonly by: "agent" | "collie";
+  },
+): Effect.Effect<void, never, FileSystem.FileSystem | Path.Path> =>
+  appendMetric(runDir, {
+    at: record.at,
+    kind: "verification",
+    subject: record.id,
+    value: record.by === "collie" ? 1 : 0,
+    note: record.result,
+  });
+
 export const readMetrics = Effect.fn("Metrics.read")(function* (runDir: string) {
   const none: Metric[] = [];
   return yield* readJournal(yield* metricsPath(runDir), MetricJson).pipe(

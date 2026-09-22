@@ -271,6 +271,44 @@ any of them.
 [ADR-0022](adr/0022-a-workflow-is-made-of-workflows.md) is why each of those is the way it
 is, and why nothing here is a dependency resolver.
 
+## Reviewing and fixing, until it converges
+
+A review/fix rally is a loop you write, over the functions the engine uses for a declared
+one. There is no repeat declaration, no scheduler and no second reading of when a loop is
+done: a workflow that writes its own rally converges, stands on a dispute and runs out of
+rounds exactly where a declared one does, because it is the same three decisions.
+
+- **`splitDisputed(findings, disputed)`** — what is still the implementer's. A finding the
+  implementer already rejected with a reason stops driving the loop; a reviewer who answers
+  that reason with a `rebuttal` puts it back.
+- **`settleRound({ live, disputed, at, seen })`** — where this round goes: `fix` with the
+  blocking set that drives it, `clean` when nothing blocking is left, or `halt` when a
+  dispute stands unanswered or the same blocking findings came back unchanged. `seen` is
+  the previous round's `keys`; without it nothing can notice a rally going round.
+- **`settleFinalFix(live, fix, evidence)`** — the last round has no review after it, so the
+  fix's own account is what is left. Every blocking finding needs a disposition, and every
+  check it names needs a passing verification on the tree as it stands.
+
+`ReviewOutputSchema`, `FixOutputSchema` and `SynthesisSchema` are the shapes those steps
+write. Hand one to `agentWork` and what comes back is its own type — the same contract the
+shipped steps are held to, not a copy of it.
+
+## Proving it, rather than saying so
+
+`host.evidence(runId, cwd)` is what has been verified for your Run and what the tree is
+now. `settleFinalFix` reads it: a check an Output names is a claim until the journal has a
+passing record of it, collected on this exact revision. A commit or an edit since makes an
+earlier pass history — it is not that the result went off, it is that it is about another
+tree.
+
+`host.verify({ runId, name, cwd })` runs one of the commands your Run was started under the
+authority of, and records what it did. The list is `.herdr/verify.json`, read when the Run
+started — a name nobody approved is refused, and a workflow cannot add to it. Anyone else
+collects the same way from outside: `collie verify --run <your run id> -- <command>`.
+
+[ADR-0023](adr/0023-a-rally-is-a-loop-and-a-claim-is-not-proof.md) is why the rally is a
+loop and why a claim is not proof.
+
 ## What an operator can do to your Run
 
 None of it is yours to implement, but it decides where your workflow can be interrupted.

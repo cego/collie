@@ -464,3 +464,63 @@ test(
     ),
   240_000,
 );
+
+test(
+  "a Run the host owns is verified by the same command, bound to the tree it ran on",
+  () =>
+    proves("collie-lifecycle-verify-", (world) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const started = yield* client
+          .start({
+            project: world.project,
+            id: "proof",
+            request: "req-1",
+            input: { note: "verified" },
+          })
+          .pipe(Effect.orDie);
+
+        // The same command an implementer runs for any Run, on a Run with no steps.
+        const recorded = yield* collie(world, [
+          "verify",
+          "--run",
+          started.runId,
+          "--name",
+          "unit",
+          "--",
+          "true",
+        ]);
+        expect(recorded.envelope.ok).toBe(true);
+        const journal = yield* fs
+          .readFileString(`${world.state}/evidence/${started.runId}/steering/verifications.jsonl`)
+          .pipe(Effect.orDie);
+        expect(journal).toContain(`"name":"unit"`);
+        expect(journal).toContain(`"result":"pass"`);
+        // A card counts what it counts from the metrics, whichever kind of Run it was.
+        expect(
+          yield* fs.readFileString(`${world.state}/evidence/${started.runId}/metrics.jsonl`),
+        ).toContain(`"kind":"verification"`);
+
+        // A Run nobody started is still nobody's, whichever store was asked.
+        const nowhere = yield* collie(world, ["verify", "--run", "run-nobody", "--", "true"]);
+        expect(nowhere.envelope.ok).toBe(false);
+        expect(nowhere.envelope.error?.code).toBe("run_not_found");
+
+        // A directory that is not this Run's tree cannot carry a result about it.
+        const outside = yield* collie(world, [
+          "verify",
+          "--run",
+          started.runId,
+          "--cwd",
+          world.home,
+          "--",
+          "true",
+        ]);
+        expect(outside.envelope.ok).toBe(false);
+        expect(outside.envelope.error?.message).toContain("is not inside run");
+        yield* stopHost(world.state);
+      }),
+    ),
+  240_000,
+);

@@ -398,9 +398,107 @@ export type Halt =
   | "definition_changed"
   | "evidence_missing";
 
+/**
+ * What the blocking findings of one round come to, as the key a later round compares
+ * against. A finding a reviewer answered a dispute on is the argument moving rather than
+ * standing, so it is not part of what "the same set again" means.
+ */
+export function blockingKeys(findings: ReadonlyArray<Finding>): string[] {
+  return [...new Set(findings.filter((f) => isBlocking(f) && !f.rebuttal).map(findingKey))].sort();
+}
+
+/** Where a review/fix rally goes after one review, and what it is carrying there. */
+export type Rally =
+  /** Nothing blocking is left; `remaining` is what was raised and is not worth a round. */
+  | { readonly go: "clean"; readonly remaining: Finding[] }
+  /** Another fix, on `live`, of which `blocking` drives it; `keys` is this round's set. */
+  | {
+      readonly go: "fix";
+      readonly live: Finding[];
+      readonly blocking: Finding[];
+      readonly keys: ReadonlyArray<string>;
+    }
+  /** The rally is the human's now, and why. */
+  | {
+      readonly go: "halt";
+      readonly halt: Halt;
+      readonly reason: string;
+      readonly outstanding: Finding[];
+    };
+
+/**
+ * Where one round of a converging review/fix rally goes next — the decision the engine
+ * makes for a declared loop, as a function a module makes for a written one.
+ *
+ * `live` is what `splitDisputed` left for the implementer. Only blocking findings drive
+ * it: a dispute nobody answered is the human's call rather than another round of the same
+ * two agents, and the same blocking set twice running is not progress, because a third
+ * attempt would raise it a third time.
+ */
+export function settleRound(round: {
+  /** What the review left for the implementer, as `splitDisputed` returns it. */
+  readonly live: ReadonlyArray<Finding>;
+  /** What the implementer has disputed so far, carried between rounds. */
+  readonly disputed: ReadonlyArray<Finding>;
+  /** Disputes put back in front of the implementer; these drive the loop whatever their
+   *  severity, because a human resumed the Run to have them acted on. */
+  readonly reopened?: ReadonlyArray<Finding>;
+  /** Which round this is, counting from one. */
+  readonly at: number;
+  /** The blocking set of an earlier round, and which round that was. */
+  readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
+}): Rally {
+  const live = [...round.live];
+  const reopened = [...(round.reopened ?? [])];
+  const blocking = [...live.filter(isBlocking), ...reopened];
+  if (blocking.length === 0) {
+    // A dispute the reviewers did not answer settles nothing serious, whether they
+    // raised it again or left it out.
+    const standing = round.disputed.filter(isBlocking);
+    if (standing.length > 0) {
+      return {
+        go: "halt",
+        halt: "dispute_unresolved",
+        reason: `${standing.length} disputed blocking finding(s) stand unanswered — your call, not the loop's`,
+        outstanding: [...standing, ...live],
+      };
+    }
+    return { go: "clean", remaining: live };
+  }
+  const keys = blockingKeys(live);
+  const seen = round.seen;
+  if (
+    seen &&
+    seen.at < round.at &&
+    keys.length > 0 &&
+    keys.length === seen.keys.length &&
+    keys.every((key, at) => key === seen.keys[at])
+  ) {
+    return {
+      go: "halt",
+      halt: "no_progress",
+      reason: `no progress: review ${round.at} raised the same ${keys.length} blocking finding(s) as review ${seen.at}`,
+      outstanding: live,
+    };
+  }
+  return { go: "fix", live: [...live, ...reopened], blocking, keys };
+}
+
 export type FinalFix =
   | { ok: true; attestation: string; outstanding: Finding[] }
   | { ok: false; halt: Halt; reasons: string[]; outstanding: Finding[] };
+
+/**
+ * A fix report as a reader takes one. The lists are not the reader's to change, so a
+ * decoded Output — whose arrays are readonly — is one of these without being copied.
+ */
+export interface FixReport {
+  readonly verdict: "clean" | "findings";
+  readonly findings: ReadonlyArray<Finding>;
+  readonly fixed: ReadonlyArray<Fixed>;
+  readonly disputed: ReadonlyArray<Finding>;
+  readonly checks: ReadonlyArray<Check>;
+}
 
 /** What the journal holds, and the tree in front of us, for the checks to be read against. */
 export interface CheckEvidence {
@@ -431,7 +529,11 @@ function checkGap(name: string, evidence: CheckEvidence): string | null {
  * the fix's word is not a review either, which is what the attestation says. Nor is it
  * evidence that the checks passed: the journal is.
  */
-export function settleFinalFix(live: Finding[], fix: FixOutput, evidence: CheckEvidence): FinalFix {
+export function settleFinalFix(
+  live: ReadonlyArray<Finding>,
+  fix: FixReport,
+  evidence: CheckEvidence,
+): FinalFix {
   const fixed = new Set(fix.fixed.map(findingKey));
   const disputed = new Set(fix.disputed.map(findingKey));
   const disputes: string[] = [];
@@ -561,7 +663,10 @@ export interface Split {
  * another round of the same two agents — only by the human. So it stops driving the
  * loop, unless a reviewer answers the reason with a `rebuttal`.
  */
-export function splitDisputed(findings: Finding[], disputed: Finding[]): Split {
+export function splitDisputed(
+  findings: ReadonlyArray<Finding>,
+  disputed: ReadonlyArray<Finding>,
+): Split {
   const known = new Set(disputed.map(findingKey));
   const split: Split = { live: [], settled: [], rebutted: [] };
   for (const finding of findings) {
@@ -577,7 +682,7 @@ export function splitDisputed(findings: Finding[], disputed: Finding[]): Split {
   return split;
 }
 
-export function formatFindings(findings: Finding[]): string {
+export function formatFindings(findings: ReadonlyArray<Finding>): string {
   if (findings.length === 0) return "(none)";
   return findings
     .map((f) => {

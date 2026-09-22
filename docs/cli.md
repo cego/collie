@@ -127,6 +127,11 @@ or an execution exists — so a value one of them refuses costs nothing to refus
   declare one, and asking for an outcome a module always proves is refused rather than
   recorded as something it will not deliver.
 
+`collie verify --run <run-id> -- <command>` records against a module's Run as it does
+against any other: the same collector, the same binding to the tree the command ran on, and
+the same refusal for a directory that is not that Run's. A module can ask for one itself,
+but only for a command `.herdr/verify.json` named when the Run started.
+
 A module may be made of other modules. A child is a Run of its own — `run list` has it,
 `run show` says whose it is, and the Task it belongs to is its parent's — and it is started
 by the same lookup a front door uses, so a project that overrides that module overrides

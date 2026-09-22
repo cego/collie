@@ -588,6 +588,7 @@ test(
           "unwired.workflow.ts",
           "proof.workflow.ts",
           "agent.workflow.ts",
+          "rally.workflow.ts",
           "reviewed.workflow.ts",
           "graded.workflow.ts",
         ]) {

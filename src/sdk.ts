@@ -16,6 +16,8 @@
 // is why the engine underneath is Effect's.
 
 import { Context, Effect, Layer, Schema } from "effect";
+import type { CheckEvidence } from "./output";
+import type { Verification } from "./verify";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
@@ -36,6 +38,38 @@ export {
   ReviewOutputSchema,
   SynthesisSchema,
 } from "./output";
+
+/**
+ * What a review/fix rally is made of. These are the engine's own functions, not a copy
+ * for modules: a workflow that writes its loop in TypeScript converges, stands on a
+ * dispute and runs out of rounds exactly where a declared one does.
+ */
+export {
+  blockingKeys,
+  findingKey,
+  formatFindings,
+  isBlocking,
+  renderReview,
+  settleFinalFix,
+  settleRound,
+  splitDisputed,
+  substantiated,
+  unsubstantiated,
+  type Check,
+  type CheckEvidence,
+  type FinalFix,
+  type Finding,
+  type FixOutput,
+  type FixReport,
+  type Fixed,
+  type Halt,
+  type Rally,
+  type ReviewOutput,
+  type Split,
+  type Synthesis,
+} from "./output";
+
+export type { Snapshot, Verification } from "./verify";
 
 /**
  * A workflow's failure, as every native workflow reports one. One shape rather than an
@@ -94,6 +128,24 @@ export interface NativeHostApi {
   readonly record: (runId: string, event: string) => Effect.Effect<void>;
   /** Records the question this run is waiting on, so the host can say what may answer it. */
   readonly asking: (runId: string, question: DecisionSpec) => Effect.Effect<void>;
+  /**
+   * What has been verified for this run, and the tree in front of it now. This is what
+   * `settleFinalFix` is read against: a check an Output says it ran is a claim, and the
+   * journal is what binds a result to the revision it was collected on.
+   */
+  readonly evidence: (runId: string, cwd: string) => Effect.Effect<CheckEvidence>;
+  /**
+   * Runs one of the commands this Run was started under the authority of, and records
+   * what it did against the tree it ran on. A name nobody approved is refused: the list
+   * is a human's, read when the Run started, and a workflow cannot add to it.
+   */
+  readonly verify: (options: {
+    readonly runId: string;
+    readonly name: string;
+    readonly cwd: string;
+    /** What a pass looks like; `fail` is how a reproduction is proved to reproduce. */
+    readonly expect?: "pass" | "fail";
+  }) => Effect.Effect<Verification, WorkflowError>;
 }
 
 export class NativeHost extends Context.Service<NativeHost, NativeHostApi>()("collie/NativeHost") {}

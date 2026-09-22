@@ -22,6 +22,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Path,
   Predicate,
   Schedule,
   Schema,
@@ -58,7 +59,15 @@ import {
   type WorkflowEntry,
 } from "./sdk";
 import { currentPid, signalProcess } from "./lock";
+import { noteVerification } from "./metrics";
 import { RequestConflict, Store, storeLayer, type RunRow } from "./store";
+import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
+import {
+  collect as collectVerification,
+  fingerprint,
+  readVerifications,
+  type Verification,
+} from "./verify";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 
@@ -131,6 +140,31 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     WorkflowInstance,
   } from "effect/unstable/workflow/WorkflowEngine";
 
+  /** What this working tree was when a command ran on it. */
+  export interface Snapshot {
+    readonly head_sha: string;
+    readonly fingerprint: string;
+  }
+
+  /** A command Collie watched, bound to the tree it ran on. Never an Output's claim. */
+  export interface Verification {
+    readonly name: string;
+    readonly cwd: string;
+    readonly start: Snapshot;
+    readonly end: Snapshot;
+    readonly exit: number;
+    readonly expect: "pass" | "fail";
+    readonly result: "pass" | "fail" | "unstable";
+    readonly at: string;
+    readonly by: "agent" | "collie";
+  }
+
+  /** What the journal holds and the tree in front of you, for checks to be read against. */
+  export interface CheckEvidence {
+    readonly verifications: ReadonlyArray<Verification>;
+    readonly final: Snapshot;
+  }
+
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
   export interface NativeHostApi {
     readonly dir: string;
@@ -138,6 +172,15 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
     readonly record: (runId: string, event: string) => Effect.Effect<void>;
     readonly asking: (runId: string, question: DecisionSpec) => Effect.Effect<void>;
+    /** What has been verified for this run, and the tree in front of it now. */
+    readonly evidence: (runId: string, cwd: string) => Effect.Effect<CheckEvidence>;
+    /** Runs one approved command and records it. A name nobody approved is refused. */
+    readonly verify: (options: {
+      readonly runId: string;
+      readonly name: string;
+      readonly cwd: string;
+      readonly expect?: "pass" | "fail";
+    }) => Effect.Effect<Verification, WorkflowError>;
   }
   export const NativeHost: Context.Service<NativeHostApi, NativeHostApi>;
   export type NativeHost = NativeHostApi;
@@ -382,15 +425,156 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   export const RESERVED_INPUTS: Readonly<Record<string, string>>;
   export const EXCLUSIVE_STRATEGIES: ReadonlyArray<string>;
 
-  /** The shapes the shipped steps write, shared so a step declares one contract. */
-  export const FindingSchema: Schema.Top;
-  export const FixedSchema: Schema.Top;
-  export const CheckSchema: Schema.Top;
-  export const ReviewOutputSchema: Schema.Top;
-  export const SynthesisSchema: Schema.Top;
-  export const FixOutputSchema: Schema.Top;
-  export const MrOutputSchema: Schema.Top;
-  export const PlanOutputSchema: Schema.Top;
+  export interface Finding {
+    file?: string;
+    line?: number;
+    severity: string;
+    title: string;
+    detail?: string;
+    /** A reviewer's answer to the implementer's reason for disputing this finding. */
+    rebuttal?: string;
+    /** Why a synthesis dropped this finding; only a dropped entry carries one. */
+    reason?: string;
+  }
+
+  export interface ReviewOutput {
+    verdict: "clean" | "findings";
+    findings: Finding[];
+    disputed: Finding[];
+  }
+
+  export interface Fixed {
+    file?: string;
+    title: string;
+    note?: string;
+  }
+
+  export interface Synthesis extends ReviewOutput {
+    summary: string;
+    dropped: Finding[];
+    fixed: Fixed[];
+  }
+
+  /** One check the implementer says it ran. Whether it passed is read from the journal. */
+  export interface Check {
+    name: string;
+    note?: string;
+  }
+
+  export interface FixOutput {
+    verdict: "clean" | "findings";
+    findings: Finding[];
+    fixed: Fixed[];
+    disputed: Finding[];
+    checks: Check[];
+  }
+
+  export type Halt =
+    | "no_progress"
+    | "dispute_unresolved"
+    | "fix_unverified"
+    | "definition_changed"
+    | "evidence_missing";
+
+  /** What a review left for the implementer, and what is the human's call instead. */
+  export interface Split {
+    live: Finding[];
+    settled: Finding[];
+    rebutted: Finding[];
+  }
+
+  /** Where a review/fix rally goes after one review. */
+  export type Rally =
+    | { readonly go: "clean"; readonly remaining: Finding[] }
+    | {
+        readonly go: "fix";
+        readonly live: Finding[];
+        readonly blocking: Finding[];
+        readonly keys: ReadonlyArray<string>;
+      }
+    | {
+        readonly go: "halt";
+        readonly halt: Halt;
+        readonly reason: string;
+        readonly outstanding: Finding[];
+      };
+
+  export type FinalFix =
+    | { ok: true; attestation: string; outstanding: Finding[] }
+    | { ok: false; halt: Halt; reasons: string[]; outstanding: Finding[] };
+
+  /** Minor is the one severity not worth blocking on; anything else fails closed. */
+  export function isBlocking(finding: Finding): boolean;
+  export function findingKey(finding: Pick<Finding, "file" | "title">): string;
+  export function blockingKeys(findings: ReadonlyArray<Finding>): string[];
+  /** Whether a blocking finding says where and why, so it can be acted on. */
+  export function substantiated(finding: Finding): boolean;
+  export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null;
+  /** A finding the implementer already rejected stops driving the loop. */
+  export function splitDisputed(
+    findings: ReadonlyArray<Finding>,
+    disputed: ReadonlyArray<Finding>,
+  ): Split;
+  /** Where one round goes next: another fix, clean, or the human's call. */
+  export function settleRound(round: {
+    readonly live: ReadonlyArray<Finding>;
+    readonly disputed: ReadonlyArray<Finding>;
+    readonly reopened?: ReadonlyArray<Finding>;
+    readonly at: number;
+    readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
+  }): Rally;
+  /** The last fix has no review after it, so its own account and the journal decide. */
+  /** A fix report as a reader takes one; a decoded Output is one without being copied. */
+  export interface FixReport {
+    readonly verdict: "clean" | "findings";
+    readonly findings: ReadonlyArray<Finding>;
+    readonly fixed: ReadonlyArray<Fixed>;
+    readonly disputed: ReadonlyArray<Finding>;
+    readonly checks: ReadonlyArray<Check>;
+  }
+  export function settleFinalFix(
+    live: ReadonlyArray<Finding>,
+    fix: FixReport,
+    evidence: CheckEvidence,
+  ): FinalFix;
+  export function renderReview(synthesis: Synthesis): string;
+  export function formatFindings(findings: ReadonlyArray<Finding>): string;
+
+  /** A decoded review: the lists are the decoder's, not the reader's to change. */
+  export interface ReviewReport {
+    readonly verdict: "clean" | "findings";
+    readonly findings: ReadonlyArray<Finding>;
+    readonly disputed: ReadonlyArray<Finding>;
+  }
+
+  export interface SynthesisReport extends ReviewReport {
+    readonly summary: string;
+    readonly dropped: ReadonlyArray<Finding>;
+    readonly fixed: ReadonlyArray<Fixed>;
+  }
+
+  /**
+   * The shapes the shipped steps write, shared so a step declares one contract. Each is
+   * an ordinary schema: hand one to agentWork and what comes back is its own type.
+   */
+  export const FindingSchema: Schema.Codec<Finding, unknown, never, never>;
+  export const FixedSchema: Schema.Codec<Fixed, unknown, never, never>;
+  export const CheckSchema: Schema.Codec<Check, unknown, never, never>;
+  export const ReviewOutputSchema: Schema.Codec<ReviewReport, unknown, never, never>;
+  export const SynthesisSchema: Schema.Codec<SynthesisReport, unknown, never, never>;
+  export const FixOutputSchema: Schema.Codec<FixReport, unknown, never, never>;
+  export const MrOutputSchema: Schema.Codec<
+    { readonly pushed: boolean; readonly mr_url?: string | null; readonly note?: string },
+    unknown,
+    never,
+    never
+  >;
+  export const PlanOutputSchema: Schema.Codec<
+    { readonly issues_dir: string; readonly spec?: string },
+    unknown,
+    never,
+    never
+  >;
 
   /** The JSON Schema for a prompt, and what the drawing does not say. */
   export interface Projection {
@@ -587,6 +771,9 @@ export function hostLayer(options: {
 export const HOLD = "hold";
 export const STOP = "stop";
 
+/** What a Run nobody classified proves: the approved set, and no ticket's evidence. */
+const UNSPECIFIED = "unspecified";
+
 /**
  * What a workflow reads about its own run: the controls an operator has set over it, and
  * the question it is waiting on.
@@ -601,13 +788,69 @@ export const STOP = "stop";
 export const controlPath = (dir: string, control: string, runId: string): string =>
   `${dir}/${control}.${runId}`;
 
-export const nativeHostLayer = (
-  dir: string,
-): Layer.Layer<NativeHost, never, Store | FileSystem.FileSystem> =>
+/**
+ * Where one native Run's evidence lives: the verification journal `verify.ts` writes and
+ * reads, and the approved set the Run was started under. A directory rather than a table
+ * because the collector is the same one the command line uses — what proves a Run is not
+ * a different thing for being a module's.
+ */
+export const evidenceDir = (dir: string, runId: string): string => `${dir}/evidence/${runId}`;
+
+const approvedPath = (dir: string, runId: string) => `${evidenceDir(dir, runId)}/approved.json`;
+
+const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
+const decodeApproved = Schema.decodeUnknownEffect(ApprovedJson);
+const encodeApproved = Schema.encodeSync(ApprovedJson);
+
+/**
+ * What this Run may have Collie run for it, as it was when the Run started. Frozen at
+ * admission, so editing the file changes the next Run and never a live one.
+ */
+export const freezeApproved = Effect.fn("Native.freezeApproved")(function* (options: {
+  readonly dir: string;
+  readonly runId: string;
+  readonly project: string;
+  readonly configDir: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = approvedPath(options.dir, options.runId);
+  if (yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))) return;
+  const approved = yield* approvedFrom({
+    cwd: options.project,
+    configDir: options.configDir,
+  }).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []));
+  yield* fs.makeDirectory(evidenceDir(options.dir, options.runId), { recursive: true });
+  yield* fs.writeFileString(path, encodeApproved(approved));
+});
+
+const approvedOf = Effect.fn("Native.approvedOf")(function* (dir: string, runId: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const none: ReadonlyArray<VerifySpec> = [];
+  const text = yield* fs
+    .readFileString(approvedPath(dir, runId))
+    .pipe(Effect.orElseSucceed(() => "[]"));
+  return yield* decodeApproved(text).pipe(Effect.orElseSucceed(() => none));
+});
+
+export const nativeHostLayer = (options: {
+  readonly dir: string;
+  /** Where a user's own `verify.json` is, for a project that wrote none. */
+  readonly configDir?: string;
+}): Layer.Layer<
+  NativeHost,
+  never,
+  Store | FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+> =>
   Layer.effect(NativeHost)(
     Effect.gen(function* () {
+      const dir = options.dir;
       const fs = yield* FileSystem.FileSystem;
       const store = yield* Store;
+      // Captured, so a workflow asks for a verification without asking for a filesystem.
+      type Collecting = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
+      const services = yield* Effect.context<Collecting>();
+      const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
+        Effect.provideContext(effect, services);
       const set = (control: string, runId: string) =>
         fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
@@ -626,6 +869,43 @@ export const nativeHostLayer = (
             prompt: question.prompt,
             options: question.options,
           }),
+        evidence: (runId, cwd) =>
+          under(
+            Effect.all({
+              verifications: readVerifications(evidenceDir(dir, runId)).pipe(
+                Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
+              ),
+              final: fingerprint(cwd),
+            }),
+          ).pipe(Effect.orDie),
+        verify: (asked) =>
+          under(
+            approvedOf(dir, asked.runId).pipe(
+              Effect.flatMap((approved) => {
+                const spec = approved.find((entry) => entry.name === asked.name);
+                if (spec === undefined) {
+                  return Effect.fail(
+                    new WorkflowError({
+                      reason: `"${asked.name}" is not among this Run's approved verifications`,
+                    }),
+                  );
+                }
+                const runDir = evidenceDir(dir, asked.runId);
+                return collectVerification(runDir, {
+                  run: asked.runId,
+                  name: spec.name,
+                  executable: spec.executable,
+                  argv: spec.argv,
+                  cwd: asked.cwd,
+                  by: "collie",
+                  expect: asked.expect ?? "pass",
+                }).pipe(
+                  Effect.tap((record) => noteVerification(runDir, record)),
+                  Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
+                );
+              }),
+            ),
+          ),
       });
     }),
   );
@@ -935,6 +1215,12 @@ export const RunView = Schema.Struct({
   /** Where each of those values came from, and the host options it was launched with. */
   provenance: Schema.Record(Schema.String, Schema.String),
   options: Schema.Record(Schema.String, Schema.String),
+  /**
+   * What this Run has to prove, as the module fixed it or the caller selected it. A fact
+   * on the Run rather than a reading of its id, so a renamed or user-authored workflow
+   * is held to what it declared and to nothing its name suggests.
+   */
+  outcome: Schema.String,
   status: RunStatus,
   /** Every question this run has been asked, answered or not, oldest first. */
   waiting: Schema.Array(OpenDecision),
@@ -988,7 +1274,8 @@ export type HostServices =
   | WorkflowEngine.WorkflowEngine
   | NativeHost
   | NativeAgents
-  | FileSystem.FileSystem;
+  | FileSystem.FileSystem
+  | Path.Path;
 
 /**
  * Which modules a host holds and what it does with them, in front of one state directory.
@@ -1129,6 +1416,8 @@ export class Registry extends Context.Service<Registry, RegistryApi>()("collie/n
 export interface RegistryOptions {
   readonly crashAt?: CrashPoint;
   readonly locate?: Locate;
+  /** Where a user's own `verify.json` is, for a project that wrote none. */
+  readonly configDir?: string;
 }
 
 export const registryLayer = (
@@ -1145,12 +1434,14 @@ export const registryLayer = (
 export const foundationLayer = (options: {
   readonly dir: string;
   readonly registrationTimeout?: Duration.Input;
+  /** Where a user's own `verify.json` is, for a project that wrote none. */
+  readonly configDir?: string;
 }): Layer.Layer<
   NativeHost | Store | WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
   ConfigError,
-  FileSystem.FileSystem
+  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > =>
-  nativeHostLayer(options.dir).pipe(
+  nativeHostLayer({ dir: options.dir, configDir: options.configDir }).pipe(
     Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(hostLayer(options)))),
   );
 
@@ -1161,6 +1452,7 @@ const makeRegistry: (
   Effect.fn("Native.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
     const crashAt = options?.crashAt;
     const locate = options?.locate;
+    const configDir = options?.configDir ?? dir;
     const engine = yield* WorkflowEngine.WorkflowEngine;
     const fs = yield* FileSystem.FileSystem;
     const store = yield* Store;
@@ -1372,13 +1664,17 @@ const makeRegistry: (
         entry: entryOf(row.generation),
         input,
         provenance: yield* decodeStrings(row.provenance ?? "{}").pipe(
-          Effect.orElseSucceed(() => ({})),
+          Effect.orElseSucceed((): Record<string, string> => ({})),
         ),
-        options: yield* decodeStrings(row.options ?? "{}").pipe(Effect.orElseSucceed(() => ({}))),
+        options: yield* decodeStrings(row.options ?? "{}").pipe(
+          Effect.orElseSucceed((): Record<string, string> => ({})),
+        ),
       };
+      const outcome = admitted.options.outcome ?? UNSPECIFIED;
       const generation = live.get(row.generation);
       const about = {
         ...admitted,
+        outcome,
         waiting: yield* asked(row.run),
         controls: yield* controlsOf(row.run),
       };
@@ -1623,8 +1919,12 @@ const makeRegistry: (
         const generation = options.generation;
         const runId =
           options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
-        const launch = options.options ?? {};
-        yield* refuseOptions(generation, launch);
+        const asked = options.options ?? {};
+        yield* refuseOptions(generation, asked);
+        // What this Run has to prove, recorded as a fact on it: the module's own fixed
+        // kind, or the one the caller selected. A card reads this and never the id.
+        const launch =
+          generation.fixedOutcome === null ? asked : { ...asked, outcome: generation.fixedOutcome };
         // Settled before anything exists to clean up: an input the workflow's own schema
         // rejects names its field here, and no row, claim or execution is created.
         const settled = yield* settleInput(generation.fields, {
@@ -1652,6 +1952,13 @@ const makeRegistry: (
           parent: options.parent ?? null,
         });
         remember(claimed.row);
+        // Frozen with the Run, so editing the project's list changes the next one.
+        yield* freezeApproved({
+          dir,
+          runId: claimed.row.run,
+          project: options.project,
+          configDir,
+        }).pipe(Effect.ignore);
         // A retry of work the engine already has is nothing more to do; one that crashed
         // before it heard is handed over now, under the identity it was admitted with.
         if (claimed.row.accepted === null) yield* handOver(claimed.row);

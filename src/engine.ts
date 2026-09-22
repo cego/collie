@@ -72,6 +72,7 @@ import {
   renderReview,
   REVIEW_FILE,
   settleFinalFix,
+  settleRound,
   splitDisputed,
   type Finding,
   type Halt,
@@ -883,64 +884,34 @@ const afterStep = Effect.fn("Engine.afterStep")(function* (
           ),
         );
       }
-      const blocking = [...verdict.findings.filter(isBlocking), ...ctx.reopened];
-      if (blocking.length === 0) {
-        // A dispute the reviewers did not answer settles nothing serious, whether they
-        // raised it again or left it out: the human decides it, not the merge request.
-        // The record's severities are the reviewers' own — see the fix step below.
-        const disputed = run.record.disputed.filter(isBlocking);
-        if (disputed.length > 0) {
-          return finished(
-            yield* halt(
-              o,
-              ctx,
-              viewSource,
-              gate,
-              "dispute_unresolved",
-              `${disputed.length} disputed blocking finding(s) stand unanswered — your call, not the loop's`,
-              [...disputed, ...verdict.findings],
-            ),
-          );
-        }
-        if (verdict.findings.length === 0) {
+      // The same decision a module makes for a rally it wrote itself, so there is one
+      // reading of when a loop converges, stands on a dispute, or stops making progress.
+      const rally = settleRound({
+        live: verdict.findings,
+        disputed: run.record.disputed,
+        reopened: ctx.reopened,
+        at: run.record.iteration,
+        seen: run.record.blocking_seen
+          ? { at: run.record.blocking_seen.iteration, keys: run.record.blocking_seen.keys }
+          : null,
+      });
+      if (rally.go === "halt") {
+        return finished(
+          yield* halt(o, ctx, viewSource, gate, rally.halt, rally.reason, rally.outstanding),
+        );
+      }
+      if (rally.go === "clean") {
+        if (rally.remaining.length === 0) {
           yield* out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
           return yield* skipFix("reviews clean");
         }
-        const remain = `${verdict.findings.length} non-blocking finding(s) remain`;
+        const remain = `${rally.remaining.length} non-blocking finding(s) remain`;
         yield* out(`  nothing blocking — ${remain}, skipping ${wf.steps[gate.at]!.id}`);
         return yield* skipFix(remain);
       }
-      // The same blocking set as the last review, by identity rather than by count
-      // or line: nothing the fix did reached it, and another round would not either.
-      // A finding a reviewer answered a dispute on is the argument moving, not standing.
-      const keys = [
-        ...new Set(verdict.findings.filter((f) => isBlocking(f) && !f.rebuttal).map(findingKey)),
-      ].sort();
-      const seen = run.record.blocking_seen;
-      if (
-        seen &&
-        seen.iteration < run.record.iteration &&
-        keys.length > 0 &&
-        keys.length === seen.keys.length &&
-        keys.every((k, i) => k === seen.keys[i])
-      ) {
-        return finished(
-          yield* halt(
-            o,
-            ctx,
-            viewSource,
-            gate,
-            "no_progress",
-            `no progress: review ${run.record.iteration} raised the same ${keys.length} blocking finding(s) as review ${seen.iteration}`,
-            verdict.findings,
-          ),
-        );
-      }
-      run.record.blocking_seen = { iteration: run.record.iteration, keys };
+      run.record.blocking_seen = { iteration: run.record.iteration, keys: [...rally.keys] };
       yield* run.save();
-      yield* out(
-        `  ${verdict.findings.length + ctx.reopened.length} finding(s) to fix, ${blocking.length} blocking`,
-      );
+      yield* out(`  ${rally.live.length} finding(s) to fix, ${rally.blocking.length} blocking`);
     }
   }
 
