@@ -230,7 +230,11 @@ test(
               });
               yield* until(
                 () => client.run({ runId: started.runId }),
-                (view) => (view?.waiting ?? []).some((one) => one.name === "sign-off"),
+                // Suspended, not only asking: an answer that lands before the parent parks
+                // is taken without a replay, so nothing it held or stopped is looked at.
+                (view) =>
+                  view?.status.status === "suspended" &&
+                  view.waiting.some((one) => one.name === "sign-off"),
               );
               yield* client.control({ runId: started.runId, control: "hold", set: true });
               return started.runId;
@@ -352,7 +356,11 @@ test(
               });
               yield* until(
                 () => client.run({ runId: started.runId }),
-                (view) => (view?.waiting ?? []).some((one) => one.name === "sign-off"),
+                // Suspended, not only asking: an answer that lands before the parent parks
+                // is taken without a replay, so nothing it held or stopped is looked at.
+                (view) =>
+                  view?.status.status === "suspended" &&
+                  view.waiting.some((one) => one.name === "sign-off"),
               );
               return started.runId;
             }),

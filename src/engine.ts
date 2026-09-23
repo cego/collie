@@ -1155,11 +1155,17 @@ const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
   return [...outside].sort();
 });
 
+const scanners = {
+  ts: new Bun.Transpiler({ loader: "ts" }),
+  tsx: new Bun.Transpiler({ loader: "tsx" }),
+  js: new Bun.Transpiler({ loader: "js" }),
+};
+
 /** What this code imports by a relative path, where Bun resolves it; unparseable code imports nothing. */
 const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => {
   let imports: ReadonlyArray<{ readonly path: string }> = [];
   try {
-    imports = new Bun.Transpiler({ loader }).scanImports(text);
+    imports = scanners[loader].scanImports(text);
   } catch {
     return [];
   }
