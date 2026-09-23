@@ -590,7 +590,9 @@ None of it is yours to implement, but it decides where your workflow can be inte
   the Run's agents, and of the Runs it started, which is what stops them; the workspace
   keeps its own tab. When the Run resumes, work whose agent has gone and whose Output never
   came is given to a new one with the same prompt. Steering — `run steer` — says something
-  to a live agent through the one sender, and says whether it was delivered.
+  to a live agent through the one sender, and says whether it was delivered;
+  `agents.handOff` does the same from a workflow to another Run's live agent in a role, as
+  review hands its findings to an implementer already building the work.
 
 [ADR-0021](adr/0021-one-host-answers-for-a-run.md) is why each of those is the way it is.
 

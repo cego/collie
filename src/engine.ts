@@ -295,6 +295,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     }) => Effect.Effect<{ readonly slug: string } | null, WorkflowError | E, R>;
     /** Gives the claim back. Only a Run that finished its work releases. */
     readonly release: (runId: string) => Effect.Effect<void>;
+    /** Records the merge request this Run opened, as a fact its card reads. */
+    readonly mergeRequest: (runId: string, url: string) => Effect.Effect<void>;
   }
   export const Host: Context.Service<HostApi, HostApi>;
   export type Host = HostApi;
@@ -464,6 +466,17 @@ export const SDK_DECLARATIONS = `declare module "collie" {
      */
     readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
     readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
+    /** This work's agent started again with its prompt, where it is gone and wrote nothing. */
+    readonly revive: (ask: AgentAsk) => Effect.Effect<void, AgentUncertain | AgentParked>;
+    /** A message to another Run's live agent in this role here; null where there is none. */
+    readonly handOff: (options: {
+      readonly runId: string;
+      readonly role: string;
+      readonly cwd: string;
+      readonly text: string;
+    }) => Effect.Effect<Steered | null>;
+    /** Closes the panes of this run's live agents, and says which. */
+    readonly halt: (runId: string) => Effect.Effect<ReadonlyArray<string>>;
     readonly collect: (
       launched: Launched,
       unless?: string | null,
