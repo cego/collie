@@ -9,7 +9,7 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { checkModule, createEntry, describeModule, forkEntry } from "../src/authoring";
 import { discover, searchPath, type EntryLayer } from "../src/discovery";
-import { loadEntry } from "../src/engine";
+import { loadEntry, stageGeneration } from "../src/engine";
 import { runEffect } from "./support/effect";
 import { stopHost } from "./support/host";
 import { collie, proves as provesWith } from "./support/world";
@@ -127,34 +127,46 @@ test("creating writes a module the search path finds, and never over one already
     }).pipe(Effect.scoped),
   ));
 
-test("a fork is a file that imports what it keeps, and claims its own id", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const where = yield* layers("collie-authoring-fork-");
-      const parent = yield* where.copy("shipped", "echo.workflow.ts");
+test(
+  "a fork is a file that imports what it keeps, and claims its own id",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const where = yield* layers("collie-authoring-fork-");
+        const parent = yield* where.copy("shipped", "echo.workflow.ts");
 
-      const forked = yield* forkEntry({
-        dir: where.dirOf("user"),
-        id: "echo-mine",
-        from: { path: parent, entry: yield* loadEntry(parent) },
-      });
-      expect(forked.ok).toBe(true);
+        const forked = yield* forkEntry({
+          dir: where.dirOf("user"),
+          id: "echo-mine",
+          from: { path: parent, entry: yield* loadEntry(parent) },
+        });
+        expect(forked.ok).toBe(true);
 
-      const text = yield* fs.readFileString(forked.path);
-      expect(text).toContain(`from "../../workflows/echo.workflow.ts"`);
+        const text = yield* fs.readFileString(forked.path);
+        expect(text).toContain(`from "../../workflows/echo.workflow.ts"`);
 
-      // Both are found, each under its own id, and the fork takes the parent's inputs.
-      const found = yield* discover(where.roots);
-      expect(found.problems).toEqual([]);
-      expect(found.entries.map((one) => [one.id, one.layer])).toEqual([
-        ["echo", "shipped"],
-        ["echo-mine", "user"],
-      ]);
-      const mine = found.entries.find((one) => one.id === "echo-mine")!;
-      expect(mine.inputs.map((one) => one.name)).toEqual(["text", "times"]);
-    }).pipe(Effect.scoped),
-  ));
+        // Both are found, each under its own id, and the fork takes the parent's inputs.
+        const found = yield* discover(where.roots);
+        expect(found.problems).toEqual([]);
+        expect(found.entries.map((one) => [one.id, one.layer])).toEqual([
+          ["echo", "shipped"],
+          ["echo-mine", "user"],
+        ]);
+        const mine = found.entries.find((one) => one.id === "echo-mine")!;
+        expect(mine.inputs.map((one) => one.name)).toEqual(["text", "times"]);
+
+        // A host runs a staged copy, and the parent the fork climbs out to is still found.
+        const staged = yield* stageGeneration({
+          dir: `${where.dirOf("user")}/../state`,
+          name: "echo-mine@1",
+          entry: forked.path,
+        });
+        expect((yield* loadEntry(staged)).id).toBe("echo-mine");
+      }).pipe(Effect.scoped),
+    ),
+  60_000,
+);
 
 /** What `workflow check` and `workflow list` carry, as far as these read them. */
 const Reported = Schema.Struct({

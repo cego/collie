@@ -1103,20 +1103,65 @@ export const stageGeneration: (options: {
   readonly dir: string;
   readonly name: string;
   readonly entry: string;
-}) => Effect.Effect<string, EntryError, FileSystem.FileSystem> = Effect.fn(
+}) => Effect.Effect<string, EntryError, FileSystem.FileSystem | Path.Path> = Effect.fn(
   "Engine.stageGeneration",
 )(function* (options: { readonly dir: string; readonly name: string; readonly entry: string }) {
   const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const slash = options.entry.lastIndexOf("/");
   const from = options.entry.slice(0, slash);
   const staged = `${options.dir}/generations/${options.name}`;
-  yield* fs
-    .copy(from, staged, { overwrite: true })
-    .pipe(
-      Effect.mapError((cause) => new EntryError({ file: options.entry, message: String(cause) })),
-    );
+  const failed = (cause: unknown) =>
+    new EntryError({ file: options.entry, message: String(cause) });
+  yield* fs.copy(from, staged, { overwrite: true }).pipe(Effect.mapError(failed));
+  // A relative import that climbs out of the directory — a fork naming the module it
+  // extends — means the file it named, wherever the copy is.
+  for (const name of yield* fs
+    .readDirectory(staged, { recursive: true })
+    .pipe(Effect.mapError(failed))) {
+    const loader = loaderOf(name);
+    if (loader === null || name.startsWith("node_modules/")) continue;
+    const text = yield* fs.readFileString(`${staged}/${name}`).pipe(Effect.mapError(failed));
+    const anchored = anchorImports(text, loader, (specifier) => {
+      const target = path.resolve(path.dirname(`${from}/${name}`), specifier);
+      return target === from || target.startsWith(`${from}/`) ? null : target;
+    });
+    if (anchored !== text) {
+      yield* fs.writeFileString(`${staged}/${name}`, anchored).pipe(Effect.mapError(failed));
+    }
+  }
   return `${staged}${options.entry.slice(slash)}`;
 });
+
+const loaderOf = (name: string): "ts" | "tsx" | "js" | null => {
+  if (/\.(ts|mts|cts)$/.test(name)) return "ts";
+  if (name.endsWith(".tsx")) return "tsx";
+  return /\.(js|mjs|cjs|jsx)$/.test(name) ? "js" : null;
+};
+
+/** Each relative specifier `outside` gives a path for, rewritten to it. Unparseable text is left alone. */
+const anchorImports = (
+  text: string,
+  loader: "ts" | "tsx" | "js",
+  outside: (specifier: string) => string | null,
+): string => {
+  let imports: ReadonlyArray<{ readonly path: string }> = [];
+  try {
+    imports = new Bun.Transpiler({ loader }).scanImports(text);
+  } catch {
+    return text;
+  }
+  let out = text;
+  for (const specifier of new Set(imports.map((one) => one.path))) {
+    if (!specifier.startsWith(".")) continue;
+    const target = outside(specifier);
+    if (target === null) continue;
+    for (const quote of ['"', "'"]) {
+      out = out.replaceAll(`${quote}${specifier}${quote}`, `${quote}${target}${quote}`);
+    }
+  }
+  return out;
+};
 
 const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
 
