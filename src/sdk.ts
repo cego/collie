@@ -650,6 +650,9 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
     if (value.trim() === "") problems.push(`${field} is required`);
   }
   const fields = new Set(Object.keys(entry.input));
+  for (const [name, field] of Object.entries(entry.input)) {
+    if (!Schema.isSchema(field)) problems.push(`input "${name}" is not a schema`);
+  }
   for (const name of fields) {
     if (isReserved(name)) {
       problems.push(`input "${name}" collides with a host option: ${reservedMeaning(name)}`);

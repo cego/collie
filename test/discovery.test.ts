@@ -94,6 +94,24 @@ test("an override that cannot be read refuses its own id rather than running the
     }).pipe(Effect.scoped),
   ));
 
+test("an input that is not a schema is that entry's problem, and the rest are still found", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const where = yield* layers("collie-discovery-schema-");
+      const odd = yield* where.save(
+        "user",
+        "odd.workflow.ts",
+        entry("odd").replace("export const input = {};", "export const input = { note: 42 };"),
+      );
+      yield* where.save("user", "plain.workflow.ts", entry("plain"));
+
+      const found = yield* discover(where.roots);
+      expect(found.entries.map((one) => one.id)).toEqual(["plain"]);
+      expect(found.problems.map((one) => [one.id, one.path])).toEqual([["odd", odd]]);
+      expect(found.problems[0]?.message).toContain('input "note"');
+    }).pipe(Effect.scoped),
+  ));
+
 test("two entries in one layer claiming one id are an error that names the other file", () =>
   runEffect(
     Effect.gen(function* () {
