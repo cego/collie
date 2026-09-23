@@ -516,6 +516,86 @@ test(
   120_000,
 );
 
+/** A plan whose tickets name checkouts under the project, the web one waiting on the api. */
+const twoRepoPlan = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const plan = `${rig.root}/plan`;
+  yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
+  yield* fs.writeFileString(`${plan}/SPEC.md`, "# The spec\n");
+  yield* fs.writeFileString(`${plan}/issues/01-api.md`, "# The api\n\n**Repo:** api\n");
+  yield* fs.writeFileString(
+    `${plan}/issues/02-web.md`,
+    "# The web\n\n**Repo:** web\n\n**Blocked by:** 01\n",
+  );
+  return plan;
+});
+
+test(
+  "implement started on a plan that spans repositories cuts no checkout, and starts each repository's Run",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const plan = yield* twoRepoPlan;
+        for (const repo of ["api", "web"]) {
+          yield* fs.makeDirectory(`${rig.projectDir}/${repo}`);
+          gitRepo(`${rig.projectDir}/${repo}`);
+        }
+
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [implement] = yield* loaded(registry, [shipped("implement")]);
+            const started = yield* start(implement!, { request: "r1", text: { plan } });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const runId = started.success.runId;
+            const api = yield* until(
+              () => registry.view(`${runId}.implement-api`),
+              (view) => view !== null,
+            );
+            return {
+              parent: yield* registry.view(runId),
+              api,
+              web: yield* registry.view(`${runId}.implement-web`),
+            };
+          }),
+        );
+        expect(seen.parent?.worktree).toBeNull();
+        expect(seen.parent?.cwd).toBe(rig.projectDir);
+        expect(seen.api?.options).toMatchObject({ repo: "api" });
+        expect(seen.api?.worktree?.path).toStartWith(`${rig.root}/.herdr/worktrees/api/`);
+        // The web waits on the api, so nothing has started it yet.
+        expect(seen.web).toBeNull();
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "implement started on a plan it cannot fan out is refused, and nothing is admitted",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const plan = yield* twoRepoPlan;
+        const outcome = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [implement] = yield* loaded(registry, [shipped("implement")]);
+            return {
+              started: yield* start(implement!, { request: "r1", text: { plan } }),
+              rows: yield* (yield* Store).runs,
+            };
+          }),
+        );
+        expect(refusedWith(outcome.started)).toContain(
+          '"implement" cannot run here: These repositories are named by a ticket but not checked out',
+        );
+        expect(outcome.rows).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
 test(
   "a roaming start found holding a checkout when its host comes back keeps its claim",
   () =>
@@ -666,7 +746,7 @@ test(
         );
 
         expect(outcome.offers[0]?.unavailable).toContain("spans repositories (api, web)");
-        expect(refusedWith(outcome.invoked)).toContain("--input repo=<path>");
+        expect(refusedWith(outcome.invoked)).toContain("`collie run start builds --input work=");
         expect(outcome.rows).toHaveLength(1);
       }),
     ),

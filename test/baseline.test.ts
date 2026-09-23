@@ -517,6 +517,7 @@ const repositories = (
     const fs = yield* FileSystem.FileSystem;
     const issues = `${runDir(dir, runId)}/plan/issues`;
     yield* fs.makeDirectory(issues, { recursive: true });
+    yield* fs.writeFileString(`${runDir(dir, runId)}/plan/SPEC.md`, "# The spec\n");
     for (const ticket of tickets) {
       yield* fs.makeDirectory(`${rig.projectDir}/${ticket.repo}/.git`, { recursive: true });
       yield* fs.writeFileString(
@@ -533,7 +534,7 @@ const THREE_REPOS = [
 ];
 
 scenario(
-  "implement now on a plan that spans repositories is one implement per repository, in waves",
+  "implement now on a plan that spans repositories hands the whole plan to one implement",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -546,7 +547,7 @@ scenario(
           decision: "next-1",
         });
 
-        const result = yield* answered({
+        yield* answered({
           entry: shipped("plan"),
           runId: "r-plan-fan",
           input: GOAL,
@@ -554,11 +555,43 @@ scenario(
           value: "Implement now",
         });
 
+        expect(started.map((one) => [one.invocation, one.input, one.options])).toEqual([
+          [
+            "implement",
+            { plan: `${runDir(dir, "r-plan-fan")}/plan` },
+            { task: "one-registry", outcome: "feature" },
+          ],
+        ]);
+      }),
+    ),
+  120_000,
+);
+
+const isReasoned = Schema.is(Schema.Struct({ reason: Schema.String }));
+const reasonOf = (result: { readonly _tag: string; readonly failure?: unknown }) =>
+  result._tag === "Failure" && isReasoned(result.failure) ? result.failure.reason : "";
+
+scenario(
+  "implement on a plan that spans repositories is one Run of itself per repository, in waves",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repositories("r-impl-fan", THREE_REPOS);
+        const plan = `${runDir(dir, "r-impl-fan")}/plan`;
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-fan",
+          input: { plan },
+          options: { task: "one-registry", outcome: "feature" },
+        });
+
         expect(said(result)).toContain("3 repositories built in 2 wave(s)");
         // The repositories nothing waits on first, then the one waiting on the api.
-        expect(started.map((one) => [one.invocation, one.options])).toEqual(
+        expect(started.map((one) => [one.invocation, one.workflow, one.options])).toEqual(
           ["api", "docs", "web"].map((repo) => [
             `implement-${repo}`,
+            "self",
             {
               repo,
               workspace: `${rig.projectDir}/${repo}`,
@@ -567,9 +600,9 @@ scenario(
             },
           ]),
         );
-        expect(new Set(started.map((one) => one.input.plan))).toEqual(
-          new Set([`${runDir(dir, "r-plan-fan")}/plan`]),
-        );
+        expect(new Set(started.map((one) => one.input.plan))).toEqual(new Set([plan]));
+        // The parent builds nothing itself.
+        expect(yield* prompts()).toEqual([]);
       }),
     ),
   120_000,
@@ -581,25 +614,45 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         failing = new Set(["implement-api"]);
-        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
-        yield* repositories("r-plan-stop", THREE_REPOS);
-        yield* parked({
-          entry: shipped("plan"),
-          runId: "r-plan-stop",
-          input: GOAL,
-          decision: "next-1",
-        });
+        yield* repositories("r-impl-stop", THREE_REPOS);
 
-        const result = yield* answered({
-          entry: shipped("plan"),
-          runId: "r-plan-stop",
-          input: GOAL,
-          decision: "next-1",
-          value: "Implement now",
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-stop",
+          input: { plan: `${runDir(dir, "r-impl-stop")}/plan` },
         });
 
         expect(started.map((one) => one.invocation)).toEqual(["implement-api", "implement-docs"]);
-        expect(said(result)).toContain("api did not build. Not run: web, waiting on api.");
+        expect(reasonOf(result)).toContain("api did not build. Not run: web, waiting on api.");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a repository's share that stops on a blocking finding fails, so no wave waits on it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        const blocked = {
+          ...BUILT,
+          verdict: "findings",
+          findings: [{ severity: "blocker", title: "the schema will not migrate", file: "db" }],
+        };
+        yield* approve("r-impl-share", ["unit"]);
+        yield* rig.queueOutputs([blocked]);
+
+        const result = yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-share",
+          input: { plan },
+          options: { repo: "api" },
+        });
+
+        expect(result._tag).toBe("Failure");
+        expect(reasonOf(result)).toContain("stopped with 1 blocking finding(s)");
       }),
     ),
   120_000,

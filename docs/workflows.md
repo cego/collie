@@ -38,8 +38,8 @@ handoff. Plans never enter the repository
 
 - **Implement now** — starts `implement` with this run's `plan/` as the work source, as a
   child of this run: stopping the plan reaches the build, and the build is its own Run with
-  its own card. A plan whose tickets name several repositories starts one per repository;
-  see [Plans that span repositories](#plans-that-span-repositories).
+  its own card. A plan whose tickets name several repositories is one per repository,
+  which that `implement` starts; see [Plans that span repositories](#plans-that-span-repositories).
 - **Second opinion** — one reviewer round over the plan, then the menu again; where it
   reports findings, the planner gets a follow-up round to revise.
 - **Offload to Linear** — the planner files the tickets as Linear issues. It asks once
@@ -68,7 +68,8 @@ before it builds, so every run leaves the same audit trail.
 `repo` is one repository's share of a plan that spans several, as the tickets' `Repo:`
 line names it: given one, the build step builds only the tickets naming it and leaves the
 rest to their own run. It is empty for every single-repository run, which builds the whole
-plan; see [Plans that span repositories](#plans-that-span-repositories) for when to give it.
+plan, and for the parent of a fan-out, which sets it on each repository's run; see
+[Plans that span repositories](#plans-that-span-repositories).
 
 **Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
 the reviewed branch, else the `<name>` of a `branch:<base>...<name>` target you gave, else
@@ -105,23 +106,30 @@ A plan is single-repository only when its tickets all say `.`, or carry no line 
 plan whose tickets all name one repository _by path_ is not one of those: that repository
 is somewhere under the root, and its run has to be rooted there.
 
-Every other plan fans out on **Implement now**: one `implement` per repository, each
-started from that repository's checkout under the plan's root, each with the shared plan
-directory and its own `repo`, and all on one branch name — so the sibling merge requests are
-findable by it. See [Repo run](../CONTEXT.md) for the term.
+Every other plan fans out, whether **Implement now** hands it to `implement` or you start
+it yourself from the plan's root with `collie run start implement --input plan=<the plan
+directory>`. That `implement` cuts no checkout of its own and builds nothing itself: it
+starts one Run of itself per repository, each from that repository's checkout under the
+root, each with the shared plan directory and its own `repo`, and all on one branch name —
+so the sibling merge requests are findable by it. See [Repo run](../CONTEXT.md) for the
+term.
 
 They start in **waves**. A repository's run starts once every repository its tickets are
 blocked by has been built; repositories that block nothing start together. Ticket order
-inside a repository is that run's own business, as in a single-repository run. The plan
-Run is their parent until the last one ends, so stopping it stops them, resuming it goes on
-with the ones it already has rather than starting them again, and its result names what
-each repository ended as.
+inside a repository is that run's own business, as in a single-repository run. The
+`implement` that fanned out is their parent until the last one ends, so stopping it stops
+them, resuming it goes on with the ones it already has rather than starting them again, and
+its result names what each repository ended as.
 
+- **A repository that did not build** fails rather than ending with its reason — a ticket
+  stopped on a blocking finding, a review that halted, a merge request with no evidence for
+  it — so no wave starts on work that is not there.
 - **A repository that fails or cannot start** starts no further wave. The others in its
-  wave are left to finish, and the result names the repository that stopped it and the ones
-  that never ran.
-- **A plan the fan-out cannot run** starts nothing when you pick **Implement now**: the
-  reason is recorded and shown on the Run, and the menu comes back. The same reading checks
+  wave are left to finish, and the parent fails naming the repository that stopped it and
+  the ones that never ran.
+- **A plan the fan-out cannot run** starts nothing. Picked as **Implement now**, the reason
+  is recorded and shown on the Run, and the menu comes back; started directly, the start is
+  refused with it before any Run is admitted. The same reading checks
   the tickets when the planner writes them, and a plan it refuses goes back to the planner
   once, so most of these never reach the menu. The reasons are a repository-level cycle, a
   ticket with no `Repo:` line where its siblings have one, a repository with no checkout
@@ -133,9 +141,8 @@ each repository ended as.
   (`2` finds `02-…`), and the digits inside a word like `v2` are part of that word, not an
   edge.
 - **A card does not fan out.** The plan's own offer on its card, and `collie run action`,
-  refuse a plan that spans repositories and say how to build it: from each repository's
-  checkout, `collie run start implement --input plan=<the plan directory> --input
-repo=<path>`, which builds only that repository's tickets.
+  refuse a plan that spans repositories and name the start that does:
+  `collie run start implement --input plan=<the plan directory>`.
 
 A workflow of your own can fan out the same way with the SDK's `planReposOf`
 ([the SDK](sdk.md#a-workflow-made-of-other-workflows)).

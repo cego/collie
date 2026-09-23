@@ -374,8 +374,9 @@ module that awaits a deferred directly gets a Run nobody can answer.
 
 `child({ runId, invocation, workflow, input })` starts another workflow as part of this one
 and waits for it. `workflow` is a public id, selected in your Run's own project, so a
-project that overrides that module overrides it here too. Importing a function from a file
-beside yours does the opposite on purpose: the file decides, and no lookup happens at all.
+project that overrides that module overrides it here too; `"self"` is your own, whatever a
+fork has renamed it to. Importing a function from a file beside yours does the opposite on
+purpose: the file decides, and no lookup happens at all.
 
 - **`invocation` is the identity.** The child's Run id is your Run id and this name, so
   replaying your body asks for the child you already have rather than a second one, and a
@@ -440,7 +441,9 @@ for (const wave of plan.waves) {
 changes and in what order their Runs may start — a wave waits on the one before it — or
 refuses the whole plan: a cycle, a ticket number claimed twice, a repository with no
 checkout to work in. Refuse at the parent, where no child exists yet and there is nothing
-to clean up.
+to clean up. A Run whose work source is such a plan, and which was given no `repo`, is
+placed as that parent: the host cuts it no checkout, since each repository's Run cuts its
+own, and refuses to start it at all where the plan cannot fan out.
 
 [ADR-0022](adr/0022-a-workflow-is-made-of-workflows.md) is why each of those is the way it
 is, and why nothing here is a dependency resolver.

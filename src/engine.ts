@@ -365,6 +365,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly runId: string;
     /** Stable within the parent: the same one twice is the same child. */
     readonly invocation: string;
+    /** A public id, or "self" for the parent's own. */
     readonly workflow: string;
     readonly input: Readonly<Record<string, unknown>>;
     /** The host's own options for the child; only the host's own names are taken. */
@@ -1983,6 +1984,25 @@ const branchInputs = Effect.fn("Engine.branchInputs")(function* (
 });
 
 /**
+ * The plan a Run fans out over: one spanning repositories, where the Run was given no
+ * `repo` share of it. Null for every other Run.
+ */
+const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (
+  generation: Generation,
+  input: Readonly<Record<string, Schema.Json>>,
+  options: Readonly<Record<string, string>>,
+  root: string,
+) {
+  const field = fieldWith(generation.hints, "work-source");
+  const value = field === undefined ? undefined : input[field];
+  if ((options.repo ?? "") !== "" || !isText(value)) return null;
+  const source = yield* classifyWorkSource(value).pipe(Effect.orElseSucceed(() => null));
+  if (source?.kind !== "plan-dir") return null;
+  const plan = yield* planReposOf(source.value, root).pipe(Effect.orElseSucceed(() => null));
+  return plan === null || isSingleRepo(plan) ? null : plan;
+});
+
+/**
  * What a launch records beside the author's own input: the caller's host options, and the
  * outcome this Run has to prove — the module's own fixed kind, or the one the caller
  * selected. A card reads this and never the workflow's id.
@@ -2511,13 +2531,23 @@ const makeRegistry: (
       });
     let placed: Placed = { cwd: from, branch: null, workspace: null, worktree: null };
     let opened: Cut["opened"] = null;
+    // A fan-out has no checkout of its own: each repository's Run cuts its own.
+    const fanOut =
+      ask.checkout === undefined && generation.checkout !== "none"
+        ? yield* fanOutOf(generation, ask.input, ask.options, from)
+        : null;
+    if (fanOut?.refusal) {
+      return yield* new HostRefused({
+        reason: `"${generation.id}" cannot run here: ${fanOut.refusal.message}`,
+      });
+    }
     if (ask.checkout === null) {
       return yield* new PlacementUncertain({
         reason: `a checkout from ${from} may have been cut for ${ask.runId} before the host stopped, and nothing records where. Remove it if it is there, and start again under a new request id.`,
       });
     }
     if (ask.checkout !== undefined) ({ placed, opened } = ask.checkout);
-    else if (generation.checkout !== "none") {
+    else if (generation.checkout !== "none" && fanOut === null) {
       const inputs = yield* branchInputs(generation, ask.input, ask.options);
       // A build of a review's findings works on the branch that review was pointed at.
       const source = fieldWith(generation.hints, "work-source");
@@ -2691,9 +2721,10 @@ const makeRegistry: (
     if (parent === null) {
       return yield* refused(`no run "${ask.runId}" was started here`);
     }
-    const generation = yield* resolve({ project: parent.project, id: ask.workflow }).pipe(
-      Effect.mapError((failure) => refused(failure.reason)),
-    );
+    const generation = yield* resolve({
+      project: parent.project,
+      id: ask.workflow === "self" ? parent.workflow : ask.workflow,
+    }).pipe(Effect.mapError((failure) => refused(failure.reason)));
     const runId = childRunId(ask);
     // The host's own options, held to the same rule a front door's are: a name that is
     // not the host's would be a field the child's author never declared.
@@ -3151,7 +3182,7 @@ const makeRegistry: (
         refused.set(
           offer.id,
           read.success.refusal?.message ??
-            `its plan spans repositories (${read.success.repos.map((one) => one.path).join(", ")}), which is one Run per repository. Start each from that repository's checkout with \`--input ${field}=${where}/plan --input repo=<path>\`.`,
+            `its plan spans repositories (${read.success.repos.map((one) => one.path).join(", ")}), which a card does not fan out. \`collie run start ${offer.workflow === SELF ? row.workflow : offer.workflow} --input ${field}=${where}/plan\` does, one Run per repository.`,
         );
       }
     }

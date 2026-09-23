@@ -18,6 +18,7 @@ import {
   FindingSchema,
   FixOutputSchema,
   Agents,
+  Children,
   Host,
   WorkflowError,
   agentWork,
@@ -30,7 +31,9 @@ import {
   identityProblem,
   isBlocking,
   isOutcome,
+  isSingleRepo,
   orderedTicketsOf,
+  planReposOf,
   renderApproved,
   renderEvidence,
   renderProgress,
@@ -109,6 +112,13 @@ const Built = Schema.Struct({
   documented_commands: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+/** Which repositories a plan names, as a reading of it records them. */
+const Reading = Schema.Struct({
+  single: Schema.Boolean,
+  waves: Schema.Array(Schema.Array(Schema.String)),
+  refusal: Schema.NullOr(Schema.String),
+});
+
 /** A ticket as a reading of the plan records it. */
 const SliceRecord = Schema.Struct({
   file: Schema.String,
@@ -152,6 +162,34 @@ export const make = (registrationName: string) => {
         Effect.orElseSucceed(() => ({ kind: "text", value: payload.input.plan })),
       );
       const kind = place.options.outcome ?? "";
+      const share = place.options.repo ?? "";
+      if (source.kind === "plan-dir" && share === "") {
+        const plan = yield* Activity.make({
+          name: "repos",
+          success: Reading,
+          execute: planReposOf(source.value, cwd).pipe(
+            Effect.map((read) => ({
+              single: isSingleRepo(read),
+              waves: read.waves.map((wave) => [...wave]),
+              refusal: read.refusal?.message ?? null,
+            })),
+          ),
+        });
+        if (plan.refusal !== null) return yield* new WorkflowError({ reason: plan.refusal });
+        if (!plan.single) {
+          return yield* buildEach({
+            runId,
+            plan: source.value,
+            root: cwd,
+            waves: plan.waves,
+            task: place.options.task ?? "",
+            outcome: kind,
+          });
+        }
+      }
+      // A repository's share that did not build fails, so no wave waits on work that is not there.
+      const unbuilt = (reason: string) =>
+        share === "" ? Effect.succeed(reason) : Effect.fail(new WorkflowError({ reason }));
       const approved = yield* requireApproved(runId, kind);
 
       const inputs = {
@@ -241,7 +279,9 @@ export const make = (registrationName: string) => {
         // nobody is blocked by is carried, exactly as a review's is.
         const blocking = (build.findings ?? []).filter(isBlocking);
         if (blocking.length > 0) {
-          return `${done.item}: stopped with ${blocking.length} blocking finding(s)`;
+          return yield* unbuilt(
+            `${done.item}: stopped with ${blocking.length} blocking finding(s)`,
+          );
         }
         tickets = yield* ticketsNow;
       }
@@ -259,7 +299,7 @@ export const make = (registrationName: string) => {
       });
       if (rallied.halted !== null) {
         yield* host.record(runId, rallied.halted);
-        return rallied.halted;
+        return yield* unbuilt(rallied.halted);
       }
 
       // The gate: Collie's own run of every approved command, on this tree, and then what
@@ -283,7 +323,7 @@ export const make = (registrationName: string) => {
       });
       if (gaps.length > 0) {
         yield* host.record(runId, `no merge request: ${gaps.join("; ")}`);
-        return `no merge request: ${gaps.join("; ")}`;
+        return yield* unbuilt(`no merge request: ${gaps.join("; ")}`);
       }
 
       // A step that needs something this machine or repository does not have is not a
@@ -324,6 +364,80 @@ export const make = (registrationName: string) => {
 
   return { workflow, layer, decisions: {} };
 };
+
+/**
+ * One Run of this workflow per repository the plan names, a wave at a time: a repository
+ * starts once every one its tickets wait on is built. One that fails or cannot start
+ * starts no further wave; the rest of its own wave is still waited on.
+ */
+const buildEach = (fan: {
+  readonly runId: string;
+  readonly plan: string;
+  readonly root: string;
+  readonly waves: ReadonlyArray<ReadonlyArray<string>>;
+  readonly task: string;
+  readonly outcome: string;
+}) =>
+  Effect.gen(function* () {
+    const host = yield* Host;
+    const children = yield* Children;
+    const invocation = (repo: string) => `implement-${repo.replaceAll("/", "-")}`;
+    const clash = identityProblem(fan.waves.flat().map(invocation));
+    if (clash !== null) return yield* new WorkflowError({ reason: clash });
+    const built: string[] = [];
+    for (const [at, wave] of fan.waves.entries()) {
+      const started = yield* Effect.forEach(wave, (repo) =>
+        children
+          .start({
+            runId: fan.runId,
+            invocation: invocation(repo),
+            workflow: "self",
+            input: { plan: fan.plan },
+            // One branch name in every repository, so the sibling merge requests are
+            // findable by it.
+            options: Object.fromEntries(
+              Object.entries({
+                repo,
+                workspace: `${fan.root}/${repo}`,
+                task: fan.task,
+                outcome: fan.outcome,
+              }).filter(([, value]) => value !== ""),
+            ),
+          })
+          .pipe(
+            Effect.result,
+            Effect.map((child) => ({ repo, child })),
+          ),
+      );
+      const ended = yield* Effect.forEach(
+        started,
+        ({ repo, child }) =>
+          child._tag === "Failure"
+            ? Effect.succeed({ repo, built: null, why: `not started: ${child.failure.reason}` })
+            : children.result(child.success).pipe(
+                Effect.map((value) => ({ repo, built: String(value), why: "" })),
+                Effect.catch((failure) =>
+                  Effect.succeed({ repo, built: null, why: failure.reason }),
+                ),
+              ),
+        { concurrency: "unbounded" },
+      );
+      for (const one of ended) {
+        built.push(`${one.repo}: ${one.built ?? one.why}`);
+        yield* host.record(fan.runId, `${one.repo}: ${one.built ?? one.why}`);
+      }
+      const stopped = ended.find((one) => one.built === null);
+      if (stopped !== undefined) {
+        const left = fan.waves.slice(at + 1).flat();
+        const waiting =
+          left.length === 0 ? "" : ` Not run: ${left.join(", ")}, waiting on ${stopped.repo}.`;
+        return yield* new WorkflowError({
+          reason: `${stopped.repo} did not build.${waiting} ${built.join("; ")}`,
+        });
+      }
+    }
+    return `${fan.waves.flat().length} repositories built in ${fan.waves.length} wave(s): ${built.join("; ")}`;
+  });
 
 /** What the slice claims it built, or the ticket's own name where it named nothing. */
 const claimsOf = (built: typeof Built.Type, ticket: Slice): ReadonlyArray<string> => {
