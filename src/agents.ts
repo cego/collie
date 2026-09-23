@@ -826,7 +826,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           .exists(launchPath(ask.runId, ask.operation))
           .pipe(Effect.orElseSucceed(() => false));
         const terminalId = alive ? (live.terminalId ?? undefined) : yield* start(ask, agent);
-        const launched: Launched = {
+        const landed: Launched = {
           agent,
           output: ask.output,
           reused: alive,
@@ -835,8 +835,8 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           role: ask.role,
           workflow: ask.workflow,
           harness: ask.harness ?? host.harness,
-          ...(terminalId === undefined ? {} : { terminalId }),
         };
+        const launched = terminalId === undefined ? landed : { ...landed, terminalId };
         const adapter = adapterFor(launched.harness);
         const prefix = personaPrefix(adapter, yield* personaOf(ask.role));
         const file = `${dirFor(ask.runId)}/${ask.operation}.prompt.md`;
