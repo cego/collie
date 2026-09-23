@@ -135,7 +135,7 @@ each repository ended as.
 - **A card does not fan out.** The plan's own offer on its card, and `collie run action`,
   refuse a plan that spans repositories and say how to build it: from each repository's
   checkout, `collie run start implement --input plan=<the plan directory> --input
-  repo=<path>`, which builds only that repository's tickets.
+repo=<path>`, which builds only that repository's tickets.
 
 A workflow of your own can fan out the same way with the SDK's `planReposOf`
 ([the SDK](sdk.md#a-workflow-made-of-other-workflows)).
