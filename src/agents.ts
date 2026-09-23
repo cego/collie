@@ -338,10 +338,10 @@ const parkedWhenRefused = <A>(
   runId: string,
 ): Effect.Effect<A, AgentUncertain, WorkflowEngine.WorkflowInstance> =>
   sending.pipe(
-    Effect.tap(() => host.blocked(runId, null)),
+    Effect.tap(() => host.parked(runId, null)),
     Effect.catchTag("PromptRefused", (refused) =>
       Effect.gen(function* () {
-        yield* host.blocked(runId, refused.reason);
+        yield* host.parked(runId, refused.reason);
         return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
       }),
     ),

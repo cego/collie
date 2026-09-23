@@ -238,7 +238,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
     readonly record: (runId: string, event: string) => Effect.Effect<void>;
     /** Why this Run parked its own work, shown beside its status; null clears it. */
-    readonly blocked: (runId: string, why: string | null) => Effect.Effect<void>;
+    readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
     readonly asking: (runId: string, question: DecisionSpec) => Effect.Effect<void>;
     /** What has been verified for this run, and the tree in front of it now. */
     readonly evidence: (runId: string, cwd: string) => Effect.Effect<CheckEvidence>;
@@ -1141,7 +1141,7 @@ export function hostLayer(options: {
 export const HOLD = "hold";
 export const STOP = "stop";
 /** Not a control: the Run's own word on why it parked, which only the Run writes. */
-export const BLOCKED = "blocked";
+export const PARKED = "parked";
 
 /** What a Run nobody classified proves: the approved set, and no ticket's evidence. */
 const UNSPECIFIED = "unspecified";
@@ -1289,8 +1289,8 @@ export const nativeHostLayer = (options: {
           fs
             .writeFileString(`${dir}/events.${runId}.log`, `${event}\n`, { flag: "a" })
             .pipe(Effect.orDie),
-        blocked: (runId, why) => {
-          const path = controlPath(dir, BLOCKED, runId);
+        parked: (runId, why) => {
+          const path = controlPath(dir, PARKED, runId);
           return (
             why === null ? fs.remove(path, { force: true }) : fs.writeFileString(path, why)
           ).pipe(Effect.orDie);
@@ -1825,7 +1825,7 @@ export const RunView = Schema.Struct({
   /** Why the engine could not be asked, or null when it was. */
   diagnostic: Schema.NullOr(Schema.String),
   /** Why the Run parked its own work and what picks it up again, or null. */
-  blocked: Schema.NullOr(Schema.String),
+  parked: Schema.NullOr(Schema.String),
 });
 export type RunView = typeof RunView.Type;
 
@@ -2352,8 +2352,8 @@ const makeRegistry: (
       created: row.admitted,
       waiting: yield* asked(row.run),
       controls: yield* controlsOf(row.run),
-      blocked: yield* fs
-        .readFileString(controlPath(dir, BLOCKED, row.run))
+      parked: yield* fs
+        .readFileString(controlPath(dir, PARKED, row.run))
         .pipe(Effect.orElseSucceed(() => null)),
     };
     // Not registered here is not a verdict on the work: the rows are all still there,

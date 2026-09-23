@@ -247,7 +247,7 @@ export interface NativeHostApi {
    * Why this Run has parked its own work and what picks it up again, shown beside its
    * status; null says it no longer has.
    */
-  readonly blocked: (runId: string, why: string | null) => Effect.Effect<void>;
+  readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
   /** Records the question this run is waiting on, so the host can say what may answer it. */
   readonly asking: (runId: string, question: DecisionSpec) => Effect.Effect<void>;
   /**

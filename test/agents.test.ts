@@ -24,7 +24,7 @@ import {
   type AgentHost,
 } from "../src/agents";
 import { defineWorkflow, jsonSchemaFor } from "../src/sdk";
-import { BLOCKED, controlPath, foundationLayer, pollStatus } from "../src/native";
+import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/native";
 import { deliveriesOf } from "../src/steering";
 import { agentName } from "../src/naming";
 
@@ -365,7 +365,7 @@ test(
 
         // Parked rather than failed: nothing about the work is lost, and nothing is uncertain.
         expect(yield* statusNow("r1")).toBe("suspended");
-        const why = yield* read(controlPath(dir, BLOCKED, "r1"));
+        const why = yield* read(controlPath(dir, PARKED, "r1"));
         expect(why).toMatch(/agent_blocked held for \d+s over \d+ attempts/);
         expect(why).toContain(promptPath("r1"));
         expect(why).toContain("collie run resume r1");
@@ -376,7 +376,7 @@ test(
         expect(result._tag === "Success" && result.success.note).toBe("resumed");
         expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
         expect((yield* steps("r1")).map((one) => one.delivery.state)).toEqual(["submitted"]);
-        expect(yield* fs.exists(controlPath(dir, BLOCKED, "r1"))).toBe(false);
+        expect(yield* fs.exists(controlPath(dir, PARKED, "r1"))).toBe(false);
       }),
     ),
   120_000,
