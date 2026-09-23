@@ -29,7 +29,13 @@ const OTHER = ["plain.workflow.ts"] as const;
 /** What a `--json` envelope carries for a native Run, as these tests read it. */
 const Payload = Schema.Struct({
   runId: Schema.optional(Schema.String),
-  run: Schema.optional(Schema.Struct({ runId: Schema.String, status: Schema.Unknown })),
+  run: Schema.optional(
+    Schema.Struct({
+      runId: Schema.String,
+      status: Schema.Unknown,
+      parked: Schema.optional(Schema.NullOr(Schema.String)),
+    }),
+  ),
   runs: Schema.optional(Schema.Array(Schema.Struct({ runId: Schema.String }))),
 });
 const payloadOf = (envelope: { readonly data?: unknown }) =>
@@ -297,6 +303,41 @@ test(
         });
         yield* stopHost(world.state);
       }),
+    ),
+  240_000,
+);
+
+test(
+  "a Run nothing is approved to prove stops before it works, and a grant and a resume carry it on",
+  () =>
+    provesWith(
+      "collie-lifecycle-unprovable-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(world, ["run", "start", "proved", "--input", "note=x"]);
+          const runId = (yield* payloadOf(started.envelope)).runId ?? "";
+          yield* collie(world, ["run", "wait", runId, "--until", "attention"]);
+          const parked = (yield* payloadOf((yield* collie(world, ["run", "show", runId])).envelope))
+            .run?.parked;
+          expect(parked).toContain(`collie run intent verification ${runId} --name`);
+          expect(parked).toContain(".herdr/verify.json");
+
+          const grant = (...args: ReadonlyArray<string>) =>
+            collie(world, ["run", "intent", "verification", runId, ...args]);
+          expect((yield* grant("--name", "unit", "--", "true")).envelope.ok).toBe(true);
+          yield* grant("--name", "lint", "--", "true");
+          // Withdrawn by name, as a human who granted the wrong thing would.
+          const withdrawn = yield* grant("--name", "lint", "--remove");
+          expect(withdrawn.envelope.data).toMatchObject({ approved: [{ name: "unit" }] });
+          yield* collie(world, ["run", "resume", runId]);
+          const finished = yield* collie(world, ["run", "wait", runId]);
+          expect((yield* payloadOf(finished.envelope)).run?.status).toEqual({
+            status: "complete",
+            value: "unit",
+          });
+          yield* stopHost(world.state);
+        }),
+      ["proved.workflow.ts"],
     ),
   240_000,
 );

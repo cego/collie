@@ -19,13 +19,22 @@ import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 import type { CheckEvidence } from "./output";
 import type { Verification } from "./verify";
 import type { VerifySpec } from "./verify-spec";
-import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
+import { WorkflowInstance, type WorkflowEngine } from "effect/unstable/workflow/WorkflowEngine";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import type { NativeAgents } from "./agents";
 import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
 import { exclusiveClashes } from "./strategies";
-import { KINDS, REQUESTABLE, evidenceGaps, isOutcome, refInside, type Outcome } from "./outcome";
+import {
+  KINDS,
+  REQUESTABLE,
+  evidenceGaps,
+  isOutcome,
+  needsApproved,
+  nothingApproved,
+  refInside,
+  type Outcome,
+} from "./outcome";
 import type { Source } from "./offers";
 
 export { EXCLUSIVE_STRATEGIES } from "./strategies";
@@ -402,6 +411,26 @@ export const ask = (
     const host = yield* NativeHost;
     yield* host.asking(runId, options ? { ...question.asks, options } : question.asks);
     return yield* DurableDeferred.await(question);
+  });
+
+/**
+ * What this Run may have Collie run to prove its kind of result. Where that kind needs
+ * the approved set and nothing is approved, the Run parks with the repair instead of
+ * spending work no gate could accept; a resume asks again.
+ */
+export const requireApproved = (
+  runId: string,
+  kind: string,
+): Effect.Effect<ReadonlyArray<VerifySpec>, never, NativeHost | WorkflowInstance> =>
+  Effect.gen(function* () {
+    const host = yield* NativeHost;
+    const approved = yield* host.approved(runId);
+    if (approved.length > 0 || !needsApproved(isOutcome(kind) ? kind : "unspecified")) {
+      yield* host.parked(runId, null);
+      return approved;
+    }
+    yield* host.parked(runId, nothingApproved(runId));
+    return yield* Workflow.suspend(yield* WorkflowInstance);
   });
 
 /**

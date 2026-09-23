@@ -84,7 +84,12 @@ const hostOf = (): AgentHost => ({
 
 const hosted = <A, E>(run: Effect.Effect<A, E, Registry | Store | HostServices>) =>
   run.pipe(
-    Effect.provide(registryLayer(dir(), { placing: { herdr: new FakeHerdr(env()), env: env() } })),
+    Effect.provide(
+      registryLayer(dir(), {
+        placing: { herdr: new FakeHerdr(env()), env: env() },
+        configDir: rig.configDir,
+      }),
+    ),
     Effect.provide(agentsLayer(hostOf())),
     Effect.provide(foundationLayer({ dir: dir(), configDir: rig.configDir })),
     Effect.scoped,
@@ -106,6 +111,17 @@ const aTask = Effect.gen(function* () {
   yield* writeTask(env().stateDir, task);
   return task;
 });
+
+/** A command the operator approved for every Run, so a build has something to prove. */
+const approvedByOperator = FileSystem.FileSystem.pipe(
+  Effect.flatMap((fs) =>
+    fs.writeFileString(
+      `${rig.configDir}/verify.json`,
+      '[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]',
+    ),
+  ),
+  Effect.orDie,
+);
 
 /** Which workspace each tab was opened in, and on which directory, in order. */
 const tabs = (calls: ReadonlyArray<Call>) =>
@@ -508,6 +524,7 @@ for (const chain of CHAINS) {
       runEffect(
         Effect.gen(function* () {
           yield* aTask;
+          yield* approvedByOperator;
           yield* rig.queueOutputs(chain.outputs);
           const seen = yield* chainedFrom({
             entry: shipped(chain.name),

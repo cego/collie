@@ -18,11 +18,14 @@ import { installFakeSkills } from "./support/defs";
 import { NativeAgents, agentsLayer, type AgentHost } from "../src/agents";
 import { NativeChildren, NativeHost, type ActionFacts, type ChildAsk } from "../src/sdk";
 import {
+  PARKED,
   answerDecision,
+  controlPath,
   declaredByModule,
   evidenceDir,
   foundationLayer,
   loadEntry,
+  pollStatus,
   runDir,
 } from "../src/native";
 import { VerifySpecSchema } from "../src/verify-spec";
@@ -1016,6 +1019,191 @@ test(
     ),
   120_000,
 );
+
+/** A Run of a shipped module that stops by itself, waited on until it has. */
+const stalled = (options: {
+  readonly entry: string;
+  readonly runId: string;
+  readonly input: Readonly<Record<string, Schema.Json>>;
+  readonly options?: Readonly<Record<string, string>>;
+  readonly host?: HostOverride;
+}) =>
+  session(
+    Effect.gen(function* () {
+      const made = yield* loaded(options.entry, options.runId);
+      const engine = yield* WorkflowEngine.WorkflowEngine;
+      yield* admit({
+        runId: options.runId,
+        workflow: made.workflow.name,
+        input: options.input,
+        options: options.options,
+      });
+      const payload = { runId: options.runId, input: options.input };
+      return yield* Effect.gen(function* () {
+        yield* made.workflow.execute(payload, { discard: true });
+        const id = yield* made.workflow.executionId(payload);
+        return yield* until(
+          () =>
+            engine.poll(made.workflow, id).pipe(Effect.map((got) => pollStatus(got, "").status)),
+          (status) => status === "suspended",
+        );
+      }).pipe(Effect.provide(made.layer));
+    }),
+    options.host,
+  );
+
+/** A stopped Run picked up again, as `collie run resume` does it, and run to its end. */
+const resumed = (options: {
+  readonly entry: string;
+  readonly runId: string;
+  readonly input: Readonly<Record<string, Schema.Json>>;
+  readonly host?: HostOverride;
+}) =>
+  session(
+    Effect.gen(function* () {
+      const made = yield* loaded(options.entry, options.runId);
+      const engine = yield* WorkflowEngine.WorkflowEngine;
+      const payload = { runId: options.runId, input: options.input };
+      return yield* Effect.gen(function* () {
+        yield* engine.resume(made.workflow, yield* made.workflow.executionId(payload));
+        return yield* made.workflow.execute(payload).pipe(Effect.result);
+      }).pipe(Effect.provide(made.layer));
+    }),
+    options.host,
+  );
+
+const parkedWhy = (runId: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(controlPath(dir, PARKED, runId))),
+    Effect.orElseSucceed(() => ""),
+  );
+
+test(
+  "a Run with nothing approved to prove it stops before any agent, and says how to approve something",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-none", []);
+
+        const status = yield* stalled({
+          entry: shipped("implement"),
+          runId: "r-impl-none",
+          input: { plan },
+        });
+
+        expect(status).toBe("suspended");
+        expect(yield* rig.cmds()).not.toContain("agent start");
+        const why = yield* parkedWhy("r-impl-none");
+        // This Run can still be proved; the file only helps the Runs started after it.
+        expect(why).toContain("collie run intent verification r-impl-none --name");
+        expect(why).toContain("collie run resume r-impl-none");
+        expect(why).toContain(".herdr/verify.json");
+        expect(why).toContain("only when it starts");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "the same Run, granted a verification and resumed, builds and is held to it at its gate",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-grant", []);
+        yield* stalled({ entry: shipped("implement"), runId: "r-impl-grant", input: { plan } });
+
+        yield* approve("r-impl-grant", ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        const result = yield* resumed({
+          entry: shipped("implement"),
+          runId: "r-impl-grant",
+          input: { plan },
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* parkedWhy("r-impl-grant")).toBe("");
+        expect(yield* asked("r-impl-grant", "build")).toContain(
+          `- unit: true (in ${rig.projectDir})`,
+        );
+        const opening = yield* asked("r-impl-grant", "mr");
+        expect(opening).toContain("unit");
+        expect(opening).toContain("by collie");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a grant emptied while the Run works stops it at its gate with the same repair, not an empty approval",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-emptied", ["unit"]);
+        yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        // A human withdraws the last grant once the build has been handed out.
+        let asks = 0;
+        const withdrawn: HostOverride = Layer.effect(NativeHost)(
+          Effect.gen(function* () {
+            const host = yield* NativeHost;
+            return NativeHost.of({
+              ...host,
+              approved: (runId) => ((asks += 1) === 1 ? host.approved(runId) : Effect.succeed([])),
+            });
+          }),
+        );
+
+        const status = yield* stalled({
+          entry: shipped("implement"),
+          runId: "r-impl-emptied",
+          input: { plan },
+          host: withdrawn,
+        });
+        yield* bin.restore();
+
+        expect(status).toBe("suspended");
+        expect(yield* parkedWhy("r-impl-emptied")).toContain(
+          "collie run intent verification r-impl-emptied --name",
+        );
+        // Stopped at the gate: built and reviewed, and nobody asked to open anything.
+        expect(yield* prompts()).toHaveLength(3);
+        // Nor asked to approve a list with nothing in it.
+        expect(
+          yield* session(Store.pipe(Effect.flatMap((store) => store.asked("r-impl-emptied")))),
+        ).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test("a Run whose outcome needs no evidence is not stopped for having nothing approved", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* repository();
+      yield* approve("r-impl-inv", []);
+      yield* rig.queueOutputs([null]);
+
+      yield* stalled({
+        entry: shipped("implement"),
+        runId: "r-impl-inv",
+        input: { plan: "why is the board slow?" },
+        options: { outcome: "investigation" },
+      }).pipe(Effect.timeout("3 seconds"), Effect.ignore);
+
+      expect(yield* parkedWhy("r-impl-inv")).toBe("");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+    }),
+  ));
 
 /**
  * A host with no Helle to ask. The claim is a service this machine has no credentials

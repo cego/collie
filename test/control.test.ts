@@ -127,6 +127,45 @@ test(
 );
 
 test(
+  "an answer is taken in whatever case it was typed, as the option it names",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { wf, state } = yield* workspace("collie-control-case-");
+        const host = yield* openHost(state);
+        yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
+        yield* host.ask({ op: "start", id: "echo", runId: "e1", input: { text: "hi", times: 1 } });
+        yield* host.until({ op: "waiting", runId: "e1" }, asking("keep"));
+
+        const shouted = yield* host.ask({
+          op: "answer",
+          id: "echo",
+          runId: "e1",
+          decision: "keep",
+          value: "YES",
+          request: "req-1",
+        });
+        expect(shouted).toMatchObject({ ok: true, value: "yes" });
+        // The same answer in another case is the same answer, not a second one.
+        const again = yield* host.ask({
+          op: "answer",
+          id: "echo",
+          runId: "e1",
+          decision: "keep",
+          value: "Yes",
+          request: "req-1",
+        });
+        expect(again).toMatchObject({ ok: true, value: "yes" });
+
+        const done = yield* host.until({ op: "poll", id: "echo", runId: "e1" }, complete);
+        expect(done.value).toBe("<hi>#1|yes");
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
+test(
   "a caller that names no question is answered only where there is exactly one open",
   () =>
     runEffect(

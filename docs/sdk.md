@@ -537,12 +537,19 @@ tree.
 
 `host.verify({ runId, name, cwd })` runs one of the commands your Run was started under the
 authority of, and records what it did. The list is `.herdr/verify.json`, read when the Run
-started — a name nobody approved is refused, and a workflow cannot add to it. Anyone else
+started, plus whatever a human has granted it since with `collie run intent verification` —
+a name nobody approved is refused, and a workflow cannot add to it. Anyone else
 collects the same way from outside: `collie verify --run <your run id> -- <command>`.
 
 `host.approved(runId)` is that list, for a prompt to name what the work will be held to
 before it starts — `renderApproved` writes it out — and `renderEvidence(host.evidence(...))`
 is what was actually collected and by whom, for a merge request to say what it proved.
+
+`requireApproved(runId, kind)` is the same list where your Run's kind of result needs it.
+With nothing approved it parks the Run with the repair — a grant through `collie run intent
+verification`, then `collie run resume` — instead of paying agents for work no gate could
+accept, and a resume asks again. Call it before your first agent and again at your gate, so
+a grant withdrawn meanwhile parks the Run there rather than failing it.
 
 `evidenceGapsOf` is the gate itself: what a Run of this kind still has no evidence for, one
 sentence each, and empty where the evidence is there. It reads the journal, the approved
@@ -554,7 +561,7 @@ vouch for its own scope.
 const gaps = evidenceGapsOf({
   kind: isOutcome(place.options.outcome ?? "") ? place.options.outcome : "unspecified",
   evidence: yield * host.evidence(runId, cwd),
-  approved: yield * host.approved(runId),
+  approved: yield * requireApproved(runId, place.options.outcome ?? ""),
   outputs: { build, synthesize },
   reviewed: ["synthesize"],
   roots: [place.dir, cwd],

@@ -342,6 +342,15 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     options?: ReadonlyArray<string>,
   ): Effect.Effect<string, never, NativeHost | WorkflowEngine | WorkflowInstance>;
 
+  /**
+   * What this Run may have Collie run to prove its kind of result. With nothing approved
+   * where that kind needs something, the Run parks with the repair; a resume asks again.
+   */
+  export function requireApproved(
+    runId: string,
+    kind: string,
+  ): Effect.Effect<ReadonlyArray<VerifySpec>, never, NativeHost | WorkflowInstance>;
+
   /** What a parent asks for when part of its own work is another workflow. */
   export interface ChildAsk {
     readonly runId: string;
@@ -2071,6 +2080,15 @@ export interface RegistryApi {
     readonly control: string;
     readonly set: boolean;
   }) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
+  /**
+   * Grants this run one command Collie may run itself, or withdraws the grant of that
+   * name where the command is null, and answers with what the run may run now.
+   */
+  readonly grant: (options: {
+    readonly runId: string;
+    readonly name: string;
+    readonly command: Omit<VerifySpec, "name"> | null;
+  }) => Effect.Effect<ReadonlyArray<VerifySpec>, HostRefused, HostServices>;
   /** Says something to the agent this run has, through the one sender. */
   readonly steer: (options: {
     readonly runId: string;
@@ -2757,6 +2775,8 @@ const makeRegistry: (
   // One registration at a time. Two clients starting different modules of one id at the
   // same moment would otherwise mint one name for both and stage over each other.
   const registering = yield* Semaphore.make(1);
+  // A grant is a read and a write of one file: two at once would each drop the other's.
+  const granting = yield* Semaphore.make(1);
 
   const mint = Effect.fn("Native.Registry.mint")(function* (file: string) {
     // Read as it is now to learn the id this file claims, then register the next
@@ -3038,11 +3058,16 @@ const makeRegistry: (
           reason: `run "${options.runId}" is not waiting on a decision called "${name}"`,
         });
       }
-      if (question.options.length > 0 && !question.options.includes(options.value)) {
+      // An option is its own title: taken in any case, kept as declared.
+      const named = question.options.find(
+        (option) => option.toLowerCase() === options.value.toLowerCase(),
+      );
+      if (question.options.length > 0 && named === undefined) {
         return yield* new HostRefused({
           reason: `"${options.value}" is not one of ${question.options.join(", ")}`,
         });
       }
+      const value = named ?? options.value;
       // Checked before the answer is recorded: an answer the module has no deferred for
       // would otherwise close the question against a run nothing could ever resume.
       if (!found.generation.registration.decisions[name]) {
@@ -3055,22 +3080,22 @@ const makeRegistry: (
       const settled = yield* store.settle({
         run: options.runId,
         decision: name,
-        value: options.value,
+        value,
         request: options.request,
       });
       if (settled._tag === "refused") {
         return yield* new HostRefused({ reason: settled.reason });
       }
       if (settled._tag === "repeat") {
-        return { runId: options.runId, decision: name, value: options.value, fresh: false };
+        return { runId: options.runId, decision: name, value, fresh: false };
       }
       yield* answerDecision(found.generation.registration, {
         name,
         executionId: found.execution,
-        value: options.value,
+        value,
       }).pipe(Effect.mapError((failure) => new HostRefused({ reason: failure.message })));
 
-      return { runId: options.runId, decision: name, value: options.value, fresh: true };
+      return { runId: options.runId, decision: name, value, fresh: true };
     }),
 
     control: Effect.fn("Native.Registry.control")(function* (options: {
@@ -3090,6 +3115,28 @@ const makeRegistry: (
       // a run parked on its question has nothing that would make it look again.
       if (!(options.control === HOLD && options.set)) yield* wake(found.success);
       return { ...recorded, applied: true, detail: "" };
+    }),
+
+    grant: Effect.fn("Native.Registry.grant")(function* (options: {
+      readonly runId: string;
+      readonly name: string;
+      readonly command: Omit<VerifySpec, "name"> | null;
+    }) {
+      if ((yield* store.run(options.runId)) === null) {
+        return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
+      }
+      return yield* granting.withPermits(1)(
+        Effect.gen(function* () {
+          const kept = (yield* approvedOf(dir, options.runId)).filter(
+            (spec) => spec.name !== options.name,
+          );
+          const next =
+            options.command === null ? kept : [...kept, { name: options.name, ...options.command }];
+          yield* fs.makeDirectory(evidenceDir(dir, options.runId), { recursive: true });
+          yield* fs.writeFileString(approvedPath(dir, options.runId), encodeApproved(next));
+          return next;
+        }).pipe(Effect.orDie),
+      );
     }),
 
     steer: Effect.fn("Native.Registry.steer")(function* (options: {

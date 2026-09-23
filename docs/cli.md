@@ -172,7 +172,8 @@ or an execution exists — so a value one of them refuses costs nothing to refus
 `collie verify --run <run-id> -- <command>` records against a module's Run as it does
 against any other: the same collector, the same binding to the tree the command ran on, and
 the same refusal for a directory that is not that Run's. A module can ask for one itself,
-but only for a command `.herdr/verify.json` named when the Run started.
+but only for a command `.herdr/verify.json` named when the Run started, or one a human has
+granted it since with `run intent verification`.
 
 A module may be made of other modules. A child is a Run of its own — `run list` has it,
 `run show` says whose it is, and the Task it belongs to is its parent's — and it is started
@@ -208,7 +209,8 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
 
 - **`--decision` names the question** where a module is waiting on more than one; leave it
   out and the one open question is answered, and being asked for is refused where that is
-  not exactly one. A value the question does not take is refused with what it does take.
+  not exactly one. A value the question does not take is refused with what it does take;
+  one it takes is taken in any case, so `YES` answers `yes`.
 - **One answer settles it.** A second is refused with what the Run already has; the same
   `--request-id` again is the same answer rather than another.
 - **A control reaches one Run.** Its siblings and the host carry on. A control over a Run
@@ -220,6 +222,9 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
   `agent_blocked` for ten minutes leaves the Run `suspended`, with `parked` in its view —
   and in `run show` — saying what held, for how long, and where the prompt is. `run resume`
   hands that prompt to the same agent rather than starting another.
+- **A Run with nothing approved to prove it parks before its first agent**, where its
+  outcome needs the approved set. `parked` names the repair: `run intent verification`
+  grants this Run a command through the host, and `run resume` carries it on.
 - **A Run's agents live in its Task's workspace**, opened by the start that made the Task.
   A stop closes nothing there. If herdr has closed that workspace by the next launch, it
   is reopened on the Run's checkout and the Task records the new id; with the checkout gone
@@ -565,7 +570,8 @@ A run whose question is replaced in the instant between the check and the write 
 as `choice_mismatch` too, with or without the flag: an answer nothing will ever read is
 never reported as sent.
 
-The answer is the choice's title, exactly as `run show` gives it. An empty answer dismisses
+The answer is the choice's title as `run show` gives it, in any case: `Yes`, `yes` and `YES`
+are the same answer. An empty answer dismisses
 the menu and leaves the run open for `resume`. A title that is not on offer comes back as
 `invalid_answer` with the valid ones in `details.answers`; a question already answered comes
 back as `choice_already_answered`; a run that is not at a question comes back as
@@ -961,7 +967,11 @@ Once it is approved, Collie runs the run's own approved set itself at the tree a
 stands — the whole list, or what an edit left of it — then says what is missing; gaps stop
 the run with `evidence_missing` and are listed on the record and in `run show`. A run with
 nothing approved is told so rather than passed — an empty set would make the gate say yes
-to anything.
+to anything — and it is told before any agent works: a run whose outcome needs the approved
+set, started with none, parks at once, and `run show` gives both repairs. `collie run intent
+verification <run-id> --name … -- <command>` and then `collie run resume <run-id>` carry this
+run on; `.herdr/verify.json` only helps the runs started after it, because a run reads that
+file when it starts. A grant withdrawn while the run works parks it at its gate the same way.
 
 An investigation that concludes there is nothing to change skips the merge request with a
 note and finishes. That is a real outcome, and nothing is invented to have something to
@@ -1039,7 +1049,8 @@ taken whole — and copied into `run.json` and into the run's Intent as its
 `run_verification` grant. Editing the file afterwards changes the next run and never a
 running one. From then on the Intent is the set: `run intent verification` adds to it or
 removes from it, and an Intent whose list has been emptied is a run Collie may run nothing
-for — the seed is not put back behind the human who removed it.
+for — the seed is not put back behind the human who removed it. A Run of a workflow module
+keeps its set with the host rather than in an Intent, and the same command amends it there.
 
 ```json
 [{ "name": "tests", "executable": "bun", "argv": ["test"], "cwd": "worktree" }]
@@ -1323,8 +1334,8 @@ never adopted and never signalled.
 
 Clients talk to it over a unix socket in that same directory, with Effect's own RPC: the
 same schemas at both ends, and nothing listening off this machine. It answers `identity`,
-`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `watch`, `recover`
-and `answer` — the registry `collie native` drives, in front of as many clients as ask.
+`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `watch`, `recover`,
+`answer` and `grant` — the registry `collie native` drives, in front of as many clients as ask.
 `run` and `runs` are the read model the front doors show; `watch` streams it, current state
 first and a whole state each time; `recover` registers what current files now allow and
 hands over what is outstanding. One fiber in the host asks the engine about the work it has

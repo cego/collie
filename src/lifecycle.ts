@@ -26,6 +26,7 @@ import {
 import { err, taskFor, type Failure, type OpResult } from "./operations";
 import type { TaskChoice } from "./task";
 import type { HistoryRow, RequestConflict } from "./store";
+import { renderApproved, type VerifySpec } from "./verify-spec";
 
 export { savedModules } from "./discovery";
 
@@ -429,6 +430,29 @@ export const controlNativeRun = (
           : `Recorded ${what}, but nothing here is running it: ${done.detail}`,
       };
     }),
+  );
+
+/** Grants a native Run one command Collie may run itself, or withdraws it, through the host. */
+export const grantNativeRun = (
+  env: PluginEnv,
+  options: {
+    readonly runId: string;
+    readonly name: string;
+    readonly command: Omit<VerifySpec, "name"> | null;
+  },
+): Effect.Effect<OpResult, never, Client> =>
+  asks(env, (client) => client.grant(options)).pipe(
+    Effect.map((answered) =>
+      answered.ok
+        ? {
+            ok: true as const,
+            data: { run: options.runId, approved: answered.value },
+            human: [`${options.runId} may have Collie run:`, renderApproved(answered.value)].join(
+              "\n",
+            ),
+          }
+        : answered,
+    ),
   );
 
 /** Says something of a human's to the agent a native Run has, through the host. */

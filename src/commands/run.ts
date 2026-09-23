@@ -24,6 +24,7 @@ import {
   importHistory,
   nativeHistory,
   answerNativeRun,
+  grantNativeRun,
   anyNativeRuns,
   controlNativeRun,
   invokeNativeOffer,
@@ -1259,7 +1260,11 @@ function intentChange(
   runId: string,
   requestId: Option.Option<string>,
   change: (intent: Intent) => Change | Failure,
-  options: { readonly propagate?: boolean } = {},
+  options: {
+    readonly propagate?: boolean;
+    /** What a native Run does instead, where it keeps this outside an Intent. */
+    readonly native?: (env: PluginEnv) => Effect.Effect<Result, never, BunServices>;
+  } = {},
 ) {
   return Effect.gen(function* () {
     const global = yield* root;
@@ -1273,6 +1278,9 @@ function intentChange(
             `${runId} was recorded by the engine Collie no longer has; its Intent is history and cannot be amended.`,
             { run: runId, history: true },
           );
+        const native = options.native;
+        if (resolved._tag === "Native" && native !== undefined)
+          return yield* mutation(resolved.env, operation, requestId, () => native(resolved.env));
         const dir = resolved.dir;
         return yield* mutation(resolved.env, operation, requestId, (id) =>
           Effect.gen(function* () {
@@ -1490,24 +1498,32 @@ const intentVerification = Command.make(
     propagate: propagateFlag,
     requestId: requestIdFlag,
   },
-  ({ runId, name, cwd, remove, command, propagate: wants, requestId }) =>
-    intentChange(
+  ({ runId, name, cwd, remove, command, propagate: wants, requestId }) => {
+    const [executable, ...argv] = command;
+    const granted = remove || executable === undefined ? null : { executable, argv, cwd };
+    const missing = err("invalid_input", "A verification grant needs a command, after `--`.");
+    return intentChange(
       "run-intent-verification",
       runId,
       requestId,
       (intent) => {
         const approved = intent.authority.run_verification.filter((spec) => spec.name !== name);
         if (remove) return { kind: "authority", patch: { run_verification: approved } };
-        const [executable, ...argv] = command;
-        if (executable === undefined)
-          return err("invalid_input", "A verification grant needs a command, after `--`.");
+        if (granted === null) return missing;
         return {
           kind: "authority",
-          patch: { run_verification: [...approved, { name, executable, argv, cwd }] },
+          patch: { run_verification: [...approved, { name, ...granted }] },
         };
       },
-      { propagate: wants },
-    ),
+      {
+        propagate: wants,
+        native: (env) =>
+          !remove && granted === null
+            ? Effect.succeed(missing)
+            : grantNativeRun(env, { runId, name, command: granted }),
+      },
+    );
+  },
 ).pipe(Command.withDescription("Let Collie run one exact command itself, as a verification"));
 
 /** The Session's own defaults file, which is what every Run it starts begins with. */

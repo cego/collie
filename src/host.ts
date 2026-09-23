@@ -17,7 +17,7 @@
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import { Config, Data, Effect, FileSystem, Layer, Schedule, Schema, Scope } from "effect";
+import { Config, Data, Effect, FileSystem, Layer, Schedule, Schema, Scope, Struct } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
@@ -45,6 +45,7 @@ import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { Kept } from "./history";
 import { History, RequestConflict } from "./store";
+import { VerifySpecSchema } from "./verify-spec";
 import { currentEnv } from "./env";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
@@ -200,6 +201,16 @@ export const HostRpcs = RpcGroup.make(
     success: Controlled,
     error: HostRefused,
   }),
+  /** One command Collie may run for a run, granted or, with no command, withdrawn. */
+  Rpc.make("grant", {
+    payload: {
+      runId: Schema.String,
+      name: Schema.String,
+      command: Schema.NullOr(VerifySpecSchema.mapFields(Struct.omit(["name"]))),
+    },
+    success: Schema.Array(VerifySpecSchema),
+    error: HostRefused,
+  }),
   /** A human's own words to the agent this run has, through the one sender. */
   Rpc.make("steer", {
     payload: {
@@ -290,6 +301,7 @@ const handlers = (dir: string) =>
         answer: ({ runId, decision, value, request }) =>
           registry.answer({ runId, decision, value, request }),
         control: ({ runId, control, set }) => registry.control({ runId, control, set }),
+        grant: ({ runId, name, command }) => registry.grant({ runId, name, command }),
         steer: ({ runId, text, request, operation, mode }) =>
           registry.steer({ runId, text, request, operation, mode }),
       });

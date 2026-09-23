@@ -298,7 +298,7 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Outcome** — The kind of result a Run has to prove, and the evidence that closes it: a feature names what it built, a bug reproduces before it is fixed, a refactor preserves behaviour, an investigation reaches a supported conclusion and may have no patch, docs run what they document, a migration proves it can go back. A Run nobody classified is `unspecified` and proves only its approved verifications — never a feature by default.
 
-**Approved set** — The verifications Collie may run itself for one Run, each bound argument for argument: `.herdr/verify.json` in the project, else `verify.json` in the config directory, read at start and written into the Run's Intent as its `run_verification` grant. From then on the Intent is the set, amended only by `run intent verification`. An agent may `collie verify` anything; only the approved set is what Collie runs at the gate.
+**Approved set** — The verifications Collie may run itself for one Run, each bound argument for argument: `.herdr/verify.json` in the project, else `verify.json` in the config directory, read at start and kept with the Run as its grant — its Intent's `run_verification`, or the host's record for a workflow module's Run. From then on that grant is the set, amended only by `run intent verification`, and a Run whose outcome needs it with nothing granted stops before its first agent. An agent may `collie verify` anything; only the approved set is what Collie runs at the gate.
 
 **Evidence** — A Verification collected at a revision. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 

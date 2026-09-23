@@ -3,7 +3,14 @@
 // promised.
 
 import { expect, test } from "bun:test";
-import { evidenceGaps, endsWithoutPatch, isOutcome, KINDS, renderEvidence } from "../src/outcome";
+import {
+  evidenceGaps,
+  endsWithoutPatch,
+  isOutcome,
+  KINDS,
+  nothingApproved,
+  renderEvidence,
+} from "../src/outcome";
 import type { Collected, Outcome } from "../src/outcome";
 import type { Verification } from "../src/verify";
 import type { VerifySpec } from "../src/verify-spec";
@@ -97,10 +104,12 @@ test("an unclassified Run proves the approved set and is asked for nothing else"
   expect(evidenceGaps("unspecified", collected()).join(" ")).not.toContain("ticket");
 });
 
-test("a Run with nothing approved is told so, rather than passing on an empty set", () => {
+test("a Run with nothing approved is told so and how to repair it, rather than passing on an empty set", () => {
   const gaps = evidenceGaps("unspecified", collected({ approved: [], verifications: [] }));
   expect(gaps).toHaveLength(1);
+  expect(gaps[0]).toContain("collie run intent verification");
   expect(gaps[0]).toContain(".herdr/verify.json");
+  expect(gaps[0]).toContain("only when it starts");
 });
 
 test("the approved set has to pass here, now, and by Collie", () => {
@@ -256,9 +265,7 @@ test("an investigation is a conclusion with references that hold it up, and may 
   // No approved set is demanded: nothing was changed for a command to prove.
   expect(
     evidenceGaps("investigation", collected({ approved: [], verifications: [] })),
-  ).not.toContain(
-    "nothing is approved for Collie to run, so no command can prove this Run: add .herdr/verify.json",
-  );
+  ).not.toContain(nothingApproved());
 
   const full = {
     conclusion: "The stall is in the prompt submission, not the harness.",

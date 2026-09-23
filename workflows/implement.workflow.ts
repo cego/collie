@@ -34,6 +34,7 @@ import {
   renderApproved,
   renderEvidence,
   renderProgress,
+  requireApproved,
   settleFinalFix,
   settleRound,
   splitDisputed,
@@ -140,8 +141,8 @@ export const make = (registrationName: string) => {
       const source = yield* classifyWorkSource(payload.input.plan).pipe(
         Effect.orElseSucceed(() => ({ kind: "text", value: payload.input.plan })),
       );
-      const approved = yield* host.approved(runId);
       const kind = place.options.outcome ?? "";
+      const approved = yield* requireApproved(runId, kind);
 
       const inputs = {
         plan: source.value,
@@ -238,14 +239,15 @@ export const make = (registrationName: string) => {
       // The gate: Collie's own run of every approved command, on this tree, and then what
       // this kind of result still has no evidence for. An Output saying the tests pass is
       // a claim; a record in the journal, bound to this tree, is not.
-      for (const spec of approved) {
+      const granted = yield* requireApproved(runId, kind);
+      for (const spec of granted) {
         yield* host.verify({ runId, name: spec.name, cwd });
       }
       const evidence = yield* host.evidence(runId, cwd);
       const gaps = evidenceGapsOf({
         kind: isOutcome(kind) ? kind : "unspecified",
         evidence,
-        approved,
+        approved: granted,
         outputs: { build: { ...build }, synthesize: { ...rallied.reviewed } },
         // Only a reviewer may vouch for what a reviewer is asked: read from any Output,
         // the agent that wrote the change could vouch for its own scope.
