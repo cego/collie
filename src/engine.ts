@@ -1177,8 +1177,9 @@ const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => 
  * new work without restarting the host. Bun's module registry has no invalidation:
  * re-importing the entry under a new query re-reads the entry, but its `./helper.ts`
  * resolves to the path already cached. A copy gives every file a path nothing has
- * imported yet. What the directory imports from outside it is copied beside it where it
- * sits relative to it, so every relative import still names the same file, in the copy.
+ * imported yet. The directory and what it imports from outside it are copied to their
+ * absolute paths under the generation, so every relative import names the same file, and
+ * every `node_modules` a package is looked up in is linked where its copy looks.
  * It is a cache — a host wipes it on start and stages from the module as it is now, so
  * this is never the code a past run is recovered onto.
  */
@@ -1193,12 +1194,7 @@ export const stageGeneration: (options: {
   const path = yield* Path.Path;
   const from = directoryOf(options.entry);
   const outside = yield* outsideOf(from);
-  let root = from;
-  for (const file of outside) {
-    while (!file.startsWith(`${root}/`) && root !== path.dirname(root)) root = path.dirname(root);
-  }
-  const staged = (file: string) =>
-    path.join(options.dir, "generations", options.name, path.relative(root, file));
+  const staged = (file: string) => path.join(options.dir, "generations", options.name, file);
   const failed = (cause: unknown) =>
     new EntryError({ file: options.entry, message: String(cause) });
   yield* fs.copy(from, staged(from), { overwrite: true }).pipe(Effect.mapError(failed));
@@ -1206,6 +1202,19 @@ export const stageGeneration: (options: {
     yield* fs
       .makeDirectory(path.dirname(staged(file)), { recursive: true })
       .pipe(Effect.andThen(fs.copyFile(file, staged(file))), Effect.mapError(failed));
+  }
+  const looked = new Set<string>();
+  for (const start of [from, ...outside.map((file) => path.dirname(file))]) {
+    for (let at = start; !looked.has(at); at = path.dirname(at)) looked.add(at);
+  }
+  for (const at of looked) {
+    const installed = path.join(at, "node_modules");
+    const link = path.join(staged(at), "node_modules");
+    if (!(yield* fs.exists(installed).pipe(Effect.orElseSucceed(() => false)))) continue;
+    if (yield* fs.exists(link).pipe(Effect.orElseSucceed(() => false))) continue;
+    yield* fs
+      .makeDirectory(staged(at), { recursive: true })
+      .pipe(Effect.andThen(fs.symlink(installed, link)), Effect.mapError(failed));
   }
   return staged(options.entry);
 });

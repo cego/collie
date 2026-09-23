@@ -71,7 +71,9 @@ editing any of them sends the next run to a new registration
 while a run already going keeps the code it started on. A run recovered in the same host
 resumes on its own registration; a host started again rebuilds registrations from the
 modules **as they are now**, so a file you fixed is the file it comes back on. Any staged
-copy is a cache, wiped on start, and never an archive a past run is recovered from.
+copy is a cache, wiped on start, and never an archive a past run is recovered from. A
+package is found from a staged copy exactly as from your file: the `node_modules` it would
+look in are linked beside the copy, not copied, so installing one is not an edit.
 
 Deleting a file takes its id away, and putting it back brings it — and any run waiting on
 it — back.

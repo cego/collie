@@ -15,6 +15,7 @@ import {
   provisionToolchain,
   revisionOf,
   stageGeneration,
+  clearGenerations,
   typecheckEntry,
 } from "../src/engine";
 import { runEffect } from "./support/effect";
@@ -266,6 +267,47 @@ test("a helper outside a module's directory is part of its revision, and each ge
       const second = yield* staged();
       expect(second.revision).not.toBe(first.revision);
       expect(second.module.value).toBe(2);
+    }).pipe(Effect.scoped),
+  ));
+
+test("a staged helper finds the packages installed where its author wrote it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-packages-" });
+      const install = Effect.fn(function* (at: string, name: string) {
+        yield* fs.makeDirectory(`${at}/node_modules/${name}`, { recursive: true });
+        yield* fs.writeFileString(
+          `${at}/node_modules/${name}/package.json`,
+          JSON.stringify({ name, main: "index.js" }),
+        );
+        yield* fs.writeFileString(
+          `${at}/node_modules/${name}/index.js`,
+          `export const from = "${name}";\n`,
+        );
+      });
+      yield* install(`${root}/project`, "collie-probe-above");
+      yield* install(`${root}/project/shared`, "collie-probe-beside");
+      yield* fs.makeDirectory(`${root}/project/mod`);
+      yield* fs.writeFileString(
+        `${root}/project/shared/helper.ts`,
+        [
+          `import { from as above } from "collie-probe-above";`,
+          `import { from as beside } from "collie-probe-beside";`,
+          `export const both = [above, beside];`,
+        ].join("\n"),
+      );
+      const entry = `${root}/project/mod/entry.ts`;
+      yield* fs.writeFileString(entry, `export { both } from "../shared/helper";\n`);
+
+      const file = yield* stageGeneration({ dir: `${root}/state`, name: "mod@1", entry });
+      const staged = yield* Effect.promise(() => import(file));
+      expect(staged.both).toEqual(["collie-probe-above", "collie-probe-beside"]);
+      // A generation links the author's packages, and wiping it leaves them where they are.
+      yield* clearGenerations(`${root}/state`);
+      expect(yield* fs.exists(`${root}/project/node_modules/collie-probe-above/index.js`)).toBe(
+        true,
+      );
     }).pipe(Effect.scoped),
   ));
 
