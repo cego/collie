@@ -452,7 +452,11 @@ function handle(
       // The code `--wait` answers a submission with, exit 1 and an envelope on stdout
       // the way herdr really answers one: `agent_prompt_stalled` for a lost Enter,
       // `timeout` for a wait the caller ran out of.
-      const code = yield* envString("FAKE_HERDR_PROMPT_ERROR", "");
+      // Only the first N prompts are answered with it, where a test sets N: a pane whose
+      // dialog clears after a while.
+      const times = Number.parseInt(yield* envString("FAKE_HERDR_PROMPT_ERROR_TIMES", "0"), 10);
+      const code =
+        times > 0 && state.prompts > times ? "" : yield* envString("FAKE_HERDR_PROMPT_ERROR", "");
       const answered = {
         code: 1,
         stdout: `${encodeJson({

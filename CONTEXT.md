@@ -88,9 +88,10 @@ records it as `chat:`. No action kind confirms anything, so a Proposal can never
 its own.
 
 **Delivery** — One message to one live agent incarnation, with states `queued` (held by
-the Driver for the agent's next prompt), `reserved`, `submitted`, `acknowledged`,
-`verified` and the terminal `failed`, `unknown`, `superseded`, `expired`. They are separate
-because they are separate facts. A `deliver` with no mode is `now`.
+the Driver for the agent's next prompt), `reserved`, `deferred` (herdr answered that the
+pane cannot take it yet, so it is tried again under the same id), `submitted`,
+`acknowledged`, `verified` and the terminal `failed`, `unknown`, `superseded`, `expired`.
+They are separate because they are separate facts. A `deliver` with no mode is `now`.
 
 **Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger lock
 across the compaction decision, the composition and the send.

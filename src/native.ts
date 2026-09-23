@@ -237,6 +237,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly held: (runId: string) => Effect.Effect<boolean>;
     readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
     readonly record: (runId: string, event: string) => Effect.Effect<void>;
+    /** Why this Run parked its own work, shown beside its status; null clears it. */
+    readonly blocked: (runId: string, why: string | null) => Effect.Effect<void>;
     readonly asking: (runId: string, question: DecisionSpec) => Effect.Effect<void>;
     /** What has been verified for this run, and the tree in front of it now. */
     readonly evidence: (runId: string, cwd: string) => Effect.Effect<CheckEvidence>;
@@ -418,6 +420,12 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     { operation: Schema.String, reason: Schema.String },
   ) {}
 
+  /** The agent's pane would not take its prompt for as long as that was worth waiting. */
+  export class PromptRefused extends Schema.TaggedError<PromptRefused>()(
+    "PromptRefused",
+    { operation: Schema.String, reason: Schema.String },
+  ) {}
+
   /** What a host lends a workflow that needs an agent. */
   export interface AgentsApi {
     readonly outputFor: (runId: string, operation: string) => string;
@@ -430,7 +438,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
      * pane of whoever is live in that role, and otherwise to stop and ask the human.
      */
     readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
-    readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain>;
+    readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | PromptRefused>;
     readonly collect: (
       launched: Launched,
       unless?: string | null,
@@ -438,7 +446,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly repair: (
       launched: Launched,
       problem: string,
-    ) => Effect.Effect<boolean, AgentUncertain>;
+    ) => Effect.Effect<boolean, AgentUncertain | PromptRefused>;
     readonly steer: (options: {
       readonly runId: string;
       readonly text: string;
@@ -1132,6 +1140,8 @@ export function hostLayer(options: {
 
 export const HOLD = "hold";
 export const STOP = "stop";
+/** Not a control: the Run's own word on why it parked, which only the Run writes. */
+export const BLOCKED = "blocked";
 
 /** What a Run nobody classified proves: the approved set, and no ticket's evidence. */
 const UNSPECIFIED = "unspecified";
@@ -1279,6 +1289,12 @@ export const nativeHostLayer = (options: {
           fs
             .writeFileString(`${dir}/events.${runId}.log`, `${event}\n`, { flag: "a" })
             .pipe(Effect.orDie),
+        blocked: (runId, why) => {
+          const path = controlPath(dir, BLOCKED, runId);
+          return (
+            why === null ? fs.remove(path, { force: true }) : fs.writeFileString(path, why)
+          ).pipe(Effect.orDie);
+        },
         asking: (runId, question) =>
           store.asking({
             run: runId,
@@ -1808,6 +1824,8 @@ export const RunView = Schema.Struct({
   controls: Schema.Array(Schema.String),
   /** Why the engine could not be asked, or null when it was. */
   diagnostic: Schema.NullOr(Schema.String),
+  /** Why the Run parked its own work and what picks it up again, or null. */
+  blocked: Schema.NullOr(Schema.String),
 });
 export type RunView = typeof RunView.Type;
 
@@ -2334,6 +2352,9 @@ const makeRegistry: (
       created: row.admitted,
       waiting: yield* asked(row.run),
       controls: yield* controlsOf(row.run),
+      blocked: yield* fs
+        .readFileString(controlPath(dir, BLOCKED, row.run))
+        .pipe(Effect.orElseSucceed(() => null)),
     };
     // Not registered here is not a verdict on the work: the rows are all still there,
     // and what is missing is the module, named so somebody can put it back.

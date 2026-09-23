@@ -245,6 +245,11 @@ const verdict =
   and every issue with it is reported at once.
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
   schema's own issues. A second one fails the run with `output-unusable`.
+- **A busy pane is waited out, then parked.** Where herdr answers that the agent's pane
+  cannot take a prompt yet (`agent_blocked`: a dialog is up), the prompt and its repair are
+  tried again, under the same delivery, for up to ten minutes. Past that the Run is
+  `suspended` rather than failed, `run show` says what held and for how long, and
+  `collie run resume` hands the same prompt to the same agent.
 - **`cwd` is yours to say.** The host knows its own state directory, not which checkout
   this piece of work belongs in.
 - **`role`, `harness`, `model`, `effort` and `permissions`** default to the operation's name

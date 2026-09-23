@@ -216,6 +216,10 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
   rather than reporting a success nothing can stand behind.
 - **`run stop` parks the Run, not its agent.** The agent keeps what it is holding; stopping
   the harness is its own action. `run resume` clears the stop and picks the Run up again.
+- **A Run parks itself when its agent's pane will not take a prompt.** herdr answering
+  `agent_blocked` for ten minutes leaves the Run `suspended`, with `blocked` in its view —
+  and in `run show` — saying what held, for how long, and where the prompt is. `run resume`
+  hands that prompt to the same agent rather than starting another.
 - **`run steer` says something to the Run's agent** through the one sender, with the same
   incarnation and harness-capability checks as every other delivery, and tells you whether
   it was delivered rather than that it was accepted for sending. It carries out nothing:

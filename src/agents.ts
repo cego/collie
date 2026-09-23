@@ -105,6 +105,16 @@ export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()("AgentU
   reason: Schema.String,
 }) {}
 
+/**
+ * herdr kept saying the agent's pane could not take a prompt for as long as that was worth
+ * waiting, so it was not delivered. The agent is alive and holding its context: the work
+ * parks for a resume rather than failing into a fresh agent.
+ */
+export class PromptRefused extends Schema.TaggedError<PromptRefused>()("PromptRefused", {
+  operation: Schema.String,
+  reason: Schema.String,
+}) {}
+
 /** What a host lends a workflow that needs an agent. */
 export interface AgentsApi {
   /** Where this operation's Output goes — known before anything starts, so a prompt can name it. */
@@ -123,7 +133,7 @@ export interface AgentsApi {
   readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
-  readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain>;
+  readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | PromptRefused>;
   /**
    * What the agent wrote, or null where it has written nothing in the time allowed.
    * `unless` is an Output already known to be unusable: the same text again is the agent
@@ -134,7 +144,10 @@ export interface AgentsApi {
     unless?: string | null,
   ) => Effect.Effect<string | null, AgentUncertain>;
   /** Hands one unusable Output back to the agent that wrote it. False where it could not be asked. */
-  readonly repair: (launched: Launched, problem: string) => Effect.Effect<boolean, AgentUncertain>;
+  readonly repair: (
+    launched: Launched,
+    problem: string,
+  ) => Effect.Effect<boolean, AgentUncertain | PromptRefused>;
   /**
    * Says something of a human's to the agent this run has. The request is the claim on
    * the delivery: the same one twice is one message, which is what the ledger refuses a
@@ -266,7 +279,7 @@ export const agentWork = <Output extends OutputContract>(
       name: `${work.operation}.launch`,
       success: Launched,
       error: AgentUncertain,
-      execute: agents.launch(ask),
+      execute: parkedWhenRefused(agents.launch(ask), host, work.runId),
     });
     const first = yield* Activity.make({
       name: `${work.operation}.collect`,
@@ -286,13 +299,17 @@ export const agentWork = <Output extends OutputContract>(
       name: `${work.operation}.repair`,
       success: Schema.NullOr(Schema.String),
       error: AgentUncertain,
-      execute: agents
-        .repair(launched, read.problem)
-        .pipe(
-          Effect.flatMap((asked) =>
-            asked ? agents.collect(launched, first) : Effect.succeed(null),
+      execute: parkedWhenRefused(
+        agents
+          .repair(launched, read.problem)
+          .pipe(
+            Effect.flatMap((asked) =>
+              asked ? agents.collect(launched, first) : Effect.succeed(null),
+            ),
           ),
-        ),
+        host,
+        work.runId,
+      ),
     });
     if (again === null) {
       return yield* unusable(launched, `did not write ${output} again: ${read.problem}`);
@@ -307,6 +324,26 @@ export const agentWork = <Output extends OutputContract>(
           reason: `${cause.operation}: ${cause.reason}. Nothing here says the agent did no work.`,
         }),
       ),
+    ),
+  );
+
+/**
+ * A prompt the agent's pane would not take, parked beside that agent rather than failed.
+ * The Activity is left unfinished, so a resume runs it again: the launch finds the agent it
+ * started, and the same delivery goes out to it.
+ */
+const parkedWhenRefused = <A>(
+  sending: Effect.Effect<A, AgentUncertain | PromptRefused>,
+  host: NativeHostApi,
+  runId: string,
+): Effect.Effect<A, AgentUncertain, WorkflowEngine.WorkflowInstance> =>
+  sending.pipe(
+    Effect.tap(() => host.blocked(runId, null)),
+    Effect.catchTag("PromptRefused", (refused) =>
+      Effect.gen(function* () {
+        yield* host.blocked(runId, refused.reason);
+        return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
+      }),
     ),
   );
 
@@ -440,6 +477,8 @@ export interface AgentHost {
   readonly pollMs?: number;
   /** How long an Output may take. Past it the work is uncertain, never finished. */
   readonly collectMs?: number;
+  /** How a step's own prompts wait out a pane that says it will clear by itself. */
+  readonly patience?: dispatch.Patience;
 }
 
 type AgentServices = FileSystem.FileSystem | Path.Path | BunServices;
@@ -552,26 +591,33 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   ) {
     const found = yield* entryFor(about, about.agent, null);
     if (found.entry === null) return { sent: false, why: found.reason ?? "no such agent" };
-    const outcome = yield* dispatch
-      .transaction(deps, found.entry, (channel) =>
-        channel.submit(text, {
-          run: about.runId,
-          harness: adapterFor(about.harness).id,
-          cause: { kind: delivery.kind, ref: delivery.ref },
-          mode: delivery.mode ?? "boundary",
-          // A native run has no Intent yet, so every delivery about one piece of work
-          // shares a causal key: that is what makes the second copy refusable.
-          intentVersion: 0,
-          attempt: 1,
-          requestId: `${about.runId}-${delivery.ref}-${delivery.kind}`,
-        }),
-      )
-      .pipe(Effect.catch((cause) => Effect.succeed(undeliverable(cause))));
+    const entry = found.entry;
+    const draft: dispatch.DeliveryDraft = {
+      run: about.runId,
+      harness: adapterFor(about.harness).id,
+      cause: { kind: delivery.kind, ref: delivery.ref },
+      mode: delivery.mode ?? "boundary",
+      // A native run has no Intent yet, so every delivery about one piece of work
+      // shares a causal key: that is what makes the second copy refusable.
+      intentVersion: 0,
+      attempt: 1,
+      requestId: `${about.runId}-${delivery.ref}-${delivery.kind}`,
+    };
+    // A human's own words go out once: they are waiting on the answer, and can say it again.
+    const outcome = yield* (
+      delivery.kind === "steer"
+        ? dispatch.transaction(deps, entry, (channel) => channel.submit(text, draft))
+        : dispatch.submitPatiently(deps, entry, text, draft, host.patience)
+    ).pipe(Effect.catch((cause) => Effect.succeed(undeliverable(cause))));
     if (outcome.ok) return { sent: true, why: "" };
     // Already in flight about this work: it went out, on whichever attempt got there
     // first. Sending it again is the second copy this ledger exists to prevent.
     if (outcome.reason === "blocked") return { sent: true, why: outcome.detail };
-    return { sent: false, why: `${outcome.reason}: ${outcome.detail}` };
+    return {
+      sent: false,
+      why: `${outcome.reason}: ${outcome.detail}`,
+      refused: outcome.reason === "exhausted",
+    };
   });
 
   /** A pane, an agent in it, and the registry entry that makes it addressable. */
@@ -670,6 +716,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           `${started}Your task for this step is in ${file} — read it and follow it.`,
           { kind: "step", ref: ask.operation },
         );
+        if (asked.refused) {
+          return yield* refusedWith(ask, `${agent} was not given its work (${asked.why})`, file);
+        }
         if (!asked.sent) {
           return yield* new AgentUncertain({
             operation: ask.operation,
@@ -681,7 +730,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           `${agent}: ${alive ? "reattached to" : "launched for"} ${ask.operation}`,
         );
         return launched;
-      }).pipe(Effect.catch((cause) => Effect.fail(asUncertain(ask.operation, cause)))),
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.fail(isRefused(cause) ? cause : asUncertain(ask.operation, cause)),
+        ),
+      ),
     );
 
   const collect = (launched: Launched, unless?: string | null) =>
@@ -696,7 +749,8 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     under(
       Effect.gen(function* () {
         const text = repairText(launched.output, problem);
-        yield* write(`${dirFor(launched.runId)}/${launched.operation}.repair.md`, text);
+        const file = `${dirFor(launched.runId)}/${launched.operation}.repair.md`;
+        yield* write(file, text);
         const sent = yield* deliver(launched, text, {
           kind: "repair",
           ref: launched.operation,
@@ -707,13 +761,22 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             ? `${launched.agent}: asked to write ${launched.operation}.json again`
             : `${launched.agent}: could not be asked to write it again (${sent.why})`,
         );
+        if (sent.refused) {
+          return yield* refusedWith(
+            launched,
+            `${launched.agent} was not asked to write ${launched.operation}.json again (${sent.why})`,
+            file,
+          );
+        }
         return sent.sent;
       }).pipe(
         Effect.catch((cause) =>
-          log(
-            launched.runId,
-            `${launched.agent}: could not be asked to write it again (${reason(cause)})`,
-          ).pipe(Effect.as(false)),
+          isRefused(cause)
+            ? Effect.fail(cause)
+            : log(
+                launched.runId,
+                `${launched.agent}: could not be asked to write it again (${reason(cause)})`,
+              ).pipe(Effect.as(false)),
         ),
       ),
     );
@@ -803,6 +866,19 @@ const decodeLaunched = Schema.decodeUnknownResult(LaunchedJson);
 
 /** What a delivery is called in a log: one line of it, so the log stays readable. */
 const firstLine = (text: string) => text.split("\n")[0] ?? "";
+
+/** A prompt that is waiting on its pane, said with what picks it up again. */
+const refusedWith = (
+  about: { readonly runId: string; readonly operation: string },
+  what: string,
+  file: string,
+) =>
+  new PromptRefused({
+    operation: about.operation,
+    reason: `${what}. It is alive and what it was to be told is in ${file}; \`collie run resume ${about.runId}\` hands that to it.`,
+  });
+
+const isRefused = Schema.is(PromptRefused);
 
 /** Anything a launch failed on, said as what it means: nobody can be sure what happened. */
 const isUncertain = Schema.is(AgentUncertain);

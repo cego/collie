@@ -40,10 +40,15 @@ export const isCauseKind = Schema.is(CauseSchema.fields.kind);
  * `unknown` is the honest state for a crash between reserving and submitting: nobody can
  * say whether herdr got it. It blocks the same work from being sent again until a human
  * reconciles it, and Collie never retries out of it on its own.
+ *
+ * `deferred` is herdr answering that the pane cannot take a prompt right now. That answer
+ * proves nothing was delivered, so the sender tries again under the same id, and the work
+ * stays blocked to every other copy meanwhile.
  */
 const DELIVERY_STATES = [
   "queued",
   "reserved",
+  "deferred",
   "submitted",
   "acknowledged",
   "verified",
@@ -76,6 +81,8 @@ const DeliverySchema = Schema.Struct({
   attempt: Schema.Int,
   state: Schema.Literals(DELIVERY_STATES),
   evidence: Schema.optionalKey(Schema.Struct({ kind: Schema.String, ref: Schema.String })),
+  /** herdr's own code for a refusal it answered with. */
+  code: Schema.optionalKey(Schema.String),
   note: Schema.optionalKey(Schema.String),
 });
 export type Delivery = Schema.Schema.Type<typeof DeliverySchema>;
@@ -206,14 +213,40 @@ export const deliveriesOf = Effect.fn("Steering.deliveriesOf")(function* (
  * happened, which appends `superseded` — so it stops blocking by being answered, never
  * by timing out into a guess.
  */
-export function blocked(lines: ReadonlyArray<LedgerLine>, causal_key: string): Delivery | null {
+export function blocked(
+  lines: ReadonlyArray<LedgerLine>,
+  causal_key: string,
+  /** The delivery being sent: its own `deferred` line is its retry, not another copy. */
+  resending?: string,
+): Delivery | null {
   let found: Delivery | null = null;
   for (const delivery of newestById(lines).values()) {
     if (delivery.causal_key !== causal_key) continue;
     if (TERMINAL_STATES.has(delivery.state)) continue;
+    if (delivery.id === resending && delivery.state === "deferred") continue;
     if (found === null || delivery.at > found.at) found = delivery;
   }
   return found;
+}
+
+/**
+ * When this delivery's current run of `deferred` answers began, and how many it has had.
+ * A reservation is each retry's own and continues the run; any other state ends it.
+ */
+export function deferralsOf(lines: ReadonlyArray<LedgerLine>, id: string) {
+  let since: string | null = null;
+  let count = 0;
+  for (const line of lines) {
+    if (!isDelivery(line) || line.id !== id || line.state === "reserved") continue;
+    if (line.state !== "deferred") {
+      since = null;
+      count = 0;
+      continue;
+    }
+    since ??= line.at;
+    count += 1;
+  }
+  return { since, count };
 }
 
 /**

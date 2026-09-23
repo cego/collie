@@ -457,6 +457,7 @@ export const describeRun = (view: RunView): ReadonlyArray<string> => [
   ...(view.controls.length === 0 ? [] : [`under ${view.controls.join(", ")}`]),
   ...describeWaiting(view),
   ...(view.diagnostic === null ? [] : [view.diagnostic]),
+  ...(view.blocked === null ? [] : [view.blocked]),
 ];
 
 /** The questions a Run is still waiting on, with what each will take. */

@@ -533,6 +533,9 @@ from their lines rather than by rewriting them:
   `submitted`, `acknowledged` and `verified` are separate facts and are never collapsed.
   A `reserved` line nobody settled becomes `unknown`, which blocks further deliveries
   about the same work until a human reconciles it. Collie never retries out of `unknown`.
+  The one retry is out of `deferred`, herdr answering that the pane cannot take a prompt
+  yet: that proves nothing arrived, so the same id is reserved and sent again
+  ([steering](steering.md#the-states-and-why-they-are-kept-apart)).
 - `<state>/herd/<herdKey>/budget.jsonl` — a line before every model call and a settlement
   after it: which Run it was for, how long it took, how many bytes it produced and what the
   CLI said it cost. Usage, never a quota: nothing reads it back to refuse or throttle a

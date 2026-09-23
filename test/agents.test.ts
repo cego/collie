@@ -24,7 +24,8 @@ import {
   type AgentHost,
 } from "../src/agents";
 import { defineWorkflow, jsonSchemaFor } from "../src/sdk";
-import { controlPath, foundationLayer } from "../src/native";
+import { BLOCKED, controlPath, foundationLayer, pollStatus } from "../src/native";
+import { deliveriesOf } from "../src/steering";
 import { agentName } from "../src/naming";
 
 let rig: Rig;
@@ -254,12 +255,12 @@ test("work the workflow skips opens no tab and starts no agent", () =>
  * awaited, so closing the session leaves the engine's journal with a launch in it and no
  * result — which is the window a replay must not fill with a second agent.
  */
-const interrupted = (runId: string, waitMs: number) =>
+const interrupted = (runId: string, waitMs: number, over?: Partial<AgentHost>) =>
   session(
     work
       .execute({ runId, input: { skip: false } }, { discard: true })
       .pipe(Effect.andThen(Effect.sleep(Duration.millis(waitMs)))),
-    { collectMs: 30_000 },
+    { collectMs: 30_000, ...over },
   );
 
 test(
@@ -305,6 +306,77 @@ test(
         // restart gives back, and the ledger refuses a second copy of a delivery about it.
         expect(sent(yield* rig.calls(), "not usable")).toBe(1);
         expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+/** herdr refusing prompts because the pane has a dialog up: the first `times`, or every one. */
+const busyPane = (times = 0) =>
+  new FakeHerdr(
+    rig.pluginEnv({
+      FAKE_HERDR_PROMPT_ERROR: "agent_blocked",
+      FAKE_HERDR_PROMPT_ERROR_TIMES: String(times),
+    }),
+  );
+
+const statusNow = (runId: string) =>
+  session(
+    Effect.gen(function* () {
+      const engine = yield* WorkflowEngine.WorkflowEngine;
+      const id = yield* work.executionId({ runId, input: { skip: false } });
+      return pollStatus(yield* engine.poll(work, id), "agent-work").status;
+    }),
+  );
+
+const steps = (runId: string) =>
+  deliveriesOf(hostOf().env.stateDir, runId).pipe(
+    Effect.map((found) => found.filter((one) => one.delivery.cause.kind === "step")),
+  );
+
+test("a pane that is busy when the step's prompt goes out is waited out, and the work is one prompt", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "after the dialog" }]);
+      const result = yield* session(started("r1"), {
+        herdr: busyPane(2),
+        patience: { firstMs: 10, maxMs: 20, forMs: 30_000 },
+      });
+
+      expect(result._tag === "Success" && result.success.note).toBe("after the dialog");
+      // Two refused and one taken, all of them one delivery.
+      expect(sent(yield* rig.calls(), "Your task for this step")).toBe(3);
+      expect((yield* steps("r1")).map((one) => one.delivery.state)).toEqual(["submitted"]);
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+    }),
+  ));
+
+test(
+  "a pane that stays busy parks the step beside its agent, and a resume hands that agent its prompt",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([{ verdict: "clean", note: "resumed" }]);
+        yield* interrupted("r1", 1_500, {
+          herdr: busyPane(),
+          patience: { firstMs: 10, maxMs: 20, forMs: 100 },
+        });
+
+        // Parked rather than failed: nothing about the work is lost, and nothing is uncertain.
+        expect(yield* statusNow("r1")).toBe("suspended");
+        const why = yield* read(controlPath(dir, BLOCKED, "r1"));
+        expect(why).toMatch(/agent_blocked held for \d+s over \d+ attempts/);
+        expect(why).toContain(promptPath("r1"));
+        expect(why).toContain("collie run resume r1");
+        expect((yield* steps("r1")).map((one) => one.delivery.state)).toEqual(["failed"]);
+
+        // The dialog has gone. The same agent is given the same prompt, and nothing new starts.
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("resumed");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+        expect((yield* steps("r1")).map((one) => one.delivery.state)).toEqual(["submitted"]);
+        expect(yield* fs.exists(controlPath(dir, BLOCKED, "r1"))).toBe(false);
       }),
     ),
   120_000,

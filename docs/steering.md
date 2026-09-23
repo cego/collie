@@ -36,6 +36,7 @@ than a silence.
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `queued`       | A boundary delivery the Driver holds for the agent's next prompt. Before the Driver has read it, it is a file in the Run's inbox and `collie_receipts` lists it as such. |
 | `reserved`     | Written **before** herdr was called. A crash here leaves this.                                                                                                           |
+| `deferred`     | herdr answered that the pane cannot take a prompt yet, with a code that says it clears by itself. Nothing was delivered; the same id is tried again.                     |
 | `submitted`    | herdr took it. Not: the agent read it.                                                                                                                                   |
 | `acknowledged` | The agent wrote the ack file naming this delivery, version and attempt.                                                                                                  |
 | `verified`     | An independent check says the thing asked for actually happened.                                                                                                         |
@@ -54,6 +55,19 @@ ignored look the same from here, and the note is what tells a later reader that.
 The terminal states are `failed` (herdr refused), `unknown` (herdr never answered, so
 nobody can say), `superseded` and `expired`. `unknown` blocks further deliveries about the
 same work until a human reconciles it, and Collie never retries out of it on its own.
+
+`deferred` is the one refusal that is retried, because it is the one that proves the prompt
+was not delivered and says why the next try may land. Which refusals count is decided by
+herdr's code, recorded on the line as `code` — today only `agent_blocked`, an agent with a
+dialog up — and never by its message. A step's prompt and its repair are tried again with
+a backoff from two seconds to thirty, each try reserved again under the same id, so every
+attempt is on the ledger and a second copy of the work stays blocked meanwhile. Ten minutes
+after the first refusal the delivery is settled `failed` with the note
+`<code> held for <time> over <n> attempts`, and the Run's log says it `gave up` — which a
+refusal nobody retried never says. The native Run then parks rather than failing: its agent
+is alive and its prompt is written, so `run show` says so and `collie run resume` hands that
+prompt to that agent. A human's steer is sent once and told the refusal, since they are
+waiting on the answer.
 
 A step prompt's delivery ends `superseded` with the note `work_collected` once the agent
 has gone quiet and its Output has been read: what the prompt asked for is in the Run, and a
@@ -111,7 +125,7 @@ that turn ends — `submitted` with the note `unobserved`, exactly what the Disp
 records — so `now` is not something pi has been shown to do. Codex and opencode took the
 text but their own sandboxes and permission prompts stood between them and the ack file
 in the probe; a blocked agent is one herdr refuses to prompt at all, and that refusal is
-what the ledger shows (`failed`, `agent_blocked`). Attribution on Claude needs a human
+what the ledger shows (`deferred`, then `failed`, with the code `agent_blocked`). Attribution on Claude needs a human
 typing into a Collie-launched agent's pane and is the one row an operator has to record.
 `boundary` deliveries need none of this and work on every harness.
 
