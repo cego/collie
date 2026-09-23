@@ -508,7 +508,6 @@ test("a hand-off nobody can say arrived parks until a human says what became of 
       yield* liveImplementer;
       const first = yield* session(handedOff, { herdr: new SilentPrompts(rig.pluginEnv()) });
       expect(first._tag === "Failure" && first.failure._tag).toBe("AgentParked");
-      // Neither a second copy nor a delivery nobody saw.
       const again = yield* session(handedOff);
       expect(again._tag === "Failure" && again.failure.reason).toContain(
         "collie run deliveries r-building",

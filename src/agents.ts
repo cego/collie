@@ -1131,7 +1131,6 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
 };
 
 const LAUNCH_SUFFIX = ".launch.json";
-/** Ledger states that say a delivery went out. */
 const SENT_STATES: ReadonlySet<string> = new Set(["submitted", "acknowledged", "verified"]);
 const LaunchedJson = Schema.fromJsonString(Launched);
 const encodeLaunched = Schema.encodeSync(LaunchedJson);
