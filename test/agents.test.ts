@@ -26,6 +26,10 @@ import {
 import { defineWorkflow, jsonSchemaFor } from "../src/sdk";
 import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/native";
 import { deliveriesOf } from "../src/steering";
+import { Store } from "../src/store";
+import { readTask, writeTask } from "../src/task";
+import { taskFor } from "../src/operations";
+import { readRegistry, registryPath, scopeFor } from "../src/registry";
 import { agentName } from "../src/naming";
 
 let rig: Rig;
@@ -632,5 +636,222 @@ test("an item whose identity is not a name of its own starts no agent at all", (
         'operation "../escape" contains a path separator',
       );
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toEqual([]);
+    }),
+  ));
+
+/** A list run on the host's engine, as a host that goes and comes back runs one. */
+const listingSession = <A, E>(run: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | Store>) =>
+  run.pipe(
+    Effect.provide(listingBody),
+    Effect.provide(agentsLayer({ ...hostOf(), collectMs: 30_000 })),
+    Effect.provide(foundationLayer({ dir })),
+    Effect.scoped,
+    Effect.orDie,
+  );
+
+const ITEMS = { items: "01-api,02-ui", agent: "sweep" };
+const sweeper = agentName("r1", "sweep", null, 1);
+
+/** A Task whose workspace herdr has open, and a Run of it the host admitted. */
+const inTask = (runId: string) =>
+  Effect.gen(function* () {
+    yield* rig.addWorkspace("wT", "Project | Work", rig.projectDir);
+    yield* writeTask(hostOf().env.stateDir, {
+      id: "task-1",
+      workspace: "wT",
+      label: "Project | Work",
+      cwd: rig.projectDir,
+      created_at: "2026-09-23T00:00:00.000Z",
+    });
+    yield* listingSession(
+      Effect.gen(function* () {
+        const store = yield* Store;
+        yield* store.admit({
+          request: `req-${runId}`,
+          run: runId,
+          workflow: "agent-listing",
+          project: rig.projectDir,
+          input: ITEMS,
+          provenance: {},
+          options: {},
+          generation: "agent-listing@1",
+          execution: yield* listing.executionId({ runId, input: ITEMS }),
+          task: "task-1",
+          parent: null,
+        });
+      }),
+    );
+  });
+
+/** Started and left, stopped while the first item's Output is still out. */
+const stoppedAtFirst = (runId: string) =>
+  Effect.gen(function* () {
+    yield* control("stop", runId, true);
+    yield* listingSession(
+      listing
+        .execute({ runId, input: ITEMS }, { discard: true })
+        .pipe(Effect.andThen(Effect.sleep(Duration.millis(900)))),
+    );
+  });
+
+/** What `run resume` does: the stop cleared, the execution woken, and waited on. */
+const resumedList = (runId: string) =>
+  Effect.gen(function* () {
+    yield* control("stop", runId, false);
+    return yield* listingSession(
+      Effect.gen(function* () {
+        const engine = yield* WorkflowEngine.WorkflowEngine;
+        const payload = { runId, input: ITEMS };
+        yield* engine.resume(listing, yield* listing.executionId(payload));
+        return yield* listing.execute(payload).pipe(Effect.result);
+      }),
+    );
+  });
+
+/** Which workspace each tab was asked for in, in order. */
+const tabsIn = (calls: ReadonlyArray<Call>) =>
+  calls
+    .filter((call) => call.cmd === "tab create")
+    .map((call) => {
+      const argv = call.argv ?? [];
+      return argv[argv.indexOf("--workspace") + 1] ?? "";
+    });
+
+const firstDone = FileSystem.FileSystem.pipe(
+  Effect.flatMap((fs) =>
+    fs.writeFileString(`${dir}/agents/r1/01-api.json`, `{"verdict":"clean","note":"first"}`),
+  ),
+  Effect.orDie,
+);
+
+test(
+  "a stop closes nothing of the Task's workspace, and the resume goes on to the next item in it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* inTask("r1");
+        yield* rig.queueOutputs([null, { verdict: "clean", note: "second" }]);
+        yield* stoppedAtFirst("r1");
+
+        // The agent is in the Task's workspace, not the one the host was started from, and
+        // the stop parked the Run without touching a pane, a tab or a workspace.
+        expect(tabsIn(yield* rig.calls())).toEqual(["wT"]);
+        const closing = (cmd: string) => cmd.endsWith(" close");
+        expect((yield* rig.cmds()).filter(closing)).toEqual([]);
+
+        yield* firstDone;
+        const result = yield* resumedList("r1");
+        expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
+        expect((yield* rig.cmds()).filter(closing)).toEqual([]);
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a Task workspace that closed behind a stopped Run is reopened on its checkout, and nothing done is redone",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* inTask("r1");
+        yield* rig.queueOutputs([null, { verdict: "clean", note: "second" }]);
+        yield* stoppedAtFirst("r1");
+        // Its last pane went and herdr dropped the workspace, with the agent in it.
+        yield* rig.closeWorkspace("wT", [sweeper]);
+
+        yield* firstDone;
+        const result = yield* resumedList("r1");
+        expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
+        // The first item was sent once, before the stop, and collected after it.
+        expect(sent(yield* rig.calls(), "01-api.prompt.md")).toBe(1);
+
+        const task = yield* readTask(hostOf().env.stateDir, "task-1");
+        const reopened = task?.workspace ?? "";
+        expect(reopened).not.toBe("wT");
+        const create = (yield* rig.calls()).find((call) => call.cmd === "workspace create");
+        expect(create?.argv).toContain(rig.projectDir);
+        // Every id this Run's place is known by is the new one: the Task, the tab the new
+        // agent was opened in, and the register a later step looks the agent up in.
+        expect(tabsIn(yield* rig.calls())).toEqual(["wT", reopened]);
+        const env = hostOf().env;
+        const registered = yield* readRegistry(
+          yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)),
+        );
+        expect(registered.find((entry) => entry.agent === sweeper)?.workspaceId).toBe(reopened);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a Task workspace that closed with its checkout gone parks the Run and says how to repair it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* inTask("r1");
+        yield* rig.closeWorkspace("wT", []);
+        yield* fs.remove(rig.projectDir, { recursive: true });
+
+        yield* listingSession(
+          listing
+            .execute({ runId: "r1", input: ITEMS }, { discard: true })
+            .pipe(Effect.andThen(Effect.sleep(Duration.millis(900)))),
+        );
+
+        const status = yield* listingSession(
+          Effect.gen(function* () {
+            const engine = yield* WorkflowEngine.WorkflowEngine;
+            const id = yield* listing.executionId({ runId: "r1", input: ITEMS });
+            return pollStatus(yield* engine.poll(listing, id), "agent-listing").status;
+          }),
+        );
+        expect(status).toBe("suspended");
+        const why = yield* read(controlPath(dir, PARKED, "r1"));
+        expect(why).toContain("wT");
+        expect(why).toContain(rig.projectDir);
+        expect(why).toContain("collie run resume r1");
+        expect(why).toContain("collie run start");
+        // Nothing was started against a workspace nobody can open a tab in.
+        const cmds = yield* rig.cmds();
+        expect(cmds.filter((cmd) => cmd === "tab create" || cmd === "agent start")).toEqual([]);
+        expect(cmds.filter((cmd) => cmd === "workspace create")).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test("a fresh start opens its Task a workspace of its own, and a continuation goes where its Task is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const env = rig.pluginEnv();
+      const fresh = yield* taskFor(env, { mode: "new" }, { workflow: "implement", named: "ENG-7" });
+      const task = fresh._tag === "Ok" ? fresh.task : null;
+      expect(task?.workspace).toBe("w1");
+      expect(task?.cwd).toBe(rig.projectDir);
+      expect(yield* readTask(env.stateDir, task?.id ?? "")).toEqual(task);
+      const created = (yield* rig.calls()).filter((call) => call.cmd === "workspace create");
+      expect(created.map((call) => call.argv)).toEqual([
+        expect.arrayContaining(["--cwd", rig.projectDir]),
+      ]);
+      // Its shell tab is left alone: it is what keeps the workspace open after the Run's
+      // agents' panes have closed.
+      expect((yield* rig.cmds()).filter((cmd) => cmd.endsWith(" close"))).toEqual([]);
+
+      const again = yield* taskFor(
+        env,
+        { mode: "continue", task: task! },
+        { workflow: "review", named: "" },
+      );
+      expect(again._tag === "Ok" && again.task).toEqual(task);
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(1);
+
+      // Outside herdr there is nowhere to open one, and a Run that starts no agent needs none.
+      const outside = { ...env, workspaceId: null, socketPath: null };
+      const none = yield* taskFor(outside, { mode: "new" }, { workflow: "tally", named: "" });
+      expect(none._tag === "Ok" && none.task).toBeNull();
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(1);
     }),
   ));

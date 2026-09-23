@@ -570,7 +570,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     id: module.id,
     request: yield* newRequestId(),
     input: { json: {}, text },
-    task: opts.task.mode === "continue" ? opts.task.task.id : null,
+    task: opts.task,
     parent: opts.parent?.id ?? null,
   });
   if (!started.ok) {

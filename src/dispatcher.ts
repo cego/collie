@@ -631,7 +631,7 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
     role: about.role,
     agent: about.agent,
     paneId: about.paneId ?? live.paneId,
-    workspaceId: about.workspaceId,
+    workspaceId: about.workspaceId ?? live.workspaceId,
     runId: about.runId,
     workflow: about.workflow,
     at: yield* nowIso(),

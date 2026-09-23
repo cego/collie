@@ -684,12 +684,19 @@ export class Herdr {
     );
   }
 
-  tabCreate(opts: { label?: string; cwd?: string; focus?: boolean }): HerdrEffect<StartedTab> {
+  tabCreate(opts: {
+    label?: string;
+    cwd?: string;
+    focus?: boolean;
+    /** Where the tab goes; this process's own workspace where none is named. */
+    workspace?: string | null;
+  }): HerdrEffect<StartedTab> {
     const env = this.env;
     const cli = this.cli.bind(this);
     return Effect.gen(function* () {
       const args = ["tab", "create"];
-      if (env.workspaceId) args.push("--workspace", env.workspaceId);
+      const workspace = opts.workspace ?? env.workspaceId;
+      if (workspace) args.push("--workspace", workspace);
       if (opts.cwd) args.push("--cwd", opts.cwd);
       if (opts.label) args.push("--label", opts.label);
       args.push(opts.focus ? "--focus" : "--no-focus");

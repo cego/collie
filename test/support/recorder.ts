@@ -386,6 +386,41 @@ export class Rig {
     });
   }
 
+  /**
+   * herdr dropping a workspace, as it does once its last pane closes: the agents in it go
+   * with it, and a tab asked for there is refused as `workspace_not_found`.
+   */
+  closeWorkspace(
+    workspaceId: string,
+    agents: ReadonlyArray<string>,
+  ): Effect.Effect<void, RigError, FileSystem.FileSystem> {
+    const statePath = `${this.logPath}.state.json`;
+    const readJsonObject = this.readJsonObject.bind(this);
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* readJsonObject(statePath);
+      const list = (key: string) =>
+        Option.getOrElse(
+          Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state[key]),
+          (): ReadonlyArray<Schema.JsonObject> => [],
+        );
+      const closed = Option.getOrElse(
+        Schema.decodeUnknownOption(Schema.Array(Schema.String))(state.closedWorkspaces),
+        (): ReadonlyArray<string> => [],
+      );
+      yield* fs.writeFileString(
+        statePath,
+        encodeJson(
+          Object.assign({}, state, {
+            workspaces: list("workspaces").filter((w) => w.workspace_id !== workspaceId),
+            agents: list("agents").filter((a) => !agents.includes(String(a.name))),
+            closedWorkspaces: [...closed, workspaceId],
+          }),
+        ),
+      );
+    });
+  }
+
   /** An agent herdr has forgotten: its pane closed and it went with it. */
   dropAgent(name: string): void {
     const gone = (Bun.env.FAKE_HERDR_AGENTS_GONE ?? "").split(",").filter((item) => item !== "");

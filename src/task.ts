@@ -6,7 +6,8 @@
 // label: two Tasks may share a project prefix, a workspace may be renamed by hand, and
 // neither says anything about whose work a Run is.
 
-import { Crypto, Effect, FileSystem, Path, Schema } from "effect";
+import { Crypto, Data, Effect, FileSystem, Path, Schema } from "effect";
+import { ensureLockDir, withLock } from "./lock";
 import { nowIso } from "./time";
 import { unsafePathComponent } from "./naming";
 
@@ -94,6 +95,23 @@ export const writeTask = Effect.fn("task.writeTask")(function* (
   yield* fs.writeFileString(yield* taskFile(stateDir, task.id), `${encodeTask(task)}\n`);
   return task;
 });
+
+export class TaskBusy extends Data.TaggedError("TaskBusy")<{ id: string }> {}
+
+/** Ten seconds: long enough for another Run of the Task to reopen its workspace. */
+const TASK_LOCK_CLAIMS = 400;
+
+/** Held from reading a Task to writing it back, so two Runs cannot both replace its workspace. */
+export const withTaskLock = <A, E, R>(
+  stateDir: string,
+  id: string,
+  effect: Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const file = yield* taskFile(stateDir, id);
+    yield* ensureLockDir(file);
+    return yield* withLock(`${file}.lock`, new TaskBusy({ id }), effect, TASK_LOCK_CLAIMS);
+  });
 
 export const newTask = Effect.fn("task.newTask")(function* (opts: {
   readonly workspace: string;

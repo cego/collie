@@ -336,6 +336,8 @@ export interface Place {
    * fields, and this is where a workflow that wants one reads it.
    */
   readonly options: Readonly<Record<string, string>>;
+  /** The Task this Run belongs to, whose workspace its agents open in; null for none. */
+  readonly task: string | null;
 }
 
 /** What opening a merge request from here needs, and what it would be filled in with. */

@@ -60,6 +60,8 @@ interface State {
   paneList: FakePane[];
   agents: FakeAgent[];
   workspaces: FakeWorkspace[];
+  /** Workspaces herdr has dropped, whose ids it never gives out again. */
+  closedWorkspaces: string[];
   worktrees: FakeWorktree[];
   /** The repository's own checkout, which is what herdr answers `list` with. */
   worktreeSource: string | undefined;
@@ -132,6 +134,7 @@ const StateJson = Schema.fromJsonString(
     paneList: Schema.optionalKey(Schema.Array(FakePaneSchema)),
     agents: Schema.optionalKey(Schema.Array(FakeAgentSchema)),
     workspaces: Schema.optionalKey(Schema.Array(FakeWorkspaceSchema)),
+    closedWorkspaces: Schema.optionalKey(Schema.Array(Schema.String)),
     worktrees: Schema.optionalKey(Schema.Array(FakeWorktreeSchema)),
     worktreeSource: Schema.optionalKey(Schema.String),
   }),
@@ -175,6 +178,7 @@ const emptyState = (): State => ({
   paneList: [],
   agents: [],
   workspaces: [],
+  closedWorkspaces: [],
   worktrees: [],
   worktreeSource: undefined,
 });
@@ -203,6 +207,7 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
     })),
     agents: (state.agents ?? []).map((agent) => ({ name: agent.name, pane_id: agent.pane_id })),
     workspaces: (state.workspaces ?? []).map((workspace) => ({ ...workspace })),
+    closedWorkspaces: [...(state.closedWorkspaces ?? [])],
     worktrees: (state.worktrees ?? []).map((worktree) => ({ ...worktree })),
     worktreeSource: state.worktreeSource,
   };
@@ -524,6 +529,17 @@ function handle(
     let result = {};
     switch (cmd) {
       case "tab create": {
+        const into = flag("--workspace");
+        if (into !== undefined && state.closedWorkspaces.includes(into)) {
+          return {
+            code: 1,
+            stdout: `${encodeJson({
+              id: "cli:tab:create",
+              error: { code: "workspace_not_found", message: `workspace ${into} not found` },
+            })}\n`,
+            stderr: "",
+          };
+        }
         const tab = newTab(flag("--label") ?? String(state.tabs + 1));
         result = { type: "tab_created", tab, root_pane: newPane(tab.tab_id) };
         break;

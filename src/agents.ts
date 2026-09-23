@@ -48,6 +48,7 @@ import {
   type NativeHostApi,
   type Projection,
 } from "./sdk";
+import { readTask, withTaskLock, writeTask } from "./task";
 import { renderTemplate, skillMention, skillsIn } from "./template";
 
 /** A schema that decodes an agent's Output without services of the author's own. */
@@ -62,6 +63,8 @@ export interface AgentAsk {
   /** The agent this work goes to, where several pieces share one. Null gives it its own. */
   readonly agent: string | null;
   readonly workflow: string;
+  /** The Run's Task: its agents open in that Task's workspace. Null opens where the host is. */
+  readonly task: string | null;
   readonly cwd: string;
   readonly prompt: string;
   readonly output: string;
@@ -106,11 +109,11 @@ export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()("AgentU
 }) {}
 
 /**
- * herdr kept saying the agent's pane could not take a prompt for as long as that was worth
- * waiting, so it was not delivered. The agent is alive and holding its context: the work
- * parks for a resume rather than failing into a fresh agent.
+ * The work cannot go on until something outside the Run changes — a pane that will not
+ * take its prompt, a workspace and checkout that have both gone — and nothing about it is
+ * uncertain. It parks for a resume rather than failing into a fresh agent.
  */
-export class PromptRefused extends Schema.TaggedError<PromptRefused>()("PromptRefused", {
+export class AgentParked extends Schema.TaggedError<AgentParked>()("AgentParked", {
   operation: Schema.String,
   reason: Schema.String,
 }) {}
@@ -133,7 +136,7 @@ export interface AgentsApi {
   readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
-  readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | PromptRefused>;
+  readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
   /**
    * What the agent wrote, or null where it has written nothing in the time allowed.
    * `unless` is an Output already known to be unusable: the same text again is the agent
@@ -147,7 +150,7 @@ export interface AgentsApi {
   readonly repair: (
     launched: Launched,
     problem: string,
-  ) => Effect.Effect<boolean, AgentUncertain | PromptRefused>;
+  ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
   /**
    * Says something of a human's to the agent this run has. The request is the claim on
    * the delivery: the same one twice is one message, which is what the ledger refuses a
@@ -256,6 +259,7 @@ export const agentWork = <Output extends OutputContract>(
       role,
       agent: work.agent ?? null,
       workflow: work.workflow ?? work.operation,
+      task: (yield* host.place(work.runId)).task,
       cwd: work.cwd,
       output,
       prompt: promptFor({
@@ -279,7 +283,7 @@ export const agentWork = <Output extends OutputContract>(
       name: `${work.operation}.launch`,
       success: Launched,
       error: AgentUncertain,
-      execute: parkedWhenRefused(agents.launch(ask), host, work.runId),
+      execute: parkedWhenStuck(agents.launch(ask), host, work.runId),
     });
     const first = yield* Activity.make({
       name: `${work.operation}.collect`,
@@ -299,7 +303,7 @@ export const agentWork = <Output extends OutputContract>(
       name: `${work.operation}.repair`,
       success: Schema.NullOr(Schema.String),
       error: AgentUncertain,
-      execute: parkedWhenRefused(
+      execute: parkedWhenStuck(
         agents
           .repair(launched, read.problem)
           .pipe(
@@ -328,20 +332,20 @@ export const agentWork = <Output extends OutputContract>(
   );
 
 /**
- * A prompt the agent's pane would not take, parked beside that agent rather than failed.
- * The Activity is left unfinished, so a resume runs it again: the launch finds the agent it
- * started, and the same delivery goes out to it.
+ * Work that cannot go on yet, parked rather than failed. The Activity is left unfinished,
+ * so a resume runs it again: the launch finds the agent it started, or its workspace
+ * again, and the same delivery goes out.
  */
-const parkedWhenRefused = <A>(
-  sending: Effect.Effect<A, AgentUncertain | PromptRefused>,
+const parkedWhenStuck = <A>(
+  sending: Effect.Effect<A, AgentUncertain | AgentParked>,
   host: NativeHostApi,
   runId: string,
 ): Effect.Effect<A, AgentUncertain, WorkflowEngine.WorkflowInstance> =>
   sending.pipe(
     Effect.tap(() => host.parked(runId, null)),
-    Effect.catchTag("PromptRefused", (refused) =>
+    Effect.catchTag("AgentParked", (parked) =>
       Effect.gen(function* () {
-        yield* host.parked(runId, refused.reason);
+        yield* host.parked(runId, parked.reason);
         return yield* Workflow.suspend(yield* WorkflowEngine.WorkflowInstance);
       }),
     ),
@@ -563,12 +567,17 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   const configured = HARNESSES[host.harness] ?? HARNESSES.claude!;
   const adapterFor = (harness: string) => HARNESSES[harness] ?? configured;
 
-  const entryFor = (about: Launched | AgentAsk, agent: string, paneId: string | null) =>
+  /** Null places it where herdr says the agent is. */
+  const entryFor = (
+    about: Launched | AgentAsk,
+    agent: string,
+    place: { readonly paneId: string; readonly workspaceId: string | null } | null,
+  ) =>
     dispatch.entryFromLive(deps, {
       role: about.role,
       agent,
-      paneId,
-      workspaceId: host.env.workspaceId,
+      paneId: place?.paneId ?? null,
+      workspaceId: place?.workspaceId ?? null,
       runId: about.runId,
       workflow: about.workflow,
     });
@@ -620,6 +629,42 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     };
   });
 
+  /**
+   * The workspace this Run's Task lives in. herdr drops a workspace once its last pane
+   * closes and never gives its id out again, so one that has gone is reopened on the Run's
+   * checkout and written back to the Task, where every Run of it reads the new id. A
+   * checkout that has gone too is not guessed at: the work parks.
+   */
+  const taskWorkspace = Effect.fn("Agents.taskWorkspace")(function* (ask: AgentAsk) {
+    const id = ask.task;
+    if (id === null) return null;
+    const stateDir = host.env.stateDir;
+    return yield* withTaskLock(
+      stateDir,
+      id,
+      Effect.gen(function* () {
+        const task = yield* readTask(stateDir, id);
+        if (task === null) return null;
+        const open = yield* host.herdr.workspaceList();
+        if (open.some((one) => one.workspaceId === task.workspace)) return task.workspace;
+        const fs = yield* FileSystem.FileSystem;
+        if (!(yield* fs.exists(ask.cwd).pipe(Effect.orElseSucceed(() => false)))) {
+          return yield* new AgentParked({
+            operation: ask.operation,
+            reason: `${id}'s workspace ${task.workspace} has closed and its checkout ${ask.cwd} is gone, so no agent was started. Restore ${ask.cwd} and \`collie run resume ${ask.runId}\`, or begin again with \`collie run start\`.`,
+          });
+        }
+        const reopened = yield* host.herdr.workspaceCreate({ cwd: ask.cwd, label: task.label });
+        yield* writeTask(stateDir, { ...task, workspace: reopened.workspaceId });
+        yield* log(
+          ask.runId,
+          `${id}'s workspace ${task.workspace} had closed; reopened on ${ask.cwd} as ${reopened.workspaceId}`,
+        );
+        return reopened.workspaceId;
+      }),
+    );
+  });
+
   /** A pane, an agent in it, and the registry entry that makes it addressable. */
   const start = Effect.fn("Agents.start")(function* (ask: AgentAsk, agent: string) {
     const adapter = adapterFor(ask.harness ?? host.harness);
@@ -637,7 +682,8 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           harness: adapter.id,
           cwd: ask.cwd,
         });
-        const tab = yield* host.herdr.tabCreate({ label: ask.role, cwd: ask.cwd });
+        const workspace = yield* taskWorkspace(ask);
+        const tab = yield* host.herdr.tabCreate({ label: ask.role, cwd: ask.cwd, workspace });
         // herdr ignores --cwd on tab create, so the pane is told where it is explicitly.
         yield* host.herdr.paneRun(tab.paneId, `cd ${shellQuote(ask.cwd)}`);
         yield* host.herdr.agentStart({
@@ -659,7 +705,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           ask.runId,
           `${agent}: ${adapter.id} in ${tab.paneId}, permissions ${permissions}`,
         );
-        const found = yield* entryFor(ask, agent, tab.paneId);
+        const found = yield* entryFor(ask, agent, { paneId: tab.paneId, workspaceId: workspace });
         if (found.entry !== null) {
           yield* registerAgent(
             yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
@@ -732,7 +778,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         return launched;
       }).pipe(
         Effect.catch((cause) =>
-          Effect.fail(isRefused(cause) ? cause : asUncertain(ask.operation, cause)),
+          Effect.fail(isParked(cause) ? cause : asUncertain(ask.operation, cause)),
         ),
       ),
     );
@@ -771,7 +817,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         return sent.sent;
       }).pipe(
         Effect.catch((cause) =>
-          isRefused(cause)
+          isParked(cause)
             ? Effect.fail(cause)
             : log(
                 launched.runId,
@@ -873,12 +919,12 @@ const refusedWith = (
   what: string,
   file: string,
 ) =>
-  new PromptRefused({
+  new AgentParked({
     operation: about.operation,
     reason: `${what}. It is alive and what it was to be told is in ${file}; \`collie run resume ${about.runId}\` hands that to it.`,
   });
 
-const isRefused = Schema.is(PromptRefused);
+const isParked = Schema.is(AgentParked);
 
 /** Anything a launch failed on, said as what it means: nobody can be sure what happened. */
 const isUncertain = Schema.is(AgentUncertain);

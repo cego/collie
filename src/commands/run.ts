@@ -302,7 +302,7 @@ const runStart = Command.make(
                   request: requestId,
                   input: launch.input,
                   options: launch.options,
-                  task: task.choice.mode === "continue" ? task.choice.task.id : null,
+                  task: task.choice,
                 });
                 if (!started.ok) return started;
                 return {
@@ -1207,6 +1207,10 @@ const runAction = Command.make(
     ),
 ).pipe(Command.withDescription("Do one of the things this Run offers, if it still offers it"));
 
+/** Said to a human who reached for `--workspace` as though it moved the Run. */
+const RESUME_WORKSPACE =
+  "--workspace only chose where this command looked; it does not move a Run. The Run goes back to its Task's workspace, which is reopened on its checkout if herdr has closed it.";
+
 const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =>
   Effect.gen(function* () {
     const global = yield* root;
@@ -1230,7 +1234,12 @@ const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =
             // Cleared after the module is registered again, so the run that wakes up is
             // one this host can run and does not find the stop that parked it still set.
             yield* controlNativeRun(resolved.env, { runId, control: "stop", set: false });
-            return recovered;
+            if (Option.isNone(global.workspace) || !recovered.ok) return recovered;
+            return {
+              ok: true as const,
+              data: { ...recovered.data, note: RESUME_WORKSPACE },
+              human: `${recovered.human}\n${RESUME_WORKSPACE}`,
+            };
           }),
         );
       }),

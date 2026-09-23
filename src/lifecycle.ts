@@ -23,7 +23,8 @@ import {
   type OfferView,
   type RunView,
 } from "./native";
-import { err, type Failure, type OpResult } from "./operations";
+import { err, taskFor, type Failure, type OpResult } from "./operations";
+import type { TaskChoice } from "./task";
 import type { HistoryRow, RequestConflict } from "./store";
 
 export { savedModules } from "./discovery";
@@ -152,8 +153,11 @@ export type NativeStart =
  * Starts the module this id names, under the caller's own claim on the work. The same
  * request twice is the same Run — which is what makes a retried command, a re-clicked
  * row and a replayed receipt one piece of work rather than three.
+ *
+ * The Task is placed first, so the Run's agents open in its workspace rather than in
+ * whichever one the host happened to be started from.
  */
-export const startNativeRun = (
+export const startNativeRun = Effect.fn("Lifecycle.startNativeRun")(function* (
   env: PluginEnv,
   options: {
     readonly id: string;
@@ -162,11 +166,16 @@ export const startNativeRun = (
     readonly input: Given;
     /** The host's own launch options, kept out of the author's payload. */
     readonly options?: Readonly<Record<string, string>>;
-    readonly task?: string | null;
+    readonly task: TaskChoice;
     readonly parent?: string | null;
   },
-): Effect.Effect<NativeStart, never, Client> =>
-  asks(env, (client) =>
+) {
+  const placed = yield* taskFor(env, options.task, {
+    workflow: options.id,
+    named: Object.values(options.input.text)[0] ?? "",
+  });
+  if (placed._tag === "Rejected") return placed.result;
+  return yield* asks(env, (client) =>
     client.start({
       project: env.cwd,
       id: options.id,
@@ -174,7 +183,7 @@ export const startNativeRun = (
       input: options.input.json,
       text: options.input.text,
       options: options.options,
-      task: options.task ?? undefined,
+      task: placed.task?.id,
       parent: options.parent ?? undefined,
     }),
   ).pipe(
@@ -189,6 +198,7 @@ export const startNativeRun = (
         : answered,
     ),
   );
+});
 
 /** Every native Run a listing can show, and why the rest could not be read. */
 export interface NativeListing {

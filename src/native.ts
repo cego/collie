@@ -201,6 +201,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly dir: string;
     /** The host's own launch options — the RESERVED_INPUTS names — as a caller gave them. */
     readonly options: Readonly<Record<string, string>>;
+    /** The Task this Run belongs to, whose workspace its agents open in; null for none. */
+    readonly task: string | null;
   }
 
   /** What became of a note: whether it landed, and the sentence a human reads either way. */
@@ -391,6 +393,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     /** The agent this work goes to; null gives this operation one of its own. */
     readonly agent: string | null;
     readonly workflow: string;
+    /** The Run's Task, whose workspace its agents open in; null opens where the host is. */
+    readonly task: string | null;
     readonly cwd: string;
     readonly prompt: string;
     readonly output: string;
@@ -420,9 +424,9 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     { operation: Schema.String, reason: Schema.String },
   ) {}
 
-  /** The agent's pane would not take its prompt for as long as that was worth waiting. */
-  export class PromptRefused extends Schema.TaggedError<PromptRefused>()(
-    "PromptRefused",
+  /** The work cannot go on until something outside the Run changes; a resume picks it up. */
+  export class AgentParked extends Schema.TaggedError<AgentParked>()(
+    "AgentParked",
     { operation: Schema.String, reason: Schema.String },
   ) {}
 
@@ -438,7 +442,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
      * pane of whoever is live in that role, and otherwise to stop and ask the human.
      */
     readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
-    readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | PromptRefused>;
+    readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
     readonly collect: (
       launched: Launched,
       unless?: string | null,
@@ -446,7 +450,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly repair: (
       launched: Launched,
       problem: string,
-    ) => Effect.Effect<boolean, AgentUncertain | PromptRefused>;
+    ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
     readonly steer: (options: {
       readonly runId: string;
       readonly text: string;
@@ -1254,15 +1258,15 @@ export const nativeHostLayer = (options: {
         place: (runId) =>
           under(
             store.run(runId).pipe(
-              Effect.flatMap((row): Effect.Effect<Record<string, string>> =>
+              Effect.flatMap((row) =>
                 row === null
-                  ? Effect.succeed({})
+                  ? Effect.succeed(null)
                   : decodeStrings(row.options ?? "{}").pipe(
+                      Effect.orElseSucceed((): Record<string, string> => ({})),
                       Effect.map((options) => ({
-                        ...options,
-                        workspace: options.workspace ?? row.project,
+                        options: { ...options, workspace: options.workspace ?? row.project },
+                        task: row.task,
                       })),
-                      Effect.orElseSucceed(() => ({ workspace: row.project })),
                     ),
               ),
               // A Run nobody has a row for works nowhere in particular; its own directory
@@ -1270,17 +1274,23 @@ export const nativeHostLayer = (options: {
               // Made for a Run there is one, so a workflow writes what it produces into
               // its own directory without first asking whether it is there — and asking
               // about a run that was never started leaves nothing behind.
-              Effect.tap((options) =>
-                "workspace" in options
-                  ? fs.makeDirectory(runDir(dir, runId), { recursive: true })
-                  : Effect.void,
+              Effect.tap((admitted) =>
+                admitted === null
+                  ? Effect.void
+                  : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
               ),
-              Effect.map((options) => ({
-                cwd: options.workspace ?? dir,
+              Effect.map((admitted) => ({
+                cwd: admitted?.options.workspace ?? dir,
                 dir: runDir(dir, runId),
-                options,
+                options: admitted?.options ?? {},
+                task: admitted?.task ?? null,
               })),
-              Effect.orElseSucceed(() => ({ cwd: dir, dir: runDir(dir, runId), options: {} })),
+              Effect.orElseSucceed(() => ({
+                cwd: dir,
+                dir: runDir(dir, runId),
+                options: {},
+                task: null,
+              })),
             ),
           ),
         held: (runId) => set(HOLD, runId),

@@ -216,6 +216,13 @@ before this existed stay exactly where they are and belong to no task.
 A task workspace groups work. It gives no file or branch isolation — that is what the
 worktree below is for, and it is unchanged.
 
+Stopping a run closes nothing in its workspace — the agents keep their panes — and the
+workspace's own shell tab is never given to an agent, so closing an agent's pane never
+leaves it empty. If herdr closes it anyway, the next agent the task starts reopens it on
+that run's checkout, and every run of the task uses the new one from then on; a checkout
+that has gone as well leaves the run parked, saying so, until you restore it or start
+again.
+
 ### What a task workspace is called
 
 The name is worked out, not asked for: `<Project or theme> | <what this work is>`, for

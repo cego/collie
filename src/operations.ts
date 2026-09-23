@@ -15,7 +15,6 @@ import {
   herdrFailureReason,
   type AgentInfo,
   type PaneInfo,
-  type StartedTab,
   type TabInfo,
   type WorkspaceInfo,
 } from "./herdr";
@@ -44,7 +43,7 @@ import {
 } from "./inputs";
 import { readRegistry, registryPath, scopeFor, scopeKey, scopeOfRun } from "./registry";
 import { newTask, writeTask, type TaskChoice, type TaskRecord } from "./task";
-import { nameTask, type LiveNames, type NamingDeps, type TaskContext } from "./tasknames";
+import { nameTask, type LiveNames, type NamingDeps } from "./tasknames";
 import {
   amend as amendIntent,
   constraintId,
@@ -483,54 +482,37 @@ const namingDeps = Effect.fn("operations.namingDeps")(function* (env: PluginEnv)
 });
 
 /**
- * What a fresh Task is called, worked out before its checkout: `workspace=new` has herdr
- * open the workspace itself, and a workspace can only be opened under a name that
- * already exists.
- */
-const freshTaskLabel = Effect.fn("operations.freshTaskLabel")(function* (
-  herdr: Herdr,
-  env: PluginEnv,
-  context: TaskContext,
-) {
-  const naming = yield* namingDeps(env);
-  return taskWorkspaceLabel(
-    yield* nameTask(naming, context, yield* liveNames(herdr, naming !== null)),
-  );
-});
-
-/**
  * The Task a start belongs to, and the herdr workspace its Runs and agents live in.
  *
- * A fresh start gets a workspace of its own, whatever workspace it was launched from:
- * that is what keeps one human's several pieces of work from accumulating beside each
- * other. The exception is a checkout herdr already opened a workspace for, which is the
- * same thing by another route and is taken rather than duplicated — under the name herdr
- * reports for it, so the Task is called what that sidebar row is actually called.
+ * A fresh start gets a workspace of its own on the directory it was launched in, whatever
+ * workspace it was launched from: that is what keeps one human's several pieces of work
+ * from accumulating beside each other. Its shell tab is left where it is, because it is
+ * what keeps the workspace open once the Run's agents' panes have closed.
  *
  * A continuation is given its Task, and goes where that Task already is. Membership is
  * the record, never the label: two Tasks may be called much the same thing, and a
  * workspace a human renamed is still the Task's.
+ *
+ * Started from outside herdr, a Run has no workspace to be opened from, and one that
+ * starts no agent needs none: it gets no Task rather than a refusal.
  */
-const taskFor = Effect.fn("operations.taskFor")(function* (
-  herdr: Herdr,
+export const taskFor = Effect.fn("operations.taskFor")(function* (
   env: PluginEnv,
   choice: TaskChoice,
-  opts: {
-    /** What a fresh Task is called, worked out before the checkout that may use it. */
-    readonly label: string;
-    /** The workspace herdr opened for this Run's checkout, where it opened one. */
-    readonly opened: { readonly id: string; readonly label: string | null } | null;
+  about: {
+    readonly workflow: string;
+    /** What the work is named after, where the caller named anything. */
+    readonly named: string;
   },
 ) {
-  const kept = (task: TaskRecord, launchPane: StartedTab | null = null) => ({
-    _tag: "Ok" as const,
-    task,
-    launchPane,
-  });
+  const kept = (task: TaskRecord | null) => ({ _tag: "Ok" as const, task });
   const refuse = (message: string, cause: string) => ({
     _tag: "Rejected" as const,
     result: err("operation_failed", message, { cause }),
   });
+  if (env.workspaceId === null && env.socketPath === null)
+    return kept(choice.mode === "continue" ? choice.task : null);
+  const herdr = new Herdr(env);
   if (choice.mode === "continue") {
     // The Task's workspace has to still be there. Continuing into one herdr has closed
     // would put the Run's tabs and agents nowhere, which is worse than not starting.
@@ -548,29 +530,26 @@ const taskFor = Effect.fn("operations.taskFor")(function* (
     yield* Effect.ignore(herdr.workspaceFocus(choice.task.workspace));
     return kept(choice.task);
   }
-  // What herdr says the workspace is called wins over what it was asked to call it: a
-  // workspace it opened rather than created keeps the name it already had.
-  const label = opts.opened?.label ?? opts.label;
-  let id = opts.opened?.id ?? null;
-  // The shell tab a created workspace comes with, for the Run's first agent to take
-  // over instead of leaving an empty "1" beside its own tabs.
-  let launchPane: StartedTab | null = null;
-  if (id === null) {
-    const made = yield* Effect.result(herdr.workspaceCreate({ cwd: env.cwd, label }));
-    if (made._tag === "Failure") {
-      const cause = herdrFailureReason(made.failure);
-      return refuse(`No workspace could be opened for this task: ${cause}`, cause);
-    }
-    id = made.success.workspaceId;
-    launchPane = made.success.rootTab;
+  const naming = yield* namingDeps(env);
+  const label = taskWorkspaceLabel(
+    yield* nameTask(
+      naming,
+      { workflow: about.workflow, named: about.named, short: "", goal: null, cwd: env.cwd },
+      yield* liveNames(herdr, naming !== null),
+    ),
+  );
+  const made = yield* Effect.result(herdr.workspaceCreate({ cwd: env.cwd, label }));
+  if (made._tag === "Failure") {
+    const cause = herdrFailureReason(made.failure);
+    return refuse(`No workspace could be opened for this task: ${cause}`, cause);
   }
   const task = yield* writeTask(
     env.stateDir,
-    yield* newTask({ workspace: id, label, cwd: env.cwd }),
+    yield* newTask({ workspace: made.success.workspaceId, label, cwd: env.cwd }),
   );
   // Focused, not just created: a human who started work is taken to it.
-  yield* Effect.ignore(herdr.workspaceFocus(id));
-  return kept(task, launchPane);
+  yield* Effect.ignore(herdr.workspaceFocus(task.workspace));
+  return kept(task);
 });
 
 /**
