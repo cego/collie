@@ -9,8 +9,8 @@ import { Effect, Option, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
-import { nativeHistory, nativeRuns } from "./lifecycle";
-import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./native";
+import { historyRows, runViews } from "./lifecycle";
+import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
 import type { Settled } from "./strategies";
 import type { HistoryRow } from "./store";
 import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
@@ -183,8 +183,8 @@ type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
  * host that will not answer costs the caller the Runs, never the read it was part of.
  */
 export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
-  const live = yield* nativeRuns(env, null);
-  const history = yield* nativeHistory(env, null);
+  const live = yield* runViews(env, null);
+  const history = yield* historyRows(env, null);
   const runs = [
     ...live.runs.map((view) => factsOfView(env.stateDir, view)),
     ...history.rows.map((row) => factsOfHistory(env.stateDir, row)),

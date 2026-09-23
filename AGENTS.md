@@ -65,15 +65,19 @@ herdr actions, and the `collie` CLI.
   `src/selection.ts` and `src/statusline.ts`).
 - **Changing what a workflow module exports, its metadata, or the schemas its steps
   write** → [`docs/sdk.md`](docs/sdk.md), alongside `src/sdk.ts` (the contract and what it
-  refuses) and `src/output.ts` (the shared Output schemas, beside the parsers the engine
-  still reads them with). `docs/authoring.md` is the Markdown interpreter's, which the
-  five shipped workflows still use; the two are separate until those are converted.
+  refuses) and `src/output.ts` (the shared Output schemas, and the parsers that read
+  them). `docs/authoring.md` is where a module and a persona live and how a fork follows
+  its parent.
 - **Changing how a workflow module is loaded, which Effect it gets, or what a host may
   assume about suspension and recovery** →
   [ADR-0014](docs/adr/0014-native-workflows-run-on-effects-own-engine.md), alongside
-  `src/native.ts` and `test/native-runtime.test.ts`. The two non-default cluster settings
+  `src/engine.ts` and `test/engine.test.ts`. The two non-default cluster settings
   and the four upstream behaviours the proof measured are recorded there; an Effect
   upgrade rechecks them rather than assuming them.
+- **Naming something, or writing a test that needs a real host** →
+  [ADR-0028](docs/adr/0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md),
+  alongside `test/support/host.ts`. A name says what the thing does, never which
+  implementation it replaced, and a test drives the `collie host` an installation runs.
 - **Changing where a workflow module is looked for, which layer wins, or when an edit
   reaches new work** →
   [ADR-0016](docs/adr/0016-a-workflow-module-is-found-where-it-was-saved.md) and
@@ -92,7 +96,7 @@ herdr actions, and the `collie` CLI.
   [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `src/store.ts`,
   `test/store.test.ts` and `test/admission.test.ts`. The request id is the claim and the
   un-receipted row is the whole of recovery; there is no outbox or queue to add to.
-- **Changing how a native Run is started, shown, listed or waited on from the CLI or a
+- **Changing how a Run is started, shown, listed or waited on from the CLI or a
   herdr action** →
   [ADR-0018](docs/adr/0018-a-native-run-is-a-run.md) and
   [`docs/cli.md`](docs/cli.md#a-workflow-saved-as-a-module), alongside `src/lifecycle.ts`,
@@ -102,26 +106,26 @@ herdr actions, and the `collie` CLI.
 - **Changing how an Input is inferred, settled or read back — or adding a strategy** →
   [ADR-0019](docs/adr/0019-a-strategy-not-a-field-name.md) and
   [`docs/cli.md`](docs/cli.md#a-workflow-saved-as-a-module), alongside `src/strategies.ts`,
-  `src/inputs.ts`, `src/native.ts` and `test/strategies.test.ts`. What Collie does with an
+  `src/inputs.ts`, `src/engine.ts` and `test/strategies.test.ts`. What Collie does with an
   Input is the strategy's, never the field's name: read one with `workSourceOf`,
   `diffTargetOf` or `gitlabRepositoryOf` rather than by looking a name up.
-- **Changing how a native workflow runs an agent, builds its prompt or collects its
+- **Changing how a workflow runs an agent, builds its prompt or collects its
   Output** →
   [ADR-0020](docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) and
   [`docs/sdk.md`](docs/sdk.md#having-an-agent-do-the-work), alongside `src/agents.ts` and
   `test/agents.test.ts`. One launch, one collection, one repair, each its own Activity;
   herdr is reached through `src/herdr.ts` and the prompt goes out through the Dispatcher,
   as a Step's does.
-- **Changing what a human can do to a native Run — a decision, a hold, a stop, steering** →
+- **Changing what a human can do to a Run — a decision, a hold, a stop, steering** →
   [ADR-0021](docs/adr/0021-one-host-answers-for-a-run.md) and
-  [`docs/cli.md`](docs/cli.md#answering-holding-and-steering-one), alongside `src/native.ts`,
+  [`docs/cli.md`](docs/cli.md#answering-holding-and-steering-one), alongside `src/engine.ts`,
   `src/lifecycle.ts` and `test/control.test.ts`. The host settles it whichever door it came
   in; a question is asked with `ask` so the host knows it is open, and a control says
   whether it reached the run rather than confirming what it could not.
 - **Changing how a workflow module reaches a service or another workflow** →
   [ADR-0022](docs/adr/0022-a-workflow-is-made-of-workflows.md) and
   [`docs/sdk.md`](docs/sdk.md#a-workflow-made-of-other-workflows), alongside `src/sdk.ts`,
-  `src/native.ts` and `test/children.test.ts`. A module provides what it needs with
+  `src/engine.ts` and `test/children.test.ts`. A module provides what it needs with
   `Layer.provide` and there is nothing to look a service up in; a child is selected by its
   public id in the parent's own project, and its invocation name is its identity.
 - **Changing how a review/fix rally converges, or what counts as proof of a Run** →
@@ -146,11 +150,11 @@ herdr actions, and the `collie` CLI.
 - **Changing what a shipped workflow does** →
   [ADR-0026](docs/adr/0026-a-shipped-workflow-is-a-module-like-any-other.md) and
   [`docs/sdk.md`](docs/sdk.md), alongside `workflows/*.workflow.ts`, their Markdown beside
-  them and `test/baseline-native.test.ts`. All five are modules loaded through the public
+  them and `test/baseline.test.ts`. All five are modules loaded through the public
   contract: the Markdown is content, what happens is TypeScript, and what each one proves
   and offers is its own declaration rather than its name. One that expects to be varied —
   `renovate` — takes the varying steps as ordinary functions, so a fork supplies three and
-  keeps the rest (`test/fixtures/native/landing.workflow.ts`).
+  keeps the rest (`test/fixtures/workflows/landing.workflow.ts`).
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
 - **Changing install, keybindings, the Control Plane, or a toast** →

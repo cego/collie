@@ -11,10 +11,10 @@ import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } fro
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { connect } from "../src/host";
 import { runEffect } from "./support/effect";
-import { events, stopHost, until } from "./support/native";
+import { events, stopHost, until } from "./support/host";
 
 const repo = new URL("../", import.meta.url).pathname;
-const fixtures = `${repo}test/fixtures/native`;
+const fixtures = `${repo}test/fixtures/workflows`;
 
 /** The command a client starts a host with, as `connect` reads it. */
 const asCommand = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));

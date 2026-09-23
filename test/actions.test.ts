@@ -9,7 +9,7 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { connect, type HostClient } from "../src/host";
-import { stopHost, until } from "./support/native";
+import { stopHost, until } from "./support/host";
 import { collie, proves, save, type World } from "./support/world";
 
 /** The envelope's payload as text, for asking whether an offer is in it at all. */

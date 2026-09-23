@@ -1,12 +1,11 @@
 # Writing a workflow in TypeScript
 
-This is the native contract: a workflow as a TypeScript module that Collie loads and
-Effect runs. Every workflow Collie ships is written this way — modules in `workflows/`,
-held to everything below, with their Markdown beside them as content.
-[`authoring.md`](authoring.md) is the Markdown contract a definition is still written
-against; the two do not mix, and a module of an id wins over a definition of the same one.
+A workflow is a TypeScript module that Collie loads and Effect runs. Every workflow Collie
+ships is written this way — modules in `workflows/`, held to everything below, with their
+Markdown beside them as content. [`authoring.md`](authoring.md) is where modules and
+personas live and how a fork follows its parent.
 
-Everything here is `collie/native`, which the executable serves from its own bundle — so
+Everything here is imported from `collie`, which the executable serves from its own bundle — so
 the `Effect` your module imports is the one running it, and a service the host declares is
 the service your Layer satisfies. [ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md)
 is why.
@@ -14,7 +13,7 @@ is why.
 ## A module
 
 ```ts
-import { NativeHost, ask, decision, defineWorkflow, type WorkflowMetadata } from "collie/native";
+import { Host, ask, decision, defineWorkflow, type WorkflowMetadata } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 
@@ -29,7 +28,7 @@ export const make = (registrationName: string) => {
   const keep = decision("keep", { prompt: "Keep this result?", options: ["yes", "no"] });
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       const line = yield* Activity.make({
         name: "echo",
         success: Schema.String,
@@ -143,7 +142,7 @@ nothing, and the mistake is invisible until the body asks for the service — at
 the host reports `Service not found` against the file that asked. There is no dependency
 resolver and no registry: what your workflow needs, your Layer provides, explicitly.
 
-What the host provides is `NativeHost`, `NativeAgents`, `NativeChildren` and the workflow
+What the host provides is `Host`, `Agents`, `Children` and the workflow
 engine. Everything else is yours.
 
 ### Two projects, two implementations
@@ -253,7 +252,7 @@ const verdict =
 - **`cwd` is yours to say.** The host knows its own state directory, not which checkout
   this piece of work belongs in.
 - **`role`, `harness`, `model`, `effort` and `permissions`** default to the operation's name
-  and to the operator's configuration. The role is injected as a Step's persona is, and
+  and to the operator's configuration. The role is injected as a persona, and
   where `personas/<role>.md` exists in the project, on this machine or in the installation,
   that persona is what the agent is started as. A role nobody wrote a persona for is stated
   in one line.
@@ -507,10 +506,9 @@ name rather than its place.
 
 ## Reviewing and fixing, until it converges
 
-A review/fix rally is a loop you write, over the functions the engine uses for a declared
-one. There is no repeat declaration, no scheduler and no second reading of when a loop is
-done: a workflow that writes its own rally converges, stands on a dispute and runs out of
-rounds exactly where a declared one does, because it is the same three decisions.
+A review/fix rally is a loop you write, over three functions every workflow shares. There
+is no repeat declaration, no scheduler and no second reading of when a loop is done: every
+rally converges, stands on a dispute and runs out of rounds where these three decide.
 
 - **`splitDisputed(findings, disputed)`** — what is still the implementer's. A finding the
   implementer already rejected with a reason stops driving the loop; a reviewer who answers
@@ -684,7 +682,7 @@ const { document, limits } = jsonSchemaFor(Schema.Struct(input));
 `document` is null when nothing could be drawn, and `limits` names each place the drawing
 constrains nothing — a `Schema.declare`, for instance, becomes `{}`. Neither makes the
 schema invalid. What is lost is the copy a model is held to at its own end; your workflow
-is still held to the native one.
+is still held to the schema itself.
 
 ## Typechecking a module
 
@@ -698,11 +696,11 @@ in one says nothing about the one beside it.
 
 Three answers, kept apart. A **problem** stops it running: it would not load, its metadata
 contradicts itself, `make` threw, or it does not compile. **`drawn without:`** is a place
-the JSON Schema drawn for a prompt or a listing says less than your schema does — the
-native schema still holds. **`ok, not typechecked`** means no compiler is installed in that
+the JSON Schema drawn for a prompt or a listing says less than your schema does — your
+schema still holds. **`ok, not typechecked`** means no compiler is installed in that
 directory; nothing compiled it, and it says so rather than reading as fine.
 
 `collie workflow create <id>` writes the authoring setup — `package.json`, `tsconfig.json`
-and `collie-native.d.ts` — into the directory, leaving any you already have alone, and
+and `collie.d.ts` — into the directory, leaving any you already have alone, and
 installs the toolchain with the executable's own embedded Bun, so neither Bun nor Node has
 to be on the machine. The `effect` it pins is the one the host runs.

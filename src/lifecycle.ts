@@ -1,4 +1,4 @@
-// A native Run from both front doors: start it, watch it, and pick it up again.
+// A Run from both front doors: start it, watch it, and pick it up again.
 //
 // The CLI and the picker do the same things to a workflow saved as a module, so they do
 // them here rather than each their own way: which id is a module's, the claim that makes a
@@ -22,7 +22,7 @@ import {
   type HostRefused,
   type OfferView,
   type RunView,
-} from "./native";
+} from "./engine";
 import { err, taskFor, type Failure, type OpResult } from "./operations";
 import type { TaskChoice } from "./task";
 import type { HistoryRow, RequestConflict } from "./store";
@@ -63,10 +63,8 @@ export const neededInputs = (entry: Found, given: Given): Failure | null => {
 
 /**
  * The saved module this id names: the entry where one loads, the fault where the file
- * will not, and null where no module claims it and a Markdown definition may.
- *
- * A broken module is a file to fix rather than nothing: running the Markdown workflow it
- * was written to replace would answer a question its author never asked.
+ * will not, and null where no module claims it. A broken module is a file to fix rather
+ * than nothing.
  */
 export const moduleFor = (
   env: PluginEnv,
@@ -82,7 +80,7 @@ export const moduleFor = (
   );
 
 /**
- * Whether anything native has ever run in this state directory. A machine that has never
+ * Whether anything has ever run in this state directory. A machine that has never
  * started a module does not start a host to be told it has none.
  */
 /**
@@ -90,11 +88,9 @@ export const moduleFor = (
  * of it: no rows, no host worth starting, and a caller that asked is told so rather than
  * waiting on one that has nothing to say.
  */
-export const anyNativeRuns = (
-  env: PluginEnv,
-): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
+export const anyRuns = (env: PluginEnv): Effect.Effect<boolean, never, FileSystem.FileSystem> =>
   FileSystem.FileSystem.pipe(
-    Effect.flatMap((fs) => fs.exists(`${env.stateDir}/native.db`)),
+    Effect.flatMap((fs) => fs.exists(`${env.stateDir}/host.db`)),
     Effect.orElseSucceed(() => false),
   );
 
@@ -140,7 +136,7 @@ const asks = <A>(
   );
 
 /** What a start became, or why there is no Run. */
-export type NativeStart =
+export type RunStart =
   | {
       readonly ok: true;
       readonly runId: string;
@@ -159,7 +155,7 @@ export type NativeStart =
  * whichever one the host happened to be started from. A fresh one is only named here:
  * the host opens it once it knows the checkout it is rooted at.
  */
-export const startNativeRun = Effect.fn("Lifecycle.startNativeRun")(function* (
+export const startRun = Effect.fn("Lifecycle.startRun")(function* (
   env: PluginEnv,
   options: {
     readonly id: string;
@@ -203,18 +199,18 @@ export const startNativeRun = Effect.fn("Lifecycle.startNativeRun")(function* (
   );
 });
 
-/** Every native Run a listing can show, and why the rest could not be read. */
-export interface NativeListing {
+/** Every Run a listing can show, and why the rest could not be read. */
+export interface RunListing {
   readonly runs: ReadonlyArray<RunView>;
   readonly unreadable: string | null;
 }
 
-/** One native Run as a front door shows it, or null where this is not one. */
-export const nativeRun = (
+/** One Run as a front door shows it, or null where the host has none by that id. */
+export const runView = (
   env: PluginEnv,
   runId: string,
 ): Effect.Effect<RunView | Failure | null, never, Client> =>
-  anyNativeRuns(env).pipe(
+  anyRuns(env).pipe(
     Effect.flatMap((any) =>
       any
         ? asks(env, (client) => client.run({ runId })).pipe(
@@ -225,22 +221,22 @@ export const nativeRun = (
   );
 
 /**
- * The checkout a native Run's verifications are about: the one the host placed it on. A
+ * The checkout a Run's verifications are about: the one the host placed it on. A
  * verification collected anywhere else would bind a real result to a tree nobody is
  * looking at.
  */
 export const treeOf = (view: RunView): string => view.cwd;
 
 /**
- * Every native Run this state directory has rows for, and why they could not be read
- * where they could not be: a host that will not start costs the caller the native Runs,
+ * Every Run this state directory has rows for, and why they could not be read
+ * where they could not be: a host that will not start costs the caller those Runs,
  * never the listing it asked for.
  */
-export const nativeRuns = (
+export const runViews = (
   env: PluginEnv,
   task: string | null,
-): Effect.Effect<NativeListing, never, Client> =>
-  anyNativeRuns(env).pipe(
+): Effect.Effect<RunListing, never, Client> =>
+  anyRuns(env).pipe(
     Effect.flatMap((any) =>
       any
         ? asks(env, (client) => client.runs({ task })).pipe(
@@ -265,11 +261,11 @@ export interface Historical {
  * They are readable and nothing more: a row here cannot be answered, controlled or
  * resumed, and `historyRefusal` is what every door says to a caller that tries.
  */
-export const nativeHistory = (
+export const historyRows = (
   env: PluginEnv,
   task: string | null,
 ): Effect.Effect<Historical, never, Client> =>
-  anyNativeRuns(env).pipe(
+  anyRuns(env).pipe(
     Effect.flatMap((any) =>
       any
         ? asks(env, (client) => client.history({ task })).pipe(
@@ -305,7 +301,7 @@ export const historyRefusal = (
   runId: string,
   wanted: string,
 ): Effect.Effect<Failure | null, never, Client> =>
-  nativeHistory(env, null).pipe(
+  historyRows(env, null).pipe(
     Effect.map(({ rows }) => {
       const row = rows.find((item) => item.run === runId);
       if (row === undefined) return null;
@@ -324,7 +320,7 @@ export const historyRefusal = (
  * away — a board that was closed, a wait that was interrupted — reads the truth instead
  * of waiting for an update that has already been and gone.
  */
-export const watchNativeRun = <R>(
+export const watchRun = <R>(
   env: PluginEnv,
   runId: string,
   each: (view: RunView) => Effect.Effect<boolean, never, R>,
@@ -351,10 +347,7 @@ export const watchNativeRun = <R>(
  * then says where this Run is. A file that was missing and has been put back is picked up
  * by this rather than by restarting the host.
  */
-export const recoverNativeRun = (
-  env: PluginEnv,
-  runId: string,
-): Effect.Effect<OpResult, never, Client> =>
+export const recoverRun = (env: PluginEnv, runId: string): Effect.Effect<OpResult, never, Client> =>
   asks(env, (client) => client.recover().pipe(Effect.andThen(client.run({ runId })))).pipe(
     Effect.map((answered) => {
       if (!answered.ok) return answered;
@@ -370,11 +363,11 @@ export const recoverNativeRun = (
   );
 
 /**
- * Settles the question a native Run is waiting on. The decision is named where the caller
+ * Settles the question a Run is waiting on. The decision is named where the caller
  * knows which one, and null where it means "the one it is waiting on" — the host refuses
  * that where it is not exactly one, rather than choosing for anybody.
  */
-export const answerNativeRun = (
+export const answerRun = (
   env: PluginEnv,
   options: {
     readonly runId: string;
@@ -405,11 +398,11 @@ export const answerNativeRun = (
   );
 
 /**
- * Sets or clears one control over one native Run. A control the host recorded but could
+ * Sets or clears one control over one Run. A control the host recorded but could
  * not apply says so: work no host is running is held in intent, and calling that done
  * would be a confirmation nobody can stand behind.
  */
-export const controlNativeRun = (
+export const controlRun = (
   env: PluginEnv,
   options: {
     readonly runId: string;
@@ -432,8 +425,8 @@ export const controlNativeRun = (
     }),
   );
 
-/** Grants a native Run one command Collie may run itself, or withdraws it, through the host. */
-export const grantNativeRun = (
+/** Grants a Run one command Collie may run itself, or withdraws it, through the host. */
+export const grantRun = (
   env: PluginEnv,
   options: {
     readonly runId: string;
@@ -455,8 +448,8 @@ export const grantNativeRun = (
     ),
   );
 
-/** Says something of a human's to the agent a native Run has, through the host. */
-export const steerNativeRun = (
+/** Says something of a human's to the agent a Run has, through the host. */
+export const steerRun = (
   env: PluginEnv,
   options: {
     readonly runId: string;
@@ -518,18 +511,15 @@ export const statusOf = (view: RunView): string => {
 };
 
 /** Whether the engine can still change this Run's state. */
-export const nativeSettled = (view: RunView): boolean =>
+export const isSettled = (view: RunView): boolean =>
   view.status.status === "complete" || view.status.status === "failed";
 
 /**
- * What a native Run offers to do next. The host answers, because only it holds the module
+ * What a Run offers to do next. The host answers, because only it holds the module
  * that declared them: an offer is the author's own eligibility asked of the facts as they
  * are now, and a Run whose module has gone is readable with its offers refused by name.
  */
-export const nativeOffers = (
-  env: PluginEnv,
-  runId: string,
-): Effect.Effect<OpResult, never, Client> =>
+export const showOffers = (env: PluginEnv, runId: string): Effect.Effect<OpResult, never, Client> =>
   asks(env, (client) => client.offers({ runId })).pipe(
     Effect.map((answered) =>
       answered.ok
@@ -561,7 +551,7 @@ const describeOffers = (offers: ReadonlyArray<OfferView>): string =>
     .join("\n");
 
 /** Carries out one of them, under the caller's own claim so a retry is one Run. */
-export const invokeNativeOffer = (
+export const invokeOffer = (
   env: PluginEnv,
   options: {
     readonly runId: string;

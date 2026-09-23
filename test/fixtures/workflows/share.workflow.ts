@@ -1,7 +1,7 @@
 // One repository's share of a plan, as a workflow of its own. It is started by its public
 // id like anything else and knows nothing about having been fanned out to.
 
-import { NativeHost, defineWorkflow } from "collie/native";
+import { Host, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 
@@ -19,7 +19,7 @@ export const make = (registrationName: string) => {
   const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       const built = payload.input.tickets.join(",");
       return yield* Activity.make({
         name: "build",

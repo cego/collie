@@ -14,8 +14,8 @@
 
 import {
   FindingSchema,
-  NativeAgents,
-  NativeHost,
+  Agents,
+  Host,
   type WorkflowError,
   agentWork,
   ask,
@@ -24,7 +24,7 @@ import {
   defineWorkflow,
   type Registration,
   type WorkflowMetadata,
-} from "collie/native";
+} from "collie";
 import { Effect, Schema } from "effect";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
 import markdown from "./renovate.md" with { type: "text" };
@@ -183,7 +183,7 @@ export const Recorded = Schema.Struct({
 });
 
 /** The services every step of a renovation needs, which a fork's own three need too. */
-export type Renovating = NativeAgents | NativeHost | WorkflowEngine | WorkflowInstance;
+export type Renovating = Agents | Host | WorkflowEngine | WorkflowInstance;
 
 /** Where a landing step stands: the Run, its content, and what the steps before it found. */
 export interface Landed {
@@ -265,7 +265,7 @@ export const renovation = (options: {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       const runId = payload.runId;
       const asked = payload.input;
       const place = yield* host.place(runId);

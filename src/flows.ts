@@ -46,12 +46,12 @@ import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
 import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Declared, Found } from "./discovery";
 import {
-  answerNativeRun,
-  controlNativeRun,
-  invokeNativeOffer,
-  recoverNativeRun,
+  answerRun,
+  controlRun,
+  invokeOffer,
+  recoverRun,
   savedModules,
-  startNativeRun,
+  startRun,
 } from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
@@ -546,7 +546,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
     // Absent, not empty: an optional input nobody answered is one the module never sees.
     if (answer !== "") text[field.name] = answer;
   }
-  const started = yield* startNativeRun(env, {
+  const started = yield* startRun(env, {
     id: module.id,
     request: yield* newRequestId(),
     input: { json: {}, text },
@@ -732,9 +732,9 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   });
   if (!chosen) return 0;
 
-  const resumed = yield* recoverNativeRun(env, chosen.id);
+  const resumed = yield* recoverRun(env, chosen.id);
   if (!resumed.ok) return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
-  yield* controlNativeRun(env, { runId: chosen.id, control: "stop", set: false });
+  yield* controlRun(env, { runId: chosen.id, control: "stop", set: false });
   // Only a popup can close itself; running the picker in a plain pane is fine..
   if (placement === "popup") yield* Effect.ignore(herdr.popupClose());
   return 0;
@@ -1311,7 +1311,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     // History and every workspace's group it was on — three views built to answer a
     // question the run directory answers on its own.
     case "StopRun": {
-      const stopped = yield* controlNativeRun(env, {
+      const stopped = yield* controlRun(env, {
         runId: command.runId,
         control: "stop",
         set: true,
@@ -1321,7 +1321,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     case "OpenLog":
       return "a Run keeps no log of its own: its agents' panes are the record";
     case "Answer": {
-      const answered = yield* answerNativeRun(env, {
+      const answered = yield* answerRun(env, {
         runId: command.runId,
         decision: command.choiceId === "" ? null : command.choiceId,
         value: command.value,
@@ -1341,7 +1341,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
      * table, and both are asked again now rather than taken from the card.
      */
     case "InvokeOffer": {
-      const done = yield* invokeNativeOffer(env, {
+      const done = yield* invokeOffer(env, {
         runId: command.runId,
         offer: command.offer,
         input: {},
@@ -1462,9 +1462,9 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
      * not something to start on a guess.
      */
     case "ResumeRun": {
-      const resumed = yield* recoverNativeRun(env, command.runId);
+      const resumed = yield* recoverRun(env, command.runId);
       if (!resumed.ok) return resumed.error.message;
-      yield* controlNativeRun(env, { runId: command.runId, control: "stop", set: false });
+      yield* controlRun(env, { runId: command.runId, control: "stop", set: false });
       return resumed.human;
     }
 
@@ -1707,7 +1707,7 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
   if (!choice) return { asking };
   const next = answerFor(choice, asking, key);
   if (next.value === null) return { asking: next.asking };
-  const answered = yield* answerNativeRun(env, {
+  const answered = yield* answerRun(env, {
     runId: waiting.id,
     decision: choice.id === "" ? null : choice.id,
     value: next.value,
@@ -1789,7 +1789,7 @@ const act = Effect.fn("Flows.act")(function* (
  * transcript of what happened.
  */
 export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, runId: string) {
-  const stopped = yield* controlNativeRun(env, { runId, control: "stop", set: true });
+  const stopped = yield* controlRun(env, { runId, control: "stop", set: true });
   return stopped.ok ? stopped.human : stopped.error.message;
 });
 

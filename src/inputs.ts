@@ -586,7 +586,7 @@ function isReviewRun(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     // The review a human reads, and a record beside it in whichever shape the Run that
-    // wrote it keeps one: the engine's own `run.json`, or the findings a native Run leaves
+    // wrote it keeps one: the engine's own `run.json`, or the findings a Run of a module leaves
     // for a card to count. Either way it is a Run's directory and not a plan's.
     return (
       dir !== "" &&

@@ -8,7 +8,7 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { discover, searchPath, type EntryLayer } from "../src/discovery";
-import { revisionOf } from "../src/native";
+import { revisionOf } from "../src/engine";
 import { runEffect } from "./support/effect";
 
 const repo = new URL("../", import.meta.url).pathname;

@@ -2,9 +2,9 @@ import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import type { PluginEnv } from "../env";
 import { err } from "../operations";
-import { nativeRun, treeOf } from "../lifecycle";
+import { runView, treeOf } from "../lifecycle";
 import { noteVerification } from "../metrics";
-import { evidenceDir } from "../native";
+import { evidenceDir } from "../engine";
 import { collect, insideRun } from "../verify";
 import { printResult } from "../envelope";
 import { answering } from "./shared";
@@ -20,8 +20,8 @@ interface Target {
 }
 
 /** The Run this verification is about, as the host has it. Null where it has no such Run. */
-const nativeTarget = Effect.fn("collie.verify.native")(function* (env: PluginEnv, runId: string) {
-  const view = yield* nativeRun(env, runId);
+const targetOf = Effect.fn("collie.verify.target")(function* (env: PluginEnv, runId: string) {
+  const view = yield* runView(env, runId);
   if (view === null || !("runId" in view)) return null;
   const target: Target = {
     id: view.runId,
@@ -110,7 +110,7 @@ export const verify = Command.make(
     });
     return answering((env) =>
       Effect.gen(function* () {
-        const target = yield* nativeTarget(env, runId);
+        const target = yield* targetOf(env, runId);
         if (target === null)
           return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
         return yield* verified(target);

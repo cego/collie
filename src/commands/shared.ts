@@ -8,8 +8,8 @@ import { currentEnv, type PluginEnv } from "../env";
 import { Herdr, type WorkspaceInfo } from "../herdr";
 import { reason, unsafePathComponent } from "../naming";
 import { err, resolveWorkspace, type Failure } from "../operations";
-import { evidenceDir, runDir, type Given, type RunView } from "../native";
-import { nativeHistory, nativeRun } from "../lifecycle";
+import { evidenceDir, runDir, type Given, type RunView } from "../engine";
+import { historyRows, runView } from "../lifecycle";
 import type { HistoryRow } from "../store";
 import { actorName, type Actor } from "../proposals";
 import { taskOfWorkspace } from "../task";
@@ -152,7 +152,7 @@ export function personaData(persona: PersonaDef) {
  */
 export type Located =
   | {
-      readonly _tag: "Native";
+      readonly _tag: "Hosted";
       readonly view: RunView;
       readonly dir: string;
       readonly evidence: string;
@@ -186,12 +186,12 @@ export const locateRun = Effect.fn("collie.locateRun")(function* (
   };
   if (unsafePathComponent(id)) return missing;
   const dir = runDir(env.stateDir, id);
-  const view = yield* nativeRun(env, id);
+  const view = yield* runView(env, id);
   if (view !== null && "runId" in view) {
     if (task !== null && view.task !== task) return outsideTask(id, task);
-    return { _tag: "Native", view, dir, evidence: evidenceDir(env.stateDir, id) };
+    return { _tag: "Hosted", view, dir, evidence: evidenceDir(env.stateDir, id) };
   }
-  const row = (yield* nativeHistory(env, null)).rows.find((item) => item.run === id);
+  const row = (yield* historyRows(env, null)).rows.find((item) => item.run === id);
   if (row === undefined) return missing;
   if (task !== null && row.task !== task) return outsideTask(id, task);
   // The old engine kept a Run's evidence inside the Run's own directory, which is where
@@ -205,8 +205,8 @@ const outsideTask = (id: string, task: string): Located => ({
 });
 
 /** What a located Run is called and what it was for, whichever engine recorded it. */
-export function runFacts(located: Extract<Located, { _tag: "Native" | "Imported" }>) {
-  return located._tag === "Native"
+export function runFacts(located: Extract<Located, { _tag: "Hosted" | "Imported" }>) {
+  return located._tag === "Hosted"
     ? {
         id: located.view.runId,
         workflow: located.view.workflow,
@@ -257,24 +257,6 @@ export const parseInput = Effect.fn("collie.parseInput")(function* (
   }
   return { ok: true, given: { json: typed, text } };
 });
-
-/**
- * The same values as the strings a Markdown workflow's placeholders take. `--inputs-json`
- * may carry any JSON, and a definition whose Inputs are text has nowhere to put the rest:
- * saying so is better than rendering `[object Object]` into a prompt.
- */
-export function asText(given: Given) {
-  const inputs = { ...given.text };
-  for (const [name, value] of Object.entries(given.json)) {
-    if (!isText(value)) {
-      return err("invalid_input", `"${name}" is not text, and this workflow's inputs are.`);
-    }
-    inputs[name] = value;
-  }
-  return { ok: true as const, inputs };
-}
-
-const isText = Schema.is(Schema.String);
 
 /** Every mutation takes one, and it means the same thing on all of them. */
 export const requestIdFlag = Flag.String("request-id").pipe(

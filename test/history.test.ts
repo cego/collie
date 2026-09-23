@@ -38,7 +38,7 @@ const onState = <A, E>(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix });
-      return yield* body(dir).pipe(Effect.provide(opens(`${dir}/native.db`)));
+      return yield* body(dir).pipe(Effect.provide(opens(`${dir}/host.db`)));
     }).pipe(Effect.scoped),
   );
 

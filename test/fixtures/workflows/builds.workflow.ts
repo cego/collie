@@ -1,7 +1,7 @@
 // A workflow that changes the repository, so it declares a checkout of its own. It never
 // makes one: the host cut it before this Run existed, and `place` is where it is.
 
-import { NativeHost, agentWork, defineWorkflow, type WorkflowMetadata } from "collie/native";
+import { Host, agentWork, defineWorkflow, type WorkflowMetadata } from "collie";
 import { Effect, Schema } from "effect";
 
 export const id = "builds";
@@ -22,7 +22,7 @@ export const make = (registrationName: string) => {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const place = yield* (yield* NativeHost).place(payload.runId);
+      const place = yield* (yield* Host).place(payload.runId);
       yield* agentWork({
         runId: payload.runId,
         operation: "build",

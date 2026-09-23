@@ -9,7 +9,7 @@
 import { Effect, Option } from "effect";
 import { Command, Flag } from "effect/unstable/cli";
 import { describeKept, type Kept } from "../history";
-import { importHistory, nativeHistory } from "../lifecycle";
+import { importHistory, historyRows } from "../lifecycle";
 import { attempt } from "../envelope";
 import { context, root, selectedTask } from "./shared";
 
@@ -29,7 +29,7 @@ const historyList = Command.make(
           const resolved = yield* context(global, false);
           if (resolved._tag === "ContextFailure") return resolved.result;
           const scope = Option.getOrNull(task) ?? (yield* selectedTask(global));
-          const found = yield* nativeHistory(resolved.env, scope);
+          const found = yield* historyRows(resolved.env, scope);
           return {
             ok: true,
             data: { runs: found.rows, unreadable: found.unreadable },

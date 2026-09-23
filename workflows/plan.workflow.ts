@@ -12,8 +12,8 @@
 
 import {
   FindingSchema,
-  NativeChildren,
-  NativeHost,
+  Children,
+  Host,
   PlanOutputSchema,
   ReviewOutputSchema,
   agentWork,
@@ -23,7 +23,7 @@ import {
   defineWorkflow,
   formatFindings,
   type WorkflowMetadata,
-} from "collie/native";
+} from "collie";
 import { Effect, Schema } from "effect";
 import markdown from "./plan.md" with { type: "text" };
 
@@ -136,8 +136,8 @@ export const make = (registrationName: string) => {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
-      const children = yield* NativeChildren;
+      const host = yield* Host;
+      const children = yield* Children;
       const runId = payload.runId;
       const asked = payload.input;
       const place = yield* host.place(runId);

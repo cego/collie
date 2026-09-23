@@ -45,16 +45,16 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `chat.ts`          | The Home's native conversation: which harness, which session, and how it is launched     |
 | `tools.ts`         | The bounded Herd-wide reads native chat may make, and nothing else                       |
 | `mcp.ts`           | Those same reads over MCP on stdio, which is how Claude Code reaches them                |
-| `native.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live |
+| `engine.ts`        | Effect's workflow engine, the SDK the binary serves a module, and where generations live |
 | `host.ts`          | The one local host per state directory: who owns it, how a client reaches it             |
 | `discovery.ts`     | Where a workflow module is looked for, which layer wins, and what counts as an edit      |
 | `authoring.ts`     | What a module says about itself, how it is checked, and the file an author starts from   |
 | `store.ts`         | Rows beside Effect's: request claims, run identity, generations, questions, history      |
 | `history.ts`       | What an older Collie left in directories, read once into rows. The only reader of one    |
 | `run-actions.ts`   | What a confirmed action does to a Run, and the one place each kind is carried out        |
-| `lifecycle.ts`     | A native Run from both front doors: start it, watch it, and pick it up again             |
-| `sdk.ts`           | `collie/native`: what a module exports, declares, waits on, and starts as a child        |
-| `agents.ts`        | What a native workflow does with an agent: one launch, one collection, one repair        |
+| `lifecycle.ts`     | A Run from both front doors: start it, watch it, and pick it up again                    |
+| `sdk.ts`           | `collie`: what a module exports, declares, waits on, and starts as a child               |
+| `agents.ts`        | What a workflow does with an agent: one launch, one collection, one repair               |
 | `proactive.ts`     | What is worth Collie starting a turn about, and what it has already said                 |
 | `news.ts`          | What it noticed and nobody has read: deduped, batched, and sent is never read            |
 | `home.ts`          | Which workspace is this Herd's Home, decided by proof and never by a label               |

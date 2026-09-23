@@ -4,7 +4,7 @@
 // boolean, a list, a nullable, a closed set, a union that text and JSON disagree about,
 // and one field that may simply be absent.
 
-import { defineWorkflow } from "collie/native";
+import { defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 

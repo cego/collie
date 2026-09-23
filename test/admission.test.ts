@@ -11,7 +11,7 @@
 import { expect, test } from "bun:test";
 import { Effect } from "effect";
 import { runEffect } from "./support/effect";
-import { events, openHost, until, workspace, type Host } from "./support/native";
+import { events, openHost, until, workspace, type Host } from "./support/host";
 
 const suspended = (reply: { readonly status?: string }) => reply.status === "suspended";
 const complete = (reply: { readonly status?: string }) => reply.status === "complete";

@@ -287,7 +287,7 @@ test(
           data: { path: join(saved, "tally.workflow.ts"), toolchain: null },
         });
         // The setup to typecheck it is beside it, provisioned with the embedded Bun.
-        for (const name of ["package.json", "tsconfig.json", "collie-native.d.ts"]) {
+        for (const name of ["package.json", "tsconfig.json", "collie.d.ts"]) {
           expect(yield* fs.exists(join(saved, name))).toBe(true);
         }
 

@@ -6,7 +6,7 @@ import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { mrLabel, sectionOf, type MrState, type TaskView } from "./board";
 import { latest, readDispositions, recordDisposition } from "./disposition";
 import { liveTier, mrDetails, parseMrTarget, type MrRef, type Runner } from "./mr";
-import { runDir } from "./native";
+import { runDir } from "./engine";
 import { nowIso } from "./time";
 
 /** How long one merge request's answer stands before GitLab is asked again. */

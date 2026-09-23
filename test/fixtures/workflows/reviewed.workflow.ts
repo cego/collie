@@ -4,7 +4,7 @@
 // no lookup happens and this file decides what it gets. `graded` is a public workflow id,
 // so the search path decides — and a project that overrides it overrides it here as well.
 
-import { NativeHost, ask, child, decision, defineWorkflow } from "collie/native";
+import { Host, ask, child, decision, defineWorkflow } from "collie";
 import { Effect, Layer, Schema } from "effect";
 import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
@@ -29,7 +29,7 @@ export const make = (registrationName: string) => {
   const layer = workflow
     .toLayer(
       Effect.fnUntraced(function* (payload) {
-        const host = yield* NativeHost;
+        const host = yield* Host;
         const run = yield* WorkflowEngine.WorkflowInstance;
         if (yield* host.held(payload.runId)) {
           yield* host.record(payload.runId, "held");

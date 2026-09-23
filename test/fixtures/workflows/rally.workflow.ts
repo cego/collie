@@ -8,7 +8,7 @@
 
 import {
   FixOutputSchema,
-  NativeHost,
+  Host,
   ReviewOutputSchema,
   agentWork,
   defineWorkflow,
@@ -18,7 +18,7 @@ import {
   splitDisputed,
   type Finding,
   type WorkflowMetadata,
-} from "collie/native";
+} from "collie";
 import { Effect, Schema } from "effect";
 
 export const id = "rally";
@@ -45,7 +45,7 @@ export const make = (registrationName: string) => {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       const { runId, input: asked } = payload;
       let disputed: Finding[] = [];
       let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;

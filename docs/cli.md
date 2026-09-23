@@ -89,8 +89,8 @@ schemas of its result and its failure, and its metadata:
 }
 ```
 
-`limits` names each place the drawn JSON Schema constrains less than the native schema
-does — a projection limit, not an invalid schema. `broken` is the sentence a module threw
+`limits` names each place the drawn JSON Schema constrains less than the module's own
+schema does — a projection limit, not an invalid schema. `broken` is the sentence a module threw
 when it was constructed, and null when it did not.
 
 The same reading answers `collie_definitions` over MCP and Pi, and fills the `needs_input`
@@ -102,8 +102,7 @@ the SDK declarations, without starting a run, taking an agent or opening a workt
 reports three different things and keeps them apart: `problem(s)` is what stops it running,
 `drawn without:` is a projection limit, and `ok, not typechecked` means no compiler was
 installed in that directory — never silence. It exits non-zero for problems, so it fits a
-pre-commit hook. For a Markdown definition it still catches unknown models, missing personas
-and skills, malformed choices, and placeholders no declared input can fill.
+pre-commit hook.
 
 ## Write one
 
@@ -117,7 +116,7 @@ Both write `<id>.workflow.ts` where a run will find it, return its path, and nev
 over a file that is already there. `create` writes the smallest module that runs; `fork`
 writes one that imports the original and hands `make` on, so everything it does not name is
 still the original's. Both then provision the authoring setup beside the file —
-`package.json`, `tsconfig.json`, `collie-native.d.ts` — leaving any you already have alone,
+`package.json`, `tsconfig.json`, `collie.d.ts` — leaving any you already have alone,
 and installing the toolchain with the executable's own embedded Bun. With no network on a
 first use the answer says `toolchain_unavailable`: the module still runs, and nothing was
 typechecked.
@@ -1284,37 +1283,6 @@ shows rather than sends. `--json` carries the same checks as data. `setup.sh` en
 running it, and exits with its status: the last word of an install is either that
 everything is ready, or what is missing and how to fix each one.
 
-## Running a native workflow host
-
-```sh
-collie native --dir <state-dir> [--registration-timeout-ms <n>]
-```
-
-The fixture host from
-[ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md): one process, one state
-directory, one JSON line of request in and one of reply out. It loads a workflow module
-written in TypeScript outside this repository, runs it on Effect's workflow engine over
-SQLite in that directory, and answers `load`, `start`, `poll`, `answer`, `hold`, `release`,
-`stop`, `resume`, `registrations`, `metadata`, `provision` and `check`.
-
-`start` carries the author's own `input`, which the workflow's schema settles before a row,
-a claim or an execution exists: an input it rejects comes back as `invalid_input` naming
-the field. [`docs/sdk.md`](sdk.md) is what a module declares and what is refused. The run
-id it is given is also the claim on that work here, so sending one twice is one run and
-sending it with other arguments is refused.
-
-It exists so the proof that a packaged workflow survives a real restart can be run against
-the packaged executable, and it will be superseded by the host Collie ships. It is not a
-front door for work: it opens no tab, acquires no agent, and knows nothing about Runs.
-
-`--registration-timeout-ms` is for the proof alone. Left off, a message for a workflow
-whose module is missing waits indefinitely, which is what keeps a module that has gone
-from turning recoverable work into a failed result.
-
-`--crash-at admitted|executed` is for the proof alone as well: the host kills itself in one
-of the two windows a start has — with the run recorded and the engine not yet told, or told
-and the receipt not yet written — so that recovery is demonstrated rather than argued.
-
 ## The local workflow host
 
 ```sh
@@ -1334,16 +1302,16 @@ never adopted and never signalled.
 
 Clients talk to it over a unix socket in that same directory, with Effect's own RPC: the
 same schemas at both ends, and nothing listening off this machine. It answers `identity`,
-`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `watch`, `recover`,
-`answer` and `grant` — the registry `collie native` drives, in front of as many clients as ask.
-`run` and `runs` are the read model the front doors show; `watch` streams it, current state
-first and a whole state each time; `recover` registers what current files now allow and
-hands over what is outstanding. One fiber in the host asks the engine about the work it has
-not finished, on a schedule every client shares, so watching costs the same whether one
-client is looking or the whole board is. Closing a client cancels nothing it
-started; stopping the host with `kill` leaves suspended work suspended, and the next client
-starts a host that picks it up. The operator controls the recovery proof measured — hold,
-release, stop, resume — are not on this protocol yet.
+`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `history`, `import`,
+`watch`, `recover`, `answer`, `offers`, `invoke`, `control`, `grant` and `steer` — one
+registry, in front of as many clients as ask. `run` and `runs` are the read model the front
+doors show; `watch` streams it, current state first and a whole state each time; `recover`
+registers what current files now allow and hands over what is outstanding; `control` sets
+or clears a hold or a stop on one run. One fiber in the host asks the engine about the work
+it has not finished, on a schedule every client shares, so watching costs the same whether
+one client is looking or the whole board is. Closing a client cancels nothing it started;
+stopping the host with `kill` leaves suspended work suspended, and the next client starts a
+host that picks it up.
 
 `discover` and `start` name the project asking, because one host serves the machine and a
 project's own `.herdr/workflows` is its own: two projects can run different implementations
@@ -1374,15 +1342,21 @@ those is the way it is.
 `COLLIE_HOST` names the command a client starts a host with — one path, or a JSON array —
 the way `COLLIE_DRIVER` names the Driver's. Unset, it is this executable.
 
-## Authoring against the native SDK
+`COLLIE_HOST_CRASH_AT=admitted|executed` is for the recovery proof alone: the host kills
+itself in one of the two windows a start has — with the run recorded and the engine not yet
+told, or told and the receipt not yet written — so that recovery is demonstrated rather
+than argued. Nothing else sets it.
 
-`provision` writes `package.json`, `tsconfig.json` and `collie-native.d.ts` into a workflow
-directory that has none, and installs the toolchain with the executable's own embedded Bun
-— so typechecking a module needs neither Bun nor Node on the machine. Files already there
-are left alone. `check` typechecks one module and reports each diagnostic with its file and
-line; an error in one module says nothing about the one beside it. With nothing installed
-to check with, that is `toolchain_unavailable` rather than a module reported as fine.
+## Authoring against the SDK
+
+`workflow create` and `workflow fork` write `package.json`, `tsconfig.json` and
+`collie.d.ts` beside the module when the directory has none, and install the toolchain with
+the executable's own embedded Bun — so typechecking a module needs neither Bun nor Node on
+the machine. Files already there are left alone. `workflow check` typechecks each module and
+reports each diagnostic with its file and line; an error in one module says nothing about
+the one beside it. With nothing installed to check with, that is `ok, not typechecked`
+rather than a module reported as fine.
 
 The `effect` the toolchain pins is the one the host runs, and at runtime the executable
-serves its own `effect` and `collie/native` to the module it loads, so what an author
-typechecks against and what executes are the same Effect.
+serves its own `effect` and `collie` to the module it loads, so what an author typechecks
+against and what executes are the same Effect.

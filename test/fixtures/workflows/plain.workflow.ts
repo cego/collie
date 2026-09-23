@@ -1,6 +1,6 @@
 // A second entry, so a host proves one broken or missing module leaves the others usable.
 
-import { NativeHost, defineWorkflow } from "collie/native";
+import { Host, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 
@@ -14,7 +14,7 @@ export const make = (registrationName: string) => {
   const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       yield* Activity.make({
         name: "only",
         success: Schema.String,

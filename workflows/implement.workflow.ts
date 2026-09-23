@@ -9,7 +9,7 @@
 // Nothing here is a repeat declaration or a scheduler. `splitDisputed` decides what is
 // still the implementer's, `settleRound` decides where a round goes, `settleFinalFix`
 // decides whether the last fix stands, and `evidenceGapsOf` decides whether this Run has
-// proved what it set out to prove — the same functions a declared workflow is held to.
+// proved what it set out to prove — the same functions every workflow is held to.
 //
 // The Markdown beside this file is the content: the five kinds of work source, what a
 // slice is told, and what the merge request has to say.
@@ -17,8 +17,8 @@
 import {
   FindingSchema,
   FixOutputSchema,
-  NativeAgents,
-  NativeHost,
+  Agents,
+  Host,
   WorkflowError,
   agentWork,
   classifyWorkSource,
@@ -43,7 +43,7 @@ import {
   type Slice,
   type SynthesisReport,
   type WorkflowMetadata,
-} from "collie/native";
+} from "collie";
 import { DateTime, Effect, FileSystem, Schema } from "effect";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
 import markdown from "./implement.md" with { type: "text" };
@@ -133,8 +133,8 @@ export const make = (registrationName: string) => {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
-      const agents = yield* NativeAgents;
+      const host = yield* Host;
+      const agents = yield* Agents;
       const runId = payload.runId;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
@@ -362,10 +362,10 @@ const rally = (ask: {
 }): Effect.Effect<
   Rallied,
   WorkflowError,
-  NativeAgents | NativeHost | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem
+  Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem
 > =>
   Effect.gen(function* () {
-    const host = yield* NativeHost;
+    const host = yield* Host;
     let disputed: Finding[] = [];
     let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
 

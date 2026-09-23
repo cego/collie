@@ -16,9 +16,9 @@ import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { connect } from "../src/host";
-import { nativeRuns } from "../src/lifecycle";
+import { runViews } from "../src/lifecycle";
 import { runEffect } from "./support/effect";
-import { fixtures, root, stopHost, until } from "./support/native";
+import { fixtures, root, stopHost, until } from "./support/host";
 
 const Envelope = Schema.fromJsonString(
   Schema.Struct({
@@ -122,7 +122,7 @@ const said = (
 ) => ({ id: "typed", request, input: given.json ?? {}, text: given.text ?? {} });
 
 test(
-  "text is settled by the field's own schema, so code is handed native values",
+  "text is settled by the field's own schema, so code is handed typed values",
   () =>
     proves("collie-typed-text-", (world) =>
       Effect.gen(function* () {
@@ -410,7 +410,7 @@ test(
         expect(bad.exit).toBe(2);
         expect(bad.envelope.error?.code).toBe("invalid_input");
         expect(bad.envelope.error?.message).toContain("count");
-        expect((yield* nativeRuns(env, null)).runs).toEqual([]);
+        expect((yield* runViews(env, null)).runs).toEqual([]);
 
         // The same launch, corrected. Every value is text on the command line, and the
         // module is handed the types it declared.
@@ -449,7 +449,7 @@ test(
         // `mode` is a closed set, so its question is a menu of the values it takes.
         expect(asked).toContain("A workflow with typed inputs — mode");
 
-        const listed = (yield* nativeRuns(env, null)).runs;
+        const listed = (yield* runViews(env, null)).runs;
         expect(listed).toHaveLength(2);
         expect(
           listed.map((run) => run.input.count).sort((one, other) => Number(one) - Number(other)),
@@ -473,7 +473,7 @@ test(
         // Every one it is missing, with what each will take, so a caller that has never
         // seen the module can fill them in and retry under the same request id.
         expect(asked.envelope.error?.message).toContain("count");
-        expect((yield* nativeRuns(yield* currentEnv, null)).runs).toEqual([]);
+        expect((yield* runViews(yield* currentEnv, null)).runs).toEqual([]);
         yield* stopHost(world.state);
       }),
     ),

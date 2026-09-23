@@ -15,7 +15,7 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { connect } from "../src/host";
-import { events, stopHost, until } from "./support/native";
+import { events, stopHost, until } from "./support/host";
 import { proves, save, type World } from "./support/world";
 
 /** The parent, the child, the contract they share, and which house provides it. */
@@ -181,7 +181,7 @@ test(
           );
 
           // Answering replays the parent from the top: it asks for the same children
-          // again, and native idempotency hands back the executions it already has.
+          // again, and the engine's idempotency hands back the executions it already has.
           yield* client
             .answer({
               runId: started.runId,

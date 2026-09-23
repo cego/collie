@@ -1,4 +1,4 @@
-// Step Outputs are JSON files in the run dir. Gates and loops read these,
+// Outputs are JSON files in the run dir. Gates and loops read these,
 // never terminal text (CONTEXT.md, Output).
 
 import { Effect, FileSystem, Schema, SchemaGetter } from "effect";
@@ -509,8 +509,8 @@ export type Rally =
     };
 
 /**
- * Where one round of a converging review/fix rally goes next — the decision the engine
- * makes for a declared loop, as a function a module makes for a written one.
+ * Where one round of a converging review/fix rally goes next, as a function the loop a
+ * module writes asks.
  *
  * `live` is what `splitDisputed` left for the implementer. Only blocking findings drive
  * it: a dispute nobody answered is the human's call rather than another round of the same

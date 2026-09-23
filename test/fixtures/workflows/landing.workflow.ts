@@ -10,7 +10,7 @@
 // of the shipped content the same way the shipped ones are. No service to implement, no
 // step to patch, no engine to copy.
 
-import { agentWork } from "collie/native";
+import { agentWork } from "collie";
 import {
   Merged,
   Recorded,

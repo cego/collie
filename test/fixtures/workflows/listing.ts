@@ -11,7 +11,7 @@
 
 import {
   FixOutputSchema,
-  NativeHost,
+  Host,
   WorkflowError,
   agentWork,
   ask,
@@ -24,7 +24,7 @@ import {
   type Finding,
   type Handed,
   type WorkflowMetadata,
-} from "collie/native";
+} from "collie";
 import { Effect, Schema } from "effect";
 
 export const input = {
@@ -56,7 +56,7 @@ export const make = (registrationName: string) => {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       const { runId, input: asked } = payload;
       const tickets = yield* orderedTicketsOf(asked.plan);
       // Identities before work: two items nobody can tell apart would share one result,

@@ -15,8 +15,8 @@ import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { installFakeSkills } from "./support/defs";
-import { NativeAgents, agentsLayer, type AgentHost } from "../src/agents";
-import { NativeChildren, NativeHost, type ActionFacts, type ChildAsk } from "../src/sdk";
+import { Agents, agentsLayer, type AgentHost } from "../src/agents";
+import { Children, Host, type ActionFacts, type ChildAsk } from "../src/sdk";
 import {
   PARKED,
   answerDecision,
@@ -27,11 +27,11 @@ import {
   loadEntry,
   pollStatus,
   runDir,
-} from "../src/native";
+} from "../src/engine";
 import { VerifySpecSchema } from "../src/verify-spec";
 import { offersFrom } from "../src/offers";
 import { Store } from "../src/store";
-import { fixtures, until } from "./support/native";
+import { fixtures, until } from "./support/host";
 
 const ROOT = new URL("../", import.meta.url).pathname;
 const shipped = (name: string) => `${ROOT}workflows/${name}.workflow.ts`;
@@ -45,7 +45,7 @@ beforeEach(() =>
     Effect.gen(function* () {
       rig = yield* Rig.make();
       const fs = yield* FileSystem.FileSystem;
-      dir = `${rig.root}/native`;
+      dir = `${rig.root}/host`;
       started = [];
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
@@ -72,8 +72,8 @@ const hostOf = (): AgentHost => ({
 });
 
 /** Children as the host admits them, recorded rather than run: this suite is the parent. */
-const children = Layer.succeed(NativeChildren)(
-  NativeChildren.of({
+const children = Layer.succeed(Children)(
+  Children.of({
     start: (ask) =>
       Effect.sync(() => {
         started.push(ask);
@@ -89,16 +89,16 @@ const children = Layer.succeed(NativeChildren)(
 );
 
 /** A host layer a test may wrap, for the one capability it has no service to answer with. */
-type HostOverride = Layer.Layer<NativeHost, never, NativeHost>;
+type HostOverride = Layer.Layer<Host, never, Host>;
 
 const session = <A, E>(
   run: Effect.Effect<
     A,
     E,
     | WorkflowEngine.WorkflowEngine
-    | NativeAgents
-    | NativeChildren
-    | NativeHost
+    | Agents
+    | Children
+    | Host
     | Store
     | FileSystem.FileSystem
     | Path.Path
@@ -949,14 +949,14 @@ test(
 );
 
 test(
-  "a native review's own directory is a review to build from, not a wall of text",
+  "a review module's own directory is a review to build from, not a wall of text",
   () =>
     runEffect(
       Effect.gen(function* () {
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
         yield* bin.add("glab", `exit 0`);
         yield* repository();
-        // What a native review leaves behind: the prose a human reads and the findings a
+        // What a review module leaves behind: the prose a human reads and the findings a
         // card counts. There is no engine run record beside it, and there never will be.
         const fs = yield* FileSystem.FileSystem;
         const reviewed = `${rig.root}/reviewed`;
@@ -1153,10 +1153,10 @@ test(
         yield* rig.queueOutputs([BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
         // A human withdraws the last grant once the build has been handed out.
         let asks = 0;
-        const withdrawn: HostOverride = Layer.effect(NativeHost)(
+        const withdrawn: HostOverride = Layer.effect(Host)(
           Effect.gen(function* () {
-            const host = yield* NativeHost;
-            return NativeHost.of({
+            const host = yield* Host;
+            return Host.of({
               ...host,
               approved: (runId) => ((asks += 1) === 1 ? host.approved(runId) : Effect.succeed([])),
             });
@@ -1211,10 +1211,10 @@ test("a Run whose outcome needs no evidence is not stopped for having nothing ap
  * the work is done — is what these tests are about.
  */
 const claimed: string[] = [];
-const withoutHelle: HostOverride = Layer.effect(NativeHost)(
+const withoutHelle: HostOverride = Layer.effect(Host)(
   Effect.gen(function* () {
-    const host = yield* NativeHost;
-    return NativeHost.of({
+    const host = yield* Host;
+    return Host.of({
       ...host,
       claim: (options) =>
         Effect.as(

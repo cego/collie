@@ -21,7 +21,7 @@ import {
   type Found,
 } from "./discovery";
 import { reason } from "./naming";
-import { loadEntry, provisionToolchain, revisionOf, typecheckEntry } from "./native";
+import { loadEntry, provisionToolchain, revisionOf, typecheckEntry } from "./engine";
 import {
   RESERVED_INPUTS,
   describeMetadata,
@@ -123,7 +123,11 @@ type Constructed =
 
 const construct = (entry: WorkflowEntry): Constructed => {
   try {
-    return { workflow: entry.make(entry.id).workflow, broken: null };
+    // Typed for the author, not for us: an untyped module's `make` can return anything.
+    const workflow: HostWorkflow | undefined = entry.make(entry.id).workflow;
+    return workflow === undefined
+      ? { workflow: null, broken: `make("${entry.id}") returned no workflow` }
+      : { workflow, broken: null };
   } catch (cause) {
     return { workflow: null, broken: reason(cause) };
   }
@@ -141,7 +145,7 @@ export type Checked = {
   readonly path: string;
   /** What stops it running: it would not load, would not construct, or would not compile. */
   readonly problems: ReadonlyArray<string>;
-  /** Where a drawing constrains nothing. Not a problem: the native schema still holds. */
+  /** Where a drawing constrains nothing. Not a problem: the schema itself still holds. */
   readonly limits: ReadonlyArray<string>;
   /** Why nothing was typechecked, where nothing was. Silence would read as a pass. */
   readonly toolchain: string | null;
@@ -285,7 +289,7 @@ const write = Effect.fn("Authoring.write")(function* (dir: string, id: string, t
     };
   }
   // After the entry, and never fatally: what is installed here is for typechecking, and
-  // the module Collie runs resolves `collie/native` from the executable either way.
+  // the module Collie runs resolves `collie` from the executable either way.
   const provisioned = yield* provisionToolchain(dir).pipe(Effect.result);
   return {
     ok: true,
@@ -298,7 +302,7 @@ const write = Effect.fn("Authoring.write")(function* (dir: string, id: string, t
 const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
 
 /** The smallest module that runs: typed input, one recorded step, a typed result. */
-const entryText = (id: string) => `import { NativeHost, defineWorkflow } from "collie/native";
+const entryText = (id: string) => `import { Host, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 
@@ -312,7 +316,7 @@ export const make = (registrationName: string) => {
   const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       yield* Activity.make({
         name: "note",
         success: Schema.String,

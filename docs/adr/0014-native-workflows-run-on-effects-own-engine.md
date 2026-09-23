@@ -5,6 +5,10 @@
 `collie native --dir <dir>` is the host it drives. Nothing described here is in the path of
 a Markdown workflow yet; converting those is later work.
 
+[ADR-0028](0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md) renames
+what this page calls `collie native`, `src/native.ts`, `test/native-runtime.test.ts` and
+`native.db`, and the proof now drives `collie host`.
+
 A workflow will be a TypeScript file an author writes, outside this repository, and Collie
 will run it. That means Collie either builds durability, replay, suspension and recovery,
 or it uses Effect's. This says it uses Effect's, records exactly which settings that takes,

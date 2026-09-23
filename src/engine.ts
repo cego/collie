@@ -1,4 +1,4 @@
-// Effect's own workflow engine, proven from the compiled binary.
+// Collie's workflow engine: Effect's, run from the compiled binary.
 //
 // A workflow lives in a TypeScript file outside this checkout. This module is what lets
 // the packaged executable load one, give it the binary's own Effect rather than a second
@@ -41,12 +41,12 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as WorkflowModules from "effect/unstable/workflow";
 import * as EffectRoot from "effect";
-import * as Agents from "./agents";
-import { NativeAgents } from "./agents";
+import * as AgentsSdk from "./agents";
+import { Agents } from "./agents";
 import * as Sdk from "./sdk";
 import {
-  NativeChildren,
-  NativeHost,
+  Children,
+  Host,
   RESERVED_INPUTS,
   WorkflowError,
   checkEntry,
@@ -109,7 +109,7 @@ import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 
 /** A module that cannot be loaded, named by its own file. Schema-backed, so the local
  *  host can fail a client with the same value rather than a copy of it. */
-export class NativeEntryError extends Schema.TaggedError<NativeEntryError>()("NativeEntryError", {
+export class EntryError extends Schema.TaggedError<EntryError>()("EntryError", {
   file: Schema.String,
   message: Schema.String,
 }) {}
@@ -146,7 +146,7 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
   // Two files, one module: `sdk.ts` is what a module declares about itself and `agents.ts`
   // is what it does with an agent. They are apart because the second reaches for herdr
   // and the first must not, and an author has no reason to know that.
-  const served: Array<readonly [string, object]> = [["collie/native", { ...Sdk, ...Agents }]];
+  const served: Array<readonly [string, object]> = [["collie", { ...Sdk, ...AgentsSdk }]];
   for (const [prefix, namespace] of NAMESPACES) {
     served.push([prefix, namespace]);
     for (const [name, member] of Object.entries(namespace))
@@ -155,7 +155,7 @@ export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
   return served;
 };
 
-/** Kept in step with package.json, which `native.test.ts` checks: the host and an
+/** Kept in step with package.json, which `engine.test.ts` checks: the host and an
  *  author's declarations have to be the same Effect, or the types are about another one. */
 export const TOOLCHAIN = {
   effect: "4.0.0-rc.117",
@@ -163,11 +163,11 @@ export const TOOLCHAIN = {
 } as const;
 
 /**
- * The declarations an author typechecks `collie/native` against, kept in step with
- * `src/sdk.ts` by `native-sdk.test.ts` — which typechecks a module using the whole
+ * The declarations an author typechecks `collie` against, kept in step with
+ * `src/sdk.ts` by `engine.test.ts` — which typechecks a module using the whole
  * surface, so a declaration that has drifted fails a test rather than an author's build.
  */
-export const SDK_DECLARATIONS = `declare module "collie/native" {
+export const SDK_DECLARATIONS = `declare module "collie" {
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
   import type { DurableDeferred } from "effect/unstable/workflow/DurableDeferred";
   import type { Workflow } from "effect/unstable/workflow/Workflow";
@@ -240,7 +240,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   }
 
   /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
-  export interface NativeHostApi {
+  export interface HostApi {
     readonly dir: string;
     /** This Run as the host admitted it; its directory is made as this is answered. */
     readonly place: (runId: string) => Effect.Effect<Place>;
@@ -294,10 +294,10 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     /** Gives the claim back. Only a Run that finished its work releases. */
     readonly release: (runId: string) => Effect.Effect<void>;
   }
-  export const NativeHost: Context.Service<NativeHostApi, NativeHostApi>;
-  export type NativeHost = NativeHostApi;
+  export const Host: Context.Service<HostApi, HostApi>;
+  export type Host = HostApi;
 
-  /** How every native workflow reports a failure. */
+  /** How every workflow reports a failure. */
   export class WorkflowError extends Schema.TaggedError<WorkflowError>()(
     "WorkflowError",
     { reason: Schema.String },
@@ -326,21 +326,21 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   }
 
   /** A decision a run waits on, answered with the text an operator types. */
-  export interface NativeDecision extends DurableDeferred<typeof Schema.String> {
+  export interface Decision extends DurableDeferred<typeof Schema.String> {
     readonly asks: DecisionSpec;
   }
   export function decision(
     name: string,
     asks?: { readonly prompt?: string; readonly options?: ReadonlyArray<string> },
-  ): NativeDecision;
+  ): Decision;
 
   /** Waits for this question to be answered, having told the host it is open. */
   export function ask(
     runId: string,
-    question: NativeDecision,
+    question: Decision,
     /** What it takes this time, where a menu offers less than it declares. */
     options?: ReadonlyArray<string>,
-  ): Effect.Effect<string, never, NativeHost | WorkflowEngine | WorkflowInstance>;
+  ): Effect.Effect<string, never, Host | WorkflowEngine | WorkflowInstance>;
 
   /**
    * What this Run may have Collie run to prove its kind of result. With nothing approved
@@ -349,7 +349,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   export function requireApproved(
     runId: string,
     kind: string,
-  ): Effect.Effect<ReadonlyArray<VerifySpec>, never, NativeHost | WorkflowInstance>;
+  ): Effect.Effect<ReadonlyArray<VerifySpec>, never, Host | WorkflowInstance>;
 
   /** What a parent asks for when part of its own work is another workflow. */
   export interface ChildAsk {
@@ -375,13 +375,13 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly start: (ask: ChildAsk) => Effect.Effect<ChildRun, WorkflowError>;
     readonly result: (child: ChildRun) => Effect.Effect<unknown, WorkflowError>;
   }
-  export const NativeChildren: Context.Service<ChildrenApi, ChildrenApi>;
-  export type NativeChildren = ChildrenApi;
+  export const Children: Context.Service<ChildrenApi, ChildrenApi>;
+  export type Children = ChildrenApi;
 
   /** One child workflow, started and waited on. */
   export function child(
     ask: ChildAsk,
-  ): Effect.Effect<unknown, WorkflowError, NativeChildren>;
+  ): Effect.Effect<unknown, WorkflowError, Children>;
 
   export interface Registration {
     readonly workflow: Workflow<string, any, any, typeof WorkflowError>;
@@ -390,13 +390,13 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
       never,
       never,
       | WorkflowEngine
-      | NativeHost
-      | NativeAgents
-      | NativeChildren
+      | Host
+      | Agents
+      | Children
       | FileSystem.FileSystem
       | Path.Path
     >;
-    readonly decisions: Readonly<Record<string, NativeDecision>>;
+    readonly decisions: Readonly<Record<string, Decision>>;
   }
 
   /** A schema that decodes an agent's Output without services of its own. */
@@ -488,8 +488,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly delivered: boolean;
     readonly detail: string;
   }
-  export const NativeAgents: Context.Service<AgentsApi, AgentsApi>;
-  export type NativeAgents = AgentsApi;
+  export const Agents: Context.Service<AgentsApi, AgentsApi>;
+  export type Agents = AgentsApi;
 
   /** What you ask for: the work, not the steps it takes. */
   export interface AgentWork<Output extends OutputContract> {
@@ -519,7 +519,7 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   ): Effect.Effect<
     Output["Type"],
     WorkflowError,
-    NativeAgents | NativeHost | WorkflowEngine | WorkflowInstance
+    Agents | Host | WorkflowEngine | WorkflowInstance
   >;
 
   /** Everything a prompt is built from, none of which is an Activity. */
@@ -995,7 +995,7 @@ export function installSdk(): void {
   if (sdkInstalled) return;
   sdkInstalled = true;
   Bun.plugin({
-    name: "collie-native-sdk",
+    name: "collie-sdk",
     setup(build) {
       for (const [specifier, namespace] of sdkModules()) {
         // Spread rather than passed on: Bun's object loader takes a plain object, and
@@ -1028,7 +1028,7 @@ const EntryContract = Schema.Struct({
 export const loadEntry: (
   file: string,
   revision?: string,
-) => Effect.Effect<WorkflowEntry, NativeEntryError> = Effect.fn("Native.loadEntry")(function* (
+) => Effect.Effect<WorkflowEntry, EntryError> = Effect.fn("Engine.loadEntry")(function* (
   file: string,
   revision?: string,
 ) {
@@ -1037,19 +1037,19 @@ export const loadEntry: (
   // first read both times. A revision in the specifier is a path nothing has imported.
   const loaded = yield* Effect.tryPromise({
     try: () => import(revision === undefined ? file : `${file}?v=${revision}`),
-    catch: (cause) => new NativeEntryError({ file, message: String(cause) }),
+    catch: (cause) => new EntryError({ file, message: String(cause) }),
   });
   const described = yield* Schema.decodeUnknownEffect(EntryContract)(loaded).pipe(
     Effect.mapError(
       () =>
-        new NativeEntryError({
+        new EntryError({
           file,
           message: "a workflow entry exports id, title, description and input",
         }),
     ),
   );
   if (!Predicate.isFunction(loaded.make)) {
-    return yield* new NativeEntryError({
+    return yield* new EntryError({
       file,
       message: "a workflow entry exports make(registrationName)",
     });
@@ -1060,7 +1060,7 @@ export const loadEntry: (
   const entry = { ...described, make: loaded.make } as WorkflowEntry;
   const problems = checkEntry(entry);
   if (problems.length > 0) {
-    return yield* new NativeEntryError({ file, message: problems.join("; ") });
+    return yield* new EntryError({ file, message: problems.join("; ") });
   }
   return entry;
 });
@@ -1071,7 +1071,7 @@ export const loadEntry: (
  * edited entry — and a directory nothing has touched is the same code to run.
  */
 export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
-  Effect.fn("Native.revisionOf")(function* (dir: string) {
+  Effect.fn("Engine.revisionOf")(function* (dir: string) {
     const fs = yield* FileSystem.FileSystem;
     const names = yield* fs
       .readDirectory(dir, { recursive: true })
@@ -1102,8 +1102,8 @@ export const stageGeneration: (options: {
   readonly dir: string;
   readonly name: string;
   readonly entry: string;
-}) => Effect.Effect<string, NativeEntryError, FileSystem.FileSystem> = Effect.fn(
-  "Native.stageGeneration",
+}) => Effect.Effect<string, EntryError, FileSystem.FileSystem> = Effect.fn(
+  "Engine.stageGeneration",
 )(function* (options: { readonly dir: string; readonly name: string; readonly entry: string }) {
   const fs = yield* FileSystem.FileSystem;
   const slash = options.entry.lastIndexOf("/");
@@ -1112,9 +1112,7 @@ export const stageGeneration: (options: {
   yield* fs
     .copy(from, staged, { overwrite: true })
     .pipe(
-      Effect.mapError(
-        (cause) => new NativeEntryError({ file: options.entry, message: String(cause) }),
-      ),
+      Effect.mapError((cause) => new EntryError({ file: options.entry, message: String(cause) })),
     );
   return `${staged}${options.entry.slice(slash)}`;
 });
@@ -1137,16 +1135,15 @@ export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSy
  * workflow engine. Two settings are not the defaults, and both would otherwise turn
  * recoverable work terminal — the reason each is here is in ADR-0014.
  */
-export function hostLayer(options: {
+export function engineLayer(options: {
   readonly dir: string;
-  readonly registrationTimeout?: Duration.Input;
 }): Layer.Layer<
   WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
   ConfigError
 > {
   // One connection, two halves: the engine's own tables and the rows Collie keeps beside
   // them are in the same file, written by the same process.
-  const sql = SqliteClient.layer({ filename: `${options.dir}/native.db` }).pipe(
+  const sql = SqliteClient.layer({ filename: `${options.dir}/host.db` }).pipe(
     Layer.provideMerge(Reactivity.layer),
   );
   const cluster = SingleRunner.layer({
@@ -1157,7 +1154,7 @@ export function hostLayer(options: {
       // A workflow whose module is missing has no entity to receive its messages. The
       // default marks them failed after a minute, which turns "the file is not there
       // yet" into a terminal result; waiting is what lets a repair recover the work.
-      entityRegistrationTimeout: options.registrationTimeout ?? Duration.infinity,
+      entityRegistrationTimeout: Duration.infinity,
     },
   }).pipe(Layer.provide([sql, BunCrypto.layer]));
   return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster), Layer.provideMerge(sql));
@@ -1186,7 +1183,7 @@ export const controlPath = (dir: string, control: string, runId: string): string
   `${dir}/${control}.${runId}`;
 
 /**
- * Where one native Run's evidence lives: the verification journal `verify.ts` writes and
+ * Where one Run's evidence lives: the verification journal `verify.ts` writes and
  * reads, and the approved set the Run was started under. A directory rather than a table
  * because the collector is the same one the command line uses — what proves a Run is not
  * a different thing for being a module's.
@@ -1194,7 +1191,7 @@ export const controlPath = (dir: string, control: string, runId: string): string
 export const evidenceDir = (dir: string, runId: string): string => `${dir}/evidence/${runId}`;
 
 /**
- * Where one native Run's own work belongs: the plan it wrote, the review it left, and
+ * Where one Run's own work belongs: the plan it wrote, the review it left, and
  * anything else a card reads back. A directory per Run rather than a column, because what
  * a Run produces is files and the things that read them are ordinary readers of files.
  */
@@ -1210,7 +1207,7 @@ const encodeApproved = Schema.encodeSync(ApprovedJson);
  * What this Run may have Collie run for it, as it was when the Run started. Frozen at
  * admission, so editing the file changes the next Run and never a live one.
  */
-export const freezeApproved = Effect.fn("Native.freezeApproved")(function* (options: {
+export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (options: {
   readonly dir: string;
   readonly runId: string;
   readonly project: string;
@@ -1227,7 +1224,7 @@ export const freezeApproved = Effect.fn("Native.freezeApproved")(function* (opti
   yield* fs.writeFileString(path, encodeApproved(approved));
 });
 
-const approvedOf = Effect.fn("Native.approvedOf")(function* (dir: string, runId: string) {
+const approvedOf = Effect.fn("Engine.approvedOf")(function* (dir: string, runId: string) {
   const fs = yield* FileSystem.FileSystem;
   const none: ReadonlyArray<VerifySpec> = [];
   const text = yield* fs
@@ -1252,16 +1249,16 @@ const recordedClaim = (
     Effect.orElseSucceed((): HelleClaim | null => null),
   );
 
-export const nativeHostLayer = (options: {
+export const hostLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly configDir?: string;
 }): Layer.Layer<
-  NativeHost,
+  Host,
   never,
   Store | FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > =>
-  Layer.effect(NativeHost)(
+  Layer.effect(Host)(
     Effect.gen(function* () {
       const dir = options.dir;
       const fs = yield* FileSystem.FileSystem;
@@ -1274,7 +1271,7 @@ export const nativeHostLayer = (options: {
       const set = (control: string, runId: string) =>
         fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
-      return NativeHost.of({
+      return Host.of({
         dir,
         place: (runId) =>
           under(
@@ -1490,60 +1487,8 @@ export const nativeHostLayer = (options: {
   );
 
 /**
- * What the fixture host takes and what it says back, one JSON line each way. It lives
- * here rather than in the command so a test drives the host through the same contract the
- * host answers on, instead of a copy of it that can drift.
- */
-export const HostRequest = Schema.Union([
-  Schema.Struct({ op: Schema.Literal("ping") }),
-  Schema.Struct({ op: Schema.Literal("load"), entry: Schema.String }),
-  Schema.Struct({ op: Schema.Literal("registrations") }),
-  // The author's own input, undecoded here: the workflow's schema is what settles it,
-  // and it does so before a run exists rather than after one has started.
-  Schema.Struct({
-    op: Schema.Literal("start"),
-    id: Schema.String,
-    runId: Schema.String,
-    input: Schema.Record(Schema.String, Schema.Json),
-  }),
-  Schema.Struct({ op: Schema.Literal("poll"), id: Schema.String, runId: Schema.String }),
-  Schema.Struct({
-    op: Schema.Literal("answer"),
-    id: Schema.String,
-    runId: Schema.String,
-    /** Null means the one question this run is waiting on. */
-    decision: Schema.NullOr(Schema.String),
-    value: Schema.String,
-    /** The claim this answer arrives under, so the same one twice is one answer. */
-    request: Schema.optional(Schema.String),
-  }),
-  Schema.Struct({ op: Schema.Literal("waiting"), runId: Schema.String }),
-  Schema.Struct({ op: Schema.Literal("hold"), runId: Schema.String }),
-  Schema.Struct({ op: Schema.Literal("release"), id: Schema.String, runId: Schema.String }),
-  Schema.Struct({ op: Schema.Literal("stop"), id: Schema.String, runId: Schema.String }),
-  Schema.Struct({ op: Schema.Literal("resume"), id: Schema.String, runId: Schema.String }),
-  Schema.Struct({ op: Schema.Literal("provision"), dir: Schema.String }),
-  Schema.Struct({ op: Schema.Literal("check"), dir: Schema.String, entry: Schema.String }),
-  Schema.Struct({ op: Schema.Literal("metadata"), id: Schema.String }),
-]);
-
-export const HostReply = Schema.Struct({
-  ok: Schema.Boolean,
-  op: Schema.String,
-  detail: Schema.optionalKey(Schema.String),
-  id: Schema.optionalKey(Schema.String),
-  registration: Schema.optionalKey(Schema.String),
-  registrations: Schema.optionalKey(Schema.Array(Schema.String)),
-  status: Schema.optionalKey(Schema.String),
-  value: Schema.optionalKey(Schema.String),
-  diagnostics: Schema.optionalKey(Schema.Array(Schema.String)),
-  /** What a module declares about itself, as a card and a launch would read it. */
-  metadata: Schema.optionalKey(Schema.Json),
-});
-
-/**
  * The next generation of an entry: opaque, distinct, and never a name already used. A
- * workflow's native registration name is the tag its executions are stored under, so a run
+ * workflow's registration name is the tag its executions are stored under, so a run
  * recovers only if the next host registers the module under the name that run started on.
  * Loading the same file again mints the next name rather than replacing the old one.
  *
@@ -1559,10 +1504,10 @@ export const nextRegistrationName = (
 export const answerDecision = (
   registration: Registration,
   options: { readonly name: string; readonly executionId: string; readonly value: string },
-): Effect.Effect<void, NativeEntryError, WorkflowEngine.WorkflowEngine> => {
+): Effect.Effect<void, EntryError, WorkflowEngine.WorkflowEngine> => {
   const decision = registration.decisions[options.name];
   if (!decision) {
-    return new NativeEntryError({
+    return new EntryError({
       file: registration.workflow._tag,
       message: `no decision called "${options.name}"`,
     });
@@ -1774,7 +1719,7 @@ type CheckoutRequest =
 const isSeparate = Schema.is(Schema.Literal("new"));
 
 /** The `workspace` option as the typed request it is, refused naming the field where it is not one. */
-const checkoutRequest = Effect.fn("Native.checkoutRequest")(function* (
+const checkoutRequest = Effect.fn("Engine.checkoutRequest")(function* (
   generation: Generation,
   asked: Readonly<Record<string, string>>,
 ) {
@@ -1825,7 +1770,7 @@ const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Place
   }));
 
 /** A launch as the branch resolver reads one: its text, each work source's kind, and the task. */
-const branchInputs = Effect.fn("Native.branchInputs")(function* (
+const branchInputs = Effect.fn("Engine.branchInputs")(function* (
   generation: Generation,
   input: Readonly<Record<string, Schema.Json>>,
   options: Readonly<Record<string, string>>,
@@ -2001,8 +1946,8 @@ export interface Generation {
 /** What the registry's own work takes, which is what a host holds already. */
 export type HostServices =
   | WorkflowEngine.WorkflowEngine
-  | NativeHost
-  | NativeAgents
+  | Host
+  | Agents
   | FileSystem.FileSystem
   | Path.Path;
 
@@ -2015,7 +1960,7 @@ export type HostServices =
  * outlive whichever client asked for one and are finalized when the host goes.
  */
 export interface RegistryApi {
-  readonly load: (entry: string) => Effect.Effect<Generation, NativeEntryError, HostServices>;
+  readonly load: (entry: string) => Effect.Effect<Generation, EntryError, HostServices>;
   /**
    * The generation new work goes to: the one already built from this file at this
    * revision, or a new one. An edit is therefore a new generation and an unchanged file is
@@ -2024,7 +1969,7 @@ export interface RegistryApi {
   readonly use: (options: {
     readonly entry: string;
     readonly revision: string;
-  }) => Effect.Effect<Generation, NativeEntryError, HostServices>;
+  }) => Effect.Effect<Generation, EntryError, HostServices>;
   readonly registrations: Effect.Effect<typeof Registrations.Type>;
   readonly newest: (id: string) => Effect.Effect<Generation, HostRefused>;
   /**
@@ -2096,7 +2041,7 @@ export interface RegistryApi {
     /** The caller's claim on the delivery, so the same message twice is one message. */
     readonly request: string;
     readonly operation?: string;
-    readonly mode?: Agents.DeliveryMode;
+    readonly mode?: AgentsSdk.DeliveryMode;
   }) => Effect.Effect<typeof Steered.Type, HostRefused, HostServices>;
   /** Every question this run has been asked, answered or not, oldest first. */
   readonly waiting: (runId: string) => Effect.Effect<ReadonlyArray<OpenDecision>>;
@@ -2164,7 +2109,7 @@ export interface Admitted {
 /**
  * Where a host may be made to die, for the proof that neither window loses work: with the
  * run recorded and the engine not yet told, and with the engine told and the receipt not
- * yet written. Only `collie native` sets one, and only a test asks it to.
+ * yet written. Only a test sets one, through the host's `COLLIE_HOST_CRASH_AT`.
  */
 export type CrashPoint = "admitted" | "executed";
 
@@ -2186,7 +2131,7 @@ export type Locate = (options: {
 >;
 
 /** The registry a host holds, as a service its handlers ask for. */
-export class Registry extends Context.Service<Registry, RegistryApi>()("collie/native/Registry") {}
+export class Registry extends Context.Service<Registry, RegistryApi>()("collie/Registry") {}
 
 export interface RegistryOptions {
   readonly crashAt?: CrashPoint;
@@ -2213,16 +2158,15 @@ export const registryLayer = (
  */
 export const foundationLayer = (options: {
   readonly dir: string;
-  readonly registrationTimeout?: Duration.Input;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly configDir?: string;
 }): Layer.Layer<
-  NativeHost | Store | WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
+  Host | Store | WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
   ConfigError,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > =>
-  nativeHostLayer({ dir: options.dir, configDir: options.configDir }).pipe(
-    Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(hostLayer(options)))),
+  hostLayer({ dir: options.dir, configDir: options.configDir }).pipe(
+    Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
   );
 
 const makeRegistry: (
@@ -2237,7 +2181,7 @@ const makeRegistry: (
   | Scope.Scope
   | ChildProcessSpawner.ChildProcessSpawner
   | BunServices
-> = Effect.fn("Native.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
+> = Effect.fn("Engine.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
   const crashAt = options?.crashAt;
   const locate = options?.locate;
   const configDir = options?.configDir ?? dir;
@@ -2254,7 +2198,7 @@ const makeRegistry: (
     ));
   // Captured, so placing a Run asks git and herdr without its callers providing either.
   const bun = yield* Effect.context<BunServices | Crypto.Crypto>();
-  /** Every generation this host is holding, by its native registration name. */
+  /** Every generation this host is holding, by its registration name. */
   const live = new Map<string, Generation>();
   /** Why a recorded generation is not holdable, so a caller hears the file, not a timeout. */
   const unavailable = new Map<string, string>();
@@ -2280,7 +2224,7 @@ const makeRegistry: (
     ),
   );
 
-  const register = Effect.fn("Native.register")(function* (route: {
+  const register = Effect.fn("Engine.register")(function* (route: {
     readonly workflow: string;
     readonly name: string;
     readonly entry: string;
@@ -2293,7 +2237,7 @@ const makeRegistry: (
     // own Layer: explicitly provided to this generation, never a table something looks
     // itself up in. Everything else the module needs it provides for itself.
     yield* Layer.buildWithScope(
-      registration.layer.pipe(Layer.provide(Layer.succeed(NativeChildren)(children))),
+      registration.layer.pipe(Layer.provide(Layer.succeed(Children)(children))),
       hostScope,
     );
     const generation: Generation = {
@@ -2338,7 +2282,7 @@ const makeRegistry: (
    * there is nothing to clean up. A fresh Task's workspace is opened now, on that checkout,
    * or is the worktree workspace herdr opened for it — never a second one beside it.
    */
-  const placeRun = Effect.fn("Native.placeRun")(function* (ask: {
+  const placeRun = Effect.fn("Engine.placeRun")(function* (ask: {
     readonly generation: Generation;
     readonly runId: string;
     readonly from: string;
@@ -2432,7 +2376,7 @@ const makeRegistry: (
     result: (child: ChildRun) => lending(runChild(child)),
   };
 
-  const admitChild = Effect.fn("Native.children.start")(function* (ask: ChildAsk) {
+  const admitChild = Effect.fn("Engine.children.start")(function* (ask: ChildAsk) {
     const parent = yield* store.run(ask.runId);
     if (parent === null) {
       return yield* refused(`no run "${ask.runId}" was started here`);
@@ -2519,7 +2463,7 @@ const makeRegistry: (
     };
   });
 
-  const runChild = Effect.fn("Native.children.result")(function* (child: ChildRun) {
+  const runChild = Effect.fn("Engine.children.result")(function* (child: ChildRun) {
     const found = yield* routed(child.runId).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
     );
@@ -2539,7 +2483,7 @@ const makeRegistry: (
   // registered, which is what keeps one broken module from stopping the rest.
   for (const route of known) {
     yield* register(route).pipe(
-      Effect.catchTag("NativeEntryError", (failure) =>
+      Effect.catchTag("EntryError", (failure) =>
         Effect.sync(() => unavailable.set(route.name, `${failure.file}: ${failure.message}`)),
       ),
     );
@@ -2574,7 +2518,7 @@ const makeRegistry: (
    * Nothing happens where it cannot be handed over: the module is not registered here,
    * or no longer takes what it was started with. The row stays as it is, for a repair.
    */
-  const handOver = Effect.fn("Native.handOver")(function* (row: RunRow) {
+  const handOver = Effect.fn("Engine.handOver")(function* (row: RunRow) {
     const generation = live.get(row.generation);
     if (generation === undefined) return;
     const payload = yield* payloadOf(generation, row).pipe(Effect.result);
@@ -2597,7 +2541,7 @@ const makeRegistry: (
   /** The file a generation was built from, which a row keeps naming after it has gone. */
   const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
 
-  const viewOf = Effect.fn("Native.viewOf")(function* (row: RunRow) {
+  const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow) {
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const admitted = {
       runId: row.run,
@@ -2647,7 +2591,7 @@ const makeRegistry: (
     return { ...about, status: pollStatus(result, generation.entry), diagnostic: null };
   });
 
-  const setControl = Effect.fn("Native.setControl")(function* (
+  const setControl = Effect.fn("Engine.setControl")(function* (
     runId: string,
     control: string,
     set: boolean,
@@ -2659,7 +2603,7 @@ const makeRegistry: (
   });
 
   /** Which controls an operator has set over this run. */
-  const controlsOf = Effect.fn("Native.controlsOf")(function* (runId: string) {
+  const controlsOf = Effect.fn("Engine.controlsOf")(function* (runId: string) {
     const set: string[] = [];
     for (const control of [HOLD, STOP]) {
       const on = yield* fs
@@ -2678,7 +2622,7 @@ const makeRegistry: (
    * and resuming afterwards does not bring it back. Returning only once the run has
    * settled is what makes the next thing an operator does land on it.
    */
-  const wake = Effect.fn("Native.wake")(function* (found: {
+  const wake = Effect.fn("Engine.wake")(function* (found: {
     readonly generation: Generation;
     readonly execution: string;
   }) {
@@ -2695,7 +2639,7 @@ const makeRegistry: (
   });
 
   /** Every question this run has been asked, with the answers its options allow. */
-  const asked = Effect.fn("Native.asked")(function* (runId: string) {
+  const asked = Effect.fn("Engine.asked")(function* (runId: string) {
     const rows = yield* store.asked(runId);
     const none: ReadonlyArray<string> = [];
     return yield* Effect.forEach(rows, (row) =>
@@ -2749,7 +2693,7 @@ const makeRegistry: (
     unavailable: [...unavailable.entries()].map(([name, why]) => `${name}: ${why}`).sort(),
   }));
 
-  const newest = Effect.fn("Native.newest")(function* (id: string) {
+  const newest = Effect.fn("Engine.newest")(function* (id: string) {
     const generation = live.get(newestOf.get(id) ?? "");
     if (!generation) {
       return yield* new HostRefused({ reason: `no workflow "${id}" is loaded here` });
@@ -2757,7 +2701,7 @@ const makeRegistry: (
     return generation;
   });
 
-  const routed = Effect.fn("Native.routed")(function* (runId: string) {
+  const routed = Effect.fn("Engine.routed")(function* (runId: string) {
     const row = yield* store.run(runId);
     if (row === null) {
       return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
@@ -2778,7 +2722,7 @@ const makeRegistry: (
   // A grant is a read and a write of one file: two at once would each drop the other's.
   const granting = yield* Semaphore.make(1);
 
-  const mint = Effect.fn("Native.Registry.mint")(function* (file: string) {
+  const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
     // Read as it is now to learn the id this file claims, then register the next
     // generation of that id.
     const described = yield* loadEntry(file, yield* revisionOf(directoryOf(file)));
@@ -2804,7 +2748,7 @@ const makeRegistry: (
       }),
     );
 
-  const resolve = Effect.fn("Native.Registry.resolve")(function* (options: {
+  const resolve = Effect.fn("Engine.Registry.resolve")(function* (options: {
     readonly project: string;
     readonly id: string;
   }) {
@@ -2823,7 +2767,7 @@ const makeRegistry: (
    * from the row: what is offered is the current code's to say, and a module that has
    * been edited away leaves the Run readable and its offers refused with the reason.
    */
-  const offeredBy = Effect.fn("Native.Registry.offeredBy")(function* (runId: string) {
+  const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (runId: string) {
     const row = yield* store.run(runId);
     if (row === null) {
       return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
@@ -2839,7 +2783,7 @@ const makeRegistry: (
     );
     const asked = options.outcome ?? UNSPECIFIED;
     const where = runDir(dir, runId);
-    // The facts a host has about a native Run. What it was launched with and how it
+    // The facts a host has about a Run. What it was launched with and how it
     // ended are the row's; the tickets it wrote and the findings it left are read from
     // its own directory, because producing them is the only way a Run can have them.
     const facts: ActionFacts = {
@@ -2858,7 +2802,7 @@ const makeRegistry: (
     return { row, generation, facts, where };
   });
 
-  const startWork = Effect.fn("Native.Registry.start")(function* (options: {
+  const startWork = Effect.fn("Engine.Registry.start")(function* (options: {
     readonly generation: Generation;
     readonly request: string;
     readonly project: string;
@@ -2971,7 +2915,7 @@ const makeRegistry: (
           live.has(route.name)
             ? Effect.void
             : register(route).pipe(
-                Effect.catchTag("NativeEntryError", (failure) =>
+                Effect.catchTag("EntryError", (failure) =>
                   Effect.sync(() =>
                     unavailable.set(route.name, `${failure.file}: ${failure.message}`),
                   ),
@@ -2996,7 +2940,7 @@ const makeRegistry: (
         ),
       ),
 
-    invoke: Effect.fn("Native.Registry.invoke")(function* (options: {
+    invoke: Effect.fn("Engine.Registry.invoke")(function* (options: {
       readonly runId: string;
       readonly offer: string;
       readonly input: Readonly<Record<string, Schema.Json>>;
@@ -3032,13 +2976,13 @@ const makeRegistry: (
 
     start: startWork,
 
-    status: Effect.fn("Native.Registry.status")(function* (runId: string) {
+    status: Effect.fn("Engine.Registry.status")(function* (runId: string) {
       const found = yield* routed(runId);
       const result = yield* engine.poll(found.generation.registration.workflow, found.execution);
       return pollStatus(result, found.generation.entry);
     }),
 
-    answer: Effect.fn("Native.Registry.answer")(function* (options: {
+    answer: Effect.fn("Engine.Registry.answer")(function* (options: {
       readonly runId: string;
       readonly decision: string | null;
       readonly value: string;
@@ -3098,7 +3042,7 @@ const makeRegistry: (
       return { runId: options.runId, decision: name, value, fresh: true };
     }),
 
-    control: Effect.fn("Native.Registry.control")(function* (options: {
+    control: Effect.fn("Engine.Registry.control")(function* (options: {
       readonly runId: string;
       readonly control: string;
       readonly set: boolean;
@@ -3117,7 +3061,7 @@ const makeRegistry: (
       return { ...recorded, applied: true, detail: "" };
     }),
 
-    grant: Effect.fn("Native.Registry.grant")(function* (options: {
+    grant: Effect.fn("Engine.Registry.grant")(function* (options: {
       readonly runId: string;
       readonly name: string;
       readonly command: Omit<VerifySpec, "name"> | null;
@@ -3139,16 +3083,16 @@ const makeRegistry: (
       );
     }),
 
-    steer: Effect.fn("Native.Registry.steer")(function* (options: {
+    steer: Effect.fn("Engine.Registry.steer")(function* (options: {
       readonly runId: string;
       readonly text: string;
       readonly request: string;
       readonly operation?: string;
-      readonly mode?: Agents.DeliveryMode;
+      readonly mode?: AgentsSdk.DeliveryMode;
     }) {
       // Routed first: a run this host is not holding has no agent it can vouch for.
       yield* routed(options.runId);
-      const agents = yield* NativeAgents;
+      const agents = yield* Agents;
       return yield* agents.steer(options);
     }),
   } satisfies RegistryApi;
@@ -3181,7 +3125,7 @@ const encodeCheckProject = Schema.encodeSync(
 
 /**
  * The authoring setup, written as the files an author opens and edits rather than encoded
- * from a value: `paths` is what makes `collie/native` resolve to the declarations beside
+ * from a value: `paths` is what makes `collie` resolve to the declarations beside
  * it, and `effect` is pinned to the host's so the types are about the Effect that runs.
  */
 const TOOLCHAIN_FILES = {
@@ -3204,11 +3148,11 @@ const TOOLCHAIN_FILES = {
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
     "types": [],
-    "paths": { "collie/native": ["./collie-native.d.ts"] }
+    "paths": { "collie": ["./collie.d.ts"] }
   }
 }
 `,
-  "collie-native.d.ts": SDK_DECLARATIONS,
+  "collie.d.ts": SDK_DECLARATIONS,
 } as const;
 
 /**
@@ -3223,7 +3167,7 @@ export const provisionToolchain: (
   void,
   ToolchainError,
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
-> = Effect.fn("Native.provisionToolchain")(function* (dir: string) {
+> = Effect.fn("Engine.provisionToolchain")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
   for (const [name, content] of Object.entries(TOOLCHAIN_FILES)) {
@@ -3254,7 +3198,7 @@ export const typecheckEntry: (options: {
   ReadonlyArray<string>,
   ToolchainError,
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
-> = Effect.fn("Native.typecheckEntry")(function* (options: {
+> = Effect.fn("Engine.typecheckEntry")(function* (options: {
   readonly dir: string;
   readonly file: string;
 }) {

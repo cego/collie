@@ -7,14 +7,14 @@
 
 import {
   FindingSchema,
-  NativeChildren,
-  NativeHost,
+  Children,
+  Host,
   agentWork,
   ask,
   contentOf,
   decision,
   defineWorkflow,
-} from "collie/native";
+} from "collie";
 import { Effect, Schema } from "effect";
 import markdown from "./architecture.md" with { type: "text" };
 
@@ -72,7 +72,7 @@ export const make = (registrationName: string) => {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       const runId = payload.runId;
       const place = yield* host.place(runId);
       const report = yield* agentWork({
@@ -91,7 +91,7 @@ export const make = (registrationName: string) => {
       // The plan the architect wrote, built by the workflow that builds — and the kind of
       // result it said building it would be, settled while we agreed on the work rather
       // than asked for again at the start of the build.
-      const children = yield* NativeChildren;
+      const children = yield* Children;
       const child = yield* children.start({
         runId,
         invocation: "implement",

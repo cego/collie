@@ -2,7 +2,7 @@
 // its own supplied by its own Layer, an ordinary Effect operator Collie knows nothing
 // about, and a typed result. Collie's whole contribution is the four imports below.
 
-import { NativeHost, ask, decision, defineWorkflow, type WorkflowMetadata } from "collie/native";
+import { Host, ask, decision, defineWorkflow, type WorkflowMetadata } from "collie";
 import { Context, Effect, Layer, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 
@@ -46,7 +46,7 @@ export const make = (registrationName: string) => {
   const layer = workflow
     .toLayer(
       Effect.fnUntraced(function* (payload) {
-        const host = yield* NativeHost;
+        const host = yield* Host;
         const stamp = yield* Stamp;
 
         const line = yield* Activity.make({

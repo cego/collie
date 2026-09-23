@@ -7,8 +7,8 @@ import { readEnv, type PluginEnv } from "../../src/env";
 import { resetExecutors } from "../../src/executors";
 import { connect } from "../../src/host";
 import { seedIntent, writeIntent, type Authority } from "../../src/intent";
-import { runDir } from "../../src/native";
-import { stopHost, until } from "./native";
+import { runDir } from "../../src/engine";
+import { stopHost, until } from "./host";
 import { proves, type World } from "./world";
 
 /** The fixture a hosted Run is started from: it records one launch and waits to be answered. */

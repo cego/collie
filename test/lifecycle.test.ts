@@ -1,4 +1,4 @@
-// A native Run through the doors an operator actually uses.
+// A Run through the doors an operator actually uses.
 //
 // Ticket 01 proved the engine survives a restart and ticket 05 proved one request is one
 // run. What is left is whether any of that is reachable: does a workflow saved as a module
@@ -15,9 +15,9 @@ import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
 import { Herdr } from "../src/herdr";
 import { connect } from "../src/host";
-import { nativeRun, nativeRuns } from "../src/lifecycle";
-import type { RunView } from "../src/native";
-import { events, stopHost, until } from "./support/native";
+import { runView, runViews } from "../src/lifecycle";
+import type { RunView } from "../src/engine";
+import { events, stopHost, until } from "./support/host";
 import { collie, proves as provesWith, save, type World } from "./support/world";
 
 /** A module, its helper and its prompt, as an author has them beside each other. */
@@ -26,7 +26,7 @@ const MODULE = ["proof.workflow.ts", "helper.ts", "notes.md"] as const;
 /** A second entry, so a missing module is shown to cost only its own Runs. */
 const OTHER = ["plain.workflow.ts"] as const;
 
-/** What a `--json` envelope carries for a native Run, as these tests read it. */
+/** What a `--json` envelope carries for a Run, as these tests read it. */
 const Payload = Schema.Struct({
   runId: Schema.optional(Schema.String),
   run: Schema.optional(
@@ -375,7 +375,7 @@ test(
         // The Run it started is the host's, with this project's and this module's marks
         // on it — the same row a `collie run start` would have made, read back through
         // the same operations the command line reads.
-        const listed = yield* nativeRuns(env, null);
+        const listed = yield* runViews(env, null);
         expect(listed.runs).toHaveLength(1);
         const runId = listed.runs[0]?.runId ?? "";
         expect(listed.runs[0]).toMatchObject({
@@ -386,7 +386,7 @@ test(
         });
         expect(
           yield* until(
-            () => nativeRun(env, runId),
+            () => runView(env, runId),
             (view) => view !== null && "status" in view && view.status.status === "suspended",
           ),
         ).toMatchObject({ runId, workflow: "proof", input: { note: "picked" } });

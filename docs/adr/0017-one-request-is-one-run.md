@@ -7,6 +7,10 @@ admission is `Native.Registry.start`, and the proofs are `test/store.test.ts` an
 engine and [ADR-0015](0015-one-local-host-owns-a-state-directory.md) put it in one host;
 this is what that host records beside it, and why a retry is not a second Run.
 
+[ADR-0028](0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md) renames
+what this page calls `collie native`, `src/native.ts`, `test/native-runtime.test.ts` and
+`native.db`, and the proof now drives `collie host`.
+
 A start is two things that cannot be made one: a row saying this work was accepted, and an
 engine that has been told about it. A crash can land between them whichever order they are
 done in, and a caller that does not hear an answer will ask again. Neither may produce two

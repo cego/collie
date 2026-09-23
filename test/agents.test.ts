@@ -1,4 +1,4 @@
-// What a native workflow does with a coding agent: one launch, one collection, one repair.
+// What a workflow does with a coding agent: one launch, one collection, one repair.
 //
 // The agents here are herdr's own, through the one sender and the real dispatcher ledger —
 // only the harness at the far end is a stand-in, and it answers by writing the file the
@@ -16,7 +16,7 @@ import { Rig, FakeHerdr, type Call } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith } from "./support/live";
 import {
-  NativeAgents,
+  Agents,
   agentWork,
   agentsLayer,
   decodeOutput,
@@ -24,7 +24,7 @@ import {
   type AgentHost,
 } from "../src/agents";
 import { defineWorkflow, jsonSchemaFor } from "../src/sdk";
-import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/native";
+import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/engine";
 import { deliveriesOf } from "../src/steering";
 import { Store } from "../src/store";
 import { readTask, writeTask } from "../src/task";
@@ -40,7 +40,7 @@ beforeEach(() =>
     Effect.gen(function* () {
       rig = yield* Rig.make();
       const fs = yield* FileSystem.FileSystem;
-      dir = `${rig.root}/native`;
+      dir = `${rig.root}/host`;
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
     }),
@@ -96,7 +96,7 @@ const hostOf = (): AgentHost => ({
 
 /** One host's lifetime: a fresh engine on the same directory is what a restart is. */
 const session = <A, E>(
-  run: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | NativeAgents>,
+  run: Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | Agents>,
   over?: Partial<AgentHost>,
 ) =>
   run.pipe(
@@ -456,7 +456,7 @@ const prompts = (calls: ReadonlyArray<Call>) =>
 
 /** One thing an operator says to the run's agent, through the host's own service. */
 const say = (runId: string, text: string, request: string, mode?: "boundary" | "now") =>
-  NativeAgents.pipe(Effect.flatMap((agents) => agents.steer({ runId, text, request, mode })));
+  Agents.pipe(Effect.flatMap((agents) => agents.steer({ runId, text, request, mode })));
 
 test("what a human says reaches the run's agent through the one sender, in the order they said it", () =>
   runEffect(

@@ -16,32 +16,32 @@ import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { clearOverride, err, type Failure } from "../operations";
 import { withDirLock } from "../lock";
-import { runDir } from "../native";
+import { runDir } from "../engine";
 import { Herdr } from "../herdr";
 import {
   describeWaiting,
   historyRefusal,
   importHistory,
-  nativeHistory,
-  answerNativeRun,
-  grantNativeRun,
-  anyNativeRuns,
-  controlNativeRun,
-  invokeNativeOffer,
-  nativeOffers,
-  steerNativeRun,
+  historyRows,
+  answerRun,
+  grantRun,
+  anyRuns,
+  controlRun,
+  invokeOffer,
+  showOffers,
+  steerRun,
   moduleFor,
   neededInputs,
-  nativeRun,
-  nativeRuns,
-  nativeSettled,
-  recoverNativeRun,
-  startNativeRun,
+  runView,
+  runViews,
+  isSettled,
+  recoverRun,
+  startRun,
   statusOf,
-  watchNativeRun,
+  watchRun,
 } from "../lifecycle";
 import type { HistoryRow } from "../store";
-import type { Given, RunView } from "../native";
+import type { Given, RunView } from "../engine";
 import { RESERVED_INPUTS } from "../sdk";
 import {
   EMPTY_DEFAULTS,
@@ -86,7 +86,6 @@ import {
   actorNow,
   context,
   mutating,
-  asText,
   parseInput,
   locateRun,
   runFacts,
@@ -284,9 +283,7 @@ const runStart = Command.make(
               // the Runs recorded before Tasks existed.
               const task = yield* chosenTask(resolved.env, taskId, continueTask);
               if (!task.ok) return task.error;
-              // A workflow saved as a module is that module, wherever a Markdown
-              // definition of the same name also is: what an id runs is decided by what
-              // is saved for this project, never by a flag naming an engine.
+              // What an id runs is the module saved for this project.
               const saved = yield* moduleFor(resolved.env, workflow);
               if (saved !== null) {
                 const unsupported = unsupportedFlags({ decide, goal, constraint });
@@ -298,7 +295,7 @@ const runStart = Command.make(
                 // a caller can fill the gaps and retry under the same request id.
                 const needed = "inputs" in saved ? neededInputs(saved, launch.input) : null;
                 if (needed !== null) return needed;
-                const started = yield* startNativeRun(resolved.env, {
+                const started = yield* startRun(resolved.env, {
                   id: workflow,
                   request: requestId,
                   input: launch.input,
@@ -358,22 +355,22 @@ const runList = Command.make("list", {}, () =>
         // Scoped to the Task whose workspace this is, where it is one: Runs belong to
         // Tasks now, and a workspace that is not a Task's narrows nothing.
         const task = yield* selectedTask(global);
-        const native = yield* nativeRuns(resolved.env, task);
+        const hosted = yield* runViews(resolved.env, task);
         // Beside them, what an older Collie recorded. One listing: an operator asking
         // what has been done here should not have to know which engine did it.
-        const imported = yield* nativeHistory(resolved.env, task);
+        const imported = yield* historyRows(resolved.env, task);
         return {
           ok: true,
           data: {
-            runs: native.runs,
+            runs: hosted.runs,
             history: imported.rows,
-            unreadable: native.unreadable ?? imported.unreadable,
+            unreadable: hosted.unreadable ?? imported.unreadable,
           },
           human:
             [
-              ...native.runs.map((view) => `${view.runId}\t${statusOf(view)}\t${view.workflow}`),
+              ...hosted.runs.map((view) => `${view.runId}\t${statusOf(view)}\t${view.workflow}`),
               ...imported.rows.map((row) => `${row.run}\t${row.status}\t${row.workflow}\thistory`),
-              ...(native.unreadable === null ? [] : [`runs: ${native.unreadable}`]),
+              ...(hosted.unreadable === null ? [] : [`runs: ${hosted.unreadable}`]),
               ...(imported.unreadable === null ? [] : [`history: ${imported.unreadable}`]),
             ].join("\n") || "No runs found.",
         };
@@ -403,7 +400,7 @@ const resolveCommandRun = Effect.fn("collie.resolveCommandRun")(function* (
  * `--json` payload.
  */
 const childLines = Effect.fn("run.childLines")(function* (env: PluginEnv, runId: string) {
-  const children = (yield* nativeRuns(env, null)).runs.filter((view) => view.parent === runId);
+  const children = (yield* runViews(env, null)).runs.filter((view) => view.parent === runId);
   return children.map((view) => `  ${view.runId}\t${view.workflow}\t${statusOf(view)}`);
 });
 
@@ -666,11 +663,11 @@ const runWait = Command.make(
 );
 
 /**
- * A native Run watched to the end, or to the question it is waiting on. Every state the
+ * A Run watched to the end, or to the question it is waiting on. Every state the
  * host reports arrives here, current one first — so a wait that starts long after the
  * work did is not waiting for an update that has already happened.
  */
-const waitForNative = Effect.fn("collie.waitForNative")(function* (
+const waitForRun = Effect.fn("collie.waitForRun")(function* (
   global: Global,
   env: PluginEnv,
   runId: string,
@@ -682,8 +679,8 @@ const waitForNative = Effect.fn("collie.waitForNative")(function* (
 ) {
   const seen = yield* Ref.make<RunView | null>(null);
   const enough = (view: RunView) =>
-    nativeSettled(view) || (options.wantsAttention && view.status.status === "suspended");
-  const watching = watchNativeRun(env, runId, (view) =>
+    isSettled(view) || (options.wantsAttention && view.status.status === "suspended");
+  const watching = watchRun(env, runId, (view) =>
     Effect.gen(function* () {
       const last = yield* Ref.getAndSet(seen, view);
       // One line per change, not per look: a run polled while it waits is not news.
@@ -749,7 +746,7 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
       global.json,
     );
   }
-  return yield* waitForNative(global, resolved.env, runId, { follow, ms, wantsAttention });
+  return yield* waitForRun(global, resolved.env, runId, { follow, ms, wantsAttention });
 });
 
 /** An imported Run as a front door returns one: its facts, and that it is history. */
@@ -782,7 +779,7 @@ function runMutationCommand(
   runId: string,
   requestId: Option.Option<string>,
   wanted: string,
-  native: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, BunServices>,
+  hosted: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, BunServices>,
 ) {
   return Effect.gen(function* () {
     const global = yield* root;
@@ -794,9 +791,9 @@ function runMutationCommand(
           Effect.gen(function* () {
             const imported = yield* historyRefusal(resolved.env, runId, wanted);
             if (imported !== null) return imported;
-            if (!(yield* anyNativeRuns(resolved.env)))
+            if (!(yield* anyRuns(resolved.env)))
               return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
-            return yield* native(resolved.env, id);
+            return yield* hosted(resolved.env, id);
           }),
         );
       }),
@@ -828,7 +825,7 @@ const runAnswer = Command.make(
   },
   ({ runId, answer, expectChoice, decision, requestId }) =>
     runMutationCommand("run-answer", runId, requestId, "answered", (env, id) =>
-      answerNativeRun(env, {
+      answerRun(env, {
         runId,
         decision: Option.getOrNull(decision),
         value: answer,
@@ -857,11 +854,11 @@ const runSteer = Command.make(
         Effect.gen(function* () {
           const resolved = yield* context(global, false);
           if (resolved._tag === "ContextFailure") return resolved.result;
-          if (!(yield* anyNativeRuns(resolved.env))) {
+          if (!(yield* anyRuns(resolved.env))) {
             return err("run_not_found", `No workflow host has a Run "${runId}".`, { run: runId });
           }
           return yield* mutation(resolved.env, "run-steer", requestId, (id) =>
-            steerNativeRun(resolved.env, {
+            steerRun(resolved.env, {
               runId,
               text,
               request: id,
@@ -887,7 +884,7 @@ const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
   // A Run stops where it next looks, and its agent keeps whatever it is holding:
   // halting a harness is its own action, not something a stopped Run implies.
   runMutationCommand("run-stop", runId, requestId, "stopped", (env) =>
-    controlNativeRun(env, { runId, control: "stop", set: true }),
+    controlRun(env, { runId, control: "stop", set: true }),
   ),
 ).pipe(Command.withDescription("Stop a Run and close only the panes it owns"));
 
@@ -934,10 +931,10 @@ const holdTask = Effect.fn("run.holdTask")(function* (env: PluginEnv, workspace:
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null)
     return err("invalid_input", `Workspace "${workspace}" is not a Task's.`, { workspace });
-  const runs = (yield* nativeRuns(env, task.id)).runs.filter((view) => !nativeSettled(view));
+  const runs = (yield* runViews(env, task.id)).runs.filter((view) => !isSettled(view));
   const held: string[] = [];
   for (const view of runs) {
-    const done = yield* controlNativeRun(env, { runId: view.runId, control: "hold", set: true });
+    const done = yield* controlRun(env, { runId: view.runId, control: "hold", set: true });
     if (done.ok) held.push(view.runId);
   }
   return {
@@ -982,9 +979,9 @@ const runHold = Command.make(
             Effect.gen(function* () {
               const imported = yield* historyRefusal(resolved.env, id, "held");
               if (imported !== null) return imported;
-              if (!(yield* anyNativeRuns(resolved.env)))
+              if (!(yield* anyRuns(resolved.env)))
                 return err("run_not_found", `Run "${id}" was not found.`, { run: id });
-              return yield* controlNativeRun(resolved.env, {
+              return yield* controlRun(resolved.env, {
                 runId: id,
                 control: "hold",
                 set: true,
@@ -1004,7 +1001,7 @@ const runRelease = Command.make(
   { runId: runIdArg, reason: reasonFlag, requestId: requestIdFlag },
   ({ runId, reason, requestId }) =>
     runMutationCommand("run-release", runId, requestId, "released", (env) =>
-      controlNativeRun(env, { runId, control: "hold", set: false }),
+      controlRun(env, { runId, control: "hold", set: false }),
     ),
 ).pipe(Command.withDescription("Let a held Run carry on"));
 
@@ -1057,7 +1054,7 @@ const runDisposition = Command.make(
           const resolved = yield* resolveCommandRun(global, runId);
           if (resolved._tag === "RunFailure") return resolved.result;
           const facts = runFacts(resolved);
-          const status = resolved._tag === "Native" ? statusOf(resolved.view) : resolved.row.status;
+          const status = resolved._tag === "Hosted" ? statusOf(resolved.view) : resolved.row.status;
           const kind = Option.getOrNull(as);
           if (kind === null) {
             const lines = yield* readDispositions(resolved.evidence);
@@ -1170,9 +1167,9 @@ const runActions = Command.make("actions", { runId: runIdArg }, ({ runId }) =>
         // nothing and says why — and imported work offers nothing at all.
         const imported = yield* historyRefusal(resolved.env, runId, "asked what it offers");
         if (imported !== null) return imported;
-        if (!(yield* anyNativeRuns(resolved.env)))
+        if (!(yield* anyRuns(resolved.env)))
           return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
-        return yield* nativeOffers(resolved.env, runId);
+        return yield* showOffers(resolved.env, runId);
       }),
       global.json,
     );
@@ -1194,7 +1191,7 @@ const runAction = Command.make(
   },
   ({ runId, offer, input, requestId }) =>
     runMutationCommand("run-action", runId, requestId, "asked to do anything", (env, id) =>
-      invokeNativeOffer(env, {
+      invokeOffer(env, {
         runId,
         offer,
         input: Object.fromEntries(
@@ -1225,16 +1222,16 @@ const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =
             // here, and its record says what it got to rather than where it stopped.
             const imported = yield* historyRefusal(resolved.env, runId, "resumed");
             if (imported !== null) return imported;
-            if (!(yield* anyNativeRuns(resolved.env)))
+            if (!(yield* anyRuns(resolved.env)))
               return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
             // What picks a Run up is the host registering the modules as they are now and
             // handing over what is still outstanding — which a repaired file needs — and
             // then the stop being cleared, so work that was stopped is not stopped again.
-            const recovered = yield* recoverNativeRun(resolved.env, runId);
+            const recovered = yield* recoverRun(resolved.env, runId);
             if (!recovered.ok) return recovered;
             // Cleared after the module is registered again, so the run that wakes up is
             // one this host can run and does not find the stop that parked it still set.
-            yield* controlNativeRun(resolved.env, { runId, control: "stop", set: false });
+            yield* controlRun(resolved.env, { runId, control: "stop", set: false });
             if (Option.isNone(global.workspace) || !recovered.ok) return recovered;
             return {
               ok: true as const,
@@ -1262,8 +1259,8 @@ function intentChange(
   change: (intent: Intent) => Change | Failure,
   options: {
     readonly propagate?: boolean;
-    /** What a native Run does instead, where it keeps this outside an Intent. */
-    readonly native?: (env: PluginEnv) => Effect.Effect<Result, never, BunServices>;
+    /** What a hosted Run does instead, where it keeps this outside an Intent. */
+    readonly hosted?: (env: PluginEnv) => Effect.Effect<Result, never, BunServices>;
   } = {},
 ) {
   return Effect.gen(function* () {
@@ -1278,9 +1275,9 @@ function intentChange(
             `${runId} was recorded by the engine Collie no longer has; its Intent is history and cannot be amended.`,
             { run: runId, history: true },
           );
-        const native = options.native;
-        if (resolved._tag === "Native" && native !== undefined)
-          return yield* mutation(resolved.env, operation, requestId, () => native(resolved.env));
+        const hosted = options.hosted;
+        if (resolved._tag === "Hosted" && hosted !== undefined)
+          return yield* mutation(resolved.env, operation, requestId, () => hosted(resolved.env));
         const dir = resolved.dir;
         return yield* mutation(resolved.env, operation, requestId, (id) =>
           Effect.gen(function* () {
@@ -1337,8 +1334,8 @@ const propagateToChildren = Effect.fn("run.propagateToChildren")(function* (
   intent: Intent,
 ) {
   const lines: string[] = [];
-  const children = (yield* nativeRuns(env, null)).runs.filter(
-    (view) => view.parent === parent && !nativeSettled(view),
+  const children = (yield* runViews(env, null)).runs.filter(
+    (view) => view.parent === parent && !isSettled(view),
   );
   for (const child of children) {
     const dir = runDir(env.stateDir, child.runId);
@@ -1517,10 +1514,10 @@ const intentVerification = Command.make(
       },
       {
         propagate: wants,
-        native: (env) =>
+        hosted: (env) =>
           !remove && granted === null
             ? Effect.succeed(missing)
-            : grantNativeRun(env, { runId, name, command: granted }),
+            : grantRun(env, { runId, name, command: granted }),
       },
     );
   },

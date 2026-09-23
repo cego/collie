@@ -10,22 +10,20 @@
 // from `operations.ts`. One direction each way is a cycle; one module downstream of both
 // is not.
 
-import { Effect, FileSystem } from "effect";
+import { Effect } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import { reason } from "./naming";
-import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { executorFor, registerExecutor, registeredKinds, type ExecutionResult } from "./executors";
 import type { PluginEnv } from "./env";
 import {
-  answerNativeRun,
-  controlNativeRun,
-  invokeNativeOffer,
+  answerRun,
+  controlRun,
+  invokeOffer,
   offersOf,
-  nativeRun,
-  startNativeRun,
-  steerNativeRun,
-  recoverNativeRun,
+  startRun,
+  steerRun,
+  recoverRun,
 } from "./lifecycle";
 import {
   clearOverride,
@@ -36,7 +34,7 @@ import {
   type OpResult,
 } from "./operations";
 import { Herdr } from "./herdr";
-import { runDir } from "./native";
+import { runDir } from "./engine";
 import { withDirLock } from "./lock";
 import {
   amend as amendIntent,
@@ -99,14 +97,14 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     );
 
   registerExecutor("stop", (action) =>
-    carry(controlNativeRun(env, { runId: action.run, control: "stop", set: true })),
+    carry(controlRun(env, { runId: action.run, control: "stop", set: true })),
   );
-  registerExecutor("resume", (action) => carry(recoverNativeRun(env, action.run)));
+  registerExecutor("resume", (action) => carry(recoverRun(env, action.run)));
   registerExecutor("answer", (action) =>
     carry(
       Effect.gen(function* () {
         const id = yield* newRequestId();
-        return yield* answerNativeRun(env, {
+        return yield* answerRun(env, {
           runId: action.run,
           // The question as the board named it, so an answer that arrives after it was
           // replaced lands on the one it was given rather than on whatever is open now.
@@ -118,10 +116,10 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     ),
   );
   registerExecutor("hold", (action) =>
-    carry(controlNativeRun(env, { runId: action.run, control: "hold", set: true })),
+    carry(controlRun(env, { runId: action.run, control: "hold", set: true })),
   );
   registerExecutor("release", (action) =>
-    carry(controlNativeRun(env, { runId: action.run, control: "hold", set: false })),
+    carry(controlRun(env, { runId: action.run, control: "hold", set: false })),
   );
   registerExecutor("clear_override", (action, by) =>
     carry(clearOverride(env.stateDir, new Herdr(env), action.run, action.agent, by)),
@@ -130,7 +128,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     carry(
       Effect.gen(function* () {
         const id = yield* newRequestId();
-        return yield* steerNativeRun(env, {
+        return yield* steerRun(env, {
           runId: action.run,
           text: action.text,
           request: id,
@@ -208,7 +206,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         return failed(`${action.run} declares no follow-up, so there is nothing to carry on with`);
       const id = yield* newRequestId();
       return settled(
-        yield* invokeNativeOffer(env, {
+        yield* invokeOffer(env, {
           runId: action.run,
           offer: offered.id,
           input: { text: action.text },
@@ -232,7 +230,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
           ? env
           : { ...env, cwd: where.found.cwd, workspaceId: where.found.workspaceId };
       const id = yield* newRequestId();
-      const started = yield* startNativeRun(rooted, {
+      const started = yield* startRun(rooted, {
         id: action.workflow,
         request: id,
         // Text, as the action carries it: the module's own schema is what turns it into
@@ -330,19 +328,6 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
     ),
   );
   yield* Effect.void;
-});
-
-/** Whether this Run is one the host has, for a caller deciding what to offer about it. */
-export const runIsNative = Effect.fn("runActions.isNative")(function* (
-  env: PluginEnv,
-  runId: string,
-): Effect.fn.Return<
-  boolean,
-  never,
-  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
-> {
-  const view = yield* nativeRun(env, runId);
-  return view !== null && "runId" in view;
 });
 
 /** What a caller is told about an id nothing is running. */

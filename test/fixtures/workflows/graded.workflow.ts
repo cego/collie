@@ -1,7 +1,7 @@
 // The child: a workflow of its own that consumes the shared contract its project selected.
 // Nothing here knows it is a child — it is started by id, like anything else.
 
-import { NativeHost, defineWorkflow } from "collie/native";
+import { Host, defineWorkflow } from "collie";
 import { Effect, Layer, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 import { reviewLayer, reviewed } from "./capability.ts";
@@ -22,7 +22,7 @@ export const make = (registrationName: string) => {
   const layer = workflow
     .toLayer(
       Effect.fnUntraced(function* (payload) {
-        const host = yield* NativeHost;
+        const host = yield* Host;
         return yield* Activity.make({
           name: "grade",
           success: Schema.String,

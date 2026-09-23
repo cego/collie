@@ -9,9 +9,9 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Layer, Schema, Scope } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import * as Workflow from "effect/unstable/workflow/Workflow";
-import { HostReply, hostLayer, TOOLCHAIN } from "../src/native";
+import { engineLayer, TOOLCHAIN } from "../src/engine";
 import { runEffect } from "./support/effect";
-import { events, fixtures, openHost, root, until, workspace } from "./support/native";
+import { HostReply, events, fixtures, openHost, root, until, workspace } from "./support/host";
 
 const stopsIn = (log: ReadonlyArray<string>) => log.filter((line) => line === "stopped").length;
 
@@ -26,12 +26,12 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-restart-");
+        const { wf, state } = yield* workspace("collie-engine-restart-");
         const first = yield* openHost(state);
         const loaded = yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         expect(loaded.ok).toBe(true);
         expect(loaded.id).toBe("proof");
-        // The public id, the native registration and the run are three separate names.
+        // The public id, the registration and the run are three separate names.
         expect(loaded.registration).toBe("proof@1");
 
         yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "first" } });
@@ -75,23 +75,12 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-hold-");
+        const { wf, state } = yield* workspace("collie-engine-hold-");
         const host = yield* openHost(state);
         yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
-        yield* host.ask({ op: "hold", runId: "r1" });
         yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "held" } });
-        yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
-        // Held before the wait: the boundary read is a plain Effect, so it saw the flag
-        // an operator set rather than a value cached from the first attempt.
-        const paused = yield* events(state, "r1");
-        expect(paused).toHaveLength(2);
-        expect(paused[0]).toMatch(/^launch note:held /);
-        expect(paused[1]).toBe("held");
-
-        yield* host.ask({ op: "release", id: "proof", runId: "r1" });
-        // Released work reaches its question before there is anything to answer: the host
-        // says what a run is waiting on, and that is what an operator answers.
         yield* host.until({ op: "waiting", runId: "r1" }, asking);
+        yield* host.ask({ op: "hold", runId: "r1" });
         yield* host.ask({
           op: "answer",
           id: "proof",
@@ -99,6 +88,17 @@ test(
           decision: "decision",
           value: "go",
         });
+        // Held once it has its answer: the boundary read is a plain Effect, so it saw the
+        // flag an operator set while it waited rather than a value cached from the first
+        // attempt.
+        const paused = yield* until(
+          () => events(state, "r1"),
+          (log) => log.includes("held"),
+        );
+        expect(paused[0]).toMatch(/^launch note:held /);
+        yield* host.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+
+        yield* host.ask({ op: "release", id: "proof", runId: "r1" });
         const done = yield* host.until({ op: "poll", id: "proof", runId: "r1" }, complete);
         expect(done.value).toBe("note:held=go");
         yield* host.stop;
@@ -115,7 +115,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-stop-");
+        const { wf, state } = yield* workspace("collie-engine-stop-");
         const host = yield* openHost(state);
         yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         yield* host.ask({ op: "start", id: "proof", runId: "r1", input: { note: "stopped" } });
@@ -163,7 +163,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const { wf, state } = yield* workspace("collie-native-missing-");
+        const { wf, state } = yield* workspace("collie-engine-missing-");
         const first = yield* openHost(state);
         yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         yield* first.ask({ op: "load", entry: `${wf}/plain.workflow.ts` });
@@ -222,7 +222,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const { wf, state } = yield* workspace("collie-native-generations-");
+        const { wf, state } = yield* workspace("collie-engine-generations-");
         const host = yield* openHost(state);
         yield* host.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         yield* host.ask({ op: "start", id: "proof", runId: "old", input: { note: "before" } });
@@ -271,8 +271,8 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const one = yield* workspace("collie-native-project-one-");
-        const two = yield* workspace("collie-native-project-two-");
+        const one = yield* workspace("collie-engine-project-one-");
+        const two = yield* workspace("collie-engine-project-two-");
         const hostOne = yield* openHost(one.state);
         const hostTwo = yield* openHost(two.state);
         yield* hostOne.ask({ op: "load", entry: `${one.wf}/proof.workflow.ts` });
@@ -297,7 +297,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-toolchain-");
+        const { wf, state } = yield* workspace("collie-engine-toolchain-");
         const host = yield* openHost(state);
 
         // Before provisioning there is no compiler, and that is what it says rather than
@@ -350,7 +350,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-native-duplicate-" });
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-engine-duplicate-" });
         const workflow = Workflow.make("duplicate", {
           payload: { runId: Schema.String },
           idempotencyKey: (payload) => payload.runId,
@@ -371,7 +371,7 @@ test(
             executionId: yield* workflow.executionId({ runId: "r1" }),
             payload: { runId: "r1" },
           });
-        }).pipe(Effect.provide(hostLayer({ dir })), Effect.scoped, Effect.orDie);
+        }).pipe(Effect.provide(engineLayer({ dir })), Effect.scoped, Effect.orDie);
         expect(ran).toBe("first");
       }).pipe(Effect.scoped),
     ),
@@ -384,7 +384,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const { wf, state } = yield* workspace("collie-native-deadline-");
+        const { wf, state } = yield* workspace("collie-engine-deadline-");
         const first = yield* openHost(state);
         yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "patient" } });
@@ -423,7 +423,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-crash-");
+        const { wf, state } = yield* workspace("collie-engine-crash-");
         const first = yield* openHost(state);
         yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "crashed" } });
@@ -462,7 +462,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-echo-");
+        const { wf, state } = yield* workspace("collie-engine-echo-");
         const host = yield* openHost(state);
         const loaded = yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
         expect(loaded.ok).toBe(true);
@@ -500,7 +500,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-invalid-");
+        const { wf, state } = yield* workspace("collie-engine-invalid-");
         const host = yield* openHost(state);
         yield* host.ask({ op: "load", entry: `${wf}/echo.workflow.ts` });
         const refused = yield* host.ask({
@@ -528,7 +528,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-conflicted-");
+        const { wf, state } = yield* workspace("collie-engine-conflicted-");
         const host = yield* openHost(state);
         const refused = yield* host.ask({ op: "load", entry: `${wf}/conflicted.workflow.ts` });
         expect(refused.ok).toBe(false);
@@ -557,7 +557,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-unwired-");
+        const { wf, state } = yield* workspace("collie-engine-unwired-");
         const host = yield* openHost(state);
         yield* host.ask({ op: "load", entry: `${wf}/unwired.workflow.ts` });
         yield* host.ask({ op: "start", id: "unwired", runId: "u1", input: { text: "x" } });
@@ -580,7 +580,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        const { wf, state } = yield* workspace("collie-native-sdk-types-");
+        const { wf, state } = yield* workspace("collie-engine-sdk-types-");
         const host = yield* openHost(state);
         expect((yield* host.ask({ op: "provision", dir: wf })).ok).toBe(true);
         for (const entry of [

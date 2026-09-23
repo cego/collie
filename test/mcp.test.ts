@@ -95,7 +95,7 @@ const openServer = Effect.fn("McpTest.open")(function* () {
 });
 
 test(
-  "native stdio MCP preserves discovery, tool responses, errors, and shutdown",
+  "stdio MCP preserves discovery, tool responses, errors, and shutdown",
   () =>
     runEffect(
       Effect.gen(function* () {

@@ -6,6 +6,10 @@ mechanism is `src/host.ts`, and `collie host --dir <dir>` is the process it star
 runs native workflows and left "the host Collie ships" open; this is that host. Nothing
 here is in the path of a Run yet — connecting the Run operations to it is later work.
 
+[ADR-0028](0028-names-are-the-domains-and-the-proof-drives-the-shipped-host.md) renames
+what this page calls `collie native`, `src/native.ts`, `test/native-runtime.test.ts` and
+`native.db`, and the proof now drives `collie host`.
+
 Work outlives the thing that asked for it. The CLI exits when it has said what it came to
 say, a board is closed with a keystroke, a chat turn ends — and a workflow takes hours. So
 the engine cannot live in the client, and something has to decide which process it does

@@ -15,11 +15,11 @@ import { Effect, FileSystem, Layer, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
-import { NativeAgents, agentsLayer, type AgentHost } from "../src/agents";
-import { NativeChildren, NativeHost } from "../src/sdk";
-import { answerDecision, foundationLayer, loadEntry } from "../src/native";
+import { Agents, agentsLayer, type AgentHost } from "../src/agents";
+import { Children, Host } from "../src/sdk";
+import { answerDecision, foundationLayer, loadEntry } from "../src/engine";
 import { Store } from "../src/store";
-import { events, fixtures, until } from "./support/native";
+import { events, fixtures, until } from "./support/host";
 
 let rig: Rig;
 let dir: string;
@@ -30,7 +30,7 @@ beforeEach(() =>
     Effect.gen(function* () {
       rig = yield* Rig.make();
       const fs = yield* FileSystem.FileSystem;
-      dir = `${rig.root}/native`;
+      dir = `${rig.root}/host`;
       plan = `${rig.root}/plan`;
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(`${plan}/issues`, { recursive: true });
@@ -87,9 +87,9 @@ const session = <A, E>(
     A,
     E,
     | WorkflowEngine.WorkflowEngine
-    | NativeAgents
-    | NativeChildren
-    | NativeHost
+    | Agents
+    | Children
+    | Host
     | Store
     | FileSystem.FileSystem
     | Path.Path
@@ -97,9 +97,7 @@ const session = <A, E>(
 ) =>
   run.pipe(
     Effect.provide(agentsLayer(hostOf())),
-    Effect.provide(
-      Layer.succeed(NativeChildren)(NativeChildren.of({ start: nothing, result: nothing })),
-    ),
+    Effect.provide(Layer.succeed(Children)(Children.of({ start: nothing, result: nothing }))),
     Effect.provide(foundationLayer({ dir })),
     Effect.scoped,
     Effect.orDie,

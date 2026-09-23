@@ -31,7 +31,7 @@ import type { TaskRecord } from "../src/task";
 import { runEffect } from "./support/effect";
 import { madeRun } from "./support/records";
 import { collie, proves } from "./support/world";
-import { stopHost } from "./support/native";
+import { stopHost } from "./support/host";
 
 function facts(over: Partial<Sentence> = {}): Sentence {
   return {

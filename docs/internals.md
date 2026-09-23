@@ -176,7 +176,7 @@ is running — and `git worktree add` cuts a new one at the path herdr would hav
 The run records `worktree.path`, `worktree.branch`, `worktree.managed_by` and
 `worktree.created_by_collie` in its row's `checkout`, beside the directory it works in.
 Its agents work in that worktree; its workspace is its Task's unless herdr opened one for
-the checkout (ADR-0006). `placeRun` in `native.ts` resolves it at admission, for a start
+the checkout (ADR-0006). `placeRun` in `engine.ts` resolves it at admission, for a start
 and a child alike, from the `checkout` the module declares and the `workspace` option
 decoded into a request — which is how the `implement` that `plan` or `architecture`
 chains into gets one, and why neither of them passes it anything about where to work.

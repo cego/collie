@@ -13,7 +13,7 @@ import {
   isSingleRepo,
   planReposOf,
   type WorkflowMetadata,
-} from "collie/native";
+} from "collie";
 import { Effect, Schema } from "effect";
 
 export const id = "spread";

@@ -11,7 +11,7 @@
 // is the way it is.
 
 import { Effect, FileSystem, Schema } from "effect";
-import { loadEntry, revisionOf } from "./native";
+import { loadEntry, revisionOf } from "./engine";
 import { jsonSchemaFor, type WorkflowEntry } from "./sdk";
 
 export const ENTRY_SUFFIX = ".workflow.ts";

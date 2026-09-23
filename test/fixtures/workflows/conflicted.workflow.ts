@@ -1,6 +1,6 @@
 // Every metadata conflict at once, so the refusal names each rather than the first.
 
-import { defineWorkflow, type WorkflowMetadata } from "collie/native";
+import { defineWorkflow, type WorkflowMetadata } from "collie";
 import { Effect, Schema } from "effect";
 
 export const id = "Conflicted";

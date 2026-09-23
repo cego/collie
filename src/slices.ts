@@ -1,5 +1,5 @@
-// A list of work and the hand-off between its items, for a declared `each:` and for a
-// module that writes its own loop.
+// A list of work and the hand-off between its items, for a module that writes its own
+// loop.
 //
 // An item is known by an identity, never by where it sits in the list: that is what
 // makes a reordered plan reuse the work it already has rather than hand one item's

@@ -3,7 +3,7 @@
 // the SDK's; what is here is the contract the result has to meet, and the decision not to
 // do the work at all.
 
-import { agentWork, defineWorkflow } from "collie/native";
+import { agentWork, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import notes from "./notes.md" with { type: "text" };
 

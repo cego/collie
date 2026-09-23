@@ -1,4 +1,4 @@
-// What an author imports when they write a workflow: `collie/native`.
+// What an author imports when they write a workflow: `collie`.
 //
 // A workflow module is ordinary TypeScript, and this is what Collie adds to it: the
 // payload envelope, the error contract, the metadata a card and a launch read, and the
@@ -22,7 +22,7 @@ import type { VerifySpec } from "./verify-spec";
 import { WorkflowInstance, type WorkflowEngine } from "effect/unstable/workflow/WorkflowEngine";
 import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
 import * as Workflow from "effect/unstable/workflow/Workflow";
-import type { NativeAgents } from "./agents";
+import type { Agents } from "./agents";
 import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
 import { exclusiveClashes } from "./strategies";
 import {
@@ -60,9 +60,9 @@ export {
 } from "./output";
 
 /**
- * What a review/fix rally is made of. These are the engine's own functions, not a copy
- * for modules: a workflow that writes its loop in TypeScript converges, stands on a
- * dispute and runs out of rounds exactly where a declared one does.
+ * What a review/fix rally is made of: a workflow that writes its loop in TypeScript
+ * converges, stands on a dispute and runs out of rounds where these say, and every
+ * workflow says it the same way.
  */
 export {
   blockingKeys,
@@ -115,10 +115,9 @@ export { isOutcome, renderEvidence, type Outcome } from "./outcome";
 export { classifyWorkSource } from "./inputs";
 
 /**
- * A list of work, and the hand-off between its items. The identities are the engine's own
- * rule — an item is known by its name and never by where it sits — so a module that
- * writes its own loop reuses what it has done after a reordering exactly as a declared
- * list does.
+ * A list of work, and the hand-off between its items. An item is known by its name and
+ * never by where it sits, so a module that writes its own loop reuses what it has done
+ * after a reordering.
  */
 export { identityProblem, renderProgress, type Handed } from "./slices";
 
@@ -159,10 +158,9 @@ const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
  * Everything still missing before this Run may say it proved its kind of result, one
  * sentence each. Empty means the evidence is there.
  *
- * The same table a declared workflow's gate is judged by, asked for what a module has:
- * its own Outputs rather than a step record, and the directories it owns rather than a
- * Run record to read them from. A claim in an Output is still only ever a claim — what
- * decides a check is the journal, bound to the tree in front of it.
+ * Asked of what a module has: its own Outputs, and the directories it owns. A claim in
+ * an Output is only ever a claim — what decides a check is the journal, bound to the
+ * tree in front of it.
  */
 export function evidenceGapsOf(options: {
   readonly kind: Outcome;
@@ -191,7 +189,7 @@ export function evidenceGapsOf(options: {
 }
 
 /**
- * A workflow's failure, as every native workflow reports one. One shape rather than an
+ * A workflow's failure, as every workflow reports one. One shape rather than an
  * author's own union, because what a host does with a failure is show it: a Run that
  * ended badly is a Run, not a value another workflow destructures.
  */
@@ -200,7 +198,7 @@ export class WorkflowError extends Schema.TaggedError<WorkflowError>()("Workflow
 }) {}
 
 /**
- * The envelope every native workflow is executed with. The host supplies `runId` and the
+ * The envelope every workflow is executed with. The host supplies `runId` and the
  * author supplies `input`, and idempotency is `runId` alone — so a retry of an accepted
  * request is the same execution, and a new start is a new one.
  */
@@ -210,7 +208,7 @@ export const payloadOf = <Input extends Schema.Struct.Fields>(input: Input) => (
 });
 
 /**
- * A native workflow under Collie's envelope. Everything else `Workflow.make` takes is
+ * A workflow under Collie's envelope. Everything else `Workflow.make` takes is
  * still yours; this only fixes the payload and the error, which the host has to know.
  */
 export const defineWorkflow = <
@@ -240,7 +238,7 @@ export const defineWorkflow = <
  * operator sets a control between attempts, and an Activity would hand back the answer
  * from the attempt that first ran.
  */
-export interface NativeHostApi {
+export interface HostApi {
   readonly dir: string;
   /**
    * This Run as the host admitted it. The checkout is the one it was started for — its
@@ -370,7 +368,7 @@ export interface Posted {
   readonly message: string;
 }
 
-export class NativeHost extends Context.Service<NativeHost, NativeHostApi>()("collie/NativeHost") {}
+export class Host extends Context.Service<Host, HostApi>()("collie/Host") {}
 
 /** A question as the host records it: its identity, what it asks, and what it takes. */
 export interface DecisionSpec {
@@ -381,14 +379,14 @@ export interface DecisionSpec {
 }
 
 /** A decision a run waits on. Answered with text, which is what an operator types. */
-export interface NativeDecision extends DurableDeferred.DurableDeferred<typeof Schema.String> {
+export interface Decision extends DurableDeferred.DurableDeferred<typeof Schema.String> {
   readonly asks: DecisionSpec;
 }
 
 export const decision = (
   name: string,
   asks?: { readonly prompt?: string; readonly options?: ReadonlyArray<string> },
-): NativeDecision =>
+): Decision =>
   Object.assign(DurableDeferred.make(name, { success: Schema.String }), {
     asks: { name, prompt: asks?.prompt ?? name, options: asks?.options ?? [] },
   });
@@ -403,12 +401,12 @@ export const decision = (
  */
 export const ask = (
   runId: string,
-  question: NativeDecision,
+  question: Decision,
   /** What it takes this time, where a menu offers less than it declares. */
   options?: ReadonlyArray<string>,
-): Effect.Effect<string, never, NativeHost | WorkflowEngine | WorkflowInstance> =>
+): Effect.Effect<string, never, Host | WorkflowEngine | WorkflowInstance> =>
   Effect.gen(function* () {
-    const host = yield* NativeHost;
+    const host = yield* Host;
     yield* host.asking(runId, options ? { ...question.asks, options } : question.asks);
     return yield* DurableDeferred.await(question);
   });
@@ -421,9 +419,9 @@ export const ask = (
 export const requireApproved = (
   runId: string,
   kind: string,
-): Effect.Effect<ReadonlyArray<VerifySpec>, never, NativeHost | WorkflowInstance> =>
+): Effect.Effect<ReadonlyArray<VerifySpec>, never, Host | WorkflowInstance> =>
   Effect.gen(function* () {
-    const host = yield* NativeHost;
+    const host = yield* Host;
     const approved = yield* host.approved(runId);
     if (approved.length > 0 || !needsApproved(isOutcome(kind) ? kind : "unspecified")) {
       yield* host.parked(runId, null);
@@ -476,14 +474,12 @@ export interface ChildrenApi {
   readonly result: (child: ChildRun) => Effect.Effect<unknown, WorkflowError>;
 }
 
-export class NativeChildren extends Context.Service<NativeChildren, ChildrenApi>()(
-  "collie/NativeChildren",
-) {}
+export class Children extends Context.Service<Children, ChildrenApi>()("collie/Children") {}
 
 /** One child workflow, started and waited on. Anything else is Effect's own operators. */
-export const child = (ask: ChildAsk): Effect.Effect<unknown, WorkflowError, NativeChildren> =>
+export const child = (ask: ChildAsk): Effect.Effect<unknown, WorkflowError, Children> =>
   Effect.gen(function* () {
-    const children = yield* NativeChildren;
+    const children = yield* Children;
     return yield* children.result(yield* children.start(ask));
   });
 
@@ -508,9 +504,9 @@ export interface Registration {
   readonly layer: Layer.Layer<
     never,
     never,
-    WorkflowEngine | NativeHost | NativeAgents | NativeChildren | FileSystem.FileSystem | Path.Path
+    WorkflowEngine | Host | Agents | Children | FileSystem.FileSystem | Path.Path
   >;
-  readonly decisions: Readonly<Record<string, NativeDecision>>;
+  readonly decisions: Readonly<Record<string, Decision>>;
 }
 
 /**
@@ -762,7 +758,7 @@ const asJson = Schema.decodeUnknownSync(Schema.Json);
 export interface Projection {
   /** The drawn document, or null where nothing could be drawn at all. */
   readonly document: Schema.Json | null;
-  /** Each place the drawing constrains nothing, which the native schema still does. */
+  /** Each place the drawing constrains nothing, which the schema itself still does. */
   readonly limits: ReadonlyArray<string>;
 }
 
@@ -778,7 +774,7 @@ export function jsonSchemaFor(schema: Schema.Constraint): Projection {
   }
 }
 
-/** Where the drawn document says nothing at all, which the native schema still does. */
+/** Where the drawn document says nothing at all, which the schema itself still does. */
 function unconstrained(node: Schema.Json, at: string): ReadonlyArray<string> {
   if (Array.isArray(node)) {
     return node.flatMap((item, index) => unconstrained(item, `${at}[${index}]`));

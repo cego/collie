@@ -1,7 +1,7 @@
 // A module whose Layer never supplies the service its workflow asks for. Merging is not
 // providing, and the host has to say which file that is rather than fail at run time.
 
-import { defineWorkflow } from "collie/native";
+import { defineWorkflow } from "collie";
 import { Context, Effect, Layer, Schema } from "effect";
 
 export const id = "unwired";

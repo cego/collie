@@ -9,7 +9,7 @@
 // of them copied from the other. The Markdown beside this file is the content.
 
 import {
-  NativeAgents,
+  Agents,
   ReviewOutputSchema,
   SynthesisSchema,
   agentWork,
@@ -22,7 +22,7 @@ import {
   targetKind,
   type Finding,
   type SynthesisReport,
-} from "collie/native";
+} from "collie";
 import { Effect } from "effect";
 import markdown from "./review.md" with { type: "text" };
 
@@ -90,7 +90,7 @@ const told = (ask: ReviewAsk) => ({
  */
 export const reviewPass = (ask: ReviewAsk) =>
   Effect.gen(function* () {
-    const agents = yield* NativeAgents;
+    const agents = yield* Agents;
     const { inputs, vars } = told(ask);
     // The round comes first, and the first round keeps the plain names: a Run with one
     // review reads as one, and a rally's rounds sort in the order they happened.

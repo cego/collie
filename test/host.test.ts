@@ -12,10 +12,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { connect, ownerOf } from "../src/host";
 import { signalProcess } from "../src/lock";
 import { runEffect } from "./support/effect";
-import { stopHost, until } from "./support/native";
+import { stopHost, until } from "./support/host";
 
 const root = new URL("../", import.meta.url).pathname;
-const fixtures = `${root}test/fixtures/native`;
+const fixtures = `${root}test/fixtures/workflows`;
 
 /** The command a client starts a host with, as `connect` reads it. */
 const starts = (command: ReadonlyArray<string>) =>

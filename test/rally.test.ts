@@ -17,9 +17,9 @@ import { VerifySpecSchema } from "../src/verify-spec";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { agentsLayer, type AgentHost } from "../src/agents";
-import { NativeChildren, NativeHost } from "../src/sdk";
-import { evidenceDir, foundationLayer, loadEntry } from "../src/native";
-import { fixtures } from "./support/native";
+import { Children, Host } from "../src/sdk";
+import { evidenceDir, foundationLayer, loadEntry } from "../src/engine";
+import { fixtures } from "./support/host";
 import { collect } from "../src/verify";
 
 let rig: Rig;
@@ -30,7 +30,7 @@ beforeEach(() =>
     Effect.gen(function* () {
       rig = yield* Rig.make();
       const fs = yield* FileSystem.FileSystem;
-      dir = `${rig.root}/native`;
+      dir = `${rig.root}/host`;
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
       // A real repository, because what binds a verification is the tree it ran on and
@@ -78,9 +78,7 @@ const rally = (runId: string, rounds: number) =>
     return yield* run.pipe(Effect.provide(made.layer));
   }).pipe(
     Effect.provide(agentsLayer(hostOf())),
-    Effect.provide(
-      Layer.succeed(NativeChildren)(NativeChildren.of({ start: nothing, result: nothing })),
-    ),
+    Effect.provide(Layer.succeed(Children)(Children.of({ start: nothing, result: nothing }))),
     Effect.provide(foundationLayer({ dir, configDir: rig.configDir })),
     Effect.scoped,
     Effect.orDie,
@@ -259,7 +257,7 @@ test("a command nobody approved is refused, whatever a workflow asks the host fo
         asApproved([{ name: "unit", executable: "true", argv: [], cwd: "." }]),
       );
       const asked = yield* Effect.gen(function* () {
-        const host = yield* NativeHost;
+        const host = yield* Host;
         const allowed = yield* host
           .verify({ runId: "r-perm", name: "unit", cwd: rig.projectDir })
           .pipe(Effect.result);

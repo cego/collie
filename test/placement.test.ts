@@ -13,7 +13,7 @@ import { Effect, FileSystem, Result, Schema } from "effect";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
-import { fixtures, until } from "./support/native";
+import { fixtures, until } from "./support/host";
 import { agentsLayer, type AgentHost } from "../src/agents";
 import {
   Registry,
@@ -21,7 +21,7 @@ import {
   registryLayer,
   type Generation,
   type HostServices,
-} from "../src/native";
+} from "../src/engine";
 import { Store } from "../src/store";
 import { readTask, writeTask, type TaskRecord } from "../src/task";
 import type { Call } from "./support/recorder";

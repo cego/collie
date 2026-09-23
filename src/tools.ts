@@ -34,7 +34,7 @@ import {
   workspaceCwdFromPanes,
 } from "./operations";
 import { ActionSchema, type Action } from "./evaluator";
-import { nativeRuns, nativeSettled } from "./lifecycle";
+import { runViews, isSettled } from "./lifecycle";
 import { taskOfWorkspace } from "./task";
 import {
   actorName,
@@ -707,7 +707,7 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObjec
 const holdsFor = Effect.fn("Tools.holdsFor")(function* (env: PluginEnv, workspace: string) {
   const task = yield* taskOfWorkspace(env.stateDir, workspace);
   if (task === null) return [];
-  const runs = (yield* nativeRuns(env, task.id)).runs.filter((view) => !nativeSettled(view));
+  const runs = (yield* runViews(env, task.id)).runs.filter((view) => !isSettled(view));
   return runs.map((view) => ({ kind: "hold" as const, run: view.runId }));
 });
 

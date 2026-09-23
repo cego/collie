@@ -265,13 +265,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["tools call", { route: "human-only", why: "the same — this is how a tool call is made" }],
   ["mcp", { route: "human-only", why: "the same, for the harness that reaches Collie over MCP" }],
   [
-    "native",
-    {
-      route: "human-only",
-      why: "the native-runtime proof's own host: a protocol on stdio, not an operation",
-    },
-  ],
-  [
     "host",
     {
       route: "human-only",

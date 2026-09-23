@@ -12,7 +12,7 @@ import {
 import { searchPath, type Catalogued, type EntryLayer, type Found } from "../discovery";
 import type { PluginEnv } from "../env";
 import { savedModules } from "../lifecycle";
-import { loadEntry } from "../native";
+import { loadEntry } from "../engine";
 import { isWorkflowId } from "../sdk";
 import { loadDefaults } from "../config";
 import { KINDED_STRATEGIES } from "../inputs";
@@ -91,7 +91,7 @@ function describeForHuman(one: Described): string {
 
 const asJson = (value: Schema.Json) => Schema.encodeSync(UnknownJson)(value);
 
-/** Where a drawing says less than the module does. The native schema still holds. */
+/** Where a drawing says less than the module does. The schema itself still holds. */
 const limitLines = (one: Described): ReadonlyArray<string> =>
   one.success.limits.length + one.error.limits.length === 0
     ? []

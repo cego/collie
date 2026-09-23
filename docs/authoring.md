@@ -7,8 +7,8 @@ definition accepts. For what a Workflow, Step, Persona, Layer or Override _is_, 
 
 **A workflow is a TypeScript module.** Every workflow Collie ships is one, with its prompts
 in the Markdown beside it, and yours is the same kind of thing — [the SDK](sdk.md) is the
-reference for writing one, and the rest of this page is about personas and about the
-Markdown definitions still being read. Where an id has a module, the module is what runs.
+reference for writing one, and the rest of this page is about where modules and personas
+live and how they are customized.
 
 ## Writing one
 
@@ -21,7 +21,7 @@ collie run start tally --input note=hi
 
 `create` writes `~/.collie/user/workflows/tally.workflow.ts` — `--layer project` writes
 `.herdr/workflows/` instead — and provisions the setup to typecheck it beside the file:
-`package.json`, `tsconfig.json` and `collie-native.d.ts`, installed with the executable's
+`package.json`, `tsconfig.json` and `collie.d.ts`, installed with the executable's
 own embedded Bun, so a machine with neither Bun nor Node can still compile a module. A
 `package.json` or `tsconfig.json` you already have is left exactly as it is, and nothing is
 ever written over a file that exists. With no network on a first use the answer is
@@ -76,7 +76,7 @@ it — back.
 
 ## Dependencies and services
 
-A module imports `collie/native` for what the host lends it, `effect` for everything else,
+A module imports `collie` for what the host lends it, `effect` for everything else,
 and whatever else it needs through the same directory's `package.json` — the toolchain is
 Bun's, so `bun add <package>` in that directory is the whole of it. The `effect` version
 `create` pins is the one the host runs; they have to be the same Effect, or your types are

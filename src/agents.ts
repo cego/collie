@@ -1,4 +1,4 @@
-// An agent a native workflow operates, and the Output it is held to.
+// An agent a workflow operates, and the Output it is held to.
 //
 // Three things a workflow must not be left to get right on its own. An agent is launched
 // once however often the work replays. What it wrote is decoded before any of it is
@@ -43,9 +43,9 @@ import { liveAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } f
 import {
   contentOf,
   jsonSchemaFor,
-  NativeHost,
+  Host,
   WorkflowError,
-  type NativeHostApi,
+  type HostApi,
   type Projection,
 } from "./sdk";
 import { readTask, withTaskLock, writeTask } from "./task";
@@ -181,9 +181,7 @@ export interface Steered {
   readonly detail: string;
 }
 
-export class NativeAgents extends Context.Service<NativeAgents, AgentsApi>()(
-  "collie/NativeAgents",
-) {}
+export class Agents extends Context.Service<Agents, AgentsApi>()("collie/Agents") {}
 
 /** What an author asks for: the work, not the steps it takes. */
 export interface AgentWork<Output extends OutputContract> {
@@ -231,11 +229,11 @@ export const agentWork = <Output extends OutputContract>(
 ): Effect.Effect<
   Output["Type"],
   WorkflowError,
-  NativeAgents | NativeHost | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+  Agents | Host | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
 > =>
   Effect.gen(function* () {
-    const agents = yield* NativeAgents;
-    const host = yield* NativeHost;
+    const agents = yield* Agents;
+    const host = yield* Host;
     // A boundary, and the last one before money is spent: a held run parks here rather
     // than starting an agent. Read as a plain Effect because an operator sets a hold
     // between attempts, and an Activity would hand back what the first attempt saw.
@@ -342,7 +340,7 @@ export const agentWork = <Output extends OutputContract>(
  */
 const parkedWhenStuck = <A>(
   sending: Effect.Effect<A, AgentUncertain | AgentParked>,
-  host: NativeHostApi,
+  host: HostApi,
   runId: string,
 ): Effect.Effect<A, AgentUncertain, WorkflowEngine.WorkflowInstance> =>
   sending.pipe(
@@ -365,7 +363,7 @@ const parkedWhenStuck = <A>(
  */
 const stoppable = <A, E>(
   collecting: Effect.Effect<A, E>,
-  host: NativeHostApi,
+  host: HostApi,
   runId: string,
   pollMs: number,
 ): Effect.Effect<A, E, WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance> =>
@@ -380,7 +378,7 @@ const stoppable = <A, E>(
   });
 
 /** Waits for an operator to stop this run, and for nothing else. */
-const untilStopped = (host: NativeHostApi, runId: string, pollMs: number) =>
+const untilStopped = (host: HostApi, runId: string, pollMs: number) =>
   host.stopRequested(runId).pipe(
     Effect.flatMap((stop) => (stop ? Effect.void : Effect.fail(new Error("not stopped")))),
     Effect.retry({ schedule: Schedule.spaced(Duration.millis(pollMs)) }),
@@ -432,8 +430,8 @@ export interface PromptParts {
 /**
  * What the agent is asked to do, where the answer goes, and what the answer has to be.
  * Pure, so a test and an author can read one without starting anything, and so a replay
- * never builds a different one. The role is the persona, injected at launch the way a
- * Step's is, and reaches a body here as `{{role}}`.
+ * never builds a different one. The role is the persona, injected at launch, and
+ * reaches a body here as `{{role}}`.
  */
 export function promptFor(parts: PromptParts): string {
   const rendered = renderTemplate(
@@ -499,11 +497,11 @@ const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;
  * controls and permissions the operator configured. The host's own services are captured
  * here, so a workflow asks for an agent without asking for a filesystem.
  */
-export const agentsLayer = (host: AgentHost): Layer.Layer<NativeAgents, never, AgentServices> =>
-  Layer.effect(NativeAgents)(
+export const agentsLayer = (host: AgentHost): Layer.Layer<Agents, never, AgentServices> =>
+  Layer.effect(Agents)(
     Effect.gen(function* () {
       const services = yield* Effect.context<AgentServices>();
-      return NativeAgents.of(makeAgents(host, (effect) => Effect.provideContext(effect, services)));
+      return Agents.of(makeAgents(host, (effect) => Effect.provideContext(effect, services)));
     }),
   );
 
@@ -610,7 +608,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       harness: adapterFor(about.harness).id,
       cause: { kind: delivery.kind, ref: delivery.ref },
       mode: delivery.mode ?? "boundary",
-      // A native run has no Intent yet, so every delivery about one piece of work
+      // A Run of a module has no Intent, so every delivery about one piece of work
       // shares a causal key: that is what makes the second copy refusable.
       intentVersion: 0,
       attempt: 1,

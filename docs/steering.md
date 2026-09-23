@@ -64,7 +64,7 @@ a backoff from two seconds to thirty, each try reserved again under the same id,
 attempt is on the ledger and a second copy of the work stays blocked meanwhile. Ten minutes
 after the first refusal the delivery is settled `failed` with the note
 `<code> held for <time> over <n> attempts`, and the Run's log says it `gave up` — which a
-refusal nobody retried never says. The native Run then parks rather than failing: its agent
+refusal nobody retried never says. The Run then parks rather than failing: its agent
 is alive and its prompt is written, so `run show` says so and `collie run resume` hands that
 prompt to that agent. A human's steer is sent once and told the refusal, since they are
 waiting on the answer.

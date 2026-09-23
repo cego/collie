@@ -10,8 +10,8 @@
 
 import {
   FixOutputSchema,
-  NativeChildren,
-  NativeHost,
+  Children,
+  Host,
   REVIEW_FILE,
   agentWork,
   ask,
@@ -23,7 +23,7 @@ import {
   riskLine,
   targetKind,
   type WorkflowMetadata,
-} from "collie/native";
+} from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { reviewPass, reviewText } from "./reviewing.ts";
 
@@ -86,8 +86,8 @@ export const make = (registrationName: string) => {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
-      const children = yield* NativeChildren;
+      const host = yield* Host;
+      const children = yield* Children;
       const fs = yield* FileSystem.FileSystem;
       const runId = payload.runId;
       const asked = payload.input;

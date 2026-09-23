@@ -9,12 +9,12 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { checkModule, createEntry, describeModule, forkEntry } from "../src/authoring";
 import { discover, searchPath, type EntryLayer } from "../src/discovery";
-import { loadEntry } from "../src/native";
+import { loadEntry } from "../src/engine";
 import { runEffect } from "./support/effect";
-import { stopHost } from "./support/native";
+import { stopHost } from "./support/host";
 import { collie, proves as provesWith } from "./support/world";
 
-const fixtures = new URL("./fixtures/native/", import.meta.url).pathname;
+const fixtures = new URL("./fixtures/workflows/", import.meta.url).pathname;
 
 /** The three layers, empty, with the fixtures on hand to copy into them. */
 const layers = Effect.fn("AuthoringTest.layers")(function* (prefix: string) {

@@ -183,7 +183,7 @@ test("a schema JSON Schema cannot say everything about is still a schema, and sa
   expect(drawable.document).not.toBeNull();
 
   // A declared schema draws as an empty object: valid JSON Schema that constrains
-  // nothing. It still validates natively, which is the point — the limit is on the copy
+  // nothing. It still validates against the schema itself, which is the point — the limit is on the copy
   // a model would be held to, never on the contract.
   const url = Schema.declare((value: unknown): value is URL => value instanceof URL);
   const undrawable = Schema.Struct({ at: url });

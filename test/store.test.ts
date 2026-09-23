@@ -45,7 +45,7 @@ const onStore = <A, E>(prefix: string, body: Effect.Effect<A, E, Store>) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix });
-      return yield* body.pipe(Effect.provide(opens(`${dir}/native.db`)));
+      return yield* body.pipe(Effect.provide(opens(`${dir}/host.db`)));
     }).pipe(Effect.scoped),
   );
 
@@ -119,7 +119,7 @@ test("what a host admitted is there when the database is opened again", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-store-reopen-" });
-      const file = `${dir}/native.db`;
+      const file = `${dir}/host.db`;
 
       yield* Effect.gen(function* () {
         const store = yield* Store;

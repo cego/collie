@@ -2,7 +2,7 @@
 // one that changes it. It says what the work is called, and nothing about where the child
 // works: that is the child's declaration and the host's to settle.
 
-import { NativeChildren, NativeHost, agentWork, defineWorkflow } from "collie/native";
+import { Children, Host, agentWork, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 
 export const id = "chains";
@@ -16,7 +16,7 @@ export const make = (registrationName: string) => {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const place = yield* (yield* NativeHost).place(payload.runId);
+      const place = yield* (yield* Host).place(payload.runId);
       yield* agentWork({
         runId: payload.runId,
         operation: "plan",
@@ -26,7 +26,7 @@ export const make = (registrationName: string) => {
         instructions: "Plan it.",
         output: Schema.Struct({ verdict: Schema.String }),
       });
-      const children = yield* NativeChildren;
+      const children = yield* Children;
       const child = yield* children.start({
         runId: payload.runId,
         invocation: "build",

@@ -1,8 +1,8 @@
-// A workflow module as an author writes one: ordinary TypeScript, native Effect, and no
+// A workflow module as an author writes one: ordinary TypeScript, plain Effect, and no
 // Collie vocabulary beyond the service the host lends it. The test copies this file, its
 // helper and its Markdown outside the checkout, so what runs it is the binary alone.
 
-import { NativeHost, ask, decision, defineWorkflow } from "collie/native";
+import { Host, ask, decision, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 import * as Workflow from "effect/unstable/workflow/Workflow";
@@ -22,7 +22,7 @@ export const make = (registrationName: string) => {
 
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       const run = yield* WorkflowEngine.WorkflowInstance;
 
       // Recorded once, whatever a replay does: an Activity's result is the durable one,
@@ -35,13 +35,16 @@ export const make = (registrationName: string) => {
           .pipe(Effect.as("launched")),
       });
 
-      // A hold is read here rather than inside an Activity: an Activity would hand back
-      // the answer from the attempt that first ran, and an operator sets this between
-      // attempts. Suspending leaves the run exactly where it is until release resumes it.
-      if (yield* host.held(payload.runId)) {
+      // A hold is read at each boundary rather than inside an Activity: an Activity would
+      // hand back the answer from the attempt that first ran, and an operator sets this
+      // between attempts. Suspending leaves the run exactly where it is until release
+      // resumes it.
+      const holding = Effect.gen(function* () {
+        if (!(yield* host.held(payload.runId))) return false;
         yield* host.record(payload.runId, "held");
-        return yield* Workflow.suspend(run);
-      }
+        return true;
+      });
+      if (yield* holding) return yield* Workflow.suspend(run);
 
       const chosen = yield* Activity.make({
         name: "wait",
@@ -62,6 +65,7 @@ export const make = (registrationName: string) => {
         }),
       });
 
+      if (yield* holding) return yield* Workflow.suspend(run);
       return `${label(payload.input.note)}=${chosen}`;
     }),
   );

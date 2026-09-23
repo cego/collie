@@ -29,7 +29,7 @@ export class RequestConflict extends Schema.TaggedError<RequestConflict>()("Requ
   reason: Schema.String,
 }) {}
 
-/** A run as it was admitted: the claim, the arguments and the native identity it became. */
+/** A run as it was admitted: the claim, the arguments and the execution it became. */
 const Run = Schema.Struct({
   run: Schema.String,
   request: Schema.String,
@@ -206,7 +206,7 @@ export interface StoreApi {
   readonly announce: Effect.Effect<void>;
 }
 
-export class Store extends Context.Service<Store, StoreApi>()("collie/native/Store") {}
+export class Store extends Context.Service<Store, StoreApi>()("collie/Store") {}
 
 export const storeLayer: Layer.Layer<Store, never, SqlClient.SqlClient | Reactivity.Reactivity> =
   Layer.effect(Store)(makeStore());

@@ -7,7 +7,7 @@
 import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { runEffect } from "./effect";
-import { fixtures, root } from "./native";
+import { fixtures, root } from "./host";
 
 export interface World {
   /** The installation whose user directory an author saves into. */

@@ -9,7 +9,7 @@ import { expect, setDefaultTimeout, test } from "bun:test";
 import { readEnv, type PluginEnv } from "../src/env";
 import { readIntent } from "../src/intent";
 import { connect } from "../src/host";
-import { nativeRun } from "../src/lifecycle";
+import { runView } from "../src/lifecycle";
 import { listRuns } from "../src/runs";
 import { latest, readDispositions } from "../src/disposition";
 import { TOOLS, toolNamed } from "../src/tools";
@@ -750,7 +750,7 @@ test("collie_do carries out what the human asked for, and says what happened", (
 
       expect(said).toContain("stop: applied");
       expect(yield* readProposals(yield* proposalsPath(stateDir, KEY))).toEqual([]);
-      const view = yield* nativeRun(env, run.id);
+      const view = yield* runView(env, run.id);
       expect(view !== null && "controls" in view ? view.controls : []).toContain("stop");
     }),
   ));

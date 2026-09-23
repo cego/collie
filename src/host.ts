@@ -17,7 +17,18 @@
 import * as BunSocket from "@effect/platform-bun/BunSocket";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as BunSocketServer from "@effect/platform-bun/BunSocketServer";
-import { Config, Data, Effect, FileSystem, Layer, Schedule, Schema, Scope, Struct } from "effect";
+import {
+  Config,
+  Data,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Schedule,
+  Schema,
+  Scope,
+  Struct,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
@@ -30,7 +41,7 @@ import {
   Answered,
   Controlled,
   HostRefused,
-  NativeEntryError,
+  EntryError,
   OfferView,
   Registrations,
   RunStatus,
@@ -40,7 +51,7 @@ import {
   registryLayer,
   Registry,
   type Locate,
-} from "./native";
+} from "./engine";
 import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { Kept } from "./history";
@@ -103,7 +114,7 @@ export const HostRpcs = RpcGroup.make(
   Rpc.make("load", {
     payload: { entry: Schema.String },
     success: Loaded,
-    error: NativeEntryError,
+    error: EntryError,
   }),
   Rpc.make("registrations", { success: Registrations }),
   // Which project is asking, because the answer differs: an override is one project's
@@ -353,10 +364,19 @@ const locateIn =
       }),
     );
 
+const isCrashPoint = Schema.is(Schema.Literals(["admitted", "executed"]));
+
+/** Where a test has this host kill itself mid-start; unset for every other host. */
+const crashPoint = Config.option(Config.String("COLLIE_HOST_CRASH_AT")).pipe(
+  Effect.map((set) => Option.filter(set, isCrashPoint).pipe(Option.getOrUndefined)),
+  Effect.orDie,
+);
+
 const own = (dir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const env = yield* currentEnv.pipe(Effect.orDie);
+    const crashAt = yield* crashPoint;
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
@@ -365,7 +385,11 @@ const own = (dir: string) =>
         Layer.provide(
           handlers(dir).pipe(
             Layer.provide(
-              registryLayer(dir, { locate: locateIn(env.pluginRoot), configDir: env.configDir }),
+              registryLayer(dir, {
+                locate: locateIn(env.pluginRoot),
+                configDir: env.configDir,
+                crashAt,
+              }),
             ),
           ),
         ),

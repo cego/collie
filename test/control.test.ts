@@ -11,9 +11,8 @@
 
 import { expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
-import { HostReply } from "../src/native";
 import { runEffect } from "./support/effect";
-import { events, fixtures, openHost, until, workspace } from "./support/native";
+import { HostReply, events, fixtures, openHost, until, workspace } from "./support/host";
 
 const suspended = (reply: typeof HostReply.Type) => reply.status === "suspended";
 const complete = (reply: typeof HostReply.Type) => reply.status === "complete";
@@ -263,8 +262,20 @@ test(
         const first = yield* openHost(state);
         yield* first.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
         yield* first.ask({ op: "load", entry: `${wf}/plain.workflow.ts` });
-        yield* first.ask({ op: "hold", runId: "r1" });
         yield* first.ask({ op: "start", id: "proof", runId: "r1", input: { note: "held" } });
+        yield* first.until({ op: "waiting", runId: "r1" }, asking("decision"));
+        yield* first.ask({ op: "hold", runId: "r1" });
+        yield* first.ask({
+          op: "answer",
+          id: "proof",
+          runId: "r1",
+          decision: "decision",
+          value: "on",
+        });
+        yield* until(
+          () => events(state, "r1"),
+          (log) => log.includes("held"),
+        );
         yield* first.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
 
         // The sibling is a run of its own on the same engine and the same database, and
@@ -282,20 +293,11 @@ test(
         expect((yield* second.ask({ op: "poll", id: "proof", runId: "r1" })).status).toBe(
           "suspended",
         );
-        expect(yield* events(state, "r1")).toEqual([
-          expect.stringMatching(/^launch note:held /),
-          "held",
-        ]);
+        const log = yield* events(state, "r1");
+        expect(log[0]).toMatch(/^launch note:held /);
+        expect(log.at(-1)).toBe("held");
 
         yield* second.ask({ op: "release", id: "proof", runId: "r1" });
-        yield* second.until({ op: "waiting", runId: "r1" }, asking("decision"));
-        yield* second.ask({
-          op: "answer",
-          id: "proof",
-          runId: "r1",
-          decision: "decision",
-          value: "on",
-        });
         expect(
           (yield* second.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value,
         ).toBe("note:held=on");

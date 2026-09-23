@@ -5,7 +5,7 @@
 // about this workflow — they are declarations, and the eligibility below is the only
 // thing that decides whether an offer is on the table.
 
-import { NativeHost, defineWorkflow, type WorkflowMetadata } from "collie/native";
+import { Host, defineWorkflow, type WorkflowMetadata } from "collie";
 import { Effect, Schema } from "effect";
 
 export const id = "offered";
@@ -33,7 +33,7 @@ export const make = (registrationName: string) => {
   const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
-      const host = yield* NativeHost;
+      const host = yield* Host;
       yield* host.record(payload.runId, `looked at ${payload.input.note}`);
       return `looked at ${payload.input.note}`;
     }),
