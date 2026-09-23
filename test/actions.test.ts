@@ -8,6 +8,7 @@
 
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
+import { recordDisposition } from "../src/disposition";
 import { connect, type HostClient } from "../src/host";
 import { stopHost, until } from "./support/host";
 import { collie, proves, save, type World } from "./support/world";
@@ -112,6 +113,46 @@ test(
             .pipe(Effect.result);
           expect(refused._tag).toBe("Failure");
           // Nothing was started: the Run that offered it is still the only one here.
+          expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
+test(
+  "a Run someone has settled offers nothing more, and a follow-up asked for anyway starts nothing",
+  () =>
+    proves(
+      "collie-actions-disposed-",
+      (world) =>
+        Effect.gen(function* () {
+          const project = yield* projectOf(world);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const runId = yield* finished(client, project).pipe(Effect.orDie);
+          yield* recordDisposition(`${world.state}/runs/${runId}`, {
+            kind: "superseded",
+            ref: "",
+            at: "2026-09-23T12:00:00Z",
+            by: "human",
+            note: null,
+          }).pipe(Effect.orDie);
+
+          // The follow-up is gone, and the action is shown as the reason it cannot be taken.
+          const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
+          expect(offers.map((one) => [one.id, one.unavailable !== null])).toEqual([
+            ["grade-it", true],
+          ]);
+          for (const [offer, request] of [
+            ["look-again", "act-1"],
+            ["grade-it", "act-2"],
+          ] as const) {
+            const refused = yield* client
+              .invoke({ runId, offer, input: { note: "x", grade: "pass" }, request })
+              .pipe(Effect.result);
+            expect(refused._tag).toBe("Failure");
+          }
           expect((yield* client.runs({ task: null }).pipe(Effect.orDie)).length).toBe(1);
           yield* stopHost(world.state);
         }),

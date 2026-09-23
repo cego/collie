@@ -130,9 +130,9 @@ collie --json run release <run-id> --request-id "$(uuidgen)"
 `run list` finds the Run when the user names it by repo, workflow or "the one from this
 morning" rather than by id. `resume` asks the host to pick a suspended Run up again: it
 re-enters the workflow's current code and reuses everything already done, so finished work
-is kept, an agent already launched is reattached to, and a parked Run is handed the same
-prompt. `stop` parks the Run where it is and leaves its agents alone; a held Run carries on
-with `release`. A Run an older Collie recorded is read-only: begin its work again with
+is kept, a live agent is reattached to, one a stop closed is started again with its prompt,
+and a parked Run is handed the same prompt. `stop` parks the Run where it is and closes its
+agents' panes, keeping its workspace; a held Run carries on with `release`. A Run an older Collie recorded is read-only: begin its work again with
 `run start`.
 
 Done when `run show` reports the state the user asked for.

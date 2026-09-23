@@ -291,6 +291,7 @@ export const make = (registrationName: string) => {
         },
         output: Opened,
       });
+      if (opened.mr_url) yield* host.mergeRequest(runId, opened.mr_url);
       return opened.mr_url ?? (opened.pushed ? "pushed, no merge request url" : "not pushed");
     }),
   );

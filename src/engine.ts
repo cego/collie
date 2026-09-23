@@ -85,6 +85,7 @@ import {
   projectHere,
   shell as runShell,
 } from "./mr";
+import { latest, readDispositions, type Disposition } from "./disposition";
 import { openFindingsIn } from "./output";
 import { planIssuesIn } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
@@ -1243,6 +1244,16 @@ export const evidenceDir = (dir: string, runId: string): string => `${dir}/evide
  */
 export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
 
+/** Where a Run keeps the merge request it opened. */
+const mergeRequestPath = (dir: string, runId: string) => `${runDir(dir, runId)}/merge-request`;
+
+/** The merge request a Run opened, or null where it recorded none. */
+const mergeRequestOf = (fs: FileSystem.FileSystem, dir: string, runId: string) =>
+  fs.readFileString(mergeRequestPath(dir, runId)).pipe(
+    Effect.map((url) => url.trim() || null),
+    Effect.orElseSucceed(() => null),
+  );
+
 const approvedPath = (dir: string, runId: string) => `${evidenceDir(dir, runId)}/approved.json`;
 
 const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
@@ -1530,6 +1541,14 @@ export const hostLayer = (options: {
             );
             yield* fs.remove(file, { force: true });
           }).pipe(Effect.provideContext(services), Effect.ignore),
+        mergeRequest: (runId, url) =>
+          fs
+            .makeDirectory(runDir(dir, runId), { recursive: true })
+            .pipe(
+              Effect.andThen(fs.writeFileString(mergeRequestPath(dir, runId), `${url}\n`)),
+              Effect.andThen(store.announce),
+              Effect.orDie,
+            ),
         post: (asked) =>
           under(
             fs.readFileString(asked.file).pipe(
@@ -1987,6 +2006,8 @@ export const RunView = Schema.Struct({
   diagnostic: Schema.NullOr(Schema.String),
   /** Why the Run parked its own work and what picks it up again, or null. */
   parked: Schema.NullOr(Schema.String),
+  /** The merge request the Run opened, as its workflow recorded it, or null. */
+  mr: Schema.NullOr(Schema.String),
 });
 export type RunView = typeof RunView.Type;
 
@@ -2736,6 +2757,7 @@ const makeRegistry: (
       parked: yield* fs
         .readFileString(controlPath(dir, PARKED, row.run))
         .pipe(Effect.orElseSucceed(() => null)),
+      mr: yield* mergeRequestOf(fs, dir, row.run),
     };
     // Not registered here is not a verdict on the work: the rows are all still there,
     // and what is missing is the module, named so somebody can put it back.
@@ -2950,13 +2972,17 @@ const makeRegistry: (
     // The facts a host has about a Run. What it was launched with and how it
     // ended are the row's; the tickets it wrote and the findings it left are read from
     // its own directory, because producing them is the only way a Run can have them.
+    const disposition = latest(
+      yield* readDispositions(where).pipe(Effect.orElseSucceed((): Array<Disposition> => [])),
+    );
     const facts: ActionFacts = {
       outcome: isOutcome(asked) ? asked : "unspecified",
       succeeded: state.status === "complete",
-      branch: options.branch ?? null,
-      mrUrl: null,
+      // Where the host placed it: a branch it inferred is as much the Run's as one named.
+      branch: placedOf(row, options).branch,
+      mrUrl: yield* mergeRequestOf(fs, dir, runId),
       planIssues: yield* planIssuesIn(where),
-      disposed: false,
+      disposed: disposition !== null,
       openFindings: yield* openFindingsIn(where),
       diffTarget: pointedAt(
         generation,
@@ -3200,17 +3226,33 @@ const makeRegistry: (
       readonly control: string;
       readonly set: boolean;
     }) {
+      // A stop is the Run's whole work, so it reaches the Runs it started as well: a
+      // child left working for a parent that stopped keeps changing what nobody waits on.
+      const runs =
+        options.control === STOP
+          ? [options.runId, ...descendantsOf(yield* store.runs, options.runId)]
+          : [options.runId];
       // Written before anything is woken, so a run that wakes up never finds the
       // request that stopped it still there.
-      yield* setControl(options.runId, options.control, options.set);
+      for (const runId of runs) yield* setControl(runId, options.control, options.set);
       const found = yield* routed(options.runId).pipe(Effect.result);
+      // A hold is read at the next boundary and needs no waking. Everything else does:
+      // a run parked on its question has nothing that would make it look again.
+      if (!(options.control === HOLD && options.set)) {
+        for (const runId of runs) {
+          const one = yield* routed(runId).pipe(Effect.option);
+          if (Option.isSome(one)) yield* wake(one.value);
+        }
+      }
+      // Closing their panes is what stops the agents; the Run only stops looking.
+      if (options.control === STOP && options.set) {
+        const agents = yield* Agents;
+        for (const runId of runs) yield* agents.halt(runId);
+      }
       const recorded = { runId: options.runId, control: options.control, set: options.set };
       if (found._tag === "Failure") {
         return { ...recorded, applied: false, detail: found.failure.reason };
       }
-      // A hold is read at the next boundary and needs no waking. Everything else does:
-      // a run parked on its question has nothing that would make it look again.
-      if (!(options.control === HOLD && options.set)) yield* wake(found.success);
       return { ...recorded, applied: true, detail: "" };
     }),
 
@@ -3254,6 +3296,17 @@ const makeRegistry: (
 const decodeOptions = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
+
+/**
+ * Every child this Run started, and theirs, however deep. A child is claimed under its own
+ * invocation id; a Run an offer started from this one has a request of its own and is not.
+ */
+const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArray<string> => {
+  const children = rows
+    .filter((row) => row.parent === runId && row.request === row.run)
+    .map((row) => row.run);
+  return children.flatMap((child) => [child, ...descendantsOf(rows, child)]);
+};
 
 /**
  * Why a caller who named no question cannot be given one, or null where exactly one is

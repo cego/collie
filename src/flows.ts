@@ -45,14 +45,7 @@ import type { PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
 import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Declared, Found } from "./discovery";
-import {
-  answerRun,
-  controlRun,
-  invokeOffer,
-  recoverRun,
-  savedModules,
-  startRun,
-} from "./lifecycle";
+import { answerRun, controlRun, invokeOffer, resumeRun, savedModules, startRun } from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle } from "./naming";
@@ -732,9 +725,8 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   });
   if (!chosen) return 0;
 
-  const resumed = yield* recoverRun(env, chosen.id);
+  const resumed = yield* resumeRun(env, chosen.id);
   if (!resumed.ok) return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
-  yield* controlRun(env, { runId: chosen.id, control: "stop", set: false });
   // Only a popup can close itself; running the picker in a plain pane is fine..
   if (placement === "popup") yield* Effect.ignore(herdr.popupClose());
   return 0;
@@ -1456,16 +1448,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
           return yield* forkFlow(session.herdr, env, prompts).pipe(Effect.as(null));
       }
 
-    /**
-     * A Run nothing is driving, taken up again where it stopped. `resumeRun` re-checks
-     * that for itself: the card it was asked from is minutes old, and a second Driver is
-     * not something to start on a guess.
-     */
+    /** A Run taken up again where it stopped, as every door resumes one. */
     case "ResumeRun": {
-      const resumed = yield* recoverRun(env, command.runId);
-      if (!resumed.ok) return resumed.error.message;
-      yield* controlRun(env, { runId: command.runId, control: "stop", set: false });
-      return resumed.human;
+      const resumed = yield* resumeRun(env, command.runId);
+      return resumed.ok ? resumed.human : resumed.error.message;
     }
 
     /** A finished plan, built: the same launch "Implement now" runs, from the card. */

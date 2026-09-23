@@ -319,6 +319,11 @@ export interface HostApi {
    */
   readonly release: (runId: string) => Effect.Effect<void>;
   /**
+   * Records the merge request this Run opened. It is a fact about the Run from then on:
+   * its card links it, says it waits on it, and follows what the forge says of it.
+   */
+  readonly mergeRequest: (runId: string, url: string) => Effect.Effect<void>;
+  /**
    * Puts a note on the merge request a Run was pointed at, sent by Collie rather than
    * written out again by an agent — asking for a file to be repeated verbatim is how
    * verbatim stops being true. The refusal is the message: a target that is not a merge

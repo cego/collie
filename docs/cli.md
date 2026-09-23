@@ -215,8 +215,9 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
 - **A control reaches one Run.** Its siblings and the host carry on. A control over a Run
   whose module is not loaded here is recorded and says so, naming the file to repair,
   rather than reporting a success nothing can stand behind.
-- **`run stop` parks the Run, not its agent.** The agent keeps what it is holding; stopping
-  the harness is its own action. `run resume` clears the stop and picks the Run up again.
+- **`run stop` parks the Run and stops its agents.** Their panes are closed, and those of
+  the Runs it started; the workspace keeps its own tab. `run resume` clears the stop and
+  picks the Run up again, giving work whose agent has gone to a new one.
 - **A Run parks itself when its agent's pane will not take a prompt.** herdr answering
   `agent_blocked` for ten minutes leaves the Run `suspended`, with `parked` in its view —
   and in `run show` — saying what held, for how long, and where the prompt is. `run resume`
@@ -477,11 +478,12 @@ collie --json run resume <run-id> --request-id "$(uuidgen)"
 ```
 
 `stop` parks the run where it is — at its next boundary, or inside the wait it is in — and
-leaves its agents and their panes alone: stopping a harness is its own action. `resume`
+closes its agents' panes, and those of the Runs it started, which is what stops them; the
+workspace keeps its own tab. `resume`
 asks the host to pick a suspended run up again. It re-enters the workflow's current code
 and reuses every Activity already done, so completed work and its Outputs are kept and
-never redone, and an agent already launched is reattached to rather than started a second
-time. It clears a stop first, hands a run parked on a pane the same prompt, and registers
+never redone, and an agent still live is reattached to rather than started a second
+time; one a stop closed is started again with the prompt it had. It clears a stop first, hands a run parked on a pane the same prompt, and registers
 the modules as they are now — so a run whose module was missing and has been put back is
 carried on without restarting the host. On a run the engine is already working it changes
 nothing.

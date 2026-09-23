@@ -336,11 +336,12 @@ export const renovation = (options: {
       if (!assessed.is_package) {
         // An application's updates land together: one batch branch, one merge request,
         // proved on stage once and reviewed once.
-        yield* agentWork({
+        const batched = yield* agentWork({
           ...asRenovator(here, "batch"),
           instructions: renovateText("batch"),
           output: Batched,
         });
+        if (batched.mr_url !== undefined) yield* host.mergeRequest(runId, batched.mr_url);
         const staged = yield* agentWork({
           ...asRenovator(here, "stage"),
           instructions: renovateText("stage"),

@@ -35,7 +35,7 @@ import {
   runView,
   runViews,
   isSettled,
-  recoverRun,
+  resumeRun,
   startRun,
   statusOf,
   watchRun,
@@ -875,14 +875,12 @@ const mutationFlags = {
 };
 
 const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
-  // A Run stops where it next looks, and its agent keeps whatever it is holding:
-  // halting a harness is its own action, not something a stopped Run implies.
   runMutationCommand("run-stop", runId, requestId, "stopped", (env) =>
     controlRun(env, { runId, control: "stop", set: true }),
   ),
 ).pipe(
   Command.withDescription(
-    "Stop a Run where it is; its agents and their panes are left as they are",
+    "Stop a Run where it is, and its agents with it; its workspace stays for the resume",
   ),
 );
 
@@ -1188,14 +1186,7 @@ const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =
             if (imported !== null) return imported;
             if (!(yield* anyRuns(resolved.env)))
               return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
-            // What picks a Run up is the host registering the modules as they are now and
-            // handing over what is still outstanding — which a repaired file needs — and
-            // then the stop being cleared, so work that was stopped is not stopped again.
-            const recovered = yield* recoverRun(resolved.env, runId);
-            if (!recovered.ok) return recovered;
-            // Cleared after the module is registered again, so the run that wakes up is
-            // one this host can run and does not find the stop that parked it still set.
-            yield* controlRun(resolved.env, { runId, control: "stop", set: false });
+            const recovered = yield* resumeRun(resolved.env, runId);
             if (Option.isNone(global.workspace) || !recovered.ok) return recovered;
             return {
               ok: true as const,

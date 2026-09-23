@@ -142,6 +142,17 @@ export interface AgentsApi {
   readonly pollMs: number;
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
   /**
+   * The agent for this work started again with the same prompt, where it is gone and its
+   * Output never came — a stop halts a Run's agents, and a resume picks the work up here.
+   * Nothing is started where herdr cannot say which agents it has.
+   */
+  readonly revive: (ask: AgentAsk) => Effect.Effect<void, AgentUncertain | AgentParked>;
+  /**
+   * Closes the panes this run's live agents are in, which is what stops them. Only theirs:
+   * a workspace keeps its own tab, so none is left empty by it. Says which it closed.
+   */
+  readonly halt: (runId: string) => Effect.Effect<ReadonlyArray<string>>;
+  /**
    * What the agent wrote, or null where it has written nothing in the time allowed.
    * `unless` is an Output already known to be unusable: the same text again is the agent
    * not having rewritten the file, which is not an answer to having been asked to.
@@ -293,7 +304,14 @@ export const agentWork = <Output extends OutputContract>(
       name: `${work.operation}.collect`,
       success: Schema.NullOr(Schema.String),
       error: AgentUncertain,
-      execute: stoppable(agents.collect(launched), host, work.runId, agents.pollMs),
+      execute: stoppable(
+        parkedWhenStuck(agents.revive(ask), host, work.runId).pipe(
+          Effect.andThen(agents.collect(launched)),
+        ),
+        host,
+        work.runId,
+        agents.pollMs,
+      ),
     });
     if (first === null) {
       return yield* unusable(launched, `wrote nothing to ${output}`);
@@ -364,7 +382,7 @@ const parkedWhenStuck = <A>(
  * recorded, so what comes back reattaches instead of starting a second agent.
  */
 const stoppable = <A, E>(
-  collecting: Effect.Effect<A, E>,
+  collecting: Effect.Effect<A, E, WorkflowEngine.WorkflowInstance>,
   host: HostApi,
   runId: string,
   pollMs: number,
@@ -889,6 +907,38 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       return launches;
     });
 
+  const revive = (ask: AgentAsk) =>
+    under(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
+        if (written.trim() !== "") return;
+        const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, 1);
+        const listing = yield* host.herdr.agentList().pipe(Effect.option);
+        if (listing._tag === "None" || listing.value.some((one) => one.name === agent)) return;
+        yield* log(
+          ask.runId,
+          `${agent}: gone before ${ask.operation} was written; starting it again`,
+        );
+        yield* launch(ask);
+      }),
+    );
+
+  const halt = (runId: string) =>
+    under(
+      Effect.gen(function* () {
+        const ours = new Set((yield* launchesOf(runId)).map((one) => one.agent));
+        const live = yield* host.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
+        const halted: string[] = [];
+        for (const one of live.filter((agent) => ours.has(agent.name))) {
+          const closed = yield* host.herdr.paneClose(one.paneId).pipe(Effect.result);
+          if (closed._tag === "Success") halted.push(one.name);
+        }
+        if (halted.length > 0) yield* log(runId, `stopped ${halted.join(", ")}`);
+        return halted;
+      }),
+    );
+
   const steer = (options: {
     readonly runId: string;
     readonly text: string;
@@ -945,6 +995,8 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     pollMs: host.pollMs ?? DEFAULT_POLL_MS,
     launch,
+    revive,
+    halt,
     collect,
     repair,
     steer,

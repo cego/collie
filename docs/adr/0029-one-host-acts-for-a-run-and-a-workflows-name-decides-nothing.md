@@ -1,8 +1,9 @@
 # ADR-0029: One host acts for a Run, and a workflow's name decides nothing
 
 Status: accepted. Supersedes ADR-0004's per-Run inbox and its refusal of a daemon and
-SQLite, ADR-0008's "the Driver is the only actor over agents", and ADR-0010's D1, "freeze
-the definition per Run". The rest of each stands.
+SQLite, ADR-0008's "the Driver is the only actor over agents", ADR-0010's D1, "freeze
+the definition per Run", and the first sentence of ADR-0021's D8, "stopping a Run is not
+halting its agent". The rest of each stands.
 
 ## Context
 
@@ -43,7 +44,11 @@ second time, saved as a user's entry under an id that shares nothing with the sh
 and has to pass unchanged.
 
 **A control does only what it says.** A hold is released by a human: nothing in the host
-lifts one at a time, so neither `run hold` nor `collie_hold` takes one.
+lifts one at a time, so neither `run hold` nor `collie_hold` takes one. A stop does both
+halves it names, which supersedes ADR-0021's D8: the Run parks where it next looks, and
+the host closes the panes of its agents and its children's, since closing a pane is what
+stops an agent. Only those panes: a workspace keeps its own tab. A resume gives work
+whose agent has gone, and whose Output never came, to a new agent with the same prompt.
 
 ## Consequences
 

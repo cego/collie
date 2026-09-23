@@ -15,6 +15,15 @@ export const input = {
 export const metadata: WorkflowMetadata = {
   hints: { work: "work-source" },
   checkout: "branch",
+  followUps: [
+    {
+      id: "keep-going",
+      title: "Keep going on this",
+      workflow: "self",
+      when: "succeeded",
+      eligible: (facts) => facts.branch !== null,
+    },
+  ],
 };
 
 export const make = (registrationName: string) => {

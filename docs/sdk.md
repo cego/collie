@@ -583,9 +583,11 @@ None of it is yours to implement, but it decides where your workflow can be inte
   inside an Activity abandons the wait rather than parking it. `agentWork` does this while it
   is collecting, so a stop lands even mid-collection and what resumes reattaches to the
   launch already recorded.
-- **Stopping a Run does not stop its agent.** The agent keeps what it is holding; halting a
-  harness is its own action. Steering — `run steer` — says something to that agent through
-  the one sender, and says whether it was delivered.
+- **Halting the agent is the host's half of a stop.** `run stop` also closes the panes of
+  the Run's agents, and of the Runs it started, which is what stops them; the workspace
+  keeps its own tab. When the Run resumes, work whose agent has gone and whose Output never
+  came is given to a new one with the same prompt. Steering — `run steer` — says something
+  to a live agent through the one sender, and says whether it was delivered.
 
 [ADR-0021](adr/0021-one-host-answers-for-a-run.md) is why each of those is the way it is.
 

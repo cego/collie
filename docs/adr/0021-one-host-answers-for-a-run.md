@@ -48,7 +48,8 @@ answering that read from this process's memory or its database settles the bound
 enough to race a resume, and the run parks again before the resume has landed. The measurement
 is below.
 
-**D8. Stopping a Run is not halting its agent.** A stop parks the wait where the run next
+**D8. Stopping a Run is not halting its agent.** _(Its first sentence is superseded by
+ADR-0029: the host's stop also halts the agents.)_ A stop parks the wait where the run next
 looks; the agent keeps whatever it is holding, and asking a harness to stop is its own action.
 The wait suspends its own Activity's instance, never a captured parent, and what comes back
 reattaches to the launch that was recorded rather than starting a second agent.

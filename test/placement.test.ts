@@ -331,11 +331,15 @@ test(
               taskLabel: "Project | Picker",
             });
             if (started._tag === "Failure") return yield* Effect.die(started.failure);
-            return yield* finished(started.success.runId);
+            const done = yield* finished(started.success.runId);
+            // Nobody named the branch; the one the host inferred is what the offer sees.
+            const offers = yield* registry.offers(started.success.runId);
+            return { ...done!, offers: offers.map((one) => one.id) };
           }),
         );
 
         const worktree = worktreeOf("add-a-picker");
+        expect(view.offers).toEqual(["keep-going"]);
         expect(view).toMatchObject({ cwd: worktree, workspace: null });
         const task = yield* readTask(env().stateDir, view?.task ?? "");
         expect(task).toMatchObject({ label: "Project | Picker", cwd: worktree });
@@ -420,6 +424,55 @@ test(
         expect(view?.task).not.toBeNull();
         expect(view?.status.status).toBe("complete");
         expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a stop closes the Run's agent and keeps its Task's workspace, and a resume starts the work again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const task = yield* aTask;
+        // Nothing the first time, so the stop lands while the work is out.
+        yield* rig.queueOutputs([null, { verdict: "clean" }]);
+        const view = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const started = yield* start(builds!, {
+              request: "r1",
+              text: { work: "Add a picker" },
+              task: task.id,
+            });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const runId = started.success.runId;
+            yield* until(
+              () => rig.cmds().pipe(Effect.orDie),
+              (cmds) => cmds.includes("agent prompt"),
+            );
+            yield* registry.control({ runId, control: "stop", set: true });
+            const stopped = yield* until(
+              () => registry.view(runId),
+              (seen) => seen?.status.status === "suspended",
+            );
+            expect(stopped?.controls).toEqual(["stop"]);
+            expect(yield* rig.cmds()).toContain("pane close");
+            yield* registry.control({ runId, control: "stop", set: false });
+            return yield* finished(runId);
+          }),
+        );
+
+        expect(view?.status.status).toBe("complete");
+        const cmds = yield* rig.cmds();
+        // Only the agent's pane went; the Task's workspace is where it was.
+        expect(cmds.filter((cmd) => cmd === "pane close")).toHaveLength(1);
+        expect(
+          cmds.filter((cmd) => cmd.startsWith("workspace") && cmd !== "workspace list"),
+        ).toEqual([]);
+        expect(cmds.filter((cmd) => cmd === "agent start")).toHaveLength(2);
+        expect(tabs(yield* rig.calls()).map((tab) => tab.workspace)).toEqual(["wT", "wT"]);
       }),
     ),
   120_000,

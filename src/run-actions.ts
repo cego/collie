@@ -23,7 +23,7 @@ import {
   offersOf,
   startRun,
   steerRun,
-  recoverRun,
+  resumeRun,
 } from "./lifecycle";
 import {
   clearOverride,
@@ -99,7 +99,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   registerExecutor("stop", (action) =>
     carry(controlRun(env, { runId: action.run, control: "stop", set: true })),
   );
-  registerExecutor("resume", (action) => carry(recoverRun(env, action.run)));
+  registerExecutor("resume", (action) => carry(resumeRun(env, action.run)));
   registerExecutor("answer", (action) =>
     carry(
       Effect.gen(function* () {

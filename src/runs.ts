@@ -65,18 +65,21 @@ const isText = Schema.is(Schema.String);
 const textOf = (value: Schema.Json): string => (isText(value) ? value : JSON.stringify(value));
 
 const stateOf = (view: RunView): RunState => {
+  const stopped = view.controls.includes(STOP);
   switch (view.status.status) {
     case "complete":
       return "succeeded";
     case "failed":
-      return view.controls.includes(STOP) ? "stopped" : "failed";
-    // Suspended is also an agent at work: only a question or a parked Run is waiting.
+      return stopped ? "stopped" : "failed";
+    // A stop suspends the Run where it is, so the control says which suspension it is.
+    // Otherwise suspended is also an agent at work: only a question or a parked Run waits.
     case "suspended":
+      if (stopped) return "stopped";
       return view.parked !== null || view.waiting.some((one) => one.answer === null)
         ? "waiting"
         : "running";
     case "pending":
-      return "running";
+      return stopped ? "stopped" : "running";
   }
 };
 
@@ -99,7 +102,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
     sources: view.provenance,
   },
   branch: view.branch,
-  mr: null,
+  mr: view.mr,
   workspace: view.workspace,
   worktree: view.worktree,
   dir: runDir(stateDir, view.runId),
@@ -142,6 +145,11 @@ export const factsOfHistory = (stateDir: string, row: HistoryRow): RunFacts => {
   const inputs = decodeStrings(row.inputs);
   const evidence = decodeEvidence(row.evidence);
   const dir = evidence._tag === "Some" ? evidence.value.dir : runDir(stateDir, row.run);
+  const worktree =
+    evidence._tag === "Some" && evidence.value.worktree !== undefined
+      ? Option.getOrNull(decodeWorktree(evidence.value.worktree))
+      : null;
+  const given = inputs._tag === "Some" ? inputs.value : {};
   return {
     id: row.run,
     workflow: row.workflow,
@@ -154,17 +162,16 @@ export const factsOfHistory = (stateDir: string, row: HistoryRow): RunFacts => {
     finished: row.finished,
     state: importedState(row.status),
     settled: {
-      inputs: inputs._tag === "Some" ? inputs.value : {},
+      inputs: given,
       strategies: kept._tag === "Some" ? (kept.value.strategies ?? {}) : {},
       sources: kept._tag === "Some" ? (kept.value.sources ?? {}) : {},
     },
-    branch: null,
+    // The branch its checkout was on, or the one it was asked to work on: the same fact
+    // a live Run's placement records, so both are classified alike.
+    branch: worktree?.branch || given.branch || null,
     mr: evidence._tag === "Some" ? evidence.value.mr : null,
     workspace: null,
-    worktree:
-      evidence._tag === "Some" && evidence.value.worktree !== undefined
-        ? Option.getOrNull(decodeWorktree(evidence.value.worktree))
-        : null,
+    worktree,
     dir,
     // The old engine filed a Run's evidence inside its own directory.
     evidence: dir,

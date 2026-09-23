@@ -154,8 +154,8 @@ this work is>`, from the work and from the names already live in the session —
 display only: a label never decides membership, and a label a human changed is theirs,
 never written again. It is where Collie scopes a Run lookup: a workspace that is not a
 Task's narrows nothing. It gives no file or branch isolation — that is the Worktree's job.
-A stop closes nothing in it, and its own shell tab is never handed to an agent, so it
-outlives the agents' panes. One herdr has dropped anyway is reopened on the Run's checkout
+A stop closes only its Run's agents' panes, and its own shell tab is never handed to an
+agent, so it outlives them. One herdr has dropped anyway is reopened on the Run's checkout
 at the next launch, and the Task records the new id.
 
 **TaskView** — One Task as the board draws it: name, project, state, the step glyphs, one

@@ -26,7 +26,7 @@ interface FakePane {
 interface FakeAgent {
   name: string;
   pane_id: string;
-  /** herdr's identity for the process; defaulted per name unless a test pins one. */
+  /** herdr's identity for the process; one per start, or defaulted per name. */
   terminal_id?: string;
 }
 
@@ -205,7 +205,7 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
       workspace_id: pane.workspace_id ?? null,
       foreground_cwd: pane.foreground_cwd ?? null,
     })),
-    agents: (state.agents ?? []).map((agent) => ({ name: agent.name, pane_id: agent.pane_id })),
+    agents: (state.agents ?? []).map((agent) => ({ ...agent })),
     workspaces: (state.workspaces ?? []).map((workspace) => ({ ...workspace })),
     closedWorkspaces: [...(state.closedWorkspaces ?? [])],
     worktrees: (state.worktrees ?? []).map((worktree) => ({ ...worktree })),
@@ -596,6 +596,8 @@ function handle(
       }
       case "pane close":
         state.paneList = state.paneList.filter((p) => p.pane_id !== argv[2]);
+        // The agent in a pane goes with it.
+        state.agents = state.agents.filter((a) => a.pane_id !== argv[2]);
         break;
       case "pane move": {
         const tabId = flag("--tab") ?? "";
@@ -635,10 +637,17 @@ function handle(
         };
         break;
       }
-      case "agent start":
-        state.agents.push({ name: argv[2]!, pane_id: flag("--pane") ?? "" });
+      case "agent start": {
+        const pane = flag("--pane") ?? "";
+        // A process of its own, so the same name started again is a new incarnation.
+        state.agents.push({
+          name: argv[2]!,
+          pane_id: pane,
+          terminal_id: `term-${argv[2]}@${pane}`,
+        });
         result = { type: "agent_started" };
         break;
+      }
       case "agent list": {
         const gone = new Set(
           (yield* envString("FAKE_HERDR_AGENTS_GONE")).split(",").filter((n) => n),

@@ -425,6 +425,18 @@ export const controlRun = (
     }),
   );
 
+/**
+ * Picks a Run up again, whichever door asked: the modules registered as they are now and
+ * what is outstanding handed over, then the stop cleared — after, so the run that wakes
+ * is one this host can run and does not find the stop that parked it still set.
+ */
+export const resumeRun = (env: PluginEnv, runId: string): Effect.Effect<OpResult, never, Client> =>
+  recoverRun(env, runId).pipe(
+    Effect.tap((recovered) =>
+      recovered.ok ? controlRun(env, { runId, control: "stop", set: false }) : Effect.void,
+    ),
+  );
+
 /** Grants a Run one command Collie may run itself, or withdraws it, through the host. */
 export const grantRun = (
   env: PluginEnv,

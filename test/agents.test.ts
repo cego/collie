@@ -803,7 +803,7 @@ const firstDone = FileSystem.FileSystem.pipe(
 );
 
 test(
-  "a stop closes nothing of the Task's workspace, and the resume goes on to the next item in it",
+  "a Run's own stop leaves its Task's workspace as it was, and the resume goes on to the next item in it",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -812,7 +812,7 @@ test(
         yield* stoppedAtFirst("r1");
 
         // The agent is in the Task's workspace, not the one the host was started from, and
-        // the stop parked the Run without touching a pane, a tab or a workspace.
+        // the workflow's half of a stop parks the Run without touching a tab or a workspace.
         expect(tabsIn(yield* rig.calls())).toEqual(["wT"]);
         const closing = (cmd: string) => cmd.endsWith(" close");
         expect((yield* rig.cmds()).filter(closing)).toEqual([]);
