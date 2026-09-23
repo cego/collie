@@ -768,6 +768,32 @@ const offerArguments = Effect.fn("Flows.offerArguments")(function* (
   return input;
 });
 
+/**
+ * One offer of the Run's module, as it stands now, asked for what it takes and then made.
+ * The note for the footer, or null where the human cancelled the asking.
+ */
+export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  runId: string,
+  chosen: string,
+) {
+  const listed = yield* offersOf(env, runId);
+  if ("ok" in listed) return listed.error.message;
+  const offer = listed.find((one) => one.id === chosen);
+  if (offer === undefined) return `${runId} no longer offers ${chosen}`;
+  if (offer.unavailable !== null) return `${offer.title}: ${offer.unavailable}`;
+  const input = yield* offerArguments(prompts, offer.arguments);
+  if (input === null) return null;
+  const done = yield* invokeOffer(env, {
+    runId,
+    offer: offer.id,
+    input,
+    request: yield* newRequestId(),
+  });
+  return done.ok ? done.human : done.error.message;
+});
+
 /** How often the tab re-reads the files and asks herdr what is still alive. */
 const REFRESH_MS = 1500;
 /** How long a keypress may wait; the tab has to feel like a TUI, not a report. */
@@ -1368,15 +1394,8 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
      * that is: the offer names the workflow, the facts decide whether it is still on the
      * table, and both are asked again now rather than taken from the card.
      */
-    case "InvokeOffer": {
-      const done = yield* invokeOffer(env, {
-        runId: command.runId,
-        offer: command.offer,
-        input: {},
-        request: yield* newRequestId(),
-      });
-      return done.ok ? done.human : done.error.message;
-    }
+    case "InvokeOffer":
+      return yield* makeOffer(env, prompts, command.runId, command.offer);
 
     /** What the Run's module offers now, the one chosen asked for what it takes, then made. */
     case "ChooseOffer": {
@@ -1388,17 +1407,8 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         open.map((one) => ({ id: one.id, title: one.title, subtitle: one.workflow })),
         { header: `What next for ${command.runId}?` },
       );
-      const offer = open.find((one) => one.id === chosen?.id);
-      if (offer === undefined) return null;
-      const input = yield* offerArguments(prompts, offer.arguments);
-      if (input === null) return null;
-      const done = yield* invokeOffer(env, {
-        runId: command.runId,
-        offer: offer.id,
-        input,
-        request: yield* newRequestId(),
-      });
-      return done.ok ? done.human : done.error.message;
+      if (chosen === null) return null;
+      return yield* makeOffer(env, prompts, command.runId, chosen.id);
     }
 
     case "RunWorkflow":

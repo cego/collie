@@ -1012,9 +1012,7 @@ export function actionsFor(row: Row | null, filter: Filter): Action[] {
   if (row.kind === "active") {
     actions.push({ key: "k", label: "stop", command: { _tag: "StopRun", runId } });
   } else if (sessionLocal(filter)) {
-    // What the Run's own Workflow offers, for a run that has stopped: work started from
-    // one still writing would build from half of it. What is offered, and what each one
-    // takes, is asked of the module when the key is pressed — never decided here.
+    // Only once it has stopped: work started from a Run still writing builds on half of it.
     actions.push({ key: "x", label: "offers", command: { _tag: "ChooseOffer", runId } });
   }
   if (row.target) {

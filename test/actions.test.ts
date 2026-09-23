@@ -9,6 +9,8 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { recordDisposition } from "../src/disposition";
+import { currentEnv } from "../src/env";
+import { makeOffer, type FlowPrompts } from "../src/flows";
 import { connect, type HostClient } from "../src/host";
 import { stopHost, until } from "./support/host";
 import { collie, proves, save, type World } from "./support/world";
@@ -74,6 +76,36 @@ test(
           expect(done?.workflow).toBe("graded");
           expect(done?.parent).toBe(runId);
           expect(done?.status).toEqual({ status: "complete", value: "strict:the diff/pass" });
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
+test(
+  "the card's primary button asks for what its offer takes, as the offer menu does",
+  () =>
+    proves(
+      "collie-actions-primary-",
+      (world) =>
+        Effect.gen(function* () {
+          const project = yield* projectOf(world);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const runId = yield* finished(client, project).pipe(Effect.orDie);
+          const asked: string[] = [];
+          const answers = ["the diff", "pass"];
+          const prompts: FlowPrompts = {
+            menu: () => Effect.succeed(null),
+            ask: (question) => {
+              asked.push(question);
+              return Effect.succeed(answers.shift() ?? null);
+            },
+          };
+
+          const note = yield* makeOffer(yield* currentEnv, prompts, runId, "grade-it");
+          expect(asked).toEqual(["note?", "grade?"]);
+          expect(note).toStartWith("Started run ");
           yield* stopHost(world.state);
         }),
       [],
