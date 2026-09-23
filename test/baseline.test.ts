@@ -1026,6 +1026,43 @@ scenario(
 );
 
 scenario(
+  "a ticket added to a one-ticket plan while it is being built is built next",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+        ]);
+        yield* approve("r-grow", ["unit"]);
+        yield* rig.queueOutputs([null, BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        const running = yield* Effect.forkChild(
+          ran({ entry: shipped("implement"), runId: "r-grow", input: { plan } }),
+        );
+        const agents = `${dir}/agents/r-grow`;
+        yield* until(
+          () => fs.exists(`${agents}/build.prompt.md`).pipe(Effect.orElseSucceed(() => false)),
+          (there) => there,
+        );
+        yield* fs.writeFileString(
+          `${plan}/issues/02-second.md`,
+          "# the second one\n\n**Checks:** unit\n",
+        );
+        yield* fs.writeFileString(`${agents}/build.json`, asJson(BUILT));
+        const result = yield* Fiber.join(running);
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-grow", "02-second.md")).toContain("Ticket: 02-second.md");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "the merge request says what was verified, and is assigned to whoever the config names",
   () =>
     runEffect(

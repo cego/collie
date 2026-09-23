@@ -184,9 +184,9 @@ export const make = (registrationName: string) => {
         });
       });
       let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
-      // One ticket is not a plan to slice: the hand-off would be empty and the loop a
-      // longer way of writing what one pass already does.
-      const sliced = tickets.length >= 2;
+      // One ticket is not a plan to slice: one pass builds all of it, and only tickets
+      // added after that pass are built one at a time.
+      const whole = tickets.length < 2;
       const built = new Set<string>();
       const handed: Handed[] = [];
       let build: typeof Built.Type | null = null;
@@ -195,11 +195,8 @@ export const make = (registrationName: string) => {
         // result, and finding that out after an agent has been paid for is too late.
         const clash = identityProblem(tickets.map((ticket) => ticket.file));
         if (clash !== null) return yield* new WorkflowError({ reason: clash });
-        const ticket = sliced
-          ? tickets.find((one) => !built.has(one.file))
-          : built.size === 0
-            ? null
-            : undefined;
+        const ticket =
+          whole && built.size === 0 ? null : tickets.find((one) => !built.has(one.file));
         if (ticket === undefined) break;
         const before = (yield* host.evidence(runId, cwd)).verifications.length;
         if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
@@ -237,6 +234,7 @@ export const make = (registrationName: string) => {
         };
         handed.push(done);
         built.add(done.item);
+        if (ticket === null) for (const one of tickets) built.add(one.file);
         if (ticket !== null) yield* checkpoint(place.dir, ticket, "done", claimsOf(build, ticket));
         // A ticket that did not land stops the plan here: the next one is written against
         // work that is not there, and building it would be building on nothing. A finding
@@ -245,7 +243,7 @@ export const make = (registrationName: string) => {
         if (blocking.length > 0) {
           return `${done.item}: stopped with ${blocking.length} blocking finding(s)`;
         }
-        if (sliced) tickets = yield* ticketsNow;
+        tickets = yield* ticketsNow;
       }
       if (build === null) return yield* new WorkflowError({ reason: "nothing was built" });
 
