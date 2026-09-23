@@ -166,11 +166,12 @@ export const make = (registrationName: string) => {
         }
 
         if (chosen === IMPLEMENT) {
+          // This review is the work source; the branch it reviewed is read from it.
           const child = yield* children.start({
             runId,
             invocation: "implement",
             workflow: "implement",
-            input: { plan: place.dir, target: asked.target },
+            input: { plan: place.dir },
           });
           yield* children.result(child);
           return `${synthesis.findings.length} finding(s), fixed in ${child.runId}`;

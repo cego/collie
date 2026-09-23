@@ -648,6 +648,77 @@ const CHAINS: ReadonlyArray<{
   },
 ];
 
+test(
+  "a review's findings built in a full implement run are built on the branch that was reviewed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* aTask;
+        yield* approvedByOperator;
+        // The reviewed branch, pushed where a build can fetch the reviewed work from.
+        const origin = `${rig.root}/origin.git`;
+        for (const args of [
+          ["init", "--quiet", "--bare", origin],
+          ["branch", "picker"],
+          ["remote", "add", "origin", origin],
+          ["push", "--quiet", "origin", "master", "picker"],
+        ]) {
+          Bun.spawnSync(["git", ...args], { cwd: rig.projectDir });
+        }
+        const finding = { severity: "major", title: "the guard is backwards", file: "a.ts" };
+        yield* rig.queueOutputs([
+          { verdict: "findings", findings: [finding] },
+          {
+            verdict: "findings",
+            summary: "One thing.",
+            findings: [finding],
+            dropped: [],
+            fixed: [],
+          },
+        ]);
+        const seen = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const store = yield* Store;
+            const [review] = yield* loaded(registry, [shipped("review"), shipped("implement")]);
+            const started = yield* start(review!, {
+              request: "r1",
+              text: { target: "branch:master...picker" },
+              task: "task-1",
+            });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const runId = started.success.runId;
+            yield* until(
+              () => store.asked(runId),
+              (rows) => rows.some((row) => row.decision === "post-1"),
+            );
+            yield* registry
+              .answer({
+                runId,
+                decision: "post-1",
+                value: "Fix findings in a full implement run",
+                request: "a1",
+              })
+              .pipe(Effect.orDie);
+            return yield* until(
+              () =>
+                Effect.all({
+                  parent: registry.view(runId),
+                  child: registry.view(`${runId}.implement`),
+                }),
+              (both) =>
+                both.child !== null || (both.parent !== null && isOver(both.parent.status.status)),
+            );
+          }),
+        );
+
+        expect(seen.parent?.status.status === "failed" ? seen.parent.status.reason : "").toBe("");
+        expect(seen.child).toMatchObject({ branch: "picker", task: "task-1" });
+      }),
+    ),
+  180_000,
+);
+
 for (const chain of CHAINS) {
   test(
     `${chain.name} chained into implement: one Task, one workspace, the build on its own worktree`,

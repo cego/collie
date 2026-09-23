@@ -1666,6 +1666,13 @@ const pointedAt = (
 
 const isText = Schema.is(Schema.String);
 
+/** The field a module gives this strategy, if it gives it to one. */
+const fieldWith = (hints: Readonly<Record<string, InputStrategy>>, strategy: InputStrategy) =>
+  Object.entries(hints).find(([, hint]) => hint === strategy)?.[0];
+
+/** Where placement reads a reviewed target the building module has no field for. */
+const REVIEWED = "reviewed";
+
 /** The input a run was admitted with, as the row keeps it. */
 const decodeInput = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
@@ -2388,6 +2395,17 @@ const makeRegistry: (
 
   const refused = (reason: string) => new WorkflowError({ reason });
 
+  /** What the review Run whose directory this is was pointed at, or null. */
+  const reviewedTarget = Effect.fn("Engine.reviewedTarget")(function* (dirOfRun: string) {
+    const row = yield* store.run(dirOfRun.replace(/\/+$/, "").split("/").at(-1) ?? "");
+    const generation = row === null ? undefined : live.get(row.generation);
+    if (row === null || generation === undefined) return null;
+    return pointedAt(
+      generation,
+      yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
+    );
+  });
+
   /**
    * Where a Run will work, settled before it exists. A workflow that declares a checkout is
    * cut one from the checkout it starts from, and one that cannot be is refused here, while
@@ -2413,6 +2431,17 @@ const makeRegistry: (
     let placed: Placed = { cwd: from, branch: null, workspace: null, worktree: null };
     let opened: { readonly id: string; readonly label: string | null } | null = null;
     if (generation.checkout !== "none") {
+      const inputs = yield* branchInputs(generation, ask.input, ask.options);
+      // Building a review's findings works on the branch that review was pointed at: a
+      // fact of the review's own Run, so the module building them need not declare it.
+      const source = fieldWith(generation.hints, "work-source");
+      const reviewed =
+        source !== undefined &&
+        inputs[`${source}_kind`] === "review" &&
+        fieldWith(generation.hints, "diff-target") === undefined
+          ? yield* reviewedTarget(inputs[source] ?? "")
+          : null;
+      if (reviewed !== null) inputs[REVIEWED] = reviewed;
       if (
         generation.checkout === "branch" &&
         (yield* repositoryName(runShell, from).pipe(Effect.mapError(failed))) === null
@@ -2428,8 +2457,9 @@ const makeRegistry: (
         checkout: generation.checkout,
         separate: ask.request.kind === "separate",
         name: ask.runId,
-        inputs: yield* branchInputs(generation, ask.input, ask.options),
-        strategies: generation.hints,
+        inputs,
+        strategies:
+          reviewed === null ? generation.hints : { ...generation.hints, [REVIEWED]: "diff-target" },
         sources: ask.provenance,
         openLabel: ask.taskLabel ?? null,
         explicit: ask.options.branch ?? null,

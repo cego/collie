@@ -157,7 +157,8 @@ change breaks is exactly the blocker worth raising. Minor findings are exempt.
   which fixes them where the review was pointed. Offered once: a second round of it would
   be the same findings again.
 - **Fix findings in a full implement run** — chains `implement` with this run as the work
-  source, regardless.
+  source. The build is placed on the branch this review was pointed at — a branch target's
+  head, or a merge request's source branch — read from the review's own Run.
 - **Post to MR** — sends `review.md` to the merge request it reviewed, verbatim and as a
   single note. Offered only where the target is a merge request and `glab` can reach it.
 - **Don't post** — ends the run.
