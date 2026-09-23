@@ -1103,8 +1103,9 @@ export const loadEntry: (
 
 /**
  * What a generation of an entry would be staged from, as one value. A generation is a copy
- * of the whole directory, so an edited helper or Markdown prompt is as much a change as an
- * edited entry — and a directory nothing has touched is the same code to run.
+ * of the whole directory and of what it imports from outside it, so an edited helper or
+ * Markdown prompt is as much a change as an edited entry — and nothing touched is the same
+ * code to run.
  */
 export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
   Effect.fn("Engine.revisionOf")(function* (dir: string) {
@@ -1123,16 +1124,63 @@ export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSyste
         : yield* fs.readFileString(`${dir}/${name}`).pipe(Effect.orElseSucceed(() => ""));
       read += `${name}:${Bun.hash(content).toString(16)}\n`;
     }
+    for (const file of yield* outsideOf(dir)) {
+      const content = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+      read += `${file}:${Bun.hash(content).toString(16)}\n`;
+    }
     return Bun.hash(read).toString(16);
   });
+
+/** The files outside `dir` its code imports by a relative path, and what those import in turn. */
+const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const names = yield* fs
+    .readDirectory(dir, { recursive: true })
+    .pipe(Effect.orElseSucceed((): Array<string> => []));
+  const pending = names
+    .filter((name) => !name.startsWith("node_modules/"))
+    .map((name) => `${dir}/${name}`);
+  const outside = new Set<string>();
+  for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+    const loader = loaderOf(file);
+    if (loader === null) continue;
+    const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+    for (const target of importedBy(file, text, loader)) {
+      if (target.startsWith(`${dir}/`) || outside.has(target)) continue;
+      outside.add(target);
+      pending.push(target);
+    }
+  }
+  return [...outside].sort();
+});
+
+/** What this code imports by a relative path, where Bun resolves it; unparseable code imports nothing. */
+const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => {
+  let imports: ReadonlyArray<{ readonly path: string }> = [];
+  try {
+    imports = new Bun.Transpiler({ loader }).scanImports(text);
+  } catch {
+    return [];
+  }
+  return imports.flatMap((one) => {
+    if (!one.path.startsWith(".")) return [];
+    try {
+      return [Bun.resolveSync(one.path, directoryOf(file))];
+    } catch {
+      return [];
+    }
+  });
+};
 
 /**
  * A generation's own copy of the directory the entry lives in, so an edited helper reaches
  * new work without restarting the host. Bun's module registry has no invalidation:
  * re-importing the entry under a new query re-reads the entry, but its `./helper.ts`
  * resolves to the path already cached. A copy gives every file a path nothing has
- * imported yet. It is a cache — a host wipes it on start and stages from the module as it
- * is now, so this is never the code a past run is recovered onto.
+ * imported yet. What the directory imports from outside it is copied beside it where it
+ * sits relative to it, so every relative import still names the same file, in the copy.
+ * It is a cache — a host wipes it on start and stages from the module as it is now, so
+ * this is never the code a past run is recovered onto.
  */
 export const stageGeneration: (options: {
   readonly dir: string;
@@ -1143,59 +1191,29 @@ export const stageGeneration: (options: {
 )(function* (options: { readonly dir: string; readonly name: string; readonly entry: string }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const slash = options.entry.lastIndexOf("/");
-  const from = options.entry.slice(0, slash);
-  const staged = `${options.dir}/generations/${options.name}`;
+  const from = directoryOf(options.entry);
+  const outside = yield* outsideOf(from);
+  let root = from;
+  for (const file of outside) {
+    while (!file.startsWith(`${root}/`) && root !== path.dirname(root)) root = path.dirname(root);
+  }
+  const staged = (file: string) =>
+    path.join(options.dir, "generations", options.name, path.relative(root, file));
   const failed = (cause: unknown) =>
     new EntryError({ file: options.entry, message: String(cause) });
-  yield* fs.copy(from, staged, { overwrite: true }).pipe(Effect.mapError(failed));
-  // A relative import that climbs out of the directory — a fork naming the module it
-  // extends — means the file it named, wherever the copy is.
-  for (const name of yield* fs
-    .readDirectory(staged, { recursive: true })
-    .pipe(Effect.mapError(failed))) {
-    const loader = loaderOf(name);
-    if (loader === null || name.startsWith("node_modules/")) continue;
-    const text = yield* fs.readFileString(`${staged}/${name}`).pipe(Effect.mapError(failed));
-    const anchored = anchorImports(text, loader, (specifier) => {
-      const target = path.resolve(path.dirname(`${from}/${name}`), specifier);
-      return target === from || target.startsWith(`${from}/`) ? null : target;
-    });
-    if (anchored !== text) {
-      yield* fs.writeFileString(`${staged}/${name}`, anchored).pipe(Effect.mapError(failed));
-    }
+  yield* fs.copy(from, staged(from), { overwrite: true }).pipe(Effect.mapError(failed));
+  for (const file of outside) {
+    yield* fs
+      .makeDirectory(path.dirname(staged(file)), { recursive: true })
+      .pipe(Effect.andThen(fs.copyFile(file, staged(file))), Effect.mapError(failed));
   }
-  return `${staged}${options.entry.slice(slash)}`;
+  return staged(options.entry);
 });
 
 const loaderOf = (name: string): "ts" | "tsx" | "js" | null => {
   if (/\.(ts|mts|cts)$/.test(name)) return "ts";
   if (name.endsWith(".tsx")) return "tsx";
   return /\.(js|mjs|cjs|jsx)$/.test(name) ? "js" : null;
-};
-
-/** Each relative specifier `outside` gives a path for, rewritten to it. Unparseable text is left alone. */
-const anchorImports = (
-  text: string,
-  loader: "ts" | "tsx" | "js",
-  outside: (specifier: string) => string | null,
-): string => {
-  let imports: ReadonlyArray<{ readonly path: string }> = [];
-  try {
-    imports = new Bun.Transpiler({ loader }).scanImports(text);
-  } catch {
-    return text;
-  }
-  let out = text;
-  for (const specifier of new Set(imports.map((one) => one.path))) {
-    if (!specifier.startsWith(".")) continue;
-    const target = outside(specifier);
-    if (target === null) continue;
-    for (const quote of ['"', "'"]) {
-      out = out.replaceAll(`${quote}${specifier}${quote}`, `${quote}${target}${quote}`);
-    }
-  }
-  return out;
 };
 
 const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));

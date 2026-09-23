@@ -13,6 +13,7 @@ import {
   TOOLCHAIN,
   loadEntry,
   provisionToolchain,
+  revisionOf,
   stageGeneration,
   typecheckEntry,
 } from "../src/engine";
@@ -226,6 +227,47 @@ test(
     ),
   60_000,
 );
+
+test("a helper outside a module's directory is part of its revision, and each generation loads it as it is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "collie-outside-" });
+      yield* fs.makeDirectory(`${root}/mod`);
+      yield* fs.makeDirectory(`${root}/shared`);
+      const entry = `${root}/mod/entry.ts`;
+      yield* fs.writeFileString(
+        entry,
+        [
+          `import { n } from "../shared/helper";`,
+          `export const value = n;`,
+          `export const said = "../shared/helper";`,
+        ].join("\n"),
+      );
+      const helper = (n: number) =>
+        fs.writeFileString(`${root}/shared/helper.ts`, `export const n = ${n};\n`);
+      const staged = Effect.fn(function* () {
+        const revision = yield* revisionOf(`${root}/mod`);
+        const file = yield* stageGeneration({
+          dir: `${root}/state`,
+          name: `mod@${revision}`,
+          entry,
+        });
+        return { revision, module: yield* Effect.promise(() => import(file)) };
+      });
+
+      yield* helper(1);
+      const first = yield* staged();
+      expect(first.module.value).toBe(1);
+      // A string that reads like the import is a value, not a path to anchor.
+      expect(first.module.said).toBe("../shared/helper");
+
+      yield* helper(2);
+      const second = yield* staged();
+      expect(second.revision).not.toBe(first.revision);
+      expect(second.module.value).toBe(2);
+    }).pipe(Effect.scoped),
+  ));
 
 /** What `workflow check` and `workflow list` carry, as far as these read them. */
 const Reported = Schema.Struct({
