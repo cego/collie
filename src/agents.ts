@@ -20,9 +20,11 @@ import * as Workflow from "effect/unstable/workflow/Workflow";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import {
   COMPACTION_WAIT_MS,
+  atBoundary,
   installControls,
   withControlLock,
   type CompactionDeps,
+  type CompactionPorts,
 } from "./compaction";
 import { COMPACTION_PORTS } from "./compactors";
 import { FALLBACK_DEFAULTS, loadDefaults } from "./config";
@@ -485,6 +487,8 @@ export interface AgentHost {
   readonly collectMs?: number;
   /** How a step's own prompts wait out a pane that says it will clear by itself. */
   readonly patience?: dispatch.Patience;
+  /** Each harness's compaction controls; the shipped ones where none are given. */
+  readonly ports?: CompactionPorts;
 }
 
 type AgentServices = FileSystem.FileSystem | Path.Path | BunServices;
@@ -512,6 +516,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   const launchPath = (runId: string, operation: string) =>
     `${dirFor(runId)}/${operation}${LAUNCH_SUFFIX}`;
   const outputFor = (runId: string, operation: string) => `${dirFor(runId)}/${operation}.json`;
+  const launchOrder = (runId: string) => `${dirFor(runId)}/launches`;
   const log = (runId: string, line: string) => append(`${dirFor(runId)}/agents.log`, line);
 
   /**
@@ -667,6 +672,24 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     );
   });
 
+  /**
+   * The work boundary of an agent that already has work behind it: asked to compact first
+   * where its context has grown past the limit, and held while an earlier compaction is
+   * still in the air. A channel that will not open is left to the delivery to report.
+   */
+  const boundary = (launched: Launched) =>
+    Effect.gen(function* () {
+      const found = yield* entryFor(launched, launched.agent, null);
+      if (found.entry === null) return { dispatch: true as const };
+      return yield* dispatch.transaction(deps, found.entry, (channel) =>
+        atBoundary(
+          compactionDeps(host, launched.runId),
+          { agent: launched.agent, run: launched.runId, step: launched.operation },
+          channel,
+        ),
+      );
+    }).pipe(Effect.catch(() => Effect.succeed({ dispatch: true as const })));
+
   /** A pane, an agent in it, and the registry entry that makes it addressable. */
   const start = Effect.fn("Agents.start")(function* (ask: AgentAsk, agent: string) {
     const adapter = adapterFor(ask.harness ?? host.harness);
@@ -734,6 +757,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           });
         }
         const alive = listing.success.some((one) => one.name === agent);
+        const fs = yield* FileSystem.FileSystem;
+        // A launch file already here is this same work replayed, not new work for the agent.
+        const replayed = yield* fs
+          .exists(launchPath(ask.runId, ask.operation))
+          .pipe(Effect.orElseSucceed(() => false));
         if (!alive) yield* start(ask, agent);
         const launched: Launched = {
           agent,
@@ -751,9 +779,16 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
         yield* write(file, prefix === "" ? ask.prompt : `${prefix}\n\n${ask.prompt}`);
+        if (alive && !replayed) {
+          const due = yield* boundary(launched);
+          if (!due.dispatch) {
+            return yield* new AgentParked({ operation: ask.operation, reason: due.reason });
+          }
+        }
         // Beside it, the agent this work landed on, so a human steering this run later
         // reaches the agent that has it rather than one derived from a name again.
         yield* write(launchPath(ask.runId, ask.operation), encodeLaunched(launched));
+        if (!replayed) yield* append(launchOrder(ask.runId), ask.operation);
         // The work is the file, and the message says where it is: one send is one
         // message and not a transcript, and a step's prompt carries a whole contract.
         // A skill marked `disable-model-invocation` refuses an agent that invokes it
@@ -829,13 +864,22 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     );
 
-  /** Every agent this run has launched, oldest first, as the launches recorded them. */
+  /** Every agent this run has launched, oldest first, in the order they were launched. */
   const launchesOf = (runId: string) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const names = yield* fs.readDirectory(dirFor(runId)).pipe(Effect.orElseSucceed(() => []));
+      const order = (yield* fs
+        .readFileString(launchOrder(runId))
+        .pipe(Effect.orElseSucceed(() => ""))).split("\n");
+      // A launch from before the order was kept sorts first, by name.
+      const rank = (name: string) => order.lastIndexOf(name.slice(0, -LAUNCH_SUFFIX.length));
       const launches: Launched[] = [];
-      for (const name of names.filter((one) => one.endsWith(LAUNCH_SUFFIX)).sort()) {
+      const launched = names
+        .filter((one) => one.endsWith(LAUNCH_SUFFIX))
+        .sort()
+        .sort((one, other) => rank(one) - rank(other));
+      for (const name of launched) {
         const text = yield* fs
           .readFileString(`${dirFor(runId)}/${name}`)
           .pipe(Effect.orElseSucceed(() => ""));
@@ -945,7 +989,7 @@ export const repairText = (output: string, problem: string): string =>
   `Your Output file is not usable: ${problem}\n\nWrite ${output} again — the JSON the contract described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${output}`;
 
 const compactionDeps = (host: AgentHost, runId: string): CompactionDeps => ({
-  ports: COMPACTION_PORTS,
+  ports: host.ports ?? COMPACTION_PORTS,
   stateDir: host.env.stateDir,
   configured: host.compactAtTokens,
   herdr: host.herdr,

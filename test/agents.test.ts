@@ -31,6 +31,7 @@ import { readTask, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { readRegistry, registryPath, scopeFor } from "../src/registry";
 import { agentName } from "../src/naming";
+import type { CompactionPorts } from "../src/compaction";
 
 let rig: Rig;
 let dir: string;
@@ -636,6 +637,83 @@ test("an item whose identity is not a name of its own starts no agent at all", (
         'operation "../escape" contains a path separator',
       );
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toEqual([]);
+    }),
+  ));
+
+/** Two agents, launched one after the other under names that sort the other way round. */
+const pair = defineWorkflow({ name: "agent-pair", input: {}, success: Schema.String });
+const pairBody = pair.toLayer(
+  Effect.fnUntraced(function* (payload) {
+    for (const operation of ["synthesize", "fix-1"]) {
+      yield* agentWork({
+        runId: payload.runId,
+        operation,
+        role: "implementer",
+        workflow: "agent-pair",
+        cwd: rig.projectDir,
+        instructions: "Do it.",
+        output: Verdict,
+      });
+    }
+    return "both";
+  }),
+);
+
+test("a steer that names no agent reaches the one launched last, not the last by name", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "clean", note: "one" },
+        { verdict: "clean", note: "two" },
+      ]);
+      const told = yield* Effect.gen(function* () {
+        yield* pair.execute({ runId: "r1", input: {} });
+        return yield* say("r1", "and now this", "steer-1");
+      }).pipe(
+        Effect.provide(pairBody),
+        Effect.provide(agentsLayer(hostOf())),
+        Effect.provide(foundationLayer({ dir })),
+        Effect.scoped,
+        Effect.orDie,
+      );
+      expect(told.agent).toBe(agentName("r1", "fix-1", null, 1));
+    }),
+  ));
+
+/** A harness whose context is always over the limit, and which compacts when asked. */
+const fullContext = (asked: string[]): CompactionPorts => ({
+  claude: {
+    gate: () => Effect.void,
+    install: () => Effect.succeed({ args: [] }),
+    usage: () => Effect.succeed(1_000_000),
+    request: (_ctx, id) => Effect.sync(() => void asked.push(id)).pipe(Effect.as(null)),
+    poll: () => Effect.succeed({ kind: "success" as const }),
+  },
+});
+
+test("a reused agent is compacted before its next piece of work, and a new one is not", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "clean", note: "first" },
+        { verdict: "clean", note: "second" },
+      ]);
+      const asked: string[] = [];
+      const result = yield* listing
+        .execute({ runId: "r1", input: ITEMS })
+        .pipe(
+          Effect.result,
+          Effect.provide(listingBody),
+          Effect.provide(
+            agentsLayer({ ...hostOf(), compactAtTokens: 1000, ports: fullContext(asked) }),
+          ),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      expect(result._tag === "Success" && result.success).toBe("01-api:first+02-ui:second");
+      // Once, at the boundary between the two: the agent had just started for the first.
+      expect(asked).toHaveLength(1);
     }),
   ));
 
