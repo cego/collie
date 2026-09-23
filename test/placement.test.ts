@@ -82,7 +82,10 @@ const hostOf = (): AgentHost => ({
   collectMs: 60_000,
 });
 
-const hosted = <A, E>(run: Effect.Effect<A, E, Registry | Store | HostServices>) =>
+const hosted = <A, E>(
+  run: Effect.Effect<A, E, Registry | Store | HostServices>,
+  agents: Partial<AgentHost> = {},
+) =>
   run.pipe(
     Effect.provide(
       registryLayer(dir(), {
@@ -90,7 +93,7 @@ const hosted = <A, E>(run: Effect.Effect<A, E, Registry | Store | HostServices>)
         configDir: rig.configDir,
       }),
     ),
-    Effect.provide(agentsLayer(hostOf())),
+    Effect.provide(agentsLayer({ ...hostOf(), ...agents })),
     Effect.provide(foundationLayer({ dir: dir(), configDir: rig.configDir })),
     Effect.scoped,
     Effect.orDie,
@@ -473,6 +476,45 @@ test(
         ).toEqual([]);
         expect(cmds.filter((cmd) => cmd === "agent start")).toHaveLength(2);
         expect(tabs(yield* rig.calls()).map((tab) => tab.workspace)).toEqual(["wT", "wT"]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a stop that cannot close the Run's agent says so rather than confirming it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const task = yield* aTask;
+        yield* rig.queueOutputs([null]);
+        const stopped = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const started = yield* start(builds!, {
+              request: "r1",
+              text: { work: "Add a picker" },
+              task: task.id,
+            });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            yield* until(
+              () => rig.cmds().pipe(Effect.orDie),
+              (cmds) => cmds.includes("agent prompt"),
+            );
+            return yield* registry.control({
+              runId: started.success.runId,
+              control: "stop",
+              set: true,
+            });
+          }),
+          {
+            herdr: new FakeHerdr(
+              rig.pluginEnv({ FAKE_HERDR_FAIL: `{"pane close":"pane is busy"}` }),
+            ),
+          },
+        );
+        expect(stopped.left.join("\n")).toContain("would not close (");
       }),
     ),
   120_000,

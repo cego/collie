@@ -323,6 +323,27 @@ export class Rig {
     return this.appendState("agents", { name, pane_id: paneId });
   }
 
+  /** Another process under this agent's name, in the same pane. */
+  reincarnate(name: string): Effect.Effect<void, RigError, FileSystem.FileSystem> {
+    const statePath = `${this.logPath}.state.json`;
+    const readJsonObject = this.readJsonObject.bind(this);
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* readJsonObject(statePath);
+      const agents = Option.getOrElse(
+        Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state.agents),
+        (): ReadonlyArray<Schema.JsonObject> => [],
+      );
+      const renewed = agents.map((agent) =>
+        agent.name === name ? { ...agent, terminal_id: `${agent.terminal_id}+next` } : agent,
+      );
+      yield* fs.writeFileString(
+        statePath,
+        encodeJson(Object.assign({}, state, { agents: renewed })),
+      );
+    });
+  }
+
   /** A pane herdr already has, with the directory, agent and workspace it is in. */
   addPane(
     paneId: string,

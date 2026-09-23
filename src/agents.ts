@@ -100,6 +100,8 @@ export const Launched = Schema.Struct({
   role: Schema.String,
   workflow: Schema.String,
   harness: Schema.String,
+  /** herdr's id for the process given this work: the name alone is reused by the next one. */
+  terminalId: Schema.optionalKey(Schema.String),
 });
 export type Launched = typeof Launched.Type;
 
@@ -150,8 +152,8 @@ export interface AgentsApi {
     readonly cwd: string;
     readonly text: string;
   }) => Effect.Effect<Steered | null>;
-  /** Closes the panes of this run's live agents, which stops them, and says which it closed. */
-  readonly halt: (runId: string) => Effect.Effect<ReadonlyArray<string>>;
+  /** Closes the panes of this run's live agents, which stops them; `left` may still be running. */
+  readonly halt: (runId: string) => Effect.Effect<Halted>;
   /**
    * What the agent wrote, or null where it has written nothing in the time allowed.
    * `unless` is an Output already known to be unusable: the same text again is the agent
@@ -192,6 +194,12 @@ export interface Steered {
   readonly agent: string;
   readonly delivered: boolean;
   readonly detail: string;
+}
+
+/** What a stop closed, and what may still be running after it. */
+export interface Halted {
+  readonly stopped: ReadonlyArray<string>;
+  readonly left: ReadonlyArray<string>;
 }
 
 export class Agents extends Context.Service<Agents, AgentsApi>()("collie/Agents") {}
@@ -711,7 +719,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     const permissions = isPermissionMode(wanted) ? wanted : host.permissions;
     const persona = `${dirFor(ask.runId)}/${ask.operation}.persona.md`;
     yield* write(persona, `${yield* personaOf(ask.role)}\n`);
-    yield* withControlLock(
+    return yield* withControlLock(
       host.env.stateDir,
       agent,
       Effect.gen(function* () {
@@ -745,12 +753,12 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           `${agent}: ${adapter.id} in ${tab.paneId}, permissions ${permissions}`,
         );
         const found = yield* entryFor(ask, agent, { paneId: tab.paneId, workspaceId: workspace });
-        if (found.entry !== null) {
-          yield* registerAgent(
-            yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
-            found.entry,
-          );
-        }
+        if (found.entry === null) return undefined;
+        yield* registerAgent(
+          yield* registryPath(host.env.stateDir, scopeFor(host.env, ask.cwd)),
+          found.entry,
+        );
+        return found.entry.incarnation?.terminalId;
       }),
     );
   });
@@ -770,13 +778,14 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             reason: `herdr cannot say which agents it has (${reason(listing.failure)})`,
           });
         }
-        const alive = listing.success.some((one) => one.name === agent);
+        const live = listing.success.find((one) => one.name === agent);
+        const alive = live !== undefined;
         const fs = yield* FileSystem.FileSystem;
         // A launch file already here is this same work replayed, not new work for the agent.
         const replayed = yield* fs
           .exists(launchPath(ask.runId, ask.operation))
           .pipe(Effect.orElseSucceed(() => false));
-        if (!alive) yield* start(ask, agent);
+        const terminalId = alive ? (live.terminalId ?? undefined) : yield* start(ask, agent);
         const launched: Launched = {
           agent,
           output: ask.output,
@@ -786,6 +795,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           role: ask.role,
           workflow: ask.workflow,
           harness: ask.harness ?? host.harness,
+          ...(terminalId === undefined ? {} : { terminalId }),
         };
         const adapter = adapterFor(launched.harness);
         const prefix = personaPrefix(adapter, yield* personaOf(ask.role));
@@ -963,15 +973,34 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   const halt = (runId: string) =>
     under(
       Effect.gen(function* () {
-        const ours = new Set((yield* launchesOf(runId)).map((one) => one.agent));
-        const live = yield* host.herdr.agentList().pipe(Effect.orElseSucceed(() => []));
-        const halted: string[] = [];
-        for (const one of live.filter((agent) => ours.has(agent.name))) {
-          const closed = yield* host.herdr.paneClose(one.paneId).pipe(Effect.result);
-          if (closed._tag === "Success") halted.push(one.name);
+        const launches = yield* launchesOf(runId);
+        const listing = yield* host.herdr.agentList().pipe(Effect.result);
+        if (listing._tag === "Failure") {
+          return {
+            stopped: [],
+            left: [`herdr cannot say which agents it has (${reason(listing.failure)})`],
+          };
         }
-        if (halted.length > 0) yield* log(runId, `stopped ${halted.join(", ")}`);
-        return halted;
+        const stopped: string[] = [];
+        const left: string[] = [];
+        for (const one of listing.success) {
+          const ours = launches.findLast((launched) => launched.agent === one.name);
+          if (ours === undefined) continue;
+          if (ours.terminalId === undefined || one.terminalId === null) {
+            left.push(`${one.name} cannot be proven to be this Run's, so it was left running`);
+            continue;
+          }
+          if (ours.terminalId !== one.terminalId) continue;
+          const closed = yield* host.herdr.paneClose(one.paneId).pipe(Effect.result);
+          if (closed._tag === "Success") stopped.push(one.name);
+          else
+            left.push(
+              `${one.name}'s pane ${one.paneId} would not close (${reason(closed.failure)})`,
+            );
+        }
+        if (stopped.length > 0) yield* log(runId, `stopped ${stopped.join(", ")}`);
+        if (left.length > 0) yield* log(runId, `not stopped: ${left.join("; ")}`);
+        return { stopped, left };
       }),
     );
 

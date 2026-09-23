@@ -439,6 +439,33 @@ test("a herdr that cannot say what it has blocks the work rather than starting a
     }),
   ));
 
+const halted = (runId: string) => Agents.pipe(Effect.flatMap((agents) => agents.halt(runId)));
+
+test("a stop closes the agent this Run launched, and says what it could not close", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const refused = yield* session(halted("r1"), {
+        herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_FAIL: `{"pane close":"pane is busy"}` })),
+      });
+      expect(refused.stopped).toEqual([]);
+      expect(refused.left.join("\n")).toContain(agentFor("r1"));
+      expect(yield* session(halted("r1"))).toEqual({ stopped: [agentFor("r1")], left: [] });
+    }),
+  ));
+
+test("a stop leaves another process that took the Run's agent name", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      yield* rig.reincarnate(agentFor("r1"));
+      expect(yield* session(halted("r1"))).toEqual({ stopped: [], left: [] });
+      expect(yield* rig.cmds()).not.toContain("pane close");
+    }),
+  ));
+
 /** The controls an operator sets, as the host keeps them beside the run. */
 const control = (name: string, runId: string, set: boolean) =>
   FileSystem.FileSystem.pipe(

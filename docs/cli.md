@@ -479,7 +479,9 @@ collie --json run resume <run-id> --request-id "$(uuidgen)"
 
 `stop` parks the run where it is — at its next boundary, or inside the wait it is in — and
 closes its agents' panes, and those of the Runs it started, which is what stops them; the
-workspace keeps its own tab. `resume`
+workspace keeps its own tab. Only the process each launch recorded is closed, never another
+under the same name, and a pane that will not close fails the stop and names the agent
+still running. `resume`
 asks the host to pick a suspended run up again. It re-enters the workflow's current code
 and reuses every Activity already done, so completed work and its Outputs are kept and
 never redone, and an agent still live is reattached to rather than started a second

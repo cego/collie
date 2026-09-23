@@ -415,6 +415,12 @@ export const controlRun = (
       if (!answered.ok) return answered;
       const done = answered.value;
       const what = `${done.set ? done.control : `un${done.control}`} ${done.runId}`;
+      if (done.left.length > 0) {
+        return err("operation_failed", `Recorded ${what}, but ${done.left.join("; ")}.`, {
+          run: done.runId,
+          left: [...done.left],
+        });
+      }
       return {
         ok: true as const,
         data: { run: done.runId, ...done },

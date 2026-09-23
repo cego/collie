@@ -439,6 +439,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly role: string;
     readonly workflow: string;
     readonly harness: string;
+    readonly terminalId?: string;
   }
 
   /** Nobody can say whether the agent is there, so nothing was started. */
@@ -475,8 +476,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly cwd: string;
       readonly text: string;
     }) => Effect.Effect<Steered | null>;
-    /** Closes the panes of this run's live agents, and says which. */
-    readonly halt: (runId: string) => Effect.Effect<ReadonlyArray<string>>;
+    /** Closes the panes of this run's live agents; \`left\` may still be running. */
+    readonly halt: (
+      runId: string,
+    ) => Effect.Effect<{ readonly stopped: ReadonlyArray<string>; readonly left: ReadonlyArray<string> }>;
     readonly collect: (
       launched: Launched,
       unless?: string | null,
@@ -1961,6 +1964,8 @@ export const Controlled = Schema.Struct({
   set: Schema.Boolean,
   applied: Schema.Boolean,
   detail: Schema.String,
+  /** The agents a stop could not close, which may still be changing the workspace. */
+  left: Schema.Array(Schema.String),
 });
 
 /** What became of one delivery to a run's agent. */
@@ -3276,11 +3281,12 @@ const makeRegistry: (
         }
       }
       // Closing their panes is what stops the agents; the Run only stops looking.
+      const left: string[] = [];
       if (options.control === STOP && options.set) {
         const agents = yield* Agents;
-        for (const runId of runs) yield* agents.halt(runId);
+        for (const runId of runs) left.push(...(yield* agents.halt(runId)).left);
       }
-      const recorded = { runId: options.runId, control: options.control, set: options.set };
+      const recorded = { runId: options.runId, control: options.control, set: options.set, left };
       if (found._tag === "Failure") {
         return { ...recorded, applied: false, detail: found.failure.reason };
       }
