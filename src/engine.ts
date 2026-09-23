@@ -1919,15 +1919,24 @@ const stripeOf = (key: string) => {
   return hash % CLAIM_STRIPES;
 };
 
+/** A checkout a claimant cut, as its receipt records it. */
+const Cut = Schema.Struct({
+  placed: Placed,
+  opened: Schema.NullOr(Schema.Struct({ id: Schema.String, label: Schema.NullOr(Schema.String) })),
+});
+type Cut = typeof Cut.Type;
+
 /**
  * What a claimant places a Run from: the checkout it starts in, and a fresh Task's name.
- * `workspace` is null once that Task's workspace was asked for, and its id once herdr answered.
+ * `checkout` and `workspace` are null once asked for, and what was made once it answered.
  */
 const Placing = Schema.Struct({
   from: Schema.String,
   taskLabel: Schema.NullOr(Schema.String),
   workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  checkout: Schema.optionalKey(Schema.NullOr(Cut)),
 });
+type Placing = typeof Placing.Type;
 const PlacingJson = Schema.fromJsonString(Placing);
 const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
 const encodePlacing = Schema.encodeSync(PlacingJson);
@@ -2483,7 +2492,8 @@ const makeRegistry: (
     readonly task: string | null;
     readonly taskLabel?: string | undefined;
     readonly workspace?: string | null | undefined;
-    readonly recordWorkspace: (workspace: string | null) => Effect.Effect<void>;
+    readonly checkout?: Cut | null | undefined;
+    readonly record: (receipt: Partial<Placing>) => Effect.Effect<void>;
   }) {
     const { generation, from } = ask;
     const failed = (cause: unknown) =>
@@ -2491,8 +2501,14 @@ const makeRegistry: (
         reason: `"${generation.id}" could not be given a checkout: ${String(cause)}`,
       });
     let placed: Placed = { cwd: from, branch: null, workspace: null, worktree: null };
-    let opened: { readonly id: string; readonly label: string | null } | null = null;
-    if (generation.checkout !== "none") {
+    let opened: Cut["opened"] = null;
+    if (ask.checkout === null) {
+      return yield* new PlacementUncertain({
+        reason: `a checkout from ${from} may have been cut for ${ask.runId} before the host stopped, and nothing records where. Remove it if it is there, and start again under a new request id.`,
+      });
+    }
+    if (ask.checkout !== undefined) ({ placed, opened } = ask.checkout);
+    else if (generation.checkout !== "none") {
       const inputs = yield* branchInputs(generation, ask.input, ask.options);
       // A build of a review's findings works on the branch that review was pointed at.
       const source = fieldWith(generation.hints, "work-source");
@@ -2511,6 +2527,7 @@ const makeRegistry: (
           `"${generation.id}" builds on a worktree of its own, and ${from} is not a git checkout to cut one from. Start it from a checkout, or name one with --input workspace=/path/to/checkout.`,
         );
       }
+      yield* ask.record({ checkout: null });
       const checkout = yield* checkoutFor(placing.herdr, {
         cwd: from,
         stateDir: placing.env.stateDir,
@@ -2531,7 +2548,14 @@ const makeRegistry: (
               (rows) => rows.find((row) => placedOf(row, {}).worktree?.path === at)?.run ?? null,
             ),
           ),
-      }).pipe(Effect.mapError(failed));
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new PlacementUncertain({
+              reason: `"${generation.id}" could not be given a checkout: ${String(cause)}`,
+            }),
+        ),
+      );
       if (checkout.refused !== null) {
         return yield* new HostRefused({
           reason: `"${generation.id}" could not be given a checkout: ${checkout.refused}`,
@@ -2545,6 +2569,7 @@ const makeRegistry: (
         workspace: ask.taskLabel === undefined ? own : null,
         worktree: checkout.worktree,
       };
+      yield* ask.record({ checkout: { placed, opened } });
     }
     if (ask.taskLabel === undefined) return { placed, task: ask.task };
     const label = opened?.label ?? ask.taskLabel;
@@ -2554,7 +2579,7 @@ const makeRegistry: (
           reason: `a workspace "${label}" on ${placed.cwd} may have been opened for ${ask.runId} before the host stopped, and nothing records which. Close it if it is there, and start again under a new request id.`,
         });
       }
-      yield* ask.recordWorkspace(null);
+      yield* ask.record({ workspace: null });
       const made = yield* placing.herdr.workspaceCreate({ cwd: placed.cwd, label }).pipe(
         Effect.mapError((cause) => {
           const reason = `No workspace could be opened for this task: ${herdrFailureReason(cause)}`;
@@ -2563,7 +2588,7 @@ const makeRegistry: (
             : new PlacementUncertain({ reason });
         }),
       );
-      yield* ask.recordWorkspace(made.workspaceId);
+      yield* ask.record({ workspace: made.workspaceId });
       return made.workspaceId;
     });
     const workspace = opened?.id ?? ask.workspace ?? (yield* openWorkspace);
@@ -2589,11 +2614,15 @@ const makeRegistry: (
   );
   const claimingOf = (request: string) => claiming[stripeOf(request)]!;
 
-  /** Places a claimed Run, as its claimant only; a refused placement withdraws the claim. */
-  const placeClaimed = Effect.fn("Engine.placeClaimed")(function* (row: RunRow) {
+  /**
+   * Places a claimed Run, as its claimant only. Refused, a claim this admission made is
+   * withdrawn; one found claimed may have made something already, so it is kept.
+   */
+  const placeClaimed = Effect.fn("Engine.placeClaimed")(function* (row: RunRow, fresh: boolean) {
     const generation = live.get(row.generation);
     const placing = decodePlacing(row.placing ?? "");
     if (!unplaced(row) || generation === undefined || Option.isNone(placing)) return row;
+    let receipt = placing.value;
     const strings = (text: string | null) =>
       decodeStrings(text ?? "{}").pipe(Effect.orElseSucceed((): Record<string, string> => ({})));
     const options = yield* strings(row.options);
@@ -2609,12 +2638,15 @@ const makeRegistry: (
         task: row.task,
         taskLabel: placing.value.taskLabel ?? undefined,
         workspace: placing.value.workspace,
-        recordWorkspace: (workspace) =>
-          store.recordPlacing(row.run, encodePlacing({ ...placing.value, workspace })),
+        checkout: placing.value.checkout,
+        record: (change) => {
+          receipt = { ...receipt, ...change };
+          return store.recordPlacing(row.run, encodePlacing(receipt));
+        },
       });
     }).pipe(
       // An uncertain one keeps its claim: the same request again must not open another.
-      Effect.tapErrorTag("HostRefused", () => store.forget(row.run)),
+      Effect.tapErrorTag("HostRefused", () => (fresh ? store.forget(row.run) : Effect.void)),
       Effect.catchTag("PlacementUncertain", (failure) =>
         Effect.fail(new HostRefused({ reason: failure.reason })),
       ),
@@ -2629,7 +2661,7 @@ const makeRegistry: (
     claimingOf(admission.request).withPermits(1)(
       Effect.gen(function* () {
         const claimed = yield* store.admit(admission);
-        const row = yield* placeClaimed(claimed.row);
+        const row = yield* placeClaimed(claimed.row, claimed.fresh);
         remember(row);
         return { row, fresh: claimed.fresh };
       }),
@@ -2791,7 +2823,7 @@ const makeRegistry: (
   /** Admitted work a host did not live to place or hand over, finished under its claim. */
   const recoverAdmission = (row: RunRow) =>
     claimingOf(row.request).withPermits(1)(
-      placeClaimed(row).pipe(
+      placeClaimed(row, false).pipe(
         Effect.flatMap(handOver),
         Effect.catchTag("HostRefused", (failure) =>
           Effect.logWarning(`${row.run} could not be placed: ${failure.reason}`),

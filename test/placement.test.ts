@@ -187,30 +187,33 @@ const asPlacing = Schema.encodeSync(
       from: Schema.String,
       taskLabel: Schema.String,
       workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
+      checkout: Schema.optionalKey(Schema.Null),
     }),
   ),
 );
 
-/** A claim as a dying host left it: the row, what to place it from, and nothing else. */
-const claimCut = (workspace?: string | null) =>
+/** A claim as a dying host left it: the row, what to place it from, and what it had asked for. */
+const claimCut = (
+  receipt: { readonly workspace?: string | null; readonly checkout?: null } = {},
+  workflow = "builds",
+) =>
   hosted(
     Effect.gen(function* () {
       const registry = yield* Registry;
-      const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+      const [claimed] = yield* loaded(registry, [`${fixtures}/${workflow}.workflow.ts`]);
       const store = yield* Store;
       const payload = { runId: "run-cut", input: { work: "Add a picker" } };
-      const placing = { from: rig.projectDir, taskLabel: "Project | P" };
       yield* store.admit({
         request: "r1",
         run: "run-cut",
-        workflow: "builds",
+        workflow,
         project: rig.projectDir,
         input: payload.input,
         provenance: { work: "given" },
         options: {},
-        placing: asPlacing(workspace === undefined ? placing : { ...placing, workspace }),
-        generation: builds!.name,
-        execution: yield* builds!.registration.workflow.executionId(payload),
+        placing: asPlacing({ from: rig.projectDir, taskLabel: "Project | P", ...receipt }),
+        generation: claimed!.name,
+        execution: yield* claimed!.registration.workflow.executionId(payload),
         task: null,
         parent: null,
       });
@@ -449,7 +452,7 @@ test(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean" }]);
         yield* rig.addWorkspace("wX", "Project | P", rig.projectDir);
-        yield* claimCut("wX");
+        yield* claimCut({ workspace: "wX" });
 
         const view = yield* hosted(finished("run-cut"));
         expect(view?.status.status).toBe("complete");
@@ -465,7 +468,7 @@ test(
   () =>
     runEffect(
       Effect.gen(function* () {
-        yield* claimCut(null);
+        yield* claimCut({ workspace: null });
 
         const again = yield* hosted(
           Effect.gen(function* () {
@@ -481,6 +484,57 @@ test(
         expect(refusedWith(again.started)).toContain("may have been opened for run-cut");
         expect(again.row?.checkout).toBeNull();
         expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a start the host died cutting a checkout for cuts no second one, and keeps its claim",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* claimCut({ checkout: null });
+
+        const again = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const ask = { request: "r1", text: { work: "Add a picker" }, taskLabel: "Project | P" };
+            return {
+              started: yield* start(builds!, ask),
+              row: yield* (yield* Store).run("run-cut"),
+            };
+          }),
+        );
+        expect(refusedWith(again.started)).toContain("may have been cut for run-cut");
+        expect(again.row?.checkout).toBeNull();
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${rig.root}/.herdr/worktrees`)).toBe(false);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a roaming start found holding a checkout when its host comes back keeps its claim",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* claimCut({}, "roams");
+        const roaming = `${rig.root}/.herdr/worktrees/project/roaming`;
+        Bun.spawnSync(["git", "worktree", "add", "--quiet", "--detach", roaming, "master"], {
+          cwd: rig.projectDir,
+        });
+
+        const row = yield* hosted(
+          Effect.gen(function* () {
+            yield* Registry;
+            return yield* (yield* Store).run("run-cut");
+          }),
+        );
+        expect(row?.run).toBe("run-cut");
+        expect(row?.checkout).toBeNull();
       }),
     ),
   120_000,

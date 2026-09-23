@@ -1189,7 +1189,10 @@ what they settled rather than the text it arrived as.
 answers with the run that claim became. Sending it again is that same run rather than a
 second one, whether the first attempt was answered, lost, or interrupted by a host that
 died mid-start; sending it with other arguments is `RequestConflict` rather than a quiet
-change of mind. The rows behind that are in the same SQLite file as the engine's own, and
+change of mind. A host that died after asking for the run's checkout or workspace, and
+before recording what it got, cannot tell whether one was made: that start is refused
+with what may be left behind, and keeps its claim, so the same request never makes a
+second one. The rows behind that are in the same SQLite file as the engine's own, and
 [ADR-0017](adr/0017-one-request-is-one-run.md) is why each of them is there.
 
 It says which build it is. A client of another build — after `collie upgrade` has replaced
