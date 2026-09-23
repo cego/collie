@@ -150,9 +150,9 @@ collie --json workflow fork <id> --layer user --name <yours> --request-id "$(uui
 collie --json workflow check <id>
 ```
 
-`create` writes a runnable module and the setup to typecheck it beside it — an existing
-`package.json` or `tsconfig.json` is left alone, and nothing is written over a file that is
-already there. `fork` writes one that imports the original and hands `make` on, so
+`create` writes a runnable module and the setup to typecheck it beside it — what it needs is
+merged into an existing `package.json` or `tsconfig.json`, and no module is written over a
+file that is already there. `fork` writes one that imports the original and hands `make` on, so
 everything it does not name is still the original's; there is no step to merge, so `--mode`
 and `--step` are refused on a module. Both return `data.path` — tell the user where the
 file landed. `data.toolchain` is not null when nothing could be installed to typecheck

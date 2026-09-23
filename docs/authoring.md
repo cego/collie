@@ -22,9 +22,10 @@ collie run start tally --input note=hi
 `create` writes `~/.collie/user/workflows/tally.workflow.ts` — `--layer project` writes
 `.herdr/workflows/` instead — and provisions the setup to typecheck it beside the file:
 `package.json`, `tsconfig.json` and `collie.d.ts`, installed with the executable's
-own embedded Bun, so a machine with neither Bun nor Node can still compile a module. A
-`package.json` or `tsconfig.json` you already have is left exactly as it is, and nothing is
-ever written over a file that exists. With no network on a first use the answer is
+own embedded Bun, so a machine with neither Bun nor Node can still compile a module. What
+the setup needs is merged into a `package.json` or `tsconfig.json` you already have — the
+`effect` and `typescript` it lacks, and `collie` mapped to `collie.d.ts` — and nothing of
+yours is replaced. With no network on a first use the answer is
 `toolchain_unavailable`: the module still runs, and nothing was typechecked.
 
 `check` is the loop's other half. It imports the module, constructs it and runs the

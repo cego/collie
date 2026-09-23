@@ -116,8 +116,8 @@ Both write `<id>.workflow.ts` where a run will find it, return its path, and nev
 over a file that is already there. `create` writes the smallest module that runs; `fork`
 writes one that imports the original and hands `make` on, so everything it does not name is
 still the original's. Both then provision the authoring setup beside the file —
-`package.json`, `tsconfig.json`, `collie.d.ts` — leaving any you already have alone,
-and installing the toolchain with the executable's own embedded Bun. With no network on a
+`package.json`, `tsconfig.json`, `collie.d.ts` — merging what it needs into a
+`package.json` or `tsconfig.json` you already have, and installing the toolchain with the executable's own embedded Bun. With no network on a
 first use the answer says `toolchain_unavailable`: the module still runs, and nothing was
 typechecked.
 
@@ -1206,9 +1206,11 @@ than argued. Nothing else sets it.
 ## Authoring against the SDK
 
 `workflow create` and `workflow fork` write `package.json`, `tsconfig.json` and
-`collie.d.ts` beside the module when the directory has none, and install the toolchain with
-the executable's own embedded Bun — so typechecking a module needs neither Bun nor Node on
-the machine. Files already there are left alone. `workflow check` typechecks each module and
+`collie.d.ts` beside the module, and install the toolchain with the executable's own
+embedded Bun — so typechecking a module needs neither Bun nor Node on the machine. A
+`package.json` or `tsconfig.json` already there keeps everything of yours: the `effect` and
+`typescript` it lacks and the `collie` path mapping are added to it. One that is not plain
+JSON is left alone, and the answer says what to add. `workflow check` typechecks each module and
 reports each diagnostic with its file and line; an error in one module says nothing about
 the one beside it. With nothing installed to check with, that is `ok, not typechecked`
 rather than a module reported as fine.

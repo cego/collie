@@ -9,7 +9,13 @@ import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
 import { checkModule, createEntry, describeModule, forkEntry } from "../src/authoring";
 import { discover, searchPath, type EntryLayer } from "../src/discovery";
-import { loadEntry, stageGeneration } from "../src/engine";
+import {
+  TOOLCHAIN,
+  loadEntry,
+  provisionToolchain,
+  stageGeneration,
+  typecheckEntry,
+} from "../src/engine";
 import { runEffect } from "./support/effect";
 import { stopHost } from "./support/host";
 import { collie, proves as provesWith } from "./support/world";
@@ -105,6 +111,59 @@ test("checking reads the module and the compiler, and keeps the three answers ap
       const refused = yield* checkModule({ layer: "user", path: conflicted });
       expect(refused.problems.join(" ")).toContain("outcome");
       expect(refused.id).toBe("conflicted");
+    }).pipe(Effect.scoped),
+  ));
+
+test(
+  "the authoring setup is merged into an author's own package and compiler settings",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-merge-" });
+        yield* fs.writeFileString(
+          `${dir}/package.json`,
+          '{"name":"mine","dependencies":{"zod":"^3.0.0"},"scripts":{"x":"y"}}',
+        );
+        yield* fs.writeFileString(
+          `${dir}/tsconfig.json`,
+          '{"compilerOptions":{"strict":false,"paths":{"~/*":["./src/*"]}}}',
+        );
+        // Installing may need a network this machine lacks; what is merged is written first.
+        yield* provisionToolchain(dir).pipe(Effect.result);
+
+        const pkg = yield* fs.readFileString(`${dir}/package.json`);
+        expect(pkg).toContain('"zod": "^3.0.0"');
+        expect(pkg).toContain('"scripts"');
+        expect(pkg).toContain(`"effect": "${TOOLCHAIN.effect}"`);
+        expect(pkg).toContain(`"typescript": "${TOOLCHAIN.typescript}"`);
+        const tsconfig = yield* fs.readFileString(`${dir}/tsconfig.json`);
+        expect(tsconfig).toContain('"strict": false');
+        expect(tsconfig).toContain('"~/*"');
+        expect(tsconfig).toContain('"collie": [');
+        expect(yield* fs.exists(`${dir}/collie.d.ts`)).toBe(true);
+      }).pipe(Effect.scoped),
+    ),
+  60_000,
+);
+
+test("a typechecker that falls over is no typechecker, not a clean module", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-crash-" });
+      yield* fs.makeDirectory(`${dir}/node_modules/typescript/lib`, { recursive: true });
+      yield* fs.writeFileString(
+        `${dir}/node_modules/typescript/lib/tsc.js`,
+        'console.error("could not initialise"); process.exit(99);\n',
+      );
+      yield* fs.writeFileString(`${dir}/tsconfig.json`, "{}");
+      yield* fs.writeFileString(`${dir}/plain.workflow.ts`, "export const id = 1;\n");
+      const checked = yield* typecheckEntry({ dir, file: `${dir}/plain.workflow.ts` }).pipe(
+        Effect.flip,
+      );
+      expect(checked.code).toBe("toolchain_unavailable");
+      expect(checked.message).toContain("could not initialise");
     }).pipe(Effect.scoped),
   ));
 

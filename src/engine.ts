@@ -3285,14 +3285,45 @@ const TOOLCHAIN_FILES = {
   }
 }
 `,
-  "collie.d.ts": SDK_DECLARATIONS,
 } as const;
+
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const isJsonObject = Schema.is(JsonObject);
+const readJsonObject = Schema.decodeUnknownOption(Schema.fromJsonString(JsonObject));
+const writeJsonObject = Schema.encodeSync(Schema.fromJsonString(JsonObject, { space: 2 }));
+const objectIn = (value: Schema.Json | undefined) => (isJsonObject(value) ? value : {});
+
+/** An author's package.json with what a module is typechecked against added where it is missing. */
+const mergedPackage = (pkg: Readonly<Record<string, Schema.Json>>) => {
+  const dependencies = objectIn(pkg.dependencies);
+  const devDependencies = objectIn(pkg.devDependencies);
+  return {
+    ...pkg,
+    dependencies: { effect: TOOLCHAIN.effect, ...dependencies },
+    devDependencies:
+      "typescript" in dependencies
+        ? devDependencies
+        : { typescript: TOOLCHAIN.typescript, ...devDependencies },
+  };
+};
+
+/** An author's tsconfig.json with `collie` mapped to the declarations beside it. */
+const mergedCompiler = (dir: string, tsconfig: Readonly<Record<string, Schema.Json>>) => {
+  const options = objectIn(tsconfig.compilerOptions);
+  const paths = objectIn(options.paths);
+  // Paths resolve from baseUrl where one is set, so the mapping cannot be relative to it.
+  const declarations = isText(options.baseUrl) ? `${dir}/collie.d.ts` : "./collie.d.ts";
+  return {
+    ...tsconfig,
+    compilerOptions: { ...options, paths: { collie: [declarations], ...paths } },
+  };
+};
 
 /**
  * Writes the authoring setup beside a workflow directory and installs its toolchain with
  * the embedded Bun, so a machine with neither Bun nor Node on it can still typecheck a
- * module. An existing package.json or tsconfig.json is left alone: it is the author's,
- * and this is not the only thing they may be using that directory for.
+ * module. An existing package.json or tsconfig.json is the author's: what the setup needs
+ * is merged into it and nothing of theirs is replaced.
  */
 export const provisionToolchain: (
   dir: string,
@@ -3302,21 +3333,41 @@ export const provisionToolchain: (
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
 > = Effect.fn("Engine.provisionToolchain")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
+  const unavailable = (message: string) =>
+    new ToolchainError({ code: "toolchain_unavailable", message });
   yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
-  for (const [name, content] of Object.entries(TOOLCHAIN_FILES)) {
+  // Collie's own, so an upgraded installation's declarations replace the last one's.
+  yield* fs.writeFileString(`${dir}/collie.d.ts`, SDK_DECLARATIONS).pipe(Effect.orDie);
+  const unmerged: string[] = [];
+  for (const [name, merge] of [
+    ["package.json", mergedPackage],
+    ["tsconfig.json", (read: Readonly<Record<string, Schema.Json>>) => mergedCompiler(dir, read)],
+  ] as const) {
     const path = `${dir}/${name}`;
-    if (yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))) continue;
-    yield* fs.writeFileString(path, content).pipe(Effect.orDie);
+    const existing = yield* fs.readFileString(path).pipe(Effect.option);
+    if (Option.isNone(existing)) {
+      yield* fs.writeFileString(path, TOOLCHAIN_FILES[name]).pipe(Effect.orDie);
+      continue;
+    }
+    const read = readJsonObject(existing.value);
+    if (Option.isNone(read)) {
+      unmerged.push(name);
+      continue;
+    }
+    const merged = `${writeJsonObject(merge(read.value))}\n`;
+    if (merged !== existing.value) yield* fs.writeFileString(path, merged).pipe(Effect.orDie);
   }
-  yield* runBun(dir, ["install"]).pipe(
-    Effect.mapError(
-      (message) =>
-        new ToolchainError({
-          code: "toolchain_unavailable",
-          message: `cannot install the workflow toolchain in ${dir}: ${message}`,
-        }),
-    ),
-  );
+  const installed = yield* runBun(dir, ["install"]).pipe(Effect.mapError(unavailable));
+  if (installed.code !== 0) {
+    return yield* unavailable(
+      `cannot install the workflow toolchain in ${dir}: ${installed.output}`,
+    );
+  }
+  if (unmerged.length > 0) {
+    return yield* unavailable(
+      `${unmerged.join(" and ")} in ${dir} is not plain JSON, so nothing was merged into it: add "effect" and "typescript" to package.json and map "collie" to ./collie.d.ts under compilerOptions.paths`,
+    );
+  }
 });
 
 /**
@@ -3353,22 +3404,24 @@ export const typecheckEntry: (options: {
       encodeCheckProject({ extends: "./tsconfig.json", files: [options.file] }),
     )
     .pipe(Effect.orDie);
-  const output = yield* runBun(options.dir, [
+  const unavailable = (message: string) =>
+    new ToolchainError({ code: "toolchain_unavailable", message });
+  const ran = yield* runBun(options.dir, [
     "run",
     compiler,
     "--pretty",
     "false",
     "-p",
     project,
-  ]).pipe(Effect.catch((printed) => Effect.succeed(printed)));
-  const diagnostics = output.split("\n").filter((line) => /\(\d+,\d+\): error /.test(line));
-  // tsc exits non-zero for the diagnostics it printed; anything else it refused to do is
-  // the toolchain's problem, not the module's, and must not read as a clean module.
-  if (diagnostics.length === 0 && output.includes("error TS")) {
-    return yield* new ToolchainError({
-      code: "toolchain_unavailable",
-      message: `the typechecker refused to run: ${output.trim()}`,
-    });
+  ]).pipe(Effect.mapError(unavailable));
+  if (ran.code === 0) return [];
+  const diagnostics = ran.output.split("\n").filter((line) => /\(\d+,\d+\): error /.test(line));
+  // tsc exits non-zero for the diagnostics it printed; a failure that printed none is the
+  // toolchain's problem, not the module's, and must not read as a clean module.
+  if (diagnostics.length === 0) {
+    return yield* unavailable(
+      `the typechecker exited ${ran.code} without checking: ${ran.output.trim()}`,
+    );
   }
   return diagnostics;
 });
@@ -3381,7 +3434,11 @@ export const typecheckEntry: (options: {
 const runBun = (
   cwd: string,
   args: ReadonlyArray<string>,
-): Effect.Effect<string, string, ChildProcessSpawner.ChildProcessSpawner> =>
+): Effect.Effect<
+  { readonly code: number; readonly output: string },
+  string,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const child = yield* spawner.spawn(
@@ -3395,8 +3452,7 @@ const runBun = (
     const output = yield* collect(child.stdout).pipe(
       Effect.zipWith(collect(child.stderr), (out, err) => out + err),
     );
-    const code = yield* child.exitCode;
-    return code === 0 ? output : yield* Effect.fail(output);
+    return { code: Number(yield* child.exitCode), output };
   }).pipe(
     Effect.scoped,
     Effect.catch((cause) => Effect.fail(String(cause))),

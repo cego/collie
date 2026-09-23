@@ -701,6 +701,6 @@ schema still holds. **`ok, not typechecked`** means no compiler is installed in 
 directory; nothing compiled it, and it says so rather than reading as fine.
 
 `collie workflow create <id>` writes the authoring setup — `package.json`, `tsconfig.json`
-and `collie.d.ts` — into the directory, leaving any you already have alone, and
-installs the toolchain with the executable's own embedded Bun, so neither Bun nor Node has
+and `collie.d.ts` — into the directory, merging what it needs into a `package.json` or
+`tsconfig.json` you already have without replacing anything of yours, and installs the toolchain with the executable's own embedded Bun, so neither Bun nor Node has
 to be on the machine. The `effect` it pins is the one the host runs.
