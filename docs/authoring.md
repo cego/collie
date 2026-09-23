@@ -66,7 +66,8 @@ validates every layer without starting a run.
 
 Save a file and new work uses it: nothing to register, no rebuild, no host to restart. Your
 entry, the helpers it imports and the Markdown it reads are one thing — the directory a
-generation is staged from — so editing any of them sends the next run to a new registration
+generation is staged from, and whatever it imports by a relative path from outside it — so
+editing any of them sends the next run to a new registration
 while a run already going keeps the code it started on. A run recovered in the same host
 resumes on its own registration; a host started again rebuilds registrations from the
 modules **as they are now**, so a file you fixed is the file it comes back on. Any staged

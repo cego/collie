@@ -94,7 +94,8 @@ does not compile refuses its own id and says which file — it never falls throu
 module it was written to replace, and the entries beside it keep working.
 
 An edit reaches the next run. Your entry, the helpers it imports and the Markdown it reads
-are one thing — the directory a generation is staged from — so editing any of them sends
+are one thing — the directory a generation is staged from, and whatever it imports by a
+relative path from outside it — so editing any of them sends
 new work to a new registration while a run already going keeps the code it started on.
 Deleting a file takes its id away; putting it back brings it, and any run waiting on it,
 back. [ADR-0016](adr/0016-a-workflow-module-is-found-where-it-was-saved.md) is why each of
