@@ -19,6 +19,7 @@ import {
   Registry,
   foundationLayer,
   registryLayer,
+  runDir,
   type Generation,
   type HostServices,
 } from "../src/engine";
@@ -568,6 +569,51 @@ test(
           },
         );
         expect(stopped.left.join("\n")).toContain("would not close (");
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "an offer of a plan that spans repositories is refused, and says how to build each",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        for (const repo of ["api", "web"]) {
+          yield* fs.makeDirectory(`${rig.projectDir}/${repo}/.git`, { recursive: true });
+        }
+        const outcome = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [planned] = yield* loaded(registry, [
+              `${fixtures}/planned.workflow.ts`,
+              `${fixtures}/builds.workflow.ts`,
+            ]);
+            const started = yield* start(planned!, { request: "r1", text: { goal: "two repos" } });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const runId = started.success.runId;
+            yield* finished(runId);
+            const issues = `${runDir(dir(), runId)}/plan/issues`;
+            yield* fs.makeDirectory(issues, { recursive: true });
+            yield* fs.writeFileString(`${issues}/01-api.md`, "# The api\n\n**Repo:** api\n");
+            yield* fs.writeFileString(
+              `${issues}/02-web.md`,
+              "# The web\n\n**Repo:** web\n\n**Blocked by:** 01\n",
+            );
+            return {
+              offers: yield* registry.offers(runId),
+              invoked: yield* registry
+                .invoke({ runId, offer: "build-it", input: {}, request: "r2" })
+                .pipe(Effect.result),
+              rows: yield* (yield* Store).runs,
+            };
+          }),
+        );
+
+        expect(outcome.offers[0]?.unavailable).toContain("spans repositories (api, web)");
+        expect(refusedWith(outcome.invoked)).toContain("--input repo=<path>");
+        expect(outcome.rows).toHaveLength(1);
       }),
     ),
   120_000,

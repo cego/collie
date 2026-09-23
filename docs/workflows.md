@@ -38,7 +38,8 @@ handoff. Plans never enter the repository
 
 - **Implement now** — starts `implement` with this run's `plan/` as the work source, as a
   child of this run: stopping the plan reaches the build, and the build is its own Run with
-  its own card.
+  its own card. A plan whose tickets name several repositories starts one per repository;
+  see [Plans that span repositories](#plans-that-span-repositories).
 - **Second opinion** — one reviewer round over the plan, then the menu again; where it
   reports findings, the planner gets a follow-up round to revise.
 - **Offload to Linear** — the planner files the tickets as Linear issues. It asks once
@@ -104,26 +105,40 @@ A plan is single-repository only when its tickets all say `.`, or carry no line 
 plan whose tickets all name one repository _by path_ is not one of those: that repository
 is somewhere under the root, and its run has to be rooted there.
 
-`plan`'s **Implement now** starts one `implement` for the whole plan, rooted where the plan
-run is. That is the whole of a single-repository plan; it does not fan out. For a plan whose
-tickets name several repositories, start one `implement` per repository from that
-repository's own checkout, each with the shared plan directory and `--input repo=<path>` —
-the path its tickets' `Repo:` line names — so each run builds only its own tickets. Give
-them one branch name (`--input branch=`) and the sibling merge requests are findable by it.
-See [Repo run](../CONTEXT.md) for the term.
+Every other plan fans out on **Implement now**: one `implement` per repository, each
+started from that repository's checkout under the plan's root, each with the shared plan
+directory and its own `repo`, and all on one branch name — so the sibling merge requests are
+findable by it. See [Repo run](../CONTEXT.md) for the term.
 
-A workflow of your own can fan out in **waves** with the SDK's `readPlanRepos`: a
-repository's run starts once every repository its tickets are blocked by has finished, and
-repositories that block nothing start together
-([the SDK](sdk.md#a-workflow-made-of-other-workflows)). It refuses the whole plan, before any
-run starts, where the waves cannot be built: a repository-level cycle, a ticket with no
-`Repo:` line where its siblings have one, a repository with no checkout under the root —
-Collie does not clone — a `Repo:` that is not a path under the root, two tickets wearing one
-number, or a "Blocked by" line naming something that is not a ticket of this plan. The
-`Repo:` rule is why the line cannot be absolute or contain `..`: it becomes the directory a
-run is rooted at and a branch is cut in, and a plan is prose an agent wrote. A ticket
-number is a word that is nothing but digits: unpadded ones are fine (`2` finds `02-…`), and
-the digits inside a word like `v2` are part of that word, not an edge.
+They start in **waves**. A repository's run starts once every repository its tickets are
+blocked by has been built; repositories that block nothing start together. Ticket order
+inside a repository is that run's own business, as in a single-repository run. The plan
+Run is their parent until the last one ends, so stopping it stops them, resuming it goes on
+with the ones it already has rather than starting them again, and its result names what
+each repository ended as.
+
+- **A repository that fails or cannot start** starts no further wave. The others in its
+  wave are left to finish, and the result names the repository that stopped it and the ones
+  that never ran.
+- **A plan the fan-out cannot run** starts nothing when you pick **Implement now**: the
+  reason is recorded and shown on the Run, and the menu comes back. The same reading checks
+  the tickets when the planner writes them, and a plan it refuses goes back to the planner
+  once, so most of these never reach the menu. The reasons are a repository-level cycle, a
+  ticket with no `Repo:` line where its siblings have one, a repository with no checkout
+  under the root — Collie does not clone — a `Repo:` that is not a path under the root, two
+  tickets wearing one number, or a "Blocked by" line naming something that is not a ticket
+  of this plan. The `Repo:` rule is why the line cannot be absolute or contain `..`: it
+  becomes the directory a run is rooted at and a branch is cut in, and a plan is prose an
+  agent wrote. A ticket number is a word that is nothing but digits: unpadded ones are fine
+  (`2` finds `02-…`), and the digits inside a word like `v2` are part of that word, not an
+  edge.
+- **A card does not fan out.** The plan's own offer on its card, and `collie run action`,
+  refuse a plan that spans repositories and say how to build it: from each repository's
+  checkout, `collie run start implement --input plan=<the plan directory> --input
+  repo=<path>`, which builds only that repository's tickets.
+
+A workflow of your own can fan out the same way with the SDK's `planReposOf`
+([the SDK](sdk.md#a-workflow-made-of-other-workflows)).
 
 ## `review`
 

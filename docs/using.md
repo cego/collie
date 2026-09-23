@@ -426,7 +426,8 @@ nothing to file — no branch, no merge request, no plan, no question — is fin
 waiting: fifty such cards are not fifty obligations. Each card's first button is the one
 action that ends its wait — Open MR, Resume, Mark superseded, or on a plan that is ready
 the first offer its workflow declares, under the title it gave it (the shipped plan's is
-**Implement now**; a plan that declares none gets no button) — with Mark merged and Mark
+**Implement now**, refused with how to build it for a plan that spans repositories; a plan
+that declares none gets no button) — with Mark merged and Mark
 abandoned beside it in the menu. The newest ending is at the top; anything
 older than a week folds into one counted line, `▸ 9 older than a week`, and the header
 counts the week's endings while the fold counts the rest. **Finished** is work that landed

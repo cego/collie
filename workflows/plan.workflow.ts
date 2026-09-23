@@ -16,15 +16,20 @@ import {
   Host,
   PlanOutputSchema,
   ReviewOutputSchema,
+  WorkflowError,
   agentWork,
   ask,
   contentOf,
   decision,
   defineWorkflow,
   formatFindings,
+  identityProblem,
+  isSingleRepo,
+  planReposOf,
   type WorkflowMetadata,
 } from "collie";
 import { Effect, Schema } from "effect";
+import * as Activity from "effect/unstable/workflow/Activity";
 import markdown from "./plan.md" with { type: "text" };
 
 export const id = "plan";
@@ -119,6 +124,13 @@ const CHOICES = [IMPLEMENT, ARCHITECTURE, OPINION, OFFLOAD, REFINE, FINISH];
  */
 const ROUNDS = 6;
 
+/** What the fan-out needs of a reading of the plan's `Repo:` and `Blocked by` lines. */
+const Reading = Schema.Struct({
+  single: Schema.Boolean,
+  waves: Schema.Array(Schema.Array(Schema.String)),
+  refusal: Schema.NullOr(Schema.String),
+});
+
 /** A second opinion is worth having twice at most; after that it is the same plan again. */
 const OPINIONS = 2;
 
@@ -143,6 +155,20 @@ export const make = (registrationName: string) => {
       const place = yield* host.place(runId);
       const inputs = { goal: asked.goal, ticket: asked.ticket ?? "" };
       const vars = { run: { dir: place.dir, id: runId } };
+      const planDir = `${place.dir}/plan`;
+      // Recorded, so a replay is handed the reading the plan was acted on.
+      const readRepos = (at: string) =>
+        Activity.make({
+          name: `repos.${at}`,
+          success: Reading,
+          execute: planReposOf(planDir, place.cwd).pipe(
+            Effect.map((plan) => ({
+              single: isSingleRepo(plan),
+              waves: plan.waves.map((wave) => [...wave]),
+              refusal: plan.refusal?.message ?? null,
+            })),
+          ),
+        });
 
       const grilled = yield* agentWork({
         runId,
@@ -184,6 +210,91 @@ export const make = (registrationName: string) => {
         vars,
         output: PlanOutputSchema,
       });
+      // A plan whose tickets nobody can build is not a finished plan: its planner is told once.
+      const tickets = yield* readRepos("tickets");
+      if (tickets.refusal !== null) {
+        yield* agentWork({
+          runId,
+          operation: "unbuildable",
+          agent: PLANNER,
+          role: "planner",
+          workflow: id,
+          cwd: place.cwd,
+          instructions: prompt("unbuildable"),
+          inputs,
+          vars: { ...vars, refusal: tickets.refusal },
+          output: PlanOutputSchema,
+        });
+        const still = (yield* readRepos("unbuildable")).refusal;
+        if (still !== null) return yield* new WorkflowError({ reason: still });
+      }
+
+      /**
+       * One implement per repository the plan names, a wave at a time: a repository starts
+       * once every one its tickets wait on is built. One that fails or cannot start starts
+       * no further wave; the rest of its own wave is still waited on.
+       */
+      const buildEach = (waves: ReadonlyArray<ReadonlyArray<string>>) =>
+        Effect.gen(function* () {
+          const invocation = (repo: string) => `implement-${repo.replaceAll("/", "-")}`;
+          const clash = identityProblem(waves.flat().map(invocation));
+          if (clash !== null) return yield* new WorkflowError({ reason: clash });
+          const built: string[] = [];
+          for (const [at, wave] of waves.entries()) {
+            const started = yield* Effect.forEach(wave, (repo) =>
+              children
+                .start({
+                  runId,
+                  invocation: invocation(repo),
+                  workflow: "implement",
+                  input: { plan: planDir },
+                  // One branch name in every repository, so the sibling merge requests
+                  // are findable by it.
+                  options: launch({
+                    repo,
+                    workspace: `${place.cwd}/${repo}`,
+                    task: grilled.slug,
+                    outcome: grilled.outcome,
+                  }),
+                })
+                .pipe(
+                  Effect.result,
+                  Effect.map((child) => ({ repo, child })),
+                ),
+            );
+            const ended = yield* Effect.forEach(
+              started,
+              ({ repo, child }) =>
+                child._tag === "Failure"
+                  ? Effect.succeed({
+                      repo,
+                      built: null,
+                      why: `not started: ${child.failure.reason}`,
+                    })
+                  : children.result(child.success).pipe(
+                      Effect.map((value) => ({ repo, built: String(value), why: "" })),
+                      Effect.catch((failure) =>
+                        Effect.succeed({ repo, built: null, why: failure.reason }),
+                      ),
+                    ),
+              { concurrency: "unbounded" },
+            );
+            for (const one of ended) {
+              built.push(`${one.repo}: ${one.built ?? one.why}`);
+              yield* host.record(runId, `${one.repo}: ${one.built ?? one.why}`);
+            }
+            const stopped = ended.find((one) => one.built === null);
+            if (stopped !== undefined) {
+              const left = waves.slice(at + 1).flat();
+              const waiting =
+                left.length === 0
+                  ? ""
+                  : ` Not run: ${left.join(", ")}, waiting on ${stopped.repo}.`;
+              return `${stopped.repo} did not build.${waiting} ${built.join("; ")}`;
+            }
+          }
+          return `${waves.flat().length} repositories built in ${waves.length} wave(s): ${built.join("; ")}`;
+        });
 
       let opinions = 0;
       for (const [at, question] of menu.entries()) {
@@ -196,13 +307,26 @@ export const make = (registrationName: string) => {
         );
         if (chosen === FINISH) return `${written.issues_dir}: finished planning`;
 
+        if (chosen === IMPLEMENT) {
+          // A plan that spans repositories is one implement per repository, and one the
+          // fan-out cannot honestly run starts nothing: the menu comes back.
+          const plan = yield* readRepos(`implement-${round}`);
+          if (plan.refusal !== null) {
+            yield* host.record(runId, `${IMPLEMENT} cannot run here: ${plan.refusal}`);
+            yield* host.parked(runId, `${IMPLEMENT} cannot run here: ${plan.refusal}`);
+            continue;
+          }
+          yield* host.parked(runId, null);
+          if (!plan.single) return `${written.issues_dir}: ${yield* buildEach(plan.waves)}`;
+        }
+
         if (chosen === IMPLEMENT || chosen === ARCHITECTURE) {
           const building = chosen === IMPLEMENT;
           const child = yield* children.start({
             runId,
             invocation: building ? "implement" : "architecture",
             workflow: building ? "implement" : "architecture",
-            input: building ? { plan: `${place.dir}/plan` } : {},
+            input: building ? { plan: planDir } : {},
             // What kind of result this is, and what it is called: settled during the
             // interview rather than asked for again at the start of the build.
             options: launch({

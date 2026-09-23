@@ -639,6 +639,7 @@ test(
           "spread.workflow.ts",
           "share.workflow.ts",
           "offered.workflow.ts",
+          "planned.workflow.ts",
           // A fork of a shipped workflow, which is code an author writes the same way.
           "landing.workflow.ts",
           // The shipped five, held to the same declarations: a workflow Collie ships is

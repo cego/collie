@@ -17,7 +17,7 @@ import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { installFakeSkills } from "./support/defs";
 import { Agents, agentsLayer, type AgentHost } from "../src/agents";
-import { Children, Host, type ActionFacts, type ChildAsk } from "../src/sdk";
+import { Children, Host, WorkflowError, type ActionFacts, type ChildAsk } from "../src/sdk";
 import {
   PARKED,
   answerDecision,
@@ -49,6 +49,8 @@ type Shipped = keyof typeof UNRELATED;
 let rig: Rig;
 let dir: string;
 let started: ChildAsk[] = [];
+/** The invocations whose child ends in failure. */
+let failing = new Set<string>();
 let renamed = false;
 
 /** The public id a shipped workflow is run under in this pass. */
@@ -79,6 +81,7 @@ beforeEach(() =>
       const fs = yield* FileSystem.FileSystem;
       dir = `${rig.root}/host`;
       started = [];
+      failing = new Set();
       yield* fs.makeDirectory(dir, { recursive: true });
       yield* fs.makeDirectory(rig.projectDir, { recursive: true });
       // The skills the shipped personas and steps name, installed where this machine
@@ -129,7 +132,10 @@ const children = Layer.succeed(Children)(
           fresh: true,
         };
       }),
-    result: () => Effect.succeed("done"),
+    result: (child) =>
+      failing.has(child.invocation)
+        ? Effect.fail(new WorkflowError({ reason: `${child.invocation} failed` }))
+        : Effect.succeed("done"),
   }),
 );
 
@@ -493,6 +499,164 @@ scenario(
         expect(started[0]?.input).toEqual({ plan: `${runDir(dir, "r-plan-go")}/plan` });
         // What the work is called and what it proves; where it works is the child's own.
         expect(started[0]?.options).toEqual({ task: "one-registry", outcome: "feature" });
+      }),
+    ),
+  120_000,
+);
+
+/** Checkouts under the project, and a plan in the Run's own directory whose tickets name them. */
+const repositories = (
+  runId: string,
+  tickets: ReadonlyArray<{
+    readonly file: string;
+    readonly repo: string;
+    readonly blockedBy?: string;
+  }>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const issues = `${runDir(dir, runId)}/plan/issues`;
+    yield* fs.makeDirectory(issues, { recursive: true });
+    for (const ticket of tickets) {
+      yield* fs.makeDirectory(`${rig.projectDir}/${ticket.repo}/.git`, { recursive: true });
+      yield* fs.writeFileString(
+        `${issues}/${ticket.file}`,
+        `# ${ticket.file}\n\n**Repo:** ${ticket.repo}\n\n**Blocked by:** ${ticket.blockedBy ?? "None"}\n`,
+      );
+    }
+  });
+
+const THREE_REPOS = [
+  { file: "01-api.md", repo: "api" },
+  { file: "02-web.md", repo: "web", blockedBy: "01" },
+  { file: "03-docs.md", repo: "docs" },
+];
+
+scenario(
+  "implement now on a plan that spans repositories is one implement per repository, in waves",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+        yield* repositories("r-plan-fan", THREE_REPOS);
+        yield* parked({
+          entry: shipped("plan"),
+          runId: "r-plan-fan",
+          input: GOAL,
+          decision: "next-1",
+        });
+
+        const result = yield* answered({
+          entry: shipped("plan"),
+          runId: "r-plan-fan",
+          input: GOAL,
+          decision: "next-1",
+          value: "Implement now",
+        });
+
+        expect(said(result)).toContain("3 repositories built in 2 wave(s)");
+        // The repositories nothing waits on first, then the one waiting on the api.
+        expect(started.map((one) => [one.invocation, one.options])).toEqual(
+          ["api", "docs", "web"].map((repo) => [
+            `implement-${repo}`,
+            {
+              repo,
+              workspace: `${rig.projectDir}/${repo}`,
+              task: "one-registry",
+              outcome: "feature",
+            },
+          ]),
+        );
+        expect(new Set(started.map((one) => one.input.plan))).toEqual(
+          new Set([`${runDir(dir, "r-plan-fan")}/plan`]),
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a repository that does not build starts no further wave",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        failing = new Set(["implement-api"]);
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+        yield* repositories("r-plan-stop", THREE_REPOS);
+        yield* parked({
+          entry: shipped("plan"),
+          runId: "r-plan-stop",
+          input: GOAL,
+          decision: "next-1",
+        });
+
+        const result = yield* answered({
+          entry: shipped("plan"),
+          runId: "r-plan-stop",
+          input: GOAL,
+          decision: "next-1",
+          value: "Implement now",
+        });
+
+        expect(started.map((one) => one.invocation)).toEqual(["implement-api", "implement-docs"]);
+        expect(said(result)).toContain("api did not build. Not run: web, waiting on api.");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a plan the fan-out cannot run starts nothing, and the menu comes back",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS]);
+        yield* repositories("r-plan-gone", THREE_REPOS);
+        yield* parked({
+          entry: shipped("plan"),
+          runId: "r-plan-gone",
+          input: GOAL,
+          decision: "next-1",
+        });
+        yield* fs.remove(`${rig.projectDir}/web/.git`, { recursive: true });
+
+        yield* answeredThen({
+          entry: shipped("plan"),
+          runId: "r-plan-gone",
+          input: GOAL,
+          decision: "next-1",
+          value: "Implement now",
+          until: "next-2",
+        });
+
+        expect(started).toEqual([]);
+        expect(yield* fs.readFileString(`${dir}/events.r-plan-gone.log`)).toContain(
+          "Implement now cannot run here: These repositories are named by a ticket but not checked out",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "tickets nobody can build go back to the planner once, and a plan still unbuildable fails",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS, TICKETS]);
+        yield* repositories("r-plan-bad", THREE_REPOS);
+        yield* fs.writeFileString(
+          `${runDir(dir, "r-plan-bad")}/plan/issues/04-loose.md`,
+          "# 04-loose.md\n",
+        );
+
+        const result = yield* ran({ entry: shipped("plan"), runId: "r-plan-bad", input: GOAL });
+
+        expect(yield* asked("r-plan-bad", "unbuildable")).toContain("04-loose.md");
+        expect(result._tag).toBe("Failure");
+        expect(started).toEqual([]);
       }),
     ),
   120_000,

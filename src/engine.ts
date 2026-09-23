@@ -87,7 +87,7 @@ import {
 } from "./mr";
 import { latest, readDispositions, type Disposition } from "./disposition";
 import { openFindingsIn } from "./output";
-import { planIssuesIn } from "./plan";
+import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome } from "./outcome";
 import { History, RequestConflict, Store, storeLayer, type Admission, type RunRow } from "./store";
@@ -3095,7 +3095,27 @@ const makeRegistry: (
         yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
       ),
     };
-    return { row, generation, facts, where };
+    // An offer that hands over a plan spanning repositories would start one Run for
+    // several; that is a fan-out, which an offer does not do.
+    const refused = new Map<string, string>();
+    for (const offer of generation.offers) {
+      const field = Object.entries(offer.inputs).find(([, source]) => source === "plan-dir")?.[0];
+      if (field === undefined) continue;
+      const read = yield* planReposOf(`${where}/plan`, placedOf(row, options).cwd).pipe(
+        Effect.provideContext(bun),
+        Effect.result,
+      );
+      if (read._tag === "Failure") {
+        refused.set(offer.id, `its plan could not be read: ${read.failure.message}`);
+      } else if (!isSingleRepo(read.success)) {
+        refused.set(
+          offer.id,
+          read.success.refusal?.message ??
+            `its plan spans repositories (${read.success.repos.map((one) => one.path).join(", ")}), which is one Run per repository. Start each from that repository's checkout with \`--input ${field}=${where}/plan --input repo=<path>\`.`,
+        );
+      }
+    }
+    return { row, generation, facts, where, refused };
   });
 
   const startWork = Effect.fn("Engine.Registry.start")(function* (options: {
@@ -3216,10 +3236,11 @@ const makeRegistry: (
 
     offers: (runId: string) =>
       offeredBy(runId).pipe(
-        Effect.map(({ generation, facts }) =>
+        Effect.map(({ generation, facts, refused }) =>
           offersFrom(generation.offers, facts, {
             self: generation.id,
             keepUnavailable: true,
+            refused,
           }),
         ),
       ),
@@ -3230,15 +3251,18 @@ const makeRegistry: (
       readonly input: Readonly<Record<string, Schema.Json>>;
       readonly request: string;
     }) {
-      const { row, generation, facts, where } = yield* offeredBy(options.runId);
+      const { row, generation, facts, where, refused } = yield* offeredBy(options.runId);
       // Asked again here, of the module as it is now: the card this was read from may
       // have been drawn before the file was edited, and a card is not authority.
-      const offer = offersFrom(generation.offers, facts, { self: generation.id }).find(
-        (one) => one.id === options.offer,
-      );
-      if (offer === undefined) {
+      const offer = offersFrom(generation.offers, facts, {
+        self: generation.id,
+        keepUnavailable: true,
+        refused,
+      }).find((one) => one.id === options.offer);
+      if (offer === undefined || offer.unavailable !== null) {
+        const why = offer?.unavailable ? `: ${offer.unavailable}` : " now";
         return yield* new HostRefused({
-          reason: `run "${options.runId}" does not offer "${options.offer}" now`,
+          reason: `run "${options.runId}" does not offer "${options.offer}"${why}`,
         });
       }
       const starting = yield* resolve({ project: row.project, id: offer.workflow });

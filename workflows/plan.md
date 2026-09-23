@@ -150,6 +150,16 @@ wave.
 
 Then write your Output, naming the directory you wrote them to.
 
+## unbuildable
+
+The tickets in `{{run.dir}}/plan/issues/` cannot be built as they are:
+
+{{refusal}}
+
+Fix the tickets so that reason no longer holds, changing nothing else about the plan.
+
+Then write your Output, naming the directory you wrote them to.
+
 ## second-opinion
 
 Read `{{run.dir}}/plan/SPEC.md` and every ticket in `{{run.dir}}/plan/issues/`.

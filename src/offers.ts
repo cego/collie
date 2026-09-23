@@ -51,6 +51,8 @@ export interface OfferOptions {
   readonly self?: string;
   /** Keep the ones that cannot be offered, with the reason, rather than leaving them out. */
   readonly keepUnavailable?: boolean;
+  /** Why an offer cannot be made for a reason its facts do not carry, by offer id. */
+  readonly refused?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -66,7 +68,7 @@ export function offersFrom(
   const offers: Offer[] = [];
   for (const one of declared) {
     if (one.kind === "follow-up" && facts.disposed) continue;
-    const unavailable = refusal(one, facts);
+    const unavailable = refusal(one, facts) ?? options.refused?.get(one.id) ?? null;
     if (unavailable !== null && options.keepUnavailable !== true) continue;
     offers.push({
       id: one.id,
