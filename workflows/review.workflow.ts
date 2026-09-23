@@ -120,6 +120,7 @@ export const make = (registrationName: string) => {
         plan: asked.plan ?? "",
         proves: asked.proves ?? "",
         previous: before,
+        answered: "",
         risks: place.options.risks ?? "",
         at: 1,
         of: 1,
@@ -134,7 +135,7 @@ export const make = (registrationName: string) => {
       };
       const vars = {
         run: { dir: place.dir, id: runId },
-        previous: { review: before },
+        previous: { review: before, fix: "" },
         iteration: "1",
         max_iterations: "1",
         disputed: formatFindings([]),

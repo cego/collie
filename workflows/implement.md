@@ -95,9 +95,7 @@ The work source above is one of five kinds. Do the one that matches
   under **This slice** below; Collie hands them to you one at a time, in an order their
   `Blocked by` lines allow.
 - **review** — a review of work that already exists. `{{inputs.plan}}/review.md` is the
-  spec, and the same findings as JSON are that run's own review Output —
-  `{{inputs.plan}}/steps/review/review.json` where one reviewer wrote it, or
-  `{{inputs.plan}}/steps/synthesize/synthesized.json` where several were reconciled. The
+  spec, and the same findings as JSON are `{{inputs.plan}}/findings.json`. The
   tickets are those findings, worst severity first. You are fixing an existing
   change and this checkout is already on its branch, so there is no branch to pick and
   nothing to check out: the fixes land on the branch that was reviewed, and a merge

@@ -103,8 +103,7 @@ comprehensive one: both review skills, the whole spec, the whole change, and the
 around it. A later iteration is a follow-up, and so is any review with an earlier review
 above it: do not run the full review skills again over the whole change. The previous
 round's review is at `{{run.dir}}/review.md` and the implementer's account of it — what
-it fixed, what it disputed, what it checked — is that step's Output under
-`{{run.dir}}/steps/` (in the implement workflow, `steps/fix/fix.json`). Check each of its
+it fixed, what it disputed, what it checked — is its Output at `{{previous.fix}}`. Check each of its
 findings against the code as it is now and say what happened to it — still there,
 changed but not fixed, or fixed. Then review what has changed since that review, and the
 callers and tests the fixes touched, and raise what is new. A finding you carry forward
@@ -216,10 +215,8 @@ fixed"}]}`, plus the one outcome field where the outcome names one.
 ## fix
 
 The review is written and you are fixing it, in this run, on this target. The findings
-are `{{run.dir}}/review.md`, and the same findings as JSON are the review's own Output —
-`{{run.dir}}/steps/review/review.json` where one reviewer wrote it, or
-`{{run.dir}}/steps/synthesize/synthesized.json` where several were reconciled. Worst
-severity first.
+are `{{run.dir}}/review.md`, and the same findings as JSON are
+`{{run.dir}}/findings.json`. Worst severity first.
 
 Work where the review was pointed — `target_kind` is `{{inputs.target_kind}}`:
 

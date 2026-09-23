@@ -1094,11 +1094,26 @@ scenario(
         const fixing = yield* asked("r-impl-fix", "fix-1");
         expect(fixing).toContain("the guard is on the wrong side");
         expect(fixing).toContain("Iteration 1 of at most 4");
-        expect(yield* asked("r-impl-fix", "review-2-1")).toContain("Iteration 2 of at most 4");
+        const followUp = yield* asked("r-impl-fix", "review-2-1");
+        expect(followUp).toContain("Iteration 2 of at most 4");
+        // Where the implementer's account of the first round really is.
+        expect(followUp).toContain(`${dir}/agents/r-impl-fix/fix-1.json`);
       }),
     ),
   120_000,
 );
+
+test("no shipped prompt sends an agent to a step directory a Run no longer has", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      for (const name of yield* fs.readDirectory(`${ROOT}workflows`)) {
+        if (!name.endsWith(".md")) continue;
+        const text = yield* fs.readFileString(`${ROOT}workflows/${name}`);
+        expect([name, /\/steps\//.test(text)]).toEqual([name, false]);
+      }
+    }).pipe(Effect.orDie),
+  ));
 
 scenario(
   "a review module's own directory is a review to build from, not a wall of text",

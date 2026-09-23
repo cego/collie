@@ -395,6 +395,7 @@ const rally = (ask: {
 > =>
   Effect.gen(function* () {
     const host = yield* Host;
+    const agents = yield* Agents;
     let disputed: Finding[] = [];
     let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
 
@@ -410,6 +411,8 @@ const rally = (ask: {
         plan: ask.plan,
         proves: ask.proves,
         previous: "",
+        // The last round's fix, which a follow-up review checks each of its findings against.
+        answered: at === 1 ? "" : agents.outputFor(ask.runId, `fix-${at - 1}`),
         risks: ask.risks,
         at,
         of: ROUNDS,

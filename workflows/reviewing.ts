@@ -54,6 +54,8 @@ export interface ReviewAsk {
   readonly proves: string;
   /** The review before this one, for the reviewers to read rather than repeat. */
   readonly previous: string;
+  /** Where the implementer's account of that review is; empty where nobody fixed one. */
+  readonly answered: string;
   /** The extra axes a human asked for, where they asked for any. */
   readonly risks: string;
   /** Which round this is, and how many there may be. It also names the round's work. */
@@ -74,7 +76,7 @@ const told = (ask: ReviewAsk) => ({
   },
   vars: {
     run: { dir: ask.dir, id: ask.runId },
-    previous: { review: ask.previous },
+    previous: { review: ask.previous, fix: ask.answered },
     iteration: String(ask.at),
     max_iterations: String(ask.of),
     disputed: formatFindings(ask.disputed),
