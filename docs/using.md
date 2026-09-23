@@ -424,8 +424,10 @@ is ready to implement, a Run that failed, was stopped or was abandoned with a br
 merge request behind it and has neither been resumed nor disposed of. A Run that ended with
 nothing to file — no branch, no merge request, no plan, no question — is finished, not
 waiting: fifty such cards are not fifty obligations. Each card's first button is the one
-action that ends its wait — Open MR, Implement now, Resume, Mark superseded — with Mark
-merged and Mark abandoned beside it in the menu. The newest ending is at the top; anything
+action that ends its wait — Open MR, Resume, Mark superseded, or on a plan that is ready
+the first offer its workflow declares, under the title it gave it (the shipped plan's is
+**Implement now**; a plan that declares none gets no button) — with Mark merged and Mark
+abandoned beside it in the menu. The newest ending is at the top; anything
 older than a week folds into one counted line, `▸ 9 older than a week`, and the header
 counts the week's endings while the fold counts the rest. **Finished** is work that landed
 — a disposition was recorded, the Run succeeded at a workflow that produces nothing to
@@ -526,6 +528,8 @@ closes it, as does Esc, and the key beside each item does it from the keyboard:
 | `g`     | Go to its tab      | always                              |
 | `s`     | Steer…             | while something is still driving it |
 | `w`     | Open merge request | when there is one                   |
+| `i`     | its first offer    | a plan that is ready, by its title  |
+| `o`     | What it offers…    | always: the workflow's own offers   |
 | `u`     | Resume run         | failed or stopped                   |
 | `x`     | Follow-up run      | finished                            |
 | `k`     | Stop run           | working, quiet or waiting on you    |

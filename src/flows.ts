@@ -45,7 +45,15 @@ import type { PluginEnv } from "./env";
 import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
 import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Declared, Found } from "./discovery";
-import { answerRun, controlRun, invokeOffer, resumeRun, savedModules, startRun } from "./lifecycle";
+import {
+  answerRun,
+  controlRun,
+  invokeOffer,
+  offersOf,
+  resumeRun,
+  savedModules,
+  startRun,
+} from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
 import { COLLIE_TAB, reason, runTitle } from "./naming";
@@ -732,6 +740,38 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   return 0;
 });
 
+const OfferArguments = Schema.Struct({
+  properties: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+  required: Schema.optional(Schema.Array(Schema.String)),
+});
+const decodeArguments = Schema.decodeUnknownOption(OfferArguments);
+const TextOnly = Schema.Struct({ type: Schema.Literal("string") });
+const isTextField = Schema.is(TextOnly);
+const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
+
+/**
+ * What an offer takes, asked for one field at a time from the drawing its module gave. A
+ * text field is taken as typed; anything else is read as JSON where it parses, so the
+ * workflow's own schema settles it. Null where the human cancelled.
+ */
+const offerArguments = Effect.fn("Flows.offerArguments")(function* (
+  prompts: FlowPrompts,
+  drawn: Schema.Json | null,
+) {
+  const takes = decodeArguments(drawn);
+  if (takes._tag === "None") return {};
+  const required = new Set(takes.value.required ?? []);
+  const input: Record<string, Schema.Json> = {};
+  for (const [name, field] of Object.entries(takes.value.properties ?? {})) {
+    const typed = yield* prompts.ask(required.has(name) ? `${name}?` : `${name}? (optional)`);
+    if (typed === null) return null;
+    if (typed === "" && !required.has(name)) continue;
+    const parsed = isTextField(field) ? Option.none() : parseJson(typed);
+    input[name] = Option.isSome(parsed) ? parsed.value : typed;
+  }
+  return input;
+});
+
 /** How often the tab re-reads the files and asks herdr what is still alive. */
 const REFRESH_MS = 1500;
 /** How long a keypress may wait; the tab has to feel like a TUI, not a report. */
@@ -1337,6 +1377,29 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         runId: command.runId,
         offer: command.offer,
         input: {},
+        request: yield* newRequestId(),
+      });
+      return done.ok ? done.human : done.error.message;
+    }
+
+    /** What the Run's module offers now, the one chosen asked for what it takes, then made. */
+    case "ChooseOffer": {
+      const listed = yield* offersOf(env, command.runId);
+      if ("ok" in listed) return listed.error.message;
+      const open = listed.filter((one) => one.unavailable === null);
+      if (open.length === 0) return `${command.runId} offers nothing now`;
+      const chosen = yield* prompts.menu(
+        open.map((one) => ({ id: one.id, title: one.title, subtitle: one.workflow })),
+        { header: `What next for ${command.runId}?` },
+      );
+      const offer = open.find((one) => one.id === chosen?.id);
+      if (offer === undefined) return null;
+      const input = yield* offerArguments(prompts, offer.arguments);
+      if (input === null) return null;
+      const done = yield* invokeOffer(env, {
+        runId: command.runId,
+        offer: offer.id,
+        input,
         request: yield* newRequestId(),
       });
       return done.ok ? done.human : done.error.message;

@@ -3,6 +3,7 @@ import {
   actionsFor,
   dispositionsFor,
   menuFor,
+  primaryFor,
   olderFinished,
   ALL_KEYS,
   footerKeys,
@@ -563,14 +564,14 @@ test("starting a workflow is this Session's, so a wide row is not offered one", 
   // SAFETY: one recent row goes in, so one row comes out.
   const [row] = rowsOf(board({ recent: [run("r0", { target, fixable: true })] })) as [Row];
 
-  expect(actionsFor(row, HERE).map((a) => a.key)).toEqual(["l", "x", "a", "o", "w"]);
+  expect(actionsFor(row, HERE).map((a) => a.key)).toEqual(["l", "x", "o", "w"]);
   // The merge request is still the run's own: opening it and posting its review act on
   // the run, not on this checkout.
   expect(actionsFor(row, EVERYWHERE).map((a) => a.key)).toEqual(["l", "o", "w"]);
   // And the keys go with the buttons, so neither can be pressed from a wide board.
   expect(keyIntent(keys({ row, filter: HERE }), press("x"))).toEqual({
     _tag: "Do",
-    command: { _tag: "InvokeOffer", runId: "r0", offer: "fix-open" },
+    command: { _tag: "ChooseOffer", runId: "r0" },
   });
   expect(keyIntent(keys({ row, filter: EVERYWHERE }), press("x"))).toBeNull();
 });
@@ -633,8 +634,8 @@ test("a row's actions name the row, not the newest run", () => {
     ["l", { _tag: "OpenLog", runId: "r1" }],
     ["k", { _tag: "StopRun", runId: "r1" }],
   ]);
-  // A finished run has no driver to stop; offering the key would be a lie.
-  expect(actionsFor(recent, HERE).map((a) => a.key)).toEqual(["l"]);
+  // A finished run has nothing to stop; what it offers next is its module's to say.
+  expect(actionsFor(recent, HERE).map((a) => a.key)).toEqual(["l", "x"]);
 });
 
 test("a clean review can still be opened in a browser", () => {
@@ -646,8 +647,8 @@ test("a clean review can still be opened in a browser", () => {
 
   // Nothing to fix and nothing to post, but the merge request is still there to look at:
   // opening it has nothing to do with whether the review found anything.
-  expect(actionsFor(clean, HERE).map((a) => a.key)).toEqual(["l", "a", "w"]);
-  expect(actionsFor(withFindings, HERE).map((a) => a.key)).toEqual(["l", "x", "a", "o", "w"]);
+  expect(actionsFor(clean, HERE).map((a) => a.key)).toEqual(["l", "x", "w"]);
+  expect(actionsFor(withFindings, HERE).map((a) => a.key)).toEqual(["l", "x", "o", "w"]);
 });
 
 test("one thing owns the keyboard, in one order", () => {
@@ -1580,6 +1581,7 @@ test("a card's menu offers only what that Task can be asked for", () => {
     ["enter", "Open record"],
     ["g", "Go to its tab"],
     ["s", "Steer…"],
+    ["o", "What it offers…"],
     ["k", "Stop run"],
   ]);
   expect(working[0]!.command).toEqual({ _tag: "OpenRecord", id: "t1" });
@@ -1587,12 +1589,14 @@ test("a card's menu offers only what that Task can be asked for", () => {
     _tag: "Jump",
     jump: { kind: "run", runId: "r1", label: "Strapi prod seeder" },
   });
-  expect(working[3]!.command).toEqual({ _tag: "StopRun", runId: "r1" });
+  expect(working[3]!.command).toEqual({ _tag: "ChooseOffer", runId: "r1" });
+  expect(working[4]!.command).toEqual({ _tag: "StopRun", runId: "r1" });
 
   // A run nobody is driving cannot be stopped or steered; it can be taken up again.
   expect(menuFor(task({ state: "failed" })).map((item) => item.label)).toEqual([
     "Open record",
     "Go to its tab",
+    "What it offers…",
     "Resume run",
   ]);
   expect(menuFor(task({ state: "stopped" })).map((item) => item.label)).toContain("Resume run");
@@ -1600,8 +1604,24 @@ test("a card's menu offers only what that Task can be asked for", () => {
   expect(menuFor(task({ state: "done" })).map((item) => item.label)).toEqual([
     "Open record",
     "Go to its tab",
+    "What it offers…",
     "Follow-up run",
   ]);
+});
+
+test("a ready plan's first action is the offer its module declares, under its own title", () => {
+  const offer = { id: "build-it", title: "Build these tickets" };
+  const ready = task({ state: "done", landed: false, planReady: true, offer });
+  expect(primaryFor(ready)).toEqual({
+    key: "i",
+    label: "Build these tickets",
+    command: { _tag: "InvokeOffer", runId: "r1", offer: "build-it" },
+  });
+  expect(menuFor(ready).map((item) => item.label)).toContain("Build these tickets");
+  // A plan whose module offers nothing gets no button for something nobody declared.
+  const undeclared = task({ state: "done", landed: false, planReady: true, offer: null });
+  expect(primaryFor(undeclared)).toBeNull();
+  expect(menuFor(undeclared).map((item) => item.label)).not.toContain("Implement now");
 });
 
 test("the merge request is offered when there is one to open, named the way glab takes it", () => {

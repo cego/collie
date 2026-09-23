@@ -32,6 +32,7 @@ export function task(over: Partial<TaskView> = {}): TaskView {
     ended: null,
     mrState: null,
     planReady: false,
+    offer: null,
     run: "r1",
     runs: ["r1"],
     at: Date.parse("2026-09-16T12:00:00.000Z"),

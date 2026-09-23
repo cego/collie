@@ -23,6 +23,8 @@ import { ago, agoShort, spanned } from "./time";
 import { readVerifications, type Verification } from "./verify";
 import { readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
+import { offersOf } from "./lifecycle";
+import type { OfferView } from "./engine";
 
 /** How a card reads, and the order Tasks take inside a section. */
 export type TaskState =
@@ -176,12 +178,23 @@ export interface TaskView {
   mrState: MrState | null;
   /** A plan that finished and nobody has implemented: its card's first action starts that. */
   planReady: boolean;
+  /**
+   * What that first action is: the Run's own primary offer, as its module declares it now.
+   * Null where it declares none, so no card shows an action nobody offered.
+   */
+  offer: BoardOffer | null;
   /** The Run a card's actions act on: the one the sentence is about. */
   run: string;
   /** Every Run of this Task, newest first, for the drawer. */
   runs: ReadonlyArray<string>;
   /** When this Task last changed, in epoch milliseconds, which is what orders the board. */
   at: number;
+}
+
+/** An offer a card can invoke by id, under the title its workflow gave it. */
+export interface BoardOffer {
+  readonly id: string;
+  readonly title: string;
 }
 
 /** `on-stage` and `in-prod` are merged too: the furthest its deploy jobs have taken it. */
@@ -674,6 +687,8 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   quietMs?: number;
   /** What GitLab last said about each merge request, by the reference the card carries. */
   mrStates?: ReadonlyMap<string, MrState>;
+  /** What a Run offers now; the host is asked where this is not given. */
+  offers?: (runId: string) => Effect.Effect<ReadonlyArray<OfferView>>;
 }) {
   const { stateDir, socketPath } = opts.env;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
@@ -686,6 +701,13 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   const proposals = opts.proposals ?? (yield* proposalsOf(stateDir, socketPath));
   const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
+  const offersOfRun =
+    opts.offers ??
+    ((runId: string) =>
+      offersOf(opts.env, runId).pipe(
+        Effect.map((listed) => ("ok" in listed ? [] : listed)),
+        Effect.orElseSucceed((): ReadonlyArray<OfferView> => []),
+      ));
 
   const groups = new Map<string, RunFacts[]>();
   for (const run of all) {
@@ -830,6 +852,9 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       ended: finishedAt > 0 ? finishedAt : null,
       mrState,
       planReady,
+      // Asked only of a plan that is ready, which is the one card whose first action is an
+      // offer: the rest are the board's own, and asking every card would ask every refresh.
+      offer: planReady ? primaryOf(yield* offersOfRun(leader.id)) : null,
       run: leader.id,
       runs: runs.map((run) => run.id),
       at: at === 0 ? first : at,
@@ -837,6 +862,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
   }
   return sortBoard(views);
 });
+
+/** The offer a card presents first: the one its module marks primary and can make now. */
+const primaryOf = (offers: ReadonlyArray<OfferView>): BoardOffer | null => {
+  const first = offers.find((one) => one.primary && one.unavailable === null);
+  return first === undefined ? null : { id: first.id, title: first.title };
+};
 
 export interface Sections {
   needs: TaskView[];

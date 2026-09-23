@@ -247,6 +247,8 @@ export type Command =
    */
   | { _tag: "SendReview"; runId: string | null }
   | { _tag: "InvokeOffer"; runId: string; offer: string }
+  /** Every offer the Run's module makes now, chosen from and asked about when pressed. */
+  | { _tag: "ChooseOffer"; runId: string }
   | { _tag: "PostReview"; runId: string }
   /**
    * The merge request in a browser. It names the run as well as the target, because
@@ -297,7 +299,6 @@ export type Command =
       kind: "merged" | "abandoned" | "superseded";
       ref: string;
     }
-  /** Start `implement` on a finished plan's own plan directory, in the plan's Task. */
   /**
    * Go to the next unanswered question. The app answers this itself, like
    * `EditSetting`: it moves the Selection and clears a filter hiding the row, neither
@@ -1010,25 +1011,13 @@ export function actionsFor(row: Row | null, filter: Filter): Action[] {
   // A finished run has no driver left to stop, so the key is not offered for one.
   if (row.kind === "active") {
     actions.push({ key: "k", label: "stop", command: { _tag: "StopRun", runId } });
-  } else if (row.fixable && sessionLocal(filter)) {
-    // What the Run's own Workflow offers first. Only for a run that has stopped: a fix
-    // round over one still writing its review would build from half of it. Which
-    // workflow that starts, and whether it is still on the table, is decided when the
-    // key is pressed — by the offer, never here.
-    actions.push({
-      key: "x",
-      label: "fix what is open",
-      command: { _tag: "InvokeOffer", runId, offer: FIX_OFFER },
-    });
+  } else if (sessionLocal(filter)) {
+    // What the Run's own Workflow offers, for a run that has stopped: work started from
+    // one still writing would build from half of it. What is offered, and what each one
+    // takes, is asked of the module when the key is pressed — never decided here.
+    actions.push({ key: "x", label: "offers", command: { _tag: "ChooseOffer", runId } });
   }
   if (row.target) {
-    if (sessionLocal(filter)) {
-      actions.push({
-        key: "a",
-        label: "review again",
-        command: { _tag: "InvokeOffer", runId, offer: AGAIN_OFFER },
-      });
-    }
     if (row.target.startsWith("mr:")) {
       // Posting needs a review to post, and `fixable` is the row's only word on whether
       // one was written. Looking at the merge request needs nothing but the target, so a
@@ -1045,16 +1034,6 @@ export function actionsFor(row: Row | null, filter: Filter): Action[] {
   }
   return actions;
 }
-
-/**
- * The two offers the board has keys for, by the id a Workflow declares them under. The
- * board shows a key when the Run's own facts say there is something to act on; what the
- * offer starts, and whether it is still offered at all, is the Workflow's to answer when
- * the key is pressed.
- */
-const FIX_OFFER = "fix-open";
-const AGAIN_OFFER = "run-again";
-const PLAN_OFFER = "implement-now";
 
 /**
  * What the tab's keyboard is on. Three things have to agree about it — which keys act, a
@@ -1193,12 +1172,15 @@ export function primaryFor(view: TaskView): MenuItem | null {
   if (view.state === "active" || view.state === "quiet")
     return { key: "g", label: "Go to tab", command: goToTab(view) };
   if (view.landed) return null;
+  // Whatever the plan's module offers first, under its own title; none, no button.
   if (view.planReady)
-    return {
-      key: "i",
-      label: "Implement now",
-      command: { _tag: "InvokeOffer", runId, offer: PLAN_OFFER },
-    };
+    return view.offer === null
+      ? null
+      : {
+          key: "i",
+          label: view.offer.title,
+          command: { _tag: "InvokeOffer", runId, offer: view.offer.id },
+        };
   if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned")
     return { key: "u", label: "Resume", command: { _tag: "ResumeRun", runId } };
   if (view.mrState === "closed")
@@ -1238,13 +1220,14 @@ export function menuFor(view: TaskView): MenuItem[] {
       command: { _tag: "OpenMr", target: mrTarget(mr.project, mr.iid), runId },
     });
   }
-  if (view.planReady) {
+  if (view.offer !== null) {
     items.push({
       key: "i",
-      label: "Implement now",
-      command: { _tag: "InvokeOffer", runId, offer: PLAN_OFFER },
+      label: view.offer.title,
+      command: { _tag: "InvokeOffer", runId, offer: view.offer.id },
     });
   }
+  items.push({ key: "o", label: "What it offers…", command: { _tag: "ChooseOffer", runId } });
   if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned") {
     items.push({ key: "u", label: "Resume run", command: { _tag: "ResumeRun", runId } });
   }
@@ -1346,6 +1329,8 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "s", what: "Steer…" },
   { key: "w", what: "Open merge request" },
   { key: "u", what: "Resume run" },
+  { key: "o", what: "What its workflow offers next" },
+  { key: "i", what: "The first of those, on a plan that is ready" },
   { key: "x", what: "Follow-up run" },
   { key: "k", what: "Stop run" },
 ];

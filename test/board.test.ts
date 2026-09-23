@@ -216,6 +216,7 @@ function task(over: Partial<TaskView> = {}): TaskView {
     ended: null,
     mrState: null,
     planReady: false,
+    offer: null,
     run: "r1",
     runs: ["r1"],
     at: 0,
@@ -698,11 +699,23 @@ test("landed is a disposition, a merge the forge reports, or work with nothing t
         yield* done("closed", { mr: "https://gitlab.cego.dk/mk/collie/-/merge_requests/66" }),
       ];
 
+      // What each module offers now: the shipped plan offers its build, the renamed one
+      // declares nothing, and the card offers exactly that.
+      const implementNow = {
+        id: "implement-now",
+        title: "Implement now",
+        workflow: "implement",
+        arguments: null,
+        kind: "follow-up" as const,
+        primary: true,
+        unavailable: null,
+      };
       const views = yield* board(env, runs, {
         mrStates: new Map([
           ["mk/collie!65", "merged"],
           ["mk/collie!66", "closed"],
         ]),
+        offers: (runId) => Effect.succeed(runId === "plan" ? [implementNow] : []),
       });
       const by = (task: string) => views.find((view) => view.id === `t-${task}`)!;
       expect(sectionOf(by("review"))).toBe("finished");
@@ -712,6 +725,8 @@ test("landed is a disposition, a merge the forge reports, or work with nothing t
         expect([task, sectionOf(by(task))]).toEqual([task, "waiting"]);
         expect([task, by(task).sentence]).toEqual([task, "Plan ready to implement."]);
       }
+      expect(by("plan").offer).toEqual({ id: "implement-now", title: "Implement now" });
+      expect(by("renamed").offer).toBeNull();
       expect(sectionOf(by("merged"))).toBe("finished");
       expect(sectionOf(by("closed"))).toBe("waiting");
       expect(by("closed").sentence).toBe("Merge request mk/collie!66 closed without merging.");

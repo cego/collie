@@ -329,6 +329,8 @@ prose, so the same workflow is usable by somebody else.
 what it would carry: the configured assignee, the repository's own template, the issues the
 branch answers. One question rather than two, because a step that cannot reach GitLab has
 nothing to fill in — check it before you start an agent, and say the reason where it is no.
+Once one is open, `host.mergeRequest(runId, url)` records it as a fact of the Run: its card
+links it, waits on it, and follows what the forge says of it.
 
 `host.claim({ runId, cwd, adopting, say })` blocks until this Run holds the shared claim on
 the repository it works in, and answers `null` where that repository has none. Waiting here
@@ -534,7 +536,8 @@ earlier pass history — it is not that the result went off, it is that it is ab
 tree.
 
 `host.verify({ runId, name, cwd })` runs one of the commands your Run was started under the
-authority of, and records what it did. The list is `.herdr/verify.json`, read when the Run
+authority of, in the directory the grant names, resolved from `cwd` — which has to be the
+Run's own checkout — and records what it did. The list is `.herdr/verify.json`, read when the Run
 started, plus whatever a human has granted it since with `collie run intent verification` —
 a name nobody approved is refused, and a workflow cannot add to it. Anyone else
 collects the same way from outside: `collie verify --run <your run id> -- <command>`.
