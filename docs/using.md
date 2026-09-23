@@ -950,10 +950,11 @@ checkout` for a merge request, so the fixes land on that MR's own branch and its
 - **Post to MR** — only for a merge request target: the review is posted to it.
 - **Don't post** — the run ends with its findings.
 
-**A plan that changes under an implementer.** `implement` reads its tickets by name each
-time it reaches its list, so what is already built is kept and a ticket added or edited
-since is built as it reads now. It is not told about an edit while it is building: a
-resume, or the replay after a restart, is when the list is read again.
+**A plan that changes under an implementer.** `implement` reads its tickets again after
+each one it builds, by name, so what is already built is kept, a ticket added, reordered or
+edited since is built as it reads now, and one removed is not built at all. It is not told
+about an edit while it is building a ticket. Each reading is recorded, so a replay after a
+restart follows the lists that were read rather than reading them again.
 
 **A decision the plan does not cover.** The implementer's prompt names the live planner's
 agent and pane and tells it to ask there rather than stopping. With no planner live, the

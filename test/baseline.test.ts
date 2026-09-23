@@ -10,7 +10,7 @@
 // happens: what is asked of whom, in what order, and what the answer starts next.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
@@ -978,6 +978,48 @@ scenario(
         expect(
           yield* fs.readFileString(`${runDir(dir, "r-impl")}/steering/progress/01-first.json`),
         ).toContain(`"status":"done"`);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "tickets added and removed while one is being built are the plan the next one comes from",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `[ "$1" = "api" ] && echo '{"username":"tester"}'; exit 0`);
+        yield* repository();
+        const plan = yield* planOf([
+          { file: "01-first.md", title: "the first one", checks: "unit" },
+          { file: "02-second.md", title: "the second one", checks: "unit" },
+        ]);
+        yield* approve("r-live", ["unit"]);
+        // The first ticket's Output is written by hand, once the plan has moved under it.
+        yield* rig.queueOutputs([null, BUILT, CLEAN_REVIEW, CLEAN_SYNTHESIS, OPENED]);
+        const running = yield* Effect.forkChild(
+          ran({ entry: shipped("implement"), runId: "r-live", input: { plan } }),
+        );
+        const agents = `${dir}/agents/r-live`;
+        yield* until(
+          () =>
+            fs.exists(`${agents}/01-first.md.prompt.md`).pipe(Effect.orElseSucceed(() => false)),
+          (there) => there,
+        );
+        yield* fs.remove(`${plan}/issues/02-second.md`);
+        yield* fs.writeFileString(
+          `${plan}/issues/03-third.md`,
+          "# the third one\n\n**Checks:** unit\n",
+        );
+        yield* fs.writeFileString(`${agents}/01-first.md.json`, asJson(BUILT));
+        const result = yield* Fiber.join(running);
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* fs.exists(`${agents}/03-third.md.prompt.md`)).toBe(true);
+        expect(yield* fs.exists(`${agents}/02-second.md.prompt.md`)).toBe(false);
       }),
     ),
   120_000,

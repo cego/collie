@@ -46,6 +46,7 @@ import {
 } from "collie";
 import { DateTime, Effect, FileSystem, Schema } from "effect";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
+import * as Activity from "effect/unstable/workflow/Activity";
 import markdown from "./implement.md" with { type: "text" };
 import { reviewPass } from "./reviewing.ts";
 
@@ -108,6 +109,15 @@ const Built = Schema.Struct({
   documented_commands: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+/** A ticket as a reading of the plan records it. */
+const SliceRecord = Schema.Struct({
+  file: Schema.String,
+  number: Schema.String,
+  title: Schema.String,
+  blockedBy: Schema.Array(Schema.String),
+  checks: Schema.Array(Schema.String),
+});
+
 /** What the step that opens the merge request reports, and what it linked. */
 const Opened = Schema.Struct({
   verdict: Schema.Literals(["clean", "findings"]),
@@ -160,21 +170,37 @@ export const make = (registrationName: string) => {
         obstacle: "",
       };
 
-      const tickets =
-        source.kind === "plan-dir"
-          ? yield* orderedTicketsOf(source.value, place.options.repo ?? "")
-          : [];
-      // Identities before work: two tickets nobody can tell apart would share one result,
-      // and finding that out after an agent has been paid for is finding out too late.
-      const clash = identityProblem(tickets.map((ticket) => ticket.file));
-      if (clash !== null) return yield* new WorkflowError({ reason: clash });
-
+      // The tickets as they stand at each boundary: one added, removed or reordered while
+      // another is being built is the plan from then on, and what is built stays built by
+      // name. Each reading is recorded, so a replay is handed the list that was read.
+      let readings = 0;
+      const ticketsNow = Effect.gen(function* () {
+        readings += 1;
+        if (source.kind !== "plan-dir") return [];
+        return yield* Activity.make({
+          name: `tickets.${readings}`,
+          success: Schema.Array(SliceRecord),
+          execute: orderedTicketsOf(source.value, place.options.repo ?? ""),
+        });
+      });
+      let tickets: ReadonlyArray<Slice> = yield* ticketsNow;
       // One ticket is not a plan to slice: the hand-off would be empty and the loop a
       // longer way of writing what one pass already does.
-      const slices: ReadonlyArray<Slice | null> = tickets.length < 2 ? [null] : tickets;
+      const sliced = tickets.length >= 2;
+      const built = new Set<string>();
       const handed: Handed[] = [];
       let build: typeof Built.Type | null = null;
-      for (const ticket of slices) {
+      for (;;) {
+        // Identities before work: two tickets nobody can tell apart would share one
+        // result, and finding that out after an agent has been paid for is too late.
+        const clash = identityProblem(tickets.map((ticket) => ticket.file));
+        if (clash !== null) return yield* new WorkflowError({ reason: clash });
+        const ticket = sliced
+          ? tickets.find((one) => !built.has(one.file))
+          : built.size === 0
+            ? null
+            : undefined;
+        if (ticket === undefined) break;
         const before = (yield* host.evidence(runId, cwd)).verifications.length;
         if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
         build = yield* agentWork({
@@ -210,6 +236,7 @@ export const make = (registrationName: string) => {
             .map((one) => `${one.name}: ${one.result}`),
         };
         handed.push(done);
+        built.add(done.item);
         if (ticket !== null) yield* checkpoint(place.dir, ticket, "done", claimsOf(build, ticket));
         // A ticket that did not land stops the plan here: the next one is written against
         // work that is not there, and building it would be building on nothing. A finding
@@ -218,6 +245,7 @@ export const make = (registrationName: string) => {
         if (blocking.length > 0) {
           return `${done.item}: stopped with ${blocking.length} blocking finding(s)`;
         }
+        if (sliced) tickets = yield* ticketsNow;
       }
       if (build === null) return yield* new WorkflowError({ reason: "nothing was built" });
 
