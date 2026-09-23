@@ -3095,8 +3095,7 @@ const makeRegistry: (
         yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
       ),
     };
-    // An offer that hands over a plan spanning repositories would start one Run for
-    // several; that is a fan-out, which an offer does not do.
+    // A plan spanning repositories is a fan-out, which an offer does not start.
     const refused = new Map<string, string>();
     for (const offer of generation.offers) {
       const field = Object.entries(offer.inputs).find(([, source]) => source === "plan-dir")?.[0];

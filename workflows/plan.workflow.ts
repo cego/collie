@@ -308,8 +308,7 @@ export const make = (registrationName: string) => {
         if (chosen === FINISH) return `${written.issues_dir}: finished planning`;
 
         if (chosen === IMPLEMENT) {
-          // A plan that spans repositories is one implement per repository, and one the
-          // fan-out cannot honestly run starts nothing: the menu comes back.
+          // A plan the fan-out cannot run starts nothing, and the menu comes back.
           const plan = yield* readRepos(`implement-${round}`);
           if (plan.refusal !== null) {
             yield* host.record(runId, `${IMPLEMENT} cannot run here: ${plan.refusal}`);
