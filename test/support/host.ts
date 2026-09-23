@@ -56,7 +56,7 @@ export const HostReply = Schema.Struct({
   registration: Schema.optionalKey(Schema.String),
   registrations: Schema.optionalKey(Schema.Array(Schema.String)),
   status: Schema.optionalKey(Schema.String),
-  value: Schema.optionalKey(Schema.String),
+  value: Schema.optionalKey(Schema.Json),
   diagnostics: Schema.optionalKey(Schema.Array(Schema.String)),
   /** What a module declares about itself, as a card and a launch would read it. */
   metadata: Schema.optionalKey(Schema.Json),

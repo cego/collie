@@ -8,7 +8,7 @@
 // What a Run is and what became of it stays Collie's; what a workflow has done stays
 // Effect's. Nothing here copies the second into the first.
 
-import { Effect, FileSystem, Stream, type Schema } from "effect";
+import { Effect, FileSystem, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
@@ -502,13 +502,21 @@ export const describeWaiting = (view: RunView): ReadonlyArray<string> =>
 export const statusOf = (view: RunView): string => {
   switch (view.status.status) {
     case "complete":
-      return `complete: ${view.status.value}`;
+      return `complete: ${resultText(view.status.value)}`;
     case "failed":
       return `failed: ${view.status.reason}`;
     default:
       return view.diagnostic === null ? view.status.status : "waiting for its module";
   }
 };
+
+const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+
+/** A result as a line of text: a string as it is, anything else as its JSON. */
+export const resultText = (value: Schema.Json): string =>
+  isText(value) ? value : asJsonText(value);
+
+const isText = Schema.is(Schema.String);
 
 /** Whether the engine can still change this Run's state. */
 export const isSettled = (view: RunView): boolean =>

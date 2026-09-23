@@ -523,6 +523,49 @@ test(
   120_000,
 );
 
+const COUNTS = `
+import { defineWorkflow } from "collie";
+import { Effect, Schema } from "effect";
+
+export const id = "counts";
+export const title = "A workflow whose result is a structure";
+export const description = "Counts what it was given.";
+export const input = { items: Schema.Array(Schema.String) };
+
+export const make = (registrationName: string) => {
+  const workflow = defineWorkflow({
+    name: registrationName,
+    input,
+    success: Schema.Struct({ count: Schema.Number, at: Schema.Date }),
+  });
+  const layer = workflow.toLayer(
+    Effect.fnUntraced(function* (payload) {
+      return { count: payload.input.items.length, at: new Date(0) };
+    }),
+  );
+  return { workflow, layer, decisions: {} };
+};
+`;
+
+test(
+  "a structured result reaches a client as its own schema encodes it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { wf, state } = yield* workspace("collie-engine-result-");
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(`${wf}/counts.workflow.ts`, COUNTS);
+        const host = yield* openHost(state);
+        yield* host.ask({ op: "load", entry: `${wf}/counts.workflow.ts` });
+        yield* host.ask({ op: "start", id: "counts", runId: "c1", input: { items: ["a", "b"] } });
+        const done = yield* host.until({ op: "poll", id: "counts", runId: "c1" }, complete);
+        expect(done.value).toEqual({ count: 2, at: "1970-01-01T00:00:00.000Z" });
+        yield* host.stop;
+      }).pipe(Effect.scoped),
+    ),
+  120_000,
+);
+
 test(
   "a module that contradicts itself is refused at load, with every conflict named",
   () =>

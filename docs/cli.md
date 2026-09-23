@@ -400,20 +400,20 @@ whether `type` is present.
 
 `run show` is the Run as the host has it. Its `run` object carries:
 
-| Field                                    | What it tells you                                                                                                                          |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `runId`, `workflow`, `project`           | Which run this is, of which workflow, for which project.                                                                                   |
-| `task`, `parent`                         | The Task it belongs to and the run that started it, or `null`.                                                                             |
-| `entry`, `registration`                  | The module file it was admitted on — named even once it is gone — and the name the engine registered it under.                             |
-| `input`, `provenance`, `strategies`      | What it was given, where each value came from, and which inference each input carries.                                                     |
-| `options`                                | The host's own launch options: `branch`, `task`, `workspace`, `repo`, `outcome`, `risks`, `previous`.                                      |
-| `cwd`, `branch`, `workspace`, `worktree` | Where it works: its own worktree on `branch`, or the checkout it started from; a workspace of its own, or its Task's.                      |
-| `outcome`                                | What it has to prove.                                                                                                                      |
-| `created`, `status`                      | When it was admitted, and where the engine says it is: `pending`, `suspended`, `complete` with its `value`, or `failed` with its `reason`. |
-| `waiting`                                | Every question it has been asked, oldest first: `name`, `prompt`, `options`, and `answer`, `null` while it is open.                        |
-| `controls`                               | A `hold` or a `stop` someone set over it.                                                                                                  |
-| `parked`                                 | Why it parked its own work and what picks it up again, or `null`.                                                                          |
-| `diagnostic`                             | Why the engine could not be asked about it — a module that is missing, with the file named — or `null`.                                    |
+| Field                                    | What it tells you                                                                                                                                                                                    |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `runId`, `workflow`, `project`           | Which run this is, of which workflow, for which project.                                                                                                                                             |
+| `task`, `parent`                         | The Task it belongs to and the run that started it, or `null`.                                                                                                                                       |
+| `entry`, `registration`                  | The module file it was admitted on — named even once it is gone — and the name the engine registered it under.                                                                                       |
+| `input`, `provenance`, `strategies`      | What it was given, where each value came from, and which inference each input carries.                                                                                                               |
+| `options`                                | The host's own launch options: `branch`, `task`, `workspace`, `repo`, `outcome`, `risks`, `previous`.                                                                                                |
+| `cwd`, `branch`, `workspace`, `worktree` | Where it works: its own worktree on `branch`, or the checkout it started from; a workspace of its own, or its Task's.                                                                                |
+| `outcome`                                | What it has to prove.                                                                                                                                                                                |
+| `created`, `status`                      | When it was admitted, and where the engine says it is: `pending`, `suspended`, `complete` with its `value` — the result as the workflow's success schema encodes it — or `failed` with its `reason`. |
+| `waiting`                                | Every question it has been asked, oldest first: `name`, `prompt`, `options`, and `answer`, `null` while it is open.                                                                                  |
+| `controls`                               | A `hold` or a `stop` someone set over it.                                                                                                                                                            |
+| `parked`                                 | Why it parked its own work and what picks it up again, or `null`.                                                                                                                                    |
+| `diagnostic`                             | Why the engine could not be asked about it — a module that is missing, with the file named — or `null`.                                                                                              |
 
 ## The board
 

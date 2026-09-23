@@ -1586,20 +1586,35 @@ export const answerDecision = (
  */
 export const RunStatus = Schema.Union([
   Schema.Struct({ status: Schema.Literals(["pending", "suspended"]) }),
-  Schema.Struct({ status: Schema.Literal("complete"), value: Schema.String }),
+  /** The result as the workflow's own success schema encodes it. */
+  Schema.Struct({ status: Schema.Literal("complete"), value: Schema.Json }),
   Schema.Struct({ status: Schema.Literal("failed"), reason: Schema.String, entry: Schema.String }),
 ]);
 
 export const pollStatus = (
   result: Option.Option<Workflow.Result<unknown, unknown>>,
   entry: string,
+  success?: Schema.Codec<unknown, unknown, never, never>,
 ): typeof RunStatus.Type => {
   if (Option.isNone(result)) return { status: "pending" };
   const value = result.value;
   if (value._tag === "Suspended") return { status: "suspended" };
-  if (Exit.isSuccess(value.exit)) return { status: "complete", value: String(value.exit.value) };
+  if (Exit.isSuccess(value.exit)) {
+    // Encoded by its own schema, so a client can decode it again; as it is where that fails.
+    const result = value.exit.value;
+    const encoded =
+      success === undefined
+        ? Option.none()
+        : Schema.encodeUnknownOption(Schema.toCodecJson(success))(result);
+    if (Option.isSome(encoded) && isJson(encoded.value)) {
+      return { status: "complete", value: encoded.value };
+    }
+    return { status: "complete", value: isJson(result) ? result : String(result) };
+  }
   return { status: "failed", reason: reasonOf(value.exit.cause), entry };
 };
+
+const isJson = Schema.is(Schema.Json);
 
 const isWorkflowError = Schema.is(WorkflowError);
 
@@ -2733,7 +2748,11 @@ const makeRegistry: (
       };
     }
     const result = yield* engine.poll(generation.registration.workflow, row.execution);
-    return { ...about, status: pollStatus(result, generation.entry), diagnostic: null };
+    return {
+      ...about,
+      status: pollStatus(result, generation.entry, generation.registration.workflow.successSchema),
+      diagnostic: null,
+    };
   });
 
   const setControl = Effect.fn("Engine.setControl")(function* (
@@ -3111,8 +3130,9 @@ const makeRegistry: (
 
     status: Effect.fn("Engine.Registry.status")(function* (runId: string) {
       const found = yield* routed(runId);
-      const result = yield* engine.poll(found.generation.registration.workflow, found.execution);
-      return pollStatus(result, found.generation.entry);
+      const workflow = found.generation.registration.workflow;
+      const result = yield* engine.poll(workflow, found.execution);
+      return pollStatus(result, found.generation.entry, workflow.successSchema);
     }),
 
     answer: Effect.fn("Engine.Registry.answer")(function* (options: {

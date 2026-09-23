@@ -76,8 +76,8 @@ It returns the moment the Run is suspended — at a question, held, stopped or p
 has ended, immediately if that is already true, so you never sit through a question you
 should be relaying. Read `data.run`:
 
-- `status.status` is `pending` (working), `suspended`, `complete` (with its `value`) or
-  `failed` (with its `reason`).
+- `status.status` is `pending` (working), `suspended`, `complete` (with its `value`, as the
+  workflow's success schema encodes it) or `failed` (with its `reason`).
 - `waiting` lists every question it has been asked, oldest first: `name`, `prompt`,
   `options`, and `answer`, which is `null` while it is open. An open one: go to
   [Answer a question](#answer-a-question).

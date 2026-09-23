@@ -9,7 +9,7 @@ import { Effect, Option, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
-import { historyRows, runViews } from "./lifecycle";
+import { historyRows, resultText, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
 import type { Settled } from "./strategies";
 import type { HistoryRow } from "./store";
@@ -111,7 +111,7 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   held: view.controls.includes(HOLD),
   note:
     view.parked ?? view.diagnostic ?? (view.status.status === "failed" ? view.status.reason : null),
-  summary: view.status.status === "complete" ? view.status.value : null,
+  summary: view.status.status === "complete" ? resultText(view.status.value) : null,
 });
 
 const Strings = Schema.Record(Schema.String, Schema.String);
