@@ -1132,7 +1132,10 @@ export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSyste
     return Bun.hash(read).toString(16);
   });
 
-/** The files outside `dir` its code imports by a relative path, and what those import in turn. */
+/**
+ * The files outside `dir` its code imports by a relative path or a package import, what
+ * those import in turn, and the `package.json` files above them that such imports resolve by.
+ */
 const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
   const names = yield* fs
@@ -1142,7 +1145,16 @@ const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
     .filter((name) => !name.startsWith("node_modules/"))
     .map((name) => `${dir}/${name}`);
   const outside = new Set<string>();
+  const looked = new Set<string>();
   for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+    for (let at = parentOf(file); !looked.has(at); at = parentOf(at)) {
+      looked.add(at);
+      if (at === dir || at.startsWith(`${dir}/`)) continue;
+      const manifest = `${at}/package.json`;
+      if (yield* fs.exists(manifest).pipe(Effect.orElseSucceed(() => false))) {
+        outside.add(manifest);
+      }
+    }
     const loader = loaderOf(file);
     if (loader === null) continue;
     const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
@@ -1161,7 +1173,10 @@ const scanners = {
   js: new Bun.Transpiler({ loader: "js" }),
 };
 
-/** What this code imports by a relative path, where Bun resolves it; unparseable code imports nothing. */
+/**
+ * What this code imports by a relative path or a package import, where Bun resolves it.
+ * Unparseable code imports nothing, and an installed package is linked, never copied.
+ */
 const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => {
   let imports: ReadonlyArray<{ readonly path: string }> = [];
   try {
@@ -1170,9 +1185,10 @@ const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => 
     return [];
   }
   return imports.flatMap((one) => {
-    if (!one.path.startsWith(".")) return [];
+    if (!one.path.startsWith(".") && !one.path.startsWith("#")) return [];
     try {
-      return [Bun.resolveSync(one.path, directoryOf(file))];
+      const target = Bun.resolveSync(one.path, directoryOf(file));
+      return target.includes("/node_modules/") ? [] : [target];
     } catch {
       return [];
     }
@@ -1233,6 +1249,7 @@ const loaderOf = (name: string): "ts" | "tsx" | "js" | null => {
 };
 
 const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
+const parentOf = (at: string) => at.slice(0, Math.max(at.lastIndexOf("/"), 1));
 
 /** A file and what was in its directory when it was read, as one value. */
 const sourceOf = (entry: string): Effect.Effect<string, never, FileSystem.FileSystem> =>

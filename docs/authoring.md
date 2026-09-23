@@ -73,7 +73,9 @@ resumes on its own registration; a host started again rebuilds registrations fro
 modules **as they are now**, so a file you fixed is the file it comes back on. Any staged
 copy is a cache, wiped on start, and never an archive a past run is recovered from. A
 package is found from a staged copy exactly as from your file: the `node_modules` it would
-look in are linked beside the copy, not copied, so installing one is not an edit.
+look in are linked beside the copy, not copied, and the `package.json` files above your
+code are copied with it, so a `#` import resolves as it does for you. Editing one of those
+is an edit; a package installed without changing one is not.
 
 Deleting a file takes its id away, and putting it back brings it — and any run waiting on
 it — back.

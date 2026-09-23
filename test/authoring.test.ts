@@ -270,7 +270,7 @@ test("a helper outside a module's directory is part of its revision, and each ge
     }).pipe(Effect.scoped),
   ));
 
-test("a staged helper finds the packages installed where its author wrote it", () =>
+test("a staged helper resolves packages and package imports as it does where its author wrote it", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -290,20 +290,27 @@ test("a staged helper finds the packages installed where its author wrote it", (
       yield* install(`${root}/project/shared`, "collie-probe-beside");
       yield* fs.makeDirectory(`${root}/project/mod`);
       yield* fs.writeFileString(
+        `${root}/project/shared/package.json`,
+        `{"imports":{"#local":"./local.ts"}}`,
+      );
+      yield* fs.writeFileString(`${root}/project/shared/local.ts`, `export const n = 42;\n`);
+      yield* fs.writeFileString(
         `${root}/project/shared/helper.ts`,
         [
           `import { from as above } from "collie-probe-above";`,
           `import { from as beside } from "collie-probe-beside";`,
+          `import { n } from "#local";`,
           `export const both = [above, beside];`,
+          `export const local = n;`,
         ].join("\n"),
       );
       const entry = `${root}/project/mod/entry.ts`;
-      yield* fs.writeFileString(entry, `export { both } from "../shared/helper";\n`);
+      yield* fs.writeFileString(entry, `export { both, local } from "../shared/helper";\n`);
 
       const file = yield* stageGeneration({ dir: `${root}/state`, name: "mod@1", entry });
       const staged = yield* Effect.promise(() => import(file));
       expect(staged.both).toEqual(["collie-probe-above", "collie-probe-beside"]);
-      // A generation links the author's packages, and wiping it leaves them where they are.
+      expect(staged.local).toBe(42);
       yield* clearGenerations(`${root}/state`);
       expect(yield* fs.exists(`${root}/project/node_modules/collie-probe-above/index.js`)).toBe(
         true,
