@@ -1,8 +1,3 @@
-// A Run as every reader sees it, from the host's view of it or from an imported record.
-//
-// Pure projections, so the questions are about what each fact becomes: a stop the host
-// suspended on, a merge request the Run opened, a branch an old record kept.
-
 import { expect, test } from "bun:test";
 import type { RunView } from "../src/engine";
 import { factsOfHistory, factsOfView } from "../src/runs";
