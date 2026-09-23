@@ -200,6 +200,8 @@ export interface StoreApi {
     run: string,
     placed: { readonly checkout: string; readonly task: string | null },
   ) => Effect.Effect<RunRow>;
+  /** What a placement has done outside so far, written before and after each change it makes. */
+  readonly recordPlacing: (run: string, placing: string) => Effect.Effect<void>;
   /** A claim whose placement was refused, withdrawn so the request can be made again. */
   readonly forget: (run: string) => Effect.Effect<void>;
   /** The engine has this work: the receipt a crash before it is what recovery looks for. */
@@ -552,6 +554,14 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         if (row === undefined) return yield* Effect.die(new Error(`run "${run}" is not admitted`));
         return row;
       }),
+
+      recordPlacing: (run, placing) =>
+        reactivity
+          .mutation(
+            RUNS,
+            sql`UPDATE collie_runs SET placing = ${placing} WHERE run = ${run} AND checkout IS NULL`,
+          )
+          .pipe(Effect.asVoid, Effect.orDie),
 
       forget: (run: string) =>
         reactivity

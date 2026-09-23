@@ -95,7 +95,7 @@ import { TASK_INPUT, checkoutFor, repositoryName } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
 import { WorktreeRecordSchema } from "./run";
-import { newTask, writeTask } from "./task";
+import { newTask, taskOfWorkspace, writeTask } from "./task";
 import { classifyWorkSource } from "./inputs";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
@@ -121,6 +121,11 @@ export const REFUSED_INPUT = "invalid_input";
 
 /** Anything else a host will not do, said in one sentence a caller can show. */
 export class HostRefused extends Schema.TaggedError<HostRefused>()("HostRefused", {
+  reason: Schema.String,
+}) {}
+
+/** A placement that may have changed something outside, which nothing here can prove either way. */
+class PlacementUncertain extends Schema.TaggedError<PlacementUncertain>()("PlacementUncertain", {
   reason: Schema.String,
 }) {}
 
@@ -1883,8 +1888,15 @@ const stripeOf = (key: string) => {
   return hash % CLAIM_STRIPES;
 };
 
-/** What a claimant places a Run from: the checkout it starts in, and a fresh Task's name. */
-const Placing = Schema.Struct({ from: Schema.String, taskLabel: Schema.NullOr(Schema.String) });
+/**
+ * What a claimant places a Run from: the checkout it starts in, and a fresh Task's name.
+ * `workspace` is null once that Task's workspace was asked for, and its id once herdr answered.
+ */
+const Placing = Schema.Struct({
+  from: Schema.String,
+  taskLabel: Schema.NullOr(Schema.String),
+  workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
+});
 const PlacingJson = Schema.fromJsonString(Placing);
 const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
 const encodePlacing = Schema.encodeSync(PlacingJson);
@@ -2439,6 +2451,8 @@ const makeRegistry: (
     readonly options: Readonly<Record<string, string>>;
     readonly task: string | null;
     readonly taskLabel?: string | undefined;
+    readonly workspace?: string | null | undefined;
+    readonly recordWorkspace: (workspace: string | null) => Effect.Effect<void>;
   }) {
     const { generation, from } = ask;
     const failed = (cause: unknown) =>
@@ -2503,22 +2517,36 @@ const makeRegistry: (
     }
     if (ask.taskLabel === undefined) return { placed, task: ask.task };
     const label = opened?.label ?? ask.taskLabel;
-    let workspace = opened?.id ?? null;
-    if (workspace === null) {
+    const openWorkspace = Effect.gen(function* () {
+      if (ask.workspace === null) {
+        return yield* new PlacementUncertain({
+          reason: `a workspace "${label}" on ${placed.cwd} may have been opened for ${ask.runId} before the host stopped, and nothing records which. Close it if it is there, and start again under a new request id.`,
+        });
+      }
+      yield* ask.recordWorkspace(null);
       const made = yield* placing.herdr.workspaceCreate({ cwd: placed.cwd, label }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new HostRefused({
-              reason: `No workspace could be opened for this task: ${herdrFailureReason(cause)}`,
-            }),
-        ),
+        Effect.mapError((cause) => {
+          const reason = `No workspace could be opened for this task: ${herdrFailureReason(cause)}`;
+          return cause.answered === true
+            ? new HostRefused({ reason })
+            : new PlacementUncertain({ reason });
+        }),
       );
-      workspace = made.workspaceId;
-    }
-    const task = yield* newTask({ workspace, label, cwd: placed.cwd }).pipe(
-      Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
-      Effect.orDie,
-    );
+      yield* ask.recordWorkspace(made.workspaceId);
+      return made.workspaceId;
+    });
+    const workspace = opened?.id ?? ask.workspace ?? (yield* openWorkspace);
+    // A workspace an earlier attempt recorded may already have its Task.
+    const known =
+      ask.workspace === undefined
+        ? null
+        : yield* taskOfWorkspace(placing.env.stateDir, workspace).pipe(Effect.orDie);
+    const task =
+      known ??
+      (yield* newTask({ workspace, label, cwd: placed.cwd }).pipe(
+        Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
+        Effect.orDie,
+      ));
     // Focused, not just created: a human who started work is taken to it.
     yield* Effect.ignore(placing.herdr.workspaceFocus(workspace));
     return { placed, task: task.id };
@@ -2549,8 +2577,17 @@ const makeRegistry: (
         options,
         task: row.task,
         taskLabel: placing.value.taskLabel ?? undefined,
+        workspace: placing.value.workspace,
+        recordWorkspace: (workspace) =>
+          store.recordPlacing(row.run, encodePlacing({ ...placing.value, workspace })),
       });
-    }).pipe(Effect.tapError(() => store.forget(row.run)));
+    }).pipe(
+      // An uncertain one keeps its claim: the same request again must not open another.
+      Effect.tapErrorTag("HostRefused", () => store.forget(row.run)),
+      Effect.catchTag("PlacementUncertain", (failure) =>
+        Effect.fail(new HostRefused({ reason: failure.reason })),
+      ),
+    );
     return yield* store.place(row.run, {
       checkout: encodePlaced(placement.placed),
       task: placement.task,

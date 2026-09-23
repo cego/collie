@@ -181,8 +181,41 @@ const start = (
   );
 
 const asPlacing = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Struct({ from: Schema.String, taskLabel: Schema.String })),
+  Schema.fromJsonString(
+    Schema.Struct({
+      from: Schema.String,
+      taskLabel: Schema.String,
+      workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
+    }),
+  ),
 );
+
+/** A claim as a dying host left it: the row, what to place it from, and nothing else. */
+const claimCut = (workspace?: string | null) =>
+  hosted(
+    Effect.gen(function* () {
+      const registry = yield* Registry;
+      const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+      const store = yield* Store;
+      const payload = { runId: "run-cut", input: { work: "Add a picker" } };
+      const placing = { from: rig.projectDir, taskLabel: "Project | P" };
+      yield* store.admit({
+        request: "r1",
+        run: "run-cut",
+        workflow: "builds",
+        project: rig.projectDir,
+        input: payload.input,
+        provenance: { work: "given" },
+        options: {},
+        placing: asPlacing(workspace === undefined ? placing : { ...placing, workspace }),
+        generation: builds!.name,
+        execution: yield* builds!.registration.workflow.executionId(payload),
+        task: null,
+        parent: null,
+      });
+      return (yield* store.run("run-cut"))?.checkout ?? null;
+    }),
+  );
 
 const refusedWith = (result: Result.Result<unknown, { readonly reason: string }>) =>
   Result.isFailure(result) ? result.failure.reason : "";
@@ -395,31 +428,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         yield* rig.queueOutputs([{ verdict: "clean" }]);
-        // The claim as a dying host left it: the row, what to place it from, and nothing else.
-        const claimed = yield* hosted(
-          Effect.gen(function* () {
-            const registry = yield* Registry;
-            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
-            const store = yield* Store;
-            const payload = { runId: "run-cut", input: { work: "Add a picker" } };
-            yield* store.admit({
-              request: "r1",
-              run: "run-cut",
-              workflow: "builds",
-              project: rig.projectDir,
-              input: payload.input,
-              provenance: { work: "given" },
-              options: {},
-              placing: asPlacing({ from: rig.projectDir, taskLabel: "Project | P" }),
-              generation: builds!.name,
-              execution: yield* builds!.registration.workflow.executionId(payload),
-              task: null,
-              parent: null,
-            });
-            return (yield* store.run("run-cut"))?.checkout ?? null;
-          }),
-        );
-        expect(claimed).toBeNull();
+        expect(yield* claimCut()).toBeNull();
 
         const view = yield* hosted(finished("run-cut"));
         expect(view?.cwd).toStartWith(`${rig.root}/.herdr/worktrees/`);
@@ -427,6 +436,50 @@ test(
         expect(view?.task).not.toBeNull();
         expect(view?.status.status).toBe("complete");
         expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a start the host died after herdr opened its workspace is placed in that workspace",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean" }]);
+        yield* rig.addWorkspace("wX", "Project | P", rig.projectDir);
+        yield* claimCut("wX");
+
+        const view = yield* hosted(finished("run-cut"));
+        expect(view?.status.status).toBe("complete");
+        expect((yield* readTask(env().stateDir, view?.task ?? ""))?.workspace).toBe("wX");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toEqual([]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a start the host died opening a workspace for opens no second one, and keeps its claim",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* claimCut(null);
+
+        const again = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const ask = { request: "r1", text: { work: "Add a picker" }, taskLabel: "Project | P" };
+            return {
+              started: yield* start(builds!, ask),
+              row: yield* (yield* Store).run("run-cut"),
+            };
+          }),
+        );
+        expect(refusedWith(again.started)).toContain("may have been opened for run-cut");
+        expect(again.row?.checkout).toBeNull();
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toEqual([]);
       }),
     ),
   120_000,
