@@ -50,6 +50,7 @@ import {
   type HostApi,
   type Projection,
 } from "./sdk";
+import { deliveriesOf } from "./steering";
 import { readTask, withTaskLock, writeTask } from "./task";
 import { renderTemplate, skillMention, skillsIn } from "./template";
 
@@ -145,13 +146,16 @@ export interface AgentsApi {
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
   /** Starts this work's agent again with its prompt where it is gone and its Output never came. */
   readonly revive: (ask: AgentAsk) => Effect.Effect<void, AgentUncertain | AgentParked>;
-  /** Hands a message, through the one sender, to another Run's live agent in this role here; null where none. */
+  /**
+   * Hands a message, through the one sender, to another Run's live agent in this role here;
+   * null where none. Parked where nobody can say whether it arrived.
+   */
   readonly handOff: (options: {
     readonly runId: string;
     readonly role: string;
     readonly cwd: string;
     readonly text: string;
-  }) => Effect.Effect<Steered | null>;
+  }) => Effect.Effect<Steered | null, AgentParked>;
   /** Closes the panes of this run's live agents, which stops them; `left` may still be running. */
   readonly halt: (runId: string) => Effect.Effect<Halted>;
   /**
@@ -358,6 +362,42 @@ export const agentWork = <Output extends OutputContract>(
           reason: `${cause.operation}: ${cause.reason}. Nothing here says the agent did no work.`,
         }),
       ),
+    ),
+  );
+
+/**
+ * A message handed, as an Activity, to another Run's live agent in this role: the agent it
+ * reached, or null where there is none to take it. One nobody can say arrived parks the Run.
+ */
+export const handOffWork = (options: {
+  readonly runId: string;
+  readonly operation: string;
+  readonly role: string;
+  readonly cwd: string;
+  readonly text: string;
+}): Effect.Effect<
+  string | null,
+  WorkflowError,
+  Agents | Host | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+> =>
+  Effect.gen(function* () {
+    const agents = yield* Agents;
+    const host = yield* Host;
+    return yield* Activity.make({
+      name: `${options.operation}.handoff`,
+      success: Schema.NullOr(Schema.String),
+      error: AgentUncertain,
+      execute: parkedWhenStuck(
+        agents
+          .handOff(options)
+          .pipe(Effect.map((sent) => (sent?.delivered === true ? sent.agent : null))),
+        host,
+        options.runId,
+      ),
+    });
+  }).pipe(
+    Effect.catchTag("AgentUncertain", (cause) =>
+      Effect.fail(new WorkflowError({ reason: `${cause.operation}: ${cause.reason}` })),
     ),
   );
 
@@ -944,6 +984,14 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         // Without a proven incarnation the entry names a pane, not the agent now in it.
         if (entry === null || entry.runId === options.runId) return null;
         if (!verifyIncarnation(entry, alive).ok) return null;
+        const handed = { agent: entry.agent, delivered: true, detail: "" };
+        const earlier = (yield* deliveriesOf(host.env.stateDir, entry.runId)).filter(
+          ({ delivery }) =>
+            delivery.cause.kind === "handoff" && delivery.cause.ref === options.runId,
+        );
+        if (earlier.some(({ delivery }) => delivery.note?.startsWith("reconciled as sent"))) {
+          return handed;
+        }
         const outcome = yield* dispatch.transaction(deps, entry, (channel) =>
           channel.submit(options.text, {
             run: entry.runId,
@@ -954,20 +1002,33 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             requestId: `${options.runId}-handoff-${entry.agent}`,
           }),
         );
-        // Already in flight under this claim is the hand-off having happened.
-        const delivered = outcome.ok || outcome.reason === "blocked";
+        if (outcome.ok || (outcome.held !== undefined && SENT_STATES.has(outcome.held))) {
+          yield* log(options.runId, `handed to ${entry.agent} of ${entry.runId}`);
+          return handed;
+        }
+        if (outcome.reason === "unknown" || outcome.reason === "blocked") {
+          return yield* new AgentParked({
+            operation: "handoff",
+            reason: `Nobody can say whether ${entry.agent} of ${entry.runId} was handed this (${outcome.detail}), so no second agent was started on it. \`collie run deliveries ${entry.runId}\` shows it; settle it with \`--reconcile <id> --as sent\` or \`--as not-sent\`, then \`collie run resume ${options.runId}\`.`,
+          });
+        }
         yield* log(
           options.runId,
-          delivered
-            ? `handed to ${entry.agent} of ${entry.runId}`
-            : `could not hand to ${entry.agent} (${outcome.reason}: ${outcome.detail})`,
+          `could not hand to ${entry.agent} (${outcome.reason}: ${outcome.detail})`,
         );
-        return {
-          agent: entry.agent,
-          delivered,
-          detail: outcome.ok ? "" : outcome.detail,
-        };
-      }).pipe(Effect.orElseSucceed(() => null)),
+        return { agent: entry.agent, delivered: false, detail: outcome.detail };
+      }).pipe(
+        Effect.catch((cause) =>
+          isParked(cause)
+            ? Effect.fail(cause)
+            : Effect.fail(
+                new AgentParked({
+                  operation: "handoff",
+                  reason: `Whether an agent here can take this could not be read (${reason(cause)}).`,
+                }),
+              ),
+        ),
+      ),
     );
 
   const halt = (runId: string) =>
@@ -1070,6 +1131,8 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
 };
 
 const LAUNCH_SUFFIX = ".launch.json";
+/** Ledger states that say a delivery went out. */
+const SENT_STATES: ReadonlySet<string> = new Set(["submitted", "acknowledged", "verified"]);
 const LaunchedJson = Schema.fromJsonString(Launched);
 const encodeLaunched = Schema.encodeSync(LaunchedJson);
 const decodeLaunched = Schema.decodeUnknownResult(LaunchedJson);

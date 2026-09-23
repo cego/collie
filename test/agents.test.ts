@@ -25,11 +25,12 @@ import {
 } from "../src/agents";
 import { defineWorkflow, jsonSchemaFor } from "../src/sdk";
 import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/engine";
-import { deliveriesOf } from "../src/steering";
+import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
 import { readTask, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
-import { readRegistry, registryPath, scopeFor } from "../src/registry";
+import { readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
+import { HerdrError } from "../src/herdr";
 import { agentName } from "../src/naming";
 import type { CompactionPorts } from "../src/compaction";
 
@@ -463,6 +464,73 @@ test("a stop leaves another process that took the Run's agent name", () =>
       yield* rig.reincarnate(agentFor("r1"));
       expect(yield* session(halted("r1"))).toEqual({ stopped: [], left: [] });
       expect(yield* rig.cmds()).not.toContain("pane close");
+    }),
+  ));
+
+/** Another Run's implementer, live in this checkout and registered as it. */
+const liveImplementer = Effect.gen(function* () {
+  yield* rig.addAgent("impl-live", "9-1");
+  const env = rig.pluginEnv();
+  yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+    role: "implementer",
+    agent: "impl-live",
+    paneId: "9-1",
+    workspaceId: null,
+    runId: "r-building",
+    workflow: "implement",
+    at: "2026-09-23T10:00:00Z",
+    incarnation: { terminalId: "term-impl-live", agentSession: null },
+  });
+});
+
+/** A herdr that takes a prompt and never answers, so nobody can say it arrived. */
+class SilentPrompts extends FakeHerdr {
+  override agentPrompt() {
+    return Effect.fail(new HerdrError({ message: "herdr went away mid-prompt", detail: "" }));
+  }
+}
+
+const handedOff = Agents.pipe(
+  Effect.flatMap((agents) =>
+    agents.handOff({
+      runId: "r-review",
+      role: "implementer",
+      cwd: rig.projectDir,
+      text: "the review is ready",
+    }),
+  ),
+  Effect.result,
+);
+
+test("a hand-off nobody can say arrived parks until a human says what became of it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* liveImplementer;
+      const first = yield* session(handedOff, { herdr: new SilentPrompts(rig.pluginEnv()) });
+      expect(first._tag === "Failure" && first.failure._tag).toBe("AgentParked");
+      // Neither a second copy nor a delivery nobody saw.
+      const again = yield* session(handedOff);
+      expect(again._tag === "Failure" && again.failure.reason).toContain(
+        "collie run deliveries r-building",
+      );
+      expect(sent(yield* rig.calls(), "the review is ready")).toBe(0);
+
+      const [held] = yield* deliveriesOf(rig.pluginEnv().stateDir, "r-building");
+      const settled = reconcile(
+        yield* readLedger(held!.file),
+        held!.delivery.id,
+        "sent",
+        "tester",
+        "2026-09-23T10:01:00Z",
+      );
+      if ("error" in settled) throw new Error(settled.error);
+      yield* appendLine(held!.file, settled);
+      const after = yield* session(handedOff);
+      expect(after._tag === "Success" && after.success).toMatchObject({
+        agent: "impl-live",
+        delivered: true,
+      });
+      expect(sent(yield* rig.calls(), "the review is ready")).toBe(0);
     }),
   ));
 

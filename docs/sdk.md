@@ -591,8 +591,10 @@ None of it is yours to implement, but it decides where your workflow can be inte
   keeps its own tab. When the Run resumes, work whose agent has gone and whose Output never
   came is given to a new one with the same prompt. Steering — `run steer` — says something
   to a live agent through the one sender, and says whether it was delivered;
-  `agents.handOff` does the same from a workflow to another Run's live agent in a role, as
-  review hands its findings to an implementer already building the work.
+  `handOffWork` does the same from a workflow to another Run's live agent in a role, as
+  review hands its findings to an implementer already building the work. It answers with
+  the agent it reached, or null where none is live; a hand-off nobody can say arrived parks
+  the Run until `run deliveries --reconcile` settles it, rather than starting a second agent.
 
 [ADR-0021](adr/0021-one-host-answers-for-a-run.md) is why each of those is the way it is.
 

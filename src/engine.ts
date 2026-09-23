@@ -480,7 +480,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly role: string;
       readonly cwd: string;
       readonly text: string;
-    }) => Effect.Effect<Steered | null>;
+    }) => Effect.Effect<Steered | null, AgentParked>;
     /** Closes the panes of this run's live agents; \`left\` may still be running. */
     readonly halt: (
       runId: string,
@@ -535,6 +535,19 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** What the instructions render beside the inputs, for Markdown that names its own. */
     readonly vars?: Readonly<Record<string, unknown>>;
   }
+
+  /** A message handed to another Run's live agent in this role: the agent, or null where none. */
+  export function handOffWork(options: {
+    readonly runId: string;
+    readonly operation: string;
+    readonly role: string;
+    readonly cwd: string;
+    readonly text: string;
+  }): Effect.Effect<
+    string | null,
+    WorkflowError,
+    Agents | Host | WorkflowEngine | WorkflowInstance
+  >;
 
   /** One agent, once, and its Output as a value of your own type. */
   export function agentWork<Output extends OutputContract>(

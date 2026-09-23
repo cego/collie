@@ -11,7 +11,6 @@
 import {
   FINDINGS_FILE,
   FixOutputSchema,
-  Agents,
   Children,
   Host,
   REVIEW_FILE,
@@ -20,6 +19,7 @@ import {
   decision,
   defineWorkflow,
   formatFindings,
+  handOffWork,
   parseMrTarget,
   repoArgs,
   riskLine,
@@ -27,7 +27,6 @@ import {
   type WorkflowMetadata,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
-import * as Activity from "effect/unstable/workflow/Activity";
 import { reviewPass, reviewText } from "./reviewing.ts";
 
 export const id = "review";
@@ -90,7 +89,6 @@ export const make = (registrationName: string) => {
   const layer = workflow.toLayer(
     Effect.fnUntraced(function* (payload) {
       const host = yield* Host;
-      const agents = yield* Agents;
       const children = yield* Children;
       const fs = yield* FileSystem.FileSystem;
       const runId = payload.runId;
@@ -186,17 +184,12 @@ export const make = (registrationName: string) => {
         // An implementer already live here is building this work, so it is the one to
         // fix it: a second agent on the same checkout would be two hands on one index.
         // Recorded, so a replay takes the same road rather than asking again.
-        const handed = yield* Activity.make({
-          name: "fix.handoff",
-          success: Schema.NullOr(Schema.String),
-          execute: agents
-            .handOff({
-              runId,
-              role: "implementer",
-              cwd: place.cwd,
-              text: handOffText(place.dir),
-            })
-            .pipe(Effect.map((sent) => (sent?.delivered ? sent.agent : null))),
+        const handed = yield* handOffWork({
+          runId,
+          operation: "fix",
+          role: "implementer",
+          cwd: place.cwd,
+          text: handOffText(place.dir),
         });
         if (handed !== null) {
           yield* host.record(runId, `handed the findings to ${handed}`);
