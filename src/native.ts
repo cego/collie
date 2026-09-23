@@ -1915,12 +1915,16 @@ export const RunView = Schema.Struct({
   input: Schema.Record(Schema.String, Schema.Json),
   /** Where each of those values came from, and the host options it was launched with. */
   provenance: Schema.Record(Schema.String, Schema.String),
+  /** Which inference each input carries, as its module declares it now; empty without one. */
+  strategies: Schema.Record(Schema.String, Schema.String),
   options: Schema.Record(Schema.String, Schema.String),
   /** Where it works: its own worktree, on `branch`, or the checkout it was started for. */
   cwd: Schema.String,
   branch: Schema.NullOr(Schema.String),
   /** A workspace of its own, where it asked for one; null lives in its Task's. */
   workspace: Schema.NullOr(Schema.String),
+  /** The worktree it was given, which says who takes it away again. */
+  worktree: Schema.NullOr(WorktreeRecordSchema),
   /**
    * What this Run has to prove, as the module fixed it or the caller selected it. A fact
    * on the Run rather than a reading of its id, so a renamed or user-authored workflow
@@ -2356,6 +2360,12 @@ const makeRegistry: (
         openLabel: ask.taskLabel ?? null,
         explicit: ask.options.branch ?? null,
         login: placing.env.gitlabLogin,
+        recordedBy: (at) =>
+          store.runs.pipe(
+            Effect.map(
+              (rows) => rows.find((row) => placedOf(row, {}).worktree?.path === at)?.run ?? null,
+            ),
+          ),
       }).pipe(Effect.mapError(failed));
       if (checkout.refused !== null) {
         return yield* new HostRefused({
@@ -2587,14 +2597,16 @@ const makeRegistry: (
         Effect.orElseSucceed((): Record<string, string> => ({})),
       ),
     };
-    const { cwd, branch, workspace } = placedOf(row, admitted.options);
+    const { cwd, branch, workspace, worktree } = placedOf(row, admitted.options);
     const outcome = admitted.options.outcome ?? UNSPECIFIED;
     const generation = live.get(row.generation);
     const about = {
       ...admitted,
+      strategies: generation?.hints ?? {},
       cwd,
       branch,
       workspace,
+      worktree,
       outcome,
       created: row.admitted,
       waiting: yield* asked(row.run),

@@ -20,7 +20,7 @@
 // means a person" shortcut would read it as human. Attribution, never a gate.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Crypto, Effect, FileSystem, Option, Result, Schema } from "effect";
+import { Clock, Crypto, Effect, Option, Result, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
 import { mutation } from "./envelope";
@@ -61,11 +61,10 @@ import {
   read as readNews,
   settle as settleNews,
 } from "./news";
-import { RunStore, type Run } from "./run";
+import { findRun, type RunFacts } from "./runs";
 import { nowIso, untilFrom } from "./time";
-import { attentionFor } from "./attention";
 import { deliveriesOf, herdOf } from "./steering";
-import { loadDefinitions, layers, skillDirs } from "./definitions";
+import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, pushable, readChat, whyUnavailable } from "./chat";
 import { closable, decide, homePath, readHome, UNREADABLE } from "./home";
 import { doctor } from "./doctor";
@@ -280,7 +279,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
     readOnly: true,
     title: "One Run",
     description:
-      "One Run in detail: its goal, the constraints bounding it, its Steps, the work it " +
+      "One Run in detail: its goal, the constraints bounding it, the work it " +
       "has handed over with the evidence and the gaps in it, and any drift nobody has " +
       "settled. Use it when a question is about a particular Run rather than the flock. " +
       "Name the Run; with no `run` it answers about whatever the board has selected, and " +
@@ -295,8 +294,7 @@ export const TOOLS: ReadonlyArray<Tool> = [
       },
       additionalProperties: false,
     },
-    call: (env, input) =>
-      onSelectedRun(env, input, "collie_run", (run) => said(runFacts(run, env))),
+    call: (env, input) => onSelectedRun(env, input, "collie_run", (run) => said(runFacts(run))),
   },
   {
     name: "collie_workspaces",
@@ -523,9 +521,7 @@ const carryOut = Effect.fn("Tools.carryOut")(function* (env: PluginEnv, input: J
 /** A decision of the board's, taken where the human said it. */
 const settle = Effect.fn("Tools.settle")(function* (env: PluginEnv, action: Settle, actor: Actor) {
   if (action.kind === "disposition") {
-    const run = yield* new RunStore(env.stateDir)
-      .load(action.run)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
+    const run = yield* findRun(env, action.run);
     if (run === null) return { kind: action.kind, state: "failed", note: `no Run "${action.run}"` };
     const line = {
       at: yield* nowIso(),
@@ -535,7 +531,7 @@ const settle = Effect.fn("Tools.settle")(function* (env: PluginEnv, action: Sett
       note: null,
     };
     yield* recordDisposition(run.dir, line);
-    return { kind: action.kind, state: "applied", note: statusLine(run.record.status, line) };
+    return { kind: action.kind, state: "applied", note: statusLine(run.state, line) };
   }
   const done =
     action.kind === "confirm"
@@ -579,8 +575,7 @@ const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
   const alive = yield* new Herdr(env).agentList().pipe(Effect.catch(() => Effect.succeed([])));
   const now = yield* Clock.currentTimeMillis;
   const views = yield* buildBoard({
-    stateDir: env.stateDir,
-    socketPath: env.socketPath,
+    env,
     alive,
     now,
     quietMs: (yield* loadDefaults(env.configDir)).boardQuietMs,
@@ -638,7 +633,7 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   env: PluginEnv,
   input: JsonObject,
   tool: string,
-  answer: (run: Run) => ToolAnswer,
+  answer: (run: RunFacts) => ToolAnswer,
 ) {
   const decoded = decodeRun(input);
   if (Result.isFailure(decoded))
@@ -654,9 +649,7 @@ const onSelectedRun = Effect.fn("Tools.onSelectedRun")(function* (
   const id = named ?? on?.run ?? null;
   if (id === null)
     return `${tool} takes {"run": "<run id>"}, or answers about the board's selection when there is one. The board has nothing selected — collie_herd lists the Runs there are.`;
-  const run = yield* new RunStore(env.stateDir)
-    .load(id)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
+  const run = yield* findRun(env, id);
   if (run === null)
     return on === null
       ? `No Run "${id}". collie_herd lists the ones there are.`
@@ -768,9 +761,7 @@ const newsFacts = Effect.fn("Tools.news")(function* (env: PluginEnv) {
 
 /** What `collie_receipts` answers with: what is waiting, and what each send actually reached. */
 const receiptFacts = Effect.fn("Tools.receipts")(function* (env: PluginEnv, run: string) {
-  const found = yield* new RunStore(env.stateDir)
-    .load(run)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
+  const found = yield* findRun(env, run);
   if (found === null) return `No Run "${run}".`;
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   const now = yield* Clock.currentTimeMillis;

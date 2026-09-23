@@ -13,12 +13,16 @@ import { appState, type ControlSession } from "../../src/flows";
 import { mrDetails, shell } from "../../src/mr";
 import { Herdr } from "../../src/herdr";
 import { scopeFor } from "../../src/registry";
-import { RunStore } from "../../src/run";
+import type { Runner } from "../../src/mr";
+import type { RunFacts } from "../../src/runs";
+import { madeRun } from "../support/records";
 import { recordDisposition } from "../../src/disposition";
 import { writeMrStates } from "../../src/merges";
 import { focus } from "../support/focus";
 
 let rig: Rig;
+/** The Runs the host would list, newest first. */
+let runs: RunFacts[] = [];
 
 function effectTest(
   name: string,
@@ -31,6 +35,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      runs = [];
       yield* installBaseline(rig);
     }),
   ),
@@ -67,36 +72,47 @@ function session(): ControlSession {
     configDir: env.configDir,
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
+    runsOf: () => Effect.succeed(runs),
   };
 }
+
+/** The board's reads, over the Runs this test made rather than a host's. */
+const appOver = (run: Runner) => appState(session(), rig.pluginEnv(), run);
+
+/** A Run of this workspace, remembered as the newest the host would list. */
+const made = Effect.fn("fetching.made")(function* (over: Partial<RunFacts>) {
+  const env = rig.pluginEnv();
+  const at = `2026-09-02T10:${String(runs.length).padStart(2, "0")}:00.000Z`;
+  const run = yield* madeRun(env.stateDir, {
+    id: `r${runs.length + 1}`,
+    project: env.cwd,
+    cwd: env.cwd,
+    workspace: env.workspaceId,
+    created: at,
+    ...over,
+  });
+  runs = [run, ...runs];
+  return run;
+});
 
 /** Forty finished Runs, every one of them over a merge request. */
 const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
   const env = rig.pluginEnv();
-  const store = new RunStore(env.stateDir);
   const ids: string[] = [];
   for (let n = 1; n <= count; n++) {
-    const run = yield* store.create({
+    const run = yield* made({
       workflow: "review",
-      cwd: env.cwd,
-      session: env.socketPath,
-      workspace: env.workspaceId,
-      workspaceLabel: "test",
-      inputs: { target: `mr:gitlab.example.com/g/p!${n}` },
-      inputSources: {},
-      inputStrategies: { target: "diff-target" },
-      stepIds: ["review"],
-      maxIterations: 1,
-      namedAfter: `mr-${n}`,
+      state: "succeeded",
+      finished: `2026-09-02T11:${String(n).padStart(2, "0")}:00.000Z`,
+      settled: {
+        inputs: { target: `mr:gitlab.example.com/g/p!${n}` },
+        strategies: { target: "diff-target" },
+      },
     });
-    run.record.status = "done";
-    run.record.finished_at = run.record.created_at;
-    run.record.target_label = `!${n}`;
-    yield* run.save();
     // Disposed of, so the background merge watch has nothing to ask GitLab about and
     // every `glab` call counted below is the selection's own.
     yield* recordDisposition(run.dir, {
-      at: run.record.created_at,
+      at: run.created,
       by: "test",
       kind: "merged",
       ref: `!${n}`,
@@ -113,7 +129,7 @@ const seedMany = Effect.fn("fetching.seedMany")(function* (count: number) {
 effectTest("a History of forty merge-request runs draws with no glab call at all", function* () {
   yield* seedMany(40);
   const asked = glab();
-  const app = appState(session(), rig.pluginEnv(), asked.run);
+  const app = appOver(asked.run);
 
   const state = yield* app.load(focus({ view: "history", shown: ["runs", "history"] }));
 
@@ -125,7 +141,7 @@ effectTest("a History of forty merge-request runs draws with no glab call at all
 effectTest("selecting one run reads one merge request, and re-selecting reads none", function* () {
   const [first, second] = yield* seedMany(2);
   const asked = glab();
-  const app = appState(session(), rig.pluginEnv(), asked.run);
+  const app = appOver(asked.run);
 
   yield* app.load(focus({ selected: `run:${first}` }));
   expect(asked.views()).toHaveLength(1);
@@ -150,7 +166,7 @@ effectTest("a History selection reads the merge request its own row carries", fu
   const ids = yield* seedMany(8);
   const oldest = ids[0]!;
   const asked = glab();
-  const app = appState(session(), rig.pluginEnv(), asked.run);
+  const app = appOver(asked.run);
 
   const state = yield* app.load(
     focus({ view: "history", shown: ["runs", "history"], selected: `run:${oldest}` }),
@@ -165,25 +181,13 @@ effectTest("a History selection reads the merge request its own row carries", fu
 });
 
 effectTest("a run whose target is not a merge request has no panel and no call", function* () {
-  const env = rig.pluginEnv();
-  const run = yield* new RunStore(env.stateDir).create({
+  const run = yield* made({
     workflow: "review",
-    cwd: env.cwd,
-    session: env.socketPath,
-    workspace: env.workspaceId,
-    workspaceLabel: "test",
-    inputs: { target: "worktree" },
-    inputSources: {},
-    inputStrategies: { target: "diff-target" },
-    stepIds: ["review"],
-    maxIterations: 1,
-    namedAfter: "worktree",
+    state: "succeeded",
+    settled: { inputs: { target: "worktree" }, strategies: { target: "diff-target" } },
   });
-  run.record.status = "done";
-  run.record.finished_at = run.record.created_at;
-  yield* run.save();
   const asked = glab();
-  const app = appState(session(), env, asked.run);
+  const app = appOver(asked.run);
 
   const state = yield* app.load(focus({ selected: `run:${run.id}` }));
 
@@ -194,7 +198,7 @@ effectTest("a run whose target is not a merge request has no panel and no call",
 effectTest("a view nobody has opened is not read at all", function* () {
   yield* seedMany(3);
   const asked = glab();
-  const app = appState(session(), rig.pluginEnv(), asked.run);
+  const app = appOver(asked.run);
 
   const state = yield* app.load(focus());
 
@@ -244,7 +248,7 @@ effectTest("a card outside the legacy lists still fills its own record", functio
   const ids = yield* seedMany(8);
   const oldest = ids[0]!;
   const asked = glab();
-  const app = appState(session(), rig.pluginEnv(), asked.run);
+  const app = appOver(asked.run);
 
   const state = yield* app.load(focus({ selected: `run:${oldest}` }));
 
@@ -254,23 +258,12 @@ effectTest("a card outside the legacy lists still fills its own record", functio
 });
 
 effectTest("the merge request a Run opened is the one its record details", function* () {
-  const env = rig.pluginEnv();
-  const run = yield* new RunStore(env.stateDir).create({
+  const run = yield* made({
     workflow: "implement",
-    cwd: env.cwd,
-    session: env.socketPath,
-    workspace: env.workspaceId,
-    workspaceLabel: "test",
-    inputs: { goal: "ship it" },
-    inputSources: {},
-    stepIds: ["build", "mr"],
-    maxIterations: 1,
-    namedAfter: "ship-it",
+    mr: "https://gitlab.example.com/g/p/-/merge_requests/7",
   });
-  run.record.mr_url = "https://gitlab.example.com/g/p/-/merge_requests/7";
-  yield* run.save();
   const asked = glab();
-  const app = appState(session(), env, asked.run);
+  const app = appOver(asked.run);
 
   // An implement Run's merge request is what it produced, not what it was pointed at.
   const state = yield* app.load(focus({ selected: `run:${run.id}` }));
@@ -280,23 +273,12 @@ effectTest("the merge request a Run opened is the one its record details", funct
 });
 
 effectTest("selecting a card on the board keeps the merge request it opened", function* () {
-  const env = rig.pluginEnv();
-  const run = yield* new RunStore(env.stateDir).create({
+  const run = yield* made({
     workflow: "implement",
-    cwd: env.cwd,
-    session: env.socketPath,
-    workspace: env.workspaceId,
-    workspaceLabel: "test",
-    inputs: { goal: "ship it" },
-    inputSources: {},
-    stepIds: ["build", "mr"],
-    maxIterations: 1,
-    namedAfter: "ship-it",
+    mr: "https://gitlab.example.com/g/p/-/merge_requests/7",
   });
-  run.record.mr_url = "https://gitlab.example.com/g/p/-/merge_requests/7";
-  yield* run.save();
   const asked = glab();
-  const app = appState(session(), env, asked.run);
+  const app = appOver(asked.run);
 
   // A click is a Selection change and nothing else, so the scan is reused. The row it
   // lands on carries no merge request of its own: the Run's record is what has one.

@@ -79,7 +79,7 @@ test("the Live region is the Selection's own cards, drift and deliveries", () =>
         stateDir,
         socketPath: null,
         run: { id: "r1", dir: runDir },
-        runs: [{ id: "r1", dir: runDir, awaiting: null, harnesses: [] }],
+        runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
         ownership: null,
         region: true,
       });
@@ -115,7 +115,7 @@ test("one pass answers both: the region and the row's marks", () =>
         stateDir,
         socketPath: null,
         run: { id: "r1", dir: runDir },
-        runs: [{ id: "r1", dir: runDir, awaiting: null, harnesses: [] }],
+        runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
         ownership: null,
         region: true,
       });
@@ -178,7 +178,7 @@ test("a Run's marks come from its own journals and nowhere else", () =>
         stateDir,
         socketPath: null,
         run: null,
-        runs: [{ id: "r1", dir: runDir, awaiting: "hold", harnesses: [] }],
+        runs: [{ id: "r1", dir: runDir, held: true, harnesses: [] }],
         ownership: null,
         region: false,
       });
@@ -211,7 +211,7 @@ test("correcting a Run nobody can prove they own says so on the row, permanently
       });
       yield* writeIntent(runDir, granted);
 
-      const marked = { id: "r1", dir: runDir, awaiting: null, harnesses: ["claude"] };
+      const marked = { id: "r1", dir: runDir, held: false, harnesses: ["claude"] };
       const on = yield* liveFor({
         stateDir,
         socketPath: null,
@@ -247,7 +247,7 @@ test("a Run with nothing recorded about it has no marks at all", () =>
         stateDir,
         socketPath: null,
         run: null,
-        runs: [{ id: "r1", dir: runDir, awaiting: null, harnesses: [] }],
+        runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
         ownership: null,
         region: false,
       });
@@ -314,7 +314,7 @@ test("a proposal about the installation is drawn whatever row is selected", () =
           stateDir,
           socketPath,
           run: selected,
-          runs: [{ id: "r1", dir: runDir, awaiting: null, harnesses: [] }],
+          runs: [{ id: "r1", dir: runDir, held: false, harnesses: [] }],
           ownership: null,
           region: true,
         });

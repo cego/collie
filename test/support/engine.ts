@@ -9,7 +9,6 @@ import { Herdr } from "../../src/herdr";
 import type { PluginEnv } from "../../src/env";
 import { fakeHerdr } from "./fake-herdr-core";
 import type { Rig } from "./recorder";
-import { RunStore } from "../../src/run";
 import { VerifySpecSchema } from "../../src/verify-spec";
 
 const encodeSpecs = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
@@ -72,32 +71,5 @@ export function approveVerifications(
       file,
       encodeSpecs(specs.map((spec) => ({ argv: [], cwd: ".", ...spec }))),
     );
-  });
-}
-
-/** A finished `plan` Run with a SPEC, i.e. what `plan-dir` inference looks for. */
-export function plannedRun(rig: Rig, goal: string) {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const env = rig.pluginEnv();
-    const run = yield* new RunStore(env.stateDir).create({
-      workflow: "plan",
-      cwd: env.cwd,
-      inputs: { goal },
-      inputSources: { goal: "asked" },
-      inputStrategies: { goal: "goal" },
-      stepIds: ["grill"],
-      maxIterations: 5,
-      namedAfter: goal,
-    });
-    run.step("grill").status = "done";
-    run.record.status = "done";
-    yield* run.save();
-    const dir = path.join(run.dir, "plan");
-    yield* fs.makeDirectory(path.join(dir, "issues"), { recursive: true });
-    yield* fs.writeFileString(path.join(dir, "SPEC.md"), `# ${goal}\n`);
-    yield* fs.writeFileString(path.join(dir, "issues", "01-first.md"), "# 01: first\n");
-    return dir;
   });
 }

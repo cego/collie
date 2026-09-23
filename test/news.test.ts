@@ -8,7 +8,7 @@ import { Effect, FileSystem } from "effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { BATCH, append, asText, newsPath, pending, read, settle, uncertain } from "../src/news";
 import { eventsIn } from "../src/proactive";
-import { runRecord as record } from "./support/records";
+import { runFacts as record } from "./support/records";
 import { runEffect } from "./support/effect";
 
 const KEY = "herd-abc";
@@ -37,7 +37,7 @@ afterEach(() =>
 test("an unchanged Herd has nothing to say, however often it is looked at", () => {
   // The whole of the "no model call on an idle Herd" promise, at its source: a Run that
   // is getting on with it produces no event, so nothing is ever queued to say.
-  const going = [record(), record({ id: "r2", status: "running" })];
+  const going = [record(), record({ id: "r2", held: true })];
   expect(eventsIn(going)).toEqual([]);
   // And re-reading the same board a hundred times finds the same nothing.
   for (let n = 0; n < 100; n++) expect(eventsIn(going)).toHaveLength(0);
@@ -112,20 +112,18 @@ test("a send nobody can account for stays a human's, and is never sent again by 
 
 test("every approved trigger is news, and activity alone is not", () => {
   const triggers = [
-    record({ halt: "evidence_missing" }),
-    record({ id: "r2", awaiting: "choice" }),
-    record({ id: "r3", evidence_gaps: ["nothing was verified"] }),
-    record({ id: "r4", obstacle: "the same test keeps failing" }),
-    record({ id: "r5", status: "done" }),
-    record({ id: "r6", status: "failed" }),
-    record({ id: "r7", status: "blocked", summary: "a step stopped for a human" }),
+    record({ id: "r1", state: "waiting", asking: [{ name: "scope", prompt: "?", options: [] }] }),
+    record({ id: "r2", state: "waiting", note: "the pane would not take the prompt" }),
+    record({ id: "r3", state: "succeeded" }),
+    record({ id: "r4", state: "failed" }),
+    record({ id: "r5", state: "stopped" }),
   ];
   expect(eventsIn(triggers)).toHaveLength(triggers.length);
-  // Drift Collie could not correct is the eighth, and it needs the journal's own answer.
+  // Drift Collie could not correct needs the journal's own answer.
   expect(eventsIn([record({ id: "r8" })], new Map([["r8", "stay in src"]]))).toHaveLength(1);
 
-  // And none of these is: a step starting, output arriving, a commit, time passing. A
-  // Run that is simply working is a Run nobody needs to be told about.
-  for (const busy of [record({ status: "running", iteration: 9 }), record({ iteration: 40 })])
+  // And none of these is: an agent working, a hold, time passing. A Run that is simply
+  // working is a Run nobody needs to be told about.
+  for (const busy of [record({ state: "running" }), record({ held: true })])
     expect(eventsIn([busy])).toEqual([]);
 });

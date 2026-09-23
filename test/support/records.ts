@@ -1,64 +1,54 @@
-// A Run record as the board reads one, for tests about what a Run's state *means*.
+// A Run as every reader sees one, for tests about what a Run's state *means*.
 //
 // Written out in full rather than asserted into shape: the fields a rule reads are the
-// point of these tests, and a cast would let one silently disappear from the record
-// without the test noticing.
+// point of these tests, and a cast would let one silently disappear without the test
+// noticing.
 
-import type { RunRecord } from "../../src/run";
+import { Effect, FileSystem } from "effect";
+import type { RunFacts } from "../../src/runs";
 
-export function runRecord(over: Partial<RunRecord> = {}): RunRecord {
+export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
+  const id = over.id ?? "r1";
   return {
-    id: "r1",
-    seq: 1,
-    slug: "add-a-picker",
-    named_after: "picker",
+    id,
     workflow: "implement",
-    worktree: null,
-    decisions: {},
-    previous_review: null,
-    definition: null,
-    approved_verifications: [],
-    outcome: null,
-    evidence_gaps: [],
-    obstacle: null,
-    halt: null,
-    blocking_seen: null,
-    unreviewed: null,
-    notified: [],
-    fixed: 0,
-    unpushed: null,
+    project: "/project",
     cwd: "/project",
-    session: null,
     task: null,
-    helle: null,
-    held: null,
-    workspace: null,
-    workspace_label: null,
-    workspace_worktree: null,
-    activated_cwd: null,
-    created_at: "2026-09-14T10:00:00Z",
-    finished_at: null,
-    status: "running",
-    iteration: 1,
-    max_iterations: 1,
-    inputs: {},
-    input_sources: {},
-    input_strategies: {},
-    steps: [],
     parent: null,
-    children: [],
-    choices: [],
-    awaiting: null,
-    fanout: null,
-    handoffs: [],
-    disputed: [],
-    deferred: [],
-    outstanding: [],
-    target_label: null,
-    synthesis: null,
-    mr_url: null,
-    linear_issues: [],
+    outcome: "unspecified",
+    created: "2026-09-14T10:00:00Z",
+    finished: null,
+    state: "running",
+    settled: { inputs: {}, strategies: {}, sources: {} },
+    branch: null,
+    mr: null,
+    workspace: null,
+    worktree: null,
+    dir: `/state/runs/${id}`,
+    evidence: `/state/evidence/${id}`,
+    imported: false,
+    asking: [],
+    held: false,
+    note: null,
     summary: null,
     ...over,
   };
 }
+
+/** A Run whose directories exist under this state directory, for readers of its files. */
+export const madeRun = Effect.fn("test.madeRun")(function* (
+  stateDir: string,
+  over: Partial<RunFacts> = {},
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const id = over.id ?? "r1";
+  const run = runFacts({
+    dir: `${stateDir}/runs/${id}`,
+    evidence: `${stateDir}/evidence/${id}`,
+    ...over,
+  });
+  yield* fs.makeDirectory(run.dir, { recursive: true }).pipe(Effect.orDie);
+  yield* fs.makeDirectory(run.evidence, { recursive: true }).pipe(Effect.orDie);
+  return run;
+});

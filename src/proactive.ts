@@ -17,7 +17,8 @@
 
 import { Effect, Path, Schema } from "effect";
 import { appendJournal, readJournal } from "./journal";
-import type { RunRecord } from "./run";
+import { runTitle } from "./naming";
+import { settled, type RunFacts } from "./runs";
 
 const SaidSchema = Schema.Struct({ at: Schema.String, key: Schema.String });
 const SaidJson = Schema.fromJsonString(SaidSchema);
@@ -44,86 +45,49 @@ export interface Event {
  * report, because what comes back is Collie's answer and it should read as one.
  */
 export function eventsIn(
-  records: ReadonlyArray<RunRecord>,
+  runs: ReadonlyArray<RunFacts>,
   /**
    * Runs whose drift Collie escalated rather than corrected, by the constraint drifted
-   * from. Read from the drift journal by the caller: a record does not carry it, and the
-   * board already reads that journal to mark the row.
+   * from. Read from the drift journal by the caller, which already reads it to mark rows.
    */
   drifting: ReadonlyMap<string, string> = new Map(),
 ): Event[] {
   const out: Event[] = [];
-  for (const record of records) {
-    const about = record.target_label ?? record.slug;
-    // Stopped for a reason it recorded: the reason is the key, so a resume that halts
-    // again the same way is the same event and a different halt is a new one.
-    if (record.halt !== null) {
+  for (const run of runs) {
+    // History is what happened: nothing an older Collie recorded is news now.
+    if (run.imported) continue;
+    const about = runTitle(run);
+    const asked = run.asking[0];
+    if (asked !== undefined) {
       out.push({
-        run: record.id,
-        key: `${record.id}:halt:${record.halt}:${record.iteration}`,
-        text: `Run ${record.id} (${about}) stopped with ${record.halt}. What is going on, and what should happen next?`,
+        run: run.id,
+        key: `${run.id}:asking:${asked.name}`,
+        text: `Run ${run.id} (${about}) is waiting on me (${asked.name}). What is it asking, and what turns on the answer?`,
       });
       continue;
     }
-    // Waiting on a person. A question nobody sees is a Run that has stopped for the day.
-    if (record.awaiting !== null && record.status !== "done") {
+    const drifted = drifting.get(run.id);
+    if (drifted !== undefined && !settled(run)) {
       out.push({
-        run: record.id,
-        key: `${record.id}:awaiting:${record.awaiting}`,
-        text: `Run ${record.id} (${about}) is waiting on me (${record.awaiting}). What is it asking, and what turns on the answer?`,
+        run: run.id,
+        key: `${run.id}:drift:${drifted}`,
+        text: `Run ${run.id} (${about}) drifted from ${drifted} and Collie could not correct it. What is it doing instead, and should it be stopped or steered?`,
       });
       continue;
     }
-    // Claimed to be finished without proving it. The gap list is the key: proving one of
-    // three is progress, and worth saying so.
-    if (record.evidence_gaps.length > 0) {
+    if (run.state === "waiting") {
       out.push({
-        run: record.id,
-        key: `${record.id}:gaps:${record.evidence_gaps.join("|")}`,
-        text: `Run ${record.id} (${about}) cannot show it did what it set out to: ${record.evidence_gaps.join("; ")}. What is missing, and is it worth doing?`,
+        run: run.id,
+        key: `${run.id}:parked:${run.note ?? ""}`,
+        text: `Run ${run.id} (${about}) parked its work${run.note === null ? "" : `: ${run.note}`}. What does it need, and from whom?`,
       });
       continue;
     }
-    // Drifted from its Intent past what Collie was allowed to correct. Already classified
-    // as the human's: the constraint is the key, so a second escalation on another one is
-    // a second thing to say.
-    const drifted = drifting.get(record.id);
-    if (drifted !== undefined && record.status !== "done" && record.status !== "failed") {
+    if (settled(run)) {
       out.push({
-        run: record.id,
-        key: `${record.id}:drift:${drifted}`,
-        text: `Run ${record.id} (${about}) drifted from ${drifted} and Collie could not correct it. What is it doing instead, and should it be stopped or steered?`,
-      });
-      continue;
-    }
-    // Going round. The obstacle's own words are the key, so the same obstacle is said
-    // once and a new one is said again.
-    if (record.obstacle !== null) {
-      out.push({
-        run: record.id,
-        key: `${record.id}:obstacle:${record.obstacle}`,
-        text: `Run ${record.id} (${about}) is repeating itself: ${record.obstacle} Is there a way round it?`,
-      });
-      continue;
-    }
-    // Ended. Both endings are news: one because the work is there to look at, and one
-    // because it is not.
-    if (record.status === "done" || record.status === "failed") {
-      out.push({
-        run: record.id,
-        key: `${record.id}:ended:${record.status}`,
-        text: `Run ${record.id} (${about}) ended ${record.status}. What came of it, and is there anything left to do?`,
-      });
-      continue;
-    }
-    // Stopped for a human without a halt code or a question: a step blocked with a note.
-    // The iteration is the key, so a resume that blocks again is said again.
-    if (record.status === "blocked") {
-      const why = record.summary?.split("\n")[0] ?? "a step stopped for a human";
-      out.push({
-        run: record.id,
-        key: `${record.id}:blocked:${record.iteration}`,
-        text: `Run ${record.id} (${about}) is blocked: ${why}. What does it need, and from whom?`,
+        run: run.id,
+        key: `${run.id}:ended:${run.state}`,
+        text: `Run ${run.id} (${about}) ended ${run.state}. What came of it, and is there anything left to do?`,
       });
     }
   }

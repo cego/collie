@@ -19,9 +19,6 @@ import { executorFor, resetExecutors } from "../src/executors";
 import { LEGACY_PANE_TOKEN } from "../src/home";
 import { registerRunExecutors } from "../src/operations";
 import { scopeKey } from "../src/registry";
-import { RunStore } from "../src/run";
-import { ledgerPath, readLedger, type Delivery } from "../src/steering";
-import { FakeBin } from "./support/bin";
 import { runEffect } from "./support/effect";
 
 let stateDir: string;
@@ -262,46 +259,3 @@ test("an upgrade that cannot run reports a failure rather than taking the confir
       expect(done.note).toContain(stateDir);
     }),
   ));
-
-/** A Run with one live agent on `harness`, known to the fake herdr and to the record. */
-const runWithAgent = Effect.fn("test.runWithAgent")(function* (harness: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const run = yield* new RunStore(stateDir).create({
-    workflow: "implement",
-    cwd: stateDir,
-    session: null,
-    workspace: "w1",
-    workspaceLabel: "picker",
-    inputs: {},
-    inputSources: {},
-    stepIds: ["build"],
-    maxIterations: 4,
-    namedAfter: "picker",
-  });
-  run.record.steps[0]!.variants.push({
-    harness,
-    model: "m",
-    effort: null,
-    permissions: null,
-    agent: "impl-1",
-    label: "impl-1",
-    tabId: "t-2",
-    paneId: "p-shared",
-    status: "running",
-    error: null,
-    output: null,
-    repairs: [],
-    nudges: 0,
-  });
-  yield* run.save();
-  const stateFile = `${logPath}.state.json`;
-  // The seeded state has no agents; the one this Run drives is added the way the fake
-  // reads it, keeping the workspaces and panes `beforeEach` wrote.
-  const StateJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown));
-  const state = Schema.decodeUnknownSync(StateJson)(yield* fs.readFileString(stateFile));
-  yield* fs.writeFileString(
-    stateFile,
-    Schema.encodeSync(StateJson)({ ...state, agents: [{ name: "impl-1", pane_id: "p-shared" }] }),
-  );
-  return run;
-});

@@ -8,14 +8,19 @@
 // once under the shipped names, once renamed — asserted to behave identically.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 import { branchFor, checkoutFor, type BranchAsk } from "../src/worktree";
 import { linearIssues, shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
-import { RunStore } from "../src/run";
+import { reviewedTargets } from "../src/inputs";
+import { factsOfHistory } from "../src/runs";
+import { workSourceOf } from "../src/strategies";
+import { runFacts } from "./support/records";
+
+const asText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 
 let rig: Rig;
 let bin: FakeBin;
@@ -183,44 +188,33 @@ test("a roaming Run is cut from the repository the strategy names, under a neutr
 test("the previous review of a change is found whatever the reviewing Run called it", () =>
   runEffect(
     Effect.gen(function* () {
-      const store = new RunStore(rig.stateDir);
-      const earlier = yield* store.create({
+      const earlier = runFacts({
         workflow: "review",
-        cwd: rig.projectDir,
-        inputs: { change: "mr:acme/app!42" },
-        inputSources: { change: "explicit" },
-        inputStrategies: RENAMED,
-        namedAfter: "fix-login",
-        stepIds: ["review"],
-        maxIterations: 1,
+        project: rig.projectDir,
+        state: "succeeded",
+        settled: { inputs: { change: "mr:acme/app!42" }, strategies: RENAMED },
       });
-      earlier.record.synthesis = "one finding";
-      earlier.record.status = "done";
-      yield* earlier.save();
-
-      const found = yield* store.previousReview(rig.projectDir, "mr:acme/app!42");
-      expect(found?.id).toBe(earlier.id);
+      const found = yield* reviewedTargets([earlier], rig.projectDir, 5);
+      expect(found.map((candidate) => candidate.value)).toEqual(["mr:acme/app!42"]);
     }),
   ));
 
-test("a run directory keeps which strategy settled each Input, so a reader needs no names", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const store = new RunStore(rig.stateDir);
-      const run = yield* store.create({
-        workflow: "implement",
-        cwd: rig.projectDir,
-        inputs: { spec: "/tmp/tasks/add-picker", spec_kind: "plan-dir" },
-        inputSources: { spec: "explicit" },
-        inputStrategies: RENAMED,
-        namedAfter: "add-picker",
-        stepIds: ["build"],
-        maxIterations: 1,
-      });
-      const written = yield* Schema.decodeUnknownEffect(
-        Schema.fromJsonString(Schema.Struct({ input_strategies: Schema.Json })),
-      )(yield* fs.readFileString(join(run.dir, "run.json")));
-      expect(written.input_strategies).toEqual(RENAMED);
-    }),
-  ));
+test("an imported Run keeps which strategy settled each Input, so a reader needs no names", () => {
+  const imported = factsOfHistory(rig.stateDir, {
+    run: "implement-add-picker",
+    workflow: "implement",
+    project: rig.projectDir,
+    status: "done",
+    outcome: "feature",
+    created: "2026-09-01T10:00:00Z",
+    finished: "2026-09-01T11:00:00Z",
+    task: null,
+    parent: null,
+    inputs: asText({ spec: "/tmp/tasks/add-picker", spec_kind: "plan-dir" }),
+    provenance: asText({ sources: { spec: "explicit" }, strategies: RENAMED }),
+    evidence: asText({ dir: `${rig.stateDir}/runs/implement-add-picker`, mr: null }),
+    summary: null,
+  });
+  expect(imported.settled.strategies).toEqual(RENAMED);
+  expect(workSourceOf(imported.settled)?.value).toBe("/tmp/tasks/add-picker");
+});

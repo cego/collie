@@ -157,7 +157,7 @@ same.
 | Key              | Action                                                          |
 | ---------------- | --------------------------------------------------------------- |
 | `prefix+f`       | `cego.collie.pick` — run a workflow                             |
-| `prefix+u`       | `cego.collie.resume` — resume a run with unfinished steps       |
+| `prefix+u`       | `cego.collie.resume` — pick a run that is still going back up   |
 | —                | `cego.collie.continue` — continue a task with another workflow  |
 | `prefix+shift+f` | `cego.collie.fork` — copy a workflow or persona into your layer |
 | `prefix+shift+c` | `cego.collie.board` — open this Herd's Control Plane            |
@@ -189,7 +189,7 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
    the run reaches it, so you decide with the work in front of you — `collie run start
 --decide` is the way to pre-answer one for a run you will not be there for. `plan`'s
    menu also answers to the planner, so telling it "proceed" starts the implementation.
-   `prefix+u` picks up any run with unfinished steps.
+   `prefix+u` asks the host to pick a run that is still going back up.
 
 The same operations are available without opening UI, which is how an agent drives Collie:
 see [CLI](cli.md).
@@ -378,9 +378,10 @@ are ordinary panes — herdr's own keys move between them and resize them, and r
 Home reopens only a pane that has actually gone, so a divider you dragged stays where you
 put it.
 
-It is a board, not an engine: it watches the run directories, the register of live agents
-and the steering journals and draws what it finds, so closing it loses nothing — the next
-run opens it again. The run itself is driven by a Driver with no pane at all.
+It is a board, not an engine: it draws the Runs the host reports — the ones it is holding
+and the ones an older Collie left, imported once — the register of live agents and the
+steering journals, so closing it loses nothing — the next run opens it again. The run
+itself is executed by the host, which has no pane at all.
 
 `prefix+shift+c` reaches it from any pane in any workspace, making the Home first when
 this Herd has none yet, and taking you there — a workspace switch as well as a tab focus.
@@ -629,8 +630,9 @@ is showing at a time:
   without leaving the tab.
 - **Cards** — the evidence: every card the Driver wrote for this run, the drift nobody has
   settled, and what each message sent to its agents actually reached.
-- **Log** — the end of the run's own `runner.log`. It is read only while this tab is
-  showing it, because a run directory can hold a 40 MB log.
+- **Log** — the end of a `log.txt` the run left in its directory, where it left one; a
+  run that wrote none says so, because its agents' panes are its record. It is read only
+  while this tab is showing it, because a log can be any size.
 
 The review and the plan's spec are capped and paged: `… truncated` says so, and `m` reads
 another cap of it. They are rendered a line at a time — headings in accent and bold, list
@@ -908,11 +910,11 @@ every tick, whatever the board is showing.
 
 ## Actions
 
-| Action               | What it does                                                           |
-| -------------------- | ---------------------------------------------------------------------- |
-| `cego.collie.pick`   | Popup picker of workflows; infers inputs, asks for the rest, then runs |
-| `cego.collie.resume` | Popup picker of runs with unfinished steps; finished steps are skipped |
-| `cego.collie.fork`   | Copy a workflow or persona into your layer or this project's           |
+| Action               | What it does                                                            |
+| -------------------- | ----------------------------------------------------------------------- |
+| `cego.collie.pick`   | Popup picker of workflows; infers inputs, asks for the rest, then runs  |
+| `cego.collie.resume` | Popup picker of runs still going; the host picks the chosen one back up |
+| `cego.collie.fork`   | Copy a workflow or persona into your layer or this project's            |
 
 Each action opens the `picker` popup, because that is where a terminal is. The run itself
 is not a pane: the picker starts a detached Driver that outlives it and writes what it is

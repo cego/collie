@@ -3,10 +3,10 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path, PlatformError } from "effect";
+import { Effect, FileSystem, Path, PlatformError, Schema } from "effect";
 import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
-import { installFakeSkills, writeDef } from "../support/defs";
+import { installFakeSkills } from "../support/defs";
 import { runEffect } from "../support/effect";
 import {
   buildHistory,
@@ -16,11 +16,14 @@ import {
   planTicket,
   type PlanPanel,
 } from "../../src/views";
-import { REVIEW_FILE } from "../../src/output";
-import { Herdr } from "../../src/herdr";
-import { RunStore, type Run } from "../../src/run";
+import { FINDINGS_FILE, FindingSchema, REVIEW_FILE } from "../../src/output";
+import type { RunFacts } from "../../src/runs";
+import { madeRun } from "../support/records";
 
 let rig: Rig;
+const encodeFindings = Schema.encodeSync(Schema.fromJsonString(Schema.Array(FindingSchema)));
+/** Every Run a test has made, newest first, as the host would list them. */
+let runs: RunFacts[] = [];
 
 function effectTest(
   name: string,
@@ -33,6 +36,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      runs = [];
       yield* installBaseline(rig);
       // Skills are a prerequisite, not a definition error; without them every row
       // carries the same five "not installed" lines and says nothing about the fork.
@@ -43,61 +47,65 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-/** A run in some session, with whatever the test needs settled on it. */
+/** A Run of this checkout, with whatever the test needs settled on it. */
 const seed = Effect.fn("viewsTest.seed")(function* (opts: {
   workflow: string;
   cwd?: string;
-  session?: string | null;
-  workspace?: string | null;
   target?: string;
-  status?: Run["record"]["status"];
+  state?: RunFacts["state"];
   review?: string;
-  outstanding?: number;
+  findings?: number;
+  settled?: RunFacts["settled"];
 }) {
   const env = rig.pluginEnv();
-  const run = yield* new RunStore(env.stateDir).create({
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const run = yield* madeRun(env.stateDir, {
+    id: `r${runs.length + 1}`,
     workflow: opts.workflow,
+    project: opts.cwd ?? env.cwd,
     cwd: opts.cwd ?? env.cwd,
-    session: opts.session === undefined ? env.socketPath : opts.session,
-    workspace: opts.workspace === undefined ? env.workspaceId : opts.workspace,
-    workspaceLabel: "test",
-    inputs: opts.target ? { target: opts.target } : {},
-    inputSources: {},
-    inputStrategies: { target: "diff-target" },
-    stepIds: ["one"],
-    maxIterations: 1,
-    namedAfter: opts.target ?? "goal",
+    state: opts.state ?? "succeeded",
+    created: `2026-09-0${runs.length + 1}T10:00:00.000Z`,
+    finished: opts.state === "running" ? null : `2026-09-0${runs.length + 1}T11:00:00.000Z`,
+    settled: opts.settled ?? {
+      inputs: opts.target ? { target: opts.target } : {},
+      strategies: { target: "diff-target" },
+    },
   });
-  run.record.status = opts.status ?? "done";
-  run.record.finished_at = run.record.created_at;
-  run.record.target_label = opts.target ?? null;
-  run.record.outstanding = Array.from({ length: opts.outstanding ?? 0 }, (_, i) => ({
-    file: `f${i}.ts`,
-    severity: "moderate" as const,
-    title: `finding ${i}`,
-    detail: "d",
-  }));
-  yield* run.save();
-  if (opts.review !== undefined) {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
+  if (opts.review !== undefined)
     yield* fs.writeFileString(path.join(run.dir, REVIEW_FILE), opts.review);
-  }
+  if (opts.findings !== undefined)
+    yield* fs.writeFileString(
+      path.join(run.dir, FINDINGS_FILE),
+      encodeFindings(
+        Array.from({ length: opts.findings }, (_, i) => ({
+          file: `f${i}.ts`,
+          severity: "moderate" as const,
+          title: `finding ${i}`,
+          detail: "d",
+        })),
+      ),
+    );
+  runs = [run, ...runs];
   return run;
 });
+
+/** The detail panel for one of them, as the board asks for it. */
+const detailOf = (run: { id: string }, over: Partial<Parameters<typeof buildRunDetail>[0]> = {}) =>
+  buildRunDetail({ env: rig.pluginEnv(), runId: run.id, runs, mr: null, ...over });
 
 effectTest("History is this repo's finished runs whatever session they came from", function* () {
   const env = rig.pluginEnv();
   yield* seed({ workflow: "review", target: "mr:host/g/p!1" });
-  // Another herdr session and another workspace, same checkout: this is exactly what
-  // History is for — the Runs view already hides these.
-  yield* seed({ workflow: "review", session: "/other.sock", workspace: "9", target: "worktree" });
+  // Another workspace, same checkout: this is exactly what History is for.
+  yield* seed({ workflow: "review", target: "worktree" });
   // Another checkout is somebody else's history, not this one's.
   yield* seed({ workflow: "review", cwd: "/somewhere/else", target: "worktree" });
   // Still going, so it belongs to Runs rather than to History.
-  yield* seed({ workflow: "plan", status: "running" });
+  yield* seed({ workflow: "plan", state: "running" });
 
-  const history = yield* buildHistory({ stateDir: env.stateDir, cwd: env.cwd });
+  const history = yield* buildHistory({ cwd: env.cwd, runs });
 
   expect(history).toHaveLength(2);
   expect(history.every((r) => r.title.startsWith("Review"))).toBe(true);
@@ -106,12 +114,12 @@ effectTest("History is this repo's finished runs whatever session they came from
 
 effectTest("a run that can supply the work says so, and one that cannot does not", function* () {
   const env = rig.pluginEnv();
-  yield* seed({ workflow: "review", target: "worktree", review: "# Review\n", outstanding: 2 });
+  yield* seed({ workflow: "review", target: "worktree", review: "# Review\n", findings: 2 });
   // A review that came back clean: it has a review.md, and nothing to fix.
-  yield* seed({ workflow: "review", target: "branch:main...x", review: "# Review\n" });
+  yield* seed({ workflow: "review", target: "branch:main...x", review: "# Review\n", findings: 0 });
   yield* seed({ workflow: "plan" });
 
-  const history = yield* buildHistory({ stateDir: env.stateDir, cwd: env.cwd });
+  const history = yield* buildHistory({ cwd: env.cwd, runs });
   const by = (target: string | null) => history.find((r) => r.target === target)!;
 
   expect(by("worktree").fixable).toBe(true);
@@ -183,123 +191,43 @@ effectTest("Settings offers every key loadDefaults reads, and repeats none of th
   expect(broken.defaults.find((d) => d.key === "permissions")!.value).toBe("yolo");
 });
 
-effectTest("a run's detail is its inputs, steps, hand-offs, review and Outputs", function* () {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const env = rig.pluginEnv();
+effectTest("a run's detail is its inputs and its review", function* () {
   const run = yield* seed({
     workflow: "review",
     target: "mr:host/g/p!3",
     review: "# Review\n\nSummary.\n\n## Findings\n\n- [strong] one\n",
   });
-  run.record.steps[0]!.status = "done";
-  run.record.steps[0]!.note = "two reviewers agreed";
-  run.record.steps[0]!.variants = [
-    {
-      harness: "claude",
-      model: "opus",
-      effort: null,
-      permissions: null,
-      agent: "rev-1",
-      label: "review/review/opus",
-      tabId: null,
-      paneId: null,
-      status: "done",
-      output: "steps/review/opus/reviewed.json",
-      error: null,
-      repairs: [],
-      nudges: 0,
-    },
-  ];
-  run.record.handoffs = [
-    { direction: "sent", role: "implementer", agent: "impl-1", run: "other", at: "", note: "fix" },
-  ];
-  yield* run.save();
-  yield* fs.makeDirectory(path.join(run.dir, "steps", "review", "opus"), { recursive: true });
-  yield* fs.writeFileString(
-    path.join(run.dir, "steps", "review", "opus", "reviewed.json"),
-    '{"verdict":"clean"}\n',
-  );
 
-  const detail = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-  });
+  const detail = yield* detailOf(run);
 
   expect(detail).not.toBeNull();
   if (!detail) return;
-  expect(detail.title).toContain("Review");
+  expect(detail.title).toBe("Review · !3");
   expect(detail.inputs).toContainEqual({ name: "target", value: "mr:host/g/p!3", source: "" });
-  expect(detail.steps[0]).toMatchObject({
-    id: "one",
-    status: "done",
-    note: "two reviewers agreed",
-  });
-  expect(detail.handoffs[0]).toContain("implementer");
   // The point of the panel: the review is readable without splitting a pane.
   expect(detail.review._tag).toBe("Text");
   if (detail.review._tag === "Text") {
     expect(detail.review.text).toContain("[strong] one");
     expect(detail.review.truncated).toBe(false);
   }
-  expect(detail.outputs).toContainEqual({
-    step: "one",
-    where: "steps/review/opus/reviewed.json",
-    state: "recorded",
-    text: '{"verdict":"clean"}',
-  });
 });
 
-effectTest("a run with no review, and an Output nobody wrote, both say which", function* () {
-  const env = rig.pluginEnv();
+effectTest("a run with no review says so", function* () {
   const run = yield* seed({ workflow: "review", target: "worktree" });
-  run.record.steps[0]!.variants = [
-    {
-      harness: "claude",
-      model: "opus",
-      effort: null,
-      permissions: null,
-      agent: "rev-1",
-      label: "review/one/opus",
-      tabId: null,
-      paneId: null,
-      status: "failed",
-      output: "steps/one/opus/reviewed.json",
-      error: "no Output at steps/one/opus/reviewed.json",
-      repairs: [],
-      nudges: 0,
-    },
-  ];
-  yield* run.save();
 
-  const detail = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-  });
+  const detail = yield* detailOf(run);
 
   if (!detail) throw new Error("expected a detail");
   // Stated, not thrown: a run that wrote no review is the common case, not an error.
   expect(detail.review).toEqual({ _tag: "None", reason: "this run wrote no review.md" });
-  expect(detail.outputs[0]!.state).toBe("missing");
-  expect(detail.outputs[0]!.text).toBe("no Output at steps/one/opus/reviewed.json");
 });
 
 effectTest("a review too big to read is capped and says so", function* () {
-  const env = rig.pluginEnv();
   // Two orders of magnitude past the cap: an agent writes these, so a run dir can hold
   // an artifact this size, and the panel must neither show it all nor read it all.
   const run = yield* seed({ workflow: "review", review: "x".repeat(4_000_000) });
 
-  const detail = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-  });
+  const detail = yield* detailOf(run);
 
   if (!detail || detail.review._tag !== "Text") throw new Error("expected review text");
   expect(detail.review.truncated).toBe(true);
@@ -309,22 +237,10 @@ effectTest("a review too big to read is capped and says so", function* () {
 });
 
 effectTest("a paged review reads another cap for each page asked for", function* () {
-  const env = rig.pluginEnv();
   const run = yield* seed({ workflow: "review", review: "x".repeat(4_000_000) });
 
-  const first = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-  });
-  const third = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-    pages: 3,
-  });
+  const first = yield* detailOf(run);
+  const third = yield* detailOf(run, { pages: 3 });
 
   if (first?.review._tag !== "Text" || third?.review._tag !== "Text") {
     throw new Error("expected review text");
@@ -337,43 +253,25 @@ effectTest("a paged review reads another cap for each page asked for", function*
 });
 
 effectTest("an empty review reads as empty rather than as no review at all", function* () {
-  const env = rig.pluginEnv();
   const run = yield* seed({ workflow: "review", review: "" });
 
-  const detail = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-  });
+  const detail = yield* detailOf(run);
 
   // A file that is there and says nothing is not the same as a run that wrote none.
   expect(detail?.review).toEqual({ _tag: "Text", text: "", truncated: false });
 });
 
 effectTest("the log tail is the end of a long log, and only when it is asked for", function* () {
-  const env = rig.pluginEnv();
   const run = yield* seed({ workflow: "review" });
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const lines = Array.from({ length: 20_000 }, (_, i) => `line ${i}`);
   yield* fs.writeFileString(path.join(run.dir, "log.txt"), `${lines.join("\n")}\n`);
 
-  const off = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-  });
+  const off = yield* detailOf(run);
   expect(off?.tail).toBeNull();
 
-  const on = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-    tail: true,
-  });
+  const on = yield* detailOf(run, { tail: true });
 
   if (on?.tail?._tag !== "Text") throw new Error("expected tail text");
   expect(on.tail.truncated).toBe(true);
@@ -384,30 +282,15 @@ effectTest("the log tail is the end of a long log, and only when it is asked for
 });
 
 effectTest("a run with no log says so where the tail would be", function* () {
-  const env = rig.pluginEnv();
   const run = yield* seed({ workflow: "review" });
 
-  const detail = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-    tail: true,
-  });
+  const detail = yield* detailOf(run, { tail: true });
 
   expect(detail?.tail).toEqual({ _tag: "None", reason: "this run wrote no log" });
 });
 
 effectTest("a run that is not there has no detail rather than a failure", function* () {
-  const env = rig.pluginEnv();
-  expect(
-    yield* buildRunDetail({
-      stateDir: env.stateDir,
-      agents: new Herdr(env),
-      runId: "no-such-run",
-      mr: null,
-    }),
-  ).toBeNull();
+  expect(yield* detailOf({ id: "no-such-run" })).toBeNull();
 });
 
 test("a ticket's title is its first heading, and it is done when every box is checked", () => {
@@ -436,7 +319,6 @@ effectTest(
   function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const env = rig.pluginEnv();
 
     const planner = yield* seed({ workflow: "plan" });
     const dir = path.join(planner.dir, "plan");
@@ -446,12 +328,7 @@ effectTest(
     yield* fs.writeFileString(path.join(dir, "issues", "01-first.md"), "# First\n\n- [x] a\n");
     yield* fs.writeFileString(path.join(dir, "issues", "notes.txt"), "not a ticket\n");
 
-    const own = yield* buildRunDetail({
-      stateDir: env.stateDir,
-      agents: new Herdr(env),
-      runId: planner.id,
-      mr: null,
-    });
+    const own = yield* detailOf(planner);
 
     expect(own!.plan!.spec).toEqual({
       _tag: "Text",
@@ -465,63 +342,30 @@ effectTest(
     ]);
 
     // An implement run has no plan of its own; it reads the directory it was started from.
-    const builder = yield* seed({ workflow: "implement" });
-    builder.record.inputs.plan = dir;
-    builder.record.inputs.plan_kind = "plan-dir";
-    builder.record.input_strategies.plan = "work-source";
-    yield* builder.save();
-
-    const started = yield* buildRunDetail({
-      stateDir: env.stateDir,
-      agents: new Herdr(env),
-      runId: builder.id,
-      mr: null,
+    const builder = yield* seed({
+      workflow: "implement",
+      settled: {
+        inputs: { plan: dir, plan_kind: "plan-dir" },
+        strategies: { plan: "work-source" },
+      },
     });
+
+    const started = yield* detailOf(builder);
     expect(started!.plan!.tickets.map((t) => t.title)).toEqual(["First", "Second"]);
 
     // A run built from a review rather than a plan dir has no plan at all.
-    const fixer = yield* seed({ workflow: "implement" });
-    fixer.record.inputs.plan = dir;
-    fixer.record.inputs.plan_kind = "review";
-    yield* fixer.save();
-    const none = yield* buildRunDetail({
-      stateDir: env.stateDir,
-      agents: new Herdr(env),
-      runId: fixer.id,
-      mr: null,
+    const fixer = yield* seed({
+      workflow: "implement",
+      settled: { inputs: { plan: dir, plan_kind: "review" }, strategies: { plan: "work-source" } },
     });
+    const none = yield* detailOf(fixer);
     expect(none!.plan).toBeNull();
   },
 );
 
-effectTest("a step left running by a run that stopped is timed to where it stopped", function* () {
-  const env = rig.pluginEnv();
-  const run = yield* seed({ workflow: "implement" });
-  const step = run.record.steps[0]!;
-  // What a SIGTERM or a driver that died leaves behind: the run has an end, the step
-  // it was on does not.
-  step.status = "running";
-  step.started_at = "2026-09-02T12:00:00.000Z";
-  step.finished_at = null;
-  run.record.status = "failed";
-  run.record.finished_at = "2026-09-02T12:07:00.000Z";
-  yield* run.save();
-
-  const detail = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-  });
-
-  // Seven minutes, and seven minutes tomorrow too — not however long ago it died.
-  expect(detail!.steps[0]!.took).toBe("7m");
-});
-
 effectTest("a finished run's plan is read once; a running one's is read again", function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const env = rig.pluginEnv();
   const plans = new Map<string, PlanPanel | null>();
 
   const write = (run: { dir: string }, spec: string) =>
@@ -533,24 +377,18 @@ effectTest("a finished run's plan is read once; a running one's is read again", 
   // Stopped: the plan it was built from cannot change, so the second read is the cache.
   const done = yield* seed({ workflow: "implement" });
   yield* write(done, "# first\n");
-  const readOnce = {
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: done.id,
-    mr: null,
-    plans,
-  };
-  expect((yield* buildRunDetail(readOnce))!.plan!.spec).toMatchObject({ text: "# first\n" });
+  expect((yield* detailOf(done, { plans }))!.plan!.spec).toMatchObject({ text: "# first\n" });
   yield* write(done, "# rewritten\n");
-  expect((yield* buildRunDetail(readOnce))!.plan!.spec).toMatchObject({ text: "# first\n" });
+  expect((yield* detailOf(done, { plans }))!.plan!.spec).toMatchObject({ text: "# first\n" });
 
   // Still running: it may be writing that plan as we read it, so it is never cached.
-  const going = yield* seed({ workflow: "implement", status: "running" });
+  const going = yield* seed({ workflow: "implement", state: "running" });
   yield* write(going, "# first\n");
-  const live = { stateDir: env.stateDir, agents: new Herdr(env), runId: going.id, mr: null, plans };
-  expect((yield* buildRunDetail(live))!.plan!.spec).toMatchObject({ text: "# first\n" });
+  expect((yield* detailOf(going, { plans }))!.plan!.spec).toMatchObject({ text: "# first\n" });
   yield* write(going, "# rewritten\n");
-  expect((yield* buildRunDetail(live))!.plan!.spec).toMatchObject({ text: "# rewritten\n" });
+  expect((yield* detailOf(going, { plans }))!.plan!.spec).toMatchObject({
+    text: "# rewritten\n",
+  });
 });
 
 effectTest(
@@ -575,22 +413,16 @@ effectTest(
 );
 
 effectTest("a Run's detail carries the same interruption facts the CLI reports", function* () {
-  const env = rig.pluginEnv();
-  const run = yield* seed({ workflow: "review", status: "blocked", outstanding: 2 });
-  run.record.iteration = run.record.max_iterations;
-  yield* run.save();
+  const run = yield* seed({ workflow: "review", state: "failed" });
 
-  const detail = yield* buildRunDetail({
-    stateDir: env.stateDir,
-    agents: new Herdr(env),
-    runId: run.id,
-    mr: null,
-  });
+  const detail = yield* detailOf(run);
 
-  // The same shape `run show` and `run wait --until attention` return, built by the
-  // same function: the board and the CLI cannot disagree about why a Run stopped.
+  // The same classification chat and `run show` read: the board and the CLI cannot
+  // disagree about why a Run stopped.
   expect(detail!.attention.category).toBe("interrupted");
-  expect(detail!.attention.reason).toBe("review_exhausted");
-  expect(detail!.attention.driver).toBe("none");
-  expect(detail!.attention.actions).toContain("resume");
+  expect(detail!.attention.reason).toBe("failed");
+  expect(detail!.attention.actions).toEqual(["show", "actions"]);
+  // What an older Collie recorded can be read, and nothing else.
+  const imported = yield* detailOf(run, { runs: [{ ...run, imported: true }] });
+  expect(imported!.attention.actions).toEqual(["show"]);
 });

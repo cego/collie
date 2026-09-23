@@ -6,9 +6,7 @@
 // `extractRequirements` returns constraints and a goal and has no way to return a grant.
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
-import { withRunLock } from "./run";
-// The schema lives there and not here because `run.json` records an approved set too, and
-// `run.ts` cannot import this module: this one imports `withRunLock` from it.
+import { withDirLock } from "./lock";
 import { VerifySpecSchema, type VerifySpec } from "./verify-spec";
 
 export { VerifySpecSchema, type VerifySpec };
@@ -132,7 +130,7 @@ export const readIntent = Effect.fn("Intent.read")(function* (dir: string) {
 });
 
 /**
- * The write itself, for a caller already inside `withRunLock`. An amendment is a read,
+ * The write itself, for a caller already inside `withDirLock`. An amendment is a read,
  * a decision and a write, and only all three under one lock stop two of them reading the
  * same version and the later rename erasing the earlier.
  */
@@ -150,7 +148,7 @@ export const writeIntentHeld = Effect.fn("Intent.writeHeld")(function* (
 });
 
 export const writeIntent = Effect.fn("Intent.write")(function* (dir: string, intent: Intent) {
-  yield* withRunLock(dir, writeIntentHeld(dir, intent));
+  yield* withDirLock(dir, writeIntentHeld(dir, intent));
 });
 
 /** A constraint is identified by what it says, so the same text is the same entry. */

@@ -5,14 +5,10 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem, Path } from "effect";
 import { runEffect } from "./support/effect";
 import { approvedFor, approvedFrom, renderApproved, PROJECT_FILE } from "../src/verify-spec";
-import { DEFAULT_AUTHORITY, seedIntent } from "../src/intent";
+import { DEFAULT_AUTHORITY, readIntent, seedIntent, writeIntent } from "../src/intent";
 import { VerifySpecSchema, type VerifySpec } from "../src/verify-spec";
-import { RunStore } from "../src/run";
 import { Schema } from "effect";
 
-const RecordJson = Schema.fromJsonString(Schema.Unknown);
-const decodeRecord = Schema.decodeUnknownSync(RecordJson);
-const encodeRecord = Schema.encodeSync(RecordJson);
 const encodeSpecs = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
 
 let cwd: string;
@@ -120,54 +116,20 @@ test("a Run keeps the set it started with, whatever the file says later", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const stateDir = yield* fs.makeTempDirectory({ prefix: "hw-approved-state-" });
+      const dir = yield* fs.makeTempDirectory({ prefix: "hw-approved-run-" });
       yield* write(path.join(cwd, PROJECT_FILE), [TESTS]);
 
-      const run = yield* new RunStore(stateDir).create({
-        workflow: "implement",
-        cwd,
-        inputs: {},
-        inputSources: {},
-        approvedVerifications: yield* approvedFrom({ cwd, configDir }),
-        stepIds: ["build"],
-        maxIterations: 1,
-        namedAfter: "x",
-      });
-      expect(run.record.approved_verifications).toEqual([TESTS]);
+      // Read at start, and written into the Run's Intent: from there, the Intent is the set.
+      yield* writeIntent(
+        dir,
+        seedIntent("r1", { runVerification: yield* approvedFrom({ cwd, configDir }) }),
+      );
 
       // Someone edits the project's file after the Run is going. A permission that moved
       // under a Run is not a permission, so the Run is unchanged.
       yield* write(path.join(cwd, PROJECT_FILE), [LINT]);
-      const loaded = yield* new RunStore(stateDir).load(run.id);
-      expect(loaded.record.approved_verifications).toEqual([TESTS]);
-      expect(yield* approvedFrom({ cwd, configDir })).toEqual([LINT]);
-    }),
-  ));
-
-test("a Run recorded before approved sets existed decodes as approving nothing", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const stateDir = yield* fs.makeTempDirectory({ prefix: "hw-approved-legacy-" });
-      const run = yield* new RunStore(stateDir).create({
-        workflow: "implement",
-        cwd,
-        inputs: {},
-        inputSources: {},
-        stepIds: ["build"],
-        maxIterations: 1,
-        namedAfter: "x",
-      });
-      const file = path.join(run.dir, "run.json");
-      // SAFETY: RunStore wrote this file a moment ago, so it is a record with this key.
-      const raw = decodeRecord(yield* fs.readFileString(file)) as {
-        approved_verifications?: ReadonlyArray<VerifySpec>;
-      };
-      delete raw.approved_verifications;
-      yield* fs.writeFileString(file, encodeRecord(raw));
-
-      const loaded = yield* new RunStore(stateDir).load(run.id);
-      expect(loaded.record.approved_verifications).toEqual([]);
+      const now = yield* approvedFrom({ cwd, configDir });
+      expect(now).toEqual([LINT]);
+      expect(approvedFor(now, yield* readIntent(dir))).toEqual([TESTS]);
     }),
   ));

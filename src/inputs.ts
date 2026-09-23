@@ -5,8 +5,9 @@ import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { PlatformError } from "effect/PlatformError";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { InputStrategy } from "./definitions";
-import { diffTargetOf, recorded, targetKind, type TargetKind } from "./strategies";
-import { RunStore } from "./run";
+import { diffTargetOf, targetKind, type TargetKind } from "./strategies";
+import type { RunFacts } from "./runs";
+import { openFindingsIn } from "./output";
 import { targetLabel } from "./naming";
 import { FINDINGS_FILE, REVIEW_FILE } from "./output";
 import { ago } from "./time";
@@ -102,8 +103,8 @@ export interface Resolution {
 
 export interface InferContext<R = ChildProcessSpawner.ChildProcessSpawner> {
   cwd: string;
-  /** The plugin state dir, so earlier Runs can be searched for a plan. */
-  stateDir?: string;
+  /** The Runs there are, so earlier ones can be searched for a plan or a review. */
+  runs?: ReadonlyArray<RunFacts>;
   /**
    * The Task this inference is for. Only that Task's own finished Runs are offered:
    * a repository match alone must not hand one Task another's plan or review. Absent
@@ -140,9 +141,7 @@ export function inferInput(
         };
 
       case "plan-dir": {
-        const plan = ctx.stateDir
-          ? (yield* planDirs(ctx.stateDir, ctx.cwd, 1, ctx.task))[0]
-          : undefined;
+        const plan = ctx.runs ? (yield* planDirs(ctx.runs, ctx.cwd, 1, ctx.task))[0] : undefined;
         if (plan) {
           return { ...base, value: plan.value, source: plan.source, label: plan.label };
         }
@@ -276,12 +275,23 @@ export function defaultBase(
 }
 
 /**
+ * This repo's succeeded Runs, newest first — what every "has this been done here before?"
+ * question reads. A fresh start asks about no Task and so sees the Runs recorded before
+ * Tasks existed: an upgraded installation's earlier plans stay findable.
+ */
+function finishedHere(runs: ReadonlyArray<RunFacts>, cwd: string, task?: string | null) {
+  return runs.filter(
+    (run) => run.project === cwd && run.state === "succeeded" && run.task === (task ?? null),
+  );
+}
+
+/**
  * The newest finished Runs for this repo that wrote a plan, newest first. Any
  * workflow may write one (`plan`, `architecture`), so having `plan/SPEC.md` is the
  * test, not the workflow's name (ADR-0002).
  */
 export function planDirs(
-  stateDir: string,
+  runs: ReadonlyArray<RunFacts>,
   cwd: string,
   limit: number,
   task?: string | null,
@@ -290,17 +300,15 @@ export function planDirs(
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const found: WorkSourceCandidate[] = [];
-    for (const run of yield* new RunStore(stateDir).finished(cwd, task)) {
+    for (const run of finishedHere(runs, cwd, task)) {
       if (found.length >= limit) break;
       const dir = path.join(run.dir, "plan");
       if (!(yield* fs.exists(path.join(dir, "SPEC.md")))) continue;
-      const prefix = `${run.record.workflow}-`;
-      const slug = run.record.slug;
       found.push({
         kind: "plan-dir",
         value: dir,
         source: `plan run ${run.id}`,
-        label: slug.startsWith(prefix) ? slug.slice(prefix.length) : slug,
+        label: run.task ?? run.id,
       });
     }
     return found;
@@ -312,7 +320,7 @@ export function planDirs(
  * Reviewing is a rally, and the second review should not need the link pasted again.
  */
 export function reviewedTargets(
-  stateDir: string,
+  runs: ReadonlyArray<RunFacts>,
   cwd: string,
   limit: number,
   task?: string | null,
@@ -321,20 +329,19 @@ export function reviewedTargets(
     const now = yield* Clock.currentTimeMillis;
     const found: Candidate[] = [];
     const seen = new Set<string>();
-    for (const run of yield* new RunStore(stateDir).finished(cwd, task)) {
+    for (const run of finishedHere(runs, cwd, task)) {
       if (found.length >= limit) break;
-      const target = diffTargetOf(recorded(run.record))?.value;
+      const target = diffTargetOf(run.settled)?.value;
       if (!target) continue;
       if (seen.has(target)) continue;
       seen.add(target);
-      // What came of it, from the record alone: the menu must not read N files.
-      const open = run.record.outstanding.length;
-      const when = ago(run.record.finished_at ?? run.record.created_at, now);
+      const open = yield* openFindingsIn(run.dir);
+      const when = ago(run.finished ?? run.created, now);
       found.push({
         kind: targetKind(target),
         value: target,
         source: open > 0 ? `reviewed ${when} · ${open} finding(s) open` : `reviewed ${when}`,
-        label: run.record.target_label ?? targetLabel(run.record.workflow, run.record.slug, target),
+        label: targetLabel(run.workflow, run.task ?? run.id, target),
       });
     }
     return found;
@@ -350,8 +357,8 @@ export function workSourceCandidates(
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > {
   return Effect.gen(function* () {
-    const candidates = ctx.stateDir
-      ? yield* planDirs(ctx.stateDir, ctx.cwd, PLAN_DIR_CANDIDATES, ctx.task)
+    const candidates = ctx.runs
+      ? yield* planDirs(ctx.runs, ctx.cwd, PLAN_DIR_CANDIDATES, ctx.task)
       : [];
     const ticket = yield* ticketFromBranch(ctx.run ?? shell, ctx.cwd);
     if (ticket) candidates.push({ kind: "linear", value: ticket.value, source: ticket.source });
@@ -424,10 +431,10 @@ export function targetCandidates(
     }
     // After inference, so "launch and take the default" is unchanged: what this repo
     // has reviewed before, for the second review of the same thing.
-    if (ctx.stateDir) {
+    if (ctx.runs) {
       const offered = new Set(out.map((c) => c.value));
       for (const remembered of yield* reviewedTargets(
-        ctx.stateDir,
+        ctx.runs,
         ctx.cwd,
         REVIEWED_TARGETS,
         ctx.task,

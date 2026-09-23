@@ -15,7 +15,7 @@ import {
   evaluationDeps,
   steer as steerRun,
 } from "../operations";
-import { RunStore } from "../run";
+import { findRun } from "../runs";
 import { proposalsPath, reconcileStep } from "../proposals";
 import {
   deliveriesOf,
@@ -119,9 +119,8 @@ export const runDeliveries = Command.make(
   ({ runId, reconcile, as, requestId }) =>
     answering((env) =>
       Effect.gen(function* () {
-        const store = new RunStore(env.stateDir);
-        const run = yield* store.load(runId).pipe(Effect.catch(() => Effect.succeed(null)));
-        if (run === null) return err("run_not_found", `No Run "${runId}".`);
+        if ((yield* findRun(env, runId)) === null)
+          return err("run_not_found", `No Run "${runId}".`);
         const mine = yield* deliveriesOf(env.stateDir, runId);
 
         const settleId = Option.getOrNull(reconcile);

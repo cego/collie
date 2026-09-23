@@ -4,7 +4,7 @@
 
 import { Cause, Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { currentReports, readDrift } from "./drift";
-import { diffTargetOf, recorded } from "./strategies";
+import { diffTargetOf } from "./strategies";
 import { buildBoard, type MrState, type TaskView } from "./board";
 import { settleMerges } from "./merges";
 import { nowIso } from "./time";
@@ -37,26 +37,13 @@ import {
   writeOrigin,
   UNREADABLE,
 } from "./home";
-import { liveFor, type Live } from "./live";
+import { liveFor, markedOf, type Live } from "./live";
 import type { IntentUnreadable } from "./intent";
 import { ProposalsBusy, type Actor } from "./proposals";
 import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import type { PluginEnv } from "./env";
-import {
-  Herdr,
-  type AgentInfo,
-  type AgentsAlive,
-  type AsksAgents,
-  type WorkspaceInfo,
-} from "./herdr";
-import {
-  confirmLine,
-  inferInput,
-  resolveCandidates,
-  settle,
-  type InputPrompts,
-  type PickItem,
-} from "./inputs";
+import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
+import { inferInput, type InputPrompts, type PickItem } from "./inputs";
 import type { Declared, Found } from "./discovery";
 import {
   answerNativeRun,
@@ -68,9 +55,9 @@ import {
 } from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
-import { notify } from "./notify";
-import { COLLIE_TAB, collieOwns, reason, runLabel, shellQuote, tabLabelsFor } from "./naming";
-import { markedFrom, RunStore, type Run, type RunRecord } from "./run";
+import { COLLIE_TAB, reason, runTitle } from "./naming";
+import { listRuns, settled, type RunFacts } from "./runs";
+import { everyRegistered, type AgentEntry } from "./registry";
 import { pruneWorktrees } from "./worktree";
 import { scopeFor, type RegistryScope } from "./registry";
 import type { CompactionSettings } from "./compaction";
@@ -78,7 +65,7 @@ import { recordDisposition, statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
 import { actorName } from "./proposals";
-import { listTasks, taskOfWorkspace, type TaskChoice } from "./task";
+import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
 import {
   carryOutAsked,
   carryOutProposal,
@@ -86,9 +73,6 @@ import {
   evaluationDeps,
   newRequestId,
   registerRunExecutors,
-  resolveWorkspace,
-  runSettled,
-  runStatus,
   steer,
   workspaceCwdFromPanes,
   type ExpectedError,
@@ -150,14 +134,10 @@ interface BoardSession extends RegistryScope {
 
 export interface ControlSession extends BoardSession {
   herdr: Herdr;
-  /**
-   * What this board last called each tab it reconciled, so a tick that learns nothing
-   * new sends no rename. Per Session rather than per process: two boards computing the
-   * same label is harmless, and a test's board must not inherit another's memory.
-   */
-  tabLabels?: Map<string, string>;
   /** This installation, so the board can say when it is behind its remote. */
   pluginRoot: string;
+  /** Where the board's Runs come from: the host's, unless a test hands over its own. */
+  runsOf?: RunsOf;
   /** Where the defaults live, so the board can read its own quiet threshold. */
   configDir: string;
   /**
@@ -497,7 +477,7 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     placement: Placement;
     /** Inputs the caller has already settled, which are not asked for again. */
     given?: Record<string, string>;
-    parent?: Run;
+    parent?: RunFacts;
     /** The Task this start belongs to; a fresh one unless the caller named it. */
     task?: TaskChoice;
   },
@@ -538,7 +518,7 @@ const startModule = Effect.fn("Flows.startModule")(function* (
   opts: {
     placement: Placement;
     given?: Record<string, string>;
-    parent?: Run;
+    parent?: RunFacts;
     task: TaskChoice;
   },
   module: Found,
@@ -591,7 +571,7 @@ const infer = Effect.fn("Flows.infer")(function* (
 ) {
   const settled = yield* inferInput(name, strategy, {
     cwd: env.cwd,
-    stateDir: env.stateDir,
+    runs: yield* listRuns(env),
     task: opts.task.mode === "continue" ? opts.task.task.id : null,
   }).pipe(Effect.orElseSucceed(() => null));
   if (settled === null || settled.needsAsking || settled.value === "") return null;
@@ -737,22 +717,14 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   prompts: FlowPrompts,
   placement: Placement = "popup",
 ) {
-  const store = new RunStore(env.stateDir);
-  const runs = yield* store.resumable();
-  if (runs.length === 0)
-    return yield* bail(prompts, "No runs with unfinished steps that nothing is already driving.");
+  const runs = (yield* listRuns(env)).filter((run) => !run.imported && !settled(run));
+  if (runs.length === 0) return yield* bail(prompts, "No runs are still going to pick back up.");
 
-  const items: PickItem[] = runs.map((run) => {
-    const left = run
-      .unfinished()
-      .map((s) => s.id)
-      .join(", ");
-    return {
-      id: run.id,
-      title: run.record.slug,
-      subtitle: `${run.record.status} · left: ${left} · ${run.record.created_at.slice(0, 16).replace("T", " ")}`,
-    };
-  });
+  const items: PickItem[] = runs.map((run) => ({
+    id: run.id,
+    title: runTitle(run),
+    subtitle: `${run.state} · ${run.created.slice(0, 16).replace("T", " ")}`,
+  }));
 
   const chosen = yield* prompts.menu(items, {
     header: "Resume a run",
@@ -767,12 +739,6 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   if (placement === "popup") yield* Effect.ignore(herdr.popupClose());
   return 0;
 });
-
-/**
- * The run driver. No terminal, no pane: it writes what it is doing into the run
- * dir and asks its questions there, and the Control Plane is what renders both.
- * Everything it can say about a failure goes into `runner.log`.
- */
 
 /** How often the tab re-reads the files and asks herdr what is still alive. */
 const REFRESH_MS = 1500;
@@ -945,36 +911,6 @@ const redirectBoard = Effect.fn("Flows.redirectBoard")(function* (herdr: Herdr, 
 const MR_TTL_MS = 60_000;
 
 /**
- * How long an answer about a Run's agents stays good for. The panel of a stopped Run is
- * re-produced on every board tick, and asking herdr means a subprocess per agent — so
- * without this, sitting and looking at a broken Run costs one every three seconds. Short,
- * because it is advice about what is safe: `run resume` and the resume flow ask again
- * with no cache, and that is what actually decides.
- */
-const AGENTS_TTL_MS = 15_000;
-
-/**
- * A `herdr` that remembers what it was told about a set of agents. Held by the reader,
- * beside the merge-request and plan caches, for the same reason they are: a redraw must
- * cost nothing a redraw cannot change.
- */
-function remembersAgents(herdr: Herdr): AsksAgents {
-  const answers = new Map<string, { at: number; alive: AgentsAlive }>();
-  return {
-    agentsAlive: (names) =>
-      Effect.gen(function* () {
-        const key = names.join("\u0000");
-        const now = yield* Clock.currentTimeMillis;
-        const cached = answers.get(key);
-        if (cached && now - cached.at < AGENTS_TTL_MS) return cached.alive;
-        const alive = yield* herdr.agentsAlive(names);
-        answers.set(key, { at: now, alive });
-        return alive;
-      }),
-  };
-}
-
-/**
  * Everything the app draws, for whatever it is looking at. One closure, because the
  * merge-request cache belongs with the reads it saves: a History of 40 merge-request
  * Runs must make no `glab` call to draw, one selection makes exactly one, and
@@ -993,10 +929,10 @@ function remembersAgents(herdr: Herdr): AsksAgents {
  * The Runs still going whose drift was escalated to the human, by constraint. Only the
  * unfinished ones are read: a finished Run's drift is history, and its ending is the event.
  */
-const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: ReadonlyArray<Run>) {
+const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: ReadonlyArray<RunFacts>) {
   const drifting = new Map<string, string>();
   for (const run of runs) {
-    if (run.record.status === "done" || run.record.status === "failed") continue;
+    if (settled(run)) continue;
     const lines = yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
     const stuck = currentReports(lines).find((report) => report.resolution === "escalated");
     if (stuck) drifting.set(run.id, stuck.constraint);
@@ -1017,7 +953,7 @@ const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: Readon
  */
 const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   env: PluginEnv,
-  runs: ReadonlyArray<Run>,
+  runs: ReadonlyArray<RunFacts>,
 ) {
   if (!(yield* loadDefaults(env.configDir)).proactive) return;
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
@@ -1025,10 +961,7 @@ const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   const dir = yield* herdDir(env.stateDir, key);
   const said = yield* readSaid(dir);
   const file = yield* newsPath(env.stateDir, key);
-  for (const event of eventsIn(
-    runs.map((run) => run.record),
-    yield* escalatedDrift(runs),
-  )) {
+  for (const event of eventsIn(runs, yield* escalatedDrift(runs))) {
     if (said.has(event.key)) continue;
     // Remembered only once it is in the journal. The journal deduplicates by unread key,
     // so a failed write costs a retry on the next tick — where remembering first would
@@ -1062,6 +995,7 @@ export function appState(
    */
   ownership: Live["ownership"] = null,
 ) {
+  const runsOf = session.runsOf ?? listRuns;
   const mrCache = new Map<string, { at: number; panel: MrPanel }>();
   /**
    * A finished Run's plan, kept between reads for the same reason the merge request is:
@@ -1070,7 +1004,6 @@ export function appState(
    * read, so `R` re-reads a plan the same way it re-reads the merge request.
    */
   const planCache = new Map<string, PlanPanel | null>();
-  const asksAgents = remembersAgents(session.herdr);
   /**
    * What GitLab last said about each merge request the board waits on, and when it was
    * asked. Asked in the background after a load, never on the load's own path: ten open
@@ -1138,7 +1071,8 @@ export function appState(
     const reuse = again.reuse ? last : null;
     // One scan of the run dirs per read, shared by the board and History: they are two
     // Views over the same directory, and reading it twice doubles the cost of a refresh.
-    const runs = reuse ? undefined : yield* new RunStore(env.stateDir).list();
+    const scanned = reuse ? undefined : yield* scan(env, runsOf);
+    const runs = scanned?.runs;
     // One read of the register and the workspace list for both boards: a wide tick
     // costs the local board's calls plus nothing, and the two boards cannot reconcile
     // a tab label from two different answers about the same agent.
@@ -1161,11 +1095,15 @@ export function appState(
       );
     }
     const live = reuse ? undefined : yield* liveOf(session);
-    const board = reuse ? reuse.state.board : yield* boardOf(session, runs, live);
+    const board = reuse ? reuse.state.board : yield* boardOf(session, scanned!, live);
     // Read only while the Runs view is showing it: a local board, and every other View,
     // must cost no group it is not going to draw.
     const widening = focus.filter.kind !== "workspace" && focus.view === "runs";
-    const wide = widening ? (reuse ? reuse.state.wide : yield* wideOf(session, runs, live)) : null;
+    const wide = widening
+      ? reuse
+        ? reuse.state.wide
+        : yield* wideOf(session, scanned!, live)
+      : null;
     // Before the Selection is resolved, because a History row is a row too: the board
     // keeps five finished runs and History keeps two hundred from every session that ran
     // here, so looking the Selection up in the board alone left every older row's panel
@@ -1173,7 +1111,7 @@ export function appState(
     const history = reuse
       ? reuse.state.history
       : focus.shown.includes("history")
-        ? yield* buildHistory({ stateDir: env.stateDir, cwd: env.cwd, runs })
+        ? yield* buildHistory({ cwd: env.cwd, runs: runs ?? (yield* runsOf(env)) })
         : null;
     const runId = runIdOf(focus.selected);
     // The wide groups too: a row the human is on may belong to another workspace, and
@@ -1191,10 +1129,7 @@ export function appState(
     const selectedRun =
       runId === null
         ? null
-        : ((runs ?? []).find((run) => run.id === runId) ??
-          (yield* new RunStore(env.stateDir)
-            .load(runId)
-            .pipe(Effect.catch(() => Effect.succeed(null)))));
+        : ((runs ?? (yield* runsOf(env))).find((run) => run.id === runId) ?? null);
     const where =
       selected !== undefined
         ? { id: selected.id, dir: selected.dir }
@@ -1204,7 +1139,7 @@ export function appState(
     // Read for the Selection and never for a list, and a badge is only ever filled from
     // what is in the cache. When to read past that cache is `rereads`' decision.
     const mr = yield* merge(
-      mrAbout(selectedRun?.record ?? null) ?? selected?.target ?? null,
+      mrAbout(selectedRun) ?? selected?.target ?? null,
       env.cwd,
       again.forceMr,
     );
@@ -1221,7 +1156,9 @@ export function appState(
       ...(wide?.groups.flatMap((g) => [...g.active, ...g.recent]) ?? []),
     ];
     /** What each Run's record says about it that a row does not carry. */
-    const recorded = new Map((runs ?? []).map((run) => [run.id, markedFrom(run.record)]));
+    const recorded = new Map(
+      (runs ?? []).map((run) => [run.id, markedOf(run, scanned?.registered ?? [])]),
+    );
     /**
      * The Live region and every row's marks, from one pass over the same journals. The
      * region is the Runs view's alone — nothing else draws it, and the journals of every
@@ -1236,12 +1173,11 @@ export function appState(
             stateDir: env.stateDir,
             socketPath: env.socketPath,
             run: where === null ? null : { id: where.id, dir: where.dir },
-            // From the scan this read already made, never a second load per Run: the
-            // record is the only thing the marks need that a row does not carry, and
-            // re-reading every `run.json` per tick is what a shared scan exists to avoid.
+            // From the scan this read already made, never a second read per Run: the
+            // facts are the only thing the marks need that a row does not carry.
             runs: dedupe(onBoard).map((row) => ({
               ...row,
-              ...(recorded.get(row.id) ?? markedFrom(null)),
+              ...(recorded.get(row.id) ?? { held: false, harnesses: [] }),
             })),
             ownership,
             region: focus.view === "runs",
@@ -1250,10 +1186,11 @@ export function appState(
     const tasksBuilt = reuse
       ? reuse.state.tasks
       : yield* buildBoard({
-          stateDir: env.stateDir,
-          socketPath: env.socketPath,
+          env,
           alive: live?.alive ?? [],
           runs,
+          tasks: scanned?.tasks,
+          registered: scanned?.registered,
           quietMs: defaults.boardQuietMs,
           mrStates,
         });
@@ -1288,9 +1225,9 @@ export function appState(
       stopping: [],
       detail: runId
         ? yield* buildRunDetail({
-            stateDir: env.stateDir,
+            env,
             runId,
-            agents: asksAgents,
+            runs: runs ?? (yield* runsOf(env)),
             mr,
             tail: focus.tail,
             pages: focus.reviewPages,
@@ -1310,10 +1247,10 @@ export function appState(
  * Both, because `implement` produces one and `review` is given one — reading only the
  * second left every merge request a Run built without a state, a pipeline or approvals.
  */
-function mrAbout(record: RunRecord | null): string | null {
-  const opened = record?.mr_url ? parseMrUrl(record.mr_url) : null;
+function mrAbout(run: RunFacts | null): string | null {
+  const opened = run?.mr ? parseMrUrl(run.mr) : null;
   if (opened !== null) return mrTarget(opened.project, opened.iid);
-  return record === null ? null : (diffTargetOf(recorded(record))?.value ?? null);
+  return run === null ? null : (diffTargetOf(run.settled)?.value ?? null);
 }
 
 /** One command, run against the Selection it names. The string becomes the footer note. */
@@ -1323,7 +1260,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
   command: Command,
   prompts: FlowPrompts,
 ) {
-  const runOf = (runId: string) => loadRun(session.stateDir, runId);
+  const runOf = (runId: string) =>
+    (session.runsOf ?? listRuns)(env).pipe(
+      Effect.map((runs) => runs.find((run) => run.id === runId) ?? null),
+    );
   switch (command._tag) {
     /**
      * Enter, as one call. Everything is resolved here rather than when the row was
@@ -1346,15 +1286,18 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       if (jump.kind === "agent") return yield* went(session.herdr.agentFocus(jump.agent));
       const run = yield* runOf(jump.runId);
       if (!run) return `${jump.label} has gone`;
-      // A run's tab is the tab of its newest agent; one that has opened none is only
-      // reachable as the workspace it was recorded against.
-      const tabId = run.record.steps
-        .flatMap((step) => step.variants)
-        .map((variant) => variant.tabId)
-        .filter((id): id is string => id !== null)
-        .at(-1);
-      if (tabId) return yield* went(session.herdr.tabFocus(tabId));
-      const workspace = run.record.workspace;
+      // A run is where its newest agent is; one that has started none is only reachable
+      // as the workspace it lives in.
+      const agent = (yield* everyRegistered(env.stateDir)).findLast(
+        (entry) => entry.runId === run.id,
+      );
+      if (agent) return yield* went(session.herdr.agentFocus(agent.agent));
+      const workspace =
+        run.workspace ??
+        (run.task === null
+          ? null
+          : ((yield* listTasks(env.stateDir)).find((task) => task.id === run.task)?.workspace ??
+            null));
       if (!workspace) return `${jump.label} has no tab to jump to`;
       return yield* went(session.herdr.workspaceFocus(workspace));
     }
@@ -1375,10 +1318,8 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       });
       return stopped.ok ? stopped.human : stopped.error.message;
     }
-    case "OpenLog": {
-      const run = yield* runOf(command.runId);
-      return run ? yield* openLog(session, run) : `${command.runId} has gone`;
-    }
+    case "OpenLog":
+      return "a Run keeps no log of its own: its agents' panes are the record";
     case "Answer": {
       const answered = yield* answerNativeRun(env, {
         runId: command.runId,
@@ -1446,7 +1387,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       const opened = yield* shell(
         "glab",
         ["mr", "view", ref.iid, ...repoArgs(ref.project), "--web"],
-        run?.record.cwd ?? env.cwd,
+        run?.cwd ?? env.cwd,
         "say",
       );
       return opened.code === 0
@@ -1575,7 +1516,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
             note: null,
           };
           yield* recordDisposition(run.dir, line);
-          return statusLine(run.record.status, line);
+          return statusLine(run.state, line);
         }),
       );
     }
@@ -1612,7 +1553,7 @@ const launch = Effect.fn("Flows.launch")(function* (
   session: ControlSession,
   env: PluginEnv,
   prompts: FlowPrompts,
-  opts: { workflow: string; inputs: Record<string, string>; note: string; parent?: Run },
+  opts: { workflow: string; inputs: Record<string, string>; note: string; parent?: RunFacts },
 ) {
   // The same launch flow the picker runs, for the Workflow the row named and inline in
   // the tab the row was clicked in. It used to start the Run itself whenever every Input
@@ -1649,8 +1590,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   /** The board's own Tasks, so the text view and the pane draw the same three sections. */
   const tasksOf = Effect.fn("Flows.textBoard.tasks")(function* () {
     return yield* buildBoard({
-      stateDir: env.stateDir,
-      socketPath: env.socketPath,
+      env,
       quietMs: (yield* loadDefaults(env.configDir)).boardQuietMs,
     });
   });
@@ -1661,12 +1601,15 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       stateDir: env.stateDir,
       socketPath: env.socketPath,
       run: null,
-      runs: yield* Effect.forEach(rows, (row) =>
-        Effect.gen(function* () {
-          const run = yield* loadRun(env.stateDir, row.id);
-          return { id: row.id, dir: row.dir, ...markedFrom(run?.record ?? null) };
-        }),
-      ),
+      runs: yield* Effect.gen(function* () {
+        const { runs, registered } = yield* scan(env, session.runsOf);
+        return rows.map((row) => {
+          const run = runs.find((one) => one.id === row.id);
+          return run === undefined
+            ? { id: row.id, dir: row.dir, held: false, harnesses: [] }
+            : markedOf(run, registered);
+        });
+      }),
       ownership: null,
       region: true,
     });
@@ -1675,13 +1618,13 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   // Nothing to loop on: with no keyboard the board is a report, so it is printed once
   // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
   if (!process.stdin.isTTY) {
-    const view = yield* boardOf(session);
+    const view = yield* boardOf(session, yield* scan(env, session.runsOf));
     const once = renderWorkspace(view, why, undefined, yield* steeringOf(view));
     process.stdout.write(`${once}\n`);
     return 0;
   }
   startKeyboard();
-  let view = yield* boardOf(session);
+  let view = yield* boardOf(session, yield* scan(env, session.runsOf));
   const open = (mode: Mode) => openMode(herdr, env, mode);
   let note: string | null = why;
   let drawn = "";
@@ -1717,12 +1660,12 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       } else {
         note = yield* act(session, env, view, key, open);
       }
-      view = yield* boardOf(session);
+      view = yield* boardOf(session, yield* scan(env, session.runsOf));
       read = yield* Clock.currentTimeMillis;
       continue;
     }
     if ((yield* Clock.currentTimeMillis) - read >= REFRESH_MS) {
-      view = yield* boardOf(session);
+      view = yield* boardOf(session, yield* scan(env, session.runsOf));
       read = yield* Clock.currentTimeMillis;
     }
     yield* Effect.sleep(TICK_MS);
@@ -1830,8 +1773,7 @@ const act = Effect.fn("Flows.act")(function* (
   if (key === "l") {
     const row = view.active[0] ?? view.recent[0];
     if (!row) return "no run here to open a log for";
-    const run = yield* loadRun(session.stateDir, row.id);
-    return run ? yield* openLog(session, run) : `${row.title} has gone`;
+    return `${row.title} keeps no log of its own: its agents' panes are the record`;
   }
   if (key === "k") {
     const row = view.active[0];
@@ -1842,16 +1784,6 @@ const act = Effect.fn("Flows.act")(function* (
 });
 
 /**
- * The Run behind an id, or `null` for one whose directory has gone since the row that
- * names it was drawn. This is the whole of "which run did the human mean": a row is a
- * projection of a run directory, and every board that can show a row — this Session's,
- * History, another workspace's group — is showing a directory this reads directly.
- */
-export const loadRun = Effect.fn("Flows.loadRun")(function* (stateDir: string, runId: string) {
-  return yield* new RunStore(stateDir).load(runId).pipe(Effect.catch(() => Effect.succeed(null)));
-});
-
-/**
  * Stops a run. A run used to stop when you closed its pane; the driver has no pane now,
  * so this replaces that. Its agents are left where they are: their panes are the
  * transcript of what happened.
@@ -1859,26 +1791,6 @@ export const loadRun = Effect.fn("Flows.loadRun")(function* (stateDir: string, r
 export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, runId: string) {
   const stopped = yield* controlNativeRun(env, { runId, control: "stop", set: true });
   return stopped.ok ? stopped.human : stopped.error.message;
-});
-
-/**
- * A run's `runner.log` in a pane of its own. The driver has no pane, so this is the
- * only place its detail can be read, and a temporary pane is the cheapest way to read
- * it without leaving the board.
- */
-export const openLog = Effect.fn("Flows.openLog")(function* (session: ControlSession, run: Run) {
-  const path = `${run.dir}/log.txt`;
-  return yield* Effect.gen(function* () {
-    const pane = yield* session.herdr.paneSplit({
-      paneId: session.paneId ?? "",
-      direction: "down",
-      ratio: 0.6,
-    });
-    // The pane is a shell, so the path is quoted: spaces and metacharacters in a
-    // state dir are path characters here, not syntax.
-    yield* session.herdr.paneRun(pane, `less +G ${shellQuote(path)}`);
-    return `opened ${runLabel(run.record)}'s log`;
-  }).pipe(Effect.catch((cause) => Effect.succeed(`${path}: ${reason(cause)}`)));
 });
 
 /** What herdr answers about the session right now: every agent, and every workspace. */
@@ -1924,7 +1836,7 @@ interface Pruned {
  * sweep is forked and the frame goes out with whatever the last one said. One at a
  * time, and the clock starts when it finishes, so a slow sweep does not queue more.
  */
-const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession) {
+const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession, scanned: Scanned) {
   const pruned = session.pruned;
   if (!pruned || pruned.running) return;
   const now = yield* Clock.currentTimeMillis;
@@ -1935,6 +1847,8 @@ const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession) {
       const lines = yield* pruneWorktrees({
         herdr: session.herdr,
         stateDir: session.stateDir,
+        runs: scanned.runs,
+        registered: scanned.registered,
         cwd: session.cwd,
       });
       pruned.lines = lines;
@@ -1963,62 +1877,37 @@ const boardQuietMs = Effect.fn("Flows.boardQuietMs")(function* (configDir: strin
   return quietMs;
 });
 
-/**
- * Every tab the board can see, called what the run in it is doing. The Control Plane is
- * the second half of the glyph reconcile: the Driver keeps its own run's tabs true while
- * it lives, and this keeps them true for as long as a board is open — which is what
- * makes a review handed back to a live implementer, or a finished agent prompted from
- * here, go back to ⚙ without anyone renaming anything.
- *
- * Only tabs herdr still has an agent in, and only where the label changed. A finished
- * run's tab is usually closed, and renaming one tab per finished run on every open of
- * the board would be a burst of herdr calls that told nobody anything.
- */
-const reconcileTabs = Effect.fn("Flows.reconcileTabs")(function* (
-  session: ControlSession,
-  runs: ReadonlyArray<Run>,
-  alive: ReadonlyArray<AgentInfo>,
-  rows: ReadonlyArray<RunRow>,
-) {
-  const live = new Map(alive.map((agent) => [agent.name, agent.status]));
-  const written = (session.tabLabels ??= new Map());
-  // What herdr calls each of these tabs now, so a tab a human renamed keeps their name
-  // rather than being put back by the next board tick.
-  const now = new Map(
-    (yield* session.herdr.tabList().pipe(Effect.catch(() => Effect.succeed([])))).map((tab) => [
-      tab.tabId,
-      tab.label,
-    ]),
-  );
-  for (const row of rows) {
-    const run = runs.find((r) => r.id === row.id);
-    if (!run) continue;
-    const inhabited = new Set(
-      run.record.steps
-        .flatMap((step) => step.variants)
-        .filter((variant) => live.has(variant.agent))
-        .map((variant) => variant.tabId),
-    );
-    const labels = tabLabelsFor(run.record, (agent) => live.get(agent), row.choice !== null);
-    for (const [tabId, label] of labels) {
-      if (!inhabited.has(tabId) || written.get(tabId) === label) continue;
-      if (!collieOwns(now.get(tabId), run.record)) continue;
-      written.set(tabId, label);
-      // A tab that will not rename — closed since the read — is not worth a note, and
-      // not worth trying again on every tick either.
-      yield* Effect.ignore(session.herdr.tabRename(tabId, label));
-    }
-  }
+/** Every Run, every Task and every registered agent, read once for all the Views of a load. */
+interface Scanned {
+  readonly runs: ReadonlyArray<RunFacts>;
+  readonly tasks: ReadonlyArray<TaskRecord>;
+  readonly registered: ReadonlyArray<AgentEntry>;
+}
+
+/** Where a board's Runs are read from. */
+type RunsOf = (
+  env: PluginEnv,
+) => Effect.Effect<
+  ReadonlyArray<RunFacts>,
+  never,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+>;
+
+const scan = Effect.fn("Flows.scan")(function* (env: PluginEnv, runsOf: RunsOf = listRuns) {
+  return {
+    runs: yield* runsOf(env),
+    tasks: yield* listTasks(env.stateDir).pipe(Effect.catch(() => Effect.succeed([]))),
+    registered: yield* everyRegistered(env.stateDir),
+  } satisfies Scanned;
 });
 
 const boardOf = Effect.fn("Flows.boardOf")(function* (
   session: ControlSession,
-  scanned?: ReadonlyArray<Run>,
+  scanned: Scanned,
   seen?: SessionNow,
 ) {
-  yield* sweep(session);
+  yield* sweep(session, scanned);
   const live = seen ?? (yield* liveOf(session));
-  const runs = scanned ?? (yield* new RunStore(session.stateDir).list());
   const view = yield* buildView({
     ...session,
     stateDir: session.stateDir,
@@ -2030,9 +1919,8 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
     worktrees: session.pruned?.lines ?? [],
     pluginRoot: session.pluginRoot,
     quietMs: yield* boardQuietMs(session.configDir),
-    runs,
+    ...scanned,
   });
-  yield* reconcileTabs(session, runs, live.alive, [...view.active, ...view.recent]);
   return view;
 });
 
@@ -2043,28 +1931,18 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
  */
 const wideOf = Effect.fn("Flows.wideOf")(function* (
   session: ControlSession,
-  scanned?: ReadonlyArray<Run>,
+  scanned: Scanned,
   seen?: SessionNow,
 ) {
   const live = seen ?? (yield* liveOf(session));
-  const runs = scanned ?? (yield* new RunStore(session.stateDir).list());
-  const wide = yield* buildWideView({
+  return yield* buildWideView({
     session: session.session,
     stateDir: session.stateDir,
     workspaces: live.workspaces,
     alive: live.alive,
-    runs,
+    ...scanned,
     quietMs: yield* boardQuietMs(session.configDir),
   });
-  // Every tab the wide board can see, not just this workspace's: the reconcile is what
-  // keeps a glyph true, and a board of the session is watching the whole session.
-  yield* reconcileTabs(
-    session,
-    runs,
-    live.alive,
-    wide.groups.flatMap((g) => [...g.active, ...g.recent]),
-  );
-  return wide;
 });
 
 /** A banner above a question: definition load errors, above the list they were skipped from. */

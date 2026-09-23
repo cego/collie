@@ -4,55 +4,35 @@
 // View is first shown, because loading every run's outputs at startup is what would make
 // the tab slow the day it became useful.
 
-import { Clock, Effect, FileSystem, Path, Stream } from "effect";
+import { Effect, FileSystem, Path, Stream } from "effect";
 import { attentionFor, type Attention } from "./attention";
-import type { AsksAgents } from "./herdr";
 import { loadDefaults, readConfig } from "./config";
-import {
-  isStale,
-  layers,
-  loadDefinitions,
-  skillDirs,
-  type LayerName,
-  type Provenance,
-} from "./definitions";
+import { isStale, type Provenance } from "./definitions";
 import { readIntent } from "./intent";
 import { savedModules } from "./discovery";
 import { checkModule, readModule } from "./authoring";
 import type { PluginEnv } from "./env";
-import { displayName, reason, targetLabel } from "./naming";
+import { runTitle } from "./naming";
 import type { MrPanel } from "./mr";
-import { REVIEW_FILE } from "./output";
-import { RunStore, type Run, type RunRecord } from "./run";
-import { diffTargetOf, recorded, workSourceOf } from "./strategies";
+import { REVIEW_FILE, openFindingsIn } from "./output";
+import { findRun, settled, type RunFacts, type RunState } from "./runs";
+import { diffTargetOf, workSourceOf } from "./strategies";
 import { isString } from "./schema";
-import { stepDuration, took } from "./time";
+import { took } from "./time";
 import { claudeTrust } from "./trust";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
-import { NO_OUTCOME, fixableRun, type RunRow } from "./workspace";
+import { NO_OUTCOME, type RunRow } from "./workspace";
 import { latest, readDispositions, type Disposition } from "./disposition";
 import { metricsOf, readMetrics, type Metrics } from "./metrics";
-import { branchListed } from "./worktree";
 
 /** Long enough to answer "what did I do here", short enough to stay one read. */
 const HISTORY = 200;
 
-function title(record: RunRecord): string {
-  const target =
-    record.target_label ??
-    targetLabel(record.workflow, record.slug, diffTargetOf(recorded(record))?.value ?? "");
-  const name = displayName(record.workflow);
-  return target ? `${name} · ${target}` : name;
-}
-
 /** How long the run took, where both ends of it were recorded. */
-function ranFor(record: RunRecord): string | null {
-  if (!record.finished_at) return null;
-  const ms = Date.parse(record.finished_at) - Date.parse(record.created_at);
+function ranFor(run: RunFacts): string | null {
+  if (!run.finished) return null;
+  const ms = Date.parse(run.finished) - Date.parse(run.created);
   if (!Number.isFinite(ms) || ms <= 0) return null;
-  // The same formatting a step's duration gets: History and the detail panel's Steps
-  // list are on screen in one session, and one saying "12m" while the other says
-  // "12 minutes" is one clock, said twice.
   return took(ms);
 }
 
@@ -62,53 +42,44 @@ function ranFor(record: RunRecord): string | null {
  * Session's live work, and this is the record of everything before it.
  */
 export const buildHistory = Effect.fn("Views.buildHistory")(function* (opts: {
-  stateDir: string;
   cwd: string;
-  /** The Runs already read, so a caller drawing two Views scans the dir once. */
-  runs?: ReadonlyArray<Run>;
+  runs: ReadonlyArray<RunFacts>;
 }) {
-  const all = opts.runs ?? (yield* new RunStore(opts.stateDir).list());
-  const runs = all
-    .filter((r) => r.record.cwd === opts.cwd && r.record.status !== "running")
-    .slice(0, HISTORY);
+  const runs = opts.runs.filter((r) => r.project === opts.cwd && settled(r)).slice(0, HISTORY);
 
   const rows: RunRow[] = [];
   for (const run of runs) {
-    const record = run.record;
-    const parts: string[] = [record.status];
-    if (record.outstanding.length > 0) parts.push(`${record.outstanding.length} finding(s) open`);
-    if (record.fixed > 0) parts.push(`${record.fixed} fixed`);
-    const duration = ranFor(record);
+    const parts: string[] = [run.state];
+    const open = yield* openFindingsIn(run.dir);
+    if (open > 0) parts.push(`${open} finding(s) open`);
+    const duration = ranFor(run);
     if (duration) parts.push(duration);
-    if (record.mr_url) parts.push(record.mr_url);
+    if (run.mr) parts.push(run.mr);
     rows.push({
       id: run.id,
       dir: run.dir,
-      glyph: glyphOf(record.status),
-      title: title(record),
+      glyph: glyphOf(run.state),
+      title: runTitle(run),
       detail: parts.join(" · "),
-      at: record.finished_at ? Date.parse(record.finished_at) : 0,
-      target: diffTargetOf(recorded(record))?.value ?? null,
-      // History never nests: a finished run's repository runs are finished too, and
-      // each is a row of its own in the record of everything before now.
+      at: run.finished ? Date.parse(run.finished) : 0,
+      target: diffTargetOf(run.settled)?.value ?? null,
+      // History never nests: each Run is a row of its own in the record of everything
+      // before now.
       children: [],
       // The board's own rule, not a second copy of it: History and the Runs view both
       // decide from this whether to offer the action that starts a fix run.
-      fixable: yield* fixableRun(run),
+      fixable: open > 0,
       choice: null,
       needsYou: false,
-      // History is what happened, not what to do about it: these rows are read, never
-      // acted on, and a next action on one of them would point at a Run that has ended.
+      // History is what happened, not what to do about it.
       ...NO_OUTCOME,
     });
   }
   return rows;
 });
 
-function glyphOf(status: RunRecord["status"]): string {
-  // Imported rather than re-derived would be circular; the board's own glyphFor reads a
-  // whole record, and History has only the outcome.
-  return status === "done" ? "✓" : status === "failed" ? "✗" : "⚠";
+function glyphOf(state: RunState): string {
+  return state === "succeeded" ? "✓" : state === "failed" ? "✗" : "⚠";
 }
 
 /** One Workflow as the Workflows view lists it. */
@@ -277,7 +248,7 @@ export interface OutputPanel {
 const PLAN_DIR = "plan";
 
 /** Which directory holds this run's plan, or `null` when it has none behind it. */
-const planDirOf = Effect.fn("Views.planDirOf")(function* (run: Run) {
+const planDirOf = Effect.fn("Views.planDirOf")(function* (run: RunFacts) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   // Its own copy first: a run that wrote a plan is building from that one.
@@ -285,7 +256,7 @@ const planDirOf = Effect.fn("Views.planDirOf")(function* (run: Run) {
   if (yield* fs.exists(own)) return own;
   // Then the directory it was started from, which is how an `implement` run reaches the
   // spec a `plan` run wrote for it.
-  const work = workSourceOf(recorded(run.record));
+  const work = workSourceOf(run.settled);
   if (work?.kind !== "plan-dir") return null;
   return (yield* fs.exists(work.value)) ? work.value : null;
 });
@@ -296,7 +267,7 @@ const planDirOf = Effect.fn("Views.planDirOf")(function* (run: Run) {
  * The spec is capped and paged exactly like the review: an agent wrote it, so it can be
  * any size at all, and `m` is how the rest of it is read.
  */
-const buildPlan = Effect.fn("Views.buildPlan")(function* (run: Run, cap: number) {
+const buildPlan = Effect.fn("Views.buildPlan")(function* (run: RunFacts, cap: number) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const dir = yield* planDirOf(run);
@@ -325,11 +296,11 @@ const buildPlan = Effect.fn("Views.buildPlan")(function* (run: Run, cap: number)
  * that was cut short.
  */
 const plannedFor = Effect.fn("Views.plannedFor")(function* (
-  run: Run,
+  run: RunFacts,
   cap: number,
   plans: Map<string, PlanPanel | null> | undefined,
 ) {
-  if (!plans || run.record.status === "running") return yield* buildPlan(run, cap);
+  if (!plans || !settled(run)) return yield* buildPlan(run, cap);
   const key = `${run.id}:${cap}`;
   if (plans.has(key)) return plans.get(key) ?? null;
   const plan = yield* buildPlan(run, cap);
@@ -413,10 +384,10 @@ function dispositionOf(line: Disposition | null): string | null {
 }
 
 export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts: {
-  stateDir: string;
+  env: PluginEnv;
   runId: string;
-  /** Asked whether the agents a stopped Run still records are actually there. */
-  agents: AsksAgents;
+  /** The Runs this read already has, so the selected one is not asked for twice. */
+  runs?: ReadonlyArray<RunFacts>;
   mr: MrPanel | null;
   /** Whether the panel's log tail is showing; the log is only read while it is. */
   tail?: boolean;
@@ -425,70 +396,35 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
   /**
    * Where a finished Run's plan is kept between reads, owned by the caller the way the
    * merge request is. A Run's plan is fixed input once it has stopped, and the panel is
-   * re-produced on every board tick — so re-reading SPEC.md, the issues directory and
-   * every ticket every three seconds was work for an answer that cannot change. A Run
-   * still running is never cached: it may be writing that plan as we read it.
+   * re-produced on every board tick. A Run still going is never cached: it may be
+   * writing that plan as we read it.
    */
   plans?: Map<string, PlanPanel | null>;
 }) {
   const path = yield* Path.Path;
-  const now = yield* Clock.currentTimeMillis;
-  const run = yield* new RunStore(opts.stateDir)
-    .load(opts.runId)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
-  // Gone, half-written, or never there: the panel shows the row's own facts instead.
+  const run =
+    opts.runs?.find((one) => one.id === opts.runId) ?? (yield* findRun(opts.env, opts.runId));
+  // Gone, or never there: the panel shows the row's own facts instead.
   if (!run) return null;
-  const record = run.record;
-  /**
-   * Where an unfinished step's clock stops. A run killed by a SIGTERM, or one whose
-   * driver died, records its own end without ever finishing the step it was on — and a
-   * step with no end of its own is otherwise read as still running, so reopening a run
-   * that died last week showed its last step as having taken a week.
-   */
-  const stoppedAt = record.finished_at ? Date.parse(record.finished_at) : now;
 
   const cap = REVIEW_CAP * Math.max(1, opts.pages ?? 1);
   const review =
     (yield* capped(path.join(run.dir, REVIEW_FILE), cap)) ??
     ({ _tag: "None", reason: `this run wrote no ${REVIEW_FILE}` } satisfies Panel);
 
-  const outputs: OutputPanel[] = [];
-  for (const step of record.steps) {
-    for (const variant of step.variants) {
-      if (!variant.output) continue;
-      const text = yield* capped(path.join(run.dir, variant.output), OUTPUT_CAP);
-      outputs.push({
-        step: step.id,
-        where: variant.output,
-        // An Output the agent never wrote, or wrote as prose, is what the variant's own
-        // error already says; the panel repeats it rather than deciding again.
-        state: text === null ? "missing" : variant.error ? "unreadable" : "recorded",
-        text: text === null ? (variant.error ?? "nothing was written here") : text.text.trim(),
-      });
-    }
-  }
-
-  const attention = yield* attentionFor(run, opts.agents);
+  const attention = yield* attentionFor(run);
   return {
     id: run.id,
     dir: run.dir,
-    title: title(record),
-    status: record.status,
-    inputs: Object.entries(record.inputs).map(([name, value]) => ({
+    title: runTitle(run),
+    status: run.state,
+    inputs: Object.entries(run.settled.inputs).map(([name, value]) => ({
       name,
       value,
-      source: record.input_sources[name] ?? "",
+      source: run.settled.sources?.[name] ?? "",
     })),
-    steps: record.steps.map((step) => ({
-      id: step.id,
-      status: step.status,
-      note: step.note ?? "",
-      took: stepDuration(step, stoppedAt),
-      agents: step.variants.map((v) => v.agent),
-    })),
-    handoffs: record.handoffs.map(
-      (h) => `${h.direction} ${h.role} (${h.agent}) · run ${h.run}${h.note ? ` · ${h.note}` : ""}`,
-    ),
+    steps: [],
+    handoffs: [],
     intent: yield* readIntent(run.dir).pipe(
       Effect.map((held) =>
         held === null
@@ -499,23 +435,23 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
     ),
     review,
     plan: yield* plannedFor(run, cap, opts.plans),
-    outputs,
+    outputs: [],
     attention,
     outcome: {
-      kind: record.outcome,
-      gaps: record.evidence_gaps,
-      obstacle: record.obstacle,
+      kind: run.outcome === "unspecified" ? null : run.outcome,
+      gaps: [],
+      obstacle: run.state === "succeeded" ? null : run.note,
       // The first of the actions `attention` already worked out, rather than a second
       // opinion about what to do — one classification, however it is asked for.
       next: attention.actions[0] ?? null,
       delivered: dispositionOf(latest(yield* readDispositions(run.dir))),
-      metrics: metricsOf(yield* readMetrics(run.dir), record.created_at),
+      metrics: metricsOf(yield* readMetrics(run.dir), run.created),
     },
     tail: opts.tail
       ? ((yield* tailed(path.join(run.dir, "log.txt"), TAIL_CAP)) ??
         ({ _tag: "None", reason: "this run wrote no log" } satisfies Panel))
       : null,
-    finishedAt: record.finished_at ? Date.parse(record.finished_at) : 0,
+    finishedAt: run.finished ? Date.parse(run.finished) : 0,
     mr: opts.mr,
   } satisfies RunDetail;
 });

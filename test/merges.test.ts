@@ -4,7 +4,8 @@ import { buildBoard } from "../src/board";
 import { readDispositions } from "../src/disposition";
 import { readMrStates, settleMerges } from "../src/merges";
 import type { Runner } from "../src/mr";
-import { RunStore } from "../src/run";
+import { readEnv } from "../src/env";
+import { madeRun } from "./support/records";
 import { task } from "./support/task";
 import { runEffect } from "./support/effect";
 
@@ -27,29 +28,25 @@ const MR = "https://gitlab.cego.dk/mk/collie/-/merge_requests/65";
 const seeded = Effect.fn("merges.seeded")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-merges-" });
-  const run = yield* new RunStore(stateDir).create({
-    workflow: "implement",
-    cwd: "/project",
-    session: null,
-    workspace: "w1",
-    workspaceLabel: "collie | Control plane",
-    inputs: {},
-    inputSources: {},
-    stepIds: ["build"],
-    maxIterations: 4,
-    namedAfter: "control-plane",
+  const env = readEnv({ HERDR_PLUGIN_STATE_DIR: stateDir, COLLIE_CWD: "/project" });
+  const run = yield* madeRun(stateDir, {
+    state: "succeeded",
+    mr: MR,
+    created: "2026-09-17T09:00:00Z",
   });
-  run.record.status = "done";
-  run.record.mr_url = MR;
-  yield* run.save();
-  return { stateDir, run };
+  return {
+    stateDir,
+    run,
+    board: (over: Omit<Parameters<typeof buildBoard>[0], "env" | "runs"> = {}) =>
+      buildBoard({ env, runs: [run], ...over }),
+  };
 });
 
 test("a merge GitLab reports lands the work: a disposition by gitlab, and the card moves", () =>
   runEffect(
     Effect.gen(function* () {
-      const { stateDir, run } = yield* seeded();
-      const before = yield* buildBoard({ stateDir, mrStates: new Map() });
+      const { stateDir, run, board: boardOf } = yield* seeded();
+      const before = yield* boardOf({ mrStates: new Map() });
       expect(before[0]!.sentence).toBe("Finished; mk/collie!65 is open.");
 
       const states = new Map();
@@ -69,7 +66,7 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
       ]);
       expect(yield* readMrStates(stateDir)).toEqual(new Map([["mk/collie!65", "merged"]]));
       // Nothing passed in: the CLI's board reads what the pane's watch wrote.
-      const after = yield* buildBoard({ stateDir, now: Date.parse("2026-09-17T11:00:00Z") });
+      const after = yield* boardOf({ now: Date.parse("2026-09-17T11:00:00Z") });
       expect(after[0]!.landed).toBe(true);
       expect(after[0]!.sentence).toBe("Merged as mk/collie!65.");
     }),
@@ -78,8 +75,8 @@ test("a merge GitLab reports lands the work: a disposition by gitlab, and the ca
 test("a closed merge request is news, not a verdict, and a fresh answer is not asked for again", () =>
   runEffect(
     Effect.gen(function* () {
-      const { stateDir, run } = yield* seeded();
-      const views = yield* buildBoard({ stateDir, mrStates: new Map() });
+      const { stateDir, run, board: boardOf } = yield* seeded();
+      const views = yield* boardOf({ mrStates: new Map() });
       const log: string[] = [];
       const checked = new Map<string, number>();
       const states = new Map();
@@ -94,7 +91,7 @@ test("a closed merge request is news, not a verdict, and a fresh answer is not a
         states,
       });
       expect(yield* readDispositions(run.dir)).toEqual([]);
-      const again = yield* buildBoard({ stateDir, mrStates: states, now });
+      const again = yield* boardOf({ mrStates: states, now });
       expect(again[0]!.sentence).toBe("Merge request mk/collie!65 closed without merging.");
       expect(again[0]!.landed).toBe(false);
 
@@ -156,13 +153,13 @@ function deployed(live: { stage: string; prod: string | null }, log: string[] = 
 test("a merged card follows its deploy jobs: on stage, then in production, then asked no more", () =>
   runEffect(
     Effect.gen(function* () {
-      const { stateDir, run } = yield* seeded();
+      const { stateDir, run, board: boardOf } = yield* seeded();
       const states = new Map();
       const checked = new Map<string, number>();
       let now = Date.parse("2026-09-17T10:00:00Z");
       const settle = (gitlab: Runner, log: string[] = []) =>
         Effect.gen(function* () {
-          const current = yield* buildBoard({ stateDir, mrStates: states, now });
+          const current = yield* boardOf({ mrStates: states, now });
           yield* settleMerges({
             stateDir,
             cwd: "/project",
@@ -179,7 +176,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
       yield* settle(deployed({ stage: "child", prod: "0000000" }));
       expect(states.get("mk/collie!65")).toBe("on-stage");
       expect((yield* readDispositions(run.dir)).map((line) => line.kind)).toEqual(["merged"]);
-      let board = yield* buildBoard({ stateDir, now });
+      let board = yield* boardOf({ now });
       expect(board[0]!.landed).toBe(true);
       expect(board[0]!.sentence).toBe("Merged as mk/collie!65. On stage.");
 
@@ -187,7 +184,7 @@ test("a merged card follows its deploy jobs: on stage, then in production, then 
       now += 6 * 60_000;
       yield* settle(deployed({ stage: "child", prod: "35ae2cea5e5848602729dbc0e8a87ed0d9049c46" }));
       expect(states.get("mk/collie!65")).toBe("in-prod");
-      board = yield* buildBoard({ stateDir, now });
+      board = yield* boardOf({ now });
       expect(board[0]!.sentence).toBe("Merged as mk/collie!65. In production.");
       // One merged disposition, not one per round.
       expect((yield* readDispositions(run.dir)).map((line) => line.kind)).toEqual(["merged"]);

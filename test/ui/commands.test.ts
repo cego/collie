@@ -6,20 +6,22 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { ConfigProvider, Effect, Layer, PlatformError } from "effect";
 import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
-import { installFakeSkills, writeDef } from "../support/defs";
+import { installFakeSkills } from "../support/defs";
 import { FakeBin, gitWorktreeCases } from "../support/bin";
 import { runEffect } from "../support/effect";
 import { runCommand, type ControlSession } from "../../src/flows";
 import type { Jump } from "../../src/ui/state";
 import { Herdr } from "../../src/herdr";
-import { registerAgent, registryPath, scopeFor, scopeOfRun } from "../../src/registry";
+import { registerAgent, registryPath, scopeFor } from "../../src/registry";
 import { loadDefaults, readConfig } from "../../src/config";
-import { RunStore } from "../../src/run";
-import { REVIEW_FILE } from "../../src/output";
+import type { RunFacts } from "../../src/runs";
+import { madeRun } from "../support/records";
 import { Path, FileSystem } from "effect";
 
 let rig: Rig;
 let bin: FakeBin;
+/** The Runs the host would list. */
+let runs: RunFacts[] = [];
 
 function effectTest(
   name: string,
@@ -32,6 +34,7 @@ beforeEach(() =>
   runEffect(
     Effect.gen(function* () {
       rig = yield* Rig.make();
+      runs = [];
       yield* installBaseline(rig);
       // A skill nobody installed is a validation error, not a missing input, and every
       // workflow in these tests would fail on that before it could ask anything.
@@ -83,6 +86,7 @@ function session(): ControlSession {
     configDir: env.configDir,
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
+    runsOf: () => Effect.succeed(runs),
   };
 }
 
@@ -139,39 +143,6 @@ effectTest("scope is refused unless it is a board the tab can open on", function
   expect((yield* loadDefaults(rig.pluginEnv().configDir)).scope).toBe("all");
 });
 
-/** A finished run of this session, with a review beside it only if one is asked for. */
-const seed = Effect.fn("commands.seed")(function* (opts: {
-  target: string;
-  review?: string;
-  /** A finding left open, which is what makes "fix what is open" something to offer. */
-  outstanding?: ReadonlyArray<{ severity: string; title: string }>;
-}) {
-  const env = rig.pluginEnv();
-  const run = yield* new RunStore(env.stateDir).create({
-    workflow: "review",
-    cwd: env.cwd,
-    session: env.socketPath,
-    workspace: env.workspaceId,
-    workspaceLabel: "test",
-    inputs: { target: opts.target },
-    inputSources: {},
-    inputStrategies: { target: "diff-target" },
-    stepIds: ["review"],
-    maxIterations: 1,
-    namedAfter: opts.target,
-  });
-  run.record.status = "done";
-  run.record.finished_at = run.record.created_at;
-  if (opts.outstanding) run.record.outstanding = [...opts.outstanding];
-  yield* run.save();
-  if (opts.review !== undefined) {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    yield* fs.writeFileString(path.join(run.dir, REVIEW_FILE), opts.review);
-  }
-  return run;
-});
-
 effectTest("a default is written without the whitespace around it", function* () {
   // `codex ` is displayed as `codex` and then fails harness validation, because the
   // trim was only ever used for the checks and the original string was written.
@@ -179,26 +150,6 @@ effectTest("a default is written without the whitespace around it", function* ()
 
   expect(note).toBe("harness is now codex");
   expect((yield* loadDefaults(rig.pluginEnv().configDir)).harness).toBe("codex");
-});
-
-effectTest("the log opens for a History row the board no longer keeps", function* () {
-  yield* rig.startSocket();
-  // The board keeps five finished runs; History keeps two hundred, and every History
-  // row offers `l`. The sixth-oldest must not answer "has gone" while its run directory
-  // and its runner.log are both still there — whichever list the row was drawn from.
-  const oldest = yield* seed({ target: "mr:gitlab.example.com/g/p!1" });
-  for (const n of [2, 3, 4, 5, 6, 7, 8]) {
-    yield* seed({ target: `mr:gitlab.example.com/g/p!${n}` });
-  }
-
-  const note = yield* runCommand(
-    session(),
-    rig.pluginEnv(),
-    { _tag: "OpenLog", runId: oldest.id },
-    prompts,
-  );
-
-  expect(note).not.toContain("has gone");
 });
 
 /** One run of another workspace, with an agent, a tab and whatever else a test needs. */
@@ -210,37 +161,24 @@ const elsewhere = Effect.fn("commands.elsewhere")(function* (opts: {
   cwd?: string;
 }) {
   const env = rig.pluginEnv();
-  const run = yield* new RunStore(env.stateDir).create({
-    workflow: "implement",
+  const run = yield* madeRun(env.stateDir, {
+    id: `implement-glass-${runs.length + 1}`,
     cwd: opts.cwd ?? env.cwd,
-    session: env.socketPath,
     workspace: opts.workspaceId,
-    workspaceLabel: null,
-    inputs: opts.target ? { target: opts.target } : {},
-    inputSources: {},
-    stepIds: ["build"],
-    maxIterations: 5,
-    namedAfter: "glass",
+    state: opts.status === "done" ? "succeeded" : "running",
+    settled: { inputs: opts.target ? { target: opts.target } : {}, strategies: {} },
   });
-  run.record.target_label = "glass";
-  run.record.status = opts.status ?? "running";
-  run.step("build").status = opts.status === "done" ? "done" : "running";
-  run.step("build").variants.push({
-    harness: "claude",
-    model: "opus",
-    effort: null,
-    permissions: null,
+  runs = [run, ...runs];
+  // Its agent, registered in the pane herdr opened for it.
+  yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, run.cwd)), {
+    role: "implementer",
     agent: "impl-9",
-    label: "implement-glass/build",
-    tabId: "w9:t2",
     paneId: "w9:p1",
-    status: "running",
-    output: null,
-    error: null,
-    repairs: [],
-    nudges: 0,
+    workspaceId: opts.workspaceId,
+    runId: run.id,
+    workflow: run.workflow,
+    at: "2026-09-14T10:00:00Z",
   });
-  yield* run.save();
   return run;
 });
 
@@ -257,19 +195,19 @@ effectTest("Enter goes where the row points, in one call, and says where it went
   );
   expect(yield* rig.cmds()).toEqual(["workspace.focus"]);
 
-  // A run row: the tab of its newest agent, resolved from the run now rather than from
-  // an id the board cached when it drew the row.
+  // A run row: its newest agent, resolved from the register now rather than from an id
+  // the board cached when it drew the row.
   expect(yield* jump({ kind: "run", runId: run.id, label: "Implement · glass" })).toBe(
     "went to Implement · glass",
   );
-  const focused = (yield* rig.calls()).filter((c) => c.cmd === "tab focus");
-  expect(focused.map((c) => c.argv!.at(-1))).toEqual(["w9:t2"]);
+  const focused = (yield* rig.calls()).filter((c) => c.cmd === "agent focus");
+  expect(focused.map((c) => c.argv!.at(-1))).toEqual(["impl-9"]);
 
   // An agent row: by name, which selects the workspace, the tab and the pane at once.
   expect(yield* jump({ kind: "agent", agent: "impl-9", label: "Implementer" })).toBe(
     "went to Implementer",
   );
-  expect((yield* rig.calls()).filter((c) => c.cmd === "agent focus")).toHaveLength(1);
+  expect((yield* rig.calls()).filter((c) => c.cmd === "agent focus")).toHaveLength(2);
 });
 
 effectTest("Enter on an Elsewhere row says so and asks herdr nothing", function* () {

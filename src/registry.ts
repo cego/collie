@@ -119,6 +119,18 @@ export const readRegistry = Effect.fn("readRegistry")(function* (file: string) {
   );
 });
 
+/** Every agent registered in this state directory, whichever Session registered it. */
+export const everyRegistered = Effect.fn("everyRegistered")(function* (stateDir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const dir = path.join(stateDir, "agents");
+  const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
+  const entries: AgentEntry[] = [];
+  for (const name of names.filter((one) => one.endsWith(".json")))
+    entries.push(...(yield* readRegistry(path.join(dir, name))));
+  return entries;
+});
+
 const write = Effect.fn("writeRegistry")(function* (
   file: string,
   entries: ReadonlyArray<AgentEntry>,

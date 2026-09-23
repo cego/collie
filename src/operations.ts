@@ -4,10 +4,9 @@
 // prompting, rendering, and turning a result into text or JSON.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Config, Crypto, Effect, FileSystem, Path, Schema } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { atClock, nowIso, untilFrom } from "./time";
-import { diffTargetOf, recorded } from "./strategies";
+import { Crypto, Effect, FileSystem, Path, Schema } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { nowIso } from "./time";
 import { attentionFor } from "./attention";
 import type { PluginEnv } from "./env";
 import {
@@ -18,52 +17,17 @@ import {
   type TabInfo,
   type WorkspaceInfo,
 } from "./herdr";
-import { loadDefaults } from "./config";
-import { DefinitionError, layers, loadDefinitions, skillDirs } from "./definitions";
 import { carryOutProposal } from "./run-actions";
 // Carrying an action out belongs to `run-actions`, which asks the host; it is re-exported
 // here so a front door still has one import for "what a human asked Collie to do".
 export { carryOutAsked, carryOutProposal, registerRunExecutors } from "./run-actions";
-import { approvedFrom } from "./verify-spec";
-import { REQUESTABLE, isOutcome } from "./outcome";
-import { latest, readDispositions } from "./disposition";
-import { fixableRun } from "./workspace";
-import { SELF, declaredIn, inputsFor, offersFrom, type OfferFacts } from "./offers";
-import { ownerOf } from "./history";
-import { postNote, shell, type Runner } from "./mr";
-import {
-  classifyGivenTarget,
-  classifyWorkSource,
-  inferInputs,
-  inputSources,
-  inputStrategies,
-  inputValues,
-  settle,
-  type Resolution,
-} from "./inputs";
-import { readRegistry, registryPath, scopeFor, scopeKey, scopeOfRun } from "./registry";
+import { shell, type Runner } from "./mr";
+import type { Resolution } from "./inputs";
+import { everyRegistered, type AgentEntry } from "./registry";
+import { listRuns, type RunFacts } from "./runs";
 import type { TaskChoice, TaskRecord } from "./task";
 import { nameTask, type LiveNames, type NamingDeps } from "./tasknames";
-import {
-  amend as amendIntent,
-  constraintId,
-  propagate,
-  defaultsPath,
-  describeDefaults,
-  EMPTY_DEFAULTS,
-  fromWorkSource,
-  parseConstraint,
-  readDefaults,
-  writeDefaults,
-  readIntent,
-  seedIntent,
-  writeIntent,
-  writeIntentHeld,
-  type Authority,
-  type Constraint,
-  type Intent,
-} from "./intent";
-import { currentPid, withLock } from "./lock";
+import { readIntent, type Authority, type Intent } from "./intent";
 import {
   appendLine,
   budgetPath,
@@ -85,41 +49,17 @@ import {
 } from "./evaluator";
 import {
   actorName,
-  admit,
-  confirm as confirmProposal,
   decline,
   proposalsPath,
-  read as readProposals,
   record as recordProposal,
   type Recorded,
-  stepSettled,
-  stepStarted,
   type Actor,
-  type ProposalRecord,
 } from "./proposals";
 import { openReports, readDrift } from "./drift";
 import { readCards } from "./cards";
 import { describeAction } from "./lines";
-import { fingerprint } from "./verify";
-import { entryFromLive, interrupt, MAX_DELIVERY_BYTES, transaction } from "./dispatcher";
-import { executorFor, registerExecutor, registeredKinds, type ExecutionResult } from "./executors";
-import type { CollieError } from "./envelope";
-import { REVIEW_FILE } from "./output";
-import {
-  fanoutRepos,
-  fanoutUnfinished,
-  runningAgents,
-  Run,
-  RunStore,
-  withRunLock,
-  type RunRecord,
-  type WorktreeRecord,
-} from "./run";
+import { MAX_DELIVERY_BYTES } from "./dispatcher";
 import { taskWorkspaceLabel } from "./naming";
-import { branchListed, checkoutFor, pruneWorktrees, runNames } from "./worktree";
-import { closable, isHomeDirectory } from "./home";
-import { probeHelle, probeLinearMcp } from "./optional";
-import { forkResolvedDefinition } from "./fork";
 import { YamlMapSchema, type YamlMap } from "./yaml";
 
 const ErrorCode = Schema.Literals([
@@ -184,35 +124,6 @@ const InboxAnswerCommand = Schema.Struct({
 const InboxAnswerCommandJson = Schema.fromJsonString(InboxAnswerCommand);
 
 const DriverCommandJson = Schema.fromJsonString(Schema.NonEmptyArray(Schema.String));
-
-/**
- * The Run's state as the spec names it, which the record alone does not spell: the
- * stop marker and a pending Choice both outrank what the record last recorded.
- *
- * The engine's `blocked` — a Step that needs the human, or max_iterations reached
- * with findings — is the spec's `failed`, "execution ended unsuccessfully with
- * unfinished work". It is terminal, so reporting it as `running` left `run wait`
- * watching a directory nothing would write again. Which kind of unsuccessful it was
- * is in the Run's own `outstanding` and Step notes, which `run show` returns whole.
- */
-export const runStatus = Effect.fn("operations.runStatus")(function* (run: Run) {
-  if (run.record.awaiting) return "waiting";
-  if (run.record.status === "done") return "succeeded";
-  return run.record.status === "running" ? "running" : "failed";
-});
-
-/**
- * Whether that state is the end of the Run. `waiting` is not: a Run stopped at a
- * question is still going, and a `run wait` that returned on it would be reporting a
- * Run as over while its Driver holds the menu open.
- *
- * Here beside `runStatus` because it is the same fact: the CLI's wait, the engine's
- * wait on a Repo run and a stop's look at a parent's children each used to spell the
- * three names out again, which is three places to miss a fourth.
- */
-export function runSettled(status: string): boolean {
-  return status === "succeeded" || status === "failed" || status === "stopped";
-}
 
 /** The live workspace for this environment, shared by both adapters. */
 export const resolveWorkspace = Effect.fn("operations.resolveWorkspace")(function* (
@@ -622,11 +533,11 @@ export const request = Effect.fn("operations.request")(function* (
 ) {
   if (options.actions.length === 0)
     return err("invalid_input", "A request with no actions changes nothing; say what to do.");
-  const store = new RunStore(env.stateDir);
   const named = [...new Set(options.actions.flatMap((a) => ("run" in a ? [a.run] : [])))];
-  const runs = new Map<string, Run>();
+  const known = yield* listRuns(env);
+  const runs = new Map<string, RunFacts>();
   for (const id of named) {
-    const run = yield* store.load(id).pipe(Effect.catch(() => Effect.succeed(null)));
+    const run = known.find((one) => one.id === id) ?? null;
     // Refused, not retargeted. A Run nobody has is a request about nothing, and guessing
     // which one was meant is how an action lands on somebody else's work.
     if (run === null) return err("run_not_found", `No Run "${id}".`, { run: id });
@@ -643,6 +554,7 @@ export const request = Effect.fn("operations.request")(function* (
     if (intent !== null) intents.set(id, { version: intent.version, authority: intent.authority });
   }
 
+  const registered = yield* everyRegistered(env.stateDir);
   const checked = validate(
     {
       interpretation: options.interpretation,
@@ -652,7 +564,7 @@ export const request = Effect.fn("operations.request")(function* (
     },
     {
       runs: new Set(runs.keys()),
-      agents: new Map([...runs].map(([id, run]) => [id, new Set(runningAgents(run.record))])),
+      agents: new Map([...runs.keys()].map((id) => [id, agentsOf(registered, id)])),
       intents,
       origin: "steer",
       maxDeliveryBytes: MAX_DELIVERY_BYTES,
@@ -705,7 +617,10 @@ function revisionOf(revision: { readonly head_sha: string; readonly fingerprint:
  * named or no card has that id. Binding it is what lets a confirmation say `revision_moved`
  * instead of applying a decision about one tree to a different one (SPEC §7.6).
  */
-const cardRevision = Effect.fn("operations.cardRevision")(function* (run: Run, id: string | null) {
+const cardRevision = Effect.fn("operations.cardRevision")(function* (
+  run: RunFacts,
+  id: string | null,
+) {
   if (id === null) return null;
   const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
   const card = cards.find((entry) => entry.id === id);
@@ -742,12 +657,9 @@ export const steer = Effect.fn("operations.steer")(function* (
     readonly asked?: "human" | "event";
   },
 ) {
-  const store = new RunStore(env.stateDir);
   const target = options.target ?? null;
-  const run =
-    target === null
-      ? null
-      : yield* store.load(target).pipe(Effect.catch(() => Effect.succeed(null)));
+  const known = yield* listRuns(env);
+  const run = target === null ? null : (known.find((one) => one.id === target) ?? null);
   // A steer is about one Run. A question about the flock is native chat's, which reads
   // the Herd rather than having a model asked one here — and a Run is never guessed at
   // from the words, so there is nothing to fall back to.
@@ -758,7 +670,7 @@ export const steer = Effect.fn("operations.steer")(function* (
   if (run === null) return err("run_not_found", `No Run "${target}".`, { run: target });
 
   const journal = yield* conversationPath(env.stateDir, deps.herdKey);
-  const roots = (yield* store.list()).map((r) => r.dir);
+  const roots = known.map((r) => r.dir);
   const said: NewTurn = { role: options.asked ?? "human", text: options.text };
   yield* append(journal, { ...said, target }, roots);
 
@@ -799,7 +711,7 @@ export const steer = Effect.fn("operations.steer")(function* (
 
   const checked = validate(proposed, {
     runs: new Set([run.id]),
-    agents: new Map([[run.id, new Set(runningAgents(run.record))]]),
+    agents: new Map([[run.id, agentsOf(yield* everyRegistered(env.stateDir), run.id)]]),
     intents: new Map(
       intent === null ? [] : [[run.id, { version: intent.version, authority: intent.authority }]],
     ),
@@ -850,7 +762,6 @@ export const steer = Effect.fn("operations.steer")(function* (
       requestId: options.requestId,
     });
 
-  const driver = yield* ownerOf(run.dir);
   return ok(
     {
       proposal: {
@@ -859,20 +770,12 @@ export const steer = Effect.fn("operations.steer")(function* (
         expires_at: recorded.expires_at,
         actions: checked.map((entry) => ({ ...entry.action, status: entry.state })),
       },
-      // Named only when it matters: a Run nobody is driving takes a delivery into its
-      // inbox rather than to an agent, and the human should know that before confirming.
-      no_driver: driver !== "live",
       requestId: options.requestId,
     },
     [
       previewOf(proposed.interpretation, checked),
       `collie confirm ${recorded.id} --hash ${recorded.content_hash}`,
-      driver === "live"
-        ? ""
-        : "No Driver owns this Run: any delivery will be queued in its inbox on confirm.",
-    ]
-      .filter((line) => line !== "")
-      .join("\n"),
+    ].join("\n"),
   );
 });
 
@@ -942,25 +845,20 @@ export const evaluationDeps = Effect.fn("operations.evaluationDeps")(function* (
  * same as "the human asked for it". That is what `allowedNow: []` below is.
  */
 export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: PluginEnv) {
-  const runs = yield* new RunStore(env.stateDir).list();
+  const runs = yield* listRuns(env);
+  const registered = yield* everyRegistered(env.stateDir);
   const listed = runs.slice(0, HERD_LINES);
-  const lines = yield* Effect.forEach(listed, (item) =>
-    Effect.gen(function* () {
-      const status = yield* runStatus(item);
-      const record = item.record;
-      const said = [
-        `- run ${item.id}: ${record.workflow}, ${status}`,
-        `agents ${runningAgents(record).join(", ") || "none"}`,
-        `outcome ${record.outcome ?? "unspecified"}`,
-      ];
-      if (record.evidence_gaps.length > 0)
-        said.push(`not proved: ${record.evidence_gaps.join("; ")}`);
-      if (record.obstacle !== null) said.push(`in the way: ${record.obstacle}`);
-      const attention = yield* attentionFor(item, new Herdr(env));
-      if (attention.category !== "none") said.push(attention.explanation);
-      return said.join(", ");
-    }),
-  );
+  const lines: string[] = [];
+  for (const item of listed) {
+    const said = [
+      `- run ${item.id}: ${item.workflow}, ${item.state}`,
+      `agents ${[...agentsOf(registered, item.id)].join(", ") || "none"}`,
+      `outcome ${item.outcome}`,
+    ];
+    const attention = yield* attentionFor(item);
+    if (attention.category !== "none") said.push(attention.explanation);
+    lines.push(said.join(", "));
+  }
   // An empty answer is not an answer: a Herd with no Runs says so, rather than handing
   // the model nothing to read.
   if (lines.length === 0) return "- (no Runs in this Herd)";
@@ -972,30 +870,29 @@ export const herdFacts = Effect.fn("operations.herdFacts")(function* (env: Plugi
   ].join("\n");
 });
 
+/** The agents registered for one Run, by name. */
+const agentsOf = (registered: ReadonlyArray<AgentEntry>, run: string): Set<string> =>
+  new Set(registered.filter((entry) => entry.runId === run).map((entry) => entry.agent));
+
 /**
  * One Run in the detail a next action turns on: what it is for, what bounds it, what it
- * has got through, what it handed over, and where it has drifted. The same read the
- * evidence pack embeds, so a detail asked for in chat is the detail a proposal was made
- * from.
+ * has produced and where it has drifted. The same read the evidence pack embeds, so a
+ * detail asked for in chat is the detail a proposal was made from.
  */
-export const runFacts = Effect.fn("operations.runFacts")(function* (run: Run, env: PluginEnv) {
+export const runFacts = Effect.fn("operations.runFacts")(function* (run: RunFacts) {
   const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
-  const attention = yield* attentionFor(run, new Herdr(env));
+  const attention = yield* attentionFor(run);
   const lines = [
-    `Status: ${yield* runStatus(run)}; Driver: ${attention.driver}`,
-    `Directory: ${run.record.cwd}`,
-    `Workspace: ${run.record.workspace ?? "none"}`,
-    `Goal: ${intent?.goal ?? run.record.inputs.goal ?? "(none recorded)"}`,
+    `Status: ${run.state}`,
+    `Directory: ${run.cwd}`,
+    `Workspace: ${run.workspace ?? "its Task's"}`,
+    `Goal: ${intent?.goal ?? run.settled.inputs.goal ?? "(none recorded)"}`,
     `Intent version: ${intent?.version ?? "(none)"}`,
     attention.explanation,
     `Actions: ${attention.actions.join(", ") || "none"}`,
     ...(intent?.constraints ?? []).map(
       (c) => `- constraint ${c.id} (${c.severity}, ${c.source}): ${c.text}`,
     ),
-    "",
-    "### Steps",
-    "",
-    ...run.record.steps.map((step) => `- ${step.id}: ${step.status}`),
   ];
   const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
   for (const entry of cards.slice(-CARDS_IN_CONTEXT)) {
@@ -1025,7 +922,7 @@ export const runFacts = Effect.fn("operations.runFacts")(function* (run: Run, en
 const evidencePack = Effect.fn("operations.evidencePack")(function* (
   env: PluginEnv,
   question: string,
-  run: Run | null,
+  run: RunFacts | null,
   card: string | null,
   journal: string,
 ) {
@@ -1055,7 +952,7 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
     );
   }
   if (run !== null) {
-    lines.push("", `## Run ${run.id}`, "", yield* runFacts(run, env));
+    lines.push("", `## Run ${run.id}`, "", yield* runFacts(run));
     if (card !== null) {
       const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
       const bound = cards.find((entry) => entry.id === card);
@@ -1079,19 +976,3 @@ const evidencePack = Effect.fn("operations.evidencePack")(function* (
   }
   return lines.join("\n");
 });
-
-/**
- * Whether this Run is a parent whose fan-out is not over. Such a Run can record
- * `succeeded` while a repository run of its own is still going, so the guard that
- * refuses to stop or resume a succeeded Run does not apply to it — but only while that
- * is true. Once every repository has ended, a built plan is a succeeded Run like any
- * other, and stopping it would overwrite what it recorded with `stopped`.
- */
-const stillFanningOut = (run: Run) =>
-  run.record.fanout !== null && fanoutUnfinished(run.record.fanout);
-
-/**
- * The repository runs a parent fanned out that are still going, each with the
- * repository it is building — which is what a caller reporting on one calls it.
- * Loaded rather than trusted: a child's own record is what says whether it has ended.
- */

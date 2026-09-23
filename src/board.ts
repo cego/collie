@@ -10,23 +10,17 @@ import { describeAction } from "./lines";
 import type { PickItem } from "./inputs";
 import { LEADING_GLYPH, type AgentInfo } from "./herdr";
 import { latest, readDispositions } from "./disposition";
-import { displayName, oneLine, runLabel } from "./naming";
+import { runTitle } from "./naming";
 import { planIssuesIn } from "./plan";
-import { diffTargetOf, recorded, workSourceOf } from "./strategies";
+import { diffTargetOf } from "./strategies";
 import { pendingFor, proposalsPath, read as readProposals, type ProposalLine } from "./proposals";
-import {
-  fanoutRepos,
-  needsHuman,
-  RunStore,
-  type Run,
-  type RunRecord,
-  type StepStatus,
-} from "./run";
+import { everyRegistered, type AgentEntry } from "./registry";
+import { listRuns, settled as ended, type RunFacts, type RunState } from "./runs";
+import type { PluginEnv } from "./env";
 import { herdOf } from "./steering";
 import { listTasks, type TaskRecord } from "./task";
-import { ago, agoShort, atClock, spanned } from "./time";
+import { ago, agoShort, spanned } from "./time";
 import { readVerifications, type Verification } from "./verify";
-import { runStatus } from "./operations";
 import { readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 
@@ -446,54 +440,28 @@ export function sortBoard(views: ReadonlyArray<TaskView>): TaskView[] {
   );
 }
 
-const STEP_STATE: Readonly<Record<StepStatus, StepState>> = {
-  pending: "todo",
+const STEP_STATE: Readonly<Record<RunState, StepState>> = {
   running: "active",
-  done: "done",
-  blocked: "blocked",
+  waiting: "blocked",
+  succeeded: "done",
   failed: "failed",
+  stopped: "failed",
 };
 
-/** The step a decision is holding, where the decision names one. */
-function blockedStep(decision: Decision | null): string | null {
-  return decision === null || decision.kind === "proposal" ? null : decision.step;
-}
-
-/**
- * The Task's pipeline across its Runs, in the order it went through them, each step with
- * the state its newest Run left it in. A step that loops shows once: the record keeps one
- * entry per step whatever round it last ran in, and a Task that re-ran a step keeps the
- * place that step first took.
- */
-function stepsOf(runs: ReadonlyArray<Run>, decision: Decision | null): BoardStep[] {
-  const states = new Map<string, StepState>();
-  for (const run of [...runs].reverse()) {
-    for (const step of run.record.steps) states.set(step.id, STEP_STATE[step.status]);
-  }
-  const holding = blockedStep(decision);
-  return [...states].map(([name, state]) => ({
-    name,
-    state: name === holding ? "blocked" : state,
-  }));
-}
-
-/** The step whichever Run of this Task stopped on for a human, or null when none did. */
-function stepAwaited(records: ReadonlyArray<RunRecord>): string | null {
-  const step = records.find(needsHuman)?.awaiting ?? null;
-  return step === null ? null : `the ${step} step`;
+/** The Task's pipeline: its Runs in the order they started, each as it now stands. */
+function stepsOf(runs: ReadonlyArray<RunFacts>): BoardStep[] {
+  return [...runs].reverse().map((run) => ({ name: run.workflow, state: STEP_STATE[run.state] }));
 }
 
 /** What a Run is, in the board's words. A decision outranks whatever it was doing. */
 function stateOf(
-  status: string,
+  status: RunState,
   silent: boolean,
   decision: Decision | null,
-  abandoned: boolean,
   /** Something is waiting for the human in a pane, with no Decision to say so. */
   stalled: boolean,
 ): TaskState {
   if (decision !== null) return "blocked";
-  if (abandoned) return "abandoned";
   if (status === "stopped") return "stopped";
   if (status === "failed") return "failed";
   if (status === "succeeded") return "done";
@@ -503,37 +471,22 @@ function stateOf(
   return silent ? "quiet" : "active";
 }
 
-/** What the frozen definition says this step is doing, where it said anything. */
-function verbFrom(record: RunRecord): string | null {
-  const step = record.steps.find((s) => s.status === "running" || s.status === "blocked");
-  return step?.summary ?? null;
-}
-
-/** The step the work is on, and which round of the loop it is in. */
-function stepNow(record: RunRecord): Sentence["step"] {
-  const step = record.steps.find((s) => s.status === "running" || s.status === "blocked");
-  if (!step) return null;
-  return {
-    id: step.id,
-    round: step.iteration > 1 ? { at: step.iteration, of: record.max_iterations } : null,
-  };
-}
-
-/**
- * The answer the work carried on with, where it has not moved past the step that asked.
- * Only what the record keeps: a Choice's title. A Run that has gone on to the next step
- * is doing that step, not still resuming.
- */
-function resumedWith(record: RunRecord): string | null {
-  const step = record.steps.find((s) => s.status === "running" || s.status === "blocked");
-  if (!step) return null;
-  return [...record.choices].reverse().find((c) => c.step === step.id)?.title ?? null;
-}
-
-/** Why a Run stopped, in its own words, where no verification explains it. */
-function noteOf(record: RunRecord): string | null {
-  if (record.obstacle !== null) return record.obstacle;
-  return record.steps.filter((s) => s.note && s.status !== "done").at(-1)?.note ?? null;
+/** The first question any of these Runs is waiting on, as a card asks it. */
+function questionOf(runs: ReadonlyArray<RunFacts>): Question | null {
+  for (const run of runs) {
+    const asked = run.asking[0];
+    if (asked === undefined) continue;
+    return {
+      kind: "question",
+      run: run.id,
+      id: asked.name,
+      step: run.workflow,
+      topic: asked.name,
+      text: asked.prompt,
+      options: asked.options.map((option) => ({ id: option, title: option, subtitle: null })),
+    };
+  }
+  return null;
 }
 
 /**
@@ -555,7 +508,6 @@ export function lastFailure(
   return { name: last.name, times };
 }
 
-/** What the Task is called, and whose project it is: the workspace label's two halves. */
 /** An absolute path, wherever one sits in a name, read as what it points at. */
 function withoutPaths(text: string): string {
   return text.replace(/(?:^|\s)\/(?:[^\s/]+\/)+([^\s/]+)/g, (whole, last: string) =>
@@ -563,102 +515,56 @@ function withoutPaths(text: string): string {
   );
 }
 
-function namesOf(label: string, record: RunRecord) {
+/** What the Task is called, and whose project it is: the workspace label's two halves. */
+function namesOf(label: string, run: RunFacts) {
   const clean = withoutPaths(label.replace(LEADING_GLYPH, "").trim());
   const at = clean.indexOf(" | ");
   if (at >= 0) return { project: clean.slice(0, at), name: clean.slice(at + 3) };
-  // No task workspace to take a name from: the workspace names the project, and the Run
-  // names itself — by the plan directory's own name where an older Run was named after
-  // its whole path, and never the same words twice.
-  const name = withoutPaths(legacyPlanName(record) ?? pathNamed(record) ?? runLabel(record));
-  // A workspace that was named after the Run says nothing the card does not: the checkout
-  // names the project then.
-  const named = clean === "" || clean === name || clean === runLabel(record);
-  // A project the name already says is said once: `Renovate · api` needs no `api` after it.
-  const project = named ? basename(record.cwd) : name.includes(clean) ? "" : clean;
+  const name = runTitle(run);
+  // A label that names the Run says nothing the card does not: the checkout names the
+  // project then, and a project the name already says is said once.
+  const named = clean === "" || clean === name;
+  const project = named ? basename(run.project) : name.includes(clean) ? "" : clean;
   return { project, name };
-}
-
-function legacyPlanName(record: RunRecord): string | null {
-  const work = workSourceOf(recorded(record));
-  if (record.named_after !== null || work?.kind !== "plan-dir") return null;
-  return `${displayName(record.workflow)} · ${basename(work.value)}`;
-}
-
-/** A Run named after a checkout's path — a renovate Run — is named after the checkout. */
-function pathNamed(record: RunRecord): string | null {
-  const after = record.named_after;
-  if (after === null || !after.startsWith("/")) return null;
-  return `${displayName(record.workflow)} · ${basename(after)}`;
 }
 
 function basename(path: string): string {
   return path.replace(/\/+$/, "").split("/").at(-1) ?? path;
 }
 
-/** Which repositories a plan that spans several has landed, is building, and has left. */
-function waveOf(record: RunRecord, children: ReadonlyArray<BoardChild>): Sentence["wave"] {
-  const fan = record.fanout;
-  if (fan === null || fan.wave === 0) return null;
-  const repos = (state: StepState) =>
-    children.filter((child) => child.state === state).map((child) => child.repo);
-  return {
-    at: fan.wave,
-    of: fan.waves.length,
-    landed: repos("done"),
-    building: [...repos("active"), ...repos("blocked")],
-    next: repos("todo"),
-    stopped: repos("failed"),
-  };
-}
-
-function childrenOf(record: RunRecord, states: ReadonlyMap<string, StepState>): BoardChild[] {
-  const fan = record.fanout;
-  if (fan === null) return [];
-  return fanoutRepos(fan).map((entry) => ({
-    repo: entry.repo,
-    run: entry.run,
-    state: entry.run === null ? "todo" : (states.get(entry.run) ?? "todo"),
-    mr: entry.mr,
-  }));
-}
-
 /**
- * The Task's agents herdr still has. One entry per live agent, however many steps of
- * however many Runs it worked on: a card counts agents, not the steps they took.
+ * The Task's agents herdr still has. One entry per live agent, however many Runs it
+ * worked for: a card counts agents, not the work they took.
  */
-function agentsOf(runs: ReadonlyArray<Run>, live: ReadonlyMap<string, AgentInfo>): BoardAgent[] {
+function agentsOf(
+  runs: ReadonlyArray<RunFacts>,
+  registered: ReadonlyArray<AgentEntry>,
+  live: ReadonlyMap<string, AgentInfo>,
+): BoardAgent[] {
   const found = new Map<string, BoardAgent>();
   for (const run of runs) {
-    for (const step of run.record.steps) {
-      for (const variant of step.variants) {
-        const agent = live.get(variant.agent);
-        if (agent === undefined || found.has(agent.name)) continue;
-        found.set(agent.name, {
-          name: agent.name,
-          status: agent.status,
-          now: agent.title,
-          run: run.id,
-        });
-      }
+    for (const entry of registered) {
+      const agent = entry.runId === run.id ? live.get(entry.agent) : undefined;
+      if (agent === undefined || found.has(agent.name)) continue;
+      found.set(agent.name, {
+        name: agent.name,
+        status: agent.status,
+        now: agent.title,
+        run: run.id,
+      });
     }
   }
   return [...found.values()];
 }
 
 /** The Run a card is about: the newest still going, else the newest. */
-function leaderOf(runs: ReadonlyArray<Run>): Run {
-  return runs.find((run) => run.record.status === "running") ?? runs[0]!;
+function leaderOf(runs: ReadonlyArray<RunFacts>): RunFacts {
+  return runs.find((run) => !ended(run)) ?? runs[0]!;
 }
 
 /** How long finished work stays on the board. A day, so an evening's work is still there
     in the morning — midnight is not when a human stops calling it today. */
 const FINISHED_FOR_MS = 24 * 60 * 60 * 1000;
-
-const SETTLED: ReadonlySet<string> = new Set(["succeeded", "failed", "stopped"]);
-
-/** How long a `running` Run with no Driver and no agent has to have been silent. */
-const ABANDONED_MS = 60_000;
 
 /** Waiting on you shows a week open; what is older folds into one counted line. */
 export const WAIT_FOLD_MS = 7 * 24 * 60 * 60 * 1000;
@@ -693,34 +599,27 @@ const lastActivityAt = Effect.fn("Board.lastActivityAt")(function* (dir: string)
   return newest;
 });
 
-/** The checkout's branch, or null: a record written before the Run had one says "". */
-function branchOf(run: Run): string | null {
-  const branch = run.record.worktree?.branch ?? null;
-  return branch === null || branch === "" ? null : branch;
-}
+const isMrTarget = (target: string | null): target is string =>
+  target !== null && target.startsWith("mr:");
 
 /** The merge request this Run opened, or the one it was pointed at; null for neither. */
-function mrOf(run: Run): string | null {
-  const target = diffTargetOf(recorded(run.record))?.value ?? null;
-  return run.record.mr_url ?? (isMrTarget(target) ? target : null);
+function mrOf(run: RunFacts): string | null {
+  const target = diffTargetOf(run.settled)?.value ?? null;
+  return run.mr ?? (isMrTarget(target) ? target : null);
 }
 
-/** Whether this Run left anything anyone has to file, read from the Run and not its name. */
-const filedBy = Effect.fn("Board.filedBy")(function* (run: Run) {
-  return filed({
-    branch: branchOf(run),
-    mr: mrOf(run),
-    planIssues: yield* planIssuesIn(run.dir),
-  });
-});
-
 /**
- * Whether settled Runs' work landed, from the record: a disposition, or nothing that
+ * Whether settled Runs' work landed, from what they left: a disposition, or nothing that
  * anyone has to file in the first place.
  */
-const landedByRecord = Effect.fn("Board.landedByRecord")(function* (runs: ReadonlyArray<Run>) {
+const landedByRecord = Effect.fn("Board.landedByRecord")(function* (runs: ReadonlyArray<RunFacts>) {
   for (const run of runs) {
-    if (!(yield* filedBy(run))) continue;
+    const toFile = filed({
+      branch: run.branch,
+      mr: mrOf(run),
+      planIssues: yield* planIssuesIn(run.dir),
+    });
+    if (!toFile) continue;
     const seen = latest(
       yield* readDispositions(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
     );
@@ -728,27 +627,6 @@ const landedByRecord = Effect.fn("Board.landedByRecord")(function* (runs: Readon
   }
   return true;
 });
-
-/** When the newest of these Runs last did anything, from the record alone. */
-function lastTouched(runs: ReadonlyArray<Run>): number {
-  const stamps = runs
-    .map((run) => Date.parse(run.record.finished_at ?? run.record.created_at))
-    .filter(Number.isFinite);
-  return stamps.length === 0 ? 0 : Math.max(...stamps);
-}
-
-const isMrTarget = (target: string | null): target is string =>
-  target !== null && target.startsWith("mr:");
-
-/** The Runs a fan-out of this one started, as Runs: a plan's card speaks for them. */
-function childRuns(run: Run, byId: ReadonlyMap<string, Run>): Run[] {
-  const fan = run.record.fanout;
-  if (fan === null) return [];
-  return fanoutRepos(fan).flatMap((entry) => {
-    const found = entry.run === null ? undefined : byId.get(entry.run);
-    return found === undefined ? [] : [found];
-  });
-}
 
 function asProposal(line: Extract<ProposalLine, { kind: "proposal" }>): Proposal {
   return {
@@ -780,167 +658,113 @@ const DEFAULT_QUIET_MS = 5 * 60_000;
  * Every Task on the Herd's board, Herd-wide, in the order the board draws them.
  *
  * Herd-wide on purpose: the board is one board per Herd (ADR-0009), and a workspace is a
- * filter over it rather than a board of its own. The Runs a fan-out started are not Tasks
- * of their own here — they are the children of the plan that spans them, which is what
- * makes a multi-repository plan one card.
+ * filter over it rather than a board of its own.
  */
 export const buildBoard = Effect.fn("Board.build")(function* (opts: {
-  stateDir: string;
-  /** The Herd's socket, for its proposals journal; null where there is no herdr to ask. */
-  socketPath?: string | null;
+  env: PluginEnv;
   /** What herdr says is alive, so a card can say who is on it. */
   alive?: ReadonlyArray<AgentInfo>;
-  /** The Runs and Tasks already read, so a caller drawing two views scans the dir once. */
-  runs?: ReadonlyArray<Run>;
+  /** The Runs and Tasks already read, so a caller drawing two views reads them once. */
+  runs?: ReadonlyArray<RunFacts>;
   tasks?: ReadonlyArray<TaskRecord>;
+  registered?: ReadonlyArray<AgentEntry>;
   proposals?: ReadonlyArray<ProposalLine>;
   now?: number;
   /** How long a Run may write nothing before its card says it has gone quiet. */
   quietMs?: number;
-  /** The Runs whose Driver a caller already knows to be live; else each is asked. */
-  driversLive?: ReadonlySet<string>;
   /** What GitLab last said about each merge request, by the reference the card carries. */
   mrStates?: ReadonlyMap<string, MrState>;
 }) {
+  const { stateDir, socketPath } = opts.env;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
-  const all = opts.runs ?? (yield* new RunStore(opts.stateDir).list());
+  const all = opts.runs ?? (yield* listRuns(opts.env));
   const tasks = new Map(
-    (opts.tasks ?? (yield* listTasks(opts.stateDir))).map((task) => [task.id, task]),
+    (opts.tasks ?? (yield* listTasks(stateDir))).map((task) => [task.id, task]),
   );
-  const proposals = opts.proposals ?? (yield* proposalsOf(opts.stateDir, opts.socketPath ?? null));
-  const mrStates = opts.mrStates ?? (yield* readMrStates(opts.stateDir));
+  const registered = opts.registered ?? (yield* everyRegistered(stateDir));
+  const proposals = opts.proposals ?? (yield* proposalsOf(stateDir, socketPath));
+  const mrStates = opts.mrStates ?? (yield* readMrStates(stateDir));
   const live = new Map((opts.alive ?? []).map((agent) => [agent.name, agent]));
 
-  // Every Run a fan-out started belongs to the plan that started it, not to the board.
-  const fanned = new Set(
-    all.flatMap((run) =>
-      run.record.fanout === null
-        ? []
-        : fanoutRepos(run.record.fanout).flatMap((entry) => entry.run ?? []),
-    ),
-  );
-
-  const statuses = new Map<string, string>();
-  for (const run of all) statuses.set(run.id, yield* runStatus(run));
-
-  const groups = new Map<string, Run[]>();
+  const groups = new Map<string, RunFacts[]>();
   for (const run of all) {
-    if (fanned.has(run.id)) continue;
-    const key = run.record.task ?? run.id;
+    const key = run.task ?? run.id;
     groups.set(key, [...(groups.get(key) ?? []), run]);
   }
 
-  // A child's state, for the parent's own children list and its wave sentence.
-  const childStates = new Map<string, StepState>();
-  for (const run of all) {
-    if (!fanned.has(run.id)) continue;
-    const status = statuses.get(run.id)!;
-    childStates.set(
-      run.id,
-      status === "succeeded"
-        ? "done"
-        : status === "running" || status === "waiting"
-          ? "active"
-          : status === "failed"
-            ? "failed"
-            : "todo",
-    );
-  }
-
-  const byId = new Map(all.map((run) => [run.id, run]));
-
   const views: TaskView[] = [];
   for (const [id, runs] of groups) {
-    // A repository run has no card of its own, so its decisions are the plan's.
-    const spokenFor = [...runs, ...runs.flatMap((run) => childRuns(run, byId))];
-    const pending = spokenFor.flatMap((run) => pendingFor(proposals, run.id, now));
+    const pending = runs.flatMap((run) => pendingFor(proposals, run.id, now));
+    const touched = new Map<string, number>();
+    for (const run of runs) touched.set(run.id, yield* lastActivityAt(run.dir));
+    // A Run records no end of its own: its last activity is when it ended, and a Run
+    // that wrote nothing ended no later than it began.
+    const endedAt = (run: RunFacts) =>
+      run.finished === null
+        ? touched.get(run.id) || Date.parse(run.created)
+        : Date.parse(run.finished);
+    const last = Math.max(0, ...runs.map(endedAt).filter(Number.isFinite));
     // Finished work older than a day is History's, behind `older…` — landed work only:
     // an unmerged branch from last week is still waiting on you, however old.
     if (
-      runs.every((run) => SETTLED.has(statuses.get(run.id)!)) &&
-      lastTouched(runs) < now - FINISHED_FOR_MS &&
+      runs.every(ended) &&
+      last < now - FINISHED_FOR_MS &&
       pending.length === 0 &&
       (yield* landedByRecord(runs))
     )
       continue;
     const leader = leaderOf(runs);
-    const record = leader.record;
     const proposed = pending[0];
-    const decision: Decision | null = proposed ? asProposal(proposed) : null;
+    const decision: Decision | null = proposed ? asProposal(proposed) : questionOf(runs);
 
-    const status = statuses.get(leader.id)!;
-    const touched = yield* lastActivityAt(leader.dir);
-    // `waiting` is a Run whose Driver is at a question or a gate; it is going, and it is
-    // as dead as a `running` one when nothing drives it.
-    const going = status === "running" || status === "waiting";
-    const silentFor = going && touched > 0 ? now - touched : 0;
+    const status = leader.state;
+    const at = touched.get(leader.id) ?? 0;
+    const going = !ended(leader);
+    const silentFor = going && at > 0 ? now - at : 0;
     // Under a minute has no span to name, and is not silence worth a card saying.
     const span = silentFor > quietMs ? spanned(silentFor) : "";
     const silent = span === "" ? null : span;
-    // A record that says `running` is a claim; a Driver that owns it or an agent herdr
-    // still has is the proof. Neither, for over a minute, and the Run is Abandoned. Only
-    // a Driver proven live counts: a claim whose pid answers but whose identity cannot be
-    // read is, two weeks on, a pid the machine reused.
-    const agentAlive = runs.some((run) =>
-      run.record.steps.some((step) => step.variants.some((v) => live.has(v.agent))),
-    );
-    const driverLive = going && (opts.driversLive?.has(leader.id) ?? false);
-    const abandoned = going && !driverLive && !agentAlive && silentFor > ABANDONED_MS;
-    const agents = agentsOf(runs, live);
-    // Stopped for a human with no Decision to answer. Two sources, because neither sees
-    // the other: the Driver records `awaiting` when it is the one waiting, and herdr
-    // reports `blocked` for an agent sitting at its harness's own dialog — a permission
-    // prompt mid-step, which the Driver never learns about and writes no record for.
-    // herdr's name for the pane first: it is the one a human has to go to.
+    const agents = agentsOf(runs, registered, live);
+    // Stopped for a human with no Decision to answer: herdr reports `blocked` for an agent
+    // sitting at its harness's own dialog, and a Run parks where its pane will not take a
+    // prompt. herdr's name for the pane first: it is the one a human has to go to.
     const blocked = agents.find((agent) => agent.status === "blocked");
-    // No second check that a Driver is still there to consume the answer: `abandoned`
-    // is this board's one verdict on that, with the grace a fresh or resumed Run is
-    // owed, and `stateOf` already puts it above this. A stricter gate here would be the
-    // same judgement made twice, to different thresholds.
     const stalled =
-      (blocked ? `${blocked.name}'s pane` : null) ?? stepAwaited(runs.map((run) => run.record));
-    const state = stateOf(status, silent !== null, decision, abandoned, stalled !== null);
+      (blocked ? `${blocked.name}'s pane` : null) ??
+      (leader.state === "waiting" && leader.asking.length === 0 ? "its pane" : null);
+    const state = stateOf(status, silent !== null, decision, stalled !== null);
 
-    // Whichever Run of this Task is held: a Task is held when any of its Runs is.
-    const holding = runs.find((run) => run.record.held !== null)?.record.held ?? null;
-    const children = childrenOf(record, childStates);
-    const settled =
-      state === "done" || state === "failed" || state === "stopped" || state === "abandoned";
-    // Read whatever the state: a merge GitLab reported lands the work even while the record
-    // still calls the Run going, and the card must say so.
+    const holding = runs.some((run) => run.held);
+    const settledNow = state === "done" || state === "failed" || state === "stopped";
+    // Read whatever the state: a merge GitLab reported lands the work even while the Run
+    // is still going, and the card must say so.
     const disposition = latest(
       yield* readDispositions(leader.dir).pipe(Effect.catch(() => Effect.succeed([]))),
     );
     const failure =
       state === "failed"
         ? lastFailure(
-            yield* readVerifications(leader.dir).pipe(Effect.catch(() => Effect.succeed([]))),
+            yield* readVerifications(leader.evidence).pipe(Effect.catch(() => Effect.succeed([]))),
           )
         : null;
     const open = openReports(
       yield* readDrift(leader.dir).pipe(Effect.catch(() => Effect.succeed([]))),
     );
-    const task = record.task === null ? null : (tasks.get(record.task) ?? null);
-    const { name, project } = namesOf(task?.label ?? record.workspace_label ?? "", record);
-    const started = runs.map((run) => Date.parse(run.record.created_at)).filter(Number.isFinite);
-    // A Task is as old as its first Run; a record with no readable stamp has no age.
+    const task = leader.task === null ? null : (tasks.get(leader.task) ?? null);
+    const { name, project } = namesOf(task?.label ?? "", leader);
+    const started = runs.map((run) => Date.parse(run.created)).filter(Number.isFinite);
+    // A Task is as old as its first Run; a Run with no readable stamp has no age.
     const first = started.length === 0 ? 0 : Math.min(...started);
 
-    // What it opened, else what it was pointed at: `implement` produces one and
-    // `review` is given one.
-    const mr =
-      runs.map((run) => run.record.mr_url).find((url) => url !== null) ??
-      runs.map((run) => diffTargetOf(recorded(run.record))?.value ?? null).find(isMrTarget) ??
-      null;
+    const mr = runs.map(mrOf).find((one) => one !== null) ?? null;
     const mrState = mr === null ? null : (mrStates.get(mrLabel(mr)) ?? null);
-    const branch = runs.map(branchOf).find((b) => b !== null) ?? null;
-    // What the Task left behind, and nothing about what ran it: the tickets are whichever
-    // of its Runs wrote any, exactly as the branch and the merge request are.
+    const branch = runs.map((run) => run.branch).find((b) => b !== null) ?? null;
+    // What the Task left behind: the tickets are whichever of its Runs wrote any.
     let issues = 0;
     for (const run of runs) issues = Math.max(issues, yield* planIssuesIn(run.dir));
     const { planReady, landed } = standingOf({
-      settled,
+      settled: settledNow,
       succeeded: status === "succeeded",
       branch,
       mr,
@@ -949,32 +773,27 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       disposed: disposition !== null,
       asking: decision !== null,
     });
-    const ended =
-      settled && leader.record.finished_at !== null
-        ? Date.parse(leader.record.finished_at)
-        : settled && touched > 0
-          ? touched
-          : null;
+    const finishedAt = settledNow ? endedAt(leader) : 0;
     views.push({
       id,
       name,
       project,
       state,
-      steps: stepsOf(runs, decision),
+      steps: stepsOf(runs),
       sentence: sentenceFor({
         mr,
         mrState,
         planReady,
-        abandoned: abandoned ? `${spanned(now - touched)} ago` : null,
+        abandoned: null,
         state,
         decision,
-        step: stepNow(record),
-        verb: verbFrom(record),
+        step: null,
+        verb: agents.find((agent) => agent.run === leader.id)?.now ?? null,
         silent,
-        wave: waveOf(record, children),
+        wave: null,
         failure,
-        note: noteOf(record),
-        resumed: resumedWith(record),
+        note: leader.note,
+        resumed: null,
         stalled,
         disposition:
           disposition === null
@@ -989,19 +808,16 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       }),
       age: agoShort(first, now),
       // The leading Run's own open drift: what an earlier Run of this Task drifted from
-      // was judged against a tree that has moved since, and is its record, not this card's.
+      // was judged against a tree that has moved since.
       drift:
         open.length === 0
           ? null
           : `${open[0]!.constraint}${open.length > 1 ? ` (and ${open.length - 1} more)` : ""}`,
-      held:
-        holding === null
-          ? null
-          : heldLine(holding.until === null ? null : atClock(holding.until, now)),
-      heldBy: holding === null ? null : { by: holding.by, reason: holding.reason },
+      held: holding ? heldLine(null) : null,
+      heldBy: null,
       decision,
       agents,
-      children,
+      children: [],
       mr,
       branch,
       disposition:
@@ -1011,12 +827,12 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
             ? disposition.kind
             : `${disposition.kind} ${disposition.ref}`,
       landed,
-      ended,
+      ended: finishedAt > 0 ? finishedAt : null,
       mrState,
       planReady,
       run: leader.id,
       runs: runs.map((run) => run.id),
-      at: touched === 0 ? first : touched,
+      at: at === 0 ? first : at,
     });
   }
   return sortBoard(views);

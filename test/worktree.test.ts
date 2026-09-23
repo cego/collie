@@ -15,12 +15,17 @@ import {
   worktreeFor,
   type BranchAsk,
 } from "../src/worktree";
-import { RunStore, type VariantRecord } from "../src/run";
+import type { AgentEntry } from "../src/registry";
+import type { RunFacts } from "../src/runs";
+import { runFacts } from "./support/records";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 
 let rig: Rig;
 let bin: FakeBin;
+/** The Runs and registered agents this test has, which is what pruning is given. */
+let recorded: RunFacts[];
+let registered: AgentEntry[];
 
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
 
@@ -48,6 +53,8 @@ beforeEach(() =>
     Effect.gen(function* () {
       rig = yield* Rig.make();
       bin = yield* FakeBin.make(join(rig.root, "bin"));
+      recorded = [];
+      registered = [];
     }),
   ),
 );
@@ -594,25 +601,15 @@ test("two unrelated runs never share a checkout", () =>
     }),
   ));
 
-/**
- * A step's agent as the engine records one. Only the tab it was given matters to
- * pruning — that is the tab left holding a shell in the checkout — so the rest is
- * whatever a finished build step looks like.
- */
-const recordedTab = (tabId: string): VariantRecord => ({
-  harness: "claude",
-  model: "default",
-  effort: null,
-  permissions: null,
-  agent: `impl-${tabId}`,
-  label: "build",
-  tabId,
-  paneId: null,
-  status: "done",
-  output: null,
-  error: null,
-  repairs: [],
-  nudges: 0,
+/** An agent a Run was given, registered in the pane herdr opened for it. */
+const agentIn = (runId: string, paneId: string): AgentEntry => ({
+  role: "implementer",
+  agent: `impl-${paneId}`,
+  paneId,
+  workspaceId: "w1",
+  runId,
+  workflow: "implement",
+  at: "2026-09-14T10:00:00Z",
 });
 
 /** A worktree Collie made, as its run record and herdr's list would show it. */
@@ -621,8 +618,8 @@ const collieWorktree = (
   opts: {
     workspaceId?: string | null;
     managedBy?: "git" | "herdr";
-    /** The tabs the run left behind, which a removal is what closes. */
-    tabs?: ReadonlyArray<string>;
+    /** The panes the run's agents were left in, whose tabs a removal is what closes. */
+    panes?: ReadonlyArray<string>;
     /** The workflow that made it; a roaming one records no branch. */
     workflow?: string;
     /** Where it sits, for a checkout whose path is not named after a branch. */
@@ -638,14 +635,12 @@ const collieWorktree = (
     // What the run recorded when it made this checkout, which is how pruning knows it
     // is still the same one.
     const madeAt = yield* fs.stat(`${worktreePath}/.git`);
-    const run = yield* new RunStore(rig.stateDir).create({
+    const run = runFacts({
+      id: `run-${branch}`,
       workflow: opts.workflow ?? "implement",
+      project: rig.projectDir,
       cwd: worktreePath,
-      inputs: {},
-      inputSources: {},
-      stepIds: ["build"],
-      maxIterations: 1,
-      namedAfter: branch,
+      state: "succeeded",
       worktree: {
         path: worktreePath,
         branch,
@@ -657,9 +652,8 @@ const collieWorktree = (
         root_pane_id: null,
       },
     });
-    run.record.status = "done";
-    run.record.steps[0]!.variants.push(...(opts.tabs ?? []).map(recordedTab));
-    yield* run.save();
+    recorded.push(run);
+    registered.push(...(opts.panes ?? []).map((pane) => agentIn(run.id, pane)));
     return worktreePath;
   });
 
@@ -690,6 +684,8 @@ const prune = () =>
   pruneWorktrees({
     herdr: new Herdr(rig.pluginEnv()),
     stateDir: rig.stateDir,
+    runs: recorded,
+    registered,
     cwd: rig.projectDir,
   });
 
@@ -844,7 +840,7 @@ test("a settled git-managed checkout is removed with git, and its dead tabs go w
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
         workspaceId: null,
-        tabs: ["1:5", "1:6"],
+        panes: ["1-5", "1-6"],
       });
       // The run's own shell, still sitting in a directory that is about to go, and a
       // tab a human has since reused for something outside it.
@@ -876,7 +872,7 @@ test("a dead tab herdr would not close is reported, because nothing comes back f
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
         workspaceId: null,
-        tabs: ["1:5"],
+        panes: ["1-5"],
       });
       yield* rig.addPane("1-5", "1:5", worktreePath);
       yield* settledGit();
@@ -886,9 +882,15 @@ test("a dead tab herdr would not close is reported, because nothing comes back f
       // said here or never said.
       const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"tab close":"pane is busy"}' }));
 
-      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: rig.projectDir })).toEqual(
-        ["♻ removed wt · merged in !14 · 1 tab(s) left open"],
-      );
+      expect(
+        yield* pruneWorktrees({
+          herdr,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: rig.projectDir,
+        }),
+      ).toEqual(["♻ removed wt · merged in !14 · 1 tab(s) left open"]);
       // The checkout itself still went: a tab that will not close is not a reason to
       // keep a settled checkout, only a reason to say so.
       expect(yield* asked()).toContain(`worktree remove ${worktreePath}`);
@@ -902,7 +904,7 @@ test("git's refusal to remove a checkout keeps it, in git's own words", () =>
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
         workspaceId: null,
-        tabs: ["1:5"],
+        panes: ["1-5"],
       });
       yield* rig.addPane("1-5", "1:5", worktreePath);
       yield* settledGit(
@@ -924,7 +926,7 @@ test("a git-managed checkout herdr has a workspace on is still removed through h
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
         workspaceId: "w7",
-        tabs: ["1:5"],
+        panes: ["1-5"],
       });
       // The run's own tab, which is in the workspace the run was activated from — not
       // in the workspace herdr opened on the checkout, so herdr's removal cannot know
@@ -959,11 +961,17 @@ test("a checkout herdr will not remove is kept, in the words it refused with", (
         }),
       );
 
-      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: rig.projectDir })).toEqual(
-        [
-          `kept wt · herdr worktree remove failed (exit 1): fatal: ${worktreePath} contains modified files`,
-        ],
-      );
+      expect(
+        yield* pruneWorktrees({
+          herdr,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: rig.projectDir,
+        }),
+      ).toEqual([
+        `kept wt · herdr worktree remove failed (exit 1): fatal: ${worktreePath} contains modified files`,
+      ]);
       // Never git behind herdr's back: herdr owns every worktree's whole life.
       expect(yield* asked()).not.toContain(`worktree remove ${worktreePath}`);
       // And the branch is only ever deleted once the checkout has actually gone.
@@ -1001,6 +1009,8 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
         yield* pruneWorktrees({
           herdr,
           stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
           cwd: worktreePath,
           keep: worktreePath,
         }),
@@ -1013,6 +1023,8 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
         yield* pruneWorktrees({
           herdr,
           stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
           cwd: worktreePath,
           now: (yield* Clock.currentTimeMillis) + 10 * 60_000,
         }),
@@ -1030,29 +1042,38 @@ test("a herdr that will not list panes judges nothing, and says so", () =>
       // herdr that cannot be asked must not have its silence read as "none".
       const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"pane list":"herdr is gone"}' }));
 
-      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: rig.projectDir })).toEqual(
-        ["kept wt · could not ask herdr what is live"],
-      );
+      expect(
+        yield* pruneWorktrees({
+          herdr,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: rig.projectDir,
+        }),
+      ).toEqual(["kept wt · could not ask herdr what is live"]);
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
 
       // Nothing was written down, so the next round asks again rather than standing on
       // a verdict it never reached.
       const herdrAgain = new Herdr(rig.pluginEnv());
       expect(
-        yield* pruneWorktrees({ herdr: herdrAgain, stateDir: rig.stateDir, cwd: rig.projectDir }),
+        yield* pruneWorktrees({
+          herdr: herdrAgain,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: rig.projectDir,
+        }),
       ).toEqual(["♻ removed wt · merged in !14"]);
     }),
   ));
 
-test("a run still marked running keeps its checkout, driver or no driver", () =>
+test("a run still going keeps its checkout, whether or not an agent is in it", () =>
   runEffect(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
-      const store = new RunStore(rig.stateDir);
-      const run = (yield* store.list())[0]!;
-      // Nothing is driving it — no claim was ever written — and it is still running.
-      run.record.status = "running";
-      yield* run.save();
+      // Nothing is working in it that herdr can see, and the Run is still going.
+      recorded = recorded.map((run) => ({ ...run, state: "running" as const }));
       yield* settledGit();
       yield* mergedMr();
 
@@ -1060,9 +1081,11 @@ test("a run still marked running keeps its checkout, driver or no driver", () =>
         yield* pruneWorktrees({
           herdr: new Herdr(rig.pluginEnv()),
           stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
           cwd: rig.projectDir,
         }),
-      ).toEqual(["kept wt · a run could still be resumed in it"]);
+      ).toEqual(["kept wt · a run is still working in it"]);
       expect(worktreePath).toContain("wt");
     }),
   ));
@@ -1340,6 +1363,8 @@ const renovateCheckout = (inputs: Record<string, string> = {}, cwd = rig.project
     strategies: SHIPPED_STRATEGIES,
     workspaceId: "wTasks",
     workspaceLabel: "Tasks",
+    recordedBy: (at) =>
+      Effect.succeed(recorded.find((run) => run.worktree?.path === at)?.id ?? null),
   });
 
 test("a Renovate Run gets a detached checkout at the default branch, bound to no branch", () =>
@@ -1550,14 +1575,10 @@ const worktreeOwnedBy = Effect.fn("worktreeTest.worktreeOwnedBy")(function* (
 
 /** A Renovate Run that recorded this checkout, as one that is still running would. */
 const renovateRunAt = Effect.fn("worktreeTest.renovateRunAt")(function* (at: string) {
-  const run = yield* new RunStore(rig.stateDir).create({
+  const run = runFacts({
+    id: "renovate-project",
     workflow: "renovate",
     cwd: at,
-    inputs: {},
-    inputSources: {},
-    stepIds: ["merge"],
-    maxIterations: 1,
-    namedAfter: "renovate",
     worktree: {
       path: at,
       branch: "",
@@ -1569,7 +1590,8 @@ const renovateRunAt = Effect.fn("worktreeTest.renovateRunAt")(function* (at: str
       root_pane_id: null,
     },
   });
-  return run.record.id;
+  recorded.push(run);
+  return run.id;
 });
 
 test("a second Renovate Run on one repository is refused, never handed the first's tree", () =>
@@ -1792,7 +1814,7 @@ test("an agent in the checkout's own workspace keeps it, directory or no directo
 test("a finished Run's own agent, idle in the tab it left behind, does not keep its checkout", () =>
   runEffect(
     Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt", { tabs: ["1:5"] });
+      const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       yield* settledGit();
       yield* mergedMr();
       // The Run is done and its agent is still sitting there, idle — that is the leftover
@@ -1808,7 +1830,7 @@ test("a finished Run's own agent, idle in the tab it left behind, does not keep 
 test("a finished Run's own agent still working in its tab keeps the checkout", () =>
   runEffect(
     Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt", { tabs: ["1:5"] });
+      const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       yield* settledGit();
       yield* mergedMr();
       yield* rig.addPane("1-5", "1:5", worktreePath, "claude", null, null, "working");
@@ -1835,9 +1857,15 @@ test("a board outside any repository still sweeps the checkouts the Runs recorde
         }),
       );
 
-      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: home })).toEqual([
-        "♻ removed wt · merged in !14",
-      ]);
+      expect(
+        yield* pruneWorktrees({
+          herdr,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: home,
+        }),
+      ).toEqual(["♻ removed wt · merged in !14"]);
       expect(yield* asked()).toContain(`worktree remove ${worktreePath}`);
     }),
   ));
@@ -1934,20 +1962,17 @@ test("a diff of two refs that are not branches has nothing to fix on", () =>
     }),
   ));
 
-test("a run left blocked keeps the checkout a resume would restart it in", () =>
+test("a run parked for a human keeps the checkout it will carry on in", () =>
   runEffect(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
-      const run = (yield* new RunStore(rig.stateDir).list())[0]!;
-      // A Choice nobody answered, or an agent that stopped: `run resume` picks this up
-      // again, in the directory it recorded.
-      run.record.status = "blocked";
-      run.step("build").status = "pending";
-      yield* run.save();
+      // A question nobody answered, or a pane that would not take a prompt: the Run picks
+      // up again in the directory it works in.
+      recorded = recorded.map((run) => ({ ...run, state: "waiting" as const }));
       yield* settledGit();
       yield* mergedMr();
 
-      expect(yield* prune()).toEqual(["kept wt · a run could still be resumed in it"]);
+      expect(yield* prune()).toEqual(["kept wt · a run is still working in it"]);
     }),
   ));
 
@@ -2003,6 +2028,8 @@ test("one repository's board neither forgets nor reports another's", () =>
         yield* pruneWorktrees({
           herdr: new Herdr(rig.pluginEnv()),
           stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
           cwd: elsewhere,
         }),
       ).toEqual([]);

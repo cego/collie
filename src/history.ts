@@ -137,6 +137,9 @@ const Recorded = Schema.Struct({
   ),
   outcome: absent(Schema.NullOr(Schema.String), null),
   mr_url: absent(Schema.NullOr(Schema.String), null),
+  // Kept as it was written: a checkout record some version shaped differently is still
+  // what says which worktree Collie made, and is decoded where it is used.
+  worktree: absent(Schema.NullOr(Schema.Json), null),
   linear_issues: absent(Schema.Array(Schema.String), []),
   synthesis: absent(Schema.NullOr(Schema.String), null),
   summary: absent(Schema.NullOr(Schema.String), null),
@@ -260,6 +263,7 @@ export const importHistory = Effect.fn("history.import")(function* (stateDir: st
         // are files by design and stay exactly where they were written.
         dir,
         mr: decoded.mr_url,
+        worktree: decoded.worktree,
         linear: [...decoded.linear_issues],
         review: decoded.synthesis === null ? null : path.join(dir, decoded.synthesis),
       },

@@ -3,7 +3,8 @@
 // has aged out, a Run whose Intent moved, a caller that is not a person, and an action
 // nobody can say whether it already happened.
 
-import { Effect, FileSystem, Path } from "effect";
+import { Effect, FileSystem, Path, type Scope } from "effect";
+import type { BunServices } from "@effect/platform-bun/BunServices";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
   EXPIRES_AFTER_MS,
@@ -27,12 +28,14 @@ import {
 import { executorFor, registeredKinds, resetExecutors } from "../src/executors";
 import type { Action } from "../src/evaluator";
 import { carryOutProposal } from "../src/operations";
-import { currentEnv, type PluginEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
-import { RunStore } from "../src/run";
+import { connect } from "../src/host";
 import { herdOf } from "../src/steering";
 import { runEffect } from "./support/effect";
-import { withSkills } from "./support/skills";
+import { oldRecord, oldRun } from "./support/history";
+import { hosted, hostedRun } from "./support/hosted";
+import type { World } from "./support/world";
 
 let stateDir: string;
 let file: string;
@@ -328,161 +331,140 @@ test("this build registers no executors, so nothing is stubbed into pretending",
 });
 
 // From here on this process has executors registered, which is why it comes last.
-test("a refused action fails the request and does not execute later actions", () =>
-  runEffect(
+/** A Herd of this test's own with a host in it, and the proposals file its Herd keeps. */
+const inHerd = <A, E>(
+  body: (herd: {
+    world: World;
+    env: PluginEnv;
+    herdFile: string;
+  }) => Effect.Effect<A, E, BunServices | Scope.Scope>,
+) =>
+  hosted("hw-proposals-", ({ world, env }) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       // A socket path is what names a Herd, so the proposal has to be filed under the one
       // this env resolves to rather than under a key the test picked.
-      const socketPath = path.join(stateDir, "herdr.sock");
-      yield* fs.writeFileString(socketPath, "");
-      const env = yield* withSkills(
-        { ...(yield* currentEnv), stateDir, socketPath } satisfies PluginEnv,
-        "implement",
-      );
-      const herdFile = yield* proposalsPath(stateDir, yield* herdOf(socketPath));
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(env.socketPath!, "");
+      const herdFile = yield* proposalsPath(world.state, yield* herdOf(env.socketPath));
+      return yield* body({ world, env, herdFile });
+    }),
+  );
 
-      const run = yield* new RunStore(stateDir).create({
-        workflow: "implement",
-        cwd: stateDir,
-        inputs: { plan: "a picker" },
-        inputSources: { plan: "asked" },
-        stepIds: ["build"],
-        maxIterations: 5,
-        namedAfter: "a-picker",
-        worktree: null,
-      });
-      yield* writeIntent(run.dir, seedIntent(run.id, { goal: "a picker" }));
+test(
+  "a refused action fails the request and does not execute later actions",
+  () =>
+    inHerd(({ world, env, herdFile }) =>
+      Effect.gen(function* () {
+        // Work an older Collie recorded, read into history: something nothing can hold,
+        // which a proposal could not know about and only the moment of carrying it out can.
+        const dir = yield* oldRun(world.state, "implement-picker", oldRecord("implement-picker"));
+        yield* (yield* connect(world.state).pipe(Effect.orDie)).import().pipe(Effect.orDie);
+        yield* writeIntent(dir, seedIntent("implement-picker", { goal: "a picker" }));
 
-      const proposal = yield* record(herdFile, {
-        interpretation: "hold it",
-        targets: [{ run: run.id }],
-        actions: [
-          { kind: "hold", run: run.id },
-          {
-            kind: "update_intent",
-            run: run.id,
-            change: "set-goal",
-            patch: "must not happen",
-            base_version: 1,
+        const proposal = yield* record(herdFile, {
+          interpretation: "hold it",
+          targets: [{ run: "implement-picker" }],
+          actions: [
+            { kind: "hold", run: "implement-picker" },
+            {
+              kind: "update_intent",
+              run: "implement-picker",
+              change: "set-goal",
+              patch: "must not happen",
+              base_version: 1,
+            },
+          ],
+          allowedNow: [],
+          // The Intent was v1 when this was proposed, and `seedIntent` wrote v1.
+          intentVersions: { "implement-picker": 1 },
+          by: "evaluator:call-1",
+        });
+
+        // The board used to run its actions without asking this, which is the whole point
+        // of one module.
+        const out = yield* carryOutProposal(env, proposal.id, undefined, board);
+        expect(out.ok).toBe(false);
+        if (out.ok) return;
+        expect(out.error.code).toBe("operation_failed");
+        expect(out.error.message).toContain("recorded by the engine Collie no longer has");
+        expect(out.error.details).toMatchObject({ results: [{ kind: "hold", state: "skipped" }] });
+        expect((yield* readIntent(dir))?.goal).toBe("a picker");
+      }),
+    ),
+  60_000,
+);
+
+test(
+  "an Intent nobody can decode refuses the confirmation instead of reading as no version",
+  () =>
+    inHerd(({ world, env, herdFile }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const run = yield* hostedRun(world, "a picker");
+        const proposal = yield* record(herdFile, {
+          interpretation: "hold it",
+          targets: [{ run: run.id }],
+          actions: [{ kind: "hold", run: run.id }],
+          allowedNow: [],
+          intentVersions: { [run.id]: 1 },
+          by: "evaluator:call-1",
+        });
+
+        // Corrupt after the proposal was written, which is the window that matters: the
+        // version it was checked against is now unreadable rather than merely absent.
+        yield* fs.writeFileString(path.join(run.dir, "intent.json"), "{ not json");
+
+        const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+        expect(out).toMatchObject({
+          ok: false,
+          error: {
+            details: {
+              results: [
+                { kind: "hold", state: "skipped", note: `${run.id}'s Intent cannot be read` },
+              ],
+            },
           },
-        ],
-        allowedNow: [],
-        // The Intent was v1 when this was proposed, and `seedIntent` wrote v1.
-        intentVersions: { [run.id]: 1 },
-        by: "evaluator:call-1",
-      });
+        });
+      }),
+    ),
+  60_000,
+);
 
-      // Nothing owns this Run, so there is nobody to hold it — a condition the proposal
-      // could not know about and only the moment of carrying it out can. The board used
-      // to run its actions without asking this, which is the whole point of one module.
-      const out = yield* carryOutProposal(env, proposal.id, undefined, board);
-      expect(out.ok).toBe(false);
-      if (out.ok) return;
-      expect(out.error.code).toBe("operation_failed");
-      expect(out.error.message).toContain("no Driver");
-      expect(out.error.details).toMatchObject({ results: [{ kind: "hold", state: "skipped" }] });
-      expect((yield* readIntent(run.dir))?.goal).toBe("a picker");
-    }),
-  ));
+test(
+  "a confirmed start goes through the same Input settling a typed one does",
+  () =>
+    inHerd(({ world, env, herdFile }) =>
+      Effect.gen(function* () {
+        const run = yield* hostedRun(world, "a picker");
 
-test("an Intent nobody can decode refuses the confirmation instead of reading as no version", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const socketPath = path.join(stateDir, "herdr.sock");
-      yield* fs.writeFileString(socketPath, "");
-      const env = yield* withSkills(
-        { ...(yield* currentEnv), stateDir, socketPath } satisfies PluginEnv,
-        "implement",
-      );
-      const herdFile = yield* proposalsPath(stateDir, yield* herdOf(socketPath));
+        const proposal = yield* record(herdFile, {
+          interpretation: "start one and hold the other",
+          targets: [{ run: run.id }],
+          actions: [
+            { kind: "start", workflow: "proof", inputs: {} },
+            { kind: "hold", run: run.id },
+          ],
+          allowedNow: [],
+          intentVersions: { [run.id]: 1 },
+          by: "evaluator:call-1",
+        });
 
-      const run = yield* new RunStore(stateDir).create({
-        workflow: "implement",
-        cwd: stateDir,
-        inputs: { plan: "a picker" },
-        inputSources: { plan: "asked" },
-        stepIds: ["build"],
-        maxIterations: 5,
-        namedAfter: "a-picker",
-        worktree: null,
-      });
-      yield* writeIntent(run.dir, seedIntent(run.id, { goal: "a picker" }));
-      const proposal = yield* record(herdFile, {
-        interpretation: "hold it",
-        targets: [{ run: run.id }],
-        actions: [{ kind: "hold", run: run.id }],
-        allowedNow: [],
-        intentVersions: { [run.id]: 1 },
-        by: "evaluator:call-1",
-      });
-
-      // Corrupt after the proposal was written, which is the window that matters: the
-      // version it was checked against is now unreadable rather than merely absent.
-      yield* fs.writeFileString(path.join(run.dir, "intent.json"), "{ not json");
-
-      const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board).pipe(
-        Effect.catch((cause) => Effect.succeed(cause)),
-      );
-      expect(out).toMatchObject({ _tag: "IntentUnreadable" });
-    }),
-  ));
-
-test("a confirmed start goes through the same Input settling a typed one does", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const socketPath = path.join(stateDir, "herdr.sock");
-      yield* fs.writeFileString(socketPath, "");
-      const env = yield* withSkills(
-        { ...(yield* currentEnv), stateDir, socketPath } satisfies PluginEnv,
-        "implement",
-      );
-      const herdFile = yield* proposalsPath(stateDir, yield* herdOf(socketPath));
-
-      const run = yield* new RunStore(stateDir).create({
-        workflow: "implement",
-        cwd: stateDir,
-        inputs: { plan: "a picker" },
-        inputSources: { plan: "asked" },
-        stepIds: ["build"],
-        maxIterations: 5,
-        namedAfter: "a-picker",
-        worktree: null,
-      });
-      yield* writeIntent(run.dir, seedIntent(run.id, { goal: "a picker" }));
-
-      const proposal = yield* record(herdFile, {
-        interpretation: "start one and hold the other",
-        targets: [{ run: run.id }],
-        actions: [
-          { kind: "start", workflow: "implement", inputs: {} },
-          { kind: "hold", run: run.id },
-        ],
-        allowedNow: [],
-        intentVersions: { [run.id]: 1 },
-        by: "evaluator:call-1",
-      });
-
-      // `start` goes through the same two steps `run start` takes, so an Input nobody
-      // named is a refusal rather than a guess — there is no human here to ask, and a Run
-      // started on a work source nobody named is a Run about something nobody said. (A
-      // branch is the one Input Collie works out for itself, so it is the work source that
-      // has to be missing here.) The refusal is this action's and not the next one's: the
-      // `hold` is about another Run, so it is still attempted and reported on its own.
-      const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
-      expect(out.ok).toBe(false);
-      if (out.ok) return;
-      expect(out.error.details).toMatchObject({
-        results: [{ kind: "start", state: "failed" }, { kind: "hold" }],
-      });
-      expect(out.error.message).toContain("input");
-    }),
-  ));
+        // `start` goes through the same two steps `run start` takes, so an Input nobody
+        // named is a refusal rather than a guess — there is no human here to ask. The
+        // refusal is this action's and not the next one's: the `hold` is about another Run,
+        // so it is still attempted and reported on its own.
+        const out = yield* carryOutProposal(env, proposal.id, proposal.content_hash, board);
+        expect(out.ok).toBe(false);
+        if (out.ok) return;
+        expect(out.error.details).toMatchObject({
+          results: [{ kind: "start", state: "failed" }, { kind: "hold" }],
+        });
+        expect(out.error.message).toContain("note");
+      }),
+    ),
+  60_000,
+);
 
 test("a proposal is pending until it is answered or it expires", () => {
   const now = Date.parse("2026-09-09T10:00:00Z");

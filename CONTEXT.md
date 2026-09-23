@@ -161,8 +161,8 @@ at the next launch, and the Task records the new id.
 
 **TaskView** — One Task as the board draws it: name, project, state, the step glyphs, one
 plain sentence about what is happening, its age, drift, hold, pending **Decision**, agents,
-children, branch, merge request and disposition. Built by one function from the Runs, the
-live agents and the run directories, so the Home's cards, the one-screen text view and
+children, branch, merge request and disposition. Built by one function from the Runs the
+host reports, the live agents and what each Run left in its directory, so the Home's cards, the one-screen text view and
 `collie --json board` are the same model rather than three readings of it. A Run belonging
 to no Task is a TaskView of its own.
 

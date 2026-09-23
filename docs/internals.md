@@ -202,7 +202,8 @@ A worktree is **settled**, and only then removed, when all four hold:
    `git fetch --prune`, and condition 4's second half would otherwise be unreachable
    in exactly the case it names;
 3. nothing is in it: no live agent's pane (its start directory, the directory it has
-   moved to, or its workspace), and no run a `resume` could still restart there;
+   moved to, or its workspace) other than the idle agents of the runs that finished there,
+   and no run still going there;
 4. its merge request is merged or closed, or its remote branch is gone.
 
 The checks run in that order and the first failure is what the board reports, so a kept
@@ -211,8 +212,8 @@ herdr what is live, which reports every candidate as held and records nothing, s
 next refresh asks again instead of standing on a verdict it never reached.
 
 Removal follows the checkout. A git-managed one is `git worktree remove` from the
-repository's own checkout, and then the finished runs' recorded tabs whose every pane
-sits inside the removed path are closed — dead shells nothing else would ever close, and
+repository's own checkout, and then the tabs of the panes the finished runs' agents were
+registered in, where every pane of the tab sits inside the removed path, are closed — dead shells nothing else would ever close, and
 a tab a human has since split or reused is left alone. A tab herdr will not close is
 counted on the removal line (`· 1 tab(s) left open`), because the checkout has left the
 listing by then and no later sweep has a candidate to retry it with.

@@ -2,7 +2,7 @@
 
 import { Effect } from "effect";
 import { Command } from "effect/unstable/cli";
-import { RunStore } from "../run";
+import { listRuns } from "../runs";
 import { listTasks } from "../task";
 import { answering } from "./shared";
 
@@ -10,10 +10,10 @@ const list = Command.make("list", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
       const tasks = yield* listTasks(env.stateDir);
-      const runs = yield* new RunStore(env.stateDir).list();
+      const runs = yield* listRuns(env);
       const data = tasks.map((task) => ({
         ...task,
-        runs: runs.filter((run) => run.record.task === task.id).map((run) => run.id),
+        runs: runs.filter((run) => run.task === task.id).map((run) => run.id),
       }));
       return {
         ok: true,

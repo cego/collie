@@ -6,7 +6,7 @@ import { Effect, FileSystem, Option, Path, Schema } from "effect";
 import { mrLabel, sectionOf, type MrState, type TaskView } from "./board";
 import { latest, readDispositions, recordDisposition } from "./disposition";
 import { liveTier, mrDetails, parseMrTarget, type MrRef, type Runner } from "./mr";
-import { RunStore } from "./run";
+import { runDir } from "./native";
 import { nowIso } from "./time";
 
 /** How long one merge request's answer stands before GitLab is asked again. */
@@ -50,7 +50,6 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
   checked: Map<string, number>;
   states: Map<string, MrState>;
 }) {
-  const store = new RunStore(opts.stateDir);
   // What earlier panes learned, under this pane's own answers: a new pane's empty memory
   // must not ask production again about what an earlier one already saw land there.
   for (const [label, state] of yield* readMrStates(opts.stateDir))
@@ -79,13 +78,12 @@ export const settleMerges = Effect.fn("Merges.settle")(function* <R>(opts: {
     if (opts.states.get(label) !== state) learned = true;
     opts.states.set(label, state);
     if (state === "open" || state === "closed") continue;
-    const run = yield* store.load(view.run).pipe(Effect.catch(() => Effect.succeed(null)));
-    if (run === null) continue;
+    const dir = runDir(opts.stateDir, view.run);
     const already = latest(
-      yield* readDispositions(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
+      yield* readDispositions(dir).pipe(Effect.catch(() => Effect.succeed([]))),
     );
     if (already !== null) continue;
-    yield* recordDisposition(run.dir, {
+    yield* recordDisposition(dir, {
       at: yield* nowIso(),
       by: "gitlab",
       kind: "merged",

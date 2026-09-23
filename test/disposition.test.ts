@@ -16,7 +16,7 @@ import {
   statusLine,
   type Disposition,
 } from "../src/disposition";
-import { RunStore } from "../src/run";
+import { oldRecord, oldRun } from "./support/history";
 import { runEffect } from "./support/effect";
 
 const root = new URL("../", import.meta.url).pathname;
@@ -68,22 +68,19 @@ test(
           HOME: home,
         };
 
-        const store = new RunStore(state);
-        const run = yield* store.create({
-          workflow: "implement",
-          cwd: root,
-          inputs: {},
-          inputSources: {},
-          stepIds: ["build"],
-          maxIterations: 1,
-          namedAfter: "retro-delivery-evidence",
-        });
         // A Run that failed, which is the case this exists for.
-        run.record.status = "failed";
-        run.record.finished_at = "2026-09-10T09:00:00.000Z";
-        yield* run.save();
+        const run = { id: "implement-retro-delivery-evidence" };
+        const dir = yield* oldRun(
+          state,
+          run.id,
+          oldRecord(run.id, {
+            cwd: root,
+            status: "failed",
+            finished_at: "2026-09-10T09:00:00.000Z",
+          }),
+        );
 
-        const file = join(run.dir, "run.json");
+        const file = join(dir, "run.json");
         const before = yield* fs.readFileString(file);
 
         // The Run an older Collie left is read into a row once; the directory it wrote
@@ -98,7 +95,7 @@ test(
           ok: true,
           data: { status: "failed", disposition: null },
         });
-        expect(yield* fs.exists(yield* dispositionPath(run.dir))).toBe(false);
+        expect(yield* fs.exists(yield* dispositionPath(dir))).toBe(false);
         expect(yield* fs.readFileString(file)).toBe(before);
 
         const recorded = yield* cli(
@@ -124,8 +121,7 @@ test(
 
         // The whole point: the Run's own record is untouched, to the byte.
         expect(yield* fs.readFileString(file)).toBe(before);
-        expect((yield* store.load(run.id)).record.status).toBe("failed");
-        expect((yield* readDispositions(run.dir)).length).toBe(1);
+        expect((yield* readDispositions(dir)).length).toBe(1);
 
         // A replayed request id returns the first result rather than recording twice.
         const replay = yield* cli(
@@ -145,7 +141,7 @@ test(
         );
         expect(replay.exit).toBe(0);
         expect(yield* parseEnvelope(replay.stdout)).toMatchObject({ ok: true });
-        expect((yield* readDispositions(run.dir)).length).toBe(1);
+        expect((yield* readDispositions(dir)).length).toBe(1);
         expect(yield* fs.readFileString(file)).toBe(before);
 
         // And `run show` says both facts, without having written anything either.

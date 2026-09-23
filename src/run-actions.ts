@@ -20,9 +20,6 @@ import type { PluginEnv } from "./env";
 import {
   answerNativeRun,
   controlNativeRun,
-  nativeSettled,
-  statusOf,
-  treeOf,
   invokeNativeOffer,
   offersOf,
   nativeRun,
@@ -74,6 +71,7 @@ import {
 import type { Action } from "./evaluator";
 import { herdOf } from "./steering";
 import { fingerprint } from "./verify";
+import { findRun, settled } from "./runs";
 
 /**
  * Every action kind this build can carry out, against the host that owns the work.
@@ -498,30 +496,32 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   proposal: ProposalRecord | null,
 ) {
   const id = "run" in action ? action.run : null;
-  const view = id === null ? null : yield* nativeRun(env, id);
-  if (view === null || !("runId" in view)) return admit(action, emptyAdmission());
-  const dir = runDir(env.stateDir, view.runId);
+  const run = id === null ? null : yield* findRun(env, id);
+  if (run === null) return admit(action, emptyAdmission());
+  // History is read, and nothing else: there is no engine left to carry anything out.
+  if (run.imported && action.kind !== "navigate")
+    return `${run.id} was recorded by the engine Collie no longer has, so it can be read and nothing else`;
   const live = yield* new Herdr(env).agentList().pipe(Effect.catch(() => Effect.succeed([])));
   const agent = "agent" in action ? (action.agent ?? null) : null;
   // An Intent nobody can decode is not an Intent with no constraints. Refusing here is
   // what stops a corrupt file reading as "no version to disagree with".
-  const intent = yield* readIntent(dir).pipe(
+  const intent = yield* readIntent(run.dir).pipe(
     Effect.catch(() => Effect.succeed<Intent | "unreadable">("unreadable")),
   );
-  if (intent === "unreadable") return `${view.runId}'s Intent cannot be read`;
+  if (intent === "unreadable") return `${run.id}'s Intent cannot be read`;
   const bound = proposal?.card;
-  const here = bound === undefined ? null : yield* fingerprint(treeOf(view));
+  const here = bound === undefined ? null : yield* fingerprint(run.cwd);
   const now = here === null ? null : `${here.head_sha}:${here.fingerprint}`;
   return admit(action, {
-    run: { id: view.runId, status: statusOf(view) },
+    run: { id: run.id, status: run.state },
     // A host that is holding this Run is what a live Driver used to be: the thing that
     // will act on what is recorded for it.
-    driverLive: !nativeSettled(view),
-    pendingChoice: view.waiting.find((open) => open.answer === null)?.name ?? null,
+    driverLive: !settled(run),
+    pendingChoice: run.asking[0]?.name ?? null,
     incarnation: agent === null ? null : (live.find((a) => a.name === agent)?.terminalId ?? null),
     proposedIncarnation: agent === null ? null : (proposal?.incarnations?.[agent] ?? null),
     intentVersion: intent?.version ?? null,
-    proposedIntentVersion: proposal?.intent_versions[view.runId] ?? null,
+    proposedIntentVersion: proposal?.intent_versions[run.id] ?? null,
     revision: bound === undefined || now === null ? null : { card: bound.revision, now },
   });
 });
