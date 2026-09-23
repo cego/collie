@@ -47,15 +47,9 @@ const Run = Schema.Struct({
   options: Schema.NullOr(Schema.String),
   /** Where it works, as the host placed it; null while that is still to do, or from before. */
   checkout: Schema.NullOr(Schema.String),
-  /**
-   * The host options, Task and parent as the request asked for them, canonical, which a
-   * retry is compared to as well. Null for a row from before they were kept.
-   */
+  /** The host options, Task and parent as asked, canonical, which a retry is compared to. */
   asked: Schema.NullOr(Schema.String),
-  /**
-   * What placing it starts from — the checkout, and the name of a fresh Task — kept so a
-   * placement a crash cut short is made again. Null for a row from before.
-   */
+  /** What placing it starts from, so a placement a crash cut short is made again. */
   placing: Schema.NullOr(Schema.String),
   /** When this work was claimed, which is when the Run began. */
   admitted: Schema.String,

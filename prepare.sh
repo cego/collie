@@ -181,10 +181,7 @@ skills_step() {
 
 skills_step
 
-# What an older Collie recorded, read into this installation once. Idempotent by Run
-# identity, so every run after the first keeps nothing and says so — which is what makes
-# it safe on every install, upgrade and plugin rebuild. A Run something is still working
-# on is skipped and imports when that finishes; nothing here touches a run directory.
+# An older Collie's Runs, imported once by Run identity; a Run still owned waits.
 history_step() {
   if [ ! -x "$ROOT/bin/collie" ]; then
     step history "skipped — no runner to read it with"

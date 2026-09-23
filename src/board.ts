@@ -178,10 +178,7 @@ export interface TaskView {
   mrState: MrState | null;
   /** A plan that finished and nobody has implemented: its card's first action starts that. */
   planReady: boolean;
-  /**
-   * What that first action is: the Run's own primary offer, as its module declares it now.
-   * Null where it declares none, so no card shows an action nobody offered.
-   */
+  /** That action: the Run's primary offer as its module declares it now, or null for none. */
   offer: BoardOffer | null;
   /** The Run a card's actions act on: the one the sentence is about. */
   run: string;
@@ -852,8 +849,7 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
       ended: finishedAt > 0 ? finishedAt : null,
       mrState,
       planReady,
-      // Asked only of a plan that is ready, which is the one card whose first action is an
-      // offer: the rest are the board's own, and asking every card would ask every refresh.
+      // Only a ready plan's first action is an offer; asking every card would ask every refresh.
       offer: planReady ? primaryOf(yield* offersOfRun(leader.id)) : null,
       run: leader.id,
       runs: runs.map((run) => run.id),

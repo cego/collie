@@ -749,11 +749,7 @@ const TextOnly = Schema.Struct({ type: Schema.Literal("string") });
 const isTextField = Schema.is(TextOnly);
 const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
 
-/**
- * What an offer takes, asked for one field at a time from the drawing its module gave. A
- * text field is taken as typed; anything else is read as JSON where it parses, so the
- * workflow's own schema settles it. Null where the human cancelled.
- */
+/** Each field an offer takes: text as typed, anything else as JSON where it parses; null on cancel. */
 const offerArguments = Effect.fn("Flows.offerArguments")(function* (
   prompts: FlowPrompts,
   drawn: Schema.Json | null,

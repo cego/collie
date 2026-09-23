@@ -71,8 +71,7 @@ const stateOf = (view: RunView): RunState => {
       return "succeeded";
     case "failed":
       return stopped ? "stopped" : "failed";
-    // A stop suspends the Run where it is, so the control says which suspension it is.
-    // Otherwise suspended is also an agent at work: only a question or a parked Run waits.
+    // A stop suspends the Run; otherwise only a question or a parked Run is waiting.
     case "suspended":
       if (stopped) return "stopped";
       return view.parked !== null || view.waiting.some((one) => one.answer === null)
@@ -166,8 +165,7 @@ export const factsOfHistory = (stateDir: string, row: HistoryRow): RunFacts => {
       strategies: kept._tag === "Some" ? (kept.value.strategies ?? {}) : {},
       sources: kept._tag === "Some" ? (kept.value.sources ?? {}) : {},
     },
-    // The branch its checkout was on, or the one it was asked to work on: the same fact
-    // a live Run's placement records, so both are classified alike.
+    // The branch its checkout or inputs named, as a live Run's placement records one.
     branch: worktree?.branch || given.branch || null,
     mr: evidence._tag === "Some" ? evidence.value.mr : null,
     workspace: null,

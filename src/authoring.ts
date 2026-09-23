@@ -233,11 +233,7 @@ export interface Forking {
   readonly entry: WorkflowEntry;
 }
 
-/**
- * A fork as a file that imports what it keeps. Nothing is copied and nothing is merged:
- * the fork re-exports the parent's declarations, hands `make` on, and is edited from
- * there — so what it did not name is still the parent's, and moves when the parent does.
- */
+/** A fork as a file that re-exports its parent and hands `make` on; nothing is copied. */
 export const forkEntry: (options: {
   readonly dir: string;
   readonly id: string;

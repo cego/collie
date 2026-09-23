@@ -1409,8 +1409,7 @@ export const hostLayer = (options: {
                   reason: `"${asked.name}" is not among this Run's approved verifications`,
                 });
               }
-              // The checkout the workflow is in has to be the Run's own, and the approved
-              // directory is resolved from it: a grant names where it runs, not the caller.
+              // The workflow's checkout has to be the Run's own; the grant's directory is resolved from it.
               const row = yield* store.run(asked.runId);
               const placed =
                 row === null
@@ -2432,8 +2431,7 @@ const makeRegistry: (
     let opened: { readonly id: string; readonly label: string | null } | null = null;
     if (generation.checkout !== "none") {
       const inputs = yield* branchInputs(generation, ask.input, ask.options);
-      // Building a review's findings works on the branch that review was pointed at: a
-      // fact of the review's own Run, so the module building them need not declare it.
+      // A build of a review's findings works on the branch that review was pointed at.
       const source = fieldWith(generation.hints, "work-source");
       const reviewed =
         source !== undefined &&
@@ -2514,11 +2512,7 @@ const makeRegistry: (
   );
   const claimingOf = (request: string) => claiming[stripeOf(request)]!;
 
-  /**
-   * Where the claimant puts a Run it has claimed. After the claim, so two copies of one
-   * request never both cut a checkout, and one a host died half way through is placed on
-   * recovery rather than lost. A refused placement withdraws the claim: nothing started.
-   */
+  /** Places a claimed Run, as its claimant only; a refused placement withdraws the claim. */
   const placeClaimed = Effect.fn("Engine.placeClaimed")(function* (row: RunRow) {
     const generation = live.get(row.generation);
     const placing = decodePlacing(row.placing ?? "");
@@ -2719,11 +2713,7 @@ const makeRegistry: (
       ),
     );
 
-  /**
-   * Every recorded answer handed to the run it settles. One a host died between recording
-   * and completing is still owed to a run that waits for it; the rest are the same
-   * completion again, which the engine keeps once.
-   */
+  /** Every recorded answer handed again to a run still waiting; the engine keeps one completion. */
   const reconcileAnswers = Effect.gen(function* () {
     for (const row of yield* store.runs) {
       const generation = live.get(row.generation);
@@ -3240,8 +3230,7 @@ const makeRegistry: (
         return yield* new HostRefused({ reason: settled.reason });
       }
       if (settled._tag === "accepted") yield* crash("answered");
-      // A repeat completes it again: the host that recorded it may have died before the
-      // run was told, and the engine keeps one completion however often it is sent.
+      // Completed again on a repeat: the recording host may have died before the run was told.
       yield* answerDecision(found.generation.registration, {
         name,
         executionId: found.execution,
@@ -3256,8 +3245,7 @@ const makeRegistry: (
       readonly control: string;
       readonly set: boolean;
     }) {
-      // A stop is the Run's whole work, so it reaches the Runs it started as well: a
-      // child left working for a parent that stopped keeps changing what nobody waits on.
+      // A stop reaches the children a Run started: they are its work too.
       const runs =
         options.control === STOP
           ? [options.runId, ...descendantsOf(yield* store.runs, options.runId)]
@@ -3327,10 +3315,7 @@ const decodeOptions = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.Array(Schema.String)),
 );
 
-/**
- * Every child this Run started, and theirs, however deep. A child is claimed under its own
- * invocation id; a Run an offer started from this one has a request of its own and is not.
- */
+/** Every child this Run started, however deep; an offer's Run has a request of its own. */
 const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArray<string> => {
   const children = rows
     .filter((row) => row.parent === runId && row.request === row.run)

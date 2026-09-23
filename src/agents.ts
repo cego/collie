@@ -141,28 +141,16 @@ export interface AgentsApi {
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
-  /**
-   * The agent for this work started again with the same prompt, where it is gone and its
-   * Output never came — a stop halts a Run's agents, and a resume picks the work up here.
-   * Nothing is started where herdr cannot say which agents it has.
-   */
+  /** Starts this work's agent again with its prompt where it is gone and its Output never came. */
   readonly revive: (ask: AgentAsk) => Effect.Effect<void, AgentUncertain | AgentParked>;
-  /**
-   * Hands a message to the agent live in this checkout's workspace in a role, through the
-   * one sender — a review's findings to the implementer already building that work,
-   * rather than a second agent on the same checkout. Null where none of another Run is
-   * live and addressable there.
-   */
+  /** Hands a message, through the one sender, to another Run's live agent in this role here; null where none. */
   readonly handOff: (options: {
     readonly runId: string;
     readonly role: string;
     readonly cwd: string;
     readonly text: string;
   }) => Effect.Effect<Steered | null>;
-  /**
-   * Closes the panes this run's live agents are in, which is what stops them. Only theirs:
-   * a workspace keeps its own tab, so none is left empty by it. Says which it closed.
-   */
+  /** Closes the panes of this run's live agents, which stops them, and says which it closed. */
   readonly halt: (runId: string) => Effect.Effect<ReadonlyArray<string>>;
   /**
    * What the agent wrote, or null where it has written nothing in the time allowed.
@@ -702,11 +690,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     );
   });
 
-  /**
-   * The work boundary of an agent that already has work behind it: asked to compact first
-   * where its context has grown past the limit, and held while an earlier compaction is
-   * still in the air. A channel that will not open is left to the delivery to report.
-   */
+  /** A reused agent's work boundary: compacted past the limit, held while a compaction is unresolved. */
   const boundary = (launched: Launched) =>
     Effect.gen(function* () {
       const found = yield* entryFor(launched, launched.agent, null);
@@ -947,8 +931,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         const alive = yield* host.herdr.agentList();
         const file = yield* registryPath(host.env.stateDir, scopeFor(host.env, options.cwd));
         const entry = yield* liveAgent(file, alive, options.role);
-        // An entry with no proven incarnation names a pane, and whatever is in it now is
-        // not the agent it was written about; a stopped Run's agents are closed already.
+        // Without a proven incarnation the entry names a pane, not the agent now in it.
         if (entry === null || entry.runId === options.runId) return null;
         if (!verifyIncarnation(entry, alive).ok) return null;
         const outcome = yield* dispatch.transaction(deps, entry, (channel) =>

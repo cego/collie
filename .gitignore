@@ -1,9 +1,7 @@
 bin/
 node_modules/
 
-# Workflows written on this machine (`user/workflows/*.workflow.ts`). This checkout is an
-# installation, and `collie upgrade` fast-forwards it: what an author saved here is theirs
-# and is never something a pull has an opinion about.
+# Workflows saved on this machine: the author's, never an upgrade's.
 user/
 
 # One-off specs, plans, tickets and reports live in the Run directory (ADR-0002), never
