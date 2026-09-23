@@ -333,11 +333,8 @@ test(
         expect(started).toHaveLength(1);
         expect(started[0]?.workflow).toBe("implement");
         expect(started[0]?.input).toEqual({ plan: `${runDir(dir, "r-arch-go")}/plan` });
-        expect(started[0]?.options).toEqual({
-          workspace: rig.projectDir,
-          task: "one-registry",
-          outcome: "refactor",
-        });
+        // What the work is called and what it proves; where it works is the child's own.
+        expect(started[0]?.options).toEqual({ task: "one-registry", outcome: "refactor" });
       }),
     ),
   120_000,
@@ -446,11 +443,8 @@ test(
         expect(started).toHaveLength(1);
         expect(started[0]?.workflow).toBe("implement");
         expect(started[0]?.input).toEqual({ plan: `${runDir(dir, "r-plan-go")}/plan` });
-        expect(started[0]?.options).toEqual({
-          workspace: rig.projectDir,
-          task: "one-registry",
-          outcome: "feature",
-        });
+        // What the work is called and what it proves; where it works is the child's own.
+        expect(started[0]?.options).toEqual({ task: "one-registry", outcome: "feature" });
       }),
     ),
   120_000,

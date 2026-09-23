@@ -732,11 +732,17 @@ function handle(
           ({
             path: asked ?? path.join(path.dirname(log), "worktrees", branch),
             branch,
-            open_workspace_id: `w${state.worktrees.length + 1}`,
+            open_workspace_id: `w${state.workspaces.length + 1}`,
           } satisfies FakeWorktree);
         if (!known) {
           state.worktrees.push(worktree);
           state.worktreeSource ??= from;
+          // The workspace herdr opened on it is one it lists from then on.
+          state.workspaces.push({
+            workspace_id: worktree.open_workspace_id ?? "",
+            label: flag("--label") ?? branch,
+            cwd: worktree.path,
+          });
         }
         yield* fs.makeDirectory(worktree.path, { recursive: true });
         // The `.git` file git writes at `worktree add`, which is a checkout's identity.

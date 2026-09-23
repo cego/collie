@@ -123,6 +123,8 @@ export const HostRpcs = RpcGroup.make(
       // What this work belongs to, which is the caller's to know and the host's to keep.
       // Left out by a caller that is neither continuing a Task nor inside another run.
       task: Schema.optional(Schema.String),
+      /** A new Task to open for it under this label, once its checkout is known. */
+      taskLabel: Schema.optional(Schema.String),
       parent: Schema.optional(Schema.String),
     },
     success: Started,
@@ -259,7 +261,7 @@ const handlers = (dir: string) =>
               problems: found.problems,
             })),
           ),
-        start: ({ project, id, request, input, text, options, task, parent }) =>
+        start: ({ project, id, request, input, text, options, task, taskLabel, parent }) =>
           registry.resolve({ project, id }).pipe(
             Effect.flatMap((generation) =>
               registry.start({
@@ -270,6 +272,7 @@ const handlers = (dir: string) =>
                 text,
                 options,
                 task,
+                taskLabel,
                 parent,
               }),
             ),

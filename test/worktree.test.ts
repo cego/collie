@@ -1246,7 +1246,7 @@ test("the checkout a branch already has is reused, never added twice", () =>
     }),
   ));
 
-test("workspace=new asks herdr for the checkout and takes the workspace it opens", () =>
+test("a Run that asks for its own workspace has herdr make the checkout, and takes that workspace", () =>
   runEffect(
     Effect.gen(function* () {
       yield* fakeGit();
@@ -1258,7 +1258,8 @@ test("workspace=new asks herdr for the checkout and takes the workspace it opens
         checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
-        inputs: { plan_kind: "text", workspace: "new" },
+        inputs: { plan_kind: "text" },
+        separate: true,
         workspaceId: "wTasks",
       });
 
@@ -1316,7 +1317,8 @@ test("a checkout Collie cannot be given is a run that does not start", () =>
         checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
-        inputs: { plan_kind: "text", workspace: "new" },
+        inputs: { plan_kind: "text" },
+        separate: true,
         workspaceId: "wT",
       });
 

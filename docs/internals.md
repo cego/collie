@@ -174,16 +174,17 @@ is running — and `git worktree add` cuts a new one at the path herdr would hav
 `worktree open` gives an existing checkout its workspace back, `create` cuts a new one.
 
 The run records `worktree.path`, `worktree.branch`, `worktree.managed_by` and
-`worktree.created_by_collie`. Its cwd and Driver are that worktree's; its workspace is
-the one it was activated from unless herdr opened one for the checkout (ADR-0006).
-`startRun` resolves it for a run started here; `chain` resolves it for a chained one,
-which is how `plan` and `architecture` get one.
+`worktree.created_by_collie` in its row's `checkout`, beside the directory it works in.
+Its agents work in that worktree; its workspace is its Task's unless herdr opened one for
+the checkout (ADR-0006). `placeRun` in `native.ts` resolves it at admission, for a start
+and a child alike, from the `checkout` the module declares and the `workspace` option
+decoded into a request — which is how the `implement` that `plan` or `architecture`
+chains into gets one, and why neither of them passes it anything about where to work.
 
 Where herdr does open a workspace — `--input workspace=new`, the path ADR-0006 keeps —
 that workspace comes with one numbered shell tab, and `create` may answer with it. The
-run records it as `worktree.root_tab_id` and `worktree.root_pane_id`, and that pane is
-the run's launch pane: its first agent starts there, so the workspace opens with the
-Collie tab and the run's tabs and no bare shell tab beside them.
+run records it as `worktree.root_tab_id` and `worktree.root_pane_id`, and leaves it where
+it is: the run's agents open tabs of their own, as they do in a Task's workspace.
 
 Both keys are optional, and that is herdr's contract rather than laxity: its schema
 describes `worktree_created` twice, once with `tab` and `root_pane` and once without, so

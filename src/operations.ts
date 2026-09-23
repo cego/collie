@@ -42,7 +42,7 @@ import {
   type Resolution,
 } from "./inputs";
 import { readRegistry, registryPath, scopeFor, scopeKey, scopeOfRun } from "./registry";
-import { newTask, writeTask, type TaskChoice, type TaskRecord } from "./task";
+import type { TaskChoice, TaskRecord } from "./task";
 import { nameTask, type LiveNames, type NamingDeps } from "./tasknames";
 import {
   amend as amendIntent,
@@ -484,10 +484,11 @@ const namingDeps = Effect.fn("operations.namingDeps")(function* (env: PluginEnv)
 /**
  * The Task a start belongs to, and the herdr workspace its Runs and agents live in.
  *
- * A fresh start gets a workspace of its own on the directory it was launched in, whatever
- * workspace it was launched from: that is what keeps one human's several pieces of work
- * from accumulating beside each other. Its shell tab is left where it is, because it is
- * what keeps the workspace open once the Run's agents' panes have closed.
+ * A fresh start gets a workspace of its own, whatever workspace it was launched from:
+ * that is what keeps one human's several pieces of work from accumulating beside each
+ * other. It is only named here. The host opens it at admission, on the checkout the Run
+ * is given, and its shell tab is left where it is, because it is what keeps the
+ * workspace open once the Run's agents' panes have closed.
  *
  * A continuation is given its Task, and goes where that Task already is. Membership is
  * the record, never the label: two Tasks may be called much the same thing, and a
@@ -505,7 +506,12 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
     readonly named: string;
   },
 ) {
-  const kept = (task: TaskRecord | null) => ({ _tag: "Ok" as const, task });
+  const kept = (task: TaskRecord | null, label: string | null = null) => ({
+    _tag: "Ok" as const,
+    task,
+    /** What a fresh Task's workspace is to be called, where this start opens one. */
+    label,
+  });
   const refuse = (message: string, cause: string) => ({
     _tag: "Rejected" as const,
     result: err("operation_failed", message, { cause }),
@@ -538,18 +544,7 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
       yield* liveNames(herdr, naming !== null),
     ),
   );
-  const made = yield* Effect.result(herdr.workspaceCreate({ cwd: env.cwd, label }));
-  if (made._tag === "Failure") {
-    const cause = herdrFailureReason(made.failure);
-    return refuse(`No workspace could be opened for this task: ${cause}`, cause);
-  }
-  const task = yield* writeTask(
-    env.stateDir,
-    yield* newTask({ workspace: made.success.workspaceId, label, cwd: env.cwd }),
-  );
-  // Focused, not just created: a human who started work is taken to it.
-  yield* Effect.ignore(herdr.workspaceFocus(task.workspace));
-  return kept(task);
+  return kept(null, label);
 });
 
 /**

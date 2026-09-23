@@ -823,35 +823,37 @@ test(
   120_000,
 );
 
-test("a fresh start opens its Task a workspace of its own, and a continuation goes where its Task is", () =>
+test("a fresh start only names its Task, and a continuation goes where its Task is", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
+      // Named and nothing more: the host opens it once it knows the checkout it is rooted at.
       const fresh = yield* taskFor(env, { mode: "new" }, { workflow: "implement", named: "ENG-7" });
-      const task = fresh._tag === "Ok" ? fresh.task : null;
-      expect(task?.workspace).toBe("w1");
-      expect(task?.cwd).toBe(rig.projectDir);
-      expect(yield* readTask(env.stateDir, task?.id ?? "")).toEqual(task);
-      const created = (yield* rig.calls()).filter((call) => call.cmd === "workspace create");
-      expect(created.map((call) => call.argv)).toEqual([
-        expect.arrayContaining(["--cwd", rig.projectDir]),
-      ]);
-      // Its shell tab is left alone: it is what keeps the workspace open after the Run's
-      // agents' panes have closed.
-      expect((yield* rig.cmds()).filter((cmd) => cmd.endsWith(" close"))).toEqual([]);
+      expect(fresh._tag === "Ok" && fresh.task).toBeNull();
+      expect(fresh._tag === "Ok" ? fresh.label : null).toEqual(expect.any(String));
+      expect(yield* rig.cmds()).not.toContain("workspace create");
 
+      yield* rig.addWorkspace("wT", "Project | Work", rig.projectDir);
+      const task = {
+        id: "task-1",
+        workspace: "wT",
+        label: "Project | Work",
+        cwd: rig.projectDir,
+        created_at: "2026-09-23T00:00:00.000Z",
+      };
       const again = yield* taskFor(
         env,
-        { mode: "continue", task: task! },
+        { mode: "continue", task },
         { workflow: "review", named: "" },
       );
       expect(again._tag === "Ok" && again.task).toEqual(task);
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(1);
+      expect(again._tag === "Ok" ? again.label : "").toBeNull();
 
       // Outside herdr there is nowhere to open one, and a Run that starts no agent needs none.
       const outside = { ...env, workspaceId: null, socketPath: null };
       const none = yield* taskFor(outside, { mode: "new" }, { workflow: "tally", named: "" });
       expect(none._tag === "Ok" && none.task).toBeNull();
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(1);
+      expect(none._tag === "Ok" ? none.label : "").toBeNull();
+      expect(yield* rig.cmds()).not.toContain("workspace create");
     }),
   ));

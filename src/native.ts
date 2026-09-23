@@ -74,7 +74,7 @@ import {
 } from "./helle";
 import { Kept, describeKept, importHistory } from "./history";
 import { currentPid, signalProcess } from "./lock";
-import type { InputStrategy } from "./definitions";
+import type { CheckoutKind, InputStrategy } from "./definitions";
 import { noteVerification } from "./metrics";
 import {
   gitlabForProject,
@@ -90,7 +90,13 @@ import { planIssuesIn } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome } from "./outcome";
 import { History, RequestConflict, Store, storeLayer, type RunRow } from "./store";
-import { repositoryName } from "./worktree";
+import { TASK_INPUT, checkoutFor, repositoryName } from "./worktree";
+import { Herdr, herdrFailureReason } from "./herdr";
+import type { PluginEnv } from "./env";
+import { WorktreeRecordSchema } from "./run";
+import { newTask, writeTask } from "./task";
+import { classifyWorkSource } from "./inputs";
+import type { BunServices } from "@effect/platform-bun/BunServices";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
   collect as collectVerification,
@@ -203,6 +209,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly options: Readonly<Record<string, string>>;
     /** The Task this Run belongs to, whose workspace its agents open in; null for none. */
     readonly task: string | null;
+    /** A workspace of the Run's own, where it asked for one; null lives in its Task's. */
+    readonly workspace: string | null;
   }
 
   /** What became of a note: whether it landed, and the sentence a human reads either way. */
@@ -395,6 +403,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
     readonly workflow: string;
     /** The Run's Task, whose workspace its agents open in; null opens where the host is. */
     readonly task: string | null;
+    /** The Run's own workspace, where it asked for one; its agents open there instead. */
+    readonly workspace?: string | null;
     readonly cwd: string;
     readonly prompt: string;
     readonly output: string;
@@ -581,6 +591,8 @@ export const SDK_DECLARATIONS = `declare module "collie/native" {
   export interface WorkflowMetadata {
     readonly hints?: Readonly<Record<string, string>>;
     readonly outcome?: OutcomeContract;
+    /** A worktree the host cuts before the Run exists; absent works where it was started. */
+    readonly checkout?: "branch" | "roaming";
     readonly followUps?: ReadonlyArray<FollowUp>;
     readonly actions?: ReadonlyArray<ActionProvider>;
   }
@@ -1264,8 +1276,9 @@ export const nativeHostLayer = (options: {
                   : decodeStrings(row.options ?? "{}").pipe(
                       Effect.orElseSucceed((): Record<string, string> => ({})),
                       Effect.map((options) => ({
-                        options: { ...options, workspace: options.workspace ?? row.project },
+                        options,
                         task: row.task,
+                        placed: placedOf(row, options),
                       })),
                     ),
               ),
@@ -1280,16 +1293,18 @@ export const nativeHostLayer = (options: {
                   : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
               ),
               Effect.map((admitted) => ({
-                cwd: admitted?.options.workspace ?? dir,
+                cwd: admitted?.placed.cwd ?? dir,
                 dir: runDir(dir, runId),
                 options: admitted?.options ?? {},
                 task: admitted?.task ?? null,
+                workspace: admitted?.placed.workspace ?? null,
               })),
               Effect.orElseSucceed(() => ({
                 cwd: dir,
                 dir: runDir(dir, runId),
                 options: {},
                 task: null,
+                workspace: null,
               })),
             ),
           ),
@@ -1738,6 +1753,88 @@ const refuseOptions = (
   return Effect.void;
 };
 
+/** What a caller asked of the checkout, decoded from the host's own `workspace` option. */
+type CheckoutRequest =
+  /** What the workflow declares: its own worktree where it declares one, else where it started. */
+  | { readonly kind: "declared" }
+  /** A herdr worktree workspace of the Run's own. */
+  | { readonly kind: "separate" }
+  /** The checkout the Run starts from, by its absolute path. */
+  | { readonly kind: "existing"; readonly path: string };
+
+const isSeparate = Schema.is(Schema.Literal("new"));
+
+/** The `workspace` option as the typed request it is, refused naming the field where it is not one. */
+const checkoutRequest = Effect.fn("Native.checkoutRequest")(function* (
+  generation: Generation,
+  asked: Readonly<Record<string, string>>,
+) {
+  const given = asked.workspace?.trim() ?? "";
+  if (given === "") return { kind: "declared" } satisfies CheckoutRequest;
+  if (isSeparate(given)) {
+    if (generation.checkout === "none") {
+      return yield* refusedInput(
+        `workspace: "new" asks for a worktree workspace, and "${generation.id}" makes no checkout: it works where it was started`,
+      );
+    }
+    return { kind: "separate" } satisfies CheckoutRequest;
+  }
+  if (!given.startsWith("/")) {
+    return yield* refusedInput(
+      `workspace: "${given}" is neither "new" nor the absolute path of a checkout`,
+    );
+  }
+  const fs = yield* FileSystem.FileSystem;
+  const found = yield* fs.stat(given).pipe(Effect.option);
+  if (Option.isNone(found) || found.value.type !== "Directory") {
+    return yield* refusedInput(`workspace: ${given} is not a directory`);
+  }
+  return { kind: "existing", path: given } satisfies CheckoutRequest;
+});
+
+/** Where a Run works, as the host placed it before the Run existed. */
+const Placed = Schema.Struct({
+  cwd: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  /** A workspace of its own, where it asked for one; null lives in its Task's. */
+  workspace: Schema.NullOr(Schema.String),
+  /** The worktree it was given, which says who takes it away again. */
+  worktree: Schema.NullOr(WorktreeRecordSchema),
+});
+type Placed = typeof Placed.Type;
+const PlacedJson = Schema.fromJsonString(Placed);
+const decodePlaced = Schema.decodeUnknownOption(PlacedJson);
+const encodePlaced = Schema.encodeSync(PlacedJson);
+
+/** Where a Run works: as the host placed it, or for a row from before that, as it started. */
+const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
+  Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
+    cwd: options.workspace ?? row.project,
+    branch: null,
+    workspace: null,
+    worktree: null,
+  }));
+
+/** A launch as the branch resolver reads one: its text, each work source's kind, and the task. */
+const branchInputs = Effect.fn("Native.branchInputs")(function* (
+  generation: Generation,
+  input: Readonly<Record<string, Schema.Json>>,
+  options: Readonly<Record<string, string>>,
+) {
+  const inputs: Record<string, string> = {};
+  for (const [name, value] of Object.entries(input)) if (isText(value)) inputs[name] = value;
+  for (const [name, hint] of Object.entries(generation.hints)) {
+    const value = inputs[name];
+    if (hint !== "work-source" || value === undefined) continue;
+    const source = yield* classifyWorkSource(value).pipe(
+      Effect.orElseSucceed(() => ({ kind: "text" })),
+    );
+    inputs[`${name}_kind`] = source.kind;
+  }
+  if (options.task !== undefined) inputs[TASK_INPUT] = options.task;
+  return inputs;
+});
+
 /**
  * What a launch records beside the author's own input: the caller's host options, and the
  * outcome this Run has to prove — the module's own fixed kind, or the one the caller
@@ -1819,6 +1916,11 @@ export const RunView = Schema.Struct({
   /** Where each of those values came from, and the host options it was launched with. */
   provenance: Schema.Record(Schema.String, Schema.String),
   options: Schema.Record(Schema.String, Schema.String),
+  /** Where it works: its own worktree, on `branch`, or the checkout it was started for. */
+  cwd: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  /** A workspace of its own, where it asked for one; null lives in its Task's. */
+  workspace: Schema.NullOr(Schema.String),
   /**
    * What this Run has to prove, as the module fixed it or the caller selected it. A fact
    * on the Run rather than a reading of its id, so a renamed or user-authored workflow
@@ -1873,6 +1975,8 @@ export interface Generation {
   readonly hints: Readonly<Record<string, InputStrategy>>;
   /** The outcome this module fixes, so asking it for another is refused. */
   readonly fixedOutcome: string | null;
+  /** What it needs of the repository, which is what the host places a Run of it on. */
+  readonly checkout: CheckoutKind;
   /** The file and the revision this was built from: what makes a later start the same code. */
   readonly source: string;
   readonly metadata: Schema.Json;
@@ -1937,6 +2041,8 @@ export interface RegistryApi {
     readonly options?: Readonly<Record<string, string>>;
     /** What this work belongs to: a Task, and the run it came out of. */
     readonly task?: string | null;
+    /** A new Task to open for it, under this label, on the checkout it is given. */
+    readonly taskLabel?: string | undefined;
     readonly parent?: string | null;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   readonly status: (
@@ -2065,6 +2171,8 @@ export interface RegistryOptions {
   readonly locate?: Locate;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly configDir?: string;
+  /** The herdr checkouts and Task workspaces are made through; the host's own by default. */
+  readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
 }
 
 export const registryLayer = (
@@ -2073,7 +2181,7 @@ export const registryLayer = (
 ): Layer.Layer<
   Registry,
   never,
-  HostServices | Store | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner
+  HostServices | Store | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner | BunServices
 > => Layer.effect(Registry)(makeRegistry(dir, options));
 
 /**
@@ -2101,7 +2209,12 @@ const makeRegistry: (
 ) => Effect.Effect<
   RegistryApi,
   never,
-  HostServices | Store | Crypto.Crypto | Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
+  | HostServices
+  | Store
+  | Crypto.Crypto
+  | Scope.Scope
+  | ChildProcessSpawner.ChildProcessSpawner
+  | BunServices
 > = Effect.fn("Native.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
   const crashAt = options?.crashAt;
   const locate = options?.locate;
@@ -2111,6 +2224,14 @@ const makeRegistry: (
   const store = yield* Store;
   const crypto = yield* Crypto.Crypto;
   const hostScope = yield* Effect.scope;
+  const placing =
+    options?.placing ??
+    (yield* currentEnv.pipe(
+      Effect.map((env) => ({ herdr: new Herdr(env), env })),
+      Effect.orDie,
+    ));
+  // Captured, so placing a Run asks git and herdr without its callers providing either.
+  const bun = yield* Effect.context<BunServices | Crypto.Crypto>();
   /** Every generation this host is holding, by its native registration name. */
   const live = new Map<string, Generation>();
   /** Why a recorded generation is not holdable, so a caller hears the file, not a timeout. */
@@ -2161,6 +2282,7 @@ const makeRegistry: (
       fields: entry.input,
       hints: entry.metadata?.hints ?? {},
       fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
+      checkout: entry.metadata?.checkout ?? "none",
       source: yield* sourceOf(route.entry),
       metadata: describeMetadata(entry.metadata),
       offers: declaredByModule(entry.metadata),
@@ -2189,6 +2311,90 @@ const makeRegistry: (
   const refused = (reason: string) => new WorkflowError({ reason });
 
   /**
+   * Where a Run will work, settled before it exists. A workflow that declares a checkout is
+   * cut one from the checkout it starts from, and one that cannot be is refused here, while
+   * there is nothing to clean up. A fresh Task's workspace is opened now, on that checkout,
+   * or is the worktree workspace herdr opened for it — never a second one beside it.
+   */
+  const placeRun = Effect.fn("Native.placeRun")(function* (ask: {
+    readonly generation: Generation;
+    readonly runId: string;
+    readonly from: string;
+    readonly request: CheckoutRequest;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly provenance: Readonly<Record<string, string>>;
+    readonly options: Readonly<Record<string, string>>;
+    readonly task: string | null;
+    readonly taskLabel?: string | undefined;
+  }) {
+    const { generation, from } = ask;
+    const failed = (cause: unknown) =>
+      new HostRefused({
+        reason: `"${generation.id}" could not be given a checkout: ${String(cause)}`,
+      });
+    let placed: Placed = { cwd: from, branch: null, workspace: null, worktree: null };
+    let opened: { readonly id: string; readonly label: string | null } | null = null;
+    if (generation.checkout !== "none") {
+      if (
+        generation.checkout === "branch" &&
+        (yield* repositoryName(runShell, from).pipe(Effect.mapError(failed))) === null
+      ) {
+        return yield* refusedInput(
+          `"${generation.id}" builds on a worktree of its own, and ${from} is not a git checkout to cut one from. Start it from a checkout, or name one with --input workspace=/path/to/checkout.`,
+        );
+      }
+      const checkout = yield* checkoutFor(placing.herdr, {
+        cwd: from,
+        stateDir: placing.env.stateDir,
+        workflow: generation.id,
+        checkout: generation.checkout,
+        separate: ask.request.kind === "separate",
+        name: ask.runId,
+        inputs: yield* branchInputs(generation, ask.input, ask.options),
+        strategies: generation.hints,
+        sources: ask.provenance,
+        openLabel: ask.taskLabel ?? null,
+        explicit: ask.options.branch ?? null,
+        login: placing.env.gitlabLogin,
+      }).pipe(Effect.mapError(failed));
+      if (checkout.refused !== null) {
+        return yield* new HostRefused({
+          reason: `"${generation.id}" could not be given a checkout: ${checkout.refused}`,
+        });
+      }
+      const own = checkout.worktree?.managed_by === "herdr" ? checkout.workspaceId : null;
+      opened = own === null ? null : { id: own, label: checkout.workspaceLabel };
+      placed = {
+        cwd: checkout.cwd,
+        branch: checkout.branch,
+        workspace: ask.taskLabel === undefined ? own : null,
+        worktree: checkout.worktree,
+      };
+    }
+    if (ask.taskLabel === undefined) return { placed, task: ask.task };
+    const label = opened?.label ?? ask.taskLabel;
+    let workspace = opened?.id ?? null;
+    if (workspace === null) {
+      const made = yield* placing.herdr.workspaceCreate({ cwd: placed.cwd, label }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new HostRefused({
+              reason: `No workspace could be opened for this task: ${herdrFailureReason(cause)}`,
+            }),
+        ),
+      );
+      workspace = made.workspaceId;
+    }
+    const task = yield* newTask({ workspace, label, cwd: placed.cwd }).pipe(
+      Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
+      Effect.orDie,
+    );
+    // Focused, not just created: a human who started work is taken to it.
+    yield* Effect.ignore(placing.herdr.workspaceFocus(workspace));
+    return { placed, task: task.id };
+  }, Effect.provideContext(bun));
+
+  /**
    * Another workflow, as part of this one. Selected in the parent's own project and
    * decoded against the child's own schema before a row exists, so input the child will
    * not take is the parent's failure rather than a half-made Run.
@@ -2213,6 +2419,9 @@ const makeRegistry: (
     yield* refuseOptions(generation, asked).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
     );
+    const request = yield* checkoutRequest(generation, asked).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
     const settled = yield* settleInput(generation.fields, { json: ask.input, text: {} }).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
     );
@@ -2221,6 +2430,29 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
     );
+    // A replayed parent comes back to the child it already has, and places nothing again.
+    const placement =
+      (yield* store.claimed(runId)) !== null
+        ? null
+        : yield* placeRun({
+            generation,
+            runId,
+            // Where its parent works, unless it named a checkout of its own.
+            from:
+              request.kind === "existing"
+                ? request.path
+                : placedOf(
+                    parent,
+                    yield* decodeStrings(parent.options ?? "{}").pipe(
+                      Effect.orElseSucceed((): Record<string, string> => ({})),
+                    ),
+                  ).cwd,
+            request,
+            input: settled.input,
+            provenance: settled.provenance,
+            options: asked,
+            task: parent.task,
+          }).pipe(Effect.mapError((failure) => refused(failure.reason)));
     const claimed = yield* store
       .admit({
         // The invocation is the claim, so replaying the parent admits nothing new and
@@ -2232,6 +2464,7 @@ const makeRegistry: (
         input: settled.input,
         provenance: settled.provenance,
         options: launchOptions(generation, asked),
+        checkout: placement === null ? undefined : encodePlaced(placement.placed),
         generation: generation.name,
         execution: yield* generation.registration.workflow.executionId(payload),
         task: parent.task,
@@ -2354,10 +2587,14 @@ const makeRegistry: (
         Effect.orElseSucceed((): Record<string, string> => ({})),
       ),
     };
+    const { cwd, branch, workspace } = placedOf(row, admitted.options);
     const outcome = admitted.options.outcome ?? UNSPECIFIED;
     const generation = live.get(row.generation);
     const about = {
       ...admitted,
+      cwd,
+      branch,
+      workspace,
       outcome,
       created: row.admitted,
       waiting: yield* asked(row.run),
@@ -2598,6 +2835,7 @@ const makeRegistry: (
     readonly text?: Readonly<Record<string, string>>;
     readonly options?: Readonly<Record<string, string>>;
     readonly task?: string | null;
+    readonly taskLabel?: string | undefined;
     readonly parent?: string | null;
   }) {
     const generation = options.generation;
@@ -2605,6 +2843,7 @@ const makeRegistry: (
       options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
     const asked = options.options ?? {};
     yield* refuseOptions(generation, asked);
+    const request = yield* checkoutRequest(generation, asked);
     const launch = launchOptions(generation, asked);
     // Settled before anything exists to clean up: an input the workflow's own schema
     // rejects names its field here, and no row, claim or execution is created.
@@ -2617,6 +2856,21 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
     );
+    // A retried start is the Run it already is, and places nothing a second time.
+    const placement =
+      (yield* store.claimed(options.request)) !== null
+        ? null
+        : yield* placeRun({
+            generation,
+            runId,
+            from: request.kind === "existing" ? request.path : options.project,
+            request,
+            input: settled.input,
+            provenance: settled.provenance,
+            options: asked,
+            task: options.task ?? null,
+            taskLabel: options.taskLabel,
+          });
     const claimed = yield* store.admit({
       request: options.request,
       run: runId,
@@ -2625,9 +2879,10 @@ const makeRegistry: (
       input: settled.input,
       provenance: settled.provenance,
       options: launch,
+      checkout: placement === null ? undefined : encodePlaced(placement.placed),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
-      task: options.task ?? null,
+      task: placement?.task ?? options.task ?? null,
       parent: options.parent ?? null,
     });
     remember(claimed.row);

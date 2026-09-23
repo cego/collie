@@ -65,6 +65,8 @@ export interface AgentAsk {
   readonly workflow: string;
   /** The Run's Task: its agents open in that Task's workspace. Null opens where the host is. */
   readonly task: string | null;
+  /** The Run's own workspace, where it asked for one; its agents open there instead. */
+  readonly workspace?: string | null;
   readonly cwd: string;
   readonly prompt: string;
   readonly output: string;
@@ -253,13 +255,15 @@ export const agentWork = <Output extends OutputContract>(
     // Where each skill the instructions mention lives, so a mention is the path to read
     // rather than a name the agent has to go looking for.
     const skills = yield* agents.skills(skillsIn(work.instructions));
+    const place = yield* host.place(work.runId);
     const ask: AgentAsk = {
       runId: work.runId,
       operation: work.operation,
       role,
       agent: work.agent ?? null,
       workflow: work.workflow ?? work.operation,
-      task: (yield* host.place(work.runId)).task,
+      task: place.task,
+      workspace: place.workspace,
       cwd: work.cwd,
       output,
       prompt: promptFor({
@@ -682,7 +686,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           harness: adapter.id,
           cwd: ask.cwd,
         });
-        const workspace = yield* taskWorkspace(ask);
+        const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
         const tab = yield* host.herdr.tabCreate({ label: ask.role, cwd: ask.cwd, workspace });
         // herdr ignores --cwd on tab create, so the pane is told where it is explicitly.
         yield* host.herdr.paneRun(tab.paneId, `cd ${shellQuote(ask.cwd)}`);

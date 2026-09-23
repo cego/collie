@@ -3,11 +3,11 @@
 // checkout, two Runs building different branches cannot collide, and nothing has to
 // invent an identity for a directory.
 //
-// By default Collie makes the checkout with git and the Run stays in the workspace it
-// was activated from, because a Run belongs where it was started and herdr groups a
-// workspace by Git provenance alone (ADR-0006). `--input workspace=new` asks herdr for
-// the checkout instead, which gives the Run a workspace of its own. A record says which
-// it was, because that is who takes the checkout away again.
+// By default Collie makes the checkout with git and the Run stays in its Task's
+// workspace, because a Run belongs where its Task is and herdr groups a workspace by Git
+// provenance alone (ADR-0006). A Run that asks for a workspace of its own has herdr make
+// the checkout instead. A record says which it was, because that is who takes the
+// checkout away again.
 
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
@@ -120,7 +120,9 @@ export interface CheckoutAsk extends BranchAsk {
   workflow: string;
   /** What the Workflow declared it needs of the repository. */
   checkout: CheckoutKind;
-  /** The workspace the Run was activated from, and stays in. */
+  /** Whether the Run asked for a herdr worktree workspace of its own. */
+  separate?: boolean;
+  /** The workspace the Run lives in, which is its Task's. */
   workspaceId?: string | null;
   workspaceLabel?: string | null;
   /** What to call a workspace herdr opens for this checkout, where it opens one. */
@@ -504,9 +506,6 @@ const isBranch = Effect.fn("worktree.isBranch")(function* (
   return false;
 });
 
-/** `--input workspace=new`: today's separate herdr worktree workspace, asked for. */
-const SEPARATE_WORKSPACE = "new";
-
 /**
  * A branch as a path under the worktrees directory. Its own segments, so `feature/foo`
  * nests rather than being flattened: flattening it to `feature-foo` would collide with
@@ -804,11 +803,10 @@ export function runNames(checkout: Checkout, otherwise: { value: string; short: 
  * Where this Run works. A Workflow that changes the repository owns its branch's
  * checkout; every other Workflow works in the directory it was started from.
  *
- * The Run stays in the workspace it was activated from, and only its cwd moves: the
- * work surrounding a task is encapsulated in its workspace, and a checkout of its own
- * is about not sharing an index, not about being somewhere else in the sidebar.
- * `workspace=new` asks herdr for the checkout instead and takes the workspace herdr
- * opens on it.
+ * The Run stays in its Task's workspace, and only its cwd moves: the work surrounding a
+ * task is encapsulated in its workspace, and a checkout of its own is about not sharing
+ * an index, not about being somewhere else in the sidebar. `separate` asks herdr for the
+ * checkout instead and takes the workspace herdr opens on it.
  *
  * A mutating Workflow that cannot be given a worktree does not start. Falling back to
  * the directory it was launched from is what this whole mechanism exists to prevent:
@@ -919,10 +917,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   const refuse = (why: string) =>
     ({ ...here, refused: `no worktree for ${plan.branch}: ${why}` }) satisfies Checkout;
 
-  // The Workflow's own `workspace` Input, so both front doors and a chained Run reach
-  // it the same way: `startRun` settles it from `--input`, and the Choice that chains
-  // `implement` forwards the parent's answer.
-  if (opts.inputs.workspace?.trim() === SEPARATE_WORKSPACE) {
+  if (opts.separate === true) {
     // The Task's own name where the caller worked one out, so the workspace herdr opens
     // reads like every other task workspace rather than like the branch under it.
     const label =

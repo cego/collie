@@ -101,6 +101,16 @@ test("an outcome is fixed or selectable, and never contradicts itself", () => {
   );
 });
 
+test("a checkout is branch or roaming, and anything else is refused at load", () => {
+  expect(checkEntry(entry({ metadata: { checkout: "branch" } }))).toEqual([]);
+  expect(checkEntry(entry({ metadata: { checkout: "roaming" } }))).toEqual([]);
+  // What a module written in plain JavaScript can still say.
+  const loose: WorkflowMetadata = JSON.parse('{"checkout":"worktree"}');
+  expect(checkEntry(entry({ metadata: loose }))).toEqual([
+    'checkout "worktree" is not branch or roaming',
+  ]);
+});
+
 type Action = NonNullable<WorkflowMetadata["actions"]>[number];
 
 const action = (over: Partial<Action>): Action => ({
@@ -197,6 +207,7 @@ test("what a card is given is ids, titles and projections — never the closures
     hints: { text: "work-source" },
     outcome: null,
     selectable: ["feature"],
+    checkout: null,
     followUps: [{ id: "again", title: "Run again", workflow: "echo", when: "succeeded" }],
     actions: [
       {

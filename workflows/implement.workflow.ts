@@ -60,6 +60,8 @@ export const input = {
 
 export const metadata: WorkflowMetadata = {
   hints: { plan: "work-source" },
+  // The branch it builds, on a worktree of its own, so two Runs never share an index.
+  checkout: "branch",
   // What kind of result this Run has to prove is the human's to say, and an unclassified
   // Run is held to its approved commands rather than made a feature by default.
   outcome: {

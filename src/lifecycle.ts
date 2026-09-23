@@ -154,8 +154,9 @@ export type NativeStart =
  * request twice is the same Run — which is what makes a retried command, a re-clicked
  * row and a replayed receipt one piece of work rather than three.
  *
- * The Task is placed first, so the Run's agents open in its workspace rather than in
- * whichever one the host happened to be started from.
+ * The Task is chosen first, so the Run's agents open in its workspace rather than in
+ * whichever one the host happened to be started from. A fresh one is only named here:
+ * the host opens it once it knows the checkout it is rooted at.
  */
 export const startNativeRun = Effect.fn("Lifecycle.startNativeRun")(function* (
   env: PluginEnv,
@@ -184,6 +185,7 @@ export const startNativeRun = Effect.fn("Lifecycle.startNativeRun")(function* (
       text: options.input.text,
       options: options.options,
       task: placed.task?.id,
+      taskLabel: placed.label ?? undefined,
       parent: options.parent ?? undefined,
     }),
   ).pipe(
@@ -222,11 +224,11 @@ export const nativeRun = (
   );
 
 /**
- * The checkout a native Run's verifications are about: the workspace it was given, or
- * the project it was started for. A verification collected anywhere else would bind a
- * real result to a tree nobody is looking at.
+ * The checkout a native Run's verifications are about: the one the host placed it on. A
+ * verification collected anywhere else would bind a real result to a tree nobody is
+ * looking at.
  */
-export const treeOf = (view: RunView): string => view.options.workspace ?? view.project;
+export const treeOf = (view: RunView): string => view.cwd;
 
 /**
  * Every native Run this state directory has rows for, and why they could not be read

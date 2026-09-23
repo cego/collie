@@ -206,7 +206,6 @@ export const make = (registrationName: string) => {
             // What kind of result this is, and what it is called: settled during the
             // interview rather than asked for again at the start of the build.
             options: launch({
-              workspace: place.cwd,
               task: building ? grilled.slug : "",
               outcome: building ? grilled.outcome : "",
             }),

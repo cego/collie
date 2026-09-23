@@ -311,13 +311,20 @@ generate, and spending the slug's length cap on it would make two long plans one
 
 It is ignored by a workflow that changes nothing.
 
-`--input workspace=new` is a declared input of every mutating workflow, so it reaches the
-same place from any front door and a `plan` that chains into `implement` hands its answer
-on. It asks herdr for the checkout, so the run gets a workspace of its own instead of
-staying in the workspace it was started from
+`--input workspace=` is the host's, not the workflow's, and it says where the checkout
+comes from. `new` asks herdr for it, so the run gets a worktree workspace of its own
+instead of living in its task's; a fresh task takes that workspace as its own rather than
+opening a second one. An absolute path is an existing checkout the run starts from. It is
+decoded before anything exists: any other value is `invalid_input` naming it, and so is
+`new` for a workflow that makes no checkout. Nothing chains it on: an `implement` that a
+`plan`, an `architecture` or a `review` starts is placed by its own declaration, in the
+same task
 ([what a run does to your repository](using.md#what-a-run-does-to-your-repository)).
-`--workspace <id>` is a different thing: it roots the run at that workspace, which is the
-workspace its tabs open in.
+`--workspace <id>` is a different thing: it roots the run at that workspace's directory.
+
+A workflow that builds on a worktree of its own, started from a directory that is not a
+git checkout, is refused with `invalid_input` naming that directory, before a run, a
+worktree, a workspace or an agent exists.
 
 Examples:
 

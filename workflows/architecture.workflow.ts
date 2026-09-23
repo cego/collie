@@ -97,7 +97,7 @@ export const make = (registrationName: string) => {
         invocation: "implement",
         workflow: "implement",
         input: { plan: `${place.dir}/plan` },
-        options: launch({ workspace: place.cwd, task: report.slug, outcome: report.outcome }),
+        options: launch({ task: report.slug, outcome: report.outcome }),
       });
       yield* children.result(child);
       return `${report.report}: implemented as ${child.runId}`;

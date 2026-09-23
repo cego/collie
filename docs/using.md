@@ -238,8 +238,9 @@ Those labels are data. They go to the namer as a list of what things are called,
 prompt that says so, and what comes back is two short strings that can only become a
 label — never a path, an agent name or a command.
 
-With `--input workspace=new` herdr opens the workspace itself, on the checkout, and it is
-opened under this name — so a task reads the same on that path as on any other. A
+With `--input workspace=new` on a fresh task herdr opens the workspace itself, on the
+checkout, and it is opened under this name — so a task reads the same on that path as on
+any other. A
 workspace herdr reopens rather than creates keeps whatever it is already called.
 
 A name is decided once, when the task is made. Continuing a task never renames it, and
@@ -264,10 +265,15 @@ to build and gets a **worktree** of its own on that branch. Two runs can therefo
 two branches at once without sharing a working tree, an index, or a stash stack.
 
 Only the run's directory moves. Its tabs open in its task's workspace, so everything about
-the task stays in one place — including when the directory it was started in is not a
-checkout of the repository at all, which is what `COLLIE_CWD` or `collie --workspace <id>`
-is for. `--input workspace=new` asks herdr for the checkout, and the workspace herdr opens
-on it is the task's (ADR-0006).
+the task stays in one place: a `plan` and the `implement` it chains into are one task in
+one workspace, the implementation on its own worktree. A fresh task's workspace is opened
+on the checkout its first run is given, not on the directory you launched from. The
+worktree is cut from the checkout the run starts from, so starting one from a directory
+that is not a git checkout — a folder of repositories, say — is refused, naming that
+directory, before anything is made; `COLLIE_CWD`, `collie --workspace <id>` or
+`--input workspace=/path/to/checkout` names the right one. `--input workspace=new` asks
+herdr for the checkout instead, and the workspace herdr opens on it is the run's own —
+or, for a fresh task, the task's (ADR-0006).
 
 Which branch it is:
 

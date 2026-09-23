@@ -338,6 +338,8 @@ export interface Place {
   readonly options: Readonly<Record<string, string>>;
   /** The Task this Run belongs to, whose workspace its agents open in; null for none. */
   readonly task: string | null;
+  /** A workspace of the Run's own, where it asked for one; null lives in its Task's. */
+  readonly workspace: string | null;
 }
 
 /** What opening a merge request from here needs, and what it would be filled in with. */
@@ -503,6 +505,10 @@ export interface WorkflowEntry {
   readonly make: (registrationName: string) => Registration;
 }
 
+/** What a workflow may declare it needs of the repository. */
+const DeclaredCheckout = Schema.Literals(["branch", "roaming"]);
+const isDeclaredCheckout = Schema.is(DeclaredCheckout);
+
 /**
  * What a card, a launch and a follow-up read. None of it is a step: a hint says how an
  * input is inferred, an outcome says what closing needs, an action says what may be
@@ -512,6 +518,12 @@ export interface WorkflowMetadata {
   /** Input field to the strategy that infers it. At most one field per exclusive one. */
   readonly hints?: Readonly<Record<string, InputStrategy>>;
   readonly outcome?: OutcomeContract;
+  /**
+   * What this workflow needs of the repository. `branch` builds on a worktree of its own
+   * and `roaming` on a detached one; the host makes it before the Run exists. Absent works
+   * in the checkout the Run was started for.
+   */
+  readonly checkout?: typeof DeclaredCheckout.Type;
   readonly followUps?: ReadonlyArray<FollowUp>;
   readonly actions?: ReadonlyArray<ActionProvider>;
 }
@@ -579,7 +591,8 @@ export interface ActionProvider {
 export const RESERVED_INPUTS = {
   branch: "Branch selection for mutating work, offered by the host",
   task: "Task naming and association, never inferred from the workflow's name",
-  workspace: "An existing checkout or workspace, distinct from the CLI's workspace scope",
+  workspace:
+    "Where the checkout comes from: `new` for a worktree workspace of its own, or an existing checkout's absolute path; distinct from the CLI's workspace scope",
   repo: "One repository's share of a multi-repository work source",
   outcome: "The selectable outcome, where the workflow does not fix one",
   risks: "Additional review axes, passed as declared context",
@@ -619,6 +632,10 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
   }
   problems.push(...hintProblems(entry.metadata?.hints ?? {}, fields));
   problems.push(...outcomeProblems(entry.metadata?.outcome));
+  const checkout: unknown = entry.metadata?.checkout;
+  if (checkout !== undefined && !isDeclaredCheckout(checkout)) {
+    problems.push(`checkout "${String(checkout)}" is not branch or roaming`);
+  }
   problems.push(...offerProblems(entry.metadata));
   return problems;
 }
@@ -682,6 +699,7 @@ export function describeMetadata(metadata: WorkflowMetadata | undefined): Schema
     hints: { ...metadata?.hints },
     outcome: metadata?.outcome?.fixed ?? null,
     selectable: [...(metadata?.outcome?.selectable ?? [])],
+    checkout: metadata?.checkout ?? null,
     followUps: (metadata?.followUps ?? []).map((offer) => ({
       id: offer.id,
       title: offer.title,

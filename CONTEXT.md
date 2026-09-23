@@ -149,8 +149,8 @@ still its Task's. A Run started fresh is a new Task; only an explicit **Continue
 puts new work in an existing one.
 
 **Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
-Task, made and focused when the Task is started, and kept when the work is finished until
-the human closes it. Its label is inferred once, at creation — `<Project or theme> | <what
+Task, made and focused when its first Run is admitted, on the checkout that Run is given,
+and kept when the work is finished until the human closes it. Its label is inferred once, at creation — `<Project or theme> | <what
 this work is>`, from the work and from the names already live in the session — and is
 display only: a label never decides membership, and a label a human changed is theirs,
 never written again. It is where Collie scopes a Run lookup: a workspace that is not a
@@ -222,14 +222,17 @@ exactly one worktree per checked-out branch. The branch names the work rather th
 to it, and new work is generated as `<GitLab login>/<task>` rather than asked for, so two
 Runs on different work can never key the same checkout
 ([the order it is resolved in](docs/cli.md#start-a-run)). Only the Run's cwd moves; its tabs stay in
-the workspace it was activated from and are `cd`-ed into the checkout, because a Run
-belongs where it was started (ADR-0006). `implement` and `renovate` get one, and
-`plan`/`architecture` get one where they chain into `implement`; `review` reads the diff or
-the caller's own tree. A Renovate Run's is the one that holds no branch — see Renovate Run.
+its Task's workspace and are `cd`-ed into the checkout, because a Run belongs where its
+Task is (ADR-0006). A Workflow declares one — `checkout` in its metadata — and the host
+cuts it at admission, before the Run exists, from the checkout the Run starts from: a
+directory that is not a git checkout is refused, named. `implement` and `renovate` declare
+one; `plan`, `architecture` and `review` declare none, and the `implement` they chain into
+is placed by its own declaration, in the same Task. A Renovate Run's is the one that holds
+no branch — see Renovate Run.
 
 Two managers, and a Run records which: Collie makes the checkout with `git worktree add`
 by default, and `--input workspace=new` asks herdr for it instead, which opens it as a
-workspace of its own. It outlives the merge request and is removed only once **Settled** —
+workspace of the Run's own — or, for a fresh Task, as the Task's. It outlives the merge request and is removed only once **Settled** —
 a git-managed checkout with `git worktree remove` then `git branch -d`, and the Run's
 tabs whose shells sit inside it closed with it; one herdr has a workspace open on through
 `herdr worktree remove`, whoever made it, so herdr never lists a checkout that is gone.
@@ -237,9 +240,8 @@ tabs whose shells sit inside it closed with it; one herdr has a workspace open o
 A Run records the branch, the path, its manager, whether Collie created it, and the
 moment git wrote the checkout — which is what tells Collie's own checkout from one a
 human later made at the same path on the same branch. Where herdr opened a workspace for
-it, the Run also records the shell tab that workspace came with, which its first agent
-takes over so no empty tab is left beside the Run's own. A checkout a human made is never
-removed.
+it, that workspace's shell tab is left where it is, as a Task workspace's is. A checkout a
+human made is never removed.
 
 **Settled** — A Collie-created Worktree that holds nothing which exists only there: the
 tree is clean, it holds no commit that is not on the remote already, nothing is working in

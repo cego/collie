@@ -45,6 +45,8 @@ const Run = Schema.Struct({
   /** Where each settled value came from, and what the host itself was given beside them. */
   provenance: Schema.NullOr(Schema.String),
   options: Schema.NullOr(Schema.String),
+  /** Where it works, as the host placed it at admission; null for a row from before. */
+  checkout: Schema.NullOr(Schema.String),
   /** When this work was claimed, which is when the Run began. */
   admitted: Schema.String,
   /** When the engine took this work, or null while it is still a host's to hand over. */
@@ -139,6 +141,8 @@ export interface Admission {
   /** Where each of those came from, and what the host was given that is not the author's. */
   readonly provenance: Readonly<Record<string, string>>;
   readonly options: Readonly<Record<string, string>>;
+  /** Where it works, as the host placed it, as JSON. */
+  readonly checkout?: string;
   readonly generation: string;
   readonly execution: string;
   readonly task: string | null;
@@ -187,6 +191,8 @@ export interface StoreApi {
   readonly admit: (
     admission: Admission,
   ) => Effect.Effect<{ readonly row: RunRow; readonly fresh: boolean }, RequestConflict>;
+  /** The row a request was already admitted as, and null for one nobody has made yet. */
+  readonly claimed: (request: string) => Effect.Effect<RunRow | null>;
   /** The engine has this work: the receipt a crash before it is what recovery looks for. */
   readonly accepted: (run: string) => Effect.Effect<void>;
   readonly pending: Effect.Effect<ReadonlyArray<RunRow>>;
@@ -243,6 +249,10 @@ const MIGRATIONS = {
     yield* sql`ALTER TABLE collie_runs ADD COLUMN provenance TEXT`;
     yield* sql`ALTER TABLE collie_runs ADD COLUMN options TEXT`;
   }),
+  "6_checkout": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE collie_runs ADD COLUMN checkout TEXT`;
+  }),
   "4_decisions": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
@@ -293,7 +303,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       table: "collie_migrations",
     }).pipe(Effect.orDie);
 
-    const columns = sql`run, request, workflow, project, input, generation, execution, task, parent, provenance, options, admitted, accepted`;
+    const columns = sql`run, request, workflow, project, input, generation, execution, task, parent, provenance, options, checkout, admitted, accepted`;
 
     const byRequest = SqlSchema.findAll({
       Request: Schema.String,
@@ -464,12 +474,13 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
             sql`
               INSERT INTO collie_runs
                 (run, request, workflow, project, input, generation, execution,
-                 task, parent, provenance, options, admitted)
+                 task, parent, provenance, options, checkout, admitted)
               VALUES (
                 ${admission.run}, ${admission.request}, ${admission.workflow},
                 ${admission.project}, ${input}, ${admission.generation},
                 ${admission.execution}, ${admission.task}, ${admission.parent},
-                ${asJsonText(admission.provenance)}, ${asJsonText(admission.options)}, ${at}
+                ${asJsonText(admission.provenance)}, ${asJsonText(admission.options)},
+                ${admission.checkout ?? null}, ${at}
               )
               ON CONFLICT(request) DO NOTHING
               RETURNING run
@@ -504,6 +515,11 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
           );
         }).pipe(Effect.orDie),
 
+      claimed: (request: string) =>
+        byRequest(request).pipe(
+          Effect.map((rows) => rows[0] ?? null),
+          Effect.orDie,
+        ),
       pending: unaccepted().pipe(Effect.orDie),
       runs: all,
       run: (run: string) =>

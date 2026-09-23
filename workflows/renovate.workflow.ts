@@ -45,6 +45,8 @@ export const input = {
 
 export const metadata: WorkflowMetadata = {
   hints: { repository: "gitlab-repository" },
+  // Detached at the default branch, so no branch of the repository is bound to this Run.
+  checkout: "roaming",
 };
 
 const content = contentOf(markdown);

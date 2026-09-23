@@ -295,11 +295,17 @@ handed a path still knows where to work.
 
 ```ts
 const place = yield * host.place(payload.runId);
-// place.cwd     — the checkout this Run was started for
-// place.dir     — this Run's own directory, made as you ask for it
-// place.options — the host's own launch options: branch, task, workspace, repo, outcome,
-//                 risks, previous
+// place.cwd       — where this Run works: its own worktree, or the checkout it started from
+// place.dir       — this Run's own directory, made as you ask for it
+// place.options   — the host's own launch options: branch, task, workspace, repo, outcome,
+//                   risks, previous
+// place.task      — the Task it belongs to, whose workspace its agents open in
+// place.workspace — a workspace of its own, where the Run asked for one; null otherwise
 ```
+
+`place.cwd` is decided before your body runs, and your body never makes a checkout. A
+workflow that declares `checkout` in its [metadata](#metadata) is given a worktree of its
+own there; every other one works where it was started, and a child where its parent works.
 
 `place.dir` is where what a Run produces belongs, and where the things that read a Run look:
 a plan's tickets under `plan/issues/`, a review's prose in `review.md` and its findings in
@@ -402,8 +408,11 @@ any of them.
 
 `options` is the host's own — `repo`, `workspace`, `branch`, the names in
 `RESERVED_INPUTS` — and nothing else is taken: a parent cannot put a field into a child's
-payload that its author never declared. It is how a repository gets its share of a plan
-that spans several:
+payload that its author never declared. Where the child works is not among what you pass:
+it starts from where its parent works and is placed on whatever checkout it declares, in
+the parent's Task. `workspace` is only for a child that works somewhere else — a
+repository's own checkout, or `new` for a worktree workspace of its own. It is how a
+repository gets its share of a plan that spans several:
 
 ```ts
 const plan = yield * planReposOf(asked.plan, asked.root);
@@ -603,6 +612,12 @@ export const metadata: WorkflowMetadata = {
   listed under, or which previous review it is given.
 - **`outcome`** is `fixed` or `selectable`, never both. `selectable` offers only the kinds
   a human may ask an implement Run for — `review` and `plan` are what a workflow proves.
+- **`checkout`** is what the workflow needs of the repository. `branch` builds on a
+  worktree of its own, on the branch the host resolves for it; `roaming` is detached at
+  the default branch and binds none. The host makes it before the Run exists, so a launch
+  from a directory that is not a git checkout is refused naming that directory, and no
+  Run, worktree, workspace or agent is left behind. Absent, the Run works where it was
+  started.
 - **`followUps` and `actions`** carry an `id` that is stable and a `title` a human reads.
   Two fields, because a retitled action is the same action and a card matching on the
   title would start a different one. `workflow` is a public id or `"self"` for the one
@@ -633,7 +648,9 @@ an outcome is either fixed or selectable, not both
 
 `RESERVED_INPUTS` is the published list of names the host supplies at launch — `branch`,
 `task`, `workspace`, `repo`, `outcome`, `risks`, `previous`. An input of one of those would
-be shadowed without you ever seeing it, so declaring one is refused.
+be shadowed without you ever seeing it, so declaring one is refused. `workspace` is decoded
+before anything exists: `new`, or the absolute path of a directory. Anything else is
+`invalid_input` naming it, and so is `new` for a workflow that declares no checkout.
 
 ## The shapes the shipped steps write
 

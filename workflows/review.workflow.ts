@@ -171,7 +171,6 @@ export const make = (registrationName: string) => {
             invocation: "implement",
             workflow: "implement",
             input: { plan: place.dir, target: asked.target },
-            options: { workspace: place.cwd },
           });
           yield* children.result(child);
           return `${synthesis.findings.length} finding(s), fixed in ${child.runId}`;

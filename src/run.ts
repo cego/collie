@@ -66,7 +66,7 @@ const ChoiceRecordSchema = Schema.Struct({
  * The checkout a mutating Run owns, keyed by its branch. `created_by_collie` is what
  * makes a worktree a candidate for pruning: a checkout a human made is never touched.
  */
-const WorktreeRecordSchema = Schema.Struct({
+export const WorktreeRecordSchema = Schema.Struct({
   path: Schema.String,
   branch: Schema.String,
   created_by_collie: Schema.Boolean,
