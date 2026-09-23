@@ -226,7 +226,7 @@ collie --json run steer <run-id> "check the migration too" --request-id "$(uuidg
   outcome needs the approved set. `parked` names the repair: `run intent verification`
   grants this Run a command through the host, and `run resume` carries it on.
 - **A Run's agents live in its Task's workspace**, opened by the start that made the Task.
-  A stop closes nothing there. If herdr has closed that workspace by the next launch, it
+  A stop closes only its agents' panes there. If herdr has closed that workspace by the next launch, it
   is reopened on the Run's checkout and the Task records the new id; with the checkout gone
   too, the Run parks with `parked` naming both and the way back. `run resume --workspace`
   does not move a Run: `--workspace` only chooses where the command looks, and the resume
