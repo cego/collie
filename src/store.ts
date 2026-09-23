@@ -45,8 +45,18 @@ const Run = Schema.Struct({
   /** Where each settled value came from, and what the host itself was given beside them. */
   provenance: Schema.NullOr(Schema.String),
   options: Schema.NullOr(Schema.String),
-  /** Where it works, as the host placed it at admission; null for a row from before. */
+  /** Where it works, as the host placed it; null while that is still to do, or from before. */
   checkout: Schema.NullOr(Schema.String),
+  /**
+   * The host options, Task and parent as the request asked for them, canonical, which a
+   * retry is compared to as well. Null for a row from before they were kept.
+   */
+  asked: Schema.NullOr(Schema.String),
+  /**
+   * What placing it starts from — the checkout, and the name of a fresh Task — kept so a
+   * placement a crash cut short is made again. Null for a row from before.
+   */
+  placing: Schema.NullOr(Schema.String),
   /** When this work was claimed, which is when the Run began. */
   admitted: Schema.String,
   /** When the engine took this work, or null while it is still a host's to hand over. */
@@ -141,12 +151,12 @@ export interface Admission {
   /** Where each of those came from, and what the host was given that is not the author's. */
   readonly provenance: Readonly<Record<string, string>>;
   readonly options: Readonly<Record<string, string>>;
-  /** Where it works, as the host placed it, as JSON. */
-  readonly checkout?: string;
   readonly generation: string;
   readonly execution: string;
   readonly task: string | null;
   readonly parent: string | null;
+  /** What the host places it from, as JSON; absent for work that is placed already. */
+  readonly placing?: string;
 }
 
 export interface StoreApi {
@@ -191,8 +201,13 @@ export interface StoreApi {
   readonly admit: (
     admission: Admission,
   ) => Effect.Effect<{ readonly row: RunRow; readonly fresh: boolean }, RequestConflict>;
-  /** The row a request was already admitted as, and null for one nobody has made yet. */
-  readonly claimed: (request: string) => Effect.Effect<RunRow | null>;
+  /** Where the claimant placed it, and the Task that placement opened, if it opened one. */
+  readonly place: (
+    run: string,
+    placed: { readonly checkout: string; readonly task: string | null },
+  ) => Effect.Effect<RunRow>;
+  /** A claim whose placement was refused, withdrawn so the request can be made again. */
+  readonly forget: (run: string) => Effect.Effect<void>;
   /** The engine has this work: the receipt a crash before it is what recovery looks for. */
   readonly accepted: (run: string) => Effect.Effect<void>;
   readonly pending: Effect.Effect<ReadonlyArray<RunRow>>;
@@ -253,6 +268,11 @@ const MIGRATIONS = {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`ALTER TABLE collie_runs ADD COLUMN checkout TEXT`;
   }),
+  "7_asked": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`ALTER TABLE collie_runs ADD COLUMN asked TEXT`;
+    yield* sql`ALTER TABLE collie_runs ADD COLUMN placing TEXT`;
+  }),
   "4_decisions": Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     yield* sql`
@@ -303,7 +323,7 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
       table: "collie_migrations",
     }).pipe(Effect.orDie);
 
-    const columns = sql`run, request, workflow, project, input, generation, execution, task, parent, provenance, options, checkout, admitted, accepted`;
+    const columns = sql`run, request, workflow, project, input, generation, execution, task, parent, provenance, options, checkout, asked, placing, admitted, accepted`;
 
     const byRequest = SqlSchema.findAll({
       Request: Schema.String,
@@ -455,7 +475,9 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
           };
         }
         if (settled.length > 0) return { _tag: "accepted" as const, row };
-        if (row.request === answer.request) return { _tag: "repeat" as const, row };
+        if (row.request === answer.request && row.answer === answer.value) {
+          return { _tag: "repeat" as const, row };
+        }
         return {
           _tag: "refused" as const,
           reason: `"${answer.decision}" was already answered "${row.answer}"`,
@@ -464,6 +486,11 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
 
       admit: Effect.fn("Store.admit")(function* (admission: Admission) {
         const input = canonical(admission.input);
+        const asked = canonical({
+          options: { ...admission.options },
+          task: admission.task,
+          parent: admission.parent,
+        });
         const at = yield* nowIso();
         // The claim is the insert, and what it returns is whether this caller made it:
         // one request id, one row, decided by the database rather than by a read another
@@ -474,13 +501,13 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
             sql`
               INSERT INTO collie_runs
                 (run, request, workflow, project, input, generation, execution,
-                 task, parent, provenance, options, checkout, admitted)
+                 task, parent, provenance, options, asked, placing, admitted)
               VALUES (
                 ${admission.run}, ${admission.request}, ${admission.workflow},
                 ${admission.project}, ${input}, ${admission.generation},
                 ${admission.execution}, ${admission.task}, ${admission.parent},
                 ${asJsonText(admission.provenance)}, ${asJsonText(admission.options)},
-                ${admission.checkout ?? null}, ${at}
+                ${asked}, ${admission.placing ?? null}, ${at}
               )
               ON CONFLICT(request) DO NOTHING
               RETURNING run
@@ -496,7 +523,8 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         if (
           row.workflow !== admission.workflow ||
           row.project !== admission.project ||
-          row.input !== input
+          row.input !== input ||
+          (row.asked !== null && row.asked !== asked)
         ) {
           return yield* new RequestConflict({
             request: admission.request,
@@ -515,11 +543,26 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
           );
         }).pipe(Effect.orDie),
 
-      claimed: (request: string) =>
-        byRequest(request).pipe(
-          Effect.map((rows) => rows[0] ?? null),
-          Effect.orDie,
-        ),
+      place: Effect.fn("Store.place")(function* (run, placed) {
+        yield* reactivity
+          .mutation(
+            RUNS,
+            sql`
+              UPDATE collie_runs
+              SET checkout = ${placed.checkout}, task = COALESCE(${placed.task}, task)
+              WHERE run = ${run}
+            `,
+          )
+          .pipe(Effect.orDie);
+        const [row] = yield* byRun(run).pipe(Effect.orDie);
+        if (row === undefined) return yield* Effect.die(new Error(`run "${run}" is not admitted`));
+        return row;
+      }),
+
+      forget: (run: string) =>
+        reactivity
+          .mutation(RUNS, sql`DELETE FROM collie_runs WHERE run = ${run} AND accepted IS NULL`)
+          .pipe(Effect.asVoid, Effect.orDie),
       pending: unaccepted().pipe(Effect.orDie),
       runs: all,
       run: (run: string) =>

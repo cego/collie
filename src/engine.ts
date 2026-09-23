@@ -89,7 +89,7 @@ import { openFindingsIn } from "./output";
 import { planIssuesIn } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome } from "./outcome";
-import { History, RequestConflict, Store, storeLayer, type RunRow } from "./store";
+import { History, RequestConflict, Store, storeLayer, type Admission, type RunRow } from "./store";
 import { TASK_INPUT, checkoutFor, repositoryName } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
@@ -99,9 +99,10 @@ import { classifyWorkSource } from "./inputs";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
 import {
-  collect as collectVerification,
   fingerprint,
+  insideRun,
   readVerifications,
+  runApproved,
   type Verification,
 } from "./verify";
 import * as Workflow from "effect/unstable/workflow/Workflow";
@@ -1344,31 +1345,45 @@ export const hostLayer = (options: {
           ).pipe(Effect.orDie),
         verify: (asked) =>
           under(
-            approvedOf(dir, asked.runId).pipe(
-              Effect.flatMap((approved) => {
-                const spec = approved.find((entry) => entry.name === asked.name);
-                if (spec === undefined) {
-                  return Effect.fail(
-                    new WorkflowError({
-                      reason: `"${asked.name}" is not among this Run's approved verifications`,
-                    }),
-                  );
-                }
-                const journal = evidenceDir(dir, asked.runId);
-                return collectVerification(journal, {
-                  run: asked.runId,
-                  name: spec.name,
-                  executable: spec.executable,
-                  argv: spec.argv,
-                  cwd: asked.cwd,
-                  by: "collie",
-                  expect: asked.expect ?? "pass",
-                }).pipe(
-                  Effect.tap((record) => noteVerification(journal, record)),
-                  Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
-                );
-              }),
-            ),
+            Effect.gen(function* () {
+              const approved = yield* approvedOf(dir, asked.runId);
+              const spec = approved.find((entry) => entry.name === asked.name);
+              if (spec === undefined) {
+                return yield* new WorkflowError({
+                  reason: `"${asked.name}" is not among this Run's approved verifications`,
+                });
+              }
+              // The checkout the workflow is in has to be the Run's own, and the approved
+              // directory is resolved from it: a grant names where it runs, not the caller.
+              const row = yield* store.run(asked.runId);
+              const placed =
+                row === null
+                  ? null
+                  : placedOf(
+                      row,
+                      yield* decodeStrings(row.options ?? "{}").pipe(
+                        Effect.orElseSucceed((): Record<string, string> => ({})),
+                      ),
+                    );
+              const worktree = placed?.worktree?.path ?? null;
+              const own = { id: asked.runId, cwd: placed?.cwd ?? dir, worktree };
+              if (!(yield* insideRun(asked.cwd, own))) {
+                return yield* new WorkflowError({
+                  reason: `"${asked.cwd}" is not inside run ${asked.runId}`,
+                });
+              }
+              const journal = evidenceDir(dir, asked.runId);
+              return yield* runApproved(
+                journal,
+                { ...own, cwd: asked.cwd },
+                approved,
+                spec,
+                asked.expect ?? "pass",
+              ).pipe(
+                Effect.tap((record) => noteVerification(journal, record)),
+                Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
+              );
+            }),
           ),
         approved: (runId) => under(approvedOf(dir, runId)),
         config: (dotted) =>
@@ -1760,6 +1775,22 @@ const PlacedJson = Schema.fromJsonString(Placed);
 const decodePlaced = Schema.decodeUnknownOption(PlacedJson);
 const encodePlaced = Schema.encodeSync(PlacedJson);
 
+const CLAIM_STRIPES = 16;
+const stripeOf = (key: string) => {
+  let hash = 0;
+  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return hash % CLAIM_STRIPES;
+};
+
+/** What a claimant places a Run from: the checkout it starts in, and a fresh Task's name. */
+const Placing = Schema.Struct({ from: Schema.String, taskLabel: Schema.NullOr(Schema.String) });
+const PlacingJson = Schema.fromJsonString(Placing);
+const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
+const encodePlacing = Schema.encodeSync(PlacingJson);
+
+/** A row claimed and not placed yet: nothing hands it to the engine until it is. */
+const unplaced = (row: RunRow) => row.checkout === null && row.placing !== null;
+
 /** Where a Run works: as the host placed it, or for a row from before that, as it started. */
 const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
   Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
@@ -2111,7 +2142,7 @@ export interface Admitted {
  * run recorded and the engine not yet told, and with the engine told and the receipt not
  * yet written. Only a test sets one, through the host's `COLLIE_HOST_CRASH_AT`.
  */
-export type CrashPoint = "admitted" | "executed";
+export type CrashPoint = "admitted" | "executed" | "answered";
 
 /**
  * How a host turns a public workflow id into the module this project should run. It is
@@ -2366,6 +2397,53 @@ const makeRegistry: (
     return { placed, task: task.id };
   }, Effect.provideContext(bun));
 
+  // One admission of a request at a time: placing is external, and only its claimant places.
+  const claiming = yield* Effect.forEach(Array.from({ length: CLAIM_STRIPES }), () =>
+    Semaphore.make(1),
+  );
+  const claimingOf = (request: string) => claiming[stripeOf(request)]!;
+
+  /**
+   * Where the claimant puts a Run it has claimed. After the claim, so two copies of one
+   * request never both cut a checkout, and one a host died half way through is placed on
+   * recovery rather than lost. A refused placement withdraws the claim: nothing started.
+   */
+  const placeClaimed = Effect.fn("Engine.placeClaimed")(function* (row: RunRow) {
+    const generation = live.get(row.generation);
+    const placing = decodePlacing(row.placing ?? "");
+    if (!unplaced(row) || generation === undefined || Option.isNone(placing)) return row;
+    const strings = (text: string | null) =>
+      decodeStrings(text ?? "{}").pipe(Effect.orElseSucceed((): Record<string, string> => ({})));
+    const options = yield* strings(row.options);
+    const placement = yield* Effect.gen(function* () {
+      return yield* placeRun({
+        generation,
+        runId: row.run,
+        from: placing.value.from,
+        request: yield* checkoutRequest(generation, options),
+        input: yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
+        provenance: yield* strings(row.provenance),
+        options,
+        task: row.task,
+        taskLabel: placing.value.taskLabel ?? undefined,
+      });
+    }).pipe(Effect.tapError(() => store.forget(row.run)));
+    return yield* store.place(row.run, {
+      checkout: encodePlaced(placement.placed),
+      task: placement.task,
+    });
+  });
+
+  const claimAndPlace = (admission: Admission) =>
+    claimingOf(admission.request).withPermits(1)(
+      Effect.gen(function* () {
+        const claimed = yield* store.admit(admission);
+        const row = yield* placeClaimed(claimed.row);
+        remember(row);
+        return { row, fresh: claimed.fresh };
+      }),
+    );
+
   /**
    * Another workflow, as part of this one. Selected in the parent's own project and
    * decoded against the child's own schema before a row exists, so input the child will
@@ -2402,48 +2480,32 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
     );
-    // A replayed parent comes back to the child it already has, and places nothing again.
-    const placement =
-      (yield* store.claimed(runId)) !== null
-        ? null
-        : yield* placeRun({
-            generation,
-            runId,
-            // Where its parent works, unless it named a checkout of its own.
-            from:
-              request.kind === "existing"
-                ? request.path
-                : placedOf(
-                    parent,
-                    yield* decodeStrings(parent.options ?? "{}").pipe(
-                      Effect.orElseSucceed((): Record<string, string> => ({})),
-                    ),
-                  ).cwd,
-            request,
-            input: settled.input,
-            provenance: settled.provenance,
-            options: asked,
-            task: parent.task,
-          }).pipe(Effect.mapError((failure) => refused(failure.reason)));
-    const claimed = yield* store
-      .admit({
-        // The invocation is the claim, so replaying the parent admits nothing new and
-        // changing what an invocation is given is refused rather than run twice.
-        request: runId,
-        run: runId,
-        workflow: generation.id,
-        project: parent.project,
-        input: settled.input,
-        provenance: settled.provenance,
-        options: launchOptions(generation, asked),
-        checkout: placement === null ? undefined : encodePlaced(placement.placed),
-        generation: generation.name,
-        execution: yield* generation.registration.workflow.executionId(payload),
-        task: parent.task,
-        parent: ask.runId,
-      })
-      .pipe(Effect.mapError((conflict) => refused(conflict.reason)));
-    remember(claimed.row);
+    // Where its parent works, unless it named a checkout of its own.
+    const from =
+      request.kind === "existing"
+        ? request.path
+        : placedOf(
+            parent,
+            yield* decodeStrings(parent.options ?? "{}").pipe(
+              Effect.orElseSucceed((): Record<string, string> => ({})),
+            ),
+          ).cwd;
+    const claimed = yield* claimAndPlace({
+      // The invocation is the claim, so replaying the parent admits nothing new and
+      // changing what an invocation is given is refused rather than run twice.
+      request: runId,
+      run: runId,
+      workflow: generation.id,
+      project: parent.project,
+      input: settled.input,
+      provenance: settled.provenance,
+      options: launchOptions(generation, asked),
+      placing: encodePlacing({ from, taskLabel: null }),
+      generation: generation.name,
+      execution: yield* generation.registration.workflow.executionId(payload),
+      task: parent.task,
+      parent: ask.runId,
+    }).pipe(Effect.mapError((failure) => refused(failure.reason)));
     // A child is a Run, so what it may verify is frozen with it rather than read when
     // it asks: the same list, and the same moment, as the start of any other.
     yield* freezeApproved({
@@ -2520,7 +2582,7 @@ const makeRegistry: (
    */
   const handOver = Effect.fn("Engine.handOver")(function* (row: RunRow) {
     const generation = live.get(row.generation);
-    if (generation === undefined) return;
+    if (generation === undefined || unplaced(row)) return;
     const payload = yield* payloadOf(generation, row).pipe(Effect.result);
     if (payload._tag === "Failure") return;
     yield* crash("admitted");
@@ -2535,8 +2597,46 @@ const makeRegistry: (
     yield* store.accepted(row.run);
   });
 
-  // What a host admitted and did not live to hand over. Both crash windows end here.
-  for (const row of yield* store.pending) yield* handOver(row);
+  /** Admitted work a host did not live to place or hand over, finished under its claim. */
+  const recoverAdmission = (row: RunRow) =>
+    claimingOf(row.request).withPermits(1)(
+      placeClaimed(row).pipe(
+        Effect.flatMap(handOver),
+        Effect.catchTag("HostRefused", (failure) =>
+          Effect.logWarning(`${row.run} could not be placed: ${failure.reason}`),
+        ),
+      ),
+    );
+
+  /**
+   * Every recorded answer handed to the run it settles. One a host died between recording
+   * and completing is still owed to a run that waits for it; the rest are the same
+   * completion again, which the engine keeps once.
+   */
+  const reconcileAnswers = Effect.gen(function* () {
+    for (const row of yield* store.runs) {
+      const generation = live.get(row.generation);
+      if (generation === undefined) continue;
+      const answered = (yield* store.asked(row.run)).filter((one) => one.answer !== null);
+      if (answered.length === 0) continue;
+      const state = pollStatus(
+        yield* engine.poll(generation.registration.workflow, row.execution),
+        generation.entry,
+      );
+      if (state.status !== "suspended") continue;
+      for (const one of answered) {
+        yield* answerDecision(generation.registration, {
+          name: one.decision,
+          executionId: row.execution,
+          value: one.answer ?? "",
+        }).pipe(Effect.ignore);
+      }
+    }
+  });
+
+  // What a host admitted and did not live to hand over. Every crash window ends here.
+  for (const row of yield* store.pending) yield* recoverAdmission(row);
+  yield* reconcileAnswers;
 
   /** The file a generation was built from, which a row keeps naming after it has gone. */
   const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
@@ -2832,22 +2932,7 @@ const makeRegistry: (
     )({ runId, input: settled.input }).pipe(
       Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
     );
-    // A retried start is the Run it already is, and places nothing a second time.
-    const placement =
-      (yield* store.claimed(options.request)) !== null
-        ? null
-        : yield* placeRun({
-            generation,
-            runId,
-            from: request.kind === "existing" ? request.path : options.project,
-            request,
-            input: settled.input,
-            provenance: settled.provenance,
-            options: asked,
-            task: options.task ?? null,
-            taskLabel: options.taskLabel,
-          });
-    const claimed = yield* store.admit({
+    const claimed = yield* claimAndPlace({
       request: options.request,
       run: runId,
       workflow: generation.id,
@@ -2855,13 +2940,15 @@ const makeRegistry: (
       input: settled.input,
       provenance: settled.provenance,
       options: launch,
-      checkout: placement === null ? undefined : encodePlaced(placement.placed),
+      placing: encodePlacing({
+        from: request.kind === "existing" ? request.path : options.project,
+        taskLabel: options.taskLabel ?? null,
+      }),
       generation: generation.name,
       execution: yield* generation.registration.workflow.executionId(payload),
-      task: placement?.task ?? options.task ?? null,
+      task: options.task ?? null,
       parent: options.parent ?? null,
     });
-    remember(claimed.row);
     // Frozen with the Run, so editing the project's list changes the next one.
     yield* freezeApproved({
       dir,
@@ -2923,7 +3010,8 @@ const makeRegistry: (
               ),
         ),
       );
-      for (const row of yield* store.pending) yield* handOver(row);
+      for (const row of yield* store.pending) yield* recoverAdmission(row);
+      yield* reconcileAnswers;
       return yield* held;
     }),
 
@@ -3030,16 +3118,16 @@ const makeRegistry: (
       if (settled._tag === "refused") {
         return yield* new HostRefused({ reason: settled.reason });
       }
-      if (settled._tag === "repeat") {
-        return { runId: options.runId, decision: name, value, fresh: false };
-      }
+      if (settled._tag === "accepted") yield* crash("answered");
+      // A repeat completes it again: the host that recorded it may have died before the
+      // run was told, and the engine keeps one completion however often it is sent.
       yield* answerDecision(found.generation.registration, {
         name,
         executionId: found.execution,
         value,
       }).pipe(Effect.mapError((failure) => new HostRefused({ reason: failure.message })));
 
-      return { runId: options.runId, decision: name, value, fresh: true };
+      return { runId: options.runId, decision: name, value, fresh: settled._tag === "accepted" };
     }),
 
     control: Effect.fn("Engine.Registry.control")(function* (options: {

@@ -177,6 +177,10 @@ const start = (
     Effect.result,
   );
 
+const asPlacing = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ from: Schema.String, taskLabel: Schema.String })),
+);
+
 const refusedWith = (result: Result.Result<unknown, { readonly reason: string }>) =>
   Result.isFailure(result) ? result.failure.reason : "";
 
@@ -342,6 +346,80 @@ test(
         expect(tabs(yield* rig.calls())).toEqual([
           { workspace: task?.workspace ?? "", cwd: worktree },
         ]);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "one request started twice at once is placed once: one worktree, one Task, one workspace",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean" }]);
+        const outcome = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const ask = { request: "r1", text: { work: "Add a picker" }, taskLabel: "Project | P" };
+            const both = yield* Effect.all([start(builds!, ask), start(builds!, ask)], {
+              concurrency: "unbounded",
+            });
+            const ids = both.map((one) => (one._tag === "Success" ? one.success.runId : ""));
+            yield* finished(ids[0] ?? "");
+            return { ids, rows: yield* (yield* Store).runs };
+          }),
+        );
+
+        expect(new Set(outcome.ids).size).toBe(1);
+        expect(outcome.rows).toHaveLength(1);
+        const cmds = yield* rig.cmds();
+        expect(cmds.filter((cmd) => cmd === "workspace create")).toHaveLength(1);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.readDirectory(`${env().stateDir}/tasks`)).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a start the host died between claiming and placing is placed and run when it comes back",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean" }]);
+        // The claim as a dying host left it: the row, what to place it from, and nothing else.
+        const claimed = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const store = yield* Store;
+            const payload = { runId: "run-cut", input: { work: "Add a picker" } };
+            yield* store.admit({
+              request: "r1",
+              run: "run-cut",
+              workflow: "builds",
+              project: rig.projectDir,
+              input: payload.input,
+              provenance: { work: "given" },
+              options: {},
+              placing: asPlacing({ from: rig.projectDir, taskLabel: "Project | P" }),
+              generation: builds!.name,
+              execution: yield* builds!.registration.workflow.executionId(payload),
+              task: null,
+              parent: null,
+            });
+            return (yield* store.run("run-cut"))?.checkout ?? null;
+          }),
+        );
+        expect(claimed).toBeNull();
+
+        const view = yield* hosted(finished("run-cut"));
+        expect(view?.cwd).toStartWith(`${rig.root}/.herdr/worktrees/`);
+        expect(view?.worktree?.path).toBe(view?.cwd);
+        expect(view?.task).not.toBeNull();
+        expect(view?.status.status).toBe("complete");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "workspace create")).toHaveLength(1);
       }),
     ),
   120_000,

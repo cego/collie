@@ -103,6 +103,46 @@ test("a request reused with other arguments is refused, and what it claimed is u
     }),
   ));
 
+test("a request reused with other host options, another Task or another parent is refused", () =>
+  onStore(
+    "collie-store-arguments-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      const first = {
+        ...admission("req-1", "run-a", { note: "same" }),
+        options: { branch: "one" },
+      };
+      yield* store.admit(first);
+      for (const changed of [
+        { ...first, options: { branch: "two" } },
+        { ...first, task: "task-7" },
+        { ...first, parent: "run-parent" },
+      ]) {
+        const refused = yield* store.admit({ ...changed, run: "run-b" }).pipe(Effect.flip);
+        expect(refused._tag).toBe("RequestConflict");
+      }
+      // Placing a fresh Task is the host's doing, not an argument the retry changed.
+      yield* store.place("run-a", { checkout: "{}", task: "task-new" });
+      expect((yield* store.admit({ ...first, run: "run-b" })).fresh).toBe(false);
+    }),
+  ));
+
+test("an answer under a request already used for another answer is refused", () =>
+  onStore(
+    "collie-store-answer-",
+    Effect.gen(function* () {
+      const store = yield* Store;
+      yield* store.admit(admission("req-1", "run-a", { note: "asks" }));
+      yield* store.asking({ run: "run-a", decision: "go", prompt: "Go?", options: ["yes", "no"] });
+      const answer = { run: "run-a", decision: "go", request: "ans-1" };
+      expect((yield* store.settle({ ...answer, value: "no" }))._tag).toBe("accepted");
+      expect((yield* store.settle({ ...answer, value: "no" }))._tag).toBe("repeat");
+      const changed = yield* store.settle({ ...answer, value: "yes" });
+      expect(changed._tag === "refused" && changed.reason).toContain('"no"');
+      expect((yield* store.asked("run-a"))[0]?.answer).toBe("no");
+    }),
+  ));
+
 test("two requests with the same input are two runs", () =>
   onStore(
     "collie-store-separate-",

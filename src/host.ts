@@ -364,7 +364,7 @@ const locateIn =
       }),
     );
 
-const isCrashPoint = Schema.is(Schema.Literals(["admitted", "executed"]));
+const isCrashPoint = Schema.is(Schema.Literals(["admitted", "executed", "answered"]));
 
 /** Where a test has this host kill itself mid-start; unset for every other host. */
 const crashPoint = Config.option(Config.String("COLLIE_HOST_CRASH_AT")).pipe(

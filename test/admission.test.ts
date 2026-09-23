@@ -89,6 +89,41 @@ test(
 );
 
 test(
+  "an answer a host recorded and died before handing over reaches the run, and its retry is that answer",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { wf, state } = yield* workspace("collie-admission-answer-");
+        const dying = yield* openHost(state, { crashAt: "answered" });
+        yield* dying.ask({ op: "load", entry: `${wf}/proof.workflow.ts` });
+        yield* started(dying, "r1", "told");
+        yield* dying.until({ op: "poll", id: "proof", runId: "r1" }, suspended);
+        const answer = {
+          op: "answer" as const,
+          id: "proof",
+          runId: "r1",
+          decision: "decision",
+          value: "on",
+          request: "ans-1",
+        };
+        yield* dying.tell(answer);
+        yield* dying.child.exitCode.pipe(Effect.ignore);
+
+        const next = yield* openHost(state);
+        expect((yield* next.until({ op: "poll", id: "proof", runId: "r1" }, complete)).value).toBe(
+          "note:told=on",
+        );
+        const retried = yield* next.ask(answer);
+        expect(retried.ok).toBe(true);
+        const changed = yield* next.ask({ ...answer, value: "off" });
+        expect(changed.ok).toBe(false);
+        yield* next.stop;
+      }).pipe(Effect.scoped),
+    ),
+  180_000,
+);
+
+test(
   "the same request twice is one run, and the same request with other arguments is refused",
   () =>
     runEffect(

@@ -21,6 +21,7 @@ import { Children, Host } from "../src/sdk";
 import { evidenceDir, foundationLayer, loadEntry } from "../src/engine";
 import { fixtures } from "./support/host";
 import { collect } from "../src/verify";
+import { Store } from "../src/store";
 
 let rig: Rig;
 let dir: string;
@@ -251,29 +252,53 @@ test("a command nobody approved is refused, whatever a workflow asks the host fo
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      yield* fs.makeDirectory(`${rig.projectDir}/sub`, { recursive: true });
       yield* fs.makeDirectory(evidenceDir(dir, "r-perm"), { recursive: true });
       yield* fs.writeFileString(
         `${evidenceDir(dir, "r-perm")}/approved.json`,
-        asApproved([{ name: "unit", executable: "true", argv: [], cwd: "." }]),
+        asApproved([
+          { name: "unit", executable: "true", argv: [], cwd: "." },
+          { name: "nested", executable: "true", argv: [], cwd: "sub" },
+        ]),
       );
       const asked = yield* Effect.gen(function* () {
+        yield* (yield* Store).admit({
+          request: "req-perm",
+          run: "r-perm",
+          workflow: "proof",
+          project: rig.projectDir,
+          input: {},
+          provenance: {},
+          options: {},
+          generation: "proof@1",
+          execution: "execution-r-perm",
+          task: null,
+          parent: null,
+        });
         const host = yield* Host;
-        const allowed = yield* host
-          .verify({ runId: "r-perm", name: "unit", cwd: rig.projectDir })
-          .pipe(Effect.result);
-        const refused = yield* host
-          .verify({ runId: "r-perm", name: "rm-rf", cwd: rig.projectDir })
-          .pipe(Effect.result);
-        return { allowed, refused };
+        const verify = (name: string, cwd = rig.projectDir) =>
+          host.verify({ runId: "r-perm", name, cwd }).pipe(Effect.result);
+        return {
+          allowed: yield* verify("unit"),
+          nested: yield* verify("nested"),
+          refused: yield* verify("rm-rf"),
+          elsewhere: yield* verify("unit", rig.root),
+        };
       }).pipe(
         Effect.provide(foundationLayer({ dir, configDir: rig.configDir })),
         Effect.scoped,
         Effect.orDie,
       );
       expect(asked.allowed._tag).toBe("Success");
-      expect(asked.refused._tag).toBe("Failure");
+      // Where the grant said, not where the workflow happened to be standing.
+      expect(asked.nested._tag === "Success" && asked.nested.success.cwd).toBe(
+        `${rig.projectDir}/sub`,
+      );
       expect(asked.refused._tag === "Failure" && asked.refused.failure.reason).toContain(
         "is not among this Run's approved verifications",
+      );
+      expect(asked.elsewhere._tag === "Failure" && asked.elsewhere.failure.reason).toContain(
+        "is not inside run r-perm",
       );
     }),
   ));
