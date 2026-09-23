@@ -230,8 +230,7 @@ test(
               });
               yield* until(
                 () => client.run({ runId: started.runId }),
-                // Suspended, not only asking: an answer that lands before the parent parks
-                // is taken without a replay, so nothing it held or stopped is looked at.
+                // Parked, not only asking: an earlier answer is taken without a replay.
                 (view) =>
                   view?.status.status === "suspended" &&
                   view.waiting.some((one) => one.name === "sign-off"),
@@ -356,8 +355,7 @@ test(
               });
               yield* until(
                 () => client.run({ runId: started.runId }),
-                // Suspended, not only asking: an answer that lands before the parent parks
-                // is taken without a replay, so nothing it held or stopped is looked at.
+                // Parked, not only asking: an earlier answer is taken without a replay.
                 (view) =>
                   view?.status.status === "suspended" &&
                   view.waiting.some((one) => one.name === "sign-off"),

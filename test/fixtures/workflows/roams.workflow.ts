@@ -1,5 +1,3 @@
-// A workflow that roams one repository's branches from a detached checkout the host cut.
-
 import { Host, defineWorkflow, type WorkflowMetadata } from "collie";
 import { Effect, Schema } from "effect";
 
