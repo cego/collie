@@ -279,7 +279,7 @@ test("a staged helper finds the packages installed where its author wrote it", (
         yield* fs.makeDirectory(`${at}/node_modules/${name}`, { recursive: true });
         yield* fs.writeFileString(
           `${at}/node_modules/${name}/package.json`,
-          JSON.stringify({ name, main: "index.js" }),
+          `{"name":"${name}","main":"index.js"}`,
         );
         yield* fs.writeFileString(
           `${at}/node_modules/${name}/index.js`,
