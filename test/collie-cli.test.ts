@@ -61,36 +61,6 @@ const cli = Effect.fn("test.cli")(function* (
 
 const parseEnvelope = Schema.decodeUnknownEffect(CliEnvelope);
 
-/**
- * A Markdown workflow with a menu and a previous-review input. The shipped three are
- * modules now, and what these tests are about is the engine that runs a definition: the
- * Driver it spawns, the Choices a launch may decide, and the run a `previous` has to name.
- */
-const PANEL = `---
-name: panel
-title: panel — a definition with a menu
-description: What the engine does with a Choice, for the tests that are about the engine.
-inputs:
-  target: diff-target
-  previous: optional
-steps:
-  - id: post
-    standalone: true
-    choices:
-      - title: Fix findings
-        prompt: fix
-        persona: implementer
-        output: fix.json
-      - title: Don't post
-        stop: true
----
-
-## fix
-
-Fix what the review raised, then write the Output JSON.
-`;
-const withPanel = { "panel.md": PANEL };
-
 /** `workflow show` for a module: what a caller may give it, and what it gives back. */
 const ShownModule = Schema.fromJsonString(
   Schema.Struct({
@@ -187,6 +157,67 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
       const help = yield* cli(["--help"]);
       expect(help.exit).toBe(0);
       expect(help.stdout).toContain("USAGE");
+    }),
+  ));
+
+test("a hold takes no time to lift at and no reason, because nothing would read either", () =>
+  runEffect(
+    Effect.gen(function* () {
+      for (const [command, flag] of [
+        ["hold", "--reason"],
+        ["release", "--reason"],
+      ]) {
+        const given = yield* cli(["--json", "run", command!, "r1", flag!, "lunch"]);
+        expect(yield* parseEnvelope(given.stdout)).toMatchObject({
+          ok: false,
+          error: { message: `Unrecognized flag: ${flag} in command collie run ${command}` },
+        });
+      }
+      const timed = yield* cli(["--json", "run", "hold", "r1", "--until", "14:00"]);
+      expect(yield* parseEnvelope(timed.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: "invalid_input",
+          message: "Unrecognized flag: --until in command collie run hold",
+        },
+      });
+      expect(timed.exit).toBe(2);
+    }),
+  ));
+
+test("an answer names its question with --decision, not a flag nothing reads", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const expecting = yield* cli([
+        "--json",
+        "run",
+        "answer",
+        "r1",
+        "yes",
+        "--expect-choice",
+        "c1",
+      ]);
+      expect(yield* parseEnvelope(expecting.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: "invalid_input",
+          message: "Unrecognized flag: --expect-choice in command collie run answer",
+        },
+      });
+      expect(expecting.exit).toBe(2);
+    }),
+  ));
+
+test("a workflow is forked by importing it, so fork takes no Markdown merge flags", () =>
+  runEffect(
+    Effect.gen(function* () {
+      for (const flag of ["--mode", "--step"]) {
+        const given = yield* cli(["--json", "workflow", "fork", "implement", flag, "copy"]);
+        expect(yield* parseEnvelope(given.stdout)).toMatchObject({
+          ok: false,
+          error: { message: `Unrecognized flag: ${flag} in command collie workflow fork` },
+        });
+      }
     }),
   ));
 

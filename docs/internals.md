@@ -12,77 +12,57 @@ available programmatically without a second implementation
 ([ADR-0003](adr/0003-collie-is-one-effect-program.md)). A capability that exists in only
 one front door is a defect, not a design.
 
-The shared middle is `operations.ts` (workspace resolution and run mutations) and
-`engine.ts` (tabs, agents, prompts, waits, gates, choices and the fix loop). `collie.ts`
-and `commands/` are the CLI adapter; `flows.ts` and `herdr.ts` are the herdr adapter.
+The shared middle is `operations.ts` (workspace resolution and run mutations),
+`lifecycle.ts` (what a front door asks the host), `host.ts` (the host and its RPC) and
+`engine.ts` (the workflow engine: the registry, recovery, and the SDK a module is served).
+`collie.ts` and `commands/` are the CLI adapter; `flows.ts` and `herdr.ts` are the herdr
+adapter.
 
-## The Driver and the run directory
+## The host and the run directory
 
-A run is executed by a **Driver**: a detached process with no pane at all. It writes its
-progress and any failure into the run directory and asks its questions through files there,
-and the Control Plane is a view over that. A run therefore survives the picker closing, the
-Control Plane closing, and the terminal being detached.
+Work runs in one background **host** per state directory
+([ADR-0015](adr/0015-one-local-host-owns-a-state-directory.md)): `collie host --dir
+<state>`, started by the first client that needs it and owned under `host.lock`. The CLI,
+the board and chat reach it over Effect RPC on `host.sock`, so a Run survives the picker
+closing, the board closing and the terminal being detached, and a client of another build
+is told to restart the host rather than served.
 
-One Driver owns a run's authoritative snapshot and consumes Schema-validated commands from
-an atomic per-run inbox, watched through Effect's `FileSystem.watch`
-([ADR-0004](adr/0004-coordinate-runs-through-the-filesystem.md)). An ownership claim in the
-run directory — acquired atomically and carrying the process's identity — says whether a
-Driver is still driving, so `resume` never starts a second one and a stop signal never
-reaches an unrelated process.
+A workflow is a TypeScript module, and the host runs it on Effect's own engine
+([ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md)): a
+`ClusterWorkflowEngine` over a `SingleRunner`, with execution state in `host.db`, a Bun
+SQLite file. The registry in `engine.ts` loads a module into a generation of its own
+(`<id>@<n>`), admits a start under its request id and hands it to the engine; the store in
+`store.ts` keeps what Collie adds to a Run — its Task, project, entry, input and where each
+value came from, its options, its decisions and its receipts. The request id is the claim:
+the same request twice is one Run, and a Run recorded and not yet handed to the engine is
+handed over when the host starts again ([ADR-0017](adr/0017-one-request-is-one-run.md)).
 
-`collie run stop` writes the request into the inbox and, when a Driver owns the run, sends it
-SIGTERM. The Effect runtime answers a signal by interrupting the Driver's fibre, so the stop
-is recorded in a finaliser: a run still `running` when its Driver is interrupted gets the
-`stopped` marker and its finish time written before the ownership claim is released. A
-Driver killed outright leaves neither, which is what the Control Plane reports as abandoned.
+Recovery re-enters the module as it is now. Completed Activities are reused, a question
+already asked is still asked, and an agent already launched is reattached to. There is no
+frozen copy of the workflow: an unchanged one resumes where it was, one edited out of shape
+has no seamless-resume promise, and one whose module is missing waits, naming the file,
+until it is put back ([ADR-0016](adr/0016-a-workflow-module-is-found-where-it-was-saved.md),
+[ADR-0029](adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md)).
 
-Every run is recorded under the Collie state directory: `runs/<id>/run.json` with the
-inputs and where each came from, `workflow/<name>.json` with the
-[definition snapshot](../CONTEXT.md),
-`steps/<step>[/<variant>]/` with the exact prompt sent and the output written, `personas/`
-with the persona as injected, `review.md` where the run produced one, and `log.txt`. That is
-the audit trail and what `resume` reads.
+A human's controls are the host's to settle, whichever door they come in by
+([ADR-0021](adr/0021-one-host-answers-for-a-run.md)). A hold is a flag the Run reads as a
+plain Effect at its next boundary and suspends on; release clears it and resumes. A stop is
+read inside the Activity that waits on an agent and suspends that Activity's own instance,
+so a resume reattaches to the launch already recorded. A Run that cannot go on by itself — a
+pane that will not take a prompt, nothing approved to prove it, a workspace closed with its
+checkout gone — parks with the reason and the repair, and `run resume` picks it up.
 
-The definition snapshot is what `CONTEXT.md` defines it as: the workflow a run is actually
-running, frozen when the run is created. Without it a Driver re-resolves from whatever the layers say
-_now_ every time it starts, so editing a workflow changes what a run started yesterday does
-on resume — or crashes it, because a record has no step by the new name. What is frozen is
-the **resolved** workflow, after `extends:` and `use:`: rebased step ids, merged variant
-settings and each step's prompt text as it was resolved. It is written as JSON rather than
-re-emitted Markdown precisely because reading Markdown back would resolve it again against
-today's files, which is the thing being prevented. The snapshot is a copy inside the run
-directory; nothing under the user's or the project's config is ever written.
-
-A run recorded before snapshots existed has `definition: null` and resolves from the layers
-as it always did — but only while the steps still match. Where the workflow has since gained,
-lost or reordered a step, `resume` refuses with `definition_changed` and writes nothing, and
-a Driver that finds the same mismatch stops the run `blocked` with that halt rather than
-running a workflow the run never started. Reverting the workflow edit makes it resumable
-again.
+Beside the database, a Run's files are its audit trail: `agents/<run>/<operation>.prompt.md`
+with the Output it came back with, `evidence/<run>/` with the verifications it was granted
+and the ones collected, and `runs/<run>/` with its cards, its `plan/` and the review it left.
+A Run an older Collie recorded is a row `history.ts` imported once, with its directory left
+exactly as it was ([ADR-0027](adr/0027-one-engine-and-history-is-imported-once.md)).
 
 <!-- prettier-ignore -->
 > [!IMPORTANT]
 > The run directory is internal mechanics, not an interface. Its layout can change
 > without notice. Coordinate with a run through the CLI ([CLI](cli.md)) — `run show`,
-> `run wait`, `run answer` — and never by reading or writing run-directory files. Writing
-> one directly races the Driver that owns it.
-
-The Driver reads its inbox **during** a step as well as at a question: once per
-`awaitAgent` poll, and again at every work boundary before a prompt is composed. That is
-what makes steering reach a run that is busy rather than waiting — before this, a command
-written while an agent worked sat unread until the next Choice.
-
-What survives a Driver is decided by what the command is addressed to. `deliver`,
-`intent_changed` and `drift_report` are about the work, so a new Driver keeps them;
-`answer`, `stop`, `hold` and `release` were about the process that is gone, so it drops
-them. A `stop` in particular must not survive: a stop written mid-step used to outlive its
-Driver and kill the next one at its first question, which made any Workflow that asks a
-question unresumable. A command this build cannot decode is logged and left in place —
-a newer Collie may know what it is.
-
-A `hold` takes effect at a work boundary, never mid-turn: the Driver declines to start the
-next piece of work rather than interrupting anyone. It then loops on the inbox until a
-`release` or a `stop`, with `awaiting` set to `hold` so both front doors say so.
+> `run wait`, `run answer` — and never by reading or writing run-directory files.
 
 Plan artefacts are the same story from the other side: `SPEC.md`, tickets, wayfinder maps
 and architecture reports go into the run's `plan/` directory and never into the repository
@@ -90,78 +70,26 @@ and architecture reports go into the run's `plan/` directory and never into the 
 made while planning _are_ written into the repository — those are domain knowledge, not
 plans.
 
-A plan can also move while it is being built. A `plan` Step's own rewrite is diffed and
-handed to the implementer, but a planner answering a question in its pane and writing the
-answer into a ticket is outside any Step of ours. So a Step waiting on an agent re-reads
-the plan's `issues/` at the same beat it samples the pane, and sends the acceptance
-checkboxes that came and went. The baseline is the Run's, read before the first Step and
-moved on only once an agent has actually been told: a `fresh` agent is not told — it
-started after the edit and read the new ticket already — so a change during a review is
-still news to the `fix` that follows. An unreadable ticket yields nothing rather than an
-empty one, since empty would read as requirements deleted.
+A plan can also move while it is being built. `implement` reads its tickets by name each
+time it reaches its list, so a ticket edited since is built as it reads now and a completed
+one is not built again
+([ADR-0024](adr/0024-a-list-of-work-is-known-by-its-names.md)).
 
-## A plan proves it can be handed out
+## A workflow made of workflows
 
-The refusals that stop a fan-out — a ticket with no `Repo:` line, a repository nobody
-checked out, a number claimed twice, a `Blocked by` line naming something that is not a
-ticket, repositories that block each other in a cycle — are read at the step that writes
-the tickets, not only when someone picks "Implement now". A `plan` run could otherwise end
-`done` with tickets nobody can run, and the human would find out a workflow later from a
-hand-off that would not start. A refusal makes the Output unusable, so the planner is asked
-once to fix the tickets in the refusal's own words; a second unrunnable set blocks the step.
+`child({ runId, invocation, workflow, input })` starts another workflow as part of a Run
+([ADR-0022](adr/0022-a-workflow-is-made-of-workflows.md)). The workflow id is resolved in
+the parent's own project, through the same search path a front door uses; the child's
+schema decodes the input before a row exists; and the invocation name is the child's
+identity, so a replayed parent gets the child it already has. The parent writes its child's
+row as accepted and dispatches it itself.
 
-Two of those rules — a number claimed twice, and a blocker naming no ticket of the plan —
-are about the tickets rather than the repositories, so they are checked whatever the plan's
-layout. They used to be read only past the single-repository shortcut, which judged the same
-plan one way as one repository and another as two, and the order those lines describe is
-what a build is sliced along.
-
-## A parent run that fans out
-
-A Choice that chains is normally fire-and-forget: the child gets its own Driver and the
-parent finishes. One case is not. When the plan a Choice hands on names several
-repositories in its tickets' `Repo:` lines, "Implement now" starts one `implement` run per
-repository and the parent stays `running` until the last of them ends
-([Plans that span repositories](workflows.md#plans-that-span-repositories) is what that
-means for the operator; `Repo run` and `Wave` in [`CONTEXT.md`](../CONTEXT.md) are the
-terms).
-
-Three mechanics carry it, and all three are the run directory again rather than anything
-new between processes — so this is
-[ADR-0004](adr/0004-coordinate-runs-through-the-filesystem.md) applied to a second run
-rather than a decision of its own:
-
-- **The record.** `run.json` gains `fanout`: the Choice title that started it, the waves as
-  lists of repository paths, the run each repository got, the merge request each of those
-  opened, which wave is in flight and which repository stopped it. `src/run.ts` owns the
-  shape and the readers of it — `fanoutRepos` is what the board's row, the parent's
-  summary, `run show`'s child lines and the resume check all read, so none of them derives
-  "this repository was never started" for itself.
-- **Waiting.** The engine gets a wait-on-run: watch the child's run directory, re-read its
-  record, stop on a terminal status — the same watch-plus-tick shape the Driver's own
-  Choice wait uses, for the same reason (an event that never arrives should cost latency,
-  not the answer). It has no timeout: a repository run takes as long as its work does, and
-  a child whose Driver was killed outright leaves the record `running`, so the parent waits
-  until someone stops it. The parent's row says which repository it is waiting on.
-- **Stop and resume across two runs.** `run stop` on a parent stops its repository runs
-  before itself, and a repository run that will not stop is the whole answer: the parent is
-  left alone and the failure names it, because stopping the parent and reporting success
-  would say the plan had stopped while one of its runs was still orchestrating agents.
-  `run resume` re-enters the fan-out instead of asking the menu again — repositories that
-  succeeded are skipped, ones that failed or were stopped are resumed as themselves, and
-  the rest start when their blockers are done, so a second attempt opens no second merge
-  requests. The guard that refuses to stop or resume a run that has succeeded is lifted for
-  a parent only while its fan-out is unfinished; once every repository has ended, a built
-  plan is a succeeded run like any other.
-
-A plan the fan-out cannot honestly run is refused when the Choice is picked, before
-anything starts: a repository-level cycle, a ticket with no `Repo:` line where its siblings
-have one, a `Repo:` that is not a path under the plan's root, one with no checkout there,
-two tickets sharing one number, or a "Blocked by" line naming something that is not a
-ticket of the plan. That reading is a
-pure function in `src/plan.ts` for exactly that reason — the refusals have to be decidable
-before a single run exists — and `isSingleRepo` is the same function's answer to "is this a
-plan to chain as one run", which is `.` and nothing else.
+Fan-out is a loop in a module. `readPlanRepos` reads a plan's `Repo:` and `Blocked by` lines
+into waves, or refuses the whole plan before any child exists: a repository-level cycle, a
+ticket with no `Repo:` line where its siblings have one, a `Repo:` that is not a path under
+the root or has no checkout there, two tickets sharing one number, or a `Blocked by` line
+naming no ticket of the plan. It is a pure function in `src/plan.ts` for that reason — the
+refusals are decidable before a single Run exists.
 
 ## Worktrees and the settled rule
 
@@ -337,8 +265,7 @@ A submission that fails outright — no such agent, a socket that is gone — bl
 variant with the reason rather than failing every agent beside it. `unobserved` is never
 erased. Every send goes through the Dispatcher, which writes the `submitted` ledger line
 with `unobserved` as its note and hands the answer back to the caller: the engine logs it
-against the variant, a boundary item composed into that prompt — a hand-off queued through
-the receiving Run's inbox among them — inherits the note, `run deliveries` shows it beside
+against the variant, a boundary item composed into that prompt inherits the note, `run deliveries` shows it beside
 the state, and a compaction request records it, so an unresolved compaction can be told
 from one whose request may never have arrived.
 
@@ -350,21 +277,24 @@ socket path, plugin root. `HERDR_PLUGIN_ROOT` is what pins the baseline definiti
 installation the runner came from; the `collie` on PATH is a two-line shim that sets it.
 Without the pin the compiled runner falls back to its own installation (`process.execPath`
 is the binary when bun runs it from `/$bunfs/`), so a `bin/collie` started from another
-directory still finds its workflows and its Driver. Only `bun src/main.ts` in development
+directory still finds its workflows and the host it starts. Only `bun src/main.ts` in development
 falls all the way through to the current directory.
 
 ## Definitions and layers
 
-`definitions.ts` owns layer lookup, `extends:` overrides, `use:` embedding and validation;
-`yaml.ts` splits frontmatter from the body over Effect's YAML parser and writes a key back
+`discovery.ts` owns where a workflow module is found: project `.herdr/workflows/`, then the
+user's `~/.collie/user/workflows/`, then the installation's `workflows/`. Two entries with
+one id in a layer are an error, and a broken override is reported rather than fallen
+through. `authoring.ts` reads a module without running it — it loads, constructs and
+typechecks it — which is what `collie workflow check` and `workflow show` report.
+
+`definitions.ts` owns persona layer lookup, `extends:` overrides and validation; `yaml.ts`
+splits a persona's frontmatter from its body over Effect's YAML parser and writes a key back
 when forking. The merge semantics are canonical there and in
 [Authoring](authoring.md#forking) — change both together.
 
-Validation runs before a single tab opens: unknown harnesses, models, efforts and
-permissions modes, a permissions mode on a step that continues another step's agent (the
-mode is fixed when that agent starts), missing personas and skills, malformed choices,
-unknown `extends:` parents, cycles, and placeholders no declared input can fill.
-`collie workflow check` is the same validation without a run.
+An unknown harness, model, effort or permissions mode, and a persona or skill that is not
+installed, are refused before an agent's tab opens.
 
 ## Trust
 
@@ -389,7 +319,7 @@ registry exists for. That directory holds the control record, the helper the lau
 generated, and the telemetry the harness's own interface appends; an unresolved
 compaction attempt is on the record, so whichever process reaches that agent next
 refuses to dispatch past it. That telemetry is a bounded file independent processes all
-write — a status line, a hook, a Driver — so every write takes the file's own lock, and
+write — a status line, a hook, the host — so every write takes the file's own lock, and
 the cap drops the oldest lines while keeping the session line and the newest few
 compaction events. Those are what a waiting Run polls for: a file the cap had taken the
 binding out of reads as an agent nothing is known about, and the Run waits out its budget
@@ -397,7 +327,7 @@ for an answer that had already arrived. Installation through agent startup holds
 lock outside the controls directory. Cleanup takes the same lock and rechecks `agent
 list` before removing controls or stopping an endpoint. A parallel launch therefore
 cannot mistake an agent still starting for a stale one; a failed launch releases its
-lock, and the existing PID-lock recovery handles a Driver that crashes.
+lock, and the existing PID-lock recovery handles a process that crashes.
 
 ## The registry and sessions
 
@@ -433,7 +363,7 @@ would be a hand-off delivered to whichever agent happens to be in that pane now.
 `dispatcher.ts` is the only code that sends text to an agent, and a test reads every
 source file to keep it that way. Six callers used to send independently — the next step's
 prompt, a repair, a nudge, two hand-offs and a compaction request — none of them aware of
-the others, so a hand-off from the board and a nudge from a Driver could land in one pane
+the others, so a hand-off from the board and a nudge could land in one pane
 in either order.
 
 `Dispatcher.transaction(deps, entry, body)` holds one agent's ledger lock for the whole of
@@ -462,11 +392,10 @@ after the task text would be read after the thing it was meant to change. Each c
 item is its own delivery with its own id and its own acknowledgement, and its ledger line
 names the prompt that carried it.
 
-A hand-off is a delivery like any other, so it goes into the receiving Run's inbox for
-that Run's Driver to compose — never straight into the pane. A hand-off to a Run nobody is
-driving is refused: there would be nothing to compose it into the agent's next piece of
-work, nothing to hold it behind an unresolved compaction, and nothing to record whether it
-was understood.
+A human's steer is a delivery like any other: the host sends it to the Run's agent through
+the Dispatcher, with the same incarnation and harness-capability checks, and says whether
+it was delivered rather than that it was accepted for sending. Nothing is typed into a pane
+on another Run's behalf.
 
 ## The Herd and its Home
 

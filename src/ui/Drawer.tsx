@@ -117,7 +117,7 @@ export function Drawer(props: DrawerProps) {
 
   const agents = (): Line[] =>
     props.view.agents.length === 0
-      ? [{ text: "no live agent: the Driver holds this run", fg: C.dim }]
+      ? [{ text: "no live agent: the host holds this run", fg: C.dim }]
       : props.view.agents.map((agent) => ({
           text: `${agent.name} — ${agent.now ?? agent.status}`,
           mark: "●",

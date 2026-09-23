@@ -1,8 +1,8 @@
 # Authoring workflows and personas
 
 Every workflow and persona Collie ships is a starting point, not a restriction. This page
-is where they live, how a fork follows its parent, and every key a persona or a Markdown
-definition accepts. For what a Workflow, Step, Persona, Layer or Override _is_, see
+is where they live, how a fork follows its parent, and every key a persona accepts. For
+what a Workflow, an operation, a Persona, a Layer or an Override _is_, see
 [`CONTEXT.md`](../CONTEXT.md).
 
 **A workflow is a TypeScript module.** Every workflow Collie ships is one, with its prompts
@@ -170,12 +170,12 @@ without a pinned default omit the model flag. Effort is optional — leave it ou
 harness uses its own default.
 
 The unattended switch is passed unless `permissions` says `harness`, in your `config.json`
-or on the step; see [Permissions](using.md#permissions-unattended-by-default) for what it
+or on the operation; see [Permissions](using.md#permissions-unattended-by-default) for what it
 means. pi's column says none because it does not ask before a tool call — its `--approve`
 only trusts project-local files — so `bypass` and `harness` start it identically.
 
-A module asks for one piece of work at a time and says what that piece needs, so a step
-that should ask is the one that asks for `permissions: "harness"`.
+A module asks for one piece of work at a time and says what that piece needs, so an
+operation that should ask is the one that asks for `permissions: "harness"`.
 
 The mode is settled when an agent starts, so work handed to an agent that is already
 running keeps the mode that agent was started in. An unknown harness, model, effort or

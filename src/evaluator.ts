@@ -75,7 +75,7 @@ export const ActionSchema = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("hold"),
     run: Schema.String,
-    /** When it lifts by itself, ISO or a clock time; absent is held until released. */
+    /** Refused at admission rather than dropped: nothing lifts a hold at a time. */
     until: Schema.optionalKey(Schema.String),
   }),
   Schema.Struct({ kind: Schema.Literal("release"), run: Schema.String }),

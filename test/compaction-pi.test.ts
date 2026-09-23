@@ -3,7 +3,7 @@
 // attempt. Checked against the installed Pi where the check is about Pi itself.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Path, Schema } from "effect";
+import { Effect, FileSystem, Path, Schedule, Schema } from "effect";
 import { Rig } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { onMachineWith } from "./support/live";
@@ -296,6 +296,51 @@ onMachineWith("pi")(
       Effect.gen(function* () {
         const help = yield* Effect.promise(() => Bun.$`pi --help`.text());
         expect(help).toContain("--extension");
+      }),
+    ),
+  { timeout: 30_000 },
+);
+
+/** One command on Pi's RPC stdin. */
+const asRpc = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Struct({ type: Schema.String, message: Schema.String })),
+);
+
+onMachineWith("pi")(
+  "the installed Pi runs the extension Collie installs and answers a request by its id",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const { args } = yield* pi.install({
+          agent: "reuse-run-two-r1",
+          harness: "pi",
+          cwd: rig.projectDir,
+          dir,
+        });
+        // Offline, in an agent directory of its own: no provider call, and no ~/.pi.
+        const child = Bun.spawn(["pi", "--mode", "rpc", "--offline", ...args], {
+          cwd: rig.projectDir,
+          env: { ...process.env, PI_CODING_AGENT_DIR: path.join(rig.root, "pi-agent") },
+          stdin: "pipe",
+          stdout: "ignore",
+          stderr: "ignore",
+        });
+        child.stdin.write(`${asRpc({ type: "prompt", message: "/collie-compact req-live" })}\n`);
+        child.stdin.flush();
+
+        const outcome = yield* pi.poll(ctx(), "req-live").pipe(
+          Effect.repeat({
+            until: (found) => found !== null,
+            schedule: Schedule.spaced("100 millis"),
+          }),
+          Effect.timeout("20 seconds"),
+          Effect.ensuring(Effect.sync(() => child.kill())),
+        );
+
+        // A fresh session has nothing to compact, and Pi says so through this request's
+        // own error callback; before any response its context estimate is unavailable.
+        expect(outcome?.kind).toBe("failure");
+        expect(yield* pi.usage(ctx())).toBeNull();
       }),
     ),
   { timeout: 30_000 },

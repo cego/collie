@@ -445,7 +445,7 @@ is, and why nothing here is a dependency resolver.
 ## A list of work, one item at a time
 
 A list is `Effect.forEach` over whatever you enumerated; what Collie adds is the two things
-a list of _work_ needs, which are the same two a declared `each:` uses.
+a list of _work_ needs.
 
 - **An item is known by its own name.** `agentWork`'s `operation` is the identity: what it
   launched, what it collected and what it wrote are all recorded under it, so replaying the

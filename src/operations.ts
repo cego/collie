@@ -117,14 +117,6 @@ export const newRequestId = Effect.fn("operations.newRequestId")(function* () {
   return yield* (yield* Crypto.Crypto).randomUUIDv4;
 });
 
-const InboxAnswerCommand = Schema.Struct({
-  type: Schema.Literal("answer"),
-  choiceId: Schema.String,
-});
-const InboxAnswerCommandJson = Schema.fromJsonString(InboxAnswerCommand);
-
-const DriverCommandJson = Schema.fromJsonString(Schema.NonEmptyArray(Schema.String));
-
 /** The live workspace for this environment, shared by both adapters. */
 export const resolveWorkspace = Effect.fn("operations.resolveWorkspace")(function* (
   herdr: Herdr,
@@ -458,10 +450,6 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
   return kept(null, label);
 });
 
-/**
- * Creates the Run and hands it to a detached Driver. Inputs are already settled.
- * Returns an explicit started/rejected outcome so adapters cannot mistake a failure for a Run.
- */
 export const clearOverride = Effect.fn("operations.clearOverride")(function* (
   stateDir: string,
   herdr: Herdr,

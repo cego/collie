@@ -499,9 +499,7 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   const now = here === null ? null : `${here.head_sha}:${here.fingerprint}`;
   return admit(action, {
     run: { id: run.id, status: run.state },
-    // A host that is holding this Run is what a live Driver used to be: the thing that
-    // will act on what is recorded for it.
-    driverLive: !settled(run),
+    hostHolds: !settled(run),
     pendingChoice: run.asking[0]?.name ?? null,
     incarnation: agent === null ? null : (live.find((a) => a.name === agent)?.terminalId ?? null),
     proposedIncarnation: agent === null ? null : (proposal?.incarnations?.[agent] ?? null),
@@ -514,7 +512,7 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
 function emptyAdmission(): Parameters<typeof admit>[1] {
   return {
     run: null,
-    driverLive: false,
+    hostHolds: false,
     pendingChoice: null,
     incarnation: null,
     proposedIncarnation: null,

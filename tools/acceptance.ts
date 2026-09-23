@@ -71,6 +71,7 @@ const SHIPPED = "shipped in 0.8.0";
 const RETRO = "collie-retro-fixes (this MR)";
 const NATIVE = "native-collie-control-panel (this MR)";
 const OPERATOR = "operator";
+const MODULES = "workflow modules (this MR)";
 
 /** What the front door owes a person, and cannot be settled below the front door. */
 const FRONT_DOOR: readonly Check[] = [
@@ -444,6 +445,179 @@ const BACKEND: readonly Check[] = [
   },
 ];
 
+/** What a workflow module is promised, whoever wrote it and whatever it is called. */
+const WORKFLOWS: readonly Check[] = [
+  {
+    id: "workflows/no-shipped-workflow-is-privileged",
+    statement:
+      "Each shipped workflow, saved as a user's entry under an id that shares nothing with it, asks the same questions, starts the same agents in the same tabs, is held to the same evidence and offers the same next steps as it does under its own id — and a fork under another id keeps everything it did not change.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/baseline.test.ts",
+      name: "under an unrelated id",
+    },
+  },
+  {
+    id: "workflows/generic-code-decides-nothing-by-a-workflow-name",
+    statement:
+      "Nothing in the runtime or the board chooses a checkout, a card, a tab or an offer because a Run's workflow is called plan, implement, review, architecture or renovate. Workflows compose by id; Collie does not dispatch on one.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/workflow-names.test.ts",
+      name: "the generic runtime and the board decide nothing by a shipped workflow's name",
+    },
+  },
+  {
+    id: "workflows/a-reintroduced-name-classification-fails-the-suite",
+    statement:
+      "The name-based plan and renovate classification Collie used to have, put back into the file it lived in, fails the suite.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/workflow-names.test.ts",
+      name: "the guard catches the name-based plan and renovate classification Collie used to have",
+    },
+  },
+  {
+    id: "workflows/a-card-is-its-facts",
+    statement:
+      'A finished Run that wrote plan tickets reads "Plan ready to implement." whatever its workflow is called, and one called plan that wrote none owes nothing.',
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/board.test.ts",
+      name: "landed is a disposition, a merge the forge reports, or work with nothing to land",
+    },
+  },
+  {
+    id: "workflows/an-agent-saves-checks-finds-and-runs-a-workflow",
+    statement:
+      "On an installation with no workflows of its own, a module is written, typechecked with the toolchain Collie provisions, found where it was saved and run — with no system Bun or Node and nothing registered by hand.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/authoring.test.ts",
+      name: "an installation with no workflows writes one, checks it, finds it and runs it",
+    },
+  },
+  {
+    id: "workflows/two-projects-run-their-own-implementation-of-one-id",
+    statement:
+      "One host runs two projects' own implementations of the same workflow id at the same time, and neither sees the other's.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/autoload.test.ts",
+      name: "two projects run their own implementation of one id at the same time",
+    },
+  },
+  {
+    id: "workflows/an-edit-reaches-the-next-run",
+    statement:
+      "An edited entry, helper or prompt reaches the next Run without a rebuild or a restart, and the Run already going keeps the code it started with.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/autoload.test.ts",
+      name: "an edited entry, helper and prompt reach the next run while the one going keeps its own",
+    },
+  },
+  {
+    id: "workflows/one-request-is-one-run-through-a-crash",
+    statement:
+      "A host that dies after it recorded a Run, or after the engine accepted it but before the receipt, starts that Run exactly once when it comes back.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/admission.test.ts",
+      name: "a host that dies",
+    },
+  },
+  {
+    id: "workflows/unchanged-work-recovers-after-a-restart",
+    statement:
+      "A module saved outside the checkout runs on the installed binary, and after a restart its completed work is reused rather than done again.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/engine.test.ts",
+      name: "a module outside the checkout runs on the binary and a restart reuses its completed work",
+    },
+  },
+  {
+    id: "workflows/stop-and-resume-keep-the-work",
+    statement:
+      "A Run stopped and resumed twice keeps the work it had done, launches nothing again and still completes.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/engine.test.ts",
+      name: "two stop and resume cycles keep the run's work and it still completes",
+    },
+  },
+  {
+    id: "workflows/history-is-imported-once",
+    statement:
+      "Work the previous engine left behind is imported into the host's rows once; importing again imports nothing, and its files are left as they were.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/history.test.ts",
+      name: "an old Run is imported once, and importing again imports nothing",
+    },
+  },
+  {
+    id: "workflows/the-sdk-and-the-host-share-one-effect",
+    statement:
+      "The Effect an author's module is typechecked against is the one the host runs it on.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/engine.test.ts",
+      name: "the Effect an author's declarations come from is the one the host runs",
+    },
+  },
+  {
+    id: "workflows/mcp-over-stdio",
+    statement:
+      "Collie's MCP server over stdio lists its tools, answers them with their own text, reports errors and exits cleanly at end of input.",
+    owner: MODULES,
+    needs: "backend",
+    proof: {
+      kind: "test",
+      layer: "backend",
+      file: "test/mcp.test.ts",
+      name: "stdio MCP preserves discovery, tool responses, errors, and shutdown",
+    },
+  },
+];
+
 /** What only a person at a terminal can settle. */
 const OPERATOR_CHECKS: readonly Check[] = [
   {
@@ -492,7 +666,12 @@ const OPERATOR_CHECKS: readonly Check[] = [
   },
 ];
 
-export const CHECKS: readonly Check[] = [...FRONT_DOOR, ...BACKEND, ...OPERATOR_CHECKS];
+export const CHECKS: readonly Check[] = [
+  ...FRONT_DOOR,
+  ...BACKEND,
+  ...WORKFLOWS,
+  ...OPERATOR_CHECKS,
+];
 
 export type State = "pass" | "fail" | "pending";
 

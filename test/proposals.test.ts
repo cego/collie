@@ -258,7 +258,7 @@ test("a confirmed proposal cannot then be declined", () =>
 
 const ctx = (over: Partial<AdmissionContext> = {}): AdmissionContext => ({
   run: { id: "r1", status: "running" },
-  driverLive: true,
+  hostHolds: true,
   pendingChoice: null,
   incarnation: "term-1",
   proposedIncarnation: "term-1",
@@ -266,6 +266,12 @@ const ctx = (over: Partial<AdmissionContext> = {}): AdmissionContext => ({
   proposedIntentVersion: 2,
   revision: null,
   ...over,
+});
+
+test("a proposed hold that names a time is refused, because nothing would lift it", () => {
+  const timed: Action = { kind: "hold", run: "r1", until: "2026-09-23T14:00:00+02:00" };
+  expect(admit(timed, ctx())).toContain("nothing lifts a hold at a time");
+  expect(admit({ kind: "hold", run: "r1" }, ctx())).toBeNull();
 });
 
 test("admission asks again, immediately before the action runs", () => {
@@ -281,7 +287,7 @@ test("admission asks again, immediately before the action runs", () => {
   expect(admit(deliver, ctx({ run: { id: "r1", status: "succeeded" } }))).toBe(
     "the run is succeeded",
   );
-  expect(admit(deliver, ctx({ driverLive: false }))).toContain("no Driver");
+  expect(admit(deliver, ctx({ hostHolds: false }))).toContain("the host no longer holds the run");
   // The agent moved on between the proposal and the yes.
   expect(admit(deliver, ctx({ incarnation: "term-2" }))).toContain("not the one in that pane");
   expect(admit(deliver, ctx({ intentVersion: 3 }))).toContain("v2");
@@ -315,7 +321,7 @@ test("terminal Runs can be resumed or visited through the same operations as the
   for (const status of ["failed", "stopped", "succeeded"]) {
     // The resume operation owns its lifecycle rules, including succeeded Runs whose
     // fan-out is unfinished. Admission must not reject them before it can check.
-    const terminal = ctx({ run: { id: "r1", status }, driverLive: false });
+    const terminal = ctx({ run: { id: "r1", status }, hostHolds: false });
     expect(admit({ kind: "resume", run: "r1" }, terminal)).toBeNull();
     expect(admit({ kind: "navigate", run: "r1" }, terminal)).toBeNull();
     expect(admit({ kind: "hold", run: "r1" }, terminal)).toContain(`the run is ${status}`);

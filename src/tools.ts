@@ -62,7 +62,7 @@ import {
   settle as settleNews,
 } from "./news";
 import { findRun, type RunFacts } from "./runs";
-import { nowIso, untilFrom } from "./time";
+import { nowIso } from "./time";
 import { deliveriesOf, herdOf } from "./steering";
 import { loadDefinitions, layers } from "./definitions";
 import { chatHarnessOf, chatPath, pushable, readChat, whyUnavailable } from "./chat";
@@ -119,7 +119,6 @@ const RunInput = Schema.Struct({ run: Schema.optionalKey(Schema.String) });
 const HoldInput = Schema.Struct({
   run: Schema.optionalKey(Schema.String),
   workspace: Schema.optionalKey(Schema.String),
-  until: Schema.optionalKey(Schema.String),
   reason: Schema.optionalKey(Schema.String),
 });
 const decodeHold = decodeStrict(HoldInput);
@@ -390,18 +389,16 @@ export const TOOLS: ReadonlyArray<Tool> = [
     title: "Hold a Run, or a whole workspace",
     description:
       "Stop a Run — or every unfinished Run in a workspace — taking on new work. What is " +
-      "already running carries on; the Driver simply declines to start the next thing. " +
-      "Carried out at once, because it is the human's own instruction: do not propose a " +
-      "hold they asked for. Name the Run by the id `collie_herd` lists, or the workspace " +
-      "by the id `collie_workspaces` lists, and give `until` as a clock time (`14:00`) or " +
-      "a full timestamp to have it lift by itself. Without `until` it is held until " +
-      "someone releases it.",
+      "already running carries on; the Run parks at its next boundary instead of starting " +
+      "the next thing. Carried out at once, because it is the human's own instruction: do " +
+      "not propose a hold they asked for. Name the Run by the id `collie_herd` lists, or " +
+      "the workspace by the id `collie_workspaces` lists. It is held until someone " +
+      "releases it; nothing lifts a hold at a time.",
     input: {
       type: "object",
       properties: {
         run: { type: "string", description: "The Run to hold" },
         workspace: { type: "string", description: "Hold every unfinished Run in this workspace" },
-        until: { type: "string", description: "When it lifts: `14:00`, or a full timestamp" },
         reason: { type: "string", description: "Why, in the human's own words" },
       },
       additionalProperties: false,
@@ -671,24 +668,20 @@ const hold = Effect.fn("Tools.hold")(function* (env: PluginEnv, input: JsonObjec
     return refused(
       "collie_hold",
       decoded.failure,
-      'It takes {"run": "..."} or {"workspace": "..."}, and optionally "until" and "reason".',
+      'It takes {"run": "..."} or {"workspace": "..."}, and optionally "reason".',
     );
-  const { workspace, until, reason } = decoded.success;
+  const { workspace, reason } = decoded.success;
   const on =
     decoded.success.run === undefined && workspace === undefined ? yield* selectionOf(env) : null;
   const run = decoded.success.run ?? on?.run;
   if (run === undefined && workspace === undefined)
     return "collie_hold needs a run or a workspace to hold, and the board has nothing open. Ask which one they meant.";
-  const ends = until === undefined ? null : untilFrom(until, yield* Clock.currentTimeMillis);
-  if (until !== undefined && ends === null)
-    return `Collie could not read "${until}" as a time. Ask for a clock time like 14:00, or a full timestamp.`;
   const why = reason ?? "asked in chat";
   const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
 
   // One channel for every control, so what chat can do to a Run is exactly what the
   // board and the CLI can do to it — including which Runs there are to do it to.
-  const oneRun: Action =
-    ends === null ? { kind: "hold", run: run! } : { kind: "hold", run: run!, until: ends };
+  const oneRun: Action = { kind: "hold", run: run! };
   const held = yield* carryOutAsked(
     env,
     workspace === undefined ? [oneRun] : yield* holdsFor(env, workspace),

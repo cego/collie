@@ -842,6 +842,16 @@ test("a key an action does not take is refused by name, never dropped", () =>
     }),
   ));
 
+test("a hold asked for until a time is refused, because nothing would lift it", () =>
+  inWorld(
+    Effect.gen(function* () {
+      const run = yield* aRun("add a picker");
+      const said = yield* call("collie_hold", { run: run.id, until: "14:00" });
+      expect(said).toContain("collie_hold refused the request (InvalidInput)");
+      expect(said).toContain("Nothing was done");
+    }),
+  ));
+
 test("a confirmation whose actions failed stops the rest of what was asked", () =>
   inWorld(
     Effect.gen(function* () {

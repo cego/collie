@@ -1,7 +1,8 @@
-// The shipped workflows as modules: plan, review and architecture, run the way a user's
-// own module is run.
+// The shipped workflows as modules, run the way a user's own module is run.
 //
-// Nothing here is special-cased for being shipped. The entries are loaded from
+// Nothing here is special-cased for being shipped, and every scenario runs twice: as
+// shipped, and saved as a user's entry under an id that shares nothing with it. The same
+// assertions have to hold both times. The entries are loaded from
 // `workflows/` through the public contract, the agents are herdr's through the real
 // dispatcher with a stand-in harness at the far end, and the engine is Effect's over real
 // SQLite. What is proved is that the Markdown supplies the content — the persona, the
@@ -34,11 +35,41 @@ import { Store } from "../src/store";
 import { fixtures, until } from "./support/host";
 
 const ROOT = new URL("../", import.meta.url).pathname;
-const shipped = (name: string) => `${ROOT}workflows/${name}.workflow.ts`;
+
+const UNRELATED = {
+  plan: "chart-the-work",
+  implement: "lay-the-bricks",
+  review: "second-look",
+  architecture: "survey-the-ground",
+  renovate: "keep-current",
+} as const;
+type Shipped = keyof typeof UNRELATED;
 
 let rig: Rig;
 let dir: string;
 let started: ChildAsk[] = [];
+let renamed = false;
+
+/** The public id a shipped workflow is run under in this pass. */
+const idOf = (name: Shipped) => (renamed ? UNRELATED[name] : name);
+const shipped = (name: Shipped) =>
+  renamed
+    ? `${rig.root}/user/workflows/${idOf(name)}.workflow.ts`
+    : `${ROOT}workflows/${name}.workflow.ts`;
+
+/** A scenario, once as shipped and once under the unrelated ids. */
+const scenario = (name: string, body: () => Promise<void>, timeout?: number) => {
+  for (const pass of [false, true]) {
+    test(
+      pass ? `${name} (under an unrelated id)` : name,
+      () => {
+        renamed = pass;
+        return body();
+      },
+      timeout,
+    );
+  }
+};
 
 beforeEach(() =>
   runEffect(
@@ -52,6 +83,19 @@ beforeEach(() =>
       // The skills the shipped personas and steps name, installed where this machine
       // keeps them: a mention resolves to a path, and a step that starts one can.
       yield* installFakeSkills(rig.root);
+      yield* fs.makeDirectory(`${rig.root}/user/workflows`, { recursive: true });
+      for (const [name, id] of Object.entries(UNRELATED)) {
+        yield* fs.writeFileString(
+          `${rig.root}/user/workflows/${id}.workflow.ts`,
+          [
+            `export * from "${ROOT}workflows/${name}.workflow.ts";`,
+            `export const id = "${id}";`,
+            `export const title = "${id}";`,
+            `export const description = "The shipped ${name}, saved under an id of its own.";`,
+            "",
+          ].join("\n"),
+        );
+      }
     }),
   ),
 );
@@ -282,7 +326,7 @@ const REPORT = {
   outcome: "refactor",
 };
 
-test(
+scenario(
   "architecture reads the project it was started for, as the architect, with the skill started",
   () =>
     runEffect(
@@ -311,7 +355,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "implement now builds the plan the architect wrote, named and classified by the report",
   () =>
     runEffect(
@@ -343,7 +387,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "stop here is an answer: nothing is started, and the run says where the report is",
   () =>
     runEffect(
@@ -382,7 +426,7 @@ const SPEC = { verdict: "clean", findings: [], spec: "plan/SPEC.md" };
 const TICKETS = { verdict: "clean", findings: [], issues_dir: "plan/issues", tickets: 3 };
 const GOAL = { goal: "make the registries one", ticket: "" };
 
-test(
+scenario(
   "plan interviews, writes the spec and cuts the tickets — one planner, its two skills started",
   () =>
     runEffect(
@@ -421,7 +465,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "implement now builds the tickets, under the name and the kind the interview settled",
   () =>
     runEffect(
@@ -453,7 +497,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "a second opinion is another reviewer's, the planner revises from it, and the menu comes back",
   () =>
     runEffect(
@@ -510,7 +554,7 @@ const SYNTHESIS = {
   fixed: [],
 };
 
-test(
+scenario(
   "review reviews the target, reconciles it, and leaves the prose and the findings behind",
   () =>
     runEffect(
@@ -548,7 +592,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "posting is offered for a merge request and nothing else, and a note that did not land asks again",
   () =>
     runEffect(
@@ -581,7 +625,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "a merge request target is offered the post, and the fix is an implementer on this run",
   () =>
     runEffect(
@@ -630,7 +674,7 @@ test(
   120_000,
 );
 
-test("what a finished Run of each shipped module offers is the module's own declaration", () =>
+scenario("what a finished Run of each shipped module offers is the module's own declaration", () =>
   runEffect(
     Effect.gen(function* () {
       const facts = (over: Partial<ActionFacts>): ActionFacts => ({
@@ -650,16 +694,24 @@ test("what a finished Run of each shipped module offers is the module's own decl
           Effect.orDie,
         );
 
+      // The entry this pass loads is the id it claims to be.
+      expect(
+        yield* loadEntry(shipped("review"), "offers").pipe(
+          Effect.map((described) => described.id),
+          Effect.orDie,
+        ),
+      ).toBe(idOf("review"));
+
       // A review with findings has something to fix; one that came back clean has not,
       // and neither answer comes from the workflow being called "review".
       const review = yield* declaredIn(shipped("review"));
       expect(
         offersFrom(review, facts({ openFindings: 2, diffTarget: "branch:main...HEAD" }), {
-          self: "review",
+          self: idOf("review"),
         }).map((offer) => [offer.id, offer.workflow, offer.primary]),
       ).toEqual([
         ["fix-open", "implement", true],
-        ["run-again", "review", false],
+        ["run-again", idOf("review"), false],
       ]);
       expect(
         offersFrom(review, facts({ diffTarget: "branch:main...HEAD" })).map((offer) => offer.id),
@@ -678,7 +730,8 @@ test("what a finished Run of each shipped module offers is the module's own decl
       // The architect's report is read by a human; nothing is offered off the back of it.
       expect(yield* declaredIn(shipped("architecture"))).toEqual([]);
     }),
-  ));
+  ),
+);
 
 test(
   "moved to a directory of its own, a shipped module is the same workflow",
@@ -827,7 +880,7 @@ const OPENED = {
   pushed: true,
 };
 
-test(
+scenario(
   "implement builds a plan one ticket at a time on one implementer, then reviews what it built",
   () =>
     runEffect(
@@ -856,6 +909,17 @@ test(
           .cmds()
           .pipe(Effect.map((cmds) => cmds.filter((cmd) => cmd === "agent start")));
         expect(starts).toHaveLength(3);
+        // Tabs open in the order their agents started, whatever the workflow is called.
+        const tabs = yield* rig
+          .calls()
+          .pipe(
+            Effect.map((calls) =>
+              calls
+                .filter((call) => call.cmd === "tab create")
+                .map((call) => call.argv?.[(call.argv?.indexOf("--label") ?? -2) + 1]),
+            ),
+          );
+        expect(tabs).toEqual(["implementer", "reviewer", "reviewer"]);
         // The second ticket is handed what the first left, not the whole transcript.
         const second = yield* asked("r-impl", "02-second.md");
         expect(second).toContain("Ticket: 02-second.md — the second one");
@@ -873,7 +937,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "the merge request says what was verified, and is assigned to whoever the config names",
   () =>
     runEffect(
@@ -903,7 +967,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "a blocking finding goes back to the agent that built it, and the next review ends the rally",
   () =>
     runEffect(
@@ -948,7 +1012,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "a review module's own directory is a review to build from, not a wall of text",
   () =>
     runEffect(
@@ -981,7 +1045,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "no merge request where the evidence is not there, and the reason is what the Run says",
   () =>
     runEffect(
@@ -1078,7 +1142,7 @@ const parkedWhy = (runId: string) =>
     Effect.orElseSucceed(() => ""),
   );
 
-test(
+scenario(
   "a Run with nothing approved to prove it stops before any agent, and says how to approve something",
   () =>
     runEffect(
@@ -1106,7 +1170,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "the same Run, granted a verification and resumed, builds and is held to it at its gate",
   () =>
     runEffect(
@@ -1140,7 +1204,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "a grant emptied while the Run works stops it at its gate with the same repair, not an empty approval",
   () =>
     runEffect(
@@ -1186,7 +1250,7 @@ test(
   120_000,
 );
 
-test("a Run whose outcome needs no evidence is not stopped for having nothing approved", () =>
+scenario("a Run whose outcome needs no evidence is not stopped for having nothing approved", () =>
   runEffect(
     Effect.gen(function* () {
       yield* repository();
@@ -1203,7 +1267,8 @@ test("a Run whose outcome needs no evidence is not stopped for having nothing ap
       expect(yield* parkedWhy("r-impl-inv")).toBe("");
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
     }),
-  ));
+  ),
+);
 
 /**
  * A host with no Helle to ask. The claim is a service this machine has no credentials
@@ -1264,7 +1329,7 @@ const MERGED = {
 const RELEASED = { verdict: "clean", findings: [], version: "1.2.0", tagged: true };
 const RECORDED = { verdict: "clean", findings: [], checked_off: true, status: "renovated" };
 
-test(
+scenario(
   "a package never reaches batch, stage or approval: no agent, no Output, and a reason on the record",
   () =>
     runEffect(
@@ -1300,7 +1365,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "nothing to renovate: no claim is taken, nothing is merged, and the repository is checked off",
   () =>
     runEffect(
@@ -1332,7 +1397,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "an application batches under the claim, proves it on stage and waits for a teammate",
   () =>
     runEffect(
@@ -1374,7 +1439,7 @@ test(
   120_000,
 );
 
-test(
+scenario(
   "a stage that was not proved merges nothing, and says so rather than carrying on",
   () =>
     runEffect(
@@ -1404,7 +1469,7 @@ test(
 
 const PACKAGE = { verdict: "clean", up_to_date: false, is_package: true, merge_requests: BUMPS };
 
-test(
+scenario(
   "a fork changes what lands and keeps everything that decides whether it should",
   () =>
     runEffect(

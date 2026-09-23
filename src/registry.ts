@@ -90,10 +90,9 @@ export function scopeFor(
 
 /**
  * The register a Run's own agents are on, which is not the register of whoever is
- * asking about them. A Driver is spawned with the Run's session, its workspace and its
- * checkout (`operations.spawnDriver`), so those three are what it registered under —
- * and a board of every workspace stops and hands off runs that were never this
- * Session's.
+ * asking about them. A Run's agents are registered under its session, its workspace and
+ * its checkout — and a board of every workspace stops and hands off runs that were never
+ * this Session's.
  */
 export function scopeOfRun(record: {
   session: string | null;

@@ -68,7 +68,7 @@ import { currentReports, readDrift } from "../drift";
 import { newest, readCards } from "../cards";
 import { metricsOf, readMetrics } from "../metrics";
 import { latest, readDispositions, recordDisposition, statusLine } from "../disposition";
-import { nowIso, untilFrom } from "../time";
+import { nowIso } from "../time";
 import type { PluginEnv } from "../env";
 import {
   attempt,
@@ -809,12 +809,6 @@ const runAnswer = Command.make(
     answer: Argument.String("answer").pipe(
       Argument.withDescription("The Choice to take, as `run show` titles it"),
     ),
-    expectChoice: Flag.String("expect-choice").pipe(
-      Flag.withDescription(
-        "Only answer while this is still the pending Choice, as `run wait --until attention` returns its id",
-      ),
-      Flag.optional,
-    ),
     decision: Flag.String("decision").pipe(
       Flag.withDescription(
         "Which question, for a workflow module waiting on more than one; `run show` names them",
@@ -823,7 +817,7 @@ const runAnswer = Command.make(
     ),
     requestId: requestIdFlag,
   },
-  ({ runId, answer, expectChoice, decision, requestId }) =>
+  ({ runId, answer, decision, requestId }) =>
     runMutationCommand("run-answer", runId, requestId, "answered", (env, id) =>
       answerRun(env, {
         runId,
@@ -886,42 +880,16 @@ const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
   runMutationCommand("run-stop", runId, requestId, "stopped", (env) =>
     controlRun(env, { runId, control: "stop", set: true }),
   ),
-).pipe(Command.withDescription("Stop a Run and close only the panes it owns"));
-
-const reasonFlag = Flag.String("reason").pipe(
-  Flag.withDescription("Why, in your own words; it is shown wherever the hold is"),
-  Flag.withDefault("no reason given"),
-);
-
-const untilFlag = Flag.String("until").pipe(
-  Flag.withDescription("When the hold lifts by itself: `14:00`, or a full timestamp"),
-  Flag.optional,
+).pipe(
+  Command.withDescription(
+    "Stop a Run where it is; its agents and their panes are left as they are",
+  ),
 );
 
 const holdWorkspaceFlag = Flag.String("workspace").pipe(
   Flag.withDescription("Hold every unfinished Run in this workspace instead of one Run"),
   Flag.optional,
 );
-
-type ParsedEnd = { ok: true; until: string | null } | { ok: false; error: Result };
-
-/**
- * When a hold ends. Refused here rather than carried as words nobody can act on: a hold
- * whose end the Driver cannot read is a hold that never lifts.
- */
-function parseEnd(value: Option.Option<string>, nowMs: number): ParsedEnd {
-  if (Option.isNone(value)) return { ok: true, until: null };
-  const at = untilFrom(value.value, nowMs);
-  return at === null
-    ? {
-        ok: false,
-        error: err(
-          "invalid_input",
-          `Invalid --until "${value.value}"; use a clock time like 14:00, or a full timestamp.`,
-        ),
-      }
-    : { ok: true, until: at };
-}
 
 /**
  * Every Run of the Task this workspace belongs to, held. A workspace is where a Task is
@@ -949,19 +917,15 @@ const runHold = Command.make(
   {
     runId: runIdArg.pipe(Argument.optional),
     workspace: holdWorkspaceFlag,
-    reason: reasonFlag,
-    until: untilFlag,
     requestId: requestIdFlag,
   },
-  ({ runId, workspace, reason, until, requestId }) =>
+  ({ runId, workspace, requestId }) =>
     Effect.gen(function* () {
       const global = yield* root;
-      const ends = parseEnd(until, yield* Clock.currentTimeMillis);
       const where = Option.getOrNull(workspace);
       const id = Option.getOrNull(runId);
       yield* attempt(
         Effect.gen(function* () {
-          if (!ends.ok) return ends.error;
           const resolved = yield* context(global, false);
           if (resolved._tag === "ContextFailure") return resolved.result;
           if (where !== null) {
@@ -998,8 +962,8 @@ const runHold = Command.make(
 
 const runRelease = Command.make(
   "release",
-  { runId: runIdArg, reason: reasonFlag, requestId: requestIdFlag },
-  ({ runId, reason, requestId }) =>
+  { runId: runIdArg, requestId: requestIdFlag },
+  ({ runId, requestId }) =>
     runMutationCommand("run-release", runId, requestId, "released", (env) =>
       controlRun(env, { runId, control: "hold", set: false }),
     ),

@@ -2,7 +2,7 @@
 
 This is the operator's guide: how to install Collie, start a run from inside herdr, read
 the Control Plane, answer what a run asks you, and pick up where you left off. For the
-vocabulary — Run, Step, Driver, Choice, Hand-off — see [`CONTEXT.md`](../CONTEXT.md).
+vocabulary — Run, operation, host, Choice, Hand-off — see [`CONTEXT.md`](../CONTEXT.md).
 
 ## Install
 
@@ -137,15 +137,13 @@ is no — a Run that would only find out at its merge step is not started.
 | `COLLIE_BIN_DIR`      | Where `install.sh` writes the `collie` on your PATH; defaults to `~/.local/bin`. `collie doctor` looks there for a shim that is not on PATH. |
 | `CLAUDE_SKILLS_DIR`   | Claude Code's skill store, where `prepare.sh` links the operator skill beside `~/.agents/skills`; defaults to `~/.claude/skills`.            |
 | `COLLIE_RELEASE_BASE` | Base URL from which `install.sh` downloads `collie-<os>-<arch>`.                                                                             |
-| `COLLIE_DRIVER`       | Driver executable for development and tests: one executable path, or a JSON array containing the executable and arguments.                   |
 | `COLLIE_MODE`         | Internal picker mode passed from a herdr action to its picker pane.                                                                          |
-| `COLLIE_RUN`          | Internal Run ID passed to a detached Driver.                                                                                                 |
-| `COLLIE_CWD`          | Working directory passed to picker, agent, and Driver processes; also re-roots a CLI run.                                                    |
+| `COLLIE_CWD`          | Working directory passed to picker and agent processes; also re-roots a CLI run.                                                             |
+| `COLLIE_HOST`         | Host executable for development and tests: one executable path, or a JSON array containing the executable and arguments.                     |
 | `GITLAB_USER_LOGIN`   | Who a generated branch is namespaced under. Unset, Collie asks `glab` who you are for this checkout's host.                                  |
 | `HELLE_ENV_FILE`      | Where Helle credentials are read from; defaults to `~/.config/helle/env`. See [Optional integrations](#optional-integrations).               |
 
-`COLLIE_MODE` and `COLLIE_RUN` are process-to-process contracts set by Collie; you do not
-set them yourself.
+`COLLIE_MODE` is a process-to-process contract set by Collie; you do not set it yourself.
 
 ### Keybindings
 
@@ -154,13 +152,13 @@ set them yourself.
 delivered reliably over SSH or through some terminals, and herdr's own config notes the
 same.
 
-| Key              | Action                                                          |
-| ---------------- | --------------------------------------------------------------- |
-| `prefix+f`       | `cego.collie.pick` — run a workflow                             |
-| `prefix+u`       | `cego.collie.resume` — pick a run that is still going back up   |
-| —                | `cego.collie.continue` — continue a task with another workflow  |
-| `prefix+shift+f` | `cego.collie.fork` — copy a workflow or persona into your layer |
-| `prefix+shift+c` | `cego.collie.board` — open this Herd's Control Plane            |
+| Key              | Action                                                         |
+| ---------------- | -------------------------------------------------------------- |
+| `prefix+f`       | `cego.collie.pick` — run a workflow                            |
+| `prefix+u`       | `cego.collie.resume` — pick a run that is still going back up  |
+| —                | `cego.collie.continue` — continue a task with another workflow |
+| `prefix+shift+f` | `cego.collie.fork` — copy a persona into your layer            |
+| `prefix+shift+c` | `cego.collie.board` — open this Herd's Control Plane           |
 
 They show up in herdr's keybind help (`prefix+?`). Without a binding, any action still
 runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
@@ -175,20 +173,14 @@ runs from a shell inside herdr: `herdr plugin action invoke cego.collie.pick`.
    of a guess: `implement`'s work source, and `review`'s target.
 4. The workspace's **Control Plane** tab opens, and it is always the workspace's first
    tab, so `prefix+1` lands on it.
-5. The run's own tabs hold agents and nothing else: one tab per step, a step's parallel
-   variants side by side in it with an even share each, a step that reconciles them
-   (`fan_in:`) underneath them in the same tab, and a step that continues an earlier agent
-   opening nothing at all — it renames that pane to itself, so `build` becomes
-   `architecture`, then `simplify`, then `fix`. Tabs are named `⚙ <workflow> · <target>`
-   and carry the run's state: `⚙` working, `⚠` your turn, `✓` done — only once every pane
-   in the tab is — and `✗` stopped. Panes are named for what is in them: the model for
-   parallel variants (`opus`, `sonnet`), the step's name when it runs alone. A toast tells
-   you when a run is done or needs you.
-6. `plan` and `architecture` end in a menu, which takes over the whole pane while it is
-   open and hands it back afterwards. Launching asks nothing about it: a menu is asked when
-   the run reaches it, so you decide with the work in front of you — `collie run start
---decide` is the way to pre-answer one for a run you will not be there for. `plan`'s
-   menu also answers to the planner, so telling it "proceed" starts the implementation.
+5. The run's own tabs hold agents and nothing else: one tab per agent it starts, labelled
+   with the agent's role — `implementer`, `reviewer` — in the order they started, each
+   `cd`-ed into the checkout the run works in. An operation that reuses an agent opens
+   nothing. The label carries no state: the run's card on the board says what it is doing,
+   and herdr's own agent-status column says what each agent is.
+6. `plan`, `architecture` and `review` end in a question — **What next?** — answered on the
+   run's card, with `collie run answer`, or in chat. Launching asks nothing about it: a
+   question is asked when the run reaches it, so you decide with the work in front of you.
    `prefix+u` asks the host to pick a run that is still going back up.
 
 The same operations are available without opening UI, which is how an agent drives Collie:
@@ -418,17 +410,15 @@ by whether the work **landed**.
 
 **Needs you** is one card per Task that has stopped for you: an open decision you answer
 on the card, or an agent waiting for you in its own pane — a harness dialog herdr will not
-answer, or one that went idle without producing its Output. The second kind has nothing to
+answer, or a run that parked because its agent's pane would not take a prompt. The second kind has nothing to
 answer under the card and says where to go instead (`Waiting for you in build-r7's pane.`);
 Enter on the card gets you there. Either way the work has stopped, which is what the
 section is for. **Working** is one card per Task something is
-actually doing — a Run with a Driver that owns it, or an agent herdr still has: its name,
+actually doing — a Run the host holds that has not settled, or an agent herdr still has: its name,
 its project, one plain sentence about what is happening, one amber line when it has
 drifted, the step glyphs, where it has got to, how many agents are on it and how long it
 has been going. Silence past `board_quiet_ms` reads `…but silent for 14 minutes` and moves
-nothing; a record that says `running` while nothing drives it and no agent works on it is
-not working, whatever the record says — after a minute of that it is **abandoned**, and
-waiting on you. **Waiting on you** is work that ended without landing, and that nobody has
+nothing. **Waiting on you** is work that ended without landing, and that nobody has
 asked you about: an implement that succeeded and whose merge request is open, a plan that
 is ready to implement, a Run that failed, was stopped or was abandoned with a branch or a
 merge request behind it and has neither been resumed nor disposed of. A Run that ended with
@@ -568,22 +558,9 @@ collie --json board   # the same model, for an agent reading the CLI
 
 ### What a run's tab says
 
-A run's tab is `⚙ Implement · control-plane-glass · fix 3/5`: the workflow, what it is
-pointed at, and the step it is on — with the round of the fix loop where that step has
-looped, and nothing where it has not. While the run is waiting on you it reads
-`⚠ … · asks you` instead of naming the step, and when the run is over it is just
-`✓ Implement · control-plane-glass`. herdr clips what does not fit its sidebar; the wide
-board carries the full text. Every tab of one run says the same thing, so the workspace's
-sidebar row says which step the run is on whichever tab it is showing.
-
-The glyph is the state of what is in that tab, not of the last step that ran: anything in
-it herdr calls `working` is ⚙, anything `blocked` is ⚠, and with nothing working it is the
-run's own state — ✓ once the run has finished, ⚙ while it has not, ✗ when it failed. It is
-kept true by whoever is watching: the Driver on the status poll it already makes, and any
-open Control Plane on the `agent list` it already reads, each writing only when the string
-changed. So a review handed back to a live implementer, or a finished run's agent you
-prompt yourself, goes back to ⚙ without anyone renaming anything. With no Driver and no
-Control Plane open, nothing reconciles — herdr's own agent-status column is the truth then.
+A run's tabs are named for the agent in each — `implementer`, `reviewer` — and carry no
+state glyph. What a run is doing, and whether it is waiting on you, is its card on the
+board; what each agent is doing is herdr's own agent-status column in the sidebar.
 
 ### Workflows, Settings and what came before
 
@@ -628,7 +605,7 @@ is showing at a time:
   directory it was started from. Each ticket is listed by its first heading, with `✓` when
   every checkbox in it is checked. That is what lets the work be judged against its intent
   without leaving the tab.
-- **Cards** — the evidence: every card the Driver wrote for this run, the drift nobody has
+- **Cards** — the evidence: every card Collie wrote for this run, the drift nobody has
   settled, and what each message sent to its agents actually reached.
 - **Log** — the end of a `log.txt` the run left in its directory, where it left one; a
   run that wrote none says so, because its agents' panes are its record. It is read only
@@ -647,12 +624,12 @@ about this one.
 At the bottom is one field: **say something about this run**. What you type there is a
 [steer](steering.md) about that run and nothing else — it is written down, Collie is asked,
 and what comes back is a proposal you confirm. The field is absent for a run that is
-finished, failed or stopped: there is nothing driving it to say it to. What the send
+finished, failed or stopped: there is nothing left to say it to. What the send
 actually reached shows up under **Cards**, as `→ implementer acknowledged`.
 
 ### Stopping, and stopping several
 
-**Stop run** — from a card's menu, from the record, or `k` — does not reach the Driver
+**Stop run** — from a card's menu, from the record, or `k` — does not reach the host
 straight away. The card says `■ stopping…`, the foot of the pane says `Stopped <name>` with
 an **Undo** button, and only when five seconds have passed is anything sent. Nothing is
 signalled and nothing is written in the meantime, so Undo takes back a decision rather than
@@ -738,16 +715,16 @@ rather than delivered, so a pasted value can be read before Enter sends it.
 
 ### Questions
 
-A question is answered on its own card, and what you press is written to the run directory
-where its Driver is waiting. That is what makes it durable: closing this tab, reopening it
-or resuming the run later brings you the same question rather than losing it, and it is the
-same question `collie run answer` and chat answer. A proposal and an evidence gate live in
-the same place, for the same reason.
+A question is answered on its own card, and what you press goes to the host, which holds
+the run waiting on it. That is what makes it durable: closing this tab, reopening it or
+resuming the run later brings you the same question rather than losing it, and it is the
+same question `collie run answer` and chat answer. A proposal is kept the same way, for
+the same reason.
 
-The Driver toasts and brings the tab to the front before it asks, so a question is never
-left unseen in a tab you are not looking at — unless you have set
-[`questions: notify`](#your-defaults), which keeps the toast and drops the jump. Nothing
-else moves you: a card, a correction and a proposal all arrive while you carry on.
+The board brings its tab to the front when a question arrives, so a question is never left
+unseen in a tab you are not looking at — unless you have set
+[`questions: notify`](#your-defaults), which leaves it on the board without moving you.
+Nothing else moves you: a card, a correction and a proposal all arrive while you carry on.
 
 What you have half-typed or half-chosen against a question is kept per run and per question
 for as long as the tab is open, so moving between waiting runs costs nobody their answer.
@@ -802,8 +779,8 @@ same validation and the same executors.
 Which of two things it does with one depends on **who wanted it**
 ([ADR-0011](adr/0011-the-conversation-is-a-native-harness.md)):
 
-- **You asked for it, so it is done.** "Hold happytiger until 14:00" holds it, and the
-  cards say `⏸ Held until 14:00.` Chat may do what you could do on the board yourself;
+- **You asked for it, so it is done.** "Hold happytiger" holds it, and its card says so
+  until you release it. Chat may do what you could do on the board yourself;
   pointing you at the UI for something it can plainly do is chat obstructing you. A hold
   is `collie_hold`; stopping, resuming, releasing, answering a question, steering an agent,
   following up a finished run and starting one are `collie_do`, and so are the board's
@@ -914,84 +891,64 @@ every tick, whatever the board is showing.
 | -------------------- | ----------------------------------------------------------------------- |
 | `cego.collie.pick`   | Popup picker of workflows; infers inputs, asks for the rest, then runs  |
 | `cego.collie.resume` | Popup picker of runs still going; the host picks the chosen one back up |
-| `cego.collie.fork`   | Copy a workflow or persona into your layer or this project's            |
+| `cego.collie.fork`   | Copy a persona into your layer or this project's                        |
 
 Each action opens the `picker` popup, because that is where a terminal is. The run itself
-is not a pane: the picker starts a detached Driver that outlives it and writes what it is
-doing into the run directory, and the Control Plane is what renders that. A run therefore
+is not a pane: the picker hands it to the host, which outlives it, and the Control Plane
+renders what the host reports. A run therefore
 survives the picker closing, the Control Plane closing, and the terminal being detached.
 
 ### Why a run stopped
 
 The detail panel of a run that stopped opens with **Stopped**: one line saying why — the
 review loop out of iterations or making no progress, a blocking finding the implementer
-disputed, a last fix whose own account did not hold up, a step that stopped for a human, a
-stop someone asked for, or a Driver that is no longer there — then what a resume keeps,
-then which actions are safe right now. Where nothing recorded says why, it says that rather than guessing.
+disputed, a last fix whose own account did not hold up, a stop someone asked for, or work
+the run parked itself — a pane that would not take a prompt, nothing approved to prove it,
+a workspace that closed with its checkout gone — then which actions are safe right now. Where nothing recorded says why, it says that rather than guessing.
 
 It is the same classification `collie run show` and `collie run wait --until attention`
 return ([the CLI reference](cli.md#watch-a-run) has the codes), from the same function, so
 the board and an agent driving the CLI cannot disagree. Reading it recovers nothing and
-changes nothing: only `u` and `run resume` start a Driver, and both re-check ownership when
-they run.
+changes nothing: only `u` and `run resume` pick a run up again.
 
 ## Resuming a run
 
-`prefix+u`, or `collie run resume <id>`, starts a fresh Driver for a run and skips the
-steps that already finished. A step is finished when its `output:` file exists, so an
-agent that went quiet without writing one is restarted rather than assumed done.
-Completed steps and their Outputs survive it. An `implement` run's review gate and fix
-decision are made again from those Outputs rather than skipped, and a run that stopped on
-them is resumed as the human's word to retry the blocked fix, never as a waiver: after
-`no_progress` the fix step runs again against the review that repeated itself; after
-`dispute_unresolved` the disputed blocking findings go back in front of the implementer,
-who fixes them or disputes them again; after `fix_unverified` the fix step runs again and
-its new Output is judged. No review is started to repair the bookkeeping — the next review
-happens where the loop would have run one anyway. A run whose review Output is missing
-stops again until it is restored. The Driver claims the run atomically, so
-`resume` refuses to start a second Driver for a run something is already driving — and a
-claim it cannot read counts as one, so an unreadable `runner.pid` refuses too.
+`prefix+u`, or `collie run resume <id>`, asks the host to pick a run up again. The host
+re-enters the workflow's current code and reuses every Activity it has already finished, so
+completed work and its Outputs are kept and never redone, a question still open is still
+open, and an agent already launched is reattached to rather than started a second time. A
+stop is cleared first; a run that parked on a pane is handed the same prompt by the same
+agent; and a run whose module was missing and has been put back is registered again and
+carried on, without restarting the host. On a run the engine is already working it changes
+nothing.
 
-The Driver is not the only thing that can still be working there. A run's record names the
-agents its steps had running, and resuming resets every unfinished step — so before it
-starts, Collie asks herdr about each of those agents. One that herdr still has working
-refuses the resume, and so does one herdr could not be asked about: "I could not check" is
-not the same as "nothing is there". That is a retry, not a dead end — the run resumes once
-herdr is reachable again, or once the agent is stopped. The board's **Stopped** block and
-`collie run show` offer `resume` under the same rule, so what is offered and what is
-allowed cannot drift apart.
-
-Esc at a Choice leaves the step unfinished on purpose, so `resume` finds the run again.
+A workflow edited in a way that changes its shape has no promise of a seamless resume, and
+not every such edit can be detected: start a new run where one would not carry on. A run
+an older Collie recorded is imported read-only and cannot be resumed; `collie run start`
+begins the same work again.
 
 ## Hand-offs between runs
 
 Runs in the same **session** — one herdr session, one workspace — know about
-each other's long-lived agents, and hand work over rather than starting a second one. There
-is only ever one implementer and one planner per session.
+each other's long-lived agents. There is only ever one implementer and one planner per
+session.
 
-**A review, to whoever can act on it.** After the synthesis, a standalone review's menu
-offers exactly one of these, never both:
+**A review, to whoever can act on it.** After the synthesis, `review` asks **What next?**:
 
-- **Send to implementer** — when an implementer is already working here. It is the first
-  option, so Enter takes it: that agent is prompted with `review.md` and the findings JSON
-  and applies them as a fix round, `disputed` and all. Both runs record the hand-off. The
-  `s` key on the Control Plane does the same thing for the newest review in the session.
-- **Fix findings** — when none is. It chains `implement` with the review itself as the
-  work source: `review.md` is the spec, the findings are the tickets, and the implementer
-  works where the review was pointed — checking out the branch, or `glab mr checkout` for
-  a merge request, so the fixes land on that MR's own branch and its `mr` step updates
-  that merge request instead of opening a second one.
+- **Fix findings** — an implementer on this review's own run applies them as a fix round,
+  `disputed` and all. It is offered once.
+- **Fix findings in a full implement run** — starts `implement` with the review itself as
+  the work source: `review.md` is the spec, the findings are the tickets, and the
+  implementer works where the review was pointed — checking out the branch, or `glab mr
+checkout` for a merge request, so the fixes land on that MR's own branch and its merge
+  request is updated instead of a second one opened.
+- **Post to MR** — only for a merge request target: the review is posted to it.
+- **Don't post** — the run ends with its findings.
 
-**A plan that changes under an implementer.** The planner keeps its tab after its run
-ends. If you refine the plan, take a second opinion, or just talk to the planner while an
-implementer is building from that plan, the Driver sends it the diff of `plan/` and the
-planner's own `changelog` — once per change — and asks it to reconcile.
-
-That covers a plan Step rewriting the plan. A planner can also edit a ticket outside any
-Step of its own — answering a question in its pane and writing the answer into the file —
-so a building Step watches the `issues/` directory it was given as well. When a ticket
-changes there, the Step's own agent is told, with the acceptance checkboxes that came and
-went, and asked to reconcile rather than restart.
+**A plan that changes under an implementer.** `implement` reads its tickets by name each
+time it reaches its list, so what is already built is kept and a ticket added or edited
+since is built as it reads now. It is not told about an edit while it is building: a
+resume, or the replay after a restart, is when the list is read again.
 
 **A decision the plan does not cover.** The implementer's prompt names the live planner's
 agent and pane and tells it to ask there rather than stopping. With no planner live, the
@@ -1004,7 +961,7 @@ done.
 
 An MR target carries its project, not just its iid: `mr:<host>/<group>/<project>!<iid>`.
 Paste an MR URL and the project comes from the URL; type a bare `!42` and it comes from the
-remote of the directory you are in. Every `glab` call the Driver makes — and every command
+remote of the directory you are in. Every `glab` call the run makes — and every command
 the review prompt hands the reviewers — then passes `--repo <host>/<group>/<project>`, so
 no checkout of that project is needed: you can review and comment on a colleague's MR from
 a group folder that is not a git repository at all.
@@ -1018,7 +975,7 @@ Clone that project and start the fix round from there.
 
 A step pointed at a merge request needs `glab` and `glab auth status --hostname <host>` for
 that host. The "does this directory have a GitLab remote" check stays where it belongs, on
-`implement`'s `mr` step, which is the one that pushes. In a directory that is not a
+`implement`'s merge request, which is the one that pushes. In a directory that is not a
 checkout there is no branch and no working tree to review, so the target menu is one entry
 — **Type it…**.
 
@@ -1069,45 +1026,21 @@ three. A pane under 80 columns shows one whatever this says.
 
 `questions` is what happens when a run stops to ask you something. `focus`, the default,
 brings that workspace's Collie tab to the front — the behavior every install has had.
-`notify` leaves the toast, the tab's `asks you` and the board's own count exactly as they
-are and simply does not move you: the question waits on the board until you go to it. It is
-independent of `notifications`, which is about whether the toast is raised at all; turning
-one off does not turn the other off, and neither hides the question from the board or stops
-you answering it in either scope.
+`notify` leaves the question on the board, with its count, and simply does not move you:
+it waits there until you go to it. Neither setting hides the question from the board or
+stops you answering it.
 
 `models` adds models the harness adapter table does not already accept. An unknown harness,
 model, effort, permissions mode or scope fails validation before a single tab opens. See
 [Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts, and
 [Permissions](#permissions-unattended-by-default) for what `permissions` decides.
 
-`notifications` turns a kind of toast off. All are on by default; every title carries the
-repo and the run, `request` is only ever used where a human has to act, and the same thing
-at the same step is announced once, even after a Driver restart.
+`max_iterations`, `handoff_timeout_ms`, `quiet_ms` and `notifications` are still read and
+shown under Settings, but a run of a workflow module consults none of them: `implement`
+carries its own ceiling of four review and fix rounds, there is no hand-off between runs
+to time out, no quiet agent is nudged, and no toast is raised.
 
-| Kind               | Sound     | When                                                                                         |
-| ------------------ | --------- | -------------------------------------------------------------------------------------------- |
-| `needs-you`        | `request` | A Choice is open.                                                                            |
-| `decision-lost`    | `request` | A Choice you answered is being asked again.                                                  |
-| `run-done`         | `done`    | It finished its work.                                                                        |
-| `run-stuck`        | `request` | Every review iteration used, findings still open.                                            |
-| `run-failed`       | `request` | It ended unsuccessfully.                                                                     |
-| `step-stuck`       | `request` | A step's agent went quiet and stayed quiet.                                                  |
-| `output-unusable`  | `request` | An Output could not be read and could not be repaired.                                       |
-| `mr-opened`        | `done`    | A merge request was opened or updated.                                                       |
-| `slice-ready`      | `done`    | A slice of work you could actually try. A claim alone never toasts.                          |
-| `correction-sent`  | `request` | Collie corrected an agent by itself — granting `auto_correct` is not wanting it done unseen. |
-| `drift-unresolved` | `request` | Drift Collie could not correct; nothing else happens without you.                            |
-| `proposal-pending` | `request` | Something is waiting for your yes or no.                                                     |
-| `intent-changed`   | none      | The Intent moved. Silent: it matters when the board is closed.                               |
-
-`quiet_ms` is how long a step's agent may produce nothing — no status change, no new output
-in its pane — before it is nudged to unstick itself; it is nudged once more at double that
-and given up on at triple, as blocked, with the pane left alone. Quiet is the signal, never
-duration: a step that is still printing is never nudged, however long it runs. `0` waits
-for as long as it takes.
-
-`board_quiet_ms` is the same signal from the outside, and a separate number because it is
-a different question: how long a running run's directory may go unchanged before its card
+`board_quiet_ms` is how long a running run's directory may go unchanged before its card
 reads `…but silent for 9m` and takes the quiet edge. Five minutes by default. Nothing is
 nudged and nothing is given up on — it is shown, so a hung run is visible before you notice
 by accident.
@@ -1117,8 +1050,8 @@ by accident.
 
 ## Compaction between pieces of work
 
-Collie reuses an agent across a Workflow's steps, a fix round's iterations and a hand-off
-from another Run, so its context grows all day. Before it gives a reused agent the next
+Collie reuses an agent across a Workflow's operations and a fix round's iterations, so
+its context grows all day. Before it gives a reused agent the next
 piece of work, Collie reads that harness's own current-context measure and, at or above
 `compact_at_tokens`, asks it to compact natively and waits for the outcome before sending
 anything.
@@ -1144,7 +1077,7 @@ into your `~/.pi` or `~/.claude`:
 
 | Harness     | Verified against | What it installs, and what reads the context                                                                                                                                                                                                                                                                                                       |
 | ----------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Pi          | 0.85.1           | An extension passed with `-e`. `ctx.getContextUsage()` is the estimate Pi's own compaction and footer use, and `ctx.compact`'s per-request callbacks are the outcome.                                                                                                                                                                              |
+| Pi          | 0.87.1           | An extension passed with `-e`. `ctx.getContextUsage()` is the estimate Pi's own compaction and footer use, and `ctx.compact`'s per-request callbacks are the outcome.                                                                                                                                                                              |
 | Claude Code | 2.1.263          | A settings file passed with `--settings`, which is _additional_ settings. Its status line reports `context_window` — input plus output, cache folded into the input total exactly once — and its `PreCompact`/`PostCompact` hooks are the lifecycle — the request's token reaches `PreCompact` only, so the completion is the one that follows it. |
 | Codex       | 0.153.4          | An App Server of its own on a loopback port, with the ordinary TUI pointed at it by `--remote`. `thread/tokenUsage/updated`'s `last.totalTokens` is the context its own indicator shows, `thread/compact/start` is the request, and the compaction's own turn is the outcome.                                                                      |
 | OpenCode    | 1.18.9+          | The ordinary TUI hosting its own loopback server, on a session Collie created for it. The latest assistant message's tokens are the accounting OpenCode's own overflow predicate reads, `POST /session/{id}/summarize` is the request, and the compaction's own message is the outcome.                                                            |
@@ -1205,9 +1138,8 @@ What happens at a boundary:
 The last row is the one to know about. An acknowledgement, an idle pane, an unrelated
 compaction and a dropped connection all establish nothing, so Collie will not call the
 attempt over — and a timeout is not proof that the agent stopped compacting either.
-So it does not retry, does not touch the agent, and does not replay the work: the step
-stops `blocked` with the reason, you get a `needs-you` toast, and the row on the board
-says it needs you. Nothing will send that agent work while the attempt is still in the
+So it does not retry, does not touch the agent, and does not replay the work: the work
+stops with the reason, and the board says it needs you. Nothing will send that agent work while the attempt is still in the
 air, `collie run resume` included — a resume finds the attempt's five minutes long spent
 and stops again on the spot.
 
@@ -1242,7 +1174,7 @@ once per directory, so the window is opened once.
 setting is accepted as `auto`; Collie's duplicate trust menu has been removed.
 
 If you do let claude ask, nothing breaks: `agent start` reports the agent blocked, which is
-not a failure, so the Driver says which pane wants you, toasts, and waits. It cannot answer
+not a failure, so the run says which pane wants you and waits. It cannot answer
 for you — the dialog shuffles its options between runs, so there is no safe key to send.
 
 ## Permissions: unattended by default
@@ -1267,7 +1199,7 @@ checkout you started them from**, with your uncommitted work in it and neither o
 fences in the way. That is the case to weigh before leaving the default on.
 
 Set `permissions: harness` in Settings if you would rather answer the prompts yourself, or
-`permissions: harness` on a single step (see
+`permissions: harness` on a single operation (see
 [authoring](authoring.md#harnesses-models-and-effort)) for one that should ask.
 
 An unknown value is refused: Settings will not write it, a run reading one from
@@ -1294,11 +1226,10 @@ the shim's directory on PATH, a Node runtime, the skills and harnesses your work
 whether this checkout is behind its remote, and whether `glab` is logged in — and prints the
 command that fixes each. It exits non-zero when any check fails. Helle credentials and a
 Linear MCP in Claude Code are reported too, as `!` when they are set up and not working, and
-never fail it: see [Optional integrations](#optional-integrations). It also says what
-`implement` and `review` resolve to here: a user or project override wins over the bundled
-definition, so one that still carries `architecture` and `simplify` steps or two reviewers is
-what a run in this project would actually do. That is reported with the exact edit and
-never edited — the override is yours.
+never fail it: see [Optional integrations](#optional-integrations). It also names the
+workflows here: every one a user or project entry overrides — which is what a run in this
+project would actually do — and any Markdown workflow an older Collie left in your layer,
+which nothing reads now. Neither is edited: both are yours.
 
 **A keybinding does nothing over SSH.** The bindings use plain letters after the
 prefix on purpose, because `alt` chords are not delivered reliably over SSH or through some
@@ -1306,28 +1237,16 @@ terminals. If you rebound one to a chord, that is the first thing to undo. Witho
 binding, `herdr plugin action invoke cego.collie.pick` still works from a shell inside
 herdr.
 
-**The glyph says ✓ but the agent is working.** Nothing was watching that tab: the glyph is
-reconciled by the run's Driver while it lives and by a Control Plane that can see the run,
-and a run whose Driver has finished — an agent you prompted yourself, or a review handed to
-an implementer whose own run is over — has neither. The board is the whole Herd's, so
-opening it (`prefix+shift+c`) corrects any run of this session within a tick. Otherwise
-read herdr's own agent-status column in the sidebar, which is always the truth.
-
-**A card has been silent for hours.** Its Driver may be gone: nothing has written to the
-run directory, and a run with no Driver never finishes on its own. The audit trail is
-intact, so `collie run resume <id>` starts a fresh Driver and skips the steps that
-finished.
-
-**A run says another Driver already owns it.** The ownership claim in the run directory is
-held by a live process. Stop it with `collie run stop <id>` before resuming.
+**A card has been silent for hours.** Look at its agent's pane first: an agent at a harness
+dialog is waiting on something only you can see. `collie run show <id>` says what the run
+is waiting on, and one that parked on a pane that would not take a prompt says so —
+`collie run resume <id>` then hands the same prompt to the same agent.
 
 **A workflow fails validation before any tab opens.** That is by design — a module that
-will not load, will not construct or will not compile, and, for a Markdown definition,
-unknown models, missing personas and skills, malformed choices and placeholders no declared
-input can fill, are all caught up front. `collie workflow check` reports the same problems
+will not load, will not construct or will not compile is caught up front. `collie workflow check` reports the same problems
 without starting a run, and names the file.
 
 **A skill is missing.** Skills are a prerequisite, like the harness binary. The error names
 the skill and the command that installs it, and `collie upgrade` reinstalls the whole set.
-See [Authoring](authoring.md#skills) for how a definition refers to one, and
+See [Authoring](authoring.md#skills) for how a workflow refers to one, and
 [the skills](#the-skills) for where they come from.

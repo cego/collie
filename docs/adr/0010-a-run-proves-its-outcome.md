@@ -34,7 +34,8 @@ does not have.
 
 ## Decision
 
-**D1. Freeze the definition per Run.** `RunStore.create` writes the resolved workflow into
+**D1. Freeze the definition per Run.** _Superseded by [ADR-0029](0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md): a resume runs the module as it
+is now, and reuses the work already done._ `RunStore.create` writes the resolved workflow into
 the run directory and records `definition: {hash, layer, path, snapshot}`. The Driver
 resolves from the snapshot. What is frozen is the _resolved_ workflow — after `extends:`
 and `use:` — because that is what the engine executes; re-emitting Markdown and reading it

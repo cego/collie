@@ -96,40 +96,7 @@ export function agoShort(atMs: number, nowMs: number): string {
   return "now";
 }
 
-/** A bare clock time, which is what a human types: `14:00`, never `2:00pm`. */
-const CLOCK = /^([01]\d|2[0-3]):([0-5]\d)$/;
-/** A full timestamp, matched before parsing: `Date.parse("14")` is a year, not a time. */
-const STAMP = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/;
 const DAY_MS = 86_400_000;
-
-const isoAt = (ms: number) => DateTime.formatIso(DateTime.makeUnsafe(ms));
-
-/**
- * When a hold ends, from what a human wrote. A clock time is **their** clock — this
- * machine's timezone, not UTC — and the next time it comes round: "hold until 09:00" at
- * half past nine is tomorrow morning, never a hold that expired before it was asked for.
- * A full timestamp is taken as written, zone and all. Anything else is `null`: a hold
- * whose end nobody could read would be a hold that never lifts.
- */
-export function untilFrom(text: string, nowMs: number): string | null {
-  const clock = CLOCK.exec(text.trim());
-  if (clock) {
-    const at = DateTime.setParts(local(nowMs), {
-      hour: Number(clock[1]),
-      minute: Number(clock[2]),
-      second: 0,
-      millisecond: 0,
-    });
-    // A day by the calendar rather than 24 hours: over a daylight-saving change the two
-    // are an hour apart, and what a human meant is the same time tomorrow.
-    const next = DateTime.toEpochMillis(at) > nowMs ? at : DateTime.add(at, { days: 1 });
-    return DateTime.formatIso(next);
-  }
-  const stamp = text.trim();
-  if (!STAMP.test(stamp)) return null;
-  const parsed = Date.parse(stamp);
-  return Number.isNaN(parsed) ? null : isoAt(parsed);
-}
 
 /**
  * A time to read on a card, on the reader's own clock. Today's is the clock alone,

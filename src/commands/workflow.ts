@@ -252,27 +252,15 @@ const workflowShow = Command.make(
   Command.withDescription("Show one Workflow: what it takes, what it gives back, where it is"),
 );
 
-/**
- * Forking a module: a file that imports what it keeps. There is nothing to merge, so the
- * flags that named a step to merge are refused with what to do instead rather than given
- * an adapter — the Markdown engine's step merge has no counterpart in ordinary code.
- */
+/** Forking a module: a file that imports what it keeps. */
 const forkModule = Effect.fn("Workflow.forkModule")(function* (
   env: PluginEnv,
   options: {
     readonly from: Found;
     readonly id: string;
     readonly layer: EntryLayer;
-    readonly merging: ReadonlyArray<string>;
   },
 ) {
-  if (options.merging.length > 0) {
-    return err(
-      "invalid_input",
-      `"${options.from.id}" is saved as a module, and ${options.merging.join(" and ")} merged Markdown steps. ` +
-        "Fork it — the fork imports everything it does not name — then change what you came to change.",
-    );
-  }
   const refused = notAnId(options.id);
   if (refused) return refused;
   const entry = yield* loadEntry(options.from.path, options.from.revision).pipe(Effect.result);
@@ -342,18 +330,8 @@ const workflowFork = Command.make(
   {
     workflow: workflowArg,
     ...forkFlags,
-    mode: Flag.Literals("mode", ["extends", "copy"]).pipe(
-      Flag.withDescription(
-        "`extends` changes only what the fork names; `copy` takes the whole definition",
-      ),
-      Flag.optional,
-    ),
-    step: Flag.String("step").pipe(
-      Flag.withDescription("Fork only this Step, leaving the rest following the parent"),
-      Flag.optional,
-    ),
   },
-  ({ workflow, layer, mode, name, requestId: request, step }) =>
+  ({ workflow, layer, name, requestId: request }) =>
     Effect.gen(function* () {
       const global = yield* root;
       yield* attempt(
@@ -368,15 +346,7 @@ const workflowFork = Command.make(
                 (one) => one.id === workflow,
               );
               if (module) {
-                return yield* forkModule(base.env, {
-                  from: module,
-                  id: name,
-                  layer,
-                  merging: [
-                    ...(Option.isSome(mode) ? ["--mode"] : []),
-                    ...(Option.isSome(step) ? ["--step"] : []),
-                  ],
-                });
+                return yield* forkModule(base.env, { from: module, id: name, layer });
               }
               return err("workflow_not_found", `Workflow "${workflow}" was not found.`, {
                 workflow,
@@ -387,7 +357,11 @@ const workflowFork = Command.make(
         global.json,
       );
     }),
-).pipe(Command.withDescription("Copy or extend a Workflow into your user or project Layer"));
+).pipe(
+  Command.withDescription(
+    "Write a Workflow of your own that imports another and replaces what it changes",
+  ),
+);
 
 export const workflow = Command.make("workflow").pipe(
   Command.withDescription("Write, inspect and fork Workflows"),

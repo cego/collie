@@ -447,8 +447,8 @@ export const reconcileStep = Effect.fn("Proposals.reconcileStep")(function* (
 export interface AdmissionContext {
   /** The target Run as it is now, or null where it is gone. */
   readonly run: { readonly id: string; readonly status: string } | null;
-  /** Whether a Driver owns it, which `hold` and `deliver` need and `followup` refuses. */
-  readonly driverLive: boolean;
+  /** Whether the host holds it, which `hold` and `deliver` need and `followup` refuses. */
+  readonly hostHolds: boolean;
   /** The Choice the Run is asking, if any. */
   readonly pendingChoice: string | null;
   /** The target agent's incarnation now, where the action names an agent. */
@@ -496,8 +496,10 @@ export function admit(action: Action, ctx: AdmissionContext): string | null {
   )
     return `the run is ${ctx.run.status}`;
 
-  if ((action.kind === "hold" || action.kind === "deliver") && !ctx.driverLive)
-    return "no Driver owns the run, so there is nothing to carry this out";
+  if ((action.kind === "hold" || action.kind === "deliver") && !ctx.hostHolds)
+    return "the host no longer holds the run, so there is nothing to carry this out";
+  if (action.kind === "hold" && action.until !== undefined)
+    return "nothing lifts a hold at a time: hold it, and release it when it should go on";
   if (action.kind === "answer" && ctx.pendingChoice !== action.choiceId)
     return ctx.pendingChoice === null
       ? "the run is not asking a Choice any more"

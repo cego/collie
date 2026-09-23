@@ -83,7 +83,7 @@ export const VERIFIED_VERSIONS: ReadonlyMap<string, string> = new Map([
   ["claude", "2.1.263"],
   ["codex", "0.153.4"],
   ["opencode", "1.18.9"],
-  ["pi", "0.86.1"],
+  ["pi", "0.87.1"],
 ]);
 
 /** The file each agent's controls append their telemetry to, one JSON object per line. */

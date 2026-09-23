@@ -6,7 +6,7 @@ for, what it needs from you, and how they chain. The files under
 module with its Markdown beside it as content ([the SDK](sdk.md)). Any of them is a fork
 away from being yours; see [Authoring](authoring.md).
 
-For what a Workflow, Step, Choice or Run _is_, see [`CONTEXT.md`](../CONTEXT.md).
+For what a Workflow, an operation, a Choice or a Run _is_, see [`CONTEXT.md`](../CONTEXT.md).
 
 ## How inputs reach a run
 
@@ -67,18 +67,18 @@ before it builds, so every run leaves the same audit trail.
 `repo` is one repository's share of a plan that spans several, as the tickets' `Repo:`
 line names it: given one, the build step builds only the tickets naming it and leaves the
 rest to their own run. It is empty for every single-repository run, which builds the whole
-plan, and is set by the fan-out below rather than by hand.
+plan; see [Plans that span repositories](#plans-that-span-repositories) for when to give it.
 
 **Branch:** named after the work, not the path to it — an explicit `--input branch=`, else
 the reviewed branch, else the `<name>` of a `branch:<base>...<name>` target you gave, else
 a new `<your GitLab login>/<task>` from `--input task=`, the plan directory's own name, or
 the work itself. Nobody is asked for one ([the full order](cli.md#start-a-run)).
 
-**What happens:** one implementer agent builds, a commit per ticket. It embeds `review` —
-one complete review — and loops on the findings up to `max_iterations` (5 by default). Every
-step that commits pushes what it committed, so the reviewers read the change rather than
-the state before it. The last step opens or updates the merge request, and is skipped where
-there is no GitLab to open one on.
+**What happens:** one implementer agent builds, a commit per ticket. It reviews what it
+built with the same pass `review` runs — one complete review — and loops on the findings for
+at most four review and fix rounds. Every commit is pushed, so the reviewers read the change
+rather than the state before it. The merge request is opened or updated last, and not at
+all where there is no GitLab to open one on or the evidence is not there.
 
 **Outcome.** `--input outcome=bug|refactor|investigation|docs|migration|feature` says what
 kind of result this run has to prove, and so what evidence closes it — see
@@ -87,8 +87,8 @@ chained build is never asked again. Left empty, a run is held to this project's 
 verifications and nothing more: unclassified work is not a feature by default, and asking
 documentation for a feature's evidence would ask for tickets that do not exist.
 
-**Ends:** with the merge request, or with the reason the `mr` step was skipped. There is no
-menu.
+**Ends:** with the merge request, or with the reason there is none. There is no question
+at the end.
 
 Module: [`workflows/implement.workflow.ts`](../workflows/implement.workflow.ts), with its
 content in [`workflows/implement.md`](../workflows/implement.md).
@@ -100,55 +100,30 @@ client, a frontend. `plan` writes one plan directory for all of it, and every ti
 carries a `**Repo:**` line — the checkout it changes, relative to the plan run's root and
 as it is on disk, or `.` when the root is itself a repository.
 
-A plan is single-repository only when its tickets all say `.`, or carry no line at all: the
-run is then rooted where the plan run is and behaves exactly as it always did. A plan whose
-tickets all name one repository _by path_ is not one of those — it is a fan-out of one
-wave, because that repository is somewhere under the root and its run has to be rooted
-there.
+A plan is single-repository only when its tickets all say `.`, or carry no line at all. A
+plan whose tickets all name one repository _by path_ is not one of those: that repository
+is somewhere under the root, and its run has to be rooted there.
 
-Where they name several, **Implement now** fans out: one `implement` run per repository,
-each rooted at that repository's checkout under the plan's root, each with the shared plan
-directory and its own `repo`, and all of them on one branch name — so the sibling merge
-requests are findable by it. See [Repo run](../CONTEXT.md) for the term.
+`plan`'s **Implement now** starts one `implement` for the whole plan, rooted where the plan
+run is. That is the whole of a single-repository plan; it does not fan out. For a plan whose
+tickets name several repositories, start one `implement` per repository from that
+repository's own checkout, each with the shared plan directory and `--input repo=<path>` —
+the path its tickets' `Repo:` line names — so each run builds only its own tickets. Give
+them one branch name (`--input branch=`) and the sibling merge requests are findable by it.
+See [Repo run](../CONTEXT.md) for the term.
 
-The runs start in **waves**. A repository's run starts once every repository its tickets
-are blocked by has succeeded; repositories that block nothing start together. Ticket order
-inside a repository is that run's own business, exactly as in a single-repository run. One
-rule holds over the whole plan and the planner is told it: taken repository by repository
-the blocking edges must not form a cycle — once a repository's tickets are blocked by
-another's, none of that other one's may be blocked by this one.
-
-The plan run stays alive as their parent until the last one ends, so one row says whether
-the whole plan is built, and its summary lists each repository's merge request. On the
-Control Plane the children [nest under it](using.md#the-control-plane).
-
-- **A child that fails or is stopped** starts no further wave. The children already
-  running are left to finish, the parent ends `blocked` naming the repository that stopped
-  it, and the repositories that never started are recorded as `not run: waiting on <repo>`.
-- **Stopping the parent** stops its running children first: "stop this" on a plan run
-  means the whole plan. A repository run that will not stop — a Driver Collie cannot
-  identify well enough to signal — leaves the parent running and is named in the failure,
-  because a parent reported as stopped while one of its runs is still building is worse
-  than a stop you have to repeat.
-- **Resuming the parent** re-derives the waves from its children: the repositories that
-  succeeded are skipped, the ones that failed or were stopped are resumed as themselves,
-  and the rest start when their blockers are done. So a second attempt opens no second
-  merge requests.
-- **A plan the fan-out cannot run** is refused when you pick **Implement now**, and the
-  message names what is wrong: a repository-level cycle and the tickets that interleave, a
-  ticket with no `Repo:` line where its siblings have one, a repository with no checkout
-  under the root — Collie does not clone — a `Repo:` that is not a path under the root at
-  all, two tickets wearing one number, or a "Blocked by" line naming something that is not
-  a ticket of this plan. Numbers have to be unique because a "Blocked by" line names one:
-  two tickets called `01` are two answers to which ticket an edge points at. The
-  `Repo:` rule is why the line cannot be absolute or contain `..`: it becomes the
-  directory a run is rooted at and a branch is cut in, and a plan is prose an agent wrote.
-  The "Blocked by" rule is because the waves are built from those lines — an edge nobody
-  can resolve would start a frontend run beside the backend run it depends on. A ticket
-  number is a word that is nothing but digits: unpadded ones are fine (`2` finds `02-…`),
-  and so is a number followed by prose about it — the digits inside a word like `v2` are
-  part of that word, not an edge. Nothing starts, and the menu comes back. The planner is still live, so ask it to fix the
-  tickets and pick again.
+A workflow of your own can fan out in **waves** with the SDK's `readPlanRepos`: a
+repository's run starts once every repository its tickets are blocked by has finished, and
+repositories that block nothing start together
+([the SDK](sdk.md#a-workflow-made-of-other-workflows)). It refuses the whole plan, before any
+run starts, where the waves cannot be built: a repository-level cycle, a ticket with no
+`Repo:` line where its siblings have one, a repository with no checkout under the root —
+Collie does not clone — a `Repo:` that is not a path under the root, two tickets wearing one
+number, or a "Blocked by" line naming something that is not a ticket of this plan. The
+`Repo:` rule is why the line cannot be absolute or contain `..`: it becomes the directory a
+run is rooted at and a branch is cut in, and a plan is prose an agent wrote. A ticket
+number is a word that is nothing but digits: unpadded ones are fine (`2` finds `02-…`), and
+the digits inside a word like `v2` are part of that word, not an edge.
 
 ## `review`
 
@@ -164,21 +139,19 @@ for a refactor, `supported`, `accurate` or `compatible` — which is the field t
 the merge request reads ([Outcomes](cli.md#outcomes)).
 
 **What happens:** one reviewer reads the target and writes the review — the whole spec, the
-whole change, and the code around it. The engine renders it to `review.md` in the run
-directory, which is what you read and what a menu choice can post.
-
-There is a `synthesize` step after it, and with one review it is skipped: reconciling one
-file into one file is a model call that adds no judgement. A layer that puts two or more
-reviewers back in `parallel` gets the fan-in exactly as it was — findings deduplicated
-across models, disagreements settled against the diff, and anything neither can defend
-listed under `dropped` with a reason.
+whole change, and the code around it. A synthesis then reconciles what the reviewers wrote
+into the one review a human reads — findings deduplicated across models, disagreements
+settled against the diff, and anything that cannot be defended listed under `dropped` with
+a reason — rendered to `review.md` in the run directory, which is what you read and what
+**Post to MR** sends. The shipped review has one reviewer; a fork that wants another adds an
+entry to the list in `workflows/reviewing.ts`, not a new step.
 
 Every `blocker` and `major` has to say **where** and **why**: a `file` it is about and a
 `detail`. One that says neither goes back to its own reviewer once, rather than to the
 implementer. The file does not have to be one the change touched — an unchanged caller the
 change breaks is exactly the blocker worth raising. Minor findings are exempt.
 
-**Ends with a menu:**
+**Ends with a question:**
 
 - **Fix findings** — an implementer of this run's own, given the findings and the target,
   which fixes them where the review was pointed. Offered once: a second round of it would
@@ -264,17 +237,15 @@ its prompts in [`workflows/architecture.md`](../workflows/architecture.md).
 
 - `plan` → `implement`, with the plan directory forwarded as the work source.
 - `architecture` → `implement`, the same way.
-- `implement` embeds `review` with `use:`, so the review a build gets is the same review
-  you would run standalone — override `review` in your layer and `implement` changes too.
+- `implement` imports the pass `review` runs (`workflows/reviewing.ts`), so the review a
+  build gets is the review you would run standalone. It is an import, not a lookup:
+  overriding `review` in your layer leaves `implement`'s review as it was, and a fork of
+  `implement` imports the pass it wants.
 - `plan` → `architecture`, for a plan whose tickets need architectural decisions. It is a
-  Choice a human takes, not a pass every build makes: `architecture` and `simplify` used to
-  run after every build and after every fix whether or not the work needed them, and they
-  cost a quarter of a run's wall time.
-- `review` → `implement`, or a hand-off to a live implementer. See
+  Choice a human takes, not a pass every build makes.
+- `review` → `implement`, from **Fix findings in a full implement run**. See
   [Hand-offs](using.md#hand-offs-between-runs).
 
-A chained run is a child of the one that started it, forwarded inputs first and the rest
-inferred. The parent finishes once the child has its own Driver; `collie run list` then
-shows the two independently. The one exception is a plan that spans repositories, where
-the parent chains one run per repository and stays alive until the last of them ends —
-see [Plans that span repositories](#plans-that-span-repositories).
+A chained run is a child of the one that started it, its input decoded against the child's
+own schema before it is admitted. It has a card of its own, the parent waits for it and
+ends with its result, and stopping the parent reaches it.

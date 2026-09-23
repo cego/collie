@@ -89,7 +89,7 @@ herdr actions, and the `collie` CLI.
   [ADR-0015](docs/adr/0015-one-local-host-owns-a-state-directory.md) and
   [`docs/cli.md`](docs/cli.md#the-local-workflow-host), alongside `src/host.ts` and
   `test/host.test.ts`. The lock is `src/lock.ts`'s, so ownership is decided the same way
-  it is for a Run's persistence and a Driver takeover.
+  wherever Collie needs exactly one owner.
 - **Changing how a start is claimed, what a host records about a run, or how an
   interrupted start recovers** →
   [ADR-0017](docs/adr/0017-one-request-is-one-run.md) and
@@ -114,8 +114,7 @@ herdr actions, and the `collie` CLI.
   [ADR-0020](docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md) and
   [`docs/sdk.md`](docs/sdk.md#having-an-agent-do-the-work), alongside `src/agents.ts` and
   `test/agents.test.ts`. One launch, one collection, one repair, each its own Activity;
-  herdr is reached through `src/herdr.ts` and the prompt goes out through the Dispatcher,
-  as a Step's does.
+  herdr is reached through `src/herdr.ts` and the prompt goes out through the Dispatcher.
 - **Changing what a human can do to a Run — a decision, a hold, a stop, steering** →
   [ADR-0021](docs/adr/0021-one-host-answers-for-a-run.md) and
   [`docs/cli.md`](docs/cli.md#answering-holding-and-steering-one), alongside `src/engine.ts`,
@@ -155,9 +154,14 @@ herdr actions, and the `collie` CLI.
   and offers is its own declaration rather than its name. One that expects to be varied —
   `renovate` — takes the varying steps as ordinary functions, so a fork supplies three and
   keeps the rest (`test/fixtures/workflows/landing.workflow.ts`).
+- **Adding anything in `src/` that looks at a workflow's id** →
+  [ADR-0029](docs/adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md),
+  alongside `test/workflow-names.test.ts` and `test/baseline.test.ts`, whose every
+  scenario also runs under an id that shares nothing with the shipped one. Decide from a
+  fact or a declaration; a module composing by id is fine, Collie dispatching on one is not.
 - **Changing how a run is executed, coordinated, or recorded** →
   [`docs/internals.md`](docs/internals.md) and [`docs/adr/`](docs/adr).
-- **Changing install, keybindings, the Control Plane, or a toast** →
+- **Changing install, keybindings or the Control Plane** →
   [`docs/using.md`](docs/using.md).
 
 ## Commands
@@ -188,7 +192,8 @@ binary still starts.
    evidence is collected against a revision, and no gate is satisfied by an Output field.
    Usage is recorded and never enforced.
 8. Steering's design decisions are [ADR-0008](docs/adr/0008-collie-steers-through-the-driver.md)
-   (the Driver is the only actor over agents) and
+   (one Dispatcher sends; the host is the only actor over a Run's agents, per
+   [ADR-0029](docs/adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md)) and
    [ADR-0009](docs/adr/0009-the-collie-tab-is-the-herds.md) (one board per Herd, in the
    Home). ADR-0009 supersedes only ADR-0006's sentence about where the Collie tab is
    created. A Run no longer stays in the workspace it was started from: it belongs to its
