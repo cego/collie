@@ -153,9 +153,11 @@ change breaks is exactly the blocker worth raising. Minor findings are exempt.
 
 **Ends with a question:**
 
-- **Fix findings** — an implementer of this run's own, given the findings and the target,
-  which fixes them where the review was pointed. Offered once: a second round of it would
-  be the same findings again.
+- **Fix findings** — handed, through the one sender, to the implementer already live in
+  this workspace where there is one, so no second agent works the same checkout; otherwise
+  an implementer of this run's own, given the findings and the target, which fixes them
+  where the review was pointed. Offered once: a second round of it would be the same
+  findings again.
 - **Fix findings in a full implement run** — chains `implement` with this run as the work
   source. The build is placed on the branch this review was pointed at — a branch target's
   head, or a merge request's source branch — read from the review's own Run.

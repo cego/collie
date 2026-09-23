@@ -939,8 +939,9 @@ session.
 
 **A review, to whoever can act on it.** After the synthesis, `review` asks **What next?**:
 
-- **Fix findings** — an implementer on this review's own run applies them as a fix round,
-  `disputed` and all. It is offered once.
+- **Fix findings** — the implementer already live in this workspace is handed them, where
+  there is one; otherwise an implementer on this review's own run applies them as a fix
+  round, `disputed` and all. It is offered once.
 - **Fix findings in a full implement run** — starts `implement` with the review itself as
   the work source: `review.md` is the spec, the findings are the tickets, and the
   implementer works where the review was pointed — checking out the branch, or `glab mr

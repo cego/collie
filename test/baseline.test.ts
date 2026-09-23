@@ -32,6 +32,7 @@ import {
 import { VerifySpecSchema } from "../src/verify-spec";
 import { offersFrom } from "../src/offers";
 import { Store } from "../src/store";
+import { registerAgent, registryPath, scopeFor } from "../src/registry";
 import { fixtures, until } from "./support/host";
 
 const ROOT = new URL("../", import.meta.url).pathname;
@@ -669,6 +670,51 @@ scenario(
           decision: "post-2",
         });
         expect(optionsOf(rows2, "post-2")).not.toContain("Fix findings");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "an implementer already live here takes the findings, and no second agent starts on them",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        // Another Run's implementer, live in this checkout's workspace and registered as it.
+        yield* rig.addAgent("impl-live", "9-1");
+        const env = hostOf().env;
+        yield* registerAgent(yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)), {
+          role: "implementer",
+          agent: "impl-live",
+          paneId: "9-1",
+          workspaceId: null,
+          runId: "r-building",
+          workflow: "implement",
+          at: "2026-09-23T10:00:00Z",
+          incarnation: { terminalId: "term-impl-live", agentSession: null },
+        }).pipe(Effect.orDie);
+        const target = "branch:main...HEAD";
+        yield* parked({
+          entry: shipped("review"),
+          runId: "r-review-live",
+          input: { target },
+          decision: "post-1",
+        });
+        yield* answeredThen({
+          entry: shipped("review"),
+          runId: "r-review-live",
+          input: { target },
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+
+        const handed = (yield* prompts()).filter((text) => text.includes("review.md"));
+        expect(handed).toHaveLength(1);
+        expect(handed[0]).toContain(`${runDir(dir, "r-review-live")}/review.md`);
+        // Two agents, the reviewer and the synthesis; the fix went to the one already here.
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(2);
       }),
     ),
   120_000,

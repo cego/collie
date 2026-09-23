@@ -148,6 +148,18 @@ export interface AgentsApi {
    */
   readonly revive: (ask: AgentAsk) => Effect.Effect<void, AgentUncertain | AgentParked>;
   /**
+   * Hands a message to the agent live in this checkout's workspace in a role, through the
+   * one sender — a review's findings to the implementer already building that work,
+   * rather than a second agent on the same checkout. Null where none of another Run is
+   * live and addressable there.
+   */
+  readonly handOff: (options: {
+    readonly runId: string;
+    readonly role: string;
+    readonly cwd: string;
+    readonly text: string;
+  }) => Effect.Effect<Steered | null>;
+  /**
    * Closes the panes this run's live agents are in, which is what stops them. Only theirs:
    * a workspace keeps its own tab, so none is left empty by it. Says which it closed.
    */
@@ -924,6 +936,47 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       }),
     );
 
+  const handOff = (options: {
+    readonly runId: string;
+    readonly role: string;
+    readonly cwd: string;
+    readonly text: string;
+  }) =>
+    under(
+      Effect.gen(function* () {
+        const alive = yield* host.herdr.agentList();
+        const file = yield* registryPath(host.env.stateDir, scopeFor(host.env, options.cwd));
+        const entry = yield* liveAgent(file, alive, options.role);
+        // An entry with no proven incarnation names a pane, and whatever is in it now is
+        // not the agent it was written about; a stopped Run's agents are closed already.
+        if (entry === null || entry.runId === options.runId) return null;
+        if (!verifyIncarnation(entry, alive).ok) return null;
+        const outcome = yield* dispatch.transaction(deps, entry, (channel) =>
+          channel.submit(options.text, {
+            run: entry.runId,
+            cause: { kind: "handoff", ref: options.runId },
+            mode: "boundary",
+            intentVersion: 0,
+            attempt: 1,
+            requestId: `${options.runId}-handoff-${entry.agent}`,
+          }),
+        );
+        // Already in flight under this claim is the hand-off having happened.
+        const delivered = outcome.ok || outcome.reason === "blocked";
+        yield* log(
+          options.runId,
+          delivered
+            ? `handed to ${entry.agent} of ${entry.runId}`
+            : `could not hand to ${entry.agent} (${outcome.reason}: ${outcome.detail})`,
+        );
+        return {
+          agent: entry.agent,
+          delivered,
+          detail: outcome.ok ? "" : outcome.detail,
+        };
+      }).pipe(Effect.orElseSucceed(() => null)),
+    );
+
   const halt = (runId: string) =>
     under(
       Effect.gen(function* () {
@@ -996,6 +1049,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     pollMs: host.pollMs ?? DEFAULT_POLL_MS,
     launch,
     revive,
+    handOff,
     halt,
     collect,
     repair,
