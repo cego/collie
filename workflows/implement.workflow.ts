@@ -177,13 +177,21 @@ export const make = (registrationName: string) => {
         });
         if (plan.refusal !== null) return yield* new WorkflowError({ reason: plan.refusal });
         if (!plan.single) {
+          const carried = Object.fromEntries(
+            Object.entries(place.options).filter(
+              ([name]) => name !== "repo" && name !== "workspace",
+            ),
+          );
           return yield* buildEach({
             runId,
             plan: source.value,
             root: cwd,
             waves: plan.waves,
-            task: place.options.task ?? "",
-            outcome: kind,
+            // One branch in every repository: the one asked for, or one named after this Run.
+            options:
+              carried.branch !== undefined || carried.task !== undefined
+                ? carried
+                : { ...carried, task: runId },
           });
         }
       }
@@ -375,8 +383,8 @@ const buildEach = (fan: {
   readonly plan: string;
   readonly root: string;
   readonly waves: ReadonlyArray<ReadonlyArray<string>>;
-  readonly task: string;
-  readonly outcome: string;
+  /** The launch options every repository's Run is started with, beside its own. */
+  readonly options: Readonly<Record<string, string>>;
 }) =>
   Effect.gen(function* () {
     const host = yield* Host;
@@ -393,16 +401,7 @@ const buildEach = (fan: {
             invocation: invocation(repo),
             workflow: "self",
             input: { plan: fan.plan },
-            // One branch name in every repository, so the sibling merge requests are
-            // findable by it.
-            options: Object.fromEntries(
-              Object.entries({
-                repo,
-                workspace: `${fan.root}/${repo}`,
-                task: fan.task,
-                outcome: fan.outcome,
-              }).filter(([, value]) => value !== ""),
-            ),
+            options: { ...fan.options, repo, workspace: `${fan.root}/${repo}` },
           })
           .pipe(
             Effect.result,

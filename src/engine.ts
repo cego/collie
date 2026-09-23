@@ -2793,11 +2793,12 @@ const makeRegistry: (
       parent: ask.runId,
     }).pipe(Effect.mapError((failure) => refused(failure.reason)));
     // A child is a Run, so what it may verify is frozen with it rather than read when
-    // it asks: the same list, and the same moment, as the start of any other.
+    // it asks: the same list, and the same moment, as the start of any other. One that
+    // works in a checkout of its own is held to what that checkout approves.
     yield* freezeApproved({
       dir,
       runId: claimed.row.run,
-      project: parent.project,
+      project: request.kind === "existing" ? request.path : parent.project,
       configDir,
     }).pipe(Effect.ignore);
     // The parent hands its own children over, so the receipt is written here: a host

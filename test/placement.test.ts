@@ -17,6 +17,7 @@ import { fixtures, until } from "./support/host";
 import { agentsLayer, type AgentHost } from "../src/agents";
 import {
   Registry,
+  evidenceDir,
   foundationLayer,
   registryLayer,
   runDir,
@@ -538,9 +539,13 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const plan = yield* twoRepoPlan;
         for (const repo of ["api", "web"]) {
-          yield* fs.makeDirectory(`${rig.projectDir}/${repo}`);
+          yield* fs.makeDirectory(`${rig.projectDir}/${repo}/.herdr`, { recursive: true });
           gitRepo(`${rig.projectDir}/${repo}`);
         }
+        yield* fs.writeFileString(
+          `${rig.projectDir}/api/.herdr/verify.json`,
+          '[{"name":"api-unit","executable":"true","argv":[],"cwd":"worktree"}]',
+        );
 
         const seen = yield* hosted(
           Effect.gen(function* () {
@@ -554,9 +559,13 @@ test(
               (view) => view !== null,
             );
             return {
+              runId,
               parent: yield* registry.view(runId),
               api,
               web: yield* registry.view(`${runId}.implement-web`),
+              approved: yield* fs.readFileString(
+                `${evidenceDir(dir(), `${runId}.implement-api`)}/approved.json`,
+              ),
             };
           }),
         );
@@ -564,6 +573,9 @@ test(
         expect(seen.parent?.cwd).toBe(rig.projectDir);
         expect(seen.api?.options).toMatchObject({ repo: "api" });
         expect(seen.api?.worktree?.path).toStartWith(`${rig.root}/.herdr/worktrees/api/`);
+        expect(seen.api?.branch).toBe(`${LOGIN}/${seen.runId}`);
+        // Held to what its own repository approved, not the project it was started from.
+        expect(seen.approved).toContain('"api-unit"');
         // The web waits on the api, so nothing has started it yet.
         expect(seen.web).toBeNull();
       }),

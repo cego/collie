@@ -110,9 +110,11 @@ Every other plan fans out, whether **Implement now** hands it to `implement` or 
 it yourself from the plan's root with `collie run start implement --input plan=<the plan
 directory>`. That `implement` cuts no checkout of its own and builds nothing itself: it
 starts one Run of itself per repository, each from that repository's checkout under the
-root, each with the shared plan directory and its own `repo`, and all on one branch name —
-so the sibling merge requests are findable by it. See [Repo run](../CONTEXT.md) for the
-term.
+root, each with the shared plan directory, its own `repo` and every other option it was
+started with — `risks`, `outcome` — and all on one branch name: the `branch` you gave,
+else `<login>/<task>`, else one named after the Run that fanned out, so the sibling merge
+requests are findable by it. Each is held to the verifications its own checkout approves
+in `.herdr/verify.json`. See [Repo run](../CONTEXT.md) for the term.
 
 They start in **waves**. A repository's run starts once every repository its tickets are
 blocked by has been built; repositories that block nothing start together. Ticket order

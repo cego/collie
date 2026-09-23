@@ -624,6 +624,35 @@ scenario(
 
         expect(started.map((one) => one.invocation)).toEqual(["implement-api", "implement-docs"]);
         expect(reasonOf(result)).toContain("api did not build. Not run: web, waiting on api.");
+        // Named for nothing, every repository's branch is named after the Run that fanned out.
+        expect(new Set(started.map((one) => one.options?.task))).toEqual(new Set(["r-impl-stop"]));
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "each repository builds the branch, under the review axes, its fan-out was started with",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* repositories("r-impl-carry", THREE_REPOS);
+
+        yield* ran({
+          entry: shipped("implement"),
+          runId: "r-impl-carry",
+          input: { plan: `${runDir(dir, "r-impl-carry")}/plan` },
+          options: { branch: "topic", risks: "security" },
+        });
+
+        expect(started.map((one) => one.options)).toEqual(
+          ["api", "docs", "web"].map((repo) => ({
+            branch: "topic",
+            risks: "security",
+            repo,
+            workspace: `${rig.projectDir}/${repo}`,
+          })),
+        );
       }),
     ),
   120_000,
