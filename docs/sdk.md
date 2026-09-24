@@ -244,7 +244,9 @@ const verdict =
 - **`output` decides.** A file that does not decode is unusable however plausible it reads,
   and every issue with it is reported at once.
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
-  schema's own issues. A second one fails the run with `output-unusable`.
+  schema's own issues. A second one fails the run with `output-unusable`. A stop while the
+  rewrite is awaited parks the wait, as it does the first; the resume starts an agent that
+  went with the stop again on the work.
 - **A busy pane is waited out, then parked.** Where herdr answers that the agent's pane
   cannot take a prompt yet (`agent_blocked`: a dialog is up), the prompt and its repair are
   tried again, under the same delivery, for up to ten minutes. Past that the Run is

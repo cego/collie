@@ -691,6 +691,36 @@ test(
   120_000,
 );
 
+/** An operator stopping the Run as its repair goes out. */
+class StopsAtRepair extends FakeHerdr {
+  override agentPrompt(target: string, text: string) {
+    const stop = text.includes("not usable") ? control("stop", "r1", true) : Effect.void;
+    return stop.pipe(Effect.andThen(super.agentPrompt(target, text)));
+  }
+}
+
+test(
+  "a stop while the repair is awaited parks the wait, and the resume starts the halted agent again",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "maybe" }, null, { verdict: "clean", note: "again" }]);
+        yield* interrupted("r1", 1500, {
+          herdr: new StopsAtRepair(rig.pluginEnv()),
+          collectMs: 900,
+        });
+        expect(sent(yield* rig.calls(), "not usable")).toBe(1);
+        yield* session(halted("r1"));
+
+        yield* control("stop", "r1", false);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("again");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(2);
+      }),
+    ),
+  120_000,
+);
+
 /** Two pieces of work on one agent: a list handed to one implementer, item by item. */
 const listing = defineWorkflow({
   name: "agent-listing",

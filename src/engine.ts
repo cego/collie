@@ -474,7 +474,10 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
     readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
     /** This work's agent started again with its prompt, where it is gone and wrote nothing. */
-    readonly revive: (ask: AgentAsk) => Effect.Effect<void, AgentUncertain | AgentParked>;
+    readonly revive: (
+      ask: AgentAsk,
+      unless?: string | null,
+    ) => Effect.Effect<void, AgentUncertain | AgentParked>;
     /** A message to another Run's live agent in this role here; null where there is none. */
     readonly handOff: (options: {
       readonly runId: string;

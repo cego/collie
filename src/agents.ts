@@ -144,8 +144,14 @@ export interface AgentsApi {
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
-  /** Starts this work's agent again with its prompt where it is gone and its Output never came. */
-  readonly revive: (ask: AgentAsk) => Effect.Effect<void, AgentUncertain | AgentParked>;
+  /**
+   * Starts this work's agent again with its prompt where it is gone and its Output never
+   * came; `unless` is an unusable Output that counts as none.
+   */
+  readonly revive: (
+    ask: AgentAsk,
+    unless?: string | null,
+  ) => Effect.Effect<void, AgentUncertain | AgentParked>;
   /**
    * Hands a message, through the one sender, to another Run's live agent in this role here;
    * null where none. Parked where nobody can say whether it arrived.
@@ -335,22 +341,27 @@ export const agentWork = <Output extends OutputContract>(
 
     // The repair is its own Activity, so what a restart finds is a repair that happened
     // rather than an allowance that has come back.
-    const again = yield* Activity.make({
+    const asked = yield* Activity.make({
       name: `${work.operation}.repair`,
-      success: Schema.NullOr(Schema.String),
+      success: Schema.Boolean,
       error: AgentUncertain,
-      execute: parkedWhenStuck(
-        agents
-          .repair(launched, read.problem)
-          .pipe(
-            Effect.flatMap((asked) =>
-              asked ? agents.collect(launched, first) : Effect.succeed(null),
-            ),
-          ),
-        host,
-        work.runId,
-      ),
+      execute: parkedWhenStuck(agents.repair(launched, read.problem), host, work.runId),
     });
+    const again = !asked
+      ? null
+      : yield* Activity.make({
+          name: `${work.operation}.recollect`,
+          success: Schema.NullOr(Schema.String),
+          error: AgentUncertain,
+          execute: stoppable(
+            parkedWhenStuck(agents.revive(ask, first), host, work.runId).pipe(
+              Effect.andThen(agents.collect(launched, first)),
+            ),
+            host,
+            work.runId,
+            agents.pollMs,
+          ),
+        });
     if (again === null) {
       return yield* unusable(launched, `did not write ${output} again: ${read.problem}`);
     }
@@ -956,12 +967,12 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       return launches;
     });
 
-  const revive = (ask: AgentAsk) =>
+  const revive = (ask: AgentAsk, unless?: string | null) =>
     under(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const written = yield* fs.readFileString(ask.output).pipe(Effect.orElseSucceed(() => ""));
-        if (written.trim() !== "") return;
+        if (written.trim() !== "" && written !== unless) return;
         const agent = agentName(ask.runId, ask.agent ?? ask.operation, null, 1);
         const listing = yield* host.herdr.agentList().pipe(Effect.option);
         if (listing._tag === "None" || listing.value.some((one) => one.name === agent)) return;
