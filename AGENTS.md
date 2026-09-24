@@ -154,6 +154,14 @@ herdr actions, and the `collie` CLI.
   and offers is its own declaration rather than its name. One that expects to be varied —
   `renovate` — takes the varying steps as ordinary functions, so a fork supplies three and
   keeps the rest (`test/fixtures/workflows/landing.workflow.ts`).
+- **Changing what a workflow module is, or how its agent is chosen** →
+  [ADR-0030](docs/adr/0030-a-workflow-is-one-definition-and-its-agent-is-decided-in-scope.md)
+  and [`docs/sdk.md`](docs/sdk.md), alongside `defineWorkflow`, `Run` and `withAgents` in
+  `src/sdk.ts`, the loader and `registrationOf` in `src/engine.ts`, `resolveChoice` in
+  `src/harness.ts`, and `test/definition.test.ts`, `test/agents.test.ts` and
+  `test/harness.test.ts`. A module is its default-exported definition; the Run is supplied,
+  never passed; a question is asked where the work reaches it; and harness, model and effort
+  are resolved together, layer over layer, and recorded before an agent starts.
 - **Adding anything in `src/` that looks at a workflow's id** →
   [ADR-0029](docs/adr/0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md),
   alongside `test/workflow-names.test.ts` and `test/baseline.test.ts`, whose every

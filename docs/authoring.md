@@ -102,8 +102,9 @@ it and no others.
 `collie persona fork` all put a copy in your layer (`--layer user`) or the project's
 (`--layer project`), under the id `--name` gives it.
 
-Forking a **module** writes a file that imports the original and hands `make` on, so
-everything the fork does not name is still the original's and a baseline change reaches it.
+Forking a **module** writes a file that imports the original's definition and spreads it
+under the new id, so everything the fork does not name is still the original's and a
+baseline change reaches it.
 Where a shipped module expects to be varied it takes the varying parts as ordinary
 functions or a service, and your fork supplies its own; [the SDK](sdk.md) has a worked one.
 There is no step to merge, so `--mode` and `--step` are refused on a module with what to do
@@ -177,6 +178,13 @@ pins that default to `opus`, so every base Claude agent receives `--model opus`;
 without a pinned default omit the model flag. Effort is optional — leave it out and each
 harness uses its own default.
 
+Which harness, model and effort a piece of work gets is decided layer over layer: your
+configuration, then the workflow's own `agents`, then a Run's `--harness`, `--model` and
+`--effort`, then a `withAgents` scope around the work, then the work's own options. A layer
+that switches harness keeps nothing chosen for the one below, and a combination the harness
+does not take is refused rather than replaced. [The SDK](sdk.md#which-agent-does-the-work)
+has the whole of it.
+
 The unattended switch is passed unless `permissions` says `harness`, in your `config.json`
 or on the operation; see [Permissions](using.md#permissions-unattended-by-default) for what it
 means. pi's column says none because it does not ask before a tool call — its `--approve`
@@ -192,9 +200,9 @@ permissions mode is refused before a single tab opens.
 ## Worked example: a reviewer on another harness
 
 The canonical fork. You want one reviewer on a different harness, and nothing else changed.
-`collie workflow fork review --layer user --name review` writes a module that imports the
-original and hands `make` on; you change the one thing you came to change and leave the
-rest importing.
+`collie workflow fork review --layer user --name review` writes a module that spreads the
+original's definition; you change the one thing you came to change — here
+`agents: { harness: "codex", model: "gpt-5" }` — and leave the rest importing.
 
 Check it before you rely on it:
 

@@ -10,48 +10,53 @@ the `Effect` your module imports is the one running it, and a service the host d
 the service your Layer satisfies. [ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md)
 is why.
 
-## A module
+## A workflow
 
 ```ts
-import { Host, ask, decision, defineWorkflow, type WorkflowMetadata } from "collie";
+import { Host, Run, ask, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 
-export const id = "echo";
-export const title = "Repeat a line, then ask whether to keep it";
-export const description = "The typed-module example: a custom service and one decision.";
-
-export const input = { text: Schema.String, times: Schema.Int };
-
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const keep = decision("keep", { prompt: "Keep this result?", options: ["yes", "no"] });
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
+export default defineWorkflow({
+  id: "echo",
+  title: "Repeat a line, then ask whether to keep it",
+  input: Schema.Struct({ text: Schema.String, times: Schema.Int }),
+  output: Schema.String,
+  run: ({ input }) =>
+    Effect.gen(function* () {
       const host = yield* Host;
       const line = yield* Activity.make({
         name: "echo",
         success: Schema.String,
         execute: host
-          .record(payload.runId, payload.input.text)
-          .pipe(Effect.as(payload.input.text.repeat(payload.input.times))),
+          .record((yield* Run).id, input.text)
+          .pipe(Effect.as(input.text.repeat(input.times))),
       });
-      return `${line}|${yield* ask(payload.runId, keep)}`;
+      const keep = yield* ask({ name: "keep", prompt: "Keep this?", options: ["yes", "no"] });
+      return `${line}|${keep}`;
     }),
-  );
-  return { workflow, layer, decisions: { keep } };
-};
+});
 ```
 
-Five exports, and only `make` is a function Collie calls. `id` is what an operator types;
-`registrationName` is the host's and opaque, and a second load of the same file gets a new
-one. Constructing a workflow starts nothing.
+That is the whole workflow: one default export, and nothing else Collie reads. `id` is what
+an operator types. What you leave out has a default — the title is the id, the description
+is empty, the input is an empty struct and the output is `Schema.Void` — and nothing you
+would have to make up is invented for you: the identities of your work and questions, what
+an agent is told, and any input your work really needs stay yours to write.
 
-`defineWorkflow` fixes two things and leaves the rest to you. The payload is
-`{ runId, input }` — the host supplies the run, you supply the input schema — and
-idempotency is the run alone, so a retried request is the same execution and a new start
-is a new one. The error is `WorkflowError`, which carries a `reason`: a Run that ended
-badly is a Run, not a value another workflow destructures.
+`run` is ordinary Effect code. Branches, loops, helpers in other files, parallel work and
+lists you build as you go are TypeScript, and a helper can itself ask an agent, ask a
+human, start a child or branch again: there is no step graph to keep in step with the code.
+
+The host executes `run` as a Run, and the Run is supplied rather than passed:
+`yield* Run` is its `id` and the public id of the workflow it is a Run of, and `agentWork`,
+`ask`, `child` and `requireApproved` read it themselves. Each Run is one execution keyed on
+its id, so a retried request is the same execution and a new start is a new one.
+
+A failure is a `WorkflowError`, which carries a `reason`. A workflow with failures of its
+own declares their schema as `error`, and fails with them typed: a Run that ends that way
+shows the failure as that schema encodes it, and carries the encoded value for a client to
+decode. Nothing else about Effect is wrapped — [Effect stays yours](#effect-stays-yours).
 
 ## What a caller may put in your input
 
@@ -127,24 +132,31 @@ finished before that kind of edit, and a new one started after it.
 
 ## Services
 
-A service of your own is an ordinary `Context.Service`, and your Layer provides it:
+A service of your own is an ordinary `Context.Service`, and your definition's `layer`
+provides it to `run`:
 
 ```ts
 class Stamp extends Context.Service<Stamp, { readonly around: (t: string) => string }>()(
   "echo/Stamp",
 ) {}
-const StampLayer = Layer.sync(Stamp)(() => Stamp.of({ around: (t) => `<${t}>` }));
 
-const layer = workflow.toLayer(body).pipe(Layer.provide(StampLayer));
+export default defineWorkflow({
+  id: "echo",
+  layer: Layer.sync(Stamp)(() => Stamp.of({ around: (t) => `<${t}>` })),
+  run: () =>
+    Effect.gen(function* () {
+      /* yield* Stamp */
+    }),
+});
 ```
 
-`Layer.provide` is the word that matters. Merging a Layer beside a workflow supplies it
-nothing, and the mistake is invisible until the body asks for the service — at which point
-the host reports `Service not found` against the file that asked. There is no dependency
-resolver and no registry: what your workflow needs, your Layer provides, explicitly.
+There is no dependency resolver and no registry: what `run` needs and the host does not
+lend, `layer` provides, and a `run` that asks for a service nothing provides fails to
+typecheck — and, where nothing typechecked it, the host reports `Service not found` against
+the file that asked.
 
-What the host provides is `Host`, `Agents`, `Children` and the workflow
-engine. Everything else is yours.
+What the host lends is `Run`, `Host`, `Agents`, `Children`, the workflow engine, the file
+system and paths. Everything else is yours.
 
 ### Two projects, two implementations
 
@@ -164,39 +176,57 @@ satisfies the same contract its original did.
 
 ### Forking a shipped workflow
 
-A fork that changes part of a workflow imports the rest. Where a shipped module expects to
-be varied it takes the varying parts as ordinary functions, and a fork is a file that
-supplies its own and re-exports everything else:
+A definition is a value, so a fork spreads the one it forks and says what is its own:
 
 ```ts
+import { defineWorkflow } from "collie";
+import review from "../../workflows/review.workflow.ts";
+
+export default defineWorkflow({ ...review, id: "our-review", agents: { model: "sonnet" } });
+```
+
+A fork that changes part of what a workflow does imports the rest. Where a shipped module
+expects to be varied it takes the varying parts as ordinary functions, and a fork supplies
+its own:
+
+```ts
+import { agentWork, defineWorkflow } from "collie";
 import {
   Merged,
   Released,
   Recorded,
+  TRACKER,
   renovateText,
   renovation,
   type Landing,
 } from "./renovate.workflow.ts";
-export { input, metadata } from "./renovate.workflow.ts";
 
-export const id = "landing";
 const landing: Landing = {
   merge: (at) =>
-    agentWork({ ...asMine(at, "merge"), instructions: renovateText("merge"), output: Merged }),
+    agentWork({
+      operation: "merge",
+      agent: TRACKER,
+      inputs: at.inputs,
+      instructions: renovateText("merge"),
+      output: Merged,
+    }),
   release: (at) =>
     agentWork({
-      ...asMine(at, "release"),
+      operation: "release",
+      agent: TRACKER,
       instructions: "Deploy it rather than tag it.",
       output: Released,
     }),
   record: (at) =>
     agentWork({
-      ...asMine(at, "record"),
+      operation: "record",
+      agent: TRACKER,
       instructions: "Write it off on our own board.",
       output: Recorded,
     }),
 };
-export const make = (name: string) => renovation({ name, landing });
+
+export default defineWorkflow({ ...renovation(landing), id: "landing" });
 ```
 
 Everything the fork did not write — what it assesses, what it batches, the claim it takes,
@@ -225,12 +255,10 @@ const Verdict = Schema.Struct({
 const verdict =
   yield *
   agentWork({
-    runId: payload.runId,
     operation: "review",
     role: "reviewer",
-    cwd: payload.input.cwd,
     instructions: notes,
-    inputs: { target: payload.input.target },
+    inputs: { target: input.target },
     output: Verdict,
   });
 ```
@@ -242,7 +270,9 @@ const verdict =
   Output goes and carries the JSON Schema `output` draws to. A field's `description` is the
   judgment being asked for, so write it as one.
 - **`output` decides.** A file that does not decode is unusable however plausible it reads,
-  and every issue with it is reported at once.
+  and every issue with it is reported at once. Leave `output` out and the agent answers in
+  plain text, which is what you are handed; a schema is how you opt into a structured,
+  validated answer.
 - **One unusable Output buys one repair**, sent back to the agent that wrote it, with the
   schema's own issues. A second one fails the run with `output-unusable`. A stop while the
   rewrite is awaited parks the wait, as it does the first; the resume starts an agent that
@@ -252,13 +282,13 @@ const verdict =
   tried again, under the same delivery, for up to ten minutes. Past that the Run is
   `suspended` rather than failed, `run show` says what held and for how long, and
   `collie run resume` hands the same prompt to the same agent.
-- **`cwd` is yours to say.** The host knows its own state directory, not which checkout
-  this piece of work belongs in.
-- **`role`, `harness`, `model`, `effort` and `permissions`** default to the operation's name
-  and to the operator's configuration. The role is injected as a persona, and
-  where `personas/<role>.md` exists in the project, on this machine or in the installation,
-  that persona is what the agent is started as. A role nobody wrote a persona for is stated
-  in one line.
+- **`cwd` is where the host placed the Run** unless you name another checkout.
+- **`role`** defaults to the operation's name. The role is injected as a persona, and where
+  `personas/<role>.md` exists in the project, on this machine or in the installation, that
+  persona is what the agent is started as. A role nobody wrote a persona for is stated in
+  one line.
+- **`harness`, `model` and `effort`** are [decided in layers](#which-agent-does-the-work),
+  and `permissions` is the operator's unless the work asks for `harness`.
 - **`skill` starts one.** A skill a workflow names is invoked the way a human invokes one,
   with the first message — which is the only way to reach a skill that refuses to be called
   by a model. A skill _mentioned_ in your Markdown as `{{skill:name}}` renders as the path
@@ -290,23 +320,68 @@ has stops the work with that as the reason rather than starting a second agent.
 `promptFor` builds the same prompt without launching anything, and `decodeOutput` reads a
 file against a contract. Both are plain functions, so a test of yours can use them.
 
+## Which agent does the work
+
+Harness, model and effort are preferences, and nothing has to forward them. Each piece of
+work takes the nearest layer that names one, lowest first:
+
+```text
+built-in defaults
+→ the operator's configuration
+→ the definition's own agents
+→ the Run's own: --harness, --model, --effort
+→ an enclosing withAgents scope
+→ agentWork's own options
+```
+
+`withAgents` scopes preferences over everything inside an effect — through helpers in other
+files, and into the children it starts:
+
+```ts
+yield * reviewAndFix(input).pipe(withAgents({ harness: "claude", model: "opus" }));
+```
+
+Scopes nest, the innermost winning, and parallel branches each keep their own; nothing is a
+setting that one branch changes for another. A child is handed what its parent prefers
+where it starts it — the Run's own preferences and the scopes around the call — as options
+it is started with, never the parent's Context, services or Layers. A workflow's ordinary
+preference goes in its definition's `agents`, not into every call, so `--model` still
+reaches all of its work; a preference written on one call is a deliberate choice for that
+work, and wins.
+
+The three are decided together. A layer that switches harness keeps nothing chosen below
+it, so a model named for Claude never follows the work onto codex: what is left open is the
+chosen harness's own default. A combination the harness does not take — a model it does not
+know, an effort it has none of — is refused with what it would take, never quietly
+replaced; a Run's own is checked before it starts, and anything else before its agent is.
+
+The choice is recorded before the agent is launched, as the work's own Activity, so a
+recovery, a revival and a restart start the agent the work was given, whatever is
+configured by then. An agent that is already running under the work's `agent` name is the
+conversation this continues, and a conversation cannot become another agent: what is asked
+for at the work itself — its options, or a scope around it — has to agree with what it is
+running as, and one that does not is refused rather than ignored. What only defaults below
+that decides for fresh agents alone. `permissions` is none of this: preferring a model never
+changes what an agent is allowed to do, or which commands Collie may run for the Run.
+
 ## Where your Run is, and what it was given
 
 `host.place(runId)` is the Run as the host admitted it, and it is how a module that was not
-handed a path still knows where to work.
+handed a path still knows where to work. The host's own calls take the Run's id, which is
+`(yield* Run).id`.
 
 ```ts
-const place = yield * host.place(payload.runId);
+const place = yield * host.place((yield * Run).id);
 // place.cwd       — where this Run works: its own worktree, or the checkout it started from
 // place.dir       — this Run's own directory, made as you ask for it
 // place.options   — the host's own launch options: branch, task, workspace, repo, outcome,
-//                   risks, previous
+//                   risks, previous, harness, model, effort
 // place.task      — the Task it belongs to, whose workspace its agents open in
 // place.workspace — a workspace of its own, where the Run asked for one; null otherwise
 ```
 
 `place.cwd` is decided before your body runs, and your body never makes a checkout. A
-workflow that declares `checkout` in its [metadata](#metadata) is given a worktree of its
+workflow that [declares](#what-a-definition-declares) `checkout` is given a worktree of its
 own there; every other one works where it was started, and a child where its parent works.
 
 `place.dir` is where what a Run produces belongs, and where the things that read a Run look:
@@ -358,12 +433,15 @@ const prompt = (section: string) =>
 
 ## Waiting for a human
 
-`decision(name, { prompt, options })` is a question, and `ask(runId, question)` is how you
-wait for it. Wait with `ask` and not with `DurableDeferred.await`: `ask` tells the host what
-the run is waiting on, and a host that does not know that cannot show the question, cannot
-refuse an answer to one nobody asked, and cannot tell a second answer from the first. A
-module that awaits a deferred directly gets a Run nobody can answer.
+`ask({ name, prompt, options })` asks a human and waits for the answer. It is asked when the
+work reaches it — on one branch and not another, once per item of a list — and nothing
+declares it ahead. Wait with `ask` and not with `DurableDeferred.await`: `ask` tells the
+host what the run is waiting on, and a host that does not know that cannot show the
+question, cannot refuse an answer to one nobody asked, and cannot tell a second answer from
+the first.
 
+- **`name` is its identity.** The same name is the same question, however often the work
+  replays; a question inside a loop is named after its item, never after its position.
 - **`options` is what it takes.** An answer outside them is refused before your workflow is
   told anything. Leave it out for a question answered in the operator's own words.
 - **One answer, whoever sends it.** Two answers racing make one piece of work; the second is
@@ -374,8 +452,8 @@ module that awaits a deferred directly gets a Run nobody can answer.
 
 ## A workflow made of other workflows
 
-`child({ runId, invocation, workflow, input })` starts another workflow as part of this one
-and waits for it. `workflow` is a public id, selected in your Run's own project, so a
+`child({ invocation, workflow, input })` starts another workflow as part of this one and
+waits for it. `workflow` is a public id, selected in your Run's own project, so a
 project that overrides that module overrides it here too; `"self"` is your own, whatever a
 fork has renamed it to. Importing a function from a file beside yours does the opposite on
 purpose: the file decides, and no lookup happens at all.
@@ -390,19 +468,15 @@ purpose: the file decides, and no lookup happens at all.
 - **It belongs to you.** The child carries your Run as its parent and your Task as its Task,
   it shows up in `run list` beside you, and interrupting you reaches it. It does not belong
   to whatever client asked for your Run — that can go, and neither of you notices.
+- **It prefers the agents you do** where you start it, unless its options say otherwise.
 
 How many children there are, and in what order, is TypeScript:
 
 ```ts
 const graded =
   yield *
-  Effect.forEach(payload.input.notes.split(","), (note) =>
-    child({
-      runId: payload.runId,
-      invocation: `grade-${note}`,
-      workflow: "graded",
-      input: { note },
-    }),
+  Effect.forEach(input.notes.split(","), (note) =>
+    child({ invocation: `grade-${note}`, workflow: "graded", input: { note } }),
   );
 ```
 
@@ -428,7 +502,6 @@ for (const wave of plan.waves) {
       wave,
       (repo) =>
         child({
-          runId,
           invocation: `repo-${repo}`,
           workflow: "share",
           input: { plan: asked.plan, tickets: ticketsFor(repo) },
@@ -481,10 +554,8 @@ for (const [at, ticket] of tickets.entries()) {
   const built =
     yield *
     agentWork({
-      runId,
       operation: ticket.file,
       agent: "implementer",
-      cwd: asked.cwd,
       instructions: INSTRUCTIONS,
       inputs: {
         ticket: ticket.file,
@@ -552,7 +623,7 @@ collects the same way from outside: `collie verify --run <your run id> -- <comma
 before it starts — `renderApproved` writes it out — and `renderEvidence(host.evidence(...))`
 is what was actually collected and by whom, for a merge request to say what it proved.
 
-`requireApproved(runId, kind)` is the same list where your Run's kind of result needs it.
+`requireApproved(kind)` is the same list where your Run's kind of result needs it.
 With nothing approved it parks the Run with the repair — a grant through `collie run intent
 verification`, then `collie run resume` — instead of paying agents for work no gate could
 accept, and a resume asks again. Call it before your first agent and again at your gate, so
@@ -568,7 +639,7 @@ vouch for its own scope.
 const gaps = evidenceGapsOf({
   kind: isOutcome(place.options.outcome ?? "") ? place.options.outcome : "unspecified",
   evidence: yield * host.evidence(runId, cwd),
-  approved: yield * requireApproved(runId, place.options.outcome ?? ""),
+  approved: yield * requireApproved(place.options.outcome ?? ""),
   outputs: { build, synthesize },
   reviewed: ["synthesize"],
   roots: [place.dir, cwd],
@@ -604,15 +675,19 @@ None of it is yours to implement, but it decides where your workflow can be inte
 
 [ADR-0021](adr/0021-one-host-answers-for-a-run.md) is why each of those is the way it is.
 
-## Metadata
+## What a definition declares
 
-`metadata` says what the workflow _is_. Nothing in it is consulted by a body, and nothing
-in it is a step.
+Beside what it does, a definition says what the workflow _is_, in the same object. None of
+it is consulted by `run`, none of it is a step, and all of it is read without running
+anything — a listing, a card and a launch know it from the definition alone.
 
 ```ts
-export const metadata: WorkflowMetadata = {
+export default defineWorkflow({
+  id: "echo",
+  input: Schema.Struct({ text: Schema.String, times: Schema.Int }),
   hints: { text: "work-source" },
   outcome: { selectable: ["feature", "docs"] },
+  agents: { model: "sonnet" },
   followUps: [{ id: "echo-again", title: "Echo it again", workflow: "echo", when: "succeeded" }],
   actions: [
     {
@@ -623,8 +698,12 @@ export const metadata: WorkflowMetadata = {
       eligible: (facts) => facts.succeeded && !facts.disposed,
     },
   ],
-};
+  run: ({ input }) => Effect.succeed(input.text),
+});
 ```
+
+- **`agents`** is what the workflow's own work prefers, under anything a Run or a scope
+  prefers: [which agent does the work](#which-agent-does-the-work).
 
 - **`hints`** attach inference to a field. `work-source`, `diff-target` and
   `gitlab-repository` are exclusive: one field each, so renaming `plan` to `spec` changes
@@ -670,8 +749,9 @@ an outcome is either fixed or selectable, not both
 ```
 
 `RESERVED_INPUTS` is the published list of names the host supplies at launch — `branch`,
-`task`, `workspace`, `repo`, `outcome`, `risks`, `previous`. An input of one of those would
-be shadowed without you ever seeing it, so declaring one is refused. `workspace` is decoded
+`task`, `workspace`, `repo`, `outcome`, `risks`, `previous`, `harness`, `model` and
+`effort`. An input of one of those would be shadowed without you ever seeing it, so
+declaring one is refused. `workspace` is decoded
 before anything exists: `new`, or the absolute path of a directory. Anything else is
 `invalid_input` naming it, and so is `new` for a workflow that declares no checkout.
 
@@ -694,7 +774,7 @@ them is closed against extra keys.
 not say:
 
 ```ts
-const { document, limits } = jsonSchemaFor(Schema.Struct(input));
+const { document, limits } = jsonSchemaFor(Schema.Struct({ text: Schema.String }));
 ```
 
 `document` is null when nothing could be drawn, and `limits` names each place the drawing
@@ -708,12 +788,12 @@ is still held to the schema itself.
 collie workflow check echo
 ```
 
-It imports the module, constructs it and runs the compiler over it — no run, no agent, no
-worktree. Each diagnostic comes back with its file and line, one module at a time: an error
+It imports the module, builds the workflow its definition is registered as and runs the
+compiler over it — no run, no agent, no worktree. Each diagnostic comes back with its file and line, one module at a time: an error
 in one says nothing about the one beside it.
 
-Three answers, kept apart. A **problem** stops it running: it would not load, its metadata
-contradicts itself, `make` threw, or it does not compile. **`drawn without:`** is a place
+Three answers, kept apart. A **problem** stops it running: it would not load, it exports no
+definition, what it declares contradicts itself, or it does not compile. **`drawn without:`** is a place
 the JSON Schema drawn for a prompt or a listing says less than your schema does — your
 schema still holds. **`ok, not typechecked`** means no compiler is installed in that
 directory; nothing compiled it, and it says so rather than reading as fine.
@@ -722,3 +802,17 @@ directory; nothing compiled it, and it says so rather than reading as fine.
 and `collie.d.ts` — into the directory, merging what it needs into a `package.json` or
 `tsconfig.json` you already have without replacing anything of yours, and installs the toolchain with the executable's own embedded Bun, so neither Bun nor Node has
 to be on the machine. The `effect` it pins is the one the host runs.
+
+## Effect stays yours
+
+Collie makes the common cases convenient; it does not stand between you and Effect.
+
+- **An Activity of your own** is `Activity.make`, recorded and replayed like the ones
+  `agentWork` makes.
+- **A service of your own** is an ordinary `Context` service and Layer, through `layer`.
+- **Concurrency** is `Effect.all` and `Effect.forEach`.
+- **A typed failure** stays typed, through `error`, and is encoded by its schema.
+- **A direct model call** uses Effect's own `LanguageModel` with a provider Layer of yours
+  in `layer`, wrapped in an Activity so replay hands back what it answered. Collie has no
+  classifier API of its own, and preferring a harness or model never overrides a provider
+  you supplied; `agentWork` is the way to reach the harness the operator configured.

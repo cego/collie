@@ -2,7 +2,7 @@
 
 ## Glossary
 
-**Workflow** — A TypeScript module saved as `<id>.workflow.ts`: its public id, a title, a description, its typed input, optional metadata and `make`, which returns an Effect workflow and the Layer it runs on. It asks an agent with `agentWork`, a human with `ask` and another Workflow with `child`, and composes everything else as ordinary TypeScript. Found where it was saved (see **Layer**) and run by the host; a shipped Workflow is one more module and gets nothing a user's does not.
+**Workflow** — A TypeScript module saved as `<id>.workflow.ts` whose default export is its definition: its public id, what it takes and gives back, what it declares — hints, outcome, checkout, offers and the agents it prefers — and `run`, ordinary Effect code the host executes as a Run. It asks an agent with `agentWork`, a human with `ask` and another Workflow with `child`, each when the work reaches it, and composes everything else as ordinary TypeScript. Found where it was saved (see **Layer**); a shipped Workflow is one more module and gets nothing a user's does not.
 
 **Operation** — One piece of agent work inside a Run, named by the Workflow that asks for it. The name is its identity: the agent's name, its prompt and Output files and the Activities that make it durable come from it, so it is stable within a Run and differs from every other. It has a role, injected as a Persona, a Harness, a Model, optionally the Skill it starts, and the schema its Output must decode against. An agent it starts gets a Tab of its own in its Task's workspace, labelled with its role; an operation that reuses an agent opens nothing.
 
@@ -14,9 +14,9 @@
 
 **Persona** — Harness-agnostic instructions injected when an agent starts (e.g. implementer, reviewer). Not a harness-native config file.
 
-**Harness** — The agent CLI an operation's agent runs in (claude, codex, opencode, …). User default, per-operation override.
+**Harness** — The agent CLI an operation's agent runs in (claude, codex, opencode, …). Decided with its Model and effort, layer over layer: the user's default, the Workflow's own, the Run's, a scope around the work, the operation's own. Switching it keeps no Model chosen for another; an agent already running cannot switch.
 
-**Model** — The model a Harness is asked to use. User default, per-operation override. Unknown model ⇒ launch fails before any Tab opens.
+**Model** — The model a Harness is asked to use, decided with its Harness. One the Harness does not take is refused before any Tab opens; left open, it is the Harness's own default.
 
 **Input** — A value a Workflow needs (plan directory, diff target, goal). Inferred from context (branch, cwd, earlier plan Runs, glab); the human is asked only when inference fails.
 

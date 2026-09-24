@@ -59,7 +59,7 @@ it.
 
 `workflow show <id>` gives the module's public id, the layer and file it came from, each
 input with its strategy and its schema, the names the host settles beside your input, the
-schemas of its result and its failure, and its metadata:
+schemas of its result and its failure, and what its definition declares, under `metadata`:
 
 ```json
 {
@@ -113,9 +113,9 @@ collie --json workflow fork implement --layer user --name ours
 ```
 
 Both write `<id>.workflow.ts` where a run will find it, return its path, and never write
-over a file that is already there. `create` writes the smallest module that runs; `fork`
-writes one that imports the original and hands `make` on, so everything it does not name is
-still the original's. Both then provision the authoring setup beside the file —
+over a file that is already there. `create` writes the smallest definition that runs;
+`fork` writes one that spreads the original's definition under the new id, so everything it
+does not name is still the original's. Both then provision the authoring setup beside the file —
 `package.json`, `tsconfig.json`, `collie.d.ts` — merging what it needs into a
 `package.json` or `tsconfig.json` you already have, and installing the toolchain with the executable's own embedded Bun. With no network on a
 first use the answer says `toolchain_unavailable`: the module still runs, and nothing was
@@ -137,7 +137,16 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--decide s=t`    | Refused: a Run asks its questions when it reaches them.                     |
 | `--task <id>`     | Continue that Task instead of starting a new one, as `task list` prints it. |
 | `--continue-task` | Continue the Task whose workspace this is; `needs_input` outside one.       |
+| `--harness <h>`   | The harness this Run's agents run on, over the workflow's own preference.   |
+| `--model <m>`     | The model this Run's agents run on, over the workflow's own preference.     |
+| `--effort <e>`    | The effort this Run's agents are asked for, over the workflow's own.        |
 | `--request-id`    | Idempotency key — see [Retrying safely](#retrying-safely).                  |
+
+`--harness`, `--model` and `--effort` reach every agent the Run starts, and its children,
+without the workflow doing anything for them; a piece of work that names its own still
+wins. They are resolved together before anything starts, so a model the harness does not
+take is `invalid_input` naming what it would take. [Which agent does the
+work](sdk.md#which-agent-does-the-work) is the whole order.
 
 ### A workflow saved as a module
 
