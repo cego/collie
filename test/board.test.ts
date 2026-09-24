@@ -338,6 +338,20 @@ test("the sections are what the search left", () => {
   });
 });
 
+test("a filter narrows the rows that are drawn and never what is supervised", () => {
+  const views = [
+    task({ id: "blocked", state: "blocked", decision: QUESTION }),
+    task({ id: "b", name: "Passkey bridge race", state: "done" }),
+  ];
+  // The search hides the Task that needs you from what is drawn…
+  expect(sectionsOf(views, "passkey").needs).toEqual([]);
+  // …and what says something is waiting on you still counts it.
+  expect(headerSentence(views)).toEqual({
+    text: "One task is waiting on you. 0 working.",
+    urgent: true,
+  });
+});
+
 test("Finished is one line until it is opened", () => {
   const finished = [task({ state: "done" }), task({ id: "t2", state: "failed" })];
   expect(finishedLabel(finished, false)).toBe("2 finished today, 1 failed");
@@ -647,6 +661,35 @@ test("what became of the work is the disposition's answer and nobody else's", ()
       const after = yield* board(env, [run], { now });
       expect(after[0]!.sentence).toBe("Merged as content!1 1 hour ago.");
       expect(after[0]!.disposition).toBe("merged content!1");
+    }),
+  ));
+
+test("a Run whose work shipped by hand says so, without its status being edited", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const { dir, env } = yield* scratch();
+      const run = yield* madeRun(dir, {
+        state: "failed",
+        note: "the tests never went green",
+        created: "2026-09-14T08:00:00Z",
+        finished: "2026-09-14T08:30:00Z",
+      });
+      yield* recordDisposition(run.dir, {
+        at: "2026-09-14T09:00:00Z",
+        by: "mk",
+        kind: "merged",
+        ref: "cego/collie!43",
+        note: null,
+      });
+
+      const [card] = yield* board(env, [run], { now: Date.parse("2026-09-14T10:00:00Z") });
+      // Both facts, on the card a person is looking at: how execution ended, and what
+      // became of the work. Neither is edited to tidy the other away.
+      expect(card!.state).toBe("failed");
+      expect(card!.disposition).toBe("merged cego/collie!43");
+      expect(card!.sentence).toBe(
+        "Stopped: the tests never went green. Merged as cego/collie!43 1 hour ago.",
+      );
     }),
   ));
 

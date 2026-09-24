@@ -119,7 +119,7 @@ const FRONT_DOOR: readonly Check[] = [
     proof: {
       kind: "test",
       layer: "ui",
-      file: "test/workspace-tab.test.ts",
+      file: "test/board.test.ts",
       name: "a filter narrows the rows that are drawn and never what is supervised",
     },
   },
@@ -213,7 +213,7 @@ const FRONT_DOOR: readonly Check[] = [
     proof: {
       kind: "test",
       layer: "ui",
-      file: "test/workspace-tab.test.ts",
+      file: "test/board.test.ts",
       name: "a Run whose work shipped by hand says so, without its status being edited",
     },
   },
