@@ -24,6 +24,7 @@ import {
   Option,
   Path,
   Predicate,
+  Random,
   Schedule,
   Schema,
   Scope,
@@ -1070,16 +1071,20 @@ const EntryContract = Schema.Struct({
 export const loadEntry: (
   file: string,
   revision?: string,
-) => Effect.Effect<WorkflowEntry, EntryError> = Effect.fn("Engine.loadEntry")(function* (
-  file: string,
-  revision?: string,
-) {
+) => Effect.Effect<WorkflowEntry, EntryError, FileSystem.FileSystem> = Effect.fn(
+  "Engine.loadEntry",
+)(function* (file: string, revision?: string) {
   installSdk();
-  // Bun's module registry has no invalidation, so an entry read twice at one path is the
-  // first read both times. A revision in the specifier is a path nothing has imported.
+  // Bun's module registry has no invalidation, so an entry or a helper read twice at one
+  // path is the first read both times. A revision is read from a copy nothing has imported.
+  const staged = revision === undefined ? null : yield* stagedEntry(file, revision);
   const loaded = yield* Effect.tryPromise({
-    try: () => import(revision === undefined ? file : `${file}?v=${revision}`),
-    catch: (cause) => new EntryError({ file, message: String(cause) }),
+    try: () => import(staged?.file ?? file),
+    catch: (cause) =>
+      new EntryError({
+        file,
+        message: staged === null ? String(cause) : String(cause).replaceAll(staged.root, ""),
+      }),
   });
   const described = yield* Schema.decodeUnknownEffect(EntryContract)(loaded).pipe(
     Effect.mapError(
@@ -1105,6 +1110,32 @@ export const loadEntry: (
     return yield* new EntryError({ file, message: problems.join("; ") });
   }
   return entry;
+});
+
+/** Where entries are staged to be read, per user. A revision is its content, so a copy is never stale. */
+const ENTRIES = `${Bun.env.TMPDIR ?? "/tmp"}/collie-entries-${process.getuid?.() ?? 0}`;
+
+/**
+ * This revision of an entry's directory, staged once and then shared by every process
+ * that reads it. Staged under a name of its own and renamed into place, so nobody imports
+ * a copy another process is still writing.
+ */
+const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, revision: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const name = `${Bun.hash(directoryOf(file)).toString(16)}-${revision}`;
+  const root = `${ENTRIES}/generations/${name}`;
+  const staged = { root, file: `${root}${file}` };
+  if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) return staged;
+  const draft = `${name}.${yield* Random.nextInt}`;
+  yield* stageGeneration({ dir: ENTRIES, name: draft, entry: file }).pipe(
+    Effect.provide(Path.layer),
+  );
+  const drafted = `${ENTRIES}/generations/${draft}`;
+  // Another process that staged it first is as good as this one.
+  yield* fs
+    .rename(drafted, root)
+    .pipe(Effect.catch(() => fs.remove(drafted, { recursive: true }).pipe(Effect.ignore)));
+  return staged;
 });
 
 /**

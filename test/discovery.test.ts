@@ -193,6 +193,26 @@ test("an edited helper is a new revision of the entry beside it", () =>
     }).pipe(Effect.scoped),
   ));
 
+test("what an edited helper exports is what the entry beside it says next", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const where = yield* layers("collie-discovery-helper-");
+      yield* where.save(
+        "user",
+        "proof.workflow.ts",
+        entry("proof").replace(
+          'export const title = "The proof workflow";',
+          'export { title } from "./named.ts";',
+        ),
+      );
+      yield* where.save("user", "named.ts", 'export const title = "Before";\n');
+      expect((yield* discover(where.roots)).entries[0]?.title).toBe("Before");
+
+      yield* where.save("user", "named.ts", 'export const title = "After";\n');
+      expect((yield* discover(where.roots)).entries[0]?.title).toBe("After");
+    }).pipe(Effect.scoped),
+  ));
+
 test("an installed dependency counts by its name, not by everything inside it", () =>
   runEffect(
     Effect.gen(function* () {

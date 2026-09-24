@@ -95,26 +95,25 @@ export function describeModule(entry: WorkflowEntry, where: Where): Described {
  * found, so it loads again from the same revision; a file that has gone in between is
  * described as far as the listing knew it, and says why it can no longer be read.
  */
-export const readModule: (found: Found) => Effect.Effect<Described> = Effect.fn(
-  "Authoring.readModule",
-)(function* (found: Found) {
-  const loaded = yield* loadEntry(found.path, found.revision).pipe(Effect.result);
-  return loaded._tag === "Success"
-    ? describeModule(loaded.success, found)
-    : {
-        id: found.id,
-        title: found.title,
-        description: found.description,
-        layer: found.layer,
-        path: found.path,
-        inputs: found.inputs,
-        options: HOST_OPTIONS,
-        success: NOT_DRAWN,
-        error: NOT_DRAWN,
-        metadata: {},
-        broken: loaded.failure.message,
-      };
-});
+export const readModule: (found: Found) => Effect.Effect<Described, never, FileSystem.FileSystem> =
+  Effect.fn("Authoring.readModule")(function* (found: Found) {
+    const loaded = yield* loadEntry(found.path, found.revision).pipe(Effect.result);
+    return loaded._tag === "Success"
+      ? describeModule(loaded.success, found)
+      : {
+          id: found.id,
+          title: found.title,
+          description: found.description,
+          layer: found.layer,
+          path: found.path,
+          inputs: found.inputs,
+          options: HOST_OPTIONS,
+          success: NOT_DRAWN,
+          error: NOT_DRAWN,
+          metadata: {},
+          broken: loaded.failure.message,
+        };
+  });
 
 /** What `make` gave back, or the sentence it threw instead. One of the two is always null. */
 type Constructed =
