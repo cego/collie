@@ -1035,6 +1035,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     under(
       Effect.gen(function* () {
         const launches = yield* launchesOf(runId);
+        if (launches.length === 0) return { stopped: [], left: [] };
         const listing = yield* host.herdr.agentList().pipe(Effect.result);
         if (listing._tag === "Failure") {
           return {

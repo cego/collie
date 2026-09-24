@@ -467,6 +467,19 @@ test("a stop leaves another process that took the Run's agent name", () =>
     }),
   ));
 
+test("a stop of a Run that launched no agent needs nothing from herdr", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const halt = yield* session(halted("r1"), {
+        herdr: new FakeHerdr(
+          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent list":"herdr is not answering"}` }),
+        ),
+      });
+      expect(halt).toEqual({ stopped: [], left: [] });
+      expect(yield* rig.cmds()).not.toContain("agent list");
+    }),
+  ));
+
 /** Another Run's implementer, live in this checkout and registered as it. */
 const liveImplementer = Effect.gen(function* () {
   yield* rig.addAgent("impl-live", "9-1");
