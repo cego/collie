@@ -429,17 +429,24 @@ export const openHost = Effect.fn("HostTest.open")(function* (
  * running after the process that asked for it has gone.
  */
 export const stopHost = Effect.fn("HostTest.stopHost")(function* (dir: string) {
-  const owner = yield* ownerOf(dir);
-  if (owner === null) return;
-  yield* Effect.sync(() => {
-    try {
-      process.kill(owner.pid, "SIGTERM");
-    } catch {
-      // Already gone, which is the state this is trying to reach.
-    }
-  });
+  // A host that lost the race to start may still be booting, and takes the lock once its
+  // owner has gone: whoever holds it is stopped, once each, until nobody does.
+  const stopped = new Set<number>();
   yield* until(
-    () => ownerOf(dir),
+    () =>
+      ownerOf(dir).pipe(
+        Effect.tap((owner) =>
+          Effect.sync(() => {
+            if (owner === null || stopped.has(owner.pid)) return;
+            stopped.add(owner.pid);
+            try {
+              process.kill(owner.pid, "SIGTERM");
+            } catch {
+              // Already gone, which is the state this is trying to reach.
+            }
+          }),
+        ),
+      ),
     (holder) => holder === null,
   );
 });
