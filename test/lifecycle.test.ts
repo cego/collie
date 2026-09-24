@@ -34,6 +34,7 @@ const Payload = Schema.Struct({
       runId: Schema.String,
       status: Schema.Unknown,
       parked: Schema.optional(Schema.NullOr(Schema.String)),
+      controls: Schema.optional(Schema.Array(Schema.String)),
     }),
   ),
   runs: Schema.optional(Schema.Array(Schema.Struct({ runId: Schema.String }))),
@@ -301,6 +302,25 @@ test(
         expect((yield* payloadOf(resumed.envelope)).run?.status).toEqual({
           status: "suspended",
         });
+        yield* stopHost(world.state);
+      }),
+    ),
+  240_000,
+);
+
+test(
+  "a resume answers with the Run as it is once its stop is cleared",
+  () =>
+    proves("collie-lifecycle-unstop-", (world) =>
+      Effect.gen(function* () {
+        const started = yield* collie(world, ["run", "start", "proof", "--input", "note=x"]);
+        const runId = (yield* payloadOf(started.envelope)).runId ?? "";
+        yield* collie(world, ["run", "wait", runId, "--until", "attention"]);
+        yield* collie(world, ["run", "stop", runId]);
+
+        const resumed = yield* collie(world, ["run", "resume", runId]);
+        expect(resumed.exit).toBe(0);
+        expect((yield* payloadOf(resumed.envelope)).run?.controls).not.toContain("stop");
         yield* stopHost(world.state);
       }),
     ),

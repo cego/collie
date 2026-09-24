@@ -349,18 +349,21 @@ export const watchRun = <R>(
  */
 export const recoverRun = (env: PluginEnv, runId: string): Effect.Effect<OpResult, never, Client> =>
   asks(env, (client) => client.recover().pipe(Effect.andThen(client.run({ runId })))).pipe(
-    Effect.map((answered) => {
-      if (!answered.ok) return answered;
-      const view = answered.value;
-      if (view === null)
-        return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
-      return {
-        ok: true as const,
-        data: { run: view },
-        human: describeRun(view).join("\n"),
-      };
-    }),
+    Effect.map(shown(runId)),
   );
+
+const shown =
+  (runId: string) =>
+  (answered: { readonly ok: true; readonly value: RunView | null } | Failure): OpResult => {
+    if (!answered.ok) return answered;
+    const view = answered.value;
+    if (view === null) return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
+    return {
+      ok: true as const,
+      data: { run: view },
+      human: describeRun(view).join("\n"),
+    };
+  };
 
 /**
  * Settles the question a Run is waiting on. The decision is named where the caller
@@ -434,8 +437,16 @@ export const controlRun = (
 /** Picks a Run up again from any door: recovered first, then its stop cleared, so what wakes can run. */
 export const resumeRun = (env: PluginEnv, runId: string): Effect.Effect<OpResult, never, Client> =>
   recoverRun(env, runId).pipe(
-    Effect.tap((recovered) =>
-      recovered.ok ? controlRun(env, { runId, control: "stop", set: false }) : Effect.void,
+    Effect.flatMap((recovered) =>
+      recovered.ok
+        ? controlRun(env, { runId, control: "stop", set: false }).pipe(
+            Effect.flatMap((cleared) =>
+              cleared.ok
+                ? asks(env, (client) => client.run({ runId })).pipe(Effect.map(shown(runId)))
+                : Effect.succeed(cleared),
+            ),
+          )
+        : Effect.succeed(recovered),
     ),
   );
 
