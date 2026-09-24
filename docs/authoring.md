@@ -72,8 +72,10 @@ while a run already going keeps the code it started on. A run recovered in the s
 resumes on its own registration; a host started again rebuilds registrations from the
 modules **as they are now**, so a file you fixed is the file it comes back on. Any staged
 copy is a cache, and never an archive a past run is recovered from: a host wipes its own on
-start, and a listing reads each revision from a copy in the system's temporary directory,
-so what an edited helper exports is what the next listing says. A
+start, and a listing reads each revision from a copy in your own cache
+(`$XDG_CACHE_HOME/collie/entries`, else `~/.cache/collie/entries`), so what an edited helper
+exports is what the next listing says. That directory is read as code, so Collie refuses it
+while another account owns it or can write to it. A
 package is found from a staged copy exactly as from your file: the `node_modules` it would
 look in are linked beside the copy, not copied, and the `package.json` files above your
 code are copied with it, so a `#` import resolves as it does for you. Editing one of those

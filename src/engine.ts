@@ -1216,8 +1216,29 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
   return { workflow, layer };
 };
 
-/** Where entries are staged to be read, per user. A copy is named by its content, so it is never stale. */
-const ENTRIES = `${Bun.env.TMPDIR ?? "/tmp"}/collie-entries-${process.getuid?.() ?? 0}`;
+/**
+ * Where entries are staged to be read: this account's own cache, and only while nobody
+ * else can write there, since what is in it is imported as code. A copy is named by its
+ * content, so it is never stale.
+ */
+const entriesRoot = Effect.fn("Engine.entriesRoot")(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const cache = Bun.env.XDG_CACHE_HOME || `${Bun.env.HOME ?? Bun.env.TMPDIR ?? "/tmp"}/.cache`;
+  const entries = `${cache}/collie/entries`;
+  yield* fs.makeDirectory(entries, { recursive: true, mode: 0o700 }).pipe(Effect.ignore);
+  const info = yield* fs.stat(entries).pipe(Effect.option);
+  const mine =
+    Option.isSome(info) &&
+    Option.getOrNull(info.value.uid) === (process.getuid?.() ?? null) &&
+    (info.value.mode & 0o022) === 0;
+  if (!mine) {
+    return yield* new EntryError({
+      file,
+      message: `${entries} is writable by others or is not yours, so nothing is read from it: remove it, or make it yours with \`chmod 700\``,
+    });
+  }
+  return entries;
+});
 
 /**
  * An entry's directory as it is now, staged once and then shared by every process that
@@ -1226,16 +1247,17 @@ const ENTRIES = `${Bun.env.TMPDIR ?? "/tmp"}/collie-entries-${process.getuid?.()
  */
 const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
+  const entries = yield* entriesRoot(file);
   const dir = directoryOf(file);
   const name = `${Bun.hash(dir).toString(16)}-${yield* revisionOf(dir)}`;
-  const root = `${ENTRIES}/generations/${name}`;
+  const root = `${entries}/generations/${name}`;
   const staged = { root, file: `${root}${file}` };
   if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) return staged;
   const draft = `${name}.${yield* Random.nextInt}`;
-  yield* stageGeneration({ dir: ENTRIES, name: draft, entry: file }).pipe(
+  yield* stageGeneration({ dir: entries, name: draft, entry: file }).pipe(
     Effect.provide(Path.layer),
   );
-  const drafted = `${ENTRIES}/generations/${draft}`;
+  const drafted = `${entries}/generations/${draft}`;
   // Another process that staged it first is as good as this one.
   yield* fs
     .rename(drafted, root)

@@ -6,7 +6,7 @@
 // one round trip each.
 
 import { expect, test } from "bun:test";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, FileSystem, Layer, Schema } from "effect";
 import {
   EXCLUSIVE_STRATEGIES,
   RESERVED_INPUTS,
@@ -188,6 +188,31 @@ test("the envelope is the host's runId and the author's input, keyed on the run"
       ).toBe("Failure");
       expect(Layer.isLayer(layer)).toBe(true);
     }),
+  ));
+
+test("modules are staged where only this account can write, and a cache others can write is refused", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const cache = yield* fs.makeTempDirectoryScoped({ prefix: "collie-cache-" });
+      const entries = `${cache}/collie/entries`;
+      const was = Bun.env.XDG_CACHE_HOME;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (was === undefined) delete Bun.env.XDG_CACHE_HOME;
+          else Bun.env.XDG_CACHE_HOME = was;
+        }),
+      );
+      Bun.env.XDG_CACHE_HOME = cache;
+      // Another account could have made this, and put whatever it likes where a module is read.
+      yield* fs.makeDirectory(entries, { recursive: true });
+      yield* fs.chmod(entries, 0o777);
+      const refused = yield* loadEntry(`${fixtures}/hello.workflow.ts`).pipe(Effect.flip);
+      expect(refused.message).toContain(`${entries} is writable by others`);
+
+      yield* fs.chmod(entries, 0o700);
+      expect((yield* loadEntry(`${fixtures}/hello.workflow.ts`)).id).toBe("hello");
+    }).pipe(Effect.scoped),
   ));
 
 test("a schema JSON Schema cannot say everything about is still a schema, and says so", () => {
