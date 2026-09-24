@@ -931,8 +931,7 @@ collie verify --run <run-id> --name regression --expect fail -- bun test test/bu
 An agent may `collie verify` anything; Collie runs only this run's
 [approved set](../CONTEXT.md), matched argument for argument. The set is read when the run starts — `.collie/verify.json`
 in the project, else `verify.json` in the config directory, whichever is found first and
-taken whole — and copied into `run.json` and into the run's Intent as its
-`run_verification` grant. Editing the file afterwards changes the next run and never a
+taken whole — and copied into the run's Intent as its `run_verification` grant. Editing the file afterwards changes the next run and never a
 running one. From then on the Intent is the set: `run intent verification` adds to it or
 removes from it, and an Intent whose list has been emptied is a run Collie may run nothing
 for — the seed is not put back behind the human who removed it. A Run of a workflow module

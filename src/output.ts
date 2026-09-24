@@ -188,7 +188,7 @@ export const PlanOutputSchema = Schema.Struct({
   spec: Schema.optionalKey(Schema.String),
 });
 
-/** The human-facing review, written next to run.json. */
+/** The human-facing review, written in the Run's own directory. */
 export const REVIEW_FILE = "review.md";
 
 /**

@@ -3,8 +3,8 @@
 // A verification Collie collects is the only kind a gate will accept, so the list of what
 // it may run is a permission — and a permission read from the repository would be one the
 // repository granted itself. It comes from a file a human wrote, in the project or in
-// their own config, and it is copied into `run.json` when the Run starts. Editing the file
-// afterwards changes the next Run, never a live one.
+// their own config, and it is copied into the Run's evidence when the Run starts. Editing
+// the file afterwards changes the next Run, never a live one.
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
 

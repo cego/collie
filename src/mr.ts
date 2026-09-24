@@ -16,9 +16,6 @@ export type Runner<R = never> = (
 ) => Effect.Effect<{ code: number; stdout: string }, never, R>;
 
 const UserJson = Schema.fromJsonString(Schema.Struct({ username: Schema.String }));
-const IssueJson = Schema.fromJsonString(
-  Schema.Struct({ issue: Schema.optionalKey(Schema.String) }),
-);
 
 export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
 
@@ -541,12 +538,12 @@ export function templateFile(
 
 /**
  * Every Linear ticket this branch could be answering: the work source when the
- * human named one, the branch name, and whatever a `plan` run put on the board.
+ * human named one, and the branch name.
  */
 export function linearIssues<R>(
   opts: { cwd: string } & Settled,
   run: Runner<R>,
-): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path | R> {
+): Effect.Effect<string[], never, R> {
   return Effect.gen(function* () {
     const found: string[] = [];
     const add = (id: string) => {
@@ -559,65 +556,12 @@ export function linearIssues<R>(
 
     const branch = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd);
     for (const id of matchAll(branch.stdout)) add(id);
-
-    if (work?.kind === "plan-dir") {
-      for (const id of yield* offloadedIssues(work.value)) add(id);
-    }
     return found;
   });
 }
 
 function matchAll(text: string): string[] {
   return [...text.matchAll(LINEAR_ID)].map((m) => m[1]!);
-}
-
-/**
- * A `plan` run that took "Offload to Linear" wrote the issue id into that choice's
- * Output. The plan dir is inside the run dir, so the outputs are one level up.
- */
-function offloadedIssues(
-  planDir: string,
-): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const pathService = yield* Path.Path;
-    const runDir = pathService.dirname(planDir);
-    if (planDir === "" || !(yield* fs.exists(pathService.join(runDir, "run.json")))) return [];
-    const out: string[] = [];
-    for (const file of yield* jsonFiles(pathService.join(runDir, "steps"))) {
-      const text = yield* fs
-        .readFileString(file, "utf8")
-        .pipe(Effect.catch(() => Effect.succeed("")));
-      const parsed = Schema.decodeUnknownOption(IssueJson)(text);
-      if (Option.isSome(parsed) && parsed.value.issue !== undefined)
-        out.push(...matchAll(parsed.value.issue));
-    }
-    return out;
-  });
-}
-
-function jsonFiles(
-  dir: string,
-  depth = 0,
-): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const pathService = yield* Path.Path;
-    if (depth > 3 || !(yield* fs.exists(dir))) return [];
-    const out: string[] = [];
-    const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
-    for (const name of names) {
-      const file = pathService.join(dir, name);
-      const info = yield* fs.stat(file).pipe(Effect.option);
-      if (Option.isNone(info)) {
-        // Raced with a step writing its Output; the next run will see it.
-        continue;
-      }
-      if (info.value.type === "Directory") out.push(...(yield* jsonFiles(file, depth + 1)));
-      else if (name.endsWith(".json")) out.push(file);
-    }
-    return out;
-  });
 }
 
 export function mrFacts<R>(
