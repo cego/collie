@@ -14,9 +14,9 @@ import {
   Children,
   Host,
   REVIEW_FILE,
+  Run,
   agentWork,
   ask,
-  decision,
   defineWorkflow,
   formatFindings,
   handOffWork,
@@ -24,29 +24,35 @@ import {
   repoArgs,
   riskLine,
   targetKind,
-  type WorkflowMetadata,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
 import { reviewPass, reviewText } from "./reviewing.ts";
 
-export const id = "review";
-export const title = "review — an MR, a branch diff, or the working tree";
-export const description =
-  "You pick the target — an MR, a branch diff or the working tree — one complete review comes out, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to somebody else's merge request.";
+const FIX = "Fix findings";
+const IMPLEMENT = "Fix findings in a full implement run";
+const POST = "Post to MR";
+const DONE = "Don't post";
 
-export const input = {
-  target: Schema.String,
-  /** Empty unless a workflow embedding this one has a spec to hold the change to. */
-  plan: Schema.optionalKey(Schema.String),
-  /**
-   * What kind of result the change under review has to prove, which decides the one
-   * judgement field the reviewer is asked for. Not `outcome`: that is what this Run
-   * proves, and a review always proves a review.
-   */
-  proves: Schema.optionalKey(Schema.String),
-};
+/** How often the menu may come back. A post that did not land asks again; not for ever. */
+const ROUNDS = 4;
 
-export const metadata: WorkflowMetadata = {
+export default defineWorkflow({
+  id: "review",
+  title: "review — an MR, a branch diff, or the working tree",
+  description:
+    "You pick the target — an MR, a branch diff or the working tree — one complete review comes out, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to somebody else's merge request.",
+  input: Schema.Struct({
+    target: Schema.String,
+    /** Empty unless a workflow embedding this one has a spec to hold the change to. */
+    plan: Schema.optionalKey(Schema.String),
+    /**
+     * What kind of result the change under review has to prove, which decides the one
+     * judgement field the reviewer is asked for. Not `outcome`: that is what this Run
+     * proves, and a review always proves a review.
+     */
+    proves: Schema.optionalKey(Schema.String),
+  }),
+  output: Schema.String,
   hints: { target: "diff-target" },
   // A review proves it wrote a review a human can read; nobody chooses that.
   outcome: { fixed: "review" },
@@ -70,30 +76,13 @@ export const metadata: WorkflowMetadata = {
       eligible: (facts) => facts.diffTarget !== null,
     },
   ],
-};
-
-const FIX = "Fix findings";
-const IMPLEMENT = "Fix findings in a full implement run";
-const POST = "Post to MR";
-const DONE = "Don't post";
-
-/** How often the menu may come back. A post that did not land asks again; not for ever. */
-const ROUNDS = 4;
-
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const menu = Array.from({ length: ROUNDS }, (_, at) =>
-    decision(`post-${at + 1}`, { prompt: "What next?", options: [FIX, IMPLEMENT, POST, DONE] }),
-  );
-
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
+  run: ({ input: asked }) =>
+    Effect.gen(function* () {
       const host = yield* Host;
       const children = yield* Children;
       const fs = yield* FileSystem.FileSystem;
-      const runId = payload.runId;
-      const asked = payload.input;
-      const place = yield* host.place(runId);
+      const run = yield* Run;
+      const place = yield* host.place(run.id);
       const kind = targetKind(asked.target);
 
       // The extra axes and the earlier review are the host's own — a caller attaches them
@@ -110,10 +99,6 @@ export const make = (registrationName: string) => {
       // A standalone review is one round of one review: the rally belongs to whoever
       // embeds this, and the numbers say what is true here rather than what is usual.
       const synthesis = yield* reviewPass({
-        runId,
-        workflow: id,
-        cwd: place.cwd,
-        dir: place.dir,
         target: asked.target,
         plan: asked.plan ?? "",
         proves: asked.proves ?? "",
@@ -132,7 +117,7 @@ export const make = (registrationName: string) => {
         outcome: asked.proves ?? "",
       };
       const vars = {
-        run: { dir: place.dir, id: runId },
+        run: { dir: place.dir, id: run.id },
         previous: { review: before, fix: "" },
         iteration: "1",
         max_iterations: "1",
@@ -143,26 +128,26 @@ export const make = (registrationName: string) => {
       };
 
       let fixes = 0;
-      for (const question of menu) {
+      for (let round = 1; round <= ROUNDS; round++) {
         // Posting is offered for a merge request and nothing else; whether this is one to
         // post to is decided when it is invoked, by whoever can actually see GitLab.
-        const chosen = yield* ask(
-          runId,
-          question,
-          [FIX, IMPLEMENT, ...(kind === "mr" ? [POST] : []), DONE].filter(
+        const chosen = yield* ask({
+          name: `post-${round}`,
+          prompt: "What next?",
+          options: [FIX, IMPLEMENT, ...(kind === "mr" ? [POST] : []), DONE].filter(
             (one) => one !== FIX || fixes === 0,
           ),
-        );
+        });
         if (chosen === DONE) return `${synthesis.findings.length} finding(s), not posted`;
 
         if (chosen === POST) {
           const posted = yield* host.post({
-            runId,
+            runId: run.id,
             target: asked.target,
             cwd: place.cwd,
             file: `${place.dir}/${REVIEW_FILE}`,
           });
-          yield* host.record(runId, posted.message);
+          yield* host.record(run.id, posted.message);
           // A note that did not land is not an answer, so the menu comes back.
           if (posted.ok) return posted.message;
           continue;
@@ -171,7 +156,6 @@ export const make = (registrationName: string) => {
         if (chosen === IMPLEMENT) {
           // This review is the work source; the branch it reviewed is read from it.
           const child = yield* children.start({
-            runId,
             invocation: "implement",
             workflow: "implement",
             input: { plan: place.dir },
@@ -185,39 +169,30 @@ export const make = (registrationName: string) => {
         // fix it: a second agent on the same checkout would be two hands on one index.
         // Recorded, so a replay takes the same road rather than asking again.
         const handed = yield* handOffWork({
-          runId,
           operation: "fix",
           role: "implementer",
-          cwd: place.cwd,
           text: handOffText(place.dir),
         });
         if (handed !== null) {
-          yield* host.record(runId, `handed the findings to ${handed}`);
+          yield* host.record(run.id, `handed the findings to ${handed}`);
           continue;
         }
         const fixed = yield* agentWork({
-          runId,
           operation: "fix",
           role: "implementer",
-          workflow: id,
-          cwd: place.cwd,
           instructions: reviewText("fix"),
           inputs,
           vars,
           output: FixOutputSchema,
         });
-        yield* host.record(runId, `fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`);
+        yield* host.record(
+          run.id,
+          `fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
+        );
       }
       return `${synthesis.findings.length} finding(s), asked ${ROUNDS} times what to do next`;
     }),
-  );
-
-  return {
-    workflow,
-    layer,
-    decisions: Object.fromEntries(menu.map((one) => [one.asks.name, one])),
-  };
-};
+});
 
 /** What the live implementer is told: where the review is, and that this is a fix round. */
 const handOffText = (dir: string) =>

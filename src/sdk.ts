@@ -598,11 +598,20 @@ export function ask(
  * the approved set and nothing is approved, the Run parks with the repair instead of
  * spending work no gate could accept; a resume asks again.
  */
-export const requireApproved = (
+export function requireApproved(
+  kind: string,
+): Effect.Effect<ReadonlyArray<VerifySpec>, never, Run | Host | WorkflowInstance>;
+export function requireApproved(
   runId: string,
   kind: string,
-): Effect.Effect<ReadonlyArray<VerifySpec>, never, Host | WorkflowInstance> =>
-  Effect.gen(function* () {
+): Effect.Effect<ReadonlyArray<VerifySpec>, never, Host | WorkflowInstance>;
+export function requireApproved(
+  first: string,
+  second?: string,
+): Effect.Effect<ReadonlyArray<VerifySpec>, never, Run | Host | WorkflowInstance> {
+  return Effect.gen(function* () {
+    const runId = second === undefined ? (yield* Run).id : first;
+    const kind = second ?? first;
     const host = yield* Host;
     const approved = yield* host.approved(runId);
     if (approved.length > 0 || !needsApproved(isOutcome(kind) ? kind : "unspecified")) {
@@ -612,6 +621,7 @@ export const requireApproved = (
     yield* host.parked(runId, nothingApproved(runId));
     return yield* Workflow.suspend(yield* WorkflowInstance);
   });
+}
 
 /**
  * What a parent asks for when part of its own work is another workflow.

@@ -297,42 +297,40 @@ const write = Effect.fn("Authoring.write")(function* (dir: string, id: string, t
 const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
 
 /** The smallest module that runs: typed input, one recorded step, a typed result. */
-const entryText = (id: string) => `import { Host, defineWorkflow } from "collie";
+const entryText = (id: string) => `import { Host, Run, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 
-export const id = "${id}";
-export const title = "What ${id} is for";
-export const description = "One sentence an operator reads before starting it.";
-
-export const input = { note: Schema.String };
-
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
+export default defineWorkflow({
+  id: "${id}",
+  title: "What ${id} is for",
+  description: "One sentence an operator reads before starting it.",
+  input: Schema.Struct({ note: Schema.String }),
+  output: Schema.String,
+  run: ({ input }) =>
+    Effect.gen(function* () {
       const host = yield* Host;
+      const run = yield* Run;
       yield* Activity.make({
         name: "note",
         success: Schema.String,
-        execute: host.record(payload.runId, payload.input.note).pipe(Effect.as("noted")),
+        execute: host.record(run.id, input.note).pipe(Effect.as("noted")),
       });
-      return payload.input.note;
+      return input.note;
     }),
-  );
-  return { workflow, layer, decisions: {} };
-};
+});
 `;
 
 const forkText = (id: string, parent: WorkflowEntry, from: string) =>
   `// A fork of "${parent.id}": what this file does not name is still the original's.
 
-import { make as forked } from "${from}";
-export { input${parent.metadata === undefined ? "" : ", metadata"} } from "${from}";
+import { defineWorkflow } from "collie";
+import original from "${from}";
 
-export const id = "${id}";
-export const title = ${JSON.stringify(parent.title)};
-export const description = ${JSON.stringify(parent.description)};
-
-export const make = (registrationName: string) => forked(registrationName);
+export default defineWorkflow({
+  ...original,
+  id: "${id}",
+  title: ${JSON.stringify(parent.title)},
+  description: ${JSON.stringify(parent.description)},
+});
 `;

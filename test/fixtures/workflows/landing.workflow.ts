@@ -10,33 +10,24 @@
 // of the shipped content the same way the shipped ones are. No service to implement, no
 // step to patch, no engine to copy.
 
-import { agentWork } from "collie";
+import { agentWork, defineWorkflow } from "collie";
 import {
   Merged,
   Recorded,
   Released,
+  TRACKER,
   renovateText,
   renovation,
   type Landing,
 } from "./renovate.workflow.ts";
 
-export { input, metadata } from "./renovate.workflow.ts";
-
-export const id = "landing";
-export const title = "landing — the month's updates, merged and deployed rather than tagged";
-export const description =
-  "The shipped renovation up to the point it lands, with a fast-forward merge, a deploy instead of a tag, and the record written on this installation's own board.";
-
 /** Where this fork differs, and the only thing it had to write. */
 const landing: Landing = {
   merge: (at) =>
     agentWork({
-      runId: at.runId,
       operation: "merge",
-      agent: "track",
+      agent: TRACKER,
       role: "renovate",
-      workflow: id,
-      cwd: at.cwd,
       inputs: at.inputs,
       vars: at.vars,
       // The shipped rules for what may be merged, and this fork's own way of merging.
@@ -45,12 +36,9 @@ const landing: Landing = {
     }),
   release: (at) =>
     agentWork({
-      runId: at.runId,
       operation: "release",
-      agent: "track",
+      agent: TRACKER,
       role: "renovate",
-      workflow: id,
-      cwd: at.cwd,
       inputs: at.inputs,
       vars: at.vars,
       instructions:
@@ -59,12 +47,9 @@ const landing: Landing = {
     }),
   record: (at, released) =>
     agentWork({
-      runId: at.runId,
       operation: "record",
-      agent: "track",
+      agent: TRACKER,
       role: "renovate",
-      workflow: id,
-      cwd: at.cwd,
       inputs: at.inputs,
       vars: { ...at.vars, released: released.version ?? "" },
       instructions:
@@ -73,4 +58,10 @@ const landing: Landing = {
     }),
 };
 
-export const make = (registrationName: string) => renovation({ name: registrationName, landing });
+export default defineWorkflow({
+  ...renovation(landing),
+  id: "landing",
+  title: "landing — the month's updates, merged and deployed rather than tagged",
+  description:
+    "The shipped renovation up to the point it lands, with a fast-forward merge, a deploy instead of a tag, and the record written on this installation's own board.",
+});

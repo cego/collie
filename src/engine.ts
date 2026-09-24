@@ -455,6 +455,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
    * where that kind needs something, the Run parks with the repair; a resume asks again.
    */
   export function requireApproved(
+    kind: string,
+  ): Effect.Effect<ReadonlyArray<VerifySpec>, never, Run | Host | WorkflowInstance>;
+  export function requireApproved(
     runId: string,
     kind: string,
   ): Effect.Effect<ReadonlyArray<VerifySpec>, never, Host | WorkflowInstance>;
@@ -647,10 +650,12 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** A message handed to another Run's live agent in this role: the agent, or null where none. */
   export function handOffWork(options: {
-    readonly runId: string;
+    /** The Run this is for; the one it executes as where it is left out. */
+    readonly runId?: string;
     readonly operation: string;
     readonly role: string;
-    readonly cwd: string;
+    /** Where the agent to hand to works; the Run's own checkout where it is left out. */
+    readonly cwd?: string;
     readonly text: string;
   }): Effect.Effect<
     string | null,

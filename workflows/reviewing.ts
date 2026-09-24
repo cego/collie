@@ -10,7 +10,9 @@
 
 import {
   Agents,
+  Host,
   ReviewOutputSchema,
+  Run,
   SynthesisSchema,
   agentWork,
   contentOf,
@@ -42,11 +44,6 @@ export const REVIEWERS = [{ harness: "claude", model: "opus", effort: "medium" }
 
 /** What one pass is about, and where in a rally it stands. */
 export interface ReviewAsk {
-  readonly runId: string;
-  readonly workflow: string;
-  readonly cwd: string;
-  /** The Run's own directory, where the review it leaves behind is looked for. */
-  readonly dir: string;
   readonly target: string;
   /** The spec the change is held to, where whoever asked for this has one. */
   readonly plan: string;
@@ -66,7 +63,7 @@ export interface ReviewAsk {
 }
 
 /** What the reviewers and the synthesis are both told, beside the section they are given. */
-const told = (ask: ReviewAsk) => ({
+const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: string }) => ({
   inputs: {
     target: ask.target,
     target_kind: targetKind(ask.target),
@@ -75,7 +72,7 @@ const told = (ask: ReviewAsk) => ({
     outcome: ask.proves,
   },
   vars: {
-    run: { dir: ask.dir, id: ask.runId },
+    run,
     previous: { review: ask.previous, fix: ask.answered },
     iteration: String(ask.at),
     max_iterations: String(ask.of),
@@ -93,7 +90,9 @@ const told = (ask: ReviewAsk) => ({
 export const reviewPass = (ask: ReviewAsk) =>
   Effect.gen(function* () {
     const agents = yield* Agents;
-    const { inputs, vars } = told(ask);
+    const { id } = yield* Run;
+    const { dir } = yield* (yield* Host).place(id);
+    const { inputs, vars } = told(ask, { dir, id });
     // The round comes first, and the first round keeps the plain names: a Run with one
     // review reads as one, and a rally's rounds sort in the order they happened.
     const reviewOp = (n: number) => (ask.at === 1 ? `review-${n}` : `review-${ask.at}-${n}`);
@@ -101,14 +100,11 @@ export const reviewPass = (ask: ReviewAsk) =>
 
     const reviews = yield* Effect.forEach(REVIEWERS, (reviewer, at) =>
       agentWork({
-        runId: ask.runId,
         operation: reviewOp(at + 1),
         role: "reviewer",
-        workflow: ask.workflow,
         harness: reviewer.harness,
         model: reviewer.model,
         effort: reviewer.effort,
-        cwd: ask.cwd,
         instructions: reviewText("review"),
         inputs,
         vars,
@@ -117,22 +113,17 @@ export const reviewPass = (ask: ReviewAsk) =>
     );
 
     const reconciled: SynthesisReport = yield* agentWork({
-      runId: ask.runId,
       operation: synthesis,
       role: "reviewer",
-      workflow: ask.workflow,
-      cwd: ask.cwd,
       instructions: reviewText("synthesize"),
       inputs,
       vars: {
         ...vars,
-        fan_in: reviews
-          .map((_, at) => `- ${agents.outputFor(ask.runId, reviewOp(at + 1))}`)
-          .join("\n"),
+        fan_in: reviews.map((_, at) => `- ${agents.outputFor(id, reviewOp(at + 1))}`).join("\n"),
       },
       output: SynthesisSchema,
     });
     // The prose a human reads and the findings a card counts, where both are looked for.
-    yield* leaveReview(ask.dir, reconciled);
+    yield* leaveReview(dir, reconciled);
     return reconciled;
   });

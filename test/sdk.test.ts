@@ -41,11 +41,12 @@ test("a module that says nothing wrong is registered", () => {
   expect(checkEntry(entry({}))).toEqual([]);
 });
 
-test("the identity is an identity, and the words a human reads are there", () => {
+test("the identity is an identity, and a title is there for a human to read", () => {
   expect(checkEntry(entry({ id: "Echo" }))[0]).toContain("is not an identity");
   expect(checkEntry(entry({ id: "2fast" }))[0]).toContain("is not an identity");
   expect(checkEntry(entry({ title: "  " }))).toEqual(["title is required"]);
-  expect(checkEntry(entry({ description: "" }))).toEqual(["description is required"]);
+  // A description is worth writing, and a workflow without one is still a workflow.
+  expect(checkEntry(entry({ description: "" }))).toEqual([]);
 });
 
 test("an input may not take a name the host supplies at launch", () => {

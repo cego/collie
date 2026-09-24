@@ -2,18 +2,9 @@
 // its own supplied by its own Layer, an ordinary Effect operator Collie knows nothing
 // about, and a typed result. Collie's whole contribution is the four imports below.
 
-import { Host, ask, decision, defineWorkflow, type WorkflowMetadata } from "collie";
+import { Host, Run, ask, defineWorkflow } from "collie";
 import { Context, Effect, Layer, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
-
-export const id = "echo";
-export const title = "Repeat a line, then ask whether to keep it";
-export const description = "The typed-module example: a custom service and one decision.";
-
-export const input = {
-  text: Schema.String,
-  times: Schema.Int,
-};
 
 /** A service this module invented. Collie has no idea it exists, and needs none. */
 interface StampApi {
@@ -21,10 +12,15 @@ interface StampApi {
 }
 class Stamp extends Context.Service<Stamp, StampApi>()("echo/Stamp") {}
 
-/** Supplied by this module's own Layer, which is all a custom dependency takes. */
-const StampLayer = Layer.sync(Stamp)(() => Stamp.of({ around: (text) => `<${text}>` }));
-
-export const metadata: WorkflowMetadata = {
+export default defineWorkflow({
+  id: "echo",
+  title: "Repeat a line, then ask whether to keep it",
+  description: "The typed-module example: a custom service and one decision.",
+  input: Schema.Struct({ text: Schema.String, times: Schema.Int }),
+  output: Schema.String,
+  // Supplied by this module's own Layer, which is all a custom dependency takes: the
+  // service it invented reaches its own workflow and goes no further.
+  layer: Layer.sync(Stamp)(() => Stamp.of({ around: (text) => `<${text}>` })),
   hints: { text: "work-source" },
   outcome: { selectable: ["feature", "docs"] },
   followUps: [{ id: "echo-again", title: "Echo it again", workflow: "echo", when: "succeeded" }],
@@ -37,38 +33,31 @@ export const metadata: WorkflowMetadata = {
       eligible: (facts) => facts.succeeded && !facts.disposed,
     },
   ],
-};
+  run: ({ input }) =>
+    Effect.gen(function* () {
+      const host = yield* Host;
+      const run = yield* Run;
+      const stamp = yield* Stamp;
 
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const keep = decision("keep", { prompt: "Keep this result?", options: ["yes", "no"] });
+      const line = yield* Activity.make({
+        name: "echo",
+        success: Schema.String,
+        execute: Effect.forEach(
+          // An ordinary Effect operator over the author's own typed input. Nothing
+          // here is a Collie step, a loop instruction or a repeat count it knows.
+          Array.from({ length: input.times }, (_, at) => at + 1),
+          (at) => Effect.succeed(`${stamp.around(input.text)}#${at}`),
+        ).pipe(
+          Effect.map((parts) => parts.join(" ")),
+          Effect.tap((text) => host.record(run.id, `echo ${text}`)),
+        ),
+      });
 
-  const layer = workflow
-    .toLayer(
-      Effect.fnUntraced(function* (payload) {
-        const host = yield* Host;
-        const stamp = yield* Stamp;
-
-        const line = yield* Activity.make({
-          name: "echo",
-          success: Schema.String,
-          execute: Effect.forEach(
-            // An ordinary Effect operator over the author's own typed input. Nothing
-            // here is a Collie step, a loop instruction or a repeat count it knows.
-            Array.from({ length: payload.input.times }, (_, at) => at + 1),
-            (at) => Effect.succeed(`${stamp.around(payload.input.text)}#${at}`),
-          ).pipe(
-            Effect.map((parts) => parts.join(" ")),
-            Effect.tap((text) => host.record(payload.runId, `echo ${text}`)),
-          ),
-        });
-
-        return `${line}|${yield* ask(payload.runId, keep)}`;
-      }),
-    )
-    // Explicitly provided, because merging siblings supplies nothing: the service this
-    // module invented reaches its own workflow and goes no further.
-    .pipe(Layer.provide(StampLayer));
-
-  return { workflow, layer, decisions: { keep } };
-};
+      const keep = yield* ask({
+        name: "keep",
+        prompt: "Keep this result?",
+        options: ["yes", "no"],
+      });
+      return `${line}|${keep}`;
+    }),
+});

@@ -470,11 +470,13 @@ const agrees = (held: AgentChoice, requested: Preferences) =>
  * A message handed, as an Activity, to another Run's live agent in this role: the agent it
  * reached, or null where there is none to take it. One nobody can say arrived parks the Run.
  */
-export const handOffWork = (options: {
-  readonly runId: string;
+export const handOffWork = (given: {
+  /** The Run this is for; the one it executes as where it is left out. */
+  readonly runId?: string;
   readonly operation: string;
   readonly role: string;
-  readonly cwd: string;
+  /** Where the agent to hand to works; the Run's own checkout where it is left out. */
+  readonly cwd?: string;
   readonly text: string;
 }): Effect.Effect<
   string | null,
@@ -484,6 +486,13 @@ export const handOffWork = (options: {
   Effect.gen(function* () {
     const agents = yield* Agents;
     const host = yield* Host;
+    const runId = given.runId ?? Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
+    if (runId === undefined) {
+      return yield* new WorkflowError({
+        reason: `${given.operation}: a hand-off outside a Run has to name the Run it is for`,
+      });
+    }
+    const options = { ...given, runId, cwd: given.cwd ?? (yield* host.place(runId)).cwd };
     return yield* Activity.make({
       name: `${options.operation}.handoff`,
       success: Schema.NullOr(Schema.String),
@@ -493,7 +502,7 @@ export const handOffWork = (options: {
           .handOff(options)
           .pipe(Effect.map((sent) => (sent?.delivered === true ? sent.agent : null))),
         host,
-        options.runId,
+        runId,
       ),
     });
   }).pipe(

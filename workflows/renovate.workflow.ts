@@ -16,50 +16,16 @@ import {
   FindingSchema,
   Agents,
   Host,
+  Run,
   type WorkflowError,
   agentWork,
   ask,
   contentOf,
-  decision,
   defineWorkflow,
-  type Registration,
-  type WorkflowMetadata,
 } from "collie";
 import { Effect, Schema } from "effect";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
 import markdown from "./renovate.md" with { type: "text" };
-
-export const id = "renovate";
-export const title = "renovate — merge the month's dependency updates, tag, release and record it";
-export const description =
-  "Assesses every Renovate Bot merge request, gathers an application's into one batch branch proven on stage under the shared claim and approved by a teammate, merges, tags and watches the release, then checks the repository off the team's shared Renovate issue in Linear.";
-
-export const input = {
-  /** A GitLab URL or an existing local checkout; empty is the workspace it started from. */
-  repository: Schema.optionalKey(Schema.String),
-  /** The Linear team whose shared Renovate issue this Run records itself on. */
-  team: Schema.optionalKey(Schema.String),
-  /** The team's shared Renovate issue, where the operator already knows which it is. */
-  issue: Schema.optionalKey(Schema.String),
-};
-
-export const metadata: WorkflowMetadata = {
-  hints: { repository: "gitlab-repository" },
-  // Detached at the default branch, so no branch of the repository is bound to this Run.
-  checkout: "roaming",
-  // A failed Run keeps the claim over shared work it may have left half-done. Recovering
-  // is another renovation of the same repository, which takes that claim over.
-  followUps: [
-    {
-      id: "recover",
-      title: "Recover the retained claim",
-      workflow: "self",
-      when: "failed",
-      inputs: { repository: "started-with", team: "started-with", issue: "started-with" },
-      eligible: (facts) => facts.claim !== null,
-    },
-  ],
-};
 
 const content = contentOf(markdown);
 
@@ -195,12 +161,10 @@ export const Recorded = Schema.Struct({
 });
 
 /** The services every step of a renovation needs, which a fork's own three need too. */
-export type Renovating = Agents | Host | WorkflowEngine | WorkflowInstance;
+export type Renovating = Run | Agents | Host | WorkflowEngine | WorkflowInstance;
 
-/** Where a landing step stands: the Run, its content, and what the steps before it found. */
+/** Where a landing step stands: its Run's directory, its content, and what came before it. */
 export interface Landed {
-  readonly runId: string;
-  readonly cwd: string;
   readonly dir: string;
   /** What every step of this Run is told, under the names the content asks for them by. */
   readonly inputs: Readonly<Record<string, string>>;
@@ -223,17 +187,14 @@ export interface Landing {
   ) => Effect.Effect<typeof Recorded.Type, WorkflowError, Renovating>;
 }
 
-/** One agent for the whole Run, so its model is named once and each step continues it. */
-const TRACKER = "track";
+/** One agent for the whole Run, which each step continues. */
+export const TRACKER = "track";
 
 /** What every step of this Run is asked as, and on which agent. */
-const asRenovator = (at: Pick<Landed, "runId" | "cwd" | "inputs" | "vars">, operation: string) => ({
-  runId: at.runId,
+export const asRenovator = (at: Pick<Landed, "inputs" | "vars">, operation: string) => ({
   operation,
   agent: TRACKER,
   role: "renovate",
-  workflow: id,
-  cwd: at.cwd,
   inputs: at.inputs,
   vars: at.vars,
 });
@@ -261,136 +222,158 @@ export const shippedLanding: Landing = {
 };
 
 /**
- * The whole renovation, with its landing supplied. `make` is this with the shipped one;
- * a fork exports its own `make` that calls this with three functions of its own.
+ * The whole renovation, with its landing supplied: the shipped one where none is. A fork
+ * spreads this with three functions of its own and an identity of its own.
  */
-export const renovation = (options: {
-  readonly name: string;
-  readonly landing?: Landing;
-}): Registration => {
-  const landing = options.landing ?? shippedLanding;
-  const workflow = defineWorkflow({ name: options.name, input, success: Schema.String });
-  const adopt = decision("adopt-claim", {
-    prompt: "You already hold or are queued for this project's claim. Take it over?",
-    options: ["yes", "no"],
-  });
+export const renovation = (landing: Landing = shippedLanding) =>
+  defineWorkflow({
+    id: "renovate",
+    title: "renovate — merge the month's dependency updates, tag, release and record it",
+    description:
+      "Assesses every Renovate Bot merge request, gathers an application's into one batch branch proven on stage under the shared claim and approved by a teammate, merges, tags and watches the release, then checks the repository off the team's shared Renovate issue in Linear.",
+    input: Schema.Struct({
+      /** A GitLab URL or an existing local checkout; empty is the workspace it started from. */
+      repository: Schema.optionalKey(Schema.String),
+      /** The Linear team whose shared Renovate issue this Run records itself on. */
+      team: Schema.optionalKey(Schema.String),
+      /** The team's shared Renovate issue, where the operator already knows which it is. */
+      issue: Schema.optionalKey(Schema.String),
+    }),
+    output: Schema.String,
+    // The one agent every step continues, on Claude Code, whose auto mode it is started in.
+    agents: { harness: "claude", model: "default", effort: "medium" },
+    hints: { repository: "gitlab-repository" },
+    // Detached at the default branch, so no branch of the repository is bound to this Run.
+    checkout: "roaming",
+    // A failed Run keeps the claim over shared work it may have left half-done. Recovering
+    // is another renovation of the same repository, which takes that claim over.
+    followUps: [
+      {
+        id: "recover",
+        title: "Recover the retained claim",
+        workflow: "self",
+        when: "failed",
+        inputs: { repository: "started-with", team: "started-with", issue: "started-with" },
+        eligible: (facts) => facts.claim !== null,
+      },
+    ],
+    run: ({ input: asked }) =>
+      Effect.gen(function* () {
+        const host = yield* Host;
+        const runId = (yield* Run).id;
+        const place = yield* host.place(runId);
+        const cwd = place.cwd;
+        const inputs = {
+          repository: asked.repository ?? "",
+          team: asked.team ?? "",
+          issue: asked.issue ?? "",
+        };
+        // Everything from the assessment on is glab: what it cannot reach, it cannot read,
+        // merge or tag. Asked before an agent is started rather than discovered by one, and
+        // the same answer names whoever the batch merge request is assigned to.
+        const gitlab = yield* host.mr({ cwd });
+        if (!gitlab.ok) {
+          yield* host.record(runId, `nothing to renovate here: ${gitlab.reason}`);
+          return `nothing to renovate here: ${gitlab.reason}`;
+        }
+        const vars = {
+          run: { dir: place.dir, id: runId },
+          mr: { assignee: gitlab.assignee },
+          // What the operator configured, so nothing team-specific or company-specific
+          // lives in the content: the fallback team, and where this installation's logs are.
+          config: {
+            linear: { team: yield* host.config("linear.team") },
+            renovate: { logs: yield* host.config("renovate.logs") },
+          },
+        };
+        const started = { inputs, vars };
+        const tracked = yield* agentWork({
+          ...asRenovator(started, "track"),
+          // Claude Code's configured auto mode; this agent is reused by every later step.
+          permissions: "harness",
+          instructions: renovateText("track"),
+          output: Tracked,
+        });
+        // The issue this Run bound itself to, in the preamble every later step shares: a
+        // long wait, a resume or a cycle rollover cannot split the repository across two.
+        const bound = { ...started, inputs: { ...inputs, issue: tracked.issue } };
+        // Nothing shared is touched yet: no claim is held, so the assessment reads only.
+        const assessed = yield* agentWork({
+          ...asRenovator(bound, "assess"),
+          instructions: renovateText("assess"),
+          output: Assessed,
+        });
+        const here: Landed = { ...bound, dir: place.dir, tracked, assessed };
 
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
-      const host = yield* Host;
-      const runId = payload.runId;
-      const asked = payload.input;
-      const place = yield* host.place(runId);
-      const cwd = place.cwd;
-      const inputs = {
-        repository: asked.repository ?? "",
-        team: asked.team ?? "",
-        issue: asked.issue ?? "",
-      };
-      // Everything from the assessment on is glab: what it cannot reach, it cannot read,
-      // merge or tag. Asked before an agent is started rather than discovered by one, and
-      // the same answer names whoever the batch merge request is assigned to.
-      const gitlab = yield* host.mr({ cwd });
-      if (!gitlab.ok) {
-        yield* host.record(runId, `nothing to renovate here: ${gitlab.reason}`);
-        return `nothing to renovate here: ${gitlab.reason}`;
-      }
-      const vars = {
-        run: { dir: place.dir, id: runId },
-        mr: { assignee: gitlab.assignee },
-        // What the operator configured, so nothing team-specific or company-specific
-        // lives in the content: the fallback team, and where this installation's logs are.
-        config: {
-          linear: { team: yield* host.config("linear.team") },
-          renovate: { logs: yield* host.config("renovate.logs") },
-        },
-      };
-      const started = { runId, cwd, inputs, vars };
-      const tracked = yield* agentWork({
-        ...asRenovator(started, "track"),
-        model: "default",
-        effort: "medium",
-        // Claude Code's configured auto mode; this agent is reused by every later step.
-        permissions: "harness",
-        instructions: renovateText("track"),
-        output: Tracked,
-      });
-      // The issue this Run bound itself to, in the preamble every later step shares: a
-      // long wait, a resume or a cycle rollover cannot split the repository across two.
-      const bound = { ...started, inputs: { ...inputs, issue: tracked.issue } };
-      // Nothing shared is touched yet: no claim is held, so the assessment reads only.
-      const assessed = yield* agentWork({
-        ...asRenovator(bound, "assess"),
-        instructions: renovateText("assess"),
-        output: Assessed,
-      });
-      const here: Landed = { ...bound, dir: place.dir, tracked, assessed };
+        // An empty batch is a finished Run in waiting, decided from the assessment's own
+        // judgement: no tab is opened for the work that is skipped, and no Output is
+        // written to say it had nothing to do.
+        if (assessed.up_to_date) {
+          yield* host.record(runId, "nothing to renovate: Renovate has opened nothing here");
+          const released = yield* landing.release(here);
+          const recorded = yield* landing.record(here, released);
+          return `${tracked.issue}: ${recorded.status}`;
+        }
 
-      // An empty batch is a finished Run in waiting, decided from the assessment's own
-      // judgement: no tab is opened for the work that is skipped, and no Output is
-      // written to say it had nothing to do.
-      if (assessed.up_to_date) {
-        yield* host.record(runId, "nothing to renovate: Renovate has opened nothing here");
+        // The first thing that touches anything shared, so the claim is taken here and held
+        // until the Run is settled. Waiting costs wall clock and no model tokens.
+        const claim = yield* host.claim({
+          runId,
+          cwd,
+          adopting: ask({
+            name: "adopt-claim",
+            prompt: "You already hold or are queued for this project's claim. Take it over?",
+            options: ["yes", "no"],
+          }).pipe(Effect.map((answer) => answer === "yes")),
+          say: (line) => host.record(runId, line),
+        });
+        // Given back once the work is finished, merged or not, and not before: holding it
+        // across a consultation is what stops anyone deploying on a half-finished renovation.
+        const finished = (outcome: string) =>
+          (claim === null ? Effect.void : host.release(runId)).pipe(Effect.as(outcome));
+
+        if (!assessed.is_package) {
+          // An application's updates land together: one batch branch, one merge request,
+          // proved on stage once and reviewed once.
+          const batched = yield* agentWork({
+            ...asRenovator(here, "batch"),
+            instructions: renovateText("batch"),
+            output: Batched,
+          });
+          if (batched.mr_url !== undefined) yield* host.mergeRequest(runId, batched.mr_url);
+          const staged = yield* agentWork({
+            ...asRenovator(here, "stage"),
+            instructions: renovateText("stage"),
+            output: Staged,
+          });
+          if (!staged.verified) {
+            yield* host.record(runId, "stage was not verified, so nothing is merged");
+            return yield* finished(`${tracked.issue}: stage was not verified`);
+          }
+          // The batch is approved by another team member, never by the Run that wrote it.
+          const approval = yield* agentWork({
+            ...asRenovator(here, "approval"),
+            instructions: renovateText("approval"),
+            output: Approved,
+          });
+          if ((approval.approved_by ?? []).length === 0) {
+            yield* host.record(runId, "the batch was not approved, so nothing is merged");
+            return yield* finished(`${tracked.issue}: the batch was not approved`);
+          }
+        } else {
+          yield* host.record(
+            runId,
+            "a package has no batch branch: skipped batch, stage, approval",
+          );
+        }
+
+        yield* landing.merge(here);
         const released = yield* landing.release(here);
         const recorded = yield* landing.record(here, released);
-        return `${tracked.issue}: ${recorded.status}`;
-      }
+        return yield* finished(
+          `${tracked.issue}: ${recorded.status}${released.version ? ` ${released.version}` : ""}`,
+        );
+      }),
+  });
 
-      // The first thing that touches anything shared, so the claim is taken here and held
-      // until the Run is settled. Waiting costs wall clock and no model tokens.
-      const claim = yield* host.claim({
-        runId,
-        cwd,
-        adopting: ask(runId, adopt).pipe(Effect.map((answer) => answer === "yes")),
-        say: (line) => host.record(runId, line),
-      });
-      // Given back once the work is finished, merged or not, and not before: holding it
-      // across a consultation is what stops anyone deploying on a half-finished renovation.
-      const finished = (outcome: string) =>
-        (claim === null ? Effect.void : host.release(runId)).pipe(Effect.as(outcome));
-
-      if (!assessed.is_package) {
-        // An application's updates land together: one batch branch, one merge request,
-        // proved on stage once and reviewed once.
-        const batched = yield* agentWork({
-          ...asRenovator(here, "batch"),
-          instructions: renovateText("batch"),
-          output: Batched,
-        });
-        if (batched.mr_url !== undefined) yield* host.mergeRequest(runId, batched.mr_url);
-        const staged = yield* agentWork({
-          ...asRenovator(here, "stage"),
-          instructions: renovateText("stage"),
-          output: Staged,
-        });
-        if (!staged.verified) {
-          yield* host.record(runId, "stage was not verified, so nothing is merged");
-          return yield* finished(`${tracked.issue}: stage was not verified`);
-        }
-        // The batch is approved by another team member, never by the Run that wrote it.
-        const approval = yield* agentWork({
-          ...asRenovator(here, "approval"),
-          instructions: renovateText("approval"),
-          output: Approved,
-        });
-        if ((approval.approved_by ?? []).length === 0) {
-          yield* host.record(runId, "the batch was not approved, so nothing is merged");
-          return yield* finished(`${tracked.issue}: the batch was not approved`);
-        }
-      } else {
-        yield* host.record(runId, "a package has no batch branch: skipped batch, stage, approval");
-      }
-
-      yield* landing.merge(here);
-      const released = yield* landing.release(here);
-      const recorded = yield* landing.record(here, released);
-      return yield* finished(
-        `${tracked.issue}: ${recorded.status}${released.version ? ` ${released.version}` : ""}`,
-      );
-    }),
-  );
-
-  return { workflow, layer, decisions: { "adopt-claim": adopt } };
-};
-
-export const make = (registrationName: string) => renovation({ name: registrationName });
+export default renovation();

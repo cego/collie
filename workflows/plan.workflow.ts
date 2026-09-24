@@ -1,8 +1,8 @@
 // A goal, interviewed into a spec and tickets, and then the menu that decides what
 // becomes of them.
 //
-// Three pieces of work on one planner, so its model is named once and the interview it
-// held is still in the agent that writes the spec. Then a question, and another after
+// Three pieces of work on one planner, so its model is the workflow's own default and the
+// interview it held is still in the agent that writes the spec. Then a question, and another after
 // whatever the answer started — a plan is refined, second-guessed and offloaded as often
 // as the human wants, and only "Implement now", "Architecture first" and "Finish
 // planning" end it.
@@ -16,45 +16,18 @@ import {
   Host,
   PlanOutputSchema,
   ReviewOutputSchema,
+  Run,
   WorkflowError,
   agentWork,
   ask,
   contentOf,
-  decision,
   defineWorkflow,
   formatFindings,
   planReposOf,
-  type WorkflowMetadata,
 } from "collie";
 import { Effect, Schema } from "effect";
 import * as Activity from "effect/unstable/workflow/Activity";
 import markdown from "./plan.md" with { type: "text" };
-
-export const id = "plan";
-export const title = "plan — turn a goal into a spec and tickets";
-export const description =
-  "Uses the goal and repository context to write a spec and tickets, asking only for missing decisions.";
-
-export const input = {
-  goal: Schema.String,
-  ticket: Schema.optionalKey(Schema.String),
-};
-
-export const metadata: WorkflowMetadata = {
-  hints: { goal: "goal", ticket: "ticket" },
-  // A plan proves it wrote tickets; nobody chooses that, so it is fixed rather than asked.
-  outcome: { fixed: "plan" },
-  // What a finished plan offers: the tickets it wrote, built by the workflow that builds.
-  followUps: [
-    {
-      id: "implement-now",
-      title: "Implement now",
-      workflow: "implement",
-      when: "succeeded",
-      inputs: { plan: "plan-dir" },
-    },
-  ],
-};
 
 const content = contentOf(markdown);
 const prompt = (section: string) =>
@@ -125,27 +98,42 @@ const ROUNDS = 6;
 /** A second opinion is worth having twice at most; after that it is the same plan again. */
 const OPINIONS = 2;
 
-/** The planner is one agent for the whole run, so its model is named once, here. */
+/** The planner is one agent for the whole run. */
 const PLANNER = "grill";
 
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const menu = Array.from({ length: ROUNDS }, (_, at) =>
-    decision(`next-${at + 1}`, { prompt: "What next?", options: CHOICES }),
-  );
-  const team = decision("linear-team", {
-    prompt: "Which Linear team do new issues go to",
-  });
-
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
+export default defineWorkflow({
+  id: "plan",
+  title: "plan — turn a goal into a spec and tickets",
+  description:
+    "Uses the goal and repository context to write a spec and tickets, asking only for missing decisions.",
+  input: Schema.Struct({
+    goal: Schema.String,
+    ticket: Schema.optionalKey(Schema.String),
+  }),
+  output: Schema.String,
+  // The planner's own, which a Run's --model or a scope around it can still change.
+  agents: { harness: "claude", model: "fable", effort: "medium" },
+  hints: { goal: "goal", ticket: "ticket" },
+  // A plan proves it wrote tickets; nobody chooses that, so it is fixed rather than asked.
+  outcome: { fixed: "plan" },
+  // What a finished plan offers: the tickets it wrote, built by the workflow that builds.
+  followUps: [
+    {
+      id: "implement-now",
+      title: "Implement now",
+      workflow: "implement",
+      when: "succeeded",
+      inputs: { plan: "plan-dir" },
+    },
+  ],
+  run: ({ input: asked }) =>
+    Effect.gen(function* () {
       const host = yield* Host;
       const children = yield* Children;
-      const runId = payload.runId;
-      const asked = payload.input;
-      const place = yield* host.place(runId);
+      const run = yield* Run;
+      const place = yield* host.place(run.id);
       const inputs = { goal: asked.goal, ticket: asked.ticket ?? "" };
-      const vars = { run: { dir: place.dir, id: runId } };
+      const vars = { run: { dir: place.dir, id: run.id } };
       const planDir = `${place.dir}/plan`;
       // Why the plan's tickets cannot be built, recorded so a replay is handed the same answer.
       const refusalOf = (at: string) =>
@@ -156,44 +144,28 @@ export const make = (registrationName: string) => {
             Effect.map((plan) => plan.refusal?.message ?? null),
           ),
         });
+      const planner = { agent: PLANNER, role: "planner", inputs };
 
       const grilled = yield* agentWork({
-        runId,
+        ...planner,
         operation: "grill",
-        agent: PLANNER,
-        role: "planner",
-        workflow: id,
-        model: "fable",
-        effort: "medium",
-        cwd: place.cwd,
         instructions: prompt("grill"),
-        inputs,
         vars,
         output: Grilled,
       });
       yield* agentWork({
-        runId,
+        ...planner,
         operation: "spec",
-        agent: PLANNER,
-        role: "planner",
         skill: "to-spec",
-        workflow: id,
-        cwd: place.cwd,
         instructions: prompt("spec"),
-        inputs,
         vars,
         output: Spec,
       });
       const written = yield* agentWork({
-        runId,
+        ...planner,
         operation: "tickets",
-        agent: PLANNER,
-        role: "planner",
         skill: "to-tickets",
-        workflow: id,
-        cwd: place.cwd,
         instructions: prompt("tickets"),
-        inputs,
         vars,
         output: PlanOutputSchema,
       });
@@ -201,14 +173,9 @@ export const make = (registrationName: string) => {
       const refusal = yield* refusalOf("tickets");
       if (refusal !== null) {
         yield* agentWork({
-          runId,
+          ...planner,
           operation: "unbuildable",
-          agent: PLANNER,
-          role: "planner",
-          workflow: id,
-          cwd: place.cwd,
           instructions: prompt("unbuildable"),
-          inputs,
           vars: { ...vars, refusal },
           output: PlanOutputSchema,
         });
@@ -217,31 +184,29 @@ export const make = (registrationName: string) => {
       }
 
       let opinions = 0;
-      for (const [at, question] of menu.entries()) {
-        const round = at + 1;
+      for (let round = 1; round <= ROUNDS; round++) {
         // What is left to offer: an opinion already had twice is not offered a third time.
-        const chosen = yield* ask(
-          runId,
-          question,
-          opinions < OPINIONS ? CHOICES : CHOICES.filter((one) => one !== OPINION),
-        );
+        const chosen = yield* ask({
+          name: `next-${round}`,
+          prompt: "What next?",
+          options: opinions < OPINIONS ? CHOICES : CHOICES.filter((one) => one !== OPINION),
+        });
         if (chosen === FINISH) return `${written.issues_dir}: finished planning`;
 
         if (chosen === IMPLEMENT) {
           // A plan the fan-out cannot run starts nothing, and the menu comes back.
           const unrunnable = yield* refusalOf(`implement-${round}`);
           if (unrunnable !== null) {
-            yield* host.record(runId, `${IMPLEMENT} cannot run here: ${unrunnable}`);
-            yield* host.parked(runId, `${IMPLEMENT} cannot run here: ${unrunnable}`);
+            yield* host.record(run.id, `${IMPLEMENT} cannot run here: ${unrunnable}`);
+            yield* host.parked(run.id, `${IMPLEMENT} cannot run here: ${unrunnable}`);
             continue;
           }
-          yield* host.parked(runId, null);
+          yield* host.parked(run.id, null);
         }
 
         if (chosen === IMPLEMENT || chosen === ARCHITECTURE) {
           const building = chosen === IMPLEMENT;
           const child = yield* children.start({
-            runId,
             invocation: building ? "implement" : "architecture",
             workflow: building ? "implement" : "architecture",
             input: building ? { plan: planDir } : {},
@@ -261,13 +226,10 @@ export const make = (registrationName: string) => {
           // A reviewer of its own, on its own agent: the planner that wrote the plan is
           // the last one who can tell you what is wrong with it.
           const opinion = yield* agentWork({
-            runId,
             operation: `second-opinion-${opinions}`,
             role: "reviewer",
-            workflow: id,
             model: "opus",
             effort: "xhigh",
-            cwd: place.cwd,
             instructions: prompt("second-opinion"),
             inputs,
             vars,
@@ -276,14 +238,9 @@ export const make = (registrationName: string) => {
           // A second opinion with nothing to say is not a round of revision.
           if (opinion.findings.length === 0) continue;
           yield* agentWork({
-            runId,
+            ...planner,
             operation: `revise-${opinions}`,
-            agent: PLANNER,
-            role: "planner",
-            workflow: id,
-            cwd: place.cwd,
             instructions: prompt("revise"),
-            inputs,
             vars: { ...vars, findings: formatFindings(opinion.findings) },
             output: Revised,
           });
@@ -291,16 +248,14 @@ export const make = (registrationName: string) => {
         }
 
         if (chosen === OFFLOAD) {
-          const board = yield* ask(runId, team);
+          const board = yield* ask({
+            name: "linear-team",
+            prompt: "Which Linear team do new issues go to",
+          });
           yield* agentWork({
-            runId,
+            ...planner,
             operation: `offload-${round}`,
-            agent: PLANNER,
-            role: "planner",
-            workflow: id,
-            cwd: place.cwd,
             instructions: prompt("offload"),
-            inputs,
             vars: { ...vars, config: { linear: { team: board } } },
             output: Offloaded,
           });
@@ -308,25 +263,13 @@ export const make = (registrationName: string) => {
         }
 
         yield* agentWork({
-          runId,
+          ...planner,
           operation: `refine-${round}`,
-          agent: PLANNER,
-          role: "planner",
-          workflow: id,
-          cwd: place.cwd,
           instructions: prompt("refine"),
-          inputs,
           vars,
           output: Revised,
         });
       }
       return `${written.issues_dir}: asked ${ROUNDS} times what to do next`;
     }),
-  );
-
-  return {
-    workflow,
-    layer,
-    decisions: Object.fromEntries([...menu, team].map((one) => [one.asks.name, one])),
-  };
-};
+});

@@ -20,6 +20,7 @@ import {
   Agents,
   Children,
   Host,
+  Run,
   WorkflowError,
   agentWork,
   classifyWorkSource,
@@ -45,45 +46,12 @@ import {
   type Handed,
   type Slice,
   type SynthesisReport,
-  type WorkflowMetadata,
 } from "collie";
 import { DateTime, Effect, FileSystem, Schema } from "effect";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
 import * as Activity from "effect/unstable/workflow/Activity";
 import markdown from "./implement.md" with { type: "text" };
 import { reviewPass } from "./reviewing.ts";
-
-export const id = "implement";
-export const title = "implement — build the plan, review it, fix until nothing blocks";
-export const description =
-  "Builds from a plan dir, a Linear issue or a description, gets one complete review, fixes what blocks until a review finds nothing blocking, then opens the merge request.";
-
-export const input = {
-  /** Where the work is written down: a plan, a review, an issue, a follow-up, or words. */
-  plan: Schema.String,
-};
-
-export const metadata: WorkflowMetadata = {
-  hints: { plan: "work-source" },
-  // The branch it builds, on a worktree of its own, so two Runs never share an index.
-  checkout: "branch",
-  // What kind of result this Run has to prove is the human's to say, and an unclassified
-  // Run is held to its approved commands rather than made a feature by default.
-  outcome: {
-    selectable: ["feature", "bug", "refactor", "investigation", "docs", "migration"],
-  },
-  // A follow-up builds on the same branch, so it is this workflow again rather than
-  // another one — and there is nothing to carry on from without a branch to carry it on.
-  followUps: [
-    {
-      id: "follow-up",
-      title: "Keep going on this",
-      workflow: "self",
-      when: "succeeded",
-      eligible: (facts) => facts.branch !== null,
-    },
-  ],
-};
 
 const content = contentOf(markdown);
 const prompt = (section: string) =>
@@ -148,18 +116,44 @@ const ROUNDS = 4;
 /** One agent for the whole Run, so its model is named once and the fixes know the build. */
 const BUILDER = "build";
 
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
+export default defineWorkflow({
+  id: "implement",
+  title: "implement — build the plan, review it, fix until nothing blocks",
+  description:
+    "Builds from a plan dir, a Linear issue or a description, gets one complete review, fixes what blocks until a review finds nothing blocking, then opens the merge request.",
+  input: Schema.Struct({
+    /** Where the work is written down: a plan, a review, an issue, a follow-up, or words. */
+    plan: Schema.String,
+  }),
+  output: Schema.String,
+  hints: { plan: "work-source" },
+  // The branch it builds, on a worktree of its own, so two Runs never share an index.
+  checkout: "branch",
+  // What kind of result this Run has to prove is the human's to say, and an unclassified
+  // Run is held to its approved commands rather than made a feature by default.
+  outcome: {
+    selectable: ["feature", "bug", "refactor", "investigation", "docs", "migration"],
+  },
+  // A follow-up builds on the same branch, so it is this workflow again rather than
+  // another one — and there is nothing to carry on from without a branch to carry it on.
+  followUps: [
+    {
+      id: "follow-up",
+      title: "Keep going on this",
+      workflow: "self",
+      when: "succeeded",
+      eligible: (facts) => facts.branch !== null,
+    },
+  ],
+  run: ({ input }) =>
+    Effect.gen(function* () {
       const host = yield* Host;
       const agents = yield* Agents;
-      const runId = payload.runId;
+      const runId = (yield* Run).id;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
-      const source = yield* classifyWorkSource(payload.input.plan).pipe(
-        Effect.orElseSucceed(() => ({ kind: "text", value: payload.input.plan })),
+      const source = yield* classifyWorkSource(input.plan).pipe(
+        Effect.orElseSucceed(() => ({ kind: "text", value: input.plan })),
       );
       const kind = place.options.outcome ?? "";
       const share = place.options.repo ?? "";
@@ -183,7 +177,6 @@ export const make = (registrationName: string) => {
             ),
           );
           return yield* buildEach({
-            runId,
             plan: source.value,
             root: cwd,
             waves: plan.waves,
@@ -198,7 +191,7 @@ export const make = (registrationName: string) => {
       // A repository's share that did not build fails, so no wave waits on work that is not there.
       const unbuilt = (reason: string) =>
         share === "" ? Effect.succeed(reason) : Effect.fail(new WorkflowError({ reason }));
-      const approved = yield* requireApproved(runId, kind);
+      const approved = yield* requireApproved(kind);
 
       const inputs = {
         plan: source.value,
@@ -247,16 +240,13 @@ export const make = (registrationName: string) => {
         const before = (yield* host.evidence(runId, cwd)).verifications.length;
         if (ticket !== null) yield* checkpoint(place.dir, ticket, "started", []);
         build = yield* agentWork({
-          runId,
           operation: ticket?.file ?? "build",
           agent: BUILDER,
           role: "implementer",
           skill: "implement",
-          workflow: id,
           harness: "claude",
           model: "opus",
           effort: "xhigh",
-          cwd,
           instructions: prompt("build"),
           inputs,
           vars: {
@@ -296,9 +286,7 @@ export const make = (registrationName: string) => {
       if (build === null) return yield* new WorkflowError({ reason: "nothing was built" });
 
       const rallied = yield* rally({
-        runId,
         cwd,
-        dir: place.dir,
         plan: source.kind === "plan-dir" ? source.value : "",
         proves: kind,
         risks: place.options.risks ?? "",
@@ -313,7 +301,7 @@ export const make = (registrationName: string) => {
       // The gate: Collie's own run of every approved command, on this tree, and then what
       // this kind of result still has no evidence for. An Output saying the tests pass is
       // a claim; a record in the journal, bound to this tree, is not.
-      const granted = yield* requireApproved(runId, kind);
+      const granted = yield* requireApproved(kind);
       for (const spec of granted) {
         yield* host.verify({ runId, name: spec.name, cwd });
       }
@@ -343,12 +331,9 @@ export const make = (registrationName: string) => {
       }
 
       const opened = yield* agentWork({
-        runId,
         operation: "mr",
         agent: BUILDER,
         role: "implementer",
-        workflow: id,
-        cwd,
         instructions: prompt("mr"),
         inputs,
         vars: {
@@ -368,10 +353,7 @@ export const make = (registrationName: string) => {
       if (opened.mr_url) yield* host.mergeRequest(runId, opened.mr_url);
       return opened.mr_url ?? (opened.pushed ? "pushed, no merge request url" : "not pushed");
     }),
-  );
-
-  return { workflow, layer, decisions: {} };
-};
+});
 
 /**
  * One Run of this workflow per repository the plan names, a wave at a time: a repository
@@ -379,7 +361,6 @@ export const make = (registrationName: string) => {
  * starts no further wave; the rest of its own wave is still waited on.
  */
 const buildEach = (fan: {
-  readonly runId: string;
   readonly plan: string;
   readonly root: string;
   readonly waves: ReadonlyArray<ReadonlyArray<string>>;
@@ -389,6 +370,7 @@ const buildEach = (fan: {
   Effect.gen(function* () {
     const host = yield* Host;
     const children = yield* Children;
+    const runId = (yield* Run).id;
     const invocation = (repo: string) => `implement-${repo.replaceAll("/", "-")}`;
     const clash = identityProblem(fan.waves.flat().map(invocation));
     if (clash !== null) return yield* new WorkflowError({ reason: clash });
@@ -397,7 +379,6 @@ const buildEach = (fan: {
       const started = yield* Effect.forEach(wave, (repo) =>
         children
           .start({
-            runId: fan.runId,
             invocation: invocation(repo),
             workflow: "self",
             input: { plan: fan.plan },
@@ -423,7 +404,7 @@ const buildEach = (fan: {
       );
       for (const one of ended) {
         built.push(`${one.repo}: ${one.built ?? one.why}`);
-        yield* host.record(fan.runId, `${one.repo}: ${one.built ?? one.why}`);
+        yield* host.record(runId, `${one.repo}: ${one.built ?? one.why}`);
       }
       const stopped = ended.find((one) => one.built === null);
       if (stopped !== undefined) {
@@ -491,9 +472,7 @@ interface Rallied {
  * so that fix's own account is judged against the journal rather than taken on its word.
  */
 const rally = (ask: {
-  readonly runId: string;
   readonly cwd: string;
-  readonly dir: string;
   readonly plan: string;
   readonly proves: string;
   readonly risks: string;
@@ -502,20 +481,17 @@ const rally = (ask: {
 }): Effect.Effect<
   Rallied,
   WorkflowError,
-  Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem
+  Run | Agents | Host | WorkflowEngine | WorkflowInstance | FileSystem.FileSystem
 > =>
   Effect.gen(function* () {
     const host = yield* Host;
     const agents = yield* Agents;
+    const runId = (yield* Run).id;
     let disputed: Finding[] = [];
     let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
 
     for (let at = 1; at <= ROUNDS; at++) {
       const synthesis = yield* reviewPass({
-        runId: ask.runId,
-        workflow: id,
-        cwd: ask.cwd,
-        dir: ask.dir,
         // The change is the work in this checkout: a Run that built it reviews what it
         // built, rather than a merge request somebody else has to be pointed at.
         target: "",
@@ -523,7 +499,7 @@ const rally = (ask: {
         proves: ask.proves,
         previous: "",
         // The last round's fix, which a follow-up review checks each of its findings against.
-        answered: at === 1 ? "" : agents.outputFor(ask.runId, `fix-${at - 1}`),
+        answered: at === 1 ? "" : agents.outputFor(runId, `fix-${at - 1}`),
         risks: ask.risks,
         at,
         of: ROUNDS,
@@ -538,12 +514,9 @@ const rally = (ask: {
       seen = { at, keys: round.keys };
 
       const fixed = yield* agentWork({
-        runId: ask.runId,
         operation: `fix-${at}`,
         agent: BUILDER,
         role: "implementer",
-        workflow: id,
-        cwd: ask.cwd,
         instructions: prompt("fix"),
         inputs: ask.inputs,
         vars: {
@@ -561,7 +534,7 @@ const rally = (ask: {
       disputed = [...disputed, ...fixed.disputed.filter((one) => !known.has(findingKey(one)))];
 
       if (at === ROUNDS) {
-        const settled = settleFinalFix(round.live, fixed, yield* host.evidence(ask.runId, ask.cwd));
+        const settled = settleFinalFix(round.live, fixed, yield* host.evidence(runId, ask.cwd));
         return settled.ok
           ? { halted: null, unreviewed: settled.attestation, reviewed: synthesis }
           : {

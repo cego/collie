@@ -282,6 +282,9 @@ test("the names the host settles are published beside the ones a module declares
         "outcome",
         "risks",
         "previous",
+        "harness",
+        "model",
+        "effort",
       ]);
 
       // And for a human, the order `branch` is resolved in, which is the whole of it.
@@ -367,10 +370,11 @@ test(
         expect(forked.exit).toBe(0);
         const path = join(cwd, ".herdr", "workflows", "ours.workflow.ts");
         expect(yield* parseEnvelope(forked.stdout)).toMatchObject({ ok: true, data: { path } });
-        // Ordinary composition: it imports the original and hands `make` on.
+        // Ordinary composition: it imports the original and spreads it under its own id.
         const text = yield* fs.readFileString(path);
         expect(text).toContain("workflows/implement.workflow.ts");
-        expect(text).toContain('export const id = "ours"');
+        expect(text).toContain("...original");
+        expect(text).toContain('id: "ours"');
 
         // Both are runnable, each under its own id, and the fork takes what it inherited.
         const shown = yield* cli(["--json", "workflow", "show", "ours"], scratch);

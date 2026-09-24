@@ -10,14 +10,14 @@
 // happens: what is asked of whom, in what order, and what the answer starts next.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Layer, Path, Schema } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Option, Path, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { FakeBin } from "./support/bin";
 import { installFakeSkills } from "./support/defs";
 import { Agents, agentsLayer, type AgentHost } from "../src/agents";
-import { Children, Host, WorkflowError, type ActionFacts, type ChildAsk } from "../src/sdk";
+import { Children, Host, Run, WorkflowError, type ActionFacts, type ChildAsk } from "../src/sdk";
 import {
   PARKED,
   answerDecision,
@@ -92,10 +92,14 @@ beforeEach(() =>
         yield* fs.writeFileString(
           `${rig.root}/user/workflows/${id}.workflow.ts`,
           [
-            `export * from "${ROOT}workflows/${name}.workflow.ts";`,
-            `export const id = "${id}";`,
-            `export const title = "${id}";`,
-            `export const description = "The shipped ${name}, saved under an id of its own.";`,
+            `import shipped from "${ROOT}workflows/${name}.workflow.ts";`,
+            `import { defineWorkflow } from "collie";`,
+            `export default defineWorkflow({`,
+            `  ...shipped,`,
+            `  id: "${id}",`,
+            `  title: "${id}",`,
+            `  description: "The shipped ${name}, saved under an id of its own.",`,
+            `});`,
             "",
           ].join("\n"),
         );
@@ -123,10 +127,11 @@ const hostOf = (): AgentHost => ({
 const children = Layer.succeed(Children)(
   Children.of({
     start: (ask) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         started.push(ask);
+        const parent = ask.runId ?? Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
         return {
-          runId: `${ask.runId}-${ask.invocation}`,
+          runId: `${parent}-${ask.invocation}`,
           workflow: ask.workflow,
           invocation: ask.invocation,
           fresh: true,

@@ -9,24 +9,17 @@ import {
   FindingSchema,
   Children,
   Host,
+  Run,
   agentWork,
   ask,
   contentOf,
-  decision,
   defineWorkflow,
 } from "collie";
 import { Effect, Schema } from "effect";
 import markdown from "./architecture.md" with { type: "text" };
 
-export const id = "architecture";
-export const title = "architecture — look at what is there, then improve it";
-export const description =
-  "Runs the architecture skill over this project, writes a report into the run dir, then asks what next.";
-
-/** Nothing: the project to look at is the checkout this Run was started for. */
-export const input = {};
-
-// No outcome is declared: what building this report would prove is what the report
+// It takes nothing: the project to look at is the checkout this Run was started for. No
+// outcome is declared either: what building this report would prove is what the report
 // itself says — usually a refactor, a feature where we agreed to build something that is
 // not there yet — so it is the architect's own answer below rather than a kind fixed here.
 
@@ -66,34 +59,33 @@ const launch = (options: Record<string, string>): Record<string, string> =>
 const IMPLEMENT = "Implement now";
 const STOP = "Stop here";
 
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const next = decision("next", { prompt: "What next?", options: [IMPLEMENT, STOP] });
-
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
+export default defineWorkflow({
+  id: "architecture",
+  title: "architecture — look at what is there, then improve it",
+  description:
+    "Runs the architecture skill over this project, writes a report into the run dir, then asks what next.",
+  output: Schema.String,
+  run: () =>
+    Effect.gen(function* () {
       const host = yield* Host;
-      const runId = payload.runId;
-      const place = yield* host.place(runId);
+      const run = yield* Run;
+      const place = yield* host.place(run.id);
       const report = yield* agentWork({
-        runId,
         operation: "architecture",
         role: "architect",
         skill: "improve-codebase-architecture",
-        workflow: id,
-        cwd: place.cwd,
         instructions: prompt("attended"),
-        vars: { run: { dir: place.dir, id: runId } },
+        vars: { run: { dir: place.dir, id: run.id } },
         output: Report,
       });
-      if ((yield* ask(runId, next)) === STOP) return `${report.report}: stopped there`;
+      const next = yield* ask({ name: "next", prompt: "What next?", options: [IMPLEMENT, STOP] });
+      if (next === STOP) return `${report.report}: stopped there`;
 
       // The plan the architect wrote, built by the workflow that builds — and the kind of
       // result it said building it would be, settled while we agreed on the work rather
       // than asked for again at the start of the build.
       const children = yield* Children;
       const child = yield* children.start({
-        runId,
         invocation: "implement",
         workflow: "implement",
         input: { plan: `${place.dir}/plan` },
@@ -102,7 +94,4 @@ export const make = (registrationName: string) => {
       yield* children.result(child);
       return `${report.report}: implemented as ${child.runId}`;
     }),
-  );
-
-  return { workflow, layer, decisions: { next } };
-};
+});
