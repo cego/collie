@@ -15,7 +15,7 @@
 // `docs/sdk.md` is the guidance; `docs/adr/0014-native-workflows-run-on-effects-own-engine.md`
 // is why the engine underneath is Effect's.
 
-import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Path, Predicate, Schema } from "effect";
 import type { CheckEvidence } from "./output";
 import type { Verification } from "./verify";
 import type { VerifySpec } from "./verify-spec";
@@ -638,6 +638,44 @@ const isReserved = (name: string): name is keyof typeof RESERVED_INPUTS => name 
 const reservedMeaning = (name: string) => (isReserved(name) ? RESERVED_INPUTS[name] : "");
 const KNOWN_STRATEGIES: ReadonlySet<string> = new Set(INPUT_STRATEGIES);
 
+const Callable = Schema.declare(Predicate.isFunction);
+const OfferFields = {
+  id: Schema.String,
+  title: Schema.String,
+  workflow: Schema.String,
+  inputs: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+};
+
+/** What metadata has to be before any of it can be read: a module is JavaScript by now. */
+const DeclaredMetadata = Schema.Struct({
+  hints: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  outcome: Schema.optionalKey(
+    Schema.Struct({
+      fixed: Schema.optionalKey(Schema.String),
+      selectable: Schema.optionalKey(Schema.Array(Schema.String)),
+    }),
+  ),
+  followUps: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        ...OfferFields,
+        when: Schema.Literals(["succeeded", "failed", "always"]),
+        eligible: Schema.optionalKey(Callable),
+      }),
+    ),
+  ),
+  actions: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        ...OfferFields,
+        arguments: Schema.Record(Schema.String, Schema.declare(Schema.isSchema)),
+        eligible: Callable,
+      }),
+    ),
+  ),
+});
+const readMetadata = Schema.decodeUnknownResult(DeclaredMetadata, { errors: "all" });
+
 /**
  * Everything wrong with a module's declared identity and metadata, one sentence each.
  * Empty means it may be registered. The host calls this at load, before anything of the
@@ -662,6 +700,10 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
     if (isReserved(name)) {
       problems.push(`input "${name}" collides with a host option: ${reservedMeaning(name)}`);
     }
+  }
+  const declared = entry.metadata === undefined ? null : readMetadata(entry.metadata);
+  if (declared?._tag === "Failure") {
+    return [...problems, `metadata is not what a workflow declares: ${declared.failure.message}`];
   }
   problems.push(...hintProblems(entry.metadata?.hints ?? {}, fields));
   problems.push(...outcomeProblems(entry.metadata?.outcome));

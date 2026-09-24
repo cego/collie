@@ -112,6 +112,24 @@ test("an input that is not a schema is that entry's problem, and the rest are st
     }).pipe(Effect.scoped),
   ));
 
+test("metadata that is not what a workflow declares is that entry's problem, and the rest are still found", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const where = yield* layers("collie-discovery-metadata-");
+      const odd = yield* where.save(
+        "user",
+        "odd.workflow.ts",
+        `${entry("odd")}export const metadata = { actions: 5 };\n`,
+      );
+      yield* where.save("user", "plain.workflow.ts", entry("plain"));
+
+      const found = yield* discover(where.roots);
+      expect(found.entries.map((one) => one.id)).toEqual(["plain"]);
+      expect(found.problems.map((one) => [one.id, one.path])).toEqual([["odd", odd]]);
+      expect(found.problems[0]?.message).toContain("metadata");
+    }).pipe(Effect.scoped),
+  ));
+
 test("two entries in one layer claiming one id are an error that names the other file", () =>
   runEffect(
     Effect.gen(function* () {
