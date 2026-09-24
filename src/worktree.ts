@@ -1199,12 +1199,15 @@ function fromRuns(runs: ReadonlyArray<RunFacts>, registered: ReadonlyArray<Agent
   const panes = new Map<string, Set<string>>();
   for (const run of runs) {
     const going = run.state === "running" || run.state === "waiting";
+    // A stop suspends a live Run rather than ending it; imported history never resumes.
+    const resumable = run.state === "stopped" && !run.imported;
     if (going) paths.set(run.cwd, "a run is still working in it");
+    else if (resumable) paths.set(run.cwd, "a stopped run can resume in it");
     const worktree = run.worktree;
     if (!worktree?.created_by_collie) continue;
     mine.set(worktree.path, worktree);
-    // A Run still going keeps its checkout anyway, so its agents are nobody's leftovers.
-    if (going) continue;
+    // A Run that may still go keeps its checkout anyway, so its agents are nobody's leftovers.
+    if (going || resumable) continue;
     const left = panes.get(worktree.path) ?? new Set<string>();
     for (const entry of registered) if (entry.runId === run.id) left.add(entry.paneId);
     panes.set(worktree.path, left);

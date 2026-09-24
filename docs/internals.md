@@ -131,7 +131,7 @@ A worktree is **settled**, and only then removed, when all four hold:
    in exactly the case it names;
 3. nothing is in it: no live agent's pane (its start directory, the directory it has
    moved to, or its workspace) other than the idle agents of the runs that finished there,
-   and no run still going there;
+   no run still going there, and no stopped run a resume would carry on there;
 4. its merge request is merged or closed, or its remote branch is gone.
 
 The checks run in that order and the first failure is what the board reports, so a kept
