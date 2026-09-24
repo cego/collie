@@ -23,7 +23,7 @@ import {
   promptFor,
   type AgentHost,
 } from "../src/agents";
-import { defineWorkflow, jsonSchemaFor } from "../src/sdk";
+import { Run, defineWorkflow, jsonSchemaFor } from "../src/sdk";
 import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/engine";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
@@ -31,7 +31,7 @@ import { readTask, writeTask } from "../src/task";
 import { taskFor } from "../src/operations";
 import { readRegistry, registerAgent, registryPath, scopeFor } from "../src/registry";
 import { HerdrError } from "../src/herdr";
-import { agentName } from "../src/naming";
+import { agentName, shellQuote } from "../src/naming";
 import type { CompactionPorts } from "../src/compaction";
 
 let rig: Rig;
@@ -201,6 +201,41 @@ test("a valid Output reaches the workflow as a typed value, from a real launch",
       // The prompt as it went out and the Output as it came back, both on disk.
       expect(yield* read(promptPath("r1"))).toContain("OUTPUT_PATH: ");
       expect(yield* read(outputPath("r1"))).toContain("two things");
+    }),
+  ));
+
+/** Work asked for the way a definition asks: inside a Run, naming only what it wants. */
+const worded = defineWorkflow({ name: "agent-words", input: {}, success: Schema.String });
+const wordedBody = worded.toLayer(
+  Effect.fnUntraced(function* (payload) {
+    return yield* agentWork({ operation: "summary", instructions: "Say what changed." }).pipe(
+      Effect.provideService(Run, Run.of({ id: payload.runId, workflow: "agent-words" })),
+    );
+  }),
+);
+
+test("work asked for inside a Run needs no run id, checkout or contract, and answers in words", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs(["It renames the flag."]);
+      const said = yield* worded
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.provide(wordedBody),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      expect(said).toBe("It renames the flag.");
+      const prompt = yield* read(`${dir}/agents/r1/summary.prompt.md`);
+      expect(prompt).toContain("as plain text");
+      expect(prompt).not.toContain("```json");
+      // Where the host placed the Run: nothing admitted this one, so its own directory.
+      const moved = (yield* rig.calls()).filter(
+        (call) => call.argv?.[0] === "pane" && call.argv[1] === "run",
+      );
+      expect(moved.map((call) => call.argv?.at(-1))).toContain(`cd ${shellQuote(dir)}`);
     }),
   ));
 

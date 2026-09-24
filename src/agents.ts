@@ -13,7 +13,17 @@
 //
 // `docs/adr/0020-an-agent-is-launched-once-and-its-output-is-decoded.md` is why.
 
-import { Context, Duration, Effect, FileSystem, Layer, Path, Schedule, Schema } from "effect";
+import {
+  Context,
+  Duration,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Schedule,
+  Schema,
+} from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import * as Activity from "effect/unstable/workflow/Activity";
 import * as Workflow from "effect/unstable/workflow/Workflow";
@@ -46,6 +56,7 @@ import {
   contentOf,
   jsonSchemaFor,
   Host,
+  Run,
   WorkflowError,
   type HostApi,
   type Projection,
@@ -218,14 +229,19 @@ export class Agents extends Context.Service<Agents, AgentsApi>()("collie/Agents"
 
 /** What an author asks for: the work, not the steps it takes. */
 export interface AgentWork<Output extends OutputContract> {
-  readonly runId: string;
+  /** The Run this is for; the one it executes as where it is left out. */
+  readonly runId?: string;
   /** Stable within the run: the Activity names and the agent's name are derived from it. */
   readonly operation: string;
-  readonly cwd: string;
+  /** Where the agent works; the checkout the host placed the Run on where it is left out. */
+  readonly cwd?: string;
   /** The Markdown the agent is given, with `{{inputs.x}}` rendered from the decoded input. */
   readonly instructions: string;
-  /** What the Output has to be. The prompt carries its drawing; this decides. */
-  readonly output: Output;
+  /**
+   * What the Output has to be: the prompt carries its drawing, and this decides. Left out,
+   * the agent answers in plain text.
+   */
+  readonly output?: Output;
   readonly inputs?: Readonly<Record<string, Schema.Json>>;
   readonly role?: string;
   /**
@@ -257,8 +273,8 @@ export interface AgentWork<Output extends OutputContract> {
  * comes back to an Output it has already had repaired finds the repair recorded and is
  * left with the failure, not with a fresh allowance.
  */
-export const agentWork = <Output extends OutputContract>(
-  work: AgentWork<Output>,
+export const agentWork = <Output extends OutputContract = typeof Schema.String>(
+  given: AgentWork<Output>,
 ): Effect.Effect<
   Output["Type"],
   WorkflowError,
@@ -267,6 +283,24 @@ export const agentWork = <Output extends OutputContract>(
   Effect.gen(function* () {
     const agents = yield* Agents;
     const host = yield* Host;
+    const run = Option.getOrUndefined(yield* Effect.serviceOption(Run));
+    const runId = given.runId ?? run?.id;
+    if (runId === undefined) {
+      return yield* new WorkflowError({
+        reason: `${given.operation}: work asked for outside a Run has to name the Run it is for`,
+      });
+    }
+    const place = yield* host.place(runId);
+    const plain = given.output === undefined;
+    // SAFETY: Output defaults to Schema.String exactly where no output was given.
+    const contract = (given.output ?? Schema.String) as Output;
+    const work = {
+      ...given,
+      runId,
+      cwd: given.cwd ?? place.cwd,
+      workflow: given.workflow ?? run?.workflow,
+      output: contract,
+    };
     // A boundary, and the last one before money is spent: a held run parks here rather
     // than starting an agent. Read as a plain Effect because an operator sets a hold
     // between attempts, and an Activity would hand back what the first attempt saw.
@@ -286,7 +320,6 @@ export const agentWork = <Output extends OutputContract>(
     // Where each skill the instructions mention lives, so a mention is the path to read
     // rather than a name the agent has to go looking for.
     const skills = yield* agents.skills(skillsIn(work.instructions));
-    const place = yield* host.place(work.runId);
     const ask: AgentAsk = {
       runId: work.runId,
       operation: work.operation,
@@ -305,7 +338,7 @@ export const agentWork = <Output extends OutputContract>(
         skills,
         cwd: work.cwd,
         output,
-        contract: jsonSchemaFor(work.output),
+        contract: plain ? null : jsonSchemaFor(work.output),
       }),
       skill: work.skill ?? null,
       harness: work.harness ?? null,
@@ -336,7 +369,7 @@ export const agentWork = <Output extends OutputContract>(
     if (first === null) {
       return yield* unusable(launched, `wrote nothing to ${output}`);
     }
-    const read = decodeOutput(work.output, first);
+    const read = decodeOutput(work.output, first, plain);
     if (read.ok) return read.value;
 
     // The repair is its own Activity, so what a restart finds is a repair that happened
@@ -365,7 +398,7 @@ export const agentWork = <Output extends OutputContract>(
     if (again === null) {
       return yield* unusable(launched, `did not write ${output} again: ${read.problem}`);
     }
-    const repaired = decodeOutput(work.output, again);
+    const repaired = decodeOutput(work.output, again, plain);
     if (repaired.ok) return repaired.value;
     return yield* unusable(launched, `${output} is still unusable: ${repaired.problem}`);
   }).pipe(
@@ -483,7 +516,15 @@ const asJson = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json));
 export function decodeOutput<Output extends OutputContract>(
   contract: Output,
   text: string,
+  /** Read the file as the text it is rather than as JSON. */
+  plain = false,
 ): Read<Output["Type"]> {
+  if (plain) {
+    const decoded = Schema.decodeUnknownResult(contract)(text.trim());
+    return decoded._tag === "Success"
+      ? { ok: true, value: decoded.success }
+      : { ok: false, problem: decoded.failure.message };
+  }
   const parsed = asJson(text);
   if (parsed._tag === "Failure") {
     return { ok: false, problem: `it is not JSON: ${parsed.failure.message}` };
@@ -499,7 +540,8 @@ export interface PromptParts {
   readonly role: string;
   readonly instructions: string;
   readonly output: string;
-  readonly contract: Projection;
+  /** What the Output is drawn to; null asks for plain text. */
+  readonly contract: Projection | null;
   readonly inputs?: Readonly<Record<string, Schema.Json>>;
   /** What the instructions render beside `inputs`, as the module supplies them. */
   readonly vars?: Readonly<Record<string, Schema.Json>>;
@@ -528,8 +570,8 @@ export function promptFor(parts: PromptParts): string {
   );
   return [
     rendered.text.trim(),
-    `When you are done, write your result as JSON to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
-    contractSection(parts.contract),
+    `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
+    parts.contract === null ? "" : contractSection(parts.contract),
   ]
     .filter((part) => part !== "")
     .join("\n\n");

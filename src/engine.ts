@@ -609,11 +609,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What you ask for: the work, not the steps it takes. */
   export interface AgentWork<Output extends OutputContract> {
-    readonly runId: string;
+    /** The Run this is for; the one it executes as where it is left out. */
+    readonly runId?: string;
     readonly operation: string;
-    readonly cwd: string;
+    /** Where the agent works; the checkout the host placed the Run on where it is left out. */
+    readonly cwd?: string;
     readonly instructions: string;
-    readonly output: Output;
+    /** What the Output has to be. Left out, the agent answers in plain text. */
+    readonly output?: Output;
     readonly inputs?: Readonly<Record<string, unknown>>;
     readonly role?: string;
     /** The agent this work goes to, where several operations are one agent's list. */
@@ -643,7 +646,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   >;
 
   /** One agent, once, and its Output as a value of your own type. */
-  export function agentWork<Output extends OutputContract>(
+  export function agentWork<Output extends OutputContract = typeof Schema.String>(
     work: AgentWork<Output>,
   ): Effect.Effect<
     Output["Type"],
@@ -656,7 +659,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly role: string;
     readonly instructions: string;
     readonly output: string;
-    readonly contract: Projection;
+    /** What the Output is drawn to; null asks for plain text. */
+    readonly contract: Projection | null;
     readonly inputs?: Readonly<Record<string, unknown>>;
     readonly vars?: Readonly<Record<string, unknown>>;
     /** Where each mentioned skill is installed; a mention of one that is not says so. */
