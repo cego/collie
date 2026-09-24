@@ -67,7 +67,7 @@ const hostOf = (): AgentHost => ({
 /** The module as an author saved it, loaded the way a host loads one. */
 const rally = (runId: string, rounds: number) =>
   Effect.gen(function* () {
-    const entry = yield* loadEntry(`${fixtures}/rally.workflow.ts`, `${runId}-${rounds}`);
+    const entry = yield* loadEntry(`${fixtures}/rally.workflow.ts`);
     const made = entry.make(`rally@${runId}`);
     const run = Effect.gen(function* () {
       const payload = {

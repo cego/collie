@@ -97,7 +97,7 @@ export function describeModule(entry: WorkflowEntry, where: Where): Described {
  */
 export const readModule: (found: Found) => Effect.Effect<Described, never, FileSystem.FileSystem> =
   Effect.fn("Authoring.readModule")(function* (found: Found) {
-    const loaded = yield* loadEntry(found.path, found.revision).pipe(Effect.result);
+    const loaded = yield* loadEntry(found.path).pipe(Effect.result);
     return loaded._tag === "Success"
       ? describeModule(loaded.success, found)
       : {
@@ -162,7 +162,7 @@ export const checkModule: (
   FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
 > = Effect.fn("Authoring.checkModule")(function* (where: Where) {
   const dir = directoryOf(where.path);
-  const loaded = yield* loadEntry(where.path, yield* revisionOf(dir)).pipe(Effect.result);
+  const loaded = yield* loadEntry(where.path).pipe(Effect.result);
   if (loaded._tag === "Failure") {
     return {
       id: stem(where.path),

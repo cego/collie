@@ -105,7 +105,7 @@ const session = <A, E>(
 
 /** The module as a host loads it, on the registration name a later pass comes back to. */
 const loaded = (entry: string, runId: string) =>
-  loadEntry(`${fixtures}/${entry}`, runId).pipe(
+  loadEntry(`${fixtures}/${entry}`).pipe(
     Effect.map((described) => described.make(`${described.id}@${runId}`)),
     Effect.orDie,
   );

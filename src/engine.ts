@@ -1078,21 +1078,16 @@ const EntryContract = Schema.Struct({
  */
 export const loadEntry: (
   file: string,
-  revision?: string,
 ) => Effect.Effect<WorkflowEntry, EntryError, FileSystem.FileSystem> = Effect.fn(
   "Engine.loadEntry",
-)(function* (file: string, revision?: string) {
+)(function* (file: string) {
   installSdk();
   // Bun's module registry has no invalidation, so an entry or a helper read twice at one
-  // path is the first read both times. A revision is read from a copy nothing has imported.
-  const staged = revision === undefined ? null : yield* stagedEntry(file, revision);
+  // path is the first read both times. Each read is of a copy of what is there now.
+  const staged = yield* stagedEntry(file);
   const loaded = yield* Effect.tryPromise({
-    try: () => import(staged?.file ?? file),
-    catch: (cause) =>
-      new EntryError({
-        file,
-        message: staged === null ? String(cause) : String(cause).replaceAll(staged.root, ""),
-      }),
+    try: () => import(staged.file),
+    catch: (cause) => new EntryError({ file, message: String(cause).replaceAll(staged.root, "") }),
   });
   const described = yield* Schema.decodeUnknownEffect(EntryContract)(loaded).pipe(
     Effect.mapError(
@@ -1120,17 +1115,18 @@ export const loadEntry: (
   return entry;
 });
 
-/** Where entries are staged to be read, per user. A revision is its content, so a copy is never stale. */
+/** Where entries are staged to be read, per user. A copy is named by its content, so it is never stale. */
 const ENTRIES = `${Bun.env.TMPDIR ?? "/tmp"}/collie-entries-${process.getuid?.() ?? 0}`;
 
 /**
- * This revision of an entry's directory, staged once and then shared by every process
- * that reads it. Staged under a name of its own and renamed into place, so nobody imports
- * a copy another process is still writing.
+ * An entry's directory as it is now, staged once and then shared by every process that
+ * reads it. Staged under a name of its own and renamed into place, so nobody imports a
+ * copy another process is still writing.
  */
-const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string, revision: string) {
+const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string) {
   const fs = yield* FileSystem.FileSystem;
-  const name = `${Bun.hash(directoryOf(file)).toString(16)}-${revision}`;
+  const dir = directoryOf(file);
+  const name = `${Bun.hash(dir).toString(16)}-${yield* revisionOf(dir)}`;
   const root = `${ENTRIES}/generations/${name}`;
   const staged = { root, file: `${root}${file}` };
   if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) return staged;
@@ -3242,7 +3238,7 @@ const makeRegistry: (
   const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
     // Read as it is now to learn the id this file claims, then register the next
     // generation of that id.
-    const described = yield* loadEntry(file, yield* revisionOf(directoryOf(file)));
+    const described = yield* loadEntry(file);
     const route = {
       workflow: described.id,
       name: nextRegistrationName(known, described.id),

@@ -144,7 +144,7 @@ const claimsIn = Effect.fn("Discovery.claimsIn")(function* (root: Root) {
   const revision = yield* revisionOf(root.dir);
   const claims: Array<Claim> = [];
   for (const path of yield* entryFiles(root.dir)) {
-    const read = yield* loadEntry(path, revision).pipe(Effect.result);
+    const read = yield* loadEntry(path).pipe(Effect.result);
     claims.push(
       read._tag === "Failure"
         ? { kind: "fault", id: stem(path), path, message: read.failure.message }

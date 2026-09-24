@@ -263,7 +263,7 @@ const forkModule = Effect.fn("Workflow.forkModule")(function* (
 ) {
   const refused = notAnId(options.id);
   if (refused) return refused;
-  const entry = yield* loadEntry(options.from.path, options.from.revision).pipe(Effect.result);
+  const entry = yield* loadEntry(options.from.path).pipe(Effect.result);
   if (entry._tag === "Failure") {
     return err("operation_failed", `${options.from.path}: ${entry.failure.message}`);
   }

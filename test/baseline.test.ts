@@ -169,7 +169,7 @@ const session = <A, E>(
   );
 
 const loaded = (entry: string, runId: string) =>
-  loadEntry(entry, runId).pipe(
+  loadEntry(entry).pipe(
     Effect.map((described) => described.make(`${described.id}@${runId}`)),
     Effect.orDie,
   );
@@ -982,14 +982,14 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         ...over,
       });
       const declaredIn = (entry: string) =>
-        loadEntry(entry, "offers").pipe(
+        loadEntry(entry).pipe(
           Effect.map((described) => declaredByModule(described.metadata)),
           Effect.orDie,
         );
 
       // The entry this pass loads is the id it claims to be.
       expect(
-        yield* loadEntry(shipped("review"), "offers").pipe(
+        yield* loadEntry(shipped("review")).pipe(
           Effect.map((described) => described.id),
           Effect.orDie,
         ),
