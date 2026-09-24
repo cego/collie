@@ -1225,7 +1225,13 @@ export const stageGeneration: (options: {
   const staged = (file: string) => path.join(options.dir, "generations", options.name, file);
   const failed = (cause: unknown) =>
     new EntryError({ file: options.entry, message: String(cause) });
-  yield* fs.copy(from, staged(from), { overwrite: true }).pipe(Effect.mapError(failed));
+  yield* fs.makeDirectory(staged(from), { recursive: true }).pipe(Effect.mapError(failed));
+  for (const name of yield* fs.readDirectory(from).pipe(Effect.mapError(failed))) {
+    if (name === "node_modules") continue;
+    yield* fs
+      .copy(path.join(from, name), staged(path.join(from, name)), { overwrite: true })
+      .pipe(Effect.mapError(failed));
+  }
   for (const file of outside) {
     yield* fs
       .makeDirectory(path.dirname(staged(file)), { recursive: true })

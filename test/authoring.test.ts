@@ -306,7 +306,7 @@ test("a staged helper resolves packages and package imports as it does where its
       });
       yield* install(`${root}/project`, "collie-probe-above");
       yield* install(`${root}/project/shared`, "collie-probe-beside");
-      yield* fs.makeDirectory(`${root}/project/mod`);
+      yield* install(`${root}/project/mod`, "collie-probe-entry");
       yield* fs.writeFileString(
         `${root}/project/shared/package.json`,
         `{"imports":{"#local":"./local.ts"}}`,
@@ -323,12 +323,21 @@ test("a staged helper resolves packages and package imports as it does where its
         ].join("\n"),
       );
       const entry = `${root}/project/mod/entry.ts`;
-      yield* fs.writeFileString(entry, `export { both, local } from "../shared/helper";\n`);
+      yield* fs.writeFileString(
+        entry,
+        [
+          `export { both, local } from "../shared/helper";`,
+          `export { from as own } from "collie-probe-entry";`,
+        ].join("\n"),
+      );
 
       const file = yield* stageGeneration({ dir: `${root}/state`, name: "mod@1", entry });
       const staged = yield* Effect.promise(() => import(file));
       expect(staged.both).toEqual(["collie-probe-above", "collie-probe-beside"]);
       expect(staged.local).toBe(42);
+      expect(staged.own).toBe("collie-probe-entry");
+      const beside = `${root}/project/mod/node_modules`;
+      expect(yield* fs.readLink(`${root}/state/generations/mod@1${beside}`)).toBe(beside);
       yield* clearGenerations(`${root}/state`);
       expect(yield* fs.exists(`${root}/project/node_modules/collie-probe-above/index.js`)).toBe(
         true,
