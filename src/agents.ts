@@ -694,9 +694,10 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         : dispatch.submitPatiently(deps, entry, text, draft, host.patience)
     ).pipe(Effect.catch((cause) => Effect.succeed(undeliverable(cause))));
     if (outcome.ok) return { sent: true, why: "" };
-    // Already in flight about this work: it went out, on whichever attempt got there
-    // first. Sending it again is the second copy this ledger exists to prevent.
-    if (outcome.reason === "blocked") return { sent: true, why: outcome.detail };
+    // Already sent about this work, on whichever attempt got there first. Sending it
+    // again is the second copy this ledger exists to prevent.
+    if (outcome.reason === "blocked" && outcome.held !== undefined && SENT_STATES.has(outcome.held))
+      return { sent: true, why: outcome.detail };
     return {
       sent: false,
       why: `${outcome.reason}: ${outcome.detail}`,

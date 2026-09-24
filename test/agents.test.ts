@@ -607,6 +607,21 @@ test("the same thing said twice under one claim is one delivery, not two", () =>
     }),
   ));
 
+test("a message nobody can say arrived is not called delivered when it is said again", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const first = yield* session(say("r1", "stay in src", "steer-1"), {
+        herdr: new SilentPrompts(rig.pluginEnv()),
+      });
+      expect(first.delivered).toBe(false);
+      const again = yield* session(say("r1", "stay in src", "steer-1"));
+      expect(again.delivered).toBe(false);
+      expect(again.detail).toContain("is unknown");
+    }),
+  ));
+
 test("a delivery this harness has not been shown to take is refused rather than sent and hoped for", () =>
   runEffect(
     Effect.gen(function* () {
