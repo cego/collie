@@ -408,7 +408,7 @@ test("a project Helle does not know is a 404 refusal, not silence", () =>
     }),
   ));
 
-test("adopting a claim stops the Run that held it, closes its agents, and takes its record of it", () =>
+test("adopting a claim stops the Run that held it, closes its agents, waits for it to stop, and takes its record of it", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -433,6 +433,7 @@ test("adopting a claim stops the Run that held it, closes its agents, and takes 
         to: "r-new",
         runs: ["r-old", "r-elsewhere", "r-new"],
         halt: (runId) => Effect.sync(() => (halted.push(runId), { stopped: [], left: [] })),
+        stopped: () => Effect.succeed(true),
       });
       expect(handed).toEqual(["r-old"]);
       expect(halted).toEqual(["r-old"]);
@@ -448,8 +449,44 @@ test("adopting a claim stops the Run that held it, closes its agents, and takes 
         to: "r-new",
         runs: ["r-stuck"],
         halt: () => Effect.succeed({ stopped: [], left: ["impl-1's pane would not close"] }),
+        stopped: () => Effect.succeed(true),
       }).pipe(Effect.flip);
       expect(refused.message).toContain("impl-1's pane would not close");
       expect(yield* fs.exists(`${dir}/runs/r-stuck/helle.json`)).toBe(true);
+
+      // Closing its agents does not stop a step the Run is in the middle of: the record is
+      // taken only once the Run has stopped.
+      yield* hold("r-busy", "project");
+      const seen: boolean[] = [];
+      const waited = yield* handOverClaim({
+        dir,
+        slug: "project",
+        to: "r-new",
+        runs: ["r-busy"],
+        halt: () => Effect.succeed({ stopped: [], left: [] }),
+        stopped: () =>
+          fs.exists(`${dir}/runs/r-busy/helle.json`).pipe(
+            Effect.orElseSucceed(() => false),
+            Effect.map((held) => (seen.push(held), seen.length === 3)),
+          ),
+        patience: { everyMs: 10, forMs: 5_000 },
+      });
+      expect(waited).toEqual(["r-busy"]);
+      expect(seen).toEqual([true, true, true]);
+      expect(yield* fs.exists(`${dir}/runs/r-busy/helle.json`)).toBe(false);
+
+      // One that does not stop keeps the claim, and the adoption says why.
+      yield* hold("r-running", "project");
+      const running = yield* handOverClaim({
+        dir,
+        slug: "project",
+        to: "r-new",
+        runs: ["r-running"],
+        halt: () => Effect.succeed({ stopped: [], left: [] }),
+        stopped: () => Effect.succeed(false),
+        patience: { everyMs: 10, forMs: 50 },
+      }).pipe(Effect.flip);
+      expect(running.message).toContain("r-running is still running");
+      expect(yield* fs.exists(`${dir}/runs/r-running/helle.json`)).toBe(true);
     }).pipe(Effect.scoped),
   ));

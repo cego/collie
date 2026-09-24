@@ -13,6 +13,7 @@ import * as BunCrypto from "@effect/platform-bun/BunCrypto";
 import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
   Cause,
+  Clock,
   Context,
   Crypto,
   Data,
@@ -1537,10 +1538,17 @@ const recordedClaim = (
     Effect.orElseSucceed((): HelleClaim | null => null),
   );
 
+/** Whether a Run's execution has stopped: suspended, finished, or not one this host runs. */
+export class Executions extends Context.Service<
+  Executions,
+  { readonly stopped: (runId: string) => Effect.Effect<boolean> }
+>()("collie/Executions") {}
+
 /**
- * Takes a claim over from this operator's other Runs that recorded it. Each is stopped and
- * its agents closed before its record of the claim is removed, so nothing it left running
- * goes on changing what the claim guards; an agent that will not close refuses the
+ * Takes a claim over from this operator's other Runs that recorded it. Each is stopped,
+ * its agents closed, and its execution waited out before its record of the claim is
+ * removed, so nothing it left running goes on changing what the claim guards. An agent
+ * that will not close, or a Run still in a step when patience runs out, refuses the
  * adoption. Answers the Runs it was taken from.
  */
 export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (options: {
@@ -1549,8 +1557,11 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
   readonly to: string;
   readonly runs: ReadonlyArray<string>;
   readonly halt: (runId: string) => Effect.Effect<AgentsSdk.Halted>;
+  readonly stopped: (runId: string) => Effect.Effect<boolean>;
+  readonly patience?: { readonly everyMs: number; readonly forMs: number };
 }) {
   const fs = yield* FileSystem.FileSystem;
+  const patience = options.patience ?? { everyMs: 250, forMs: 60_000 };
   const handed: string[] = [];
   for (const runId of options.runs) {
     if (runId === options.to) continue;
@@ -1562,6 +1573,15 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
       return yield* new HelleError({
         message: `the claim on ${options.slug} is ${runId}'s, and its agents did not all close (${left.join("; ")}); close them, then resume ${options.to}`,
       });
+    }
+    const deadline = (yield* Clock.currentTimeMillis) + patience.forMs;
+    while (!(yield* options.stopped(runId))) {
+      if ((yield* Clock.currentTimeMillis) >= deadline) {
+        return yield* new HelleError({
+          message: `the claim on ${options.slug} is ${runId}'s, and ${runId} is still running a step its stop has not reached; resume ${options.to} once ${runId} has stopped`,
+        });
+      }
+      yield* Effect.sleep(Duration.millis(patience.everyMs));
     }
     yield* fs.remove(file, { force: true }).pipe(Effect.orDie);
     yield* fs
@@ -1787,6 +1807,7 @@ export const hostLayer = (options: {
                 Effect.gen(function* () {
                   if (claim.claim === "adopted") {
                     const agents = yield* Effect.serviceOption(Agents);
+                    const executions = yield* Effect.serviceOption(Executions);
                     const from = yield* handOverClaim({
                       dir,
                       slug: claim.slug,
@@ -1796,6 +1817,10 @@ export const hostLayer = (options: {
                         Option.isSome(agents)
                           ? agents.value.halt(runId)
                           : Effect.succeed({ stopped: [], left: ["nothing here can close them"] }),
+                      stopped: (runId) =>
+                        Option.isSome(executions)
+                          ? executions.value.stopped(runId)
+                          : Effect.succeed(false),
                     });
                     for (const runId of from) {
                       yield* asked.say(`took the claim on ${claim.slug} over from ${runId}`);
@@ -2668,7 +2693,11 @@ const makeRegistry: (
     // own Layer: explicitly provided to this generation, never a table something looks
     // itself up in. Everything else the module needs it provides for itself.
     yield* Layer.buildWithScope(
-      registration.layer.pipe(Layer.provide(Layer.succeed(Children)(children))),
+      registration.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(Layer.succeed(Children)(children), Layer.succeed(Executions)(executions)),
+        ),
+      ),
       hostScope,
     );
     const generation: Generation = {
@@ -2949,6 +2978,18 @@ const makeRegistry: (
    * decoded against the child's own schema before a row exists, so input the child will
    * not take is the parent's failure rather than a half-made Run.
    */
+  const executions: typeof Executions.Service = {
+    stopped: (runId) =>
+      routed(runId).pipe(
+        Effect.flatMap((found) =>
+          engine.poll(found.generation.registration.workflow, found.execution),
+        ),
+        Effect.map(Option.isSome),
+        // A Run this host holds no generation for has nothing executing here.
+        Effect.orElseSucceed(() => true),
+      ),
+  };
+
   const children: ChildrenApi = {
     start: (ask: ChildAsk) => lending(admitChild(ask)),
     result: (child: ChildRun) => lending(runChild(child)),
