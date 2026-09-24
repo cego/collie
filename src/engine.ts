@@ -3594,13 +3594,16 @@ const readJsonObject = Schema.decodeUnknownOption(Schema.fromJsonString(JsonObje
 const writeJsonObject = Schema.encodeSync(Schema.fromJsonString(JsonObject, { space: 2 }));
 const objectIn = (value: Schema.Json | undefined) => (isJsonObject(value) ? value : {});
 
-/** An author's package.json with what a module is typechecked against added where it is missing. */
+/**
+ * An author's package.json with what a module is typechecked against added where it is
+ * missing, and the host's own Effect over any other: two Effects are two sets of types.
+ */
 const mergedPackage = (pkg: Readonly<Record<string, Schema.Json>>) => {
   const dependencies = objectIn(pkg.dependencies);
   const devDependencies = objectIn(pkg.devDependencies);
   return {
     ...pkg,
-    dependencies: { effect: TOOLCHAIN.effect, ...dependencies },
+    dependencies: { ...dependencies, effect: TOOLCHAIN.effect },
     devDependencies:
       "typescript" in dependencies
         ? devDependencies

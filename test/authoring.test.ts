@@ -149,6 +149,24 @@ test(
   60_000,
 );
 
+test(
+  "an author's own Effect is set to the one the host runs",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-authoring-effect-" });
+        yield* fs.writeFileString(`${dir}/package.json`, '{"dependencies":{"effect":"^3.0.0"}}');
+        yield* provisionToolchain(dir).pipe(Effect.result);
+
+        const pkg = yield* fs.readFileString(`${dir}/package.json`);
+        expect(pkg).toContain(`"effect": "${TOOLCHAIN.effect}"`);
+        expect(pkg).not.toContain("^3.0.0");
+      }).pipe(Effect.scoped),
+    ),
+  60_000,
+);
+
 test("a typechecker that falls over is no typechecker, not a clean module", () =>
   runEffect(
     Effect.gen(function* () {
