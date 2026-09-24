@@ -15,6 +15,7 @@ import {
   type HelleClaim,
   type HelleProject,
 } from "../src/helle";
+import { controlPath, handOverClaim } from "../src/engine";
 
 const ME = "6b9ba520-user";
 const OTHER = "2dd236ac-other";
@@ -405,4 +406,50 @@ test("a project Helle does not know is a 404 refusal, not silence", () =>
       expect(Result.isFailure(result)).toBe(true);
       expect(String(Result.isFailure(result) && result.failure.message)).toContain("404");
     }),
+  ));
+
+test("adopting a claim stops the Run that held it, closes its agents, and takes its record of it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-handover-" });
+      const hold = (runId: string, slug: string) =>
+        fs
+          .makeDirectory(`${dir}/runs/${runId}`, { recursive: true })
+          .pipe(
+            Effect.andThen(
+              fs.writeFileString(
+                `${dir}/runs/${runId}/helle.json`,
+                `{"slug":"${slug}","claim":"mine"}`,
+              ),
+            ),
+          );
+      yield* hold("r-old", "project");
+      yield* hold("r-elsewhere", "other");
+      const halted: string[] = [];
+      const handed = yield* handOverClaim({
+        dir,
+        slug: "project",
+        to: "r-new",
+        runs: ["r-old", "r-elsewhere", "r-new"],
+        halt: (runId) => Effect.sync(() => (halted.push(runId), { stopped: [], left: [] })),
+      });
+      expect(handed).toEqual(["r-old"]);
+      expect(halted).toEqual(["r-old"]);
+      expect(yield* fs.exists(controlPath(dir, "stop", "r-old"))).toBe(true);
+      expect(yield* fs.exists(`${dir}/runs/r-old/helle.json`)).toBe(false);
+      expect(yield* fs.exists(`${dir}/runs/r-elsewhere/helle.json`)).toBe(true);
+
+      // An agent that would not close could still change what the claim guards.
+      yield* hold("r-stuck", "project");
+      const refused = yield* handOverClaim({
+        dir,
+        slug: "project",
+        to: "r-new",
+        runs: ["r-stuck"],
+        halt: () => Effect.succeed({ stopped: [], left: ["impl-1's pane would not close"] }),
+      }).pipe(Effect.flip);
+      expect(refused.message).toContain("impl-1's pane would not close");
+      expect(yield* fs.exists(`${dir}/runs/r-stuck/helle.json`)).toBe(true);
+    }).pipe(Effect.scoped),
   ));

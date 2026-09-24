@@ -112,7 +112,10 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
     .map((one) => ({ name: one.name, prompt: one.prompt, options: one.options })),
   held: view.controls.includes(HOLD),
   note:
-    view.parked ?? view.diagnostic ?? (view.status.status === "failed" ? view.status.reason : null),
+    view.parked ??
+    (view.status.status === "failed"
+      ? [view.status.reason, view.diagnostic].filter((part) => part !== null).join(" — ")
+      : view.diagnostic),
   summary: view.status.status === "complete" ? resultText(view.status.value) : null,
 });
 

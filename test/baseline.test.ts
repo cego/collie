@@ -30,7 +30,7 @@ import {
   runDir,
 } from "../src/engine";
 import { VerifySpecSchema } from "../src/verify-spec";
-import { offersFrom } from "../src/offers";
+import { inputsFor, offersFrom } from "../src/offers";
 import { Store } from "../src/store";
 import { registerAgent, registryPath, scopeFor } from "../src/registry";
 import { fixtures, until } from "./support/host";
@@ -978,6 +978,7 @@ scenario("what a finished Run of each shipped module offers is the module's own 
         disposed: false,
         openFindings: 0,
         diffTarget: null,
+        claim: null,
         ...over,
       });
       const declaredIn = (entry: string) =>
@@ -1021,6 +1022,20 @@ scenario("what a finished Run of each shipped module offers is the module's own 
 
       // The architect's report is read by a human; nothing is offered off the back of it.
       expect(yield* declaredIn(shipped("architecture"))).toEqual([]);
+
+      // A renovation that failed holding the claim offers to recover it, on the repository
+      // it was started on; one that failed holding nothing has nothing to recover.
+      const renovate = yield* declaredIn(shipped("renovate"));
+      const failed = facts({ succeeded: false, claim: "project" });
+      const recovery = offersFrom(renovate, failed, { self: idOf("renovate") });
+      expect(recovery.map((offer) => [offer.id, offer.workflow])).toEqual([
+        ["recover", idOf("renovate")],
+      ]);
+      expect(offersFrom(renovate, facts({ succeeded: false }))).toEqual([]);
+      const repository = "https://gitlab.example.com/team/project";
+      expect(
+        inputsFor(recovery[0]!, { runDir: "/r", facts: failed, input: { repository } }),
+      ).toEqual({ repository });
     }),
   ),
 );

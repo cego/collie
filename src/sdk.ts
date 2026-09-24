@@ -596,6 +596,8 @@ export interface ActionFacts {
   readonly openFindings: number;
   /** What it was pointed at, where it was pointed at anything. */
   readonly diffTarget: string | null;
+  /** The shared claim it still holds, by the project it claimed; null where it holds none. */
+  readonly claim: string | null;
 }
 
 /**

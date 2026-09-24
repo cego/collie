@@ -17,6 +17,7 @@ const facts = (over: Partial<ActionFacts> = {}): ActionFacts => ({
   disposed: false,
   openFindings: 0,
   diffTarget: null,
+  claim: null,
   ...over,
 });
 

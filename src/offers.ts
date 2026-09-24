@@ -132,6 +132,7 @@ export const SOURCES = {
   "diff-target": "what this Run was pointed at",
   branch: "the branch its checkout is on",
   "merge-request": "the merge request it opened or was given",
+  "started-with": "what the Run was started with for the same input",
 } as const;
 export type Source = keyof typeof SOURCES;
 export const SOURCE_NAMES: ReadonlyArray<Source> = [
@@ -140,6 +141,7 @@ export const SOURCE_NAMES: ReadonlyArray<Source> = [
   "diff-target",
   "branch",
   "merge-request",
+  "started-with",
 ];
 export const isSource = (value: string): value is Source => value in SOURCES;
 
@@ -200,9 +202,13 @@ export function declaredIn(offers: ReadonlyArray<OfferDef>): Declared[] {
 /** What an offer passes, filled from the Run it is being made about. */
 export function inputsFor(
   offer: { readonly inputs: Readonly<Record<string, Source>> },
-  from: { readonly runDir: string; readonly facts: OfferFacts },
+  from: {
+    readonly runDir: string;
+    readonly facts: OfferFacts;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+  },
 ) {
-  const value = (source: Source): string | null => {
+  const value = (source: Source, name: string): Schema.Json | null => {
     switch (source) {
       case "run-dir":
         return from.runDir;
@@ -214,11 +220,13 @@ export function inputsFor(
         return from.facts.branch;
       case "merge-request":
         return from.facts.mrUrl;
+      case "started-with":
+        return from.input[name] ?? null;
     }
   };
-  const given: Record<string, string> = {};
+  const given: Record<string, Schema.Json> = {};
   for (const [name, source] of Object.entries(offer.inputs)) {
-    const filled = value(source);
+    const filled = value(source, name);
     if (filled !== null) given[name] = filled;
   }
   return given;

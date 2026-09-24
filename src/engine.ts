@@ -600,7 +600,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
    * Where an offer's input comes from, as the Run it is offered about knows it. A closed
    * list: Collie fills these in, and anything else is the caller's to give.
    */
-  export type Source = "run-dir" | "plan-dir" | "diff-target" | "branch" | "merge-request";
+  export type Source =
+    | "run-dir"
+    | "plan-dir"
+    | "diff-target"
+    | "branch"
+    | "merge-request"
+    | "started-with";
 
   export interface FollowUp {
     readonly id: string;
@@ -626,6 +632,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly openFindings: number;
     /** What it was pointed at, where it was pointed at anything. */
     readonly diffTarget: string | null;
+    /** The shared claim it still holds, by the project it claimed; null where it holds none. */
+    readonly claim: string | null;
   }
 
   export interface ActionProvider {
@@ -1433,6 +1441,45 @@ const recordedClaim = (
     Effect.orElseSucceed((): HelleClaim | null => null),
   );
 
+/**
+ * Takes a claim over from this operator's other Runs that recorded it. Each is stopped and
+ * its agents closed before its record of the claim is removed, so nothing it left running
+ * goes on changing what the claim guards; an agent that will not close refuses the
+ * adoption. Answers the Runs it was taken from.
+ */
+export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (options: {
+  readonly dir: string;
+  readonly slug: string;
+  readonly to: string;
+  readonly runs: ReadonlyArray<string>;
+  readonly halt: (runId: string) => Effect.Effect<AgentsSdk.Halted>;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const handed: string[] = [];
+  for (const runId of options.runs) {
+    if (runId === options.to) continue;
+    const file = claimPath(options.dir, runId);
+    if ((yield* recordedClaim(file))?.slug !== options.slug) continue;
+    yield* fs.writeFileString(controlPath(options.dir, STOP, runId), "").pipe(Effect.orDie);
+    const { left } = yield* options.halt(runId);
+    if (left.length > 0) {
+      return yield* new HelleError({
+        message: `the claim on ${options.slug} is ${runId}'s, and its agents did not all close (${left.join("; ")}); close them, then resume ${options.to}`,
+      });
+    }
+    yield* fs.remove(file, { force: true }).pipe(Effect.orDie);
+    yield* fs
+      .writeFileString(
+        `${options.dir}/events.${runId}.log`,
+        `claim on ${options.slug} taken over by ${options.to}; its agents were closed\n`,
+        { flag: "a" },
+      )
+      .pipe(Effect.orDie);
+    handed.push(runId);
+  }
+  return handed;
+});
+
 export const hostLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
@@ -1640,7 +1687,31 @@ export const hostLayer = (options: {
                 (yield* repositoryName(runShell, asked.cwd)) ??
                 (yield* Path.Path).basename(asked.cwd),
               claimed: yield* recordedClaim(file),
-              record: (claim) => fs.writeFileString(file, encodeClaim(claim)).pipe(Effect.orDie),
+              record: (claim) =>
+                Effect.gen(function* () {
+                  if (claim.claim === "adopted") {
+                    const agents = yield* Effect.serviceOption(Agents);
+                    const from = yield* handOverClaim({
+                      dir,
+                      slug: claim.slug,
+                      to: asked.runId,
+                      runs: (yield* store.runs).map((row) => row.run),
+                      halt: (runId) =>
+                        Option.isSome(agents)
+                          ? agents.value.halt(runId)
+                          : Effect.succeed({ stopped: [], left: ["nothing here can close them"] }),
+                    });
+                    for (const runId of from) {
+                      yield* asked.say(`took the claim on ${claim.slug} over from ${runId}`);
+                    }
+                  }
+                  yield* fs
+                    .makeDirectory(runDir(dir, asked.runId), { recursive: true })
+                    .pipe(
+                      Effect.andThen(fs.writeFileString(file, encodeClaim(claim))),
+                      Effect.orDie,
+                    );
+                }),
               out: asked.say,
               // The question is the workflow's, so it is durable and asked once; this only
               // turns the answer into the word the gate reads.
@@ -2967,6 +3038,9 @@ const makeRegistry: (
   /** The file a generation was built from, which a row keeps naming after it has gone. */
   const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
 
+  const claimOf = (runId: string) =>
+    recordedClaim(claimPath(dir, runId)).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+
   const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow) {
     const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const admitted = {
@@ -3015,10 +3089,20 @@ const makeRegistry: (
       };
     }
     const result = yield* engine.poll(generation.registration.workflow, row.execution);
+    const status = pollStatus(
+      result,
+      generation.entry,
+      generation.registration.workflow.successSchema,
+    );
+    // A failed Run keeps a claim it may have left shared work half-done under.
+    const kept = status.status === "failed" ? yield* claimOf(row.run) : null;
     return {
       ...about,
-      status: pollStatus(result, generation.entry, generation.registration.workflow.successSchema),
-      diagnostic: null,
+      status,
+      diagnostic:
+        kept === null
+          ? null
+          : `claim on ${kept.slug} retained; recovery required: a new Run of ${row.workflow} takes it over and closes this Run's agents`,
     };
   });
 
@@ -3201,7 +3285,7 @@ const makeRegistry: (
    * been edited away leaves the Run readable and its offers refused with the reason.
    */
   /** A follow-up takes what its workflow needs and the offer does not fill, so a front door asks for it. */
-  const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, string>>) =>
+  const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, Schema.Json>>) =>
     resolve({ project, id: offer.workflow }).pipe(
       Effect.map((target) => {
         const rest = Object.entries(target.fields).filter(([name]) => !(name in filled));
@@ -3236,6 +3320,7 @@ const makeRegistry: (
     const disposition = latest(
       yield* readDispositions(where).pipe(Effect.orElseSucceed((): Array<Disposition> => [])),
     );
+    const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
     const facts: ActionFacts = {
       outcome: isOutcome(asked) ? asked : "unspecified",
       succeeded: state.status === "complete",
@@ -3245,10 +3330,8 @@ const makeRegistry: (
       planIssues: yield* planIssuesIn(where),
       disposed: disposition !== null,
       openFindings: yield* openFindingsIn(where),
-      diffTarget: pointedAt(
-        generation,
-        yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
-      ),
+      diffTarget: pointedAt(generation, input),
+      claim: (yield* claimOf(runId))?.slug ?? null,
     };
     // A plan spanning repositories is a fan-out, which an offer does not start.
     const refused = new Map<string, string>();
@@ -3269,7 +3352,7 @@ const makeRegistry: (
         );
       }
     }
-    return { row, generation, facts, where, refused };
+    return { row, generation, facts, where, refused, input };
   });
 
   const startWork = Effect.fn("Engine.Registry.start")(function* (options: {
@@ -3390,7 +3473,7 @@ const makeRegistry: (
 
     offers: (runId: string) =>
       offeredBy(runId).pipe(
-        Effect.flatMap(({ row, generation, facts, where, refused }) =>
+        Effect.flatMap(({ row, generation, facts, where, refused, input }) =>
           Effect.forEach(
             offersFrom(generation.offers, facts, {
               self: generation.id,
@@ -3399,7 +3482,7 @@ const makeRegistry: (
             }),
             (offer) =>
               offer.kind === "follow-up"
-                ? unfilled(offer, row.project, inputsFor(offer, { runDir: where, facts }))
+                ? unfilled(offer, row.project, inputsFor(offer, { runDir: where, facts, input }))
                 : Effect.succeed(offer),
           ),
         ),
@@ -3411,7 +3494,7 @@ const makeRegistry: (
       readonly input: Readonly<Record<string, Schema.Json>>;
       readonly request: string;
     }) {
-      const { row, generation, facts, where, refused } = yield* offeredBy(options.runId);
+      const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
       // Asked again here, of the module as it is now: the card this was read from may
       // have been drawn before the file was edited, and a card is not authority.
       const offer = offersFrom(generation.offers, facts, {
@@ -3429,7 +3512,7 @@ const makeRegistry: (
       // What the offer said Collie fills in, filled from the Run it is about. The
       // caller's own values win: an offer names where a value comes from, and a caller
       // that has a better one for the same field is not overruled by a default.
-      const filled = { ...inputsFor(offer, { runDir: where, facts }), ...options.input };
+      const filled = { ...inputsFor(offer, { runDir: where, facts, input }), ...options.input };
       // The offer's own workflow settles what it was given, so arguments it will not
       // take are refused here and nothing is started.
       return yield* startWork({

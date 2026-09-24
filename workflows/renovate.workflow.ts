@@ -47,6 +47,18 @@ export const metadata: WorkflowMetadata = {
   hints: { repository: "gitlab-repository" },
   // Detached at the default branch, so no branch of the repository is bound to this Run.
   checkout: "roaming",
+  // A failed Run keeps the claim over shared work it may have left half-done. Recovering
+  // is another renovation of the same repository, which takes that claim over.
+  followUps: [
+    {
+      id: "recover",
+      title: "Recover the retained claim",
+      workflow: "self",
+      when: "failed",
+      inputs: { repository: "started-with", team: "started-with", issue: "started-with" },
+      eligible: (facts) => facts.claim !== null,
+    },
+  ],
 };
 
 const content = contentOf(markdown);

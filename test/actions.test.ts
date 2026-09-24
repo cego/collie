@@ -12,13 +12,20 @@ import { recordDisposition } from "../src/disposition";
 import { currentEnv } from "../src/env";
 import { makeOffer, type FlowPrompts } from "../src/flows";
 import { connect, type HostClient } from "../src/host";
+import { factsOfView } from "../src/runs";
 import { stopHost, until } from "./support/host";
 import { collie, proves, save, type World } from "./support/world";
 
 /** The envelope's payload as text, for asking whether an offer is in it at all. */
 const asText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-const MODULES = ["offered.workflow.ts", "graded.workflow.ts", "capability.ts", "house.ts"] as const;
+const MODULES = [
+  "offered.workflow.ts",
+  "graded.workflow.ts",
+  "retains.workflow.ts",
+  "capability.ts",
+  "house.ts",
+] as const;
 
 const projectOf = Effect.fn("ActionsTest.project")(function* (world: World) {
   const project = `${world.project}/work`;
@@ -114,6 +121,57 @@ test(
           const again = yield* makeOffer(yield* currentEnv, prompts, runId, "look-again");
           expect(asked).toEqual(["note?"]);
           expect(again).toStartWith("Started run ");
+          yield* stopHost(world.state);
+        }),
+      [],
+    ),
+  300_000,
+);
+
+test(
+  "a Run that failed holding the shared claim says so, where it failed, and offers to recover",
+  () =>
+    proves(
+      "collie-actions-retained-",
+      (world) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const project = yield* projectOf(world);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const { runId } = yield* client
+            .start({ project, id: "retains", request: "req-1", input: { note: "half-merged" } })
+            .pipe(Effect.orDie);
+          yield* until(
+            () => client.run({ runId }),
+            (view) => view?.status.status === "failed",
+          ).pipe(Effect.orDie);
+          const unclaimed = yield* client.run({ runId }).pipe(Effect.orDie);
+          expect(unclaimed?.diagnostic).toBeNull();
+          expect(
+            (yield* client.offers({ runId }).pipe(Effect.orDie))[0]?.unavailable,
+          ).not.toBeNull();
+
+          // What the claim gate records once a Run holds the claim.
+          yield* fs.makeDirectory(`${world.state}/runs/${runId}`, { recursive: true });
+          yield* fs.writeFileString(
+            `${world.state}/runs/${runId}/helle.json`,
+            '{"slug":"project","claim":"mine"}',
+          );
+          const view = yield* client.run({ runId }).pipe(Effect.orDie);
+          expect(view?.diagnostic).toContain("claim on project retained; recovery required");
+          const note = factsOfView(world.state, view!).note;
+          expect(note).toContain("merge: half-merged");
+          expect(note).toContain("recovery required");
+
+          const offers = yield* client.offers({ runId }).pipe(Effect.orDie);
+          expect(offers.map((one) => [one.id, one.unavailable, one.arguments])).toEqual([
+            ["recover", null, null],
+          ]);
+          const recovering = yield* client
+            .invoke({ runId, offer: "recover", input: {}, request: "act-1" })
+            .pipe(Effect.orDie);
+          const again = yield* client.run({ runId: recovering.runId }).pipe(Effect.orDie);
+          expect(again?.input).toEqual({ note: "half-merged" });
           yield* stopHost(world.state);
         }),
       [],

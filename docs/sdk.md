@@ -642,9 +642,10 @@ export const metadata: WorkflowMetadata = {
   Two fields, because a retitled action is the same action and a card matching on the
   title would start a different one. `workflow` is a public id or `"self"` for the one
   declaring it; `inputs` names what Collie fills in from the Run — `run-dir`, `plan-dir`,
-  `diff-target`, `branch`, `merge-request` — so a card makes the offer without asking a
-  human to type a path. `arguments` is the child's schema; eligibility is decided from
-  facts, never from a workflow's name. A follow-up says `when` — `succeeded`, `failed` or
+  `diff-target`, `branch`, `merge-request`, or `started-with` for what the Run was started
+  with under the same input name — so a card makes the offer without asking a human to type
+  a path. `arguments` is the child's schema; eligibility is decided from facts, never from a
+  workflow's name, and `facts.claim` is the shared claim a Run still holds. A follow-up says `when` — `succeeded`, `failed` or
   `always` — and may add an `eligible` of its own where how it ended is not the whole of
   it: an offer to carry on with a branch is not an offer where there is no branch. A
   follow-up declares no `arguments`: it takes whatever inputs its workflow has that
