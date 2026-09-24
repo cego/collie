@@ -248,8 +248,8 @@ test(
         yield* write(
           `${world.user}/proof.workflow.ts`,
           entry.replace(
-            'export const title = "A workflow that waits for a decision";',
-            'export const title = "Edited while a run was waiting";',
+            'title: "A workflow that waits for a decision",',
+            'title: "Edited while a run was waiting",',
           ),
         );
         yield* write(

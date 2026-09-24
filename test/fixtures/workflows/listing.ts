@@ -12,10 +12,10 @@
 import {
   FixOutputSchema,
   Host,
+  Run,
   WorkflowError,
   agentWork,
   ask,
-  decision,
   defineWorkflow,
   identityProblem,
   isBlocking,
@@ -23,20 +23,8 @@ import {
   renderProgress,
   type Finding,
   type Handed,
-  type WorkflowMetadata,
 } from "collie";
 import { Effect, Schema } from "effect";
-
-export const input = {
-  /** The plan whose tickets are the list. Read on every pass, never frozen. */
-  plan: Schema.String,
-  cwd: Schema.String,
-};
-
-export const metadata: WorkflowMetadata = {
-  hints: { plan: "work-source" },
-  outcome: { fixed: "feature" },
-};
 
 /** One agent for the whole list, so the item after this one is a hand-off, not a re-read. */
 const IMPLEMENTER = "implementer";
@@ -47,17 +35,21 @@ What the items before it left:
 
 {{inputs.progress}}`;
 
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const carryOn = decision("carry-on", {
-    prompt: "Findings were raised. Carry on?",
-    options: ["yes", "no"],
-  });
-
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
+/** The body both entries spread under an id of their own. */
+export const listing = defineWorkflow({
+  id: "listing",
+  input: Schema.Struct({
+    /** The plan whose tickets are the list. Read on every pass, never frozen. */
+    plan: Schema.String,
+    cwd: Schema.String,
+  }),
+  output: Schema.String,
+  hints: { plan: "work-source" },
+  outcome: { fixed: "feature" },
+  run: ({ input: asked }) =>
+    Effect.gen(function* () {
       const host = yield* Host;
-      const { runId, input: asked } = payload;
+      const runId = (yield* Run).id;
       const tickets = yield* orderedTicketsOf(asked.plan);
       // Identities before work: two items nobody can tell apart would share one result,
       // and finding that out after an agent has been paid for is finding out too late.
@@ -75,7 +67,6 @@ export const make = (registrationName: string) => {
           continue;
         }
         const built = yield* agentWork({
-          runId,
           operation: ticket.file,
           agent: IMPLEMENTER,
           role: "implementer",
@@ -103,12 +94,13 @@ export const make = (registrationName: string) => {
       const summary = handed.map((one) => `${one.item}=${one.commits.join("/")}`).join("+");
       // A question only where there is something to ask about, and durable when there is.
       if (findings.some(isBlocking)) {
-        const answer = yield* ask(runId, carryOn);
+        const answer = yield* ask({
+          name: "carry-on",
+          prompt: "Findings were raised. Carry on?",
+          options: ["yes", "no"],
+        });
         if (answer !== "yes") return `stopped: ${findings.length} finding(s), ${summary}`;
       }
       return `${handed.length} of ${tickets.length}: ${summary}, ${findings.length} finding(s)`;
     }),
-  );
-
-  return { workflow, layer, decisions: { "carry-on": carryOn } };
-};
+});

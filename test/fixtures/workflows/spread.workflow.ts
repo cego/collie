@@ -6,37 +6,23 @@
 //
 // A plan that cannot be fanned out at all is refused here, where no child exists yet.
 
-import {
-  WorkflowError,
-  child,
-  defineWorkflow,
-  isSingleRepo,
-  planReposOf,
-  type WorkflowMetadata,
-} from "collie";
+import { WorkflowError, child, defineWorkflow, isSingleRepo, planReposOf } from "collie";
 import { Effect, Schema } from "effect";
 
-export const id = "spread";
-export const title = "Build a plan that spans repositories";
-export const description = "One Run per repository the plan names, in the order it allows.";
-
-export const input = {
-  plan: Schema.String,
-  /** Where the checkouts are: a repository with none of its own is not somewhere to work. */
-  root: Schema.String,
-};
-
-export const metadata: WorkflowMetadata = {
+export default defineWorkflow({
+  id: "spread",
+  title: "Build a plan that spans repositories",
+  description: "One Run per repository the plan names, in the order it allows.",
+  input: Schema.Struct({
+    plan: Schema.String,
+    /** Where the checkouts are: a repository with none of its own is not somewhere to work. */
+    root: Schema.String,
+  }),
+  output: Schema.String,
   hints: { plan: "work-source" },
   outcome: { fixed: "feature" },
-};
-
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
-      const { runId, input: asked } = payload;
+  run: ({ input: asked }) =>
+    Effect.gen(function* () {
       const plan = yield* planReposOf(asked.plan, asked.root);
       if (plan.refusal !== null) {
         return yield* new WorkflowError({
@@ -52,7 +38,6 @@ export const make = (registrationName: string) => {
           wave,
           (repo) =>
             child({
-              runId,
               // The repository is the invocation: replaying the parent comes back to the
               // Run it already started for it rather than starting a second one.
               invocation: `repo-${repo}`,
@@ -68,7 +53,4 @@ export const make = (registrationName: string) => {
       }
       return built.join(" then ");
     }),
-  );
-
-  return { workflow, layer, decisions: {} };
-};
+});

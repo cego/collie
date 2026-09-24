@@ -1,14 +1,15 @@
 // An entry with an ordinary type error in it, so a check reports the file and the line
 // rather than refusing every workflow beside it.
 
-import { Schema } from "effect";
-
-export const id = "broken";
-export const title = "A workflow that does not typecheck";
-export const description = "Its note is a number where a string belongs.";
-
-export const input = { note: Schema.String };
+import { defineWorkflow } from "collie";
+import { Effect, Schema } from "effect";
 
 const note: string = 1;
 
-export const make = () => ({ note });
+export default defineWorkflow({
+  id: "broken",
+  title: "A workflow that does not typecheck",
+  description: "Its note is a number where a string belongs.",
+  input: Schema.Struct({ note: Schema.String }),
+  run: () => Effect.log(note),
+});

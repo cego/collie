@@ -5,16 +5,15 @@
 // about this workflow — they are declarations, and the eligibility below is the only
 // thing that decides whether an offer is on the table.
 
-import { Host, defineWorkflow, type WorkflowMetadata } from "collie";
+import { Host, Run, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 
-export const id = "offered";
-export const title = "Look at something and offer what to do about it";
-export const description = "Declares an action and a follow-up over its own facts.";
-
-export const input = { note: Schema.String };
-
-export const metadata: WorkflowMetadata = {
+export default defineWorkflow({
+  id: "offered",
+  title: "Look at something and offer what to do about it",
+  description: "Declares an action and a follow-up over its own facts.",
+  input: Schema.Struct({ note: Schema.String }),
+  output: Schema.String,
   outcome: { fixed: "review" },
   actions: [
     {
@@ -27,16 +26,9 @@ export const metadata: WorkflowMetadata = {
     },
   ],
   followUps: [{ id: "look-again", title: "Look again", workflow: "offered", when: "succeeded" }],
-};
-
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
-      const host = yield* Host;
-      yield* host.record(payload.runId, `looked at ${payload.input.note}`);
-      return `looked at ${payload.input.note}`;
+  run: ({ input }) =>
+    Effect.gen(function* () {
+      yield* (yield* Host).record((yield* Run).id, `looked at ${input.note}`);
+      return `looked at ${input.note}`;
     }),
-  );
-  return { workflow, layer, decisions: {} };
-};
+});

@@ -1,18 +1,15 @@
 // A workflow that changes the repository, so it declares a checkout of its own. It never
 // makes one: the host cut it before this Run existed, and `place` is where it is.
 
-import { Host, agentWork, defineWorkflow, type WorkflowMetadata } from "collie";
+import { Host, Run, agentWork, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 
-export const id = "builds";
-export const title = "Build the work on a branch of its own";
-export const description = "One agent, in the checkout the host gave this Run.";
-
-export const input = {
-  work: Schema.String,
-};
-
-export const metadata: WorkflowMetadata = {
+export default defineWorkflow({
+  id: "builds",
+  title: "Build the work on a branch of its own",
+  description: "One agent, in the checkout the host gave this Run.",
+  input: Schema.Struct({ work: Schema.String }),
+  output: Schema.String,
   hints: { work: "work-source" },
   checkout: "branch",
   followUps: [
@@ -24,27 +21,16 @@ export const metadata: WorkflowMetadata = {
       eligible: (facts) => facts.branch !== null,
     },
   ],
-};
-
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
-      const place = yield* (yield* Host).place(payload.runId);
+  run: ({ input }) =>
+    Effect.gen(function* () {
+      const place = yield* (yield* Host).place((yield* Run).id);
       yield* agentWork({
-        runId: payload.runId,
         operation: "build",
         role: "implementer",
-        workflow: id,
-        cwd: place.cwd,
         instructions: "Build {{inputs.work}}.",
-        inputs: { work: payload.input.work },
+        inputs: { work: input.work },
         output: Schema.Struct({ verdict: Schema.String }),
       });
       return place.cwd;
     }),
-  );
-
-  return { workflow, layer, decisions: {} };
-};
+});

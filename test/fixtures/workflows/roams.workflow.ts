@@ -1,24 +1,15 @@
-import { Host, defineWorkflow, type WorkflowMetadata } from "collie";
+import { Host, Run, defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 
-export const id = "roams";
-export const title = "Roam a repository's branches";
-export const description = "Works in the one checkout the host cut for this repository.";
-
-export const input = {
-  work: Schema.String,
-};
-
-export const metadata: WorkflowMetadata = {
+export default defineWorkflow({
+  id: "roams",
+  title: "Roam a repository's branches",
+  description: "Works in the one checkout the host cut for this repository.",
+  input: Schema.Struct({ work: Schema.String }),
+  output: Schema.String,
   checkout: "roaming",
-};
-
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
-      return (yield* (yield* Host).place(payload.runId)).cwd;
+  run: () =>
+    Effect.gen(function* () {
+      return (yield* (yield* Host).place((yield* Run).id)).cwd;
     }),
-  );
-  return { workflow, layer, decisions: {} };
-};
+});

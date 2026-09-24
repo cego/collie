@@ -10,6 +10,7 @@ import {
   FixOutputSchema,
   Host,
   ReviewOutputSchema,
+  Run,
   agentWork,
   defineWorkflow,
   findingKey,
@@ -17,45 +18,36 @@ import {
   settleRound,
   splitDisputed,
   type Finding,
-  type WorkflowMetadata,
 } from "collie";
 import { Effect, Schema } from "effect";
-
-export const id = "rally";
-export const title = "Review a change and fix it until it converges";
-export const description = "The review/fix rally, written as a loop rather than declared.";
-
-export const input = {
-  target: Schema.String,
-  cwd: Schema.String,
-  /** How many reviews at most. A rally that runs out says so rather than going again. */
-  rounds: Schema.Int,
-};
-
-export const metadata: WorkflowMetadata = {
-  hints: { target: "diff-target" },
-  outcome: { fixed: "review" },
-};
 
 const REVIEW = "Review {{inputs.target}}. Report every finding you can stand behind.";
 const FIX = "Fix what the review raised in {{inputs.target}}, or say why you will not.";
 
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({ name: registrationName, input, success: Schema.String });
-
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
+export default defineWorkflow({
+  id: "rally",
+  title: "Review a change and fix it until it converges",
+  description: "The review/fix rally, written as a loop rather than declared.",
+  input: Schema.Struct({
+    target: Schema.String,
+    cwd: Schema.String,
+    /** How many reviews at most. A rally that runs out says so rather than going again. */
+    rounds: Schema.Int,
+  }),
+  output: Schema.String,
+  hints: { target: "diff-target" },
+  outcome: { fixed: "review" },
+  run: ({ input: asked }) =>
+    Effect.gen(function* () {
       const host = yield* Host;
-      const { runId, input: asked } = payload;
+      const runId = (yield* Run).id;
       let disputed: Finding[] = [];
       let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
 
       for (let at = 1; at <= asked.rounds; at++) {
         const review = yield* agentWork({
-          runId,
           operation: `review-${at}`,
           role: "reviewer",
-          workflow: id,
           cwd: asked.cwd,
           instructions: REVIEW,
           inputs: { target: asked.target },
@@ -74,10 +66,8 @@ export const make = (registrationName: string) => {
         seen = { at, keys: rally.keys };
 
         const fix = yield* agentWork({
-          runId,
           operation: `fix-${at}`,
           role: "implementer",
-          workflow: id,
           cwd: asked.cwd,
           instructions: FIX,
           inputs: { target: asked.target },
@@ -101,7 +91,4 @@ export const make = (registrationName: string) => {
       }
       return "exhausted before any review";
     }),
-  );
-
-  return { workflow, layer, decisions: {} };
-};
+});
