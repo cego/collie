@@ -59,6 +59,8 @@ test(
           ]);
           // The arguments travel as a drawing, so a front door can ask for them.
           expect(offers[0]?.arguments).toMatchObject({ type: "object" });
+          // A follow-up takes what its workflow needs and the offer does not fill.
+          expect(offers[1]?.arguments).toMatchObject({ required: ["note"] });
 
           const started = yield* client
             .invoke({
@@ -106,6 +108,12 @@ test(
           const note = yield* makeOffer(yield* currentEnv, prompts, runId, "grade-it");
           expect(asked).toEqual(["note?", "grade?"]);
           expect(note).toStartWith("Started run ");
+
+          asked.length = 0;
+          answers.push("again");
+          const again = yield* makeOffer(yield* currentEnv, prompts, runId, "look-again");
+          expect(asked).toEqual(["note?"]);
+          expect(again).toStartWith("Started run ");
           yield* stopHost(world.state);
         }),
       [],

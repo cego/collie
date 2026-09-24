@@ -3167,6 +3167,20 @@ const makeRegistry: (
    * from the row: what is offered is the current code's to say, and a module that has
    * been edited away leaves the Run readable and its offers refused with the reason.
    */
+  /** A follow-up takes what its workflow needs and the offer does not fill, so a front door asks for it. */
+  const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, string>>) =>
+    resolve({ project, id: offer.workflow }).pipe(
+      Effect.map((target) => {
+        const rest = Object.entries(target.fields).filter(([name]) => !(name in filled));
+        if (rest.length === 0) return offer;
+        return {
+          ...offer,
+          arguments: jsonSchemaFor(Schema.Struct(Object.fromEntries(rest))).document,
+        };
+      }),
+      Effect.orElseSucceed(() => offer),
+    );
+
   const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (runId: string) {
     const row = yield* store.run(runId);
     if (row === null) {
@@ -3343,12 +3357,18 @@ const makeRegistry: (
 
     offers: (runId: string) =>
       offeredBy(runId).pipe(
-        Effect.map(({ generation, facts, refused }) =>
-          offersFrom(generation.offers, facts, {
-            self: generation.id,
-            keepUnavailable: true,
-            refused,
-          }),
+        Effect.flatMap(({ row, generation, facts, where, refused }) =>
+          Effect.forEach(
+            offersFrom(generation.offers, facts, {
+              self: generation.id,
+              keepUnavailable: true,
+              refused,
+            }),
+            (offer) =>
+              offer.kind === "follow-up"
+                ? unfilled(offer, row.project, inputsFor(offer, { runDir: where, facts }))
+                : Effect.succeed(offer),
+          ),
         ),
       ),
 

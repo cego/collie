@@ -646,7 +646,9 @@ export const metadata: WorkflowMetadata = {
   human to type a path. `arguments` is the child's schema; eligibility is decided from
   facts, never from a workflow's name. A follow-up says `when` — `succeeded`, `failed` or
   `always` — and may add an `eligible` of its own where how it ended is not the whole of
-  it: an offer to carry on with a branch is not an offer where there is no branch.
+  it: an offer to carry on with a branch is not an offer where there is no branch. A
+  follow-up declares no `arguments`: it takes whatever inputs its workflow has that
+  `inputs` does not fill, and a front door asks for those.
 
 Both are what a finished Run offers to do next, and both front doors make the same offer:
 `collie run actions <run>` lists them and `collie run action <run> <id> --input k=v` does
