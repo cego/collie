@@ -470,6 +470,7 @@ export const steerRun = (
     readonly text: string;
     readonly request: string;
     readonly operation?: string;
+    readonly agent?: string;
     readonly mode?: "boundary" | "now" | "interrupt";
   },
 ): Effect.Effect<OpResult, never, Client> =>

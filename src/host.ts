@@ -229,6 +229,7 @@ export const HostRpcs = RpcGroup.make(
       text: Schema.String,
       request: Schema.String,
       operation: Schema.optional(Schema.String),
+      agent: Schema.optional(Schema.String),
       mode: Schema.optional(Schema.Literals(["boundary", "now", "interrupt"])),
     },
     success: Steered,
@@ -313,8 +314,8 @@ const handlers = (dir: string) =>
           registry.answer({ runId, decision, value, request }),
         control: ({ runId, control, set }) => registry.control({ runId, control, set }),
         grant: ({ runId, name, command }) => registry.grant({ runId, name, command }),
-        steer: ({ runId, text, request, operation, mode }) =>
-          registry.steer({ runId, text, request, operation, mode }),
+        steer: ({ runId, text, request, operation, agent, mode }) =>
+          registry.steer({ runId, text, request, operation, agent, mode }),
       });
     }),
   );

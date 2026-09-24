@@ -787,6 +787,34 @@ test("a steer that names no agent reaches the one launched last, not the last by
     }),
   ));
 
+test("a steer that names an agent reaches that agent, not the one launched last", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([
+        { verdict: "clean", note: "one" },
+        { verdict: "clean", note: "two" },
+      ]);
+      const first = agentName("r1", "synthesize", null, 1);
+      const told = yield* Effect.gen(function* () {
+        yield* pair.execute({ runId: "r1", input: {} });
+        const agents = yield* Agents;
+        return yield* agents.steer({
+          runId: "r1",
+          text: "and now this",
+          request: "steer-1",
+          agent: first,
+        });
+      }).pipe(
+        Effect.provide(pairBody),
+        Effect.provide(agentsLayer(hostOf())),
+        Effect.provide(foundationLayer({ dir })),
+        Effect.scoped,
+        Effect.orDie,
+      );
+      expect(told.agent).toBe(first);
+    }),
+  ));
+
 /** A harness whose context is always over the limit, and which compacts when asked. */
 const fullContext = (asked: string[]): CompactionPorts => ({
   claude: {

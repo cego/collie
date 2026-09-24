@@ -499,6 +499,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
       readonly text: string;
       readonly request: string;
       readonly operation?: string;
+      /** One of the run's agents by name, which wins over operation. */
+      readonly agent?: string;
       readonly mode?: DeliveryMode;
     }) => Effect.Effect<Steered>;
     readonly pollMs: number;
@@ -2281,6 +2283,7 @@ export interface RegistryApi {
     /** The caller's claim on the delivery, so the same message twice is one message. */
     readonly request: string;
     readonly operation?: string;
+    readonly agent?: string;
     readonly mode?: AgentsSdk.DeliveryMode;
   }) => Effect.Effect<typeof Steered.Type, HostRefused, HostServices>;
   /** Every question this run has been asked, answered or not, oldest first. */
@@ -3507,6 +3510,7 @@ const makeRegistry: (
       readonly text: string;
       readonly request: string;
       readonly operation?: string;
+      readonly agent?: string;
       readonly mode?: AgentsSdk.DeliveryMode;
     }) {
       // Routed first: a run this host is not holding has no agent it can vouch for.

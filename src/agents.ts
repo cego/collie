@@ -183,6 +183,8 @@ export interface AgentsApi {
     readonly request: string;
     /** Which of the run's agents; the newest launch where a caller names none. */
     readonly operation?: string;
+    /** One of the run's agents by name, which wins over `operation`. */
+    readonly agent?: string;
     readonly mode?: DeliveryMode;
   }) => Effect.Effect<Steered>;
 }
@@ -1071,16 +1073,26 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     readonly text: string;
     readonly request: string;
     readonly operation?: string;
+    readonly agent?: string;
     readonly mode?: DeliveryMode;
   }) =>
     under(
       Effect.gen(function* () {
         const launches = yield* launchesOf(options.runId);
-        const wanted = options.operation;
+        const { operation, agent } = options;
         const launched =
-          wanted === undefined ? launches.at(-1) : launches.find((one) => one.operation === wanted);
+          agent !== undefined
+            ? launches.findLast((one) => one.agent === agent)
+            : operation !== undefined
+              ? launches.find((one) => one.operation === operation)
+              : launches.at(-1);
         if (launched === undefined) {
-          const about = wanted === undefined ? "" : ` on "${wanted}"`;
+          const about =
+            agent !== undefined
+              ? ` named "${agent}"`
+              : operation !== undefined
+                ? ` on "${operation}"`
+                : "";
           return {
             agent: "",
             delivered: false,
