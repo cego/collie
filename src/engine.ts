@@ -424,6 +424,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   ): Decision;
 
   /** Waits for this question to be answered, having told the host it is open. */
+  /** A question this Run waits on, asked when the work reaches it. The name is its identity. */
+  export function ask(question: {
+    readonly name: string;
+    readonly prompt?: string;
+    /** The answers it takes; none is a question answered in the operator's own words. */
+    readonly options?: ReadonlyArray<string>;
+  }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance>;
   export function ask(
     runId: string,
     question: Decision,
@@ -1939,14 +1946,11 @@ export const nextRegistrationName = (
 export const answerDecision = (
   registration: Registration,
   options: { readonly name: string; readonly executionId: string; readonly value: string },
-): Effect.Effect<void, EntryError, WorkflowEngine.WorkflowEngine> => {
-  const decision = registration.decisions[options.name];
-  if (!decision) {
-    return new EntryError({
-      file: registration.workflow._tag,
-      message: `no decision called "${options.name}"`,
-    });
-  }
+): Effect.Effect<void, never, WorkflowEngine.WorkflowEngine> => {
+  // A question is its name: one asked as the work reached it is found by that alone.
+  const decision =
+    registration.decisions[options.name] ??
+    DurableDeferred.make(options.name, { success: Schema.String });
   const token = DurableDeferred.tokenFromExecutionId(decision, {
     workflow: registration.workflow,
     executionId: options.executionId,
@@ -3196,7 +3200,7 @@ const makeRegistry: (
           name: one.decision,
           executionId: row.execution,
           value: one.answer ?? "",
-        }).pipe(Effect.ignore);
+        });
       }
     }
   });
@@ -3734,13 +3738,6 @@ const makeRegistry: (
         });
       }
       const value = named ?? options.value;
-      // Checked before the answer is recorded: an answer the module has no deferred for
-      // would otherwise close the question against a run nothing could ever resume.
-      if (!found.generation.registration.decisions[name]) {
-        return yield* new HostRefused({
-          reason: `${found.generation.entry} declares no decision called "${name}"`,
-        });
-      }
       // Recorded first, and only the caller the write hands the row to completes the
       // deferred: two answers racing are separated by the database, not by timing.
       const settled = yield* store.settle({
@@ -3758,7 +3755,7 @@ const makeRegistry: (
         name,
         executionId: found.execution,
         value,
-      }).pipe(Effect.mapError((failure) => new HostRefused({ reason: failure.message })));
+      });
 
       return { runId: options.runId, decision: name, value, fresh: settled._tag === "accepted" };
     }),

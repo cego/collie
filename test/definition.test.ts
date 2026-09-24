@@ -8,7 +8,7 @@ import { savedModules } from "../src/discovery";
 import { stopHost, until } from "./support/host";
 import { proves } from "./support/world";
 
-const MODULES = ["hello.workflow.ts", "quiet.workflow.ts"];
+const MODULES = ["hello.workflow.ts", "quiet.workflow.ts", "branches.workflow.ts"];
 
 test(
   "a default-exported definition is found, described with its defaults, and run",
@@ -47,6 +47,55 @@ test(
             (view) => view?.status.status === "complete",
           ).pipe(Effect.orDie);
           expect(done?.status.status).toBe("complete");
+          yield* stopHost(world.state);
+        }),
+      MODULES,
+    ),
+  300_000,
+);
+
+test(
+  "a question is asked when the work reaches it, and only then",
+  () =>
+    proves(
+      "collie-definition-ask-",
+      (world) =>
+        Effect.gen(function* () {
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const start = (size: string, request: string) =>
+            client
+              .start({ project: world.project, id: "branches", request, input: { size } })
+              .pipe(Effect.orDie);
+
+          const small = yield* start("small", "req-1");
+          const quick = yield* until(
+            () => client.run({ runId: small.runId }),
+            (view) => view?.status.status === "complete",
+          ).pipe(Effect.orDie);
+          expect(quick?.waiting).toEqual([]);
+          expect(quick?.status).toEqual({ status: "complete", value: "quick" });
+
+          const big = yield* start("big", "req-2");
+          const asking = yield* until(
+            () => client.run({ runId: big.runId }),
+            (view) => (view?.waiting ?? []).length > 0,
+          ).pipe(Effect.orDie);
+          expect(asking?.waiting.map((one) => [one.name, one.options])).toEqual([
+            ["approach", ["quick", "review-first"]],
+          ]);
+          yield* client
+            .answer({
+              runId: big.runId,
+              decision: "approach",
+              value: "review-first",
+              request: "a-1",
+            })
+            .pipe(Effect.orDie);
+          const answered = yield* until(
+            () => client.run({ runId: big.runId }),
+            (view) => view?.status.status === "complete",
+          ).pipe(Effect.orDie);
+          expect(answered?.status).toEqual({ status: "complete", value: "review-first" });
           yield* stopHost(world.state);
         }),
       MODULES,

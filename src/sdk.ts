@@ -313,13 +313,15 @@ interface LegacyOptions<Input extends Schema.Struct.Fields, Success extends Sche
   readonly success: Success;
 }
 
-type LegacyWorkflow<Input extends Schema.Struct.Fields, Success extends Schema.Top> =
-  Workflow.Workflow<
-    string,
-    Schema.Struct<{ runId: typeof Schema.String; input: Schema.Struct<Input> }>,
-    Success,
-    typeof WorkflowError
-  >;
+type LegacyWorkflow<
+  Input extends Schema.Struct.Fields,
+  Success extends Schema.Top,
+> = Workflow.Workflow<
+  string,
+  Schema.Struct<{ runId: typeof Schema.String; input: Schema.Struct<Input> }>,
+  Success,
+  typeof WorkflowError
+>;
 
 const legacyWorkflow = <Input extends Schema.Struct.Fields, Success extends Schema.Top>(
   options: LegacyOptions<Input, Success>,
@@ -524,25 +526,46 @@ export const decision = (
     asks: { name, prompt: asks?.prompt ?? name, options: asks?.options ?? [] },
   });
 
+const isRunId = Schema.is(Schema.String);
+
 /**
- * Waits for this question to be answered, having told the host it is open.
+ * Waits for this question to be answered, having told the host it is open. It is asked
+ * when the work reaches it: nothing declares it ahead.
  *
  * Both halves matter. Waiting is Effect's — the answer is durable and a restart comes
  * back to it. Saying so is Collie's: a host that does not know what a run is asking
  * cannot show the question, cannot refuse an answer to one nobody asked, and cannot tell
  * a second answer from the first.
  */
-export const ask = (
+export function ask(question: {
+  /** Its identity: the same name is the same question, however often the work replays. */
+  readonly name: string;
+  readonly prompt?: string;
+  /** The answers it takes; none is a question answered in the operator's own words. */
+  readonly options?: ReadonlyArray<string>;
+}): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance>;
+export function ask(
   runId: string,
   question: Decision,
   /** What it takes this time, where a menu offers less than it declares. */
   options?: ReadonlyArray<string>,
-): Effect.Effect<string, never, Host | WorkflowEngine | WorkflowInstance> =>
-  Effect.gen(function* () {
+): Effect.Effect<string, never, Host | WorkflowEngine | WorkflowInstance>;
+export function ask(
+  asked:
+    | string
+    | { readonly name: string; readonly prompt?: string; readonly options?: ReadonlyArray<string> },
+  question?: Decision,
+  options?: ReadonlyArray<string>,
+): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance> {
+  return Effect.gen(function* () {
+    const runId = isRunId(asked) ? asked : (yield* Run).id;
+    const deferred = isRunId(asked) ? question : decision(asked.name, asked);
+    if (deferred === undefined) return yield* Effect.die("ask(runId) needs its decision");
     const host = yield* Host;
-    yield* host.asking(runId, options ? { ...question.asks, options } : question.asks);
-    return yield* DurableDeferred.await(question);
+    yield* host.asking(runId, options ? { ...deferred.asks, options } : deferred.asks);
+    return yield* DurableDeferred.await(deferred);
   });
+}
 
 /**
  * What this Run may have Collie run to prove its kind of result. Where that kind needs
