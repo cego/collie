@@ -208,26 +208,27 @@ export function inputsFor(
     readonly input: Readonly<Record<string, Schema.Json>>;
   },
 ) {
-  const value = (source: Source, name: string): Schema.Json | null => {
+  /** Undefined where there is nothing to pass; a null the Run was started with is a value. */
+  const value = (source: Source, name: string): Schema.Json | undefined => {
     switch (source) {
       case "run-dir":
         return from.runDir;
       case "plan-dir":
         return `${from.runDir}/plan`;
       case "diff-target":
-        return from.facts.diffTarget;
+        return from.facts.diffTarget ?? undefined;
       case "branch":
-        return from.facts.branch;
+        return from.facts.branch ?? undefined;
       case "merge-request":
-        return from.facts.mrUrl;
+        return from.facts.mrUrl ?? undefined;
       case "started-with":
-        return from.input[name] ?? null;
+        return from.input[name];
     }
   };
   const given: Record<string, Schema.Json> = {};
   for (const [name, source] of Object.entries(offer.inputs)) {
     const filled = value(source, name);
-    if (filled !== null) given[name] = filled;
+    if (filled !== undefined) given[name] = filled;
   }
   return given;
 }
