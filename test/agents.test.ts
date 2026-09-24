@@ -10,7 +10,7 @@
 // second engine on the same file rather than a second map.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Duration, Effect, FileSystem, Schema } from "effect";
+import { Duration, Effect, FileSystem, Layer, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr, type Call } from "./support/recorder";
 import { runEffect } from "./support/effect";
@@ -23,9 +23,9 @@ import {
   promptFor,
   type AgentHost,
 } from "../src/agents";
-import { Run, jsonSchemaFor, withAgents } from "../src/sdk";
+import { Children, Run, jsonSchemaFor, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
-import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/engine";
+import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus } from "../src/engine";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
 import { readTask, writeTask } from "../src/task";
@@ -546,6 +546,32 @@ test("an agent is not handed work that asks for a different one than it is", () 
       expect(reason).toContain("claude/opus");
       expect(reason).toContain("claude/sonnet");
       expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+    }),
+  ));
+
+test("a definition's own preference sits under a scope's, and parallel scopes keep their own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs(["one", "two", "three"]);
+      const entry = yield* loadEntry(
+        new URL("fixtures/workflows/prefers.workflow.ts", import.meta.url).pathname,
+      ).pipe(Effect.orDie);
+      const { workflow, layer } = entry.make("prefers@1");
+      const none = Effect.die("this workflow starts no child");
+      yield* workflow
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.provide(layer),
+          Effect.provide(
+            Layer.succeed(Children)(Children.of({ start: () => none, result: () => none })),
+          ),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      const models = everyLaunch(yield* rig.calls()).map((args) => args[1]);
+      expect([...models].sort()).toEqual(["haiku", "opus", "sonnet"]);
     }),
   ));
 
