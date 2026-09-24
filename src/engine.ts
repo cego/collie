@@ -188,7 +188,6 @@ export const TOOLCHAIN = {
  */
 export const SDK_DECLARATIONS = `declare module "collie" {
   import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
-  import type { DurableDeferred } from "effect/unstable/workflow/DurableDeferred";
   import type { Workflow } from "effect/unstable/workflow/Workflow";
   import type {
     WorkflowEngine,
@@ -404,20 +403,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   >(
     definition: Definition<Fields, Output, Err, Provided>,
   ): Definition<Fields, Output, Err, Provided>;
-  /** A workflow under Collie's envelope: the host supplies runId, you supply input. */
-  export function defineWorkflow<
-    Input extends Schema.Struct.Fields,
-    Success extends Schema.Top,
-  >(options: {
-    readonly name: string;
-    readonly input: Input;
-    readonly success: Success;
-  }): Workflow<
-    string,
-    Schema.Struct<{ runId: typeof Schema.String; input: Schema.Struct<Input> }>,
-    Success,
-    typeof WorkflowError
-  >;
 
   /** A question as the host records it: its identity, what it asks, what it takes. */
   export interface DecisionSpec {
@@ -426,16 +411,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly options: ReadonlyArray<string>;
   }
 
-  /** A decision a run waits on, answered with the text an operator types. */
-  export interface Decision extends DurableDeferred<typeof Schema.String> {
-    readonly asks: DecisionSpec;
-  }
-  export function decision(
-    name: string,
-    asks?: { readonly prompt?: string; readonly options?: ReadonlyArray<string> },
-  ): Decision;
-
-  /** Waits for this question to be answered, having told the host it is open. */
   /** A question this Run waits on, asked when the work reaches it. The name is its identity. */
   export function ask(question: {
     readonly name: string;
@@ -443,12 +418,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** The answers it takes; none is a question answered in the operator's own words. */
     readonly options?: ReadonlyArray<string>;
   }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance>;
-  export function ask(
-    runId: string,
-    question: Decision,
-    /** What it takes this time, where a menu offers less than it declares. */
-    options?: ReadonlyArray<string>,
-  ): Effect.Effect<string, never, Host | WorkflowEngine | WorkflowInstance>;
 
   /**
    * What this Run may have Collie run to prove its kind of result. With nothing approved
@@ -457,15 +426,9 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export function requireApproved(
     kind: string,
   ): Effect.Effect<ReadonlyArray<VerifySpec>, never, Run | Host | WorkflowInstance>;
-  export function requireApproved(
-    runId: string,
-    kind: string,
-  ): Effect.Effect<ReadonlyArray<VerifySpec>, never, Host | WorkflowInstance>;
 
   /** What a parent asks for when part of its own work is another workflow. */
   export interface ChildAsk {
-    /** The parent's run id; the Run the parent executes as, where it is left out. */
-    readonly runId?: string;
     /** Stable within the parent: the same one twice is the same child. */
     readonly invocation: string;
     /** A public id, or "self" for the parent's own. */
@@ -496,21 +459,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     ask: ChildAsk,
   ): Effect.Effect<unknown, WorkflowError, Children>;
 
-  export interface Registration {
-    readonly workflow: Workflow<string, any, any, typeof WorkflowError>;
-    /** The host's own services, and the file system and paths a module reads work from. */
-    readonly layer: Layer.Layer<
-      never,
-      never,
-      | WorkflowEngine
-      | Host
-      | Agents
-      | Children
-      | FileSystem.FileSystem
-      | Path.Path
-    >;
-    readonly decisions: Readonly<Record<string, Decision>>;
-  }
 
   /** A schema that decodes an agent's Output without services of its own. */
   export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
@@ -625,8 +573,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What you ask for: the work, not the steps it takes. */
   export interface AgentWork<Output extends OutputContract> {
-    /** The Run this is for; the one it executes as where it is left out. */
-    readonly runId?: string;
     readonly operation: string;
     /** Where the agent works; the checkout the host placed the Run on where it is left out. */
     readonly cwd?: string;
@@ -650,8 +596,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** A message handed to another Run's live agent in this role: the agent, or null where none. */
   export function handOffWork(options: {
-    /** The Run this is for; the one it executes as where it is left out. */
-    readonly runId?: string;
     readonly operation: string;
     readonly role: string;
     /** Where the agent to hand to works; the Run's own checkout where it is left out. */
@@ -660,7 +604,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   }): Effect.Effect<
     string | null,
     WorkflowError,
-    Agents | Host | WorkflowEngine | WorkflowInstance
+    Run | Agents | Host | WorkflowEngine | WorkflowInstance
   >;
 
   /** One agent, once, and its Output as a value of your own type. */
@@ -669,7 +613,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   ): Effect.Effect<
     Output["Type"],
     WorkflowError,
-    Agents | Host | WorkflowEngine | WorkflowInstance
+    Run | Agents | Host | WorkflowEngine | WorkflowInstance
   >;
 
   /** Everything a prompt is built from, none of which is an Activity. */
@@ -753,16 +697,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly eligible: (facts: ActionFacts) => boolean;
     /** What Collie fills in from the Run itself; the rest is the caller's to give. */
     readonly inputs?: Readonly<Record<string, Source>>;
-  }
-
-  /** Data a card and a launch read; never anything a workflow body consults. */
-  export interface WorkflowMetadata {
-    readonly hints?: Readonly<Record<string, string>>;
-    readonly outcome?: OutcomeContract;
-    /** A worktree the host cuts before the Run exists; absent works where it was started. */
-    readonly checkout?: "branch" | "roaming";
-    readonly followUps?: ReadonlyArray<FollowUp>;
-    readonly actions?: ReadonlyArray<ActionProvider>;
   }
 
   /** Names the host supplies at launch; an input of one of these is refused. */
@@ -1165,24 +1099,16 @@ export function installSdk(): void {
   });
 }
 
-const EntryContract = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  description: Schema.String,
-  input: Schema.Record(Schema.String, Schema.Unknown),
-  metadata: Schema.optionalKey(Schema.Unknown),
-});
-
 /**
  * Imports a workflow entry file and holds it to the published contract. A module that
  * does not compile, does not exist, does not export the contract or contradicts itself
  * fails naming its own file — so one bad entry says which one it is and leaves every
  * other entry loadable.
  *
- * Importing runs the module's top level, which is the author's code — and deliberately
- * so, since `make` is a function it exports. It does not run a workflow body, acquire an
- * agent or open a worktree; nothing here is a sandbox. The metadata is checked here, at
- * load, which is why a contradiction never reaches a Run.
+ * Importing runs the module's top level, which is the author's code. It does not run a
+ * workflow body, acquire an agent or open a worktree; nothing here is a sandbox. What the
+ * definition declares is checked here, at load, which is why a contradiction never
+ * reaches a Run.
  */
 export const loadEntry: (
   file: string,
@@ -1197,40 +1123,17 @@ export const loadEntry: (
     try: () => import(staged.file),
     catch: (cause) => new EntryError({ file, message: String(cause).replaceAll(staged.root, "") }),
   });
-  if (loaded.default !== undefined) {
-    const read = readDefinition(loaded.default);
-    if (read._tag === "Failure" || !isWritten(loaded.default)) {
-      return yield* new EntryError({
-        file,
-        message: `the default export is not a workflow definition: ${read._tag === "Failure" ? read.failure.message : ""}`,
-      });
-    }
-    const entry = entryOf(definitionOf(loaded.default));
-    const problems = checkEntry(entry);
-    if (problems.length > 0) {
-      return yield* new EntryError({ file, message: problems.join("; ") });
-    }
-    return entry;
-  }
-  const described = yield* Schema.decodeUnknownEffect(EntryContract)(loaded).pipe(
-    Effect.mapError(
-      () =>
-        new EntryError({
-          file,
-          message: "a workflow entry exports id, title, description and input",
-        }),
-    ),
-  );
-  if (!Predicate.isFunction(loaded.make)) {
+  const read = readDefinition(loaded.default);
+  if (read._tag === "Failure" || !isWritten(loaded.default)) {
     return yield* new EntryError({
       file,
-      message: "a workflow entry exports make(registrationName)",
+      message:
+        loaded.default === undefined
+          ? "a workflow module exports its definition by default: export default defineWorkflow({ ... })"
+          : `the default export is not a workflow definition: ${read._tag === "Failure" ? read.failure.message : ""}`,
     });
   }
-  // SAFETY: the contract above decoded and `make` is a function. What the author's
-  // schemas and metadata hold is checked next, and what `make` returns is checked when
-  // the host builds its Layer.
-  const entry = { ...described, make: loaded.make } as WorkflowEntry;
+  const entry = entryOf(definitionOf(loaded.default));
   const problems = checkEntry(entry);
   if (problems.length > 0) {
     return yield* new EntryError({ file, message: problems.join("; ") });
@@ -1310,7 +1213,7 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
       );
   });
   const layer = definition.layer === undefined ? body : body.pipe(Layer.provide(definition.layer));
-  return { workflow, layer, decisions: {} };
+  return { workflow, layer };
 };
 
 /** Where entries are staged to be read, per user. A copy is named by its content, so it is never stale. */
@@ -1976,9 +1879,7 @@ export const answerDecision = (
   options: { readonly name: string; readonly executionId: string; readonly value: string },
 ): Effect.Effect<void, never, WorkflowEngine.WorkflowEngine> => {
   // A question is its name: one asked as the work reached it is found by that alone.
-  const decision =
-    registration.decisions[options.name] ??
-    DurableDeferred.make(options.name, { success: Schema.String });
+  const decision = DurableDeferred.make(options.name, { success: Schema.String });
   const token = DurableDeferred.tokenFromExecutionId(decision, {
     workflow: registration.workflow,
     executionId: options.executionId,
@@ -3087,7 +2988,7 @@ const makeRegistry: (
   };
 
   const admitChild = Effect.fn("Engine.children.start")(function* (given: ChildAsk) {
-    const parentId = given.runId ?? Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
+    const parentId = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
     if (parentId === undefined) return yield* refused("a child is started from inside a Run");
     const ask = { ...given, runId: parentId };
     const parent = yield* store.run(ask.runId);

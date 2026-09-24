@@ -197,16 +197,6 @@ export class WorkflowError extends Schema.TaggedError<WorkflowError>()("Workflow
   reason: Schema.String,
 }) {}
 
-/**
- * The envelope every workflow is executed with. The host supplies `runId` and the
- * author supplies `input`, and idempotency is `runId` alone — so a retry of an accepted
- * request is the same execution, and a new start is a new one.
- */
-export const payloadOf = <Input extends Schema.Struct.Fields>(input: Input) => ({
-  runId: Schema.String,
-  input: Schema.Struct(input),
-});
-
 /** The Run a workflow is executing as: supplied by the host, never passed by hand. */
 export interface RunApi {
   readonly id: string;
@@ -322,61 +312,18 @@ export interface Definition<
   }) => Effect.Effect<Output["Type"], WorkflowError | Err["Type"], Lent | Provided>;
 }
 
-/** Any definition an author wrote, whatever its types: what `defineWorkflow` hands back. */
-interface AnyDefinition extends Declarations {
-  readonly id: string;
-  readonly input?: Schema.Top;
-  readonly output?: Schema.Top;
-  readonly error?: Schema.Top;
-  readonly layer?: Layer.Layer<never, never, unknown>;
-  readonly run: (context: { readonly input: never }) => Effect.Effect<unknown, unknown, unknown>;
-}
-
-/** What a legacy module passed, until every module is a definition. */
-interface LegacyOptions<Input extends Schema.Struct.Fields, Success extends Schema.Top> {
-  readonly name: string;
-  readonly input: Input;
-  readonly success: Success;
-}
-
-type LegacyWorkflow<
-  Input extends Schema.Struct.Fields,
-  Success extends Schema.Top,
-> = Workflow.Workflow<
-  string,
-  Schema.Struct<{ runId: typeof Schema.String; input: Schema.Struct<Input> }>,
-  Success,
-  typeof WorkflowError
->;
-
-const legacyWorkflow = <Input extends Schema.Struct.Fields, Success extends Schema.Top>(
-  options: LegacyOptions<Input, Success>,
-): LegacyWorkflow<Input, Success> =>
-  Workflow.make(options.name, {
-    payload: payloadOf(options.input),
-    idempotencyKey: (payload) => payload.runId,
-    success: options.success,
-    error: WorkflowError,
-  });
-
 /**
  * A workflow, as the one thing its module exports by default. Left out, the title is the
  * id, the description is empty, it takes nothing and it gives nothing back.
  */
-export function defineWorkflow<
+export const defineWorkflow = <
   const Fields extends Schema.Struct.Fields = {},
   Output extends Schema.Top = typeof Schema.Void,
   Err extends Schema.Top = typeof Schema.Never,
   Provided = never,
->(definition: Definition<Fields, Output, Err, Provided>): Definition<Fields, Output, Err, Provided>;
-export function defineWorkflow<Input extends Schema.Struct.Fields, Success extends Schema.Top>(
-  options: LegacyOptions<Input, Success>,
-): LegacyWorkflow<Input, Success>;
-export function defineWorkflow(
-  options: AnyDefinition | LegacyOptions<Schema.Struct.Fields, Schema.Top>,
-): AnyDefinition | LegacyWorkflow<Schema.Struct.Fields, Schema.Top> {
-  return "run" in options ? options : legacyWorkflow(options);
-}
+>(
+  definition: Definition<Fields, Output, Err, Provided>,
+): Definition<Fields, Output, Err, Provided> => definition;
 
 /** A definition with its defaults filled in. */
 export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => ({
@@ -539,21 +486,6 @@ export interface DecisionSpec {
   readonly options: ReadonlyArray<string>;
 }
 
-/** A decision a run waits on. Answered with text, which is what an operator types. */
-export interface Decision extends DurableDeferred.DurableDeferred<typeof Schema.String> {
-  readonly asks: DecisionSpec;
-}
-
-export const decision = (
-  name: string,
-  asks?: { readonly prompt?: string; readonly options?: ReadonlyArray<string> },
-): Decision =>
-  Object.assign(DurableDeferred.make(name, { success: Schema.String }), {
-    asks: { name, prompt: asks?.prompt ?? name, options: asks?.options ?? [] },
-  });
-
-const isRunId = Schema.is(Schema.String);
-
 /**
  * Waits for this question to be answered, having told the host it is open. It is asked
  * when the work reaches it: nothing declares it ahead.
@@ -563,55 +495,35 @@ const isRunId = Schema.is(Schema.String);
  * cannot show the question, cannot refuse an answer to one nobody asked, and cannot tell
  * a second answer from the first.
  */
-export function ask(question: {
+export const ask = (question: {
   /** Its identity: the same name is the same question, however often the work replays. */
   readonly name: string;
   readonly prompt?: string;
   /** The answers it takes; none is a question answered in the operator's own words. */
   readonly options?: ReadonlyArray<string>;
-}): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance>;
-export function ask(
-  runId: string,
-  question: Decision,
-  /** What it takes this time, where a menu offers less than it declares. */
-  options?: ReadonlyArray<string>,
-): Effect.Effect<string, never, Host | WorkflowEngine | WorkflowInstance>;
-export function ask(
-  asked:
-    | string
-    | { readonly name: string; readonly prompt?: string; readonly options?: ReadonlyArray<string> },
-  question?: Decision,
-  options?: ReadonlyArray<string>,
-): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance> {
-  return Effect.gen(function* () {
-    const runId = isRunId(asked) ? asked : (yield* Run).id;
-    const deferred = isRunId(asked) ? question : decision(asked.name, asked);
-    if (deferred === undefined) return yield* Effect.die("ask(runId) needs its decision");
+}): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance> =>
+  Effect.gen(function* () {
     const host = yield* Host;
-    yield* host.asking(runId, options ? { ...deferred.asks, options } : deferred.asks);
-    return yield* DurableDeferred.await(deferred);
+    yield* host.asking((yield* Run).id, {
+      name: question.name,
+      prompt: question.prompt ?? question.name,
+      options: question.options ?? [],
+    });
+    return yield* DurableDeferred.await(
+      DurableDeferred.make(question.name, { success: Schema.String }),
+    );
   });
-}
 
 /**
  * What this Run may have Collie run to prove its kind of result. Where that kind needs
  * the approved set and nothing is approved, the Run parks with the repair instead of
  * spending work no gate could accept; a resume asks again.
  */
-export function requireApproved(
+export const requireApproved = (
   kind: string,
-): Effect.Effect<ReadonlyArray<VerifySpec>, never, Run | Host | WorkflowInstance>;
-export function requireApproved(
-  runId: string,
-  kind: string,
-): Effect.Effect<ReadonlyArray<VerifySpec>, never, Host | WorkflowInstance>;
-export function requireApproved(
-  first: string,
-  second?: string,
-): Effect.Effect<ReadonlyArray<VerifySpec>, never, Run | Host | WorkflowInstance> {
-  return Effect.gen(function* () {
-    const runId = second === undefined ? (yield* Run).id : first;
-    const kind = second ?? first;
+): Effect.Effect<ReadonlyArray<VerifySpec>, never, Run | Host | WorkflowInstance> =>
+  Effect.gen(function* () {
+    const runId = (yield* Run).id;
     const host = yield* Host;
     const approved = yield* host.approved(runId);
     if (approved.length > 0 || !needsApproved(isOutcome(kind) ? kind : "unspecified")) {
@@ -621,7 +533,6 @@ export function requireApproved(
     yield* host.parked(runId, nothingApproved(runId));
     return yield* Workflow.suspend(yield* WorkflowInstance);
   });
-}
 
 /**
  * What a parent asks for when part of its own work is another workflow.
@@ -635,11 +546,6 @@ export function requireApproved(
  * anything exists, so a value it will not take is the parent's failure and not a child.
  */
 export interface ChildAsk {
-  /**
-   * The parent's run id: what the child belongs to, and half of its identity. The Run the
-   * parent executes as, where it is left out.
-   */
-  readonly runId?: string;
   readonly invocation: string;
   readonly workflow: string;
   readonly input: Readonly<Record<string, Schema.Json>>;
@@ -692,7 +598,7 @@ export interface HostPayload extends Schema.Struct<Schema.Struct.Fields> {
 }
 export type HostWorkflow = Workflow.Workflow<string, HostPayload, HostCodec, HostCodec>;
 
-/** What `make(registrationName)` hands back: the workflow, how to register it, its decisions. */
+/** What a definition is registered as: the workflow, and how the host builds it. */
 export interface Registration {
   readonly workflow: HostWorkflow;
   /**
@@ -704,7 +610,6 @@ export interface Registration {
     never,
     WorkflowEngine | Host | Agents | Children | FileSystem.FileSystem | Path.Path
   >;
-  readonly decisions: Readonly<Record<string, Decision>>;
 }
 
 /**

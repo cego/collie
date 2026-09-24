@@ -13,6 +13,7 @@ import {
   WorkflowError,
   checkEntry,
   defineWorkflow,
+  definitionOf,
   describeMetadata,
   jsonSchemaFor,
   type Registration,
@@ -20,6 +21,9 @@ import {
   type WorkflowMetadata,
 } from "../src/sdk";
 import { REQUESTABLE, isOutcome, type Outcome } from "../src/outcome";
+import { loadEntry } from "../src/engine";
+import { runEffect } from "./support/effect";
+import { fixtures } from "./support/host";
 
 const requestable: ReadonlyArray<Outcome> = REQUESTABLE.filter(isOutcome);
 
@@ -163,20 +167,28 @@ test("every conflict is reported, not the first one", () => {
   expect(problems).toHaveLength(4);
 });
 
-test("the envelope is the host's runId and the author's input, keyed on the run", () => {
-  const workflow = defineWorkflow({
-    name: "echo@1",
-    input: { text: Schema.String },
-    success: Schema.String,
-  });
-  expect(workflow.idempotencyKey({ runId: "r1", input: { text: "hi" } })).toBe("r1");
-  // Different input, same run: the same execution, which is what a retry has to be.
-  expect(workflow.idempotencyKey({ runId: "r1", input: { text: "other" } })).toBe("r1");
-  expect(Schema.decodeUnknownExit(workflow.payloadSchema)({ runId: "r1", input: {} })._tag).toBe(
-    "Failure",
-  );
-  expect(workflow.errorSchema).toBe(WorkflowError);
+test("a definition left to its defaults is titled by its id, takes nothing and gives nothing", () => {
+  const defined = definitionOf(defineWorkflow({ id: "quiet", run: () => Effect.void }));
+  expect(defined.title).toBe("quiet");
+  expect(defined.description).toBe("");
+  expect(defined.input.fields).toEqual({});
+  expect(defined.output).toBe(Schema.Void);
 });
+
+test("the envelope is the host's runId and the author's input, keyed on the run", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const entry = yield* loadEntry(`${fixtures}/hello.workflow.ts`);
+      const { workflow, layer } = entry.make("hello@1");
+      expect(workflow.idempotencyKey({ runId: "r1", input: { name: "mk" } })).toBe("r1");
+      // Different input, same run: the same execution, which is what a retry has to be.
+      expect(workflow.idempotencyKey({ runId: "r1", input: { name: "other" } })).toBe("r1");
+      expect(
+        Schema.decodeUnknownExit(workflow.payloadSchema)({ runId: "r1", input: {} })._tag,
+      ).toBe("Failure");
+      expect(Layer.isLayer(layer)).toBe(true);
+    }),
+  ));
 
 test("a schema JSON Schema cannot say everything about is still a schema, and says so", () => {
   const drawable = jsonSchemaFor(Schema.Struct({ text: Schema.String }));
@@ -227,13 +239,4 @@ test("what a card is given is ids, titles and projections — never the closures
     ],
   });
   expect(JSON.stringify(described)).not.toContain("eligible");
-});
-
-test("a workflow's Layer is an ordinary Layer, which is what a module composes with", () => {
-  const workflow = defineWorkflow({
-    name: "probe@1",
-    input: { text: Schema.String },
-    success: Schema.String,
-  });
-  expect(Layer.isLayer(workflow.toLayer(() => Effect.succeed("x")))).toBe(true);
 });

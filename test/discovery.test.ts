@@ -14,12 +14,16 @@ import { runEffect } from "./support/effect";
 const repo = new URL("../", import.meta.url).pathname;
 
 /** A whole entry, in as much as discovery reads one: what it is, not what it does. */
-const entry = (id: string, title = `The ${id} workflow`) => `
-export const id = "${id}";
-export const title = "${title}";
-export const description = "An entry written for a test.";
-export const input = {};
-export const make = () => ({});
+const entry = (id: string, title = `The ${id} workflow`, declared = "") => `
+import { defineWorkflow } from "collie";
+import { Effect, Layer, Schema } from "effect";
+
+export default defineWorkflow({
+  id: "${id}",
+  title: ${title.startsWith("@") ? title.slice(1) : `"${title}"`},
+  description: "An entry written for a test.",${declared}
+  run: () => Effect.void,
+});
 `;
 
 /** The three layers, empty, in a directory of their own. */
@@ -94,21 +98,21 @@ test("an override that cannot be read refuses its own id rather than running the
     }).pipe(Effect.scoped),
   ));
 
-test("an input that is not a schema is that entry's problem, and the rest are still found", () =>
+test("an input that is not a struct is that entry's problem, and the rest are still found", () =>
   runEffect(
     Effect.gen(function* () {
       const where = yield* layers("collie-discovery-schema-");
       const odd = yield* where.save(
         "user",
         "odd.workflow.ts",
-        entry("odd").replace("export const input = {};", "export const input = { note: 42 };"),
+        entry("odd", undefined, "\n  input: Schema.String,"),
       );
       yield* where.save("user", "plain.workflow.ts", entry("plain"));
 
       const found = yield* discover(where.roots);
       expect(found.entries.map((one) => one.id)).toEqual(["plain"]);
       expect(found.problems.map((one) => [one.id, one.path])).toEqual([["odd", odd]]);
-      expect(found.problems[0]?.message).toContain('input "note"');
+      expect(found.problems[0]?.message).toContain("input");
     }).pipe(Effect.scoped),
   ));
 
@@ -119,7 +123,7 @@ test("metadata that is not what a workflow declares is that entry's problem, and
       const odd = yield* where.save(
         "user",
         "odd.workflow.ts",
-        `${entry("odd")}export const metadata = { actions: 5 };\n`,
+        entry("odd", undefined, "\n  actions: 5 as never,"),
       );
       yield* where.save("user", "plain.workflow.ts", entry("plain"));
 
@@ -161,7 +165,11 @@ test("only entry files are looked at, and an entry is read without being built",
       yield* where.save(
         "user",
         "plain.workflow.ts",
-        entry("plain").replace("() => ({})", '() => { throw new Error("make ran"); }'),
+        entry(
+          "plain",
+          undefined,
+          '\n  layer: Layer.effectDiscard(Effect.die("its layer was built")),',
+        ),
       );
 
       const found = yield* discover(where.roots);
@@ -200,10 +208,7 @@ test("what an edited helper exports is what the entry beside it says next", () =
       yield* where.save(
         "user",
         "proof.workflow.ts",
-        entry("proof").replace(
-          'export const title = "The proof workflow";',
-          'export { title } from "./named.ts";',
-        ),
+        `import { title } from "./named.ts";\n${entry("proof", "@title")}`,
       );
       yield* where.save("user", "named.ts", 'export const title = "Before";\n');
       expect((yield* discover(where.roots)).entries[0]?.title).toBe("Before");

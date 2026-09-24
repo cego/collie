@@ -340,11 +340,14 @@ test("what is overridden here is named, never judged and never edited", () =>
       yield* fs.writeFileString(
         mine,
         [
-          `export const id = "review";`,
-          `export const title = "Our review";`,
-          `export const description = "One reviewer, ours.";`,
-          `export const input = {};`,
-          `export const make = () => ({});`,
+          `import { defineWorkflow } from "collie";`,
+          `import { Effect } from "effect";`,
+          `export default defineWorkflow({`,
+          `  id: "review",`,
+          `  title: "Our review",`,
+          `  description: "One reviewer, ours.",`,
+          `  run: () => Effect.void,`,
+          `});`,
         ].join("\n"),
       );
       const found = check(yield* report(), "workflows");

@@ -251,8 +251,6 @@ export class Agents extends Context.Service<Agents, AgentsApi>()("collie/Agents"
 
 /** What an author asks for: the work, not the steps it takes. */
 export interface AgentWork<Output extends OutputContract> {
-  /** The Run this is for; the one it executes as where it is left out. */
-  readonly runId?: string;
   /** Stable within the run: the Activity names and the agent's name are derived from it. */
   readonly operation: string;
   /** Where the agent works; the checkout the host placed the Run on where it is left out. */
@@ -300,18 +298,13 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
 ): Effect.Effect<
   Output["Type"],
   WorkflowError,
-  Agents | Host | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+  Run | Agents | Host | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
 > =>
   Effect.gen(function* () {
     const agents = yield* Agents;
     const host = yield* Host;
-    const run = Option.getOrUndefined(yield* Effect.serviceOption(Run));
-    const runId = given.runId ?? run?.id;
-    if (runId === undefined) {
-      return yield* new WorkflowError({
-        reason: `${given.operation}: work asked for outside a Run has to name the Run it is for`,
-      });
-    }
+    const run = yield* Run;
+    const runId = run.id;
     const place = yield* host.place(runId);
     const plain = given.output === undefined;
     // SAFETY: Output defaults to Schema.String exactly where no output was given.
@@ -320,7 +313,7 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
       ...given,
       runId,
       cwd: given.cwd ?? place.cwd,
-      workflow: given.workflow ?? run?.workflow,
+      workflow: given.workflow ?? run.workflow,
       output: contract,
     };
     // A boundary, and the last one before money is spent: a held run parks here rather
@@ -471,8 +464,6 @@ const agrees = (held: AgentChoice, requested: Preferences) =>
  * reached, or null where there is none to take it. One nobody can say arrived parks the Run.
  */
 export const handOffWork = (given: {
-  /** The Run this is for; the one it executes as where it is left out. */
-  readonly runId?: string;
   readonly operation: string;
   readonly role: string;
   /** Where the agent to hand to works; the Run's own checkout where it is left out. */
@@ -481,17 +472,12 @@ export const handOffWork = (given: {
 }): Effect.Effect<
   string | null,
   WorkflowError,
-  Agents | Host | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+  Run | Agents | Host | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
 > =>
   Effect.gen(function* () {
     const agents = yield* Agents;
     const host = yield* Host;
-    const runId = given.runId ?? Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
-    if (runId === undefined) {
-      return yield* new WorkflowError({
-        reason: `${given.operation}: a hand-off outside a Run has to name the Run it is for`,
-      });
-    }
+    const runId = (yield* Run).id;
     const options = { ...given, runId, cwd: given.cwd ?? (yield* host.place(runId)).cwd };
     return yield* Activity.make({
       name: `${options.operation}.handoff`,

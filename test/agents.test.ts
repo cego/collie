@@ -23,7 +23,8 @@ import {
   promptFor,
   type AgentHost,
 } from "../src/agents";
-import { Run, defineWorkflow, jsonSchemaFor, withAgents } from "../src/sdk";
+import { Run, jsonSchemaFor, withAgents } from "../src/sdk";
+import { asRun, enveloped } from "./support/enveloped";
 import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/engine";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
@@ -59,7 +60,7 @@ const Verdict = Schema.Struct({
   note: Schema.String.annotate({ description: "one sentence a human reads" }),
 });
 
-const work = defineWorkflow({
+const work = enveloped({
   name: "agent-work",
   input: { skip: Schema.Boolean },
   success: Verdict,
@@ -67,12 +68,11 @@ const work = defineWorkflow({
 
 const SKIPPED = { verdict: "clean", note: "nothing to review" } as const;
 
-const body = work.toLayer(
-  Effect.fnUntraced(function* (payload) {
+const body = work.toLayer((payload) =>
+  Effect.gen(function* () {
     // Eligibility first, and before anything expensive: skipped work opens no tab.
     if (payload.input.skip) return SKIPPED;
     return yield* agentWork({
-      runId: payload.runId,
       operation: "review",
       role: "reviewer",
       workflow: "agent-work",
@@ -81,7 +81,7 @@ const body = work.toLayer(
       inputs: { target: "the diff" },
       output: Verdict,
     });
-  }),
+  }).pipe(asRun(payload)),
 );
 
 const hostOf = (): AgentHost => ({
@@ -205,7 +205,7 @@ test("a valid Output reaches the workflow as a typed value, from a real launch",
   ));
 
 /** Work asked for the way a definition asks: inside a Run, naming only what it wants. */
-const worded = defineWorkflow({ name: "agent-words", input: {}, success: Schema.String });
+const worded = enveloped({ name: "agent-words", input: {}, success: Schema.String });
 const wordedBody = worded.toLayer(
   Effect.fnUntraced(function* (payload) {
     return yield* agentWork({ operation: "summary", instructions: "Say what changed." }).pipe(
@@ -451,7 +451,7 @@ const everyLaunch = (calls: ReadonlyArray<Call>) =>
     .map((call) => (call.argv ?? []).slice((call.argv ?? []).indexOf("--") + 1));
 
 /** Two pieces of work under one scope of preferences, the second with a model of its own. */
-const scoped = defineWorkflow({ name: "agent-scoped", input: {}, success: Schema.String });
+const scoped = enveloped({ name: "agent-scoped", input: {}, success: Schema.String });
 const scopedBody = scoped.toLayer(
   Effect.fnUntraced(function* (payload) {
     const both = Effect.all([
@@ -509,7 +509,7 @@ test(
 );
 
 /** One agent handed two pieces of work, the second asking for another model. */
-const shared = defineWorkflow({ name: "agent-shared", input: {}, success: Schema.String });
+const shared = enveloped({ name: "agent-shared", input: {}, success: Schema.String });
 const sharedBody = shared.toLayer(
   Effect.fnUntraced(function* (payload) {
     const run = Run.of({ id: payload.runId, workflow: "agent-shared" });
@@ -861,18 +861,17 @@ test(
 );
 
 /** Two pieces of work on one agent: a list handed to one implementer, item by item. */
-const listing = defineWorkflow({
+const listing = enveloped({
   name: "agent-listing",
   input: { items: Schema.String, agent: Schema.String },
   success: Schema.String,
 });
 
-const listingBody = listing.toLayer(
-  Effect.fnUntraced(function* (payload) {
+const listingBody = listing.toLayer((payload) =>
+  Effect.gen(function* () {
     const notes: string[] = [];
     for (const item of payload.input.items.split(",")) {
       const done = yield* agentWork({
-        runId: payload.runId,
         operation: item,
         agent: payload.input.agent,
         role: "implementer",
@@ -885,7 +884,7 @@ const listingBody = listing.toLayer(
       notes.push(`${item}:${done.note}`);
     }
     return notes.join("+");
-  }),
+  }).pipe(asRun(payload)),
 );
 
 const listed = (runId: string, items: string, agent = "sweep") =>
@@ -932,12 +931,11 @@ test("an item whose identity is not a name of its own starts no agent at all", (
   ));
 
 /** Two agents, launched one after the other under names that sort the other way round. */
-const pair = defineWorkflow({ name: "agent-pair", input: {}, success: Schema.String });
-const pairBody = pair.toLayer(
-  Effect.fnUntraced(function* (payload) {
+const pair = enveloped({ name: "agent-pair", input: {}, success: Schema.String });
+const pairBody = pair.toLayer((payload) =>
+  Effect.gen(function* () {
     for (const operation of ["synthesize", "fix-1"]) {
       yield* agentWork({
-        runId: payload.runId,
         operation,
         role: "implementer",
         workflow: "agent-pair",
@@ -947,7 +945,7 @@ const pairBody = pair.toLayer(
       });
     }
     return "both";
-  }),
+  }).pipe(asRun(payload)),
 );
 
 test("a steer that names no agent reaches the one launched last, not the last by name", () =>

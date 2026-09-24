@@ -72,30 +72,6 @@ test("a module is read as its public id, where it came from, and the shapes on b
     }).pipe(Effect.scoped),
   ));
 
-test("a module that will not construct says so rather than reading as a workflow with no result", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const where = yield* layers("collie-authoring-broken-");
-      const path = `${where.dirOf("user")}/cross.workflow.ts`;
-      yield* fs.writeFileString(
-        path,
-        [
-          `export const id = "cross";`,
-          `export const title = "A module whose make throws";`,
-          `export const description = "Constructed, not run.";`,
-          `export const input = {};`,
-          `export const make = () => { throw new Error("no layer here"); };`,
-        ].join("\n"),
-      );
-
-      const described = describeModule(yield* loadEntry(path), { layer: "user", path });
-
-      expect(described.broken).toContain("no layer here");
-      expect(described.success.schema).toBeNull();
-    }).pipe(Effect.scoped),
-  ));
-
 test("checking reads the module and the compiler, and keeps the three answers apart", () =>
   runEffect(
     Effect.gen(function* () {

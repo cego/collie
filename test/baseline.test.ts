@@ -129,7 +129,7 @@ const children = Layer.succeed(Children)(
     start: (ask) =>
       Effect.gen(function* () {
         started.push(ask);
-        const parent = ask.runId ?? Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
+        const parent = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
         return {
           runId: `${parent}-${ask.invocation}`,
           workflow: ask.workflow,

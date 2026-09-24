@@ -536,24 +536,14 @@ const COUNTS = `
 import { defineWorkflow } from "collie";
 import { Effect, Schema } from "effect";
 
-export const id = "counts";
-export const title = "A workflow whose result is a structure";
-export const description = "Counts what it was given.";
-export const input = { items: Schema.Array(Schema.String) };
-
-export const make = (registrationName: string) => {
-  const workflow = defineWorkflow({
-    name: registrationName,
-    input,
-    success: Schema.Struct({ count: Schema.Number, at: Schema.Date }),
-  });
-  const layer = workflow.toLayer(
-    Effect.fnUntraced(function* (payload) {
-      return { count: payload.input.items.length, at: new Date(0) };
-    }),
-  );
-  return { workflow, layer, decisions: {} };
-};
+export default defineWorkflow({
+  id: "counts",
+  title: "A workflow whose result is a structure",
+  description: "Counts what it was given.",
+  input: Schema.Struct({ items: Schema.Array(Schema.String) }),
+  output: Schema.Struct({ count: Schema.Number, at: Schema.Date }),
+  run: ({ input }) => Effect.succeed({ count: input.items.length, at: new Date(0) }),
+});
 `;
 
 test(
