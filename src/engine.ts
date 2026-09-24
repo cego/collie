@@ -49,8 +49,11 @@ import {
   Children,
   Host,
   RESERVED_INPUTS,
+  Run,
   WorkflowError,
   checkEntry,
+  definitionOf,
+  type WrittenDefinition,
   describeMetadata,
   jsonSchemaFor,
   type ChildAsk,
@@ -60,7 +63,11 @@ import {
   type InputField,
   type InputFields,
   type WorkflowMetadata,
+  type HostCodec,
+  type HostPayload,
+  type HostWorkflow,
   type Registration,
+  type WorkflowDefinition,
   type WorkflowEntry,
 } from "./sdk";
 import { configValue, readConfig } from "./config";
@@ -313,6 +320,78 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     { reason: Schema.String },
   ) {}
 
+  /** The Run a workflow is executing as: supplied by the host, never passed by hand. */
+  export interface RunApi {
+    readonly id: string;
+    /** The public id of the workflow it is a Run of. */
+    readonly workflow: string;
+  }
+  export const Run: Context.Service<RunApi, RunApi>;
+  export type Run = RunApi;
+
+  /** Which agent does the work: each is inherited from the configuration where it is left out. */
+  export interface AgentPreferences {
+    readonly harness?: string;
+    readonly model?: string;
+    readonly effort?: string;
+  }
+
+  /** What a workflow's own code may use without providing it: the host lends all of it. */
+  export type Lent =
+    | Run
+    | Host
+    | Agents
+    | Children
+    | WorkflowEngine
+    | WorkflowInstance
+    | FileSystem.FileSystem
+    | Path.Path;
+
+  /** What a definition declares about itself beside what it does. None of it is a step. */
+  export interface Declarations {
+    readonly hints?: Readonly<Record<string, string>>;
+    readonly outcome?: OutcomeContract;
+    /** A worktree the host cuts before the Run exists; absent works where it was started. */
+    readonly checkout?: "branch" | "roaming";
+    readonly followUps?: ReadonlyArray<FollowUp>;
+    readonly actions?: ReadonlyArray<ActionProvider>;
+  }
+
+  /** A workflow: its identity, what it takes and gives, what it declares, and what it does. */
+  export interface Definition<
+    Fields extends Schema.Struct.Fields,
+    Output extends Schema.Top,
+    Err extends Schema.Top,
+    Provided,
+  > extends Declarations {
+    readonly id: string;
+    readonly title?: string;
+    readonly description?: string;
+    readonly input?: Schema.Struct<Fields>;
+    readonly output?: Output;
+    /** A typed failure of the workflow's own, beside the WorkflowError every workflow has. */
+    readonly error?: Err;
+    /** The agent every piece of work defaults to, over the operator's configuration. */
+    readonly agents?: AgentPreferences;
+    /** The services run needs that the host does not lend. */
+    readonly layer?: Layer.Layer<Provided, never, Exclude<Lent, Run | WorkflowInstance>>;
+    readonly run: (context: {
+      readonly input: Schema.Struct<Fields>["Type"];
+    }) => Effect.Effect<Output["Type"], WorkflowError | Err["Type"], Lent | Provided>;
+  }
+
+  /**
+   * A workflow, as the one thing its module exports by default. Left out, the title is the
+   * id, the description is empty, it takes nothing and it gives nothing back.
+   */
+  export function defineWorkflow<
+    const Fields extends Schema.Struct.Fields = {},
+    Output extends Schema.Top = typeof Schema.Void,
+    Err extends Schema.Top = typeof Schema.Never,
+    Provided = never,
+  >(
+    definition: Definition<Fields, Output, Err, Provided>,
+  ): Definition<Fields, Output, Err, Provided>;
   /** A workflow under Collie's envelope: the host supplies runId, you supply input. */
   export function defineWorkflow<
     Input extends Schema.Struct.Fields,
@@ -1089,6 +1168,21 @@ export const loadEntry: (
     try: () => import(staged.file),
     catch: (cause) => new EntryError({ file, message: String(cause).replaceAll(staged.root, "") }),
   });
+  if (loaded.default !== undefined) {
+    const read = readDefinition(loaded.default);
+    if (read._tag === "Failure" || !isWritten(loaded.default)) {
+      return yield* new EntryError({
+        file,
+        message: `the default export is not a workflow definition: ${read._tag === "Failure" ? read.failure.message : ""}`,
+      });
+    }
+    const entry = entryOf(definitionOf(loaded.default));
+    const problems = checkEntry(entry);
+    if (problems.length > 0) {
+      return yield* new EntryError({ file, message: problems.join("; ") });
+    }
+    return entry;
+  }
   const described = yield* Schema.decodeUnknownEffect(EntryContract)(loaded).pipe(
     Effect.mapError(
       () =>
@@ -1114,6 +1208,75 @@ export const loadEntry: (
   }
   return entry;
 });
+
+const IsSchema = Schema.declare(Schema.isSchema);
+
+/** What a default export has to be before it is read as a definition. */
+const DefinitionContract = Schema.Struct({
+  id: Schema.String,
+  title: Schema.optionalKey(Schema.String),
+  description: Schema.optionalKey(Schema.String),
+  input: Schema.optionalKey(Schema.declare((u) => Schema.isSchema(u) && "fields" in u)),
+  output: Schema.optionalKey(IsSchema),
+  error: Schema.optionalKey(IsSchema),
+  layer: Schema.optionalKey(Schema.declare(Layer.isLayer)),
+  run: Schema.declare(Predicate.isFunction),
+});
+const readDefinition = Schema.decodeUnknownResult(DefinitionContract, { errors: "all" });
+
+/** A module's default export held to the contract a definition is read against. */
+const isWritten = (exported: unknown): exported is WrittenDefinition =>
+  Schema.is(DefinitionContract)(exported);
+
+/** A definition as the entry the rest of the host reads. */
+const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
+  const { hints, outcome, checkout, followUps, actions } = definition;
+  const declared = Object.fromEntries(
+    Object.entries({ hints, outcome, checkout, followUps, actions }).filter(
+      ([, value]) => value !== undefined,
+    ),
+  );
+  // SAFETY: checkEntry refuses an input field that is not a schema before anything settles one.
+  return {
+    id: definition.id,
+    title: definition.title,
+    description: definition.description,
+    input: definition.input.fields as InputFields,
+    metadata: declared,
+    make: (name) => registrationOf(definition, name),
+  };
+};
+
+/** The envelope a definition is executed with, read where the host hands it over. */
+const readEnvelope = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }));
+
+/**
+ * The Effect workflow a definition is registered as, under the host's own name for this
+ * generation. The Run it executes as is provided here, so no author passes it along.
+ */
+const registrationOf = (definition: WorkflowDefinition, name: string): Registration => {
+  // SAFETY: every workflow is executed with this envelope, and its input is the
+  // definition's own struct, whose fields checkEntry has held to be schemas.
+  const payload = Schema.Struct({ runId: Schema.String, input: definition.input }) as HostPayload;
+  const error: HostCodec =
+    definition.error === undefined
+      ? WorkflowError
+      : Schema.Union([WorkflowError, definition.error]);
+  const workflow: HostWorkflow = Workflow.make(name, {
+    payload,
+    idempotencyKey: (envelope) => readEnvelope(envelope).runId,
+    success: definition.output,
+    error,
+  });
+  const body = workflow.toLayer((envelope) => {
+    // SAFETY: the envelope decoded against the definition's own input struct.
+    const input = envelope.input as never;
+    const run = Run.of({ id: readEnvelope(envelope).runId, workflow: definition.id });
+    return definition.run({ input }).pipe(Effect.provideService(Run, run));
+  });
+  const layer = definition.layer === undefined ? body : body.pipe(Layer.provide(definition.layer));
+  return { workflow, layer, decisions: {} };
+};
 
 /** Where entries are staged to be read, per user. A copy is named by its content, so it is never stale. */
 const ENTRIES = `${Bun.env.TMPDIR ?? "/tmp"}/collie-entries-${process.getuid?.() ?? 0}`;
@@ -2934,7 +3097,18 @@ const makeRegistry: (
     // Executed on the parent's own fiber, which is what links the two: the engine
     // reads the parent's instance from here, so the child's completion wakes the
     // parent and interrupting the parent reaches the child.
-    return yield* found.generation.registration.workflow.execute(payload);
+    const workflow = found.generation.registration.workflow;
+    const written = Schema.encodeUnknownOption(Schema.toCodecJson(workflow.errorSchema));
+    return yield* workflow.execute(payload).pipe(
+      Effect.mapError((failure) => {
+        if (isWorkflowError(failure)) return failure;
+        // A child's own typed failure, as its error schema writes it.
+        const encoded = written(failure);
+        const text =
+          Option.isSome(encoded) && isJson(encoded.value) ? asJsonText(encoded.value) : "";
+        return refused(`${child.workflow} failed: ${text}`);
+      }),
+    );
   });
 
   // What was registered before this host existed, rebuilt from the modules as they are

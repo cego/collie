@@ -207,29 +207,157 @@ export const payloadOf = <Input extends Schema.Struct.Fields>(input: Input) => (
   input: Schema.Struct(input),
 });
 
+/** The Run a workflow is executing as: supplied by the host, never passed by hand. */
+export interface RunApi {
+  readonly id: string;
+  /** The public id of the workflow it is a Run of. */
+  readonly workflow: string;
+}
+
+export class Run extends Context.Service<Run, RunApi>()("collie/Run") {}
+
+/** Which agent does the work: each is inherited from the configuration where it is left out. */
+export interface AgentPreferences {
+  readonly harness?: string;
+  readonly model?: string;
+  readonly effort?: string;
+}
+
+/** What a workflow's own code may use without providing it: the host lends all of it. */
+export type Lent =
+  | Run
+  | Host
+  | Agents
+  | Children
+  | WorkflowEngine
+  | WorkflowInstance
+  | FileSystem.FileSystem
+  | Path.Path;
+
+/** What a definition declares about itself beside what it does. None of it is a step. */
+export interface Declarations {
+  /** Input field to the strategy that infers it. At most one field per exclusive one. */
+  readonly hints?: Readonly<Record<string, InputStrategy>>;
+  readonly outcome?: OutcomeContract;
+  /**
+   * What this workflow needs of the repository. `branch` builds on a worktree of its own
+   * and `roaming` on a detached one; the host makes it before the Run exists. Absent works
+   * in the checkout the Run was started for.
+   */
+  readonly checkout?: "branch" | "roaming";
+  readonly followUps?: ReadonlyArray<FollowUp>;
+  readonly actions?: ReadonlyArray<ActionProvider>;
+}
+
 /**
- * A workflow under Collie's envelope. Everything else `Workflow.make` takes is
- * still yours; this only fixes the payload and the error, which the host has to know.
+ * A definition as the host reads one from a module's default export, before its defaults
+ * are filled in. Its run may use what the host lends and nothing else: services of its
+ * own come from its layer.
  */
-export const defineWorkflow = <
-  Input extends Schema.Struct.Fields,
-  Success extends Schema.Top,
->(options: {
+export interface WrittenDefinition extends Declarations {
+  readonly id: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly input?: Schema.Struct<InputFields>;
+  readonly output?: HostCodec;
+  /** A typed failure of the workflow's own, beside the `WorkflowError` every workflow has. */
+  readonly error?: HostCodec;
+  /** The agent every piece of work defaults to, over the operator's configuration. */
+  readonly agents?: AgentPreferences;
+  readonly layer?: Layer.Layer<never, never, Exclude<Lent, Run | WorkflowInstance>>;
+  readonly run: (context: { readonly input: never }) => Effect.Effect<unknown, unknown, Lent>;
+}
+
+/** A workflow: its identity, what it takes and gives, what it declares, and what it does. */
+export interface WorkflowDefinition extends WrittenDefinition {
+  readonly title: string;
+  readonly description: string;
+  readonly input: Schema.Struct<InputFields>;
+  readonly output: HostCodec;
+}
+
+/** A definition as its author wrote it, with every type the author's code is held to. */
+export interface Definition<
+  Fields extends Schema.Struct.Fields,
+  Output extends Schema.Top,
+  Err extends Schema.Top,
+  Provided,
+> extends Declarations {
+  readonly id: string;
+  readonly title?: string;
+  readonly description?: string;
+  readonly input?: Schema.Struct<Fields>;
+  readonly output?: Output;
+  readonly error?: Err;
+  readonly agents?: AgentPreferences;
+  readonly layer?: Layer.Layer<Provided, never, Exclude<Lent, Run | WorkflowInstance>>;
+  readonly run: (context: {
+    readonly input: Schema.Struct<Fields>["Type"];
+  }) => Effect.Effect<Output["Type"], WorkflowError | Err["Type"], Lent | Provided>;
+}
+
+/** Any definition an author wrote, whatever its types: what `defineWorkflow` hands back. */
+interface AnyDefinition extends Declarations {
+  readonly id: string;
+  readonly input?: Schema.Top;
+  readonly output?: Schema.Top;
+  readonly error?: Schema.Top;
+  readonly layer?: Layer.Layer<never, never, unknown>;
+  readonly run: (context: { readonly input: never }) => Effect.Effect<unknown, unknown, unknown>;
+}
+
+/** What a legacy module passed, until every module is a definition. */
+interface LegacyOptions<Input extends Schema.Struct.Fields, Success extends Schema.Top> {
   readonly name: string;
   readonly input: Input;
   readonly success: Success;
-}): Workflow.Workflow<
-  string,
-  Schema.Struct<{ runId: typeof Schema.String; input: Schema.Struct<Input> }>,
-  Success,
-  typeof WorkflowError
-> =>
+}
+
+type LegacyWorkflow<Input extends Schema.Struct.Fields, Success extends Schema.Top> =
+  Workflow.Workflow<
+    string,
+    Schema.Struct<{ runId: typeof Schema.String; input: Schema.Struct<Input> }>,
+    Success,
+    typeof WorkflowError
+  >;
+
+const legacyWorkflow = <Input extends Schema.Struct.Fields, Success extends Schema.Top>(
+  options: LegacyOptions<Input, Success>,
+): LegacyWorkflow<Input, Success> =>
   Workflow.make(options.name, {
     payload: payloadOf(options.input),
     idempotencyKey: (payload) => payload.runId,
     success: options.success,
     error: WorkflowError,
   });
+
+/**
+ * A workflow, as the one thing its module exports by default. Left out, the title is the
+ * id, the description is empty, it takes nothing and it gives nothing back.
+ */
+export function defineWorkflow<
+  const Fields extends Schema.Struct.Fields = {},
+  Output extends Schema.Top = typeof Schema.Void,
+  Err extends Schema.Top = typeof Schema.Never,
+  Provided = never,
+>(definition: Definition<Fields, Output, Err, Provided>): Definition<Fields, Output, Err, Provided>;
+export function defineWorkflow<Input extends Schema.Struct.Fields, Success extends Schema.Top>(
+  options: LegacyOptions<Input, Success>,
+): LegacyWorkflow<Input, Success>;
+export function defineWorkflow(
+  options: AnyDefinition | LegacyOptions<Schema.Struct.Fields, Schema.Top>,
+): AnyDefinition | LegacyWorkflow<Schema.Struct.Fields, Schema.Top> {
+  return "run" in options ? options : legacyWorkflow(options);
+}
+
+/** A definition with its defaults filled in. */
+export const definitionOf = (written: WrittenDefinition): WorkflowDefinition => ({
+  ...written,
+  title: written.title ?? written.id,
+  description: written.description ?? "",
+  input: written.input ?? Schema.Struct({}),
+  output: written.output ?? Schema.Void,
+});
 
 /**
  * What the host lends a workflow module; ticket 01's proof host provides it.
@@ -492,12 +620,12 @@ export const child = (ask: ChildAsk): Effect.Effect<unknown, WorkflowError, Chil
  * A workflow as the host sees one: any input and any result, no service of the host's to
  * encode them, and the one error contract above.
  */
-type HostCodec = Schema.Codec<unknown, unknown, never, never>;
-interface HostPayload extends Schema.Struct<Schema.Struct.Fields> {
+export type HostCodec = Schema.Codec<unknown, unknown, never, never>;
+export interface HostPayload extends Schema.Struct<Schema.Struct.Fields> {
   readonly DecodingServices: never;
   readonly EncodingServices: never;
 }
-export type HostWorkflow = Workflow.Workflow<string, HostPayload, HostCodec, typeof WorkflowError>;
+export type HostWorkflow = Workflow.Workflow<string, HostPayload, HostCodec, HostCodec>;
 
 /** What `make(registrationName)` hands back: the workflow, how to register it, its decisions. */
 export interface Registration {
@@ -688,12 +816,7 @@ export function checkEntry(entry: WorkflowEntry): ReadonlyArray<string> {
   if (!IDENTITY.test(entry.id)) {
     problems.push(`workflow id "${entry.id}" is not an identity: lower case, digits and dashes`);
   }
-  for (const [field, value] of [
-    ["title", entry.title],
-    ["description", entry.description],
-  ] as const) {
-    if (value.trim() === "") problems.push(`${field} is required`);
-  }
+  if (entry.title.trim() === "") problems.push("title is required");
   const fields = new Set(Object.keys(entry.input));
   for (const [name, field] of Object.entries(entry.input)) {
     if (!Schema.isSchema(field)) problems.push(`input "${name}" is not a schema`);

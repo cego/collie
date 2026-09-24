@@ -11,12 +11,12 @@
 // SQLite in a directory, and every second pass below is a second host on the same file.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Effect, FileSystem, Layer, Path, Result, Schema } from "effect";
 import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 import { Rig, FakeHerdr } from "./support/recorder";
 import { runEffect } from "./support/effect";
 import { Agents, agentsLayer, type AgentHost } from "../src/agents";
-import { Children, Host } from "../src/sdk";
+import { Children, Host, WorkflowError } from "../src/sdk";
 import { answerDecision, foundationLayer, loadEntry } from "../src/engine";
 import { Store } from "../src/store";
 import { events, fixtures, until } from "./support/host";
@@ -162,8 +162,8 @@ const answered = (runId: string, value: string, entry = "roster.workflow.ts") =>
 const said = (result: { readonly _tag: string; readonly success?: unknown }) =>
   result._tag === "Success" ? String(result.success) : "";
 
-const failed = (result: { readonly _tag: string; readonly failure?: { reason?: string } }) =>
-  result._tag === "Failure" ? (result.failure?.reason ?? "") : "";
+const failed = (result: Result.Result<unknown, unknown>) =>
+  Result.isFailure(result) && Schema.is(WorkflowError)(result.failure) ? result.failure.reason : "";
 
 const prompts = () =>
   rig.calls().pipe(Effect.map((calls) => calls.filter((call) => call.cmd === "agent prompt")));

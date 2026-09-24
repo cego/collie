@@ -323,6 +323,15 @@ test(
         expect(broken.diagnostics?.join("\n")).toContain("broken.workflow.ts(");
         const beside = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/plain.workflow.ts` });
         expect(beside.diagnostics).toEqual([]);
+        // A definition is typechecked against the same declarations authors are given.
+        for (const defined of ["hello", "quiet"]) {
+          const checked = yield* host.ask({
+            op: "check",
+            dir: wf,
+            entry: `${wf}/${defined}.workflow.ts`,
+          });
+          expect(checked.diagnostics).toEqual([]);
+        }
         yield* host.stop;
       }).pipe(Effect.scoped),
     ),

@@ -487,6 +487,8 @@ export const workspace = Effect.fn("HostTest.workspace")(function* (prefix: stri
     "listing.ts",
     "offered.workflow.ts",
     "planned.workflow.ts",
+    "hello.workflow.ts",
+    "quiet.workflow.ts",
     "landing.workflow.ts",
     "capability.ts",
     "house.ts",
