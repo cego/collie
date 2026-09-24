@@ -886,6 +886,50 @@ test(
   120_000,
 );
 
+/**
+ * A dialog up when the repair goes out, and an operator stopping the Run then: the stop
+ * closes the agent, so every later try finds no agent to take it.
+ */
+class ClosedAtRepair extends FakeHerdr {
+  private tries = 0;
+  override agentPrompt(target: string, text: string) {
+    if (!text.includes("not usable")) return super.agentPrompt(target, text);
+    this.tries += 1;
+    const code = this.tries === 1 ? "agent_blocked" : "agent_not_found";
+    const refused = new HerdrError({ message: code, detail: "", code, answered: true });
+    return (this.tries === 1 ? control("stop", "r1", true) : Effect.void).pipe(
+      Effect.andThen(Effect.fail(refused)),
+    );
+  }
+}
+
+test(
+  "a stop while the repair waits on a blocked pane parks the work, and the resume carries the repair on",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([
+          { verdict: "maybe" },
+          { verdict: "clean", note: "after the stop" },
+        ]);
+        yield* interrupted("r1", 1500, {
+          herdr: new ClosedAtRepair(rig.pluginEnv()),
+          patience: { firstMs: 10, maxMs: 20, forMs: 30_000 },
+        });
+        expect(yield* statusNow("r1")).toBe("suspended");
+        yield* session(halted("r1"));
+
+        yield* control("stop", "r1", false);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("after the stop");
+        // The halted agent is started again with its prompt, and then told what to repair.
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(2);
+        expect(sent(yield* rig.calls(), "not usable")).toBe(1);
+      }),
+    ),
+  120_000,
+);
+
 /** Two pieces of work on one agent: a list handed to one implementer, item by item. */
 const listing = enveloped({
   name: "agent-listing",

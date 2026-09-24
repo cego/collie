@@ -420,7 +420,16 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
       name: `${work.operation}.repair`,
       success: Schema.Boolean,
       error: AgentUncertain,
-      execute: parkedWhenStuck(agents.repair(launched, read.problem), host, work.runId),
+      execute: stoppable(
+        parkedWhenStuck(
+          agents.revive(ask, first).pipe(Effect.andThen(agents.repair(launched, read.problem))),
+          host,
+          work.runId,
+        ),
+        host,
+        work.runId,
+        agents.pollMs,
+      ),
     });
     const again = !asked
       ? null
@@ -518,7 +527,7 @@ const parkedWhenStuck = <A>(
   );
 
 /**
- * A collection an operator can stop while it is out, and resume back into.
+ * A collection or a repair an operator can stop while it is out, and resume back into.
  *
  * The suspension is the wait's own instance, never the workflow's: suspending the run
  * from in here would abandon the collection rather than park it, and the next attempt
@@ -534,11 +543,17 @@ const stoppable = <A, E>(
   Effect.gen(function* () {
     const wait = yield* WorkflowEngine.WorkflowInstance;
     const raced = yield* Effect.race(
-      collecting.pipe(Effect.map((value) => ({ collected: true as const, value }))),
+      collecting.pipe(
+        Effect.exit,
+        Effect.map((exit) => ({ collected: true as const, exit })),
+      ),
       untilStopped(host, runId, pollMs).pipe(Effect.as({ collected: false as const })),
     );
-    if (!raced.collected) return yield* Workflow.suspend(wait);
-    return raced.value;
+    // A stop closes the agent, which can fail this before the stop is seen: the stop is
+    // what happened, so the work waits for the resume either way.
+    if (!raced.collected || (yield* host.stopRequested(runId)))
+      return yield* Workflow.suspend(wait);
+    return yield* raced.exit;
   });
 
 /** Waits for an operator to stop this run, and for nothing else. */
