@@ -1167,9 +1167,10 @@ same schemas at both ends, and nothing listening off this machine. It answers `i
 registry, in front of as many clients as ask. `run` and `runs` are the read model the front
 doors show; `watch` streams it, current state first and a whole state each time; `recover`
 registers what current files now allow and hands over what is outstanding; `control` sets
-or clears a hold or a stop on one run. One fiber in the host asks the engine about the work
-it has not finished, on a schedule every client shares, so watching costs the same whether
-one client is looking or the whole board is. Closing a client cancels nothing it started;
+or clears a hold or a stop on one run, and every watcher hears about it. One fiber in the
+host asks the engine about the work it has not finished, on a schedule every client shares,
+and speaks up when anything a run shows has changed, so watching costs the same whether one
+client is looking or the whole board is. Closing a client cancels nothing it started;
 stopping the host with `kill` leaves suspended work suspended, and the next client starts a
 host that picks it up.
 

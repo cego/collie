@@ -2181,8 +2181,8 @@ export const RunView = Schema.Struct({
 });
 export type RunView = typeof RunView.Type;
 
-/** What the status of a run reads as, for comparing one poll with the last. */
-const encodeStatus = Schema.encodeSync(Schema.fromJsonString(RunStatus));
+/** What a run reads as, for comparing one poll with the last. */
+const encodeView = Schema.encodeSync(Schema.fromJsonString(RunView));
 
 /**
  * How often a host asks the engine about work it has not finished. One fiber does it for
@@ -3106,13 +3106,15 @@ const makeRegistry: (
     if (watchers === 0) return;
     let changed = false;
     for (const [runId, entry] of watched) {
-      const status = (yield* viewOf(entry.row)).status;
-      const said = encodeStatus(status);
+      const view = yield* viewOf(entry.row);
+      const said = encodeView(view);
       if (said === entry.said) continue;
       entry.said = said;
       changed = true;
       // A run the engine has finished with cannot change again, so nothing asks after.
-      if (status.status === "complete" || status.status === "failed") watched.delete(runId);
+      if (view.status.status === "complete" || view.status.status === "failed") {
+        watched.delete(runId);
+      }
     }
     if (changed) yield* store.announce;
   });
@@ -3521,6 +3523,8 @@ const makeRegistry: (
       // Written before anything is woken, so a run that wakes up never finds the
       // request that stopped it still there.
       for (const runId of runs) yield* setControl(runId, options.control, options.set);
+      // A file, not a row: nothing tells a watcher about it unless this does.
+      yield* store.announce;
       const found = yield* routed(options.runId).pipe(Effect.result);
       // A hold is read at the next boundary and needs no waking. Everything else does:
       // a run parked on its question has nothing that would make it look again.

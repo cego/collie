@@ -9,7 +9,7 @@
 // Real hosts, real SQLite, real processes: none of those questions has an answer in a map.
 
 import { expect, test } from "bun:test";
-import { Effect, FileSystem, Option, Schema, Scope, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Option, Schema, Scope, Stream } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { currentEnv } from "../src/env";
 import { pickFlow, type FlowPrompts } from "../src/flows";
@@ -204,6 +204,42 @@ test(
           status: "complete",
           value: "note:watched=again",
         });
+        yield* stopHost(world.state);
+      }),
+    ),
+  180_000,
+);
+
+test(
+  "a hold on a waiting Run reaches whoever is watching it, though its status stays the same",
+  () =>
+    proves("collie-lifecycle-watch-hold-", (world) =>
+      Effect.gen(function* () {
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const { runId } = yield* client
+          .start({ project: world.project, id: "proof", request: "req-1", input: { note: "x" } })
+          .pipe(Effect.orDie);
+        yield* Stream.runHead(
+          client
+            .watch({ runId })
+            .pipe(Stream.filter((view) => view?.status.status === "suspended")),
+        );
+        const subscribed = yield* Deferred.make<void>();
+        const watching = yield* Effect.forkChild(
+          Stream.runHead(
+            client.watch({ runId }).pipe(
+              Stream.tap(() => Deferred.succeed(subscribed, undefined)),
+              Stream.filter((view) => view?.controls.includes("hold") === true),
+            ),
+          ),
+        );
+        yield* Deferred.await(subscribed);
+        // Past the host's own sweep of the suspension, so only the hold can say anything.
+        yield* Effect.sleep("2 seconds");
+
+        yield* client.control({ runId, control: "hold", set: true }).pipe(Effect.orDie);
+        const seen = yield* Fiber.join(watching).pipe(Effect.timeout("10 seconds"), Effect.orDie);
+        expect(Option.getOrNull(seen)?.status).toEqual({ status: "suspended" });
         yield* stopHost(world.state);
       }),
     ),
