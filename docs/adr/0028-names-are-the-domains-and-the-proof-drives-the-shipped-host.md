@@ -38,8 +38,8 @@ the two windows ADR-0017 names, and nothing else sets it.
 
 - An author's imports, the generated `collie.d.ts` and the shipped workflows all say
   `collie`. A module written against a pre-release build has to change its import.
-- A `native.db` left by a pre-release build is not read. The installations that matter have
-  their history in the old engine's directories, which ADR-0027 imports.
+- A `native.db` left by a pre-release build is not read, and neither is anything the old
+  engine recorded (ADR-0027).
 - The host names a Run, so a test cannot hold a Run before it exists. The proof holds a run
   at the boundary after its decision instead, which is the same property: a hold set
   between attempts is read at the next boundary.

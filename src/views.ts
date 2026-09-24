@@ -445,7 +445,7 @@ export const buildRunDetail = Effect.fn("Views.buildRunDetail")(function* (opts:
       // opinion about what to do — one classification, however it is asked for.
       next: attention.actions[0] ?? null,
       delivered: dispositionOf(latest(yield* readDispositions(run.dir))),
-      metrics: metricsOf(yield* readMetrics(run.dir), run.created),
+      metrics: metricsOf(yield* readMetrics(run.evidence), run.created),
     },
     tail: opts.tail
       ? ((yield* tailed(path.join(run.dir, "log.txt"), TAIL_CAP)) ??

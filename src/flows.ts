@@ -718,7 +718,7 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   prompts: FlowPrompts,
   placement: Placement = "popup",
 ) {
-  const runs = (yield* listRuns(env)).filter((run) => !run.imported && !settled(run));
+  const runs = (yield* listRuns(env)).filter((run) => !settled(run));
   if (runs.length === 0) return yield* bail(prompts, "No runs are still going to pick back up.");
 
   const items: PickItem[] = runs.map((run) => ({

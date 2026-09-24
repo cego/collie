@@ -20,9 +20,6 @@ import { runDir } from "../engine";
 import { Herdr } from "../herdr";
 import {
   describeWaiting,
-  historyRefusal,
-  importHistory,
-  historyRows,
   answerRun,
   grantRun,
   anyRuns,
@@ -40,7 +37,6 @@ import {
   statusOf,
   watchRun,
 } from "../lifecycle";
-import type { HistoryRow } from "../store";
 import type { Given, RunView } from "../engine";
 import { RESERVED_INPUTS } from "../sdk";
 import {
@@ -360,9 +356,6 @@ const runStart = Command.make(
   ]),
 );
 
-/** The text Inputs an older Collie settled, as it wrote them. */
-const TextMap = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
-
 const runList = Command.make("list", {}, () =>
   Effect.gen(function* () {
     const global = yield* root;
@@ -374,22 +367,13 @@ const runList = Command.make("list", {}, () =>
         // Tasks now, and a workspace that is not a Task's narrows nothing.
         const task = yield* selectedTask(global);
         const hosted = yield* runViews(resolved.env, task);
-        // Beside them, what an older Collie recorded. One listing: an operator asking
-        // what has been done here should not have to know which engine did it.
-        const imported = yield* historyRows(resolved.env, task);
         return {
           ok: true,
-          data: {
-            runs: hosted.runs,
-            history: imported.rows,
-            unreadable: hosted.unreadable ?? imported.unreadable,
-          },
+          data: { runs: hosted.runs, unreadable: hosted.unreadable },
           human:
             [
               ...hosted.runs.map((view) => `${view.runId}\t${statusOf(view)}\t${view.workflow}`),
-              ...imported.rows.map((row) => `${row.run}\t${row.status}\t${row.workflow}\thistory`),
               ...(hosted.unreadable === null ? [] : [`runs: ${hosted.unreadable}`]),
-              ...(imported.unreadable === null ? [] : [`history: ${imported.unreadable}`]),
             ].join("\n") || "No runs found.",
         };
       }),
@@ -437,19 +421,6 @@ const runShow = Command.make(
           // Both facts on the head line: how execution ended, and what became of the
           // work. A Run that failed and whose work shipped anyway says both.
           const disposition = latest(yield* readDispositions(resolved.dir));
-          if (resolved._tag === "Imported") {
-            const row = resolved.row;
-            return {
-              ok: true,
-              data: { run: importedData(row), disposition },
-              human: [
-                `${row.run}\t${statusLine(row.status, disposition)}\t${row.workflow}`,
-                // Said on every read of one, because the id looks like any other and
-                // the one thing a caller must not do with it is expect it to carry on.
-                "Recorded by the engine Collie no longer has: readable, never resumable.",
-              ].join("\n"),
-            };
-          }
           const view = resolved.view;
           return {
             ok: true,
@@ -755,48 +726,17 @@ export const waitFor = Effect.fn("collie.waitFor")(function* (
   const wantsAttention = untilResult.until === "attention";
   const located = yield* locateRun(resolved.env, runId, yield* selectedTask(global));
   if (located._tag === "RunFailure") return yield* printResult(located.result, global.json);
-  // Imported work has already happened. A wait on it answers with what it became rather
-  // than watching a directory nothing will write to again.
-  if (located._tag === "Imported") {
-    const row = located.row;
-    return yield* printResult(
-      { ok: true, data: { run: importedData(row) }, human: `${row.run}: ${row.status}` },
-      global.json,
-    );
-  }
   return yield* waitForRun(global, resolved.env, runId, { follow, ms, wantsAttention });
 });
 
-/** An imported Run as a front door returns one: its facts, and that it is history. */
-function importedData(row: HistoryRow) {
-  return {
-    id: row.run,
-    workflow: row.workflow,
-    project: row.project,
-    task: row.task,
-    parent: row.parent,
-    status: row.status,
-    created_at: row.created,
-    finished_at: row.finished,
-    summary: row.summary,
-    inputs: Schema.decodeUnknownSync(TextMap)(row.inputs),
-    provenance: Schema.decodeUnknownSync(UnknownJson)(row.provenance),
-    evidence: Schema.decodeUnknownSync(UnknownJson)(row.evidence),
-    /** Nothing can run it again, and every door says so the same way. */
-    resumable: false,
-  };
-}
-
 /**
  * One command against one Run. The host settles it, because the host is the only thing
- * executing anything; an id it does not have is either unknown or imported, and imported
- * work is told what it is rather than reported missing.
+ * executing anything.
  */
 function runMutationCommand(
   operation: string,
   runId: string,
   requestId: Option.Option<string>,
-  wanted: string,
   hosted: (env: PluginEnv, id: string) => Effect.Effect<Result, CollieError, BunServices>,
 ) {
   return Effect.gen(function* () {
@@ -807,8 +747,6 @@ function runMutationCommand(
         if (resolved._tag === "ContextFailure") return resolved.result;
         return yield* mutation(resolved.env, operation, requestId, (id) =>
           Effect.gen(function* () {
-            const imported = yield* historyRefusal(resolved.env, runId, wanted);
-            if (imported !== null) return imported;
             if (!(yield* anyRuns(resolved.env)))
               return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
             return yield* hosted(resolved.env, id);
@@ -836,7 +774,7 @@ const runAnswer = Command.make(
     requestId: requestIdFlag,
   },
   ({ runId, answer, decision, requestId }) =>
-    runMutationCommand("run-answer", runId, requestId, "answered", (env, id) =>
+    runMutationCommand("run-answer", runId, requestId, (env, id) =>
       answerRun(env, {
         runId,
         decision: Option.getOrNull(decision),
@@ -893,7 +831,7 @@ const mutationFlags = {
 };
 
 const runStop = Command.make("stop", mutationFlags, ({ runId, requestId }) =>
-  runMutationCommand("run-stop", runId, requestId, "stopped", (env) =>
+  runMutationCommand("run-stop", runId, requestId, (env) =>
     controlRun(env, { runId, control: "stop", set: true }),
   ),
 ).pipe(
@@ -957,8 +895,6 @@ const runHold = Command.make(
           }
           return yield* mutation(resolved.env, "run-hold", requestId, () =>
             Effect.gen(function* () {
-              const imported = yield* historyRefusal(resolved.env, id, "held");
-              if (imported !== null) return imported;
               if (!(yield* anyRuns(resolved.env)))
                 return err("run_not_found", `Run "${id}" was not found.`, { run: id });
               return yield* controlRun(resolved.env, {
@@ -980,7 +916,7 @@ const runRelease = Command.make(
   "release",
   { runId: runIdArg, requestId: requestIdFlag },
   ({ runId, requestId }) =>
-    runMutationCommand("run-release", runId, requestId, "released", (env) =>
+    runMutationCommand("run-release", runId, requestId, (env) =>
       controlRun(env, { runId, control: "hold", set: false }),
     ),
 ).pipe(Command.withDescription("Let a held Run carry on"));
@@ -995,7 +931,7 @@ const runClearOverride = Command.make(
     requestId: requestIdFlag,
   },
   ({ runId, agent, requestId }) =>
-    runMutationCommand("run-clear-override", runId, requestId, "corrected again", (env, id) =>
+    runMutationCommand("run-clear-override", runId, requestId, (env, id) =>
       clearOverride(env.stateDir, new Herdr(env), runId, agent, actorName(actorNow(id))),
     ),
 ).pipe(
@@ -1034,10 +970,10 @@ const runDisposition = Command.make(
           const resolved = yield* resolveCommandRun(global, runId);
           if (resolved._tag === "RunFailure") return resolved.result;
           const facts = runFacts(resolved);
-          const status = resolved._tag === "Hosted" ? statusOf(resolved.view) : resolved.row.status;
+          const status = statusOf(resolved.view);
           const kind = Option.getOrNull(as);
           if (kind === null) {
-            const lines = yield* readDispositions(resolved.evidence);
+            const lines = yield* readDispositions(resolved.dir);
             return {
               ok: true,
               data: { run: facts.id, status, disposition: latest(lines), lines },
@@ -1053,7 +989,7 @@ const runDisposition = Command.make(
                 ref,
                 note: Option.getOrNull(note),
               };
-              yield* recordDisposition(resolved.evidence, line);
+              yield* recordDisposition(resolved.dir, line);
               return {
                 ok: true,
                 data: { run: facts.id, status, disposition: line },
@@ -1076,7 +1012,7 @@ const runDrift = Command.make("drift", { runId: runIdArg }, ({ runId }) =>
       Effect.gen(function* () {
         const resolved = yield* resolveCommandRun(global, runId);
         if (resolved._tag === "RunFailure") return resolved.result;
-        const lines = yield* readDrift(resolved.evidence);
+        const lines = yield* readDrift(resolved.dir);
         const reports = currentReports(lines);
         const skipped = lines.flatMap((line) => (line.kind === "skipped" ? [line] : []));
         return {
@@ -1108,7 +1044,7 @@ const runCards = Command.make("cards", { runId: runIdArg }, ({ runId }) =>
       Effect.gen(function* () {
         const resolved = yield* resolveCommandRun(global, runId);
         if (resolved._tag === "RunFailure") return resolved.result;
-        const cards = newest(yield* readCards(resolved.evidence));
+        const cards = newest(yield* readCards(resolved.dir));
         return {
           ok: true,
           data: { cards },
@@ -1144,9 +1080,7 @@ const runActions = Command.make("actions", { runId: runIdArg }, ({ runId }) =>
         const resolved = yield* context(global, false);
         if (resolved._tag === "ContextFailure") return resolved.result;
         // Current code supplies the actions, so a Run whose module has gone offers
-        // nothing and says why — and imported work offers nothing at all.
-        const imported = yield* historyRefusal(resolved.env, runId, "asked what it offers");
-        if (imported !== null) return imported;
+        // nothing and says why.
         if (!(yield* anyRuns(resolved.env)))
           return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
         return yield* showOffers(resolved.env, runId);
@@ -1170,7 +1104,7 @@ const runAction = Command.make(
     requestId: requestIdFlag,
   },
   ({ runId, offer, input, requestId }) =>
-    runMutationCommand("run-action", runId, requestId, "asked to do anything", (env, id) =>
+    runMutationCommand("run-action", runId, requestId, (env, id) =>
       invokeOffer(env, {
         runId,
         offer,
@@ -1198,10 +1132,6 @@ const runResume = Command.make("resume", mutationFlags, ({ runId, requestId }) =
         if (resolved._tag === "ContextFailure") return resolved.result;
         return yield* mutation(resolved.env, "run-resume", requestId, () =>
           Effect.gen(function* () {
-            // Imported work cannot be picked up: the engine that was running it is not
-            // here, and its record says what it got to rather than where it stopped.
-            const imported = yield* historyRefusal(resolved.env, runId, "resumed");
-            if (imported !== null) return imported;
             if (!(yield* anyRuns(resolved.env)))
               return err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
             const recovered = yield* resumeRun(resolved.env, runId);
@@ -1242,14 +1172,8 @@ function intentChange(
       Effect.gen(function* () {
         const resolved = yield* resolveCommandRun(global, runId);
         if (resolved._tag === "RunFailure") return resolved.result;
-        if (resolved._tag === "Imported")
-          return err(
-            "operation_failed",
-            `${runId} was recorded by the engine Collie no longer has; its Intent is history and cannot be amended.`,
-            { run: runId, history: true },
-          );
         const hosted = options.hosted;
-        if (resolved._tag === "Hosted" && hosted !== undefined)
+        if (hosted !== undefined)
           return yield* mutation(resolved.env, operation, requestId, () => hosted(resolved.env));
         const dir = resolved.dir;
         return yield* mutation(resolved.env, operation, requestId, (id) =>

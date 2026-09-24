@@ -9,8 +9,7 @@ import { Herdr, type WorkspaceInfo } from "../herdr";
 import { reason, unsafePathComponent } from "../naming";
 import { err, resolveWorkspace, type Failure } from "../operations";
 import { evidenceDir, runDir, type Given, type RunView } from "../engine";
-import { historyRows, runView } from "../lifecycle";
-import type { HistoryRow } from "../store";
+import { runView } from "../lifecycle";
 import { actorName, type Actor } from "../proposals";
 import { taskOfWorkspace } from "../task";
 import { branchListed } from "../worktree";
@@ -143,12 +142,9 @@ export function personaData(persona: PersonaDef) {
   };
 }
 
-/** A Run named on the command line, or the reason the caller cannot have it. */
 /**
- * A Run this installation has: one a host is executing, or one the old engine recorded
- * and the importer kept. Both carry the two directories a reader needs — the work the Run
- * produced, and the evidence filed about it — so nothing downstream has to know which
- * engine wrote which, or where that engine chose to put it.
+ * A Run named on the command line, with the work it produced and the evidence filed about
+ * it, or the reason the caller cannot have it.
  */
 export type Located =
   | {
@@ -157,19 +153,9 @@ export type Located =
       readonly dir: string;
       readonly evidence: string;
     }
-  | {
-      readonly _tag: "Imported";
-      readonly row: HistoryRow;
-      readonly dir: string;
-      readonly evidence: string;
-    }
   | { readonly _tag: "RunFailure"; readonly result: Failure };
 
-/**
- * Which of those this id is. A host first, because that is where work that is still
- * going lives; imported history second, so a Run that has been finished for months is
- * still found by the id its evidence is filed under.
- */
+/** Which of those this id is. */
 export const locateRun = Effect.fn("collie.locateRun")(function* (
   env: PluginEnv,
   id: string,
@@ -187,16 +173,9 @@ export const locateRun = Effect.fn("collie.locateRun")(function* (
   if (unsafePathComponent(id)) return missing;
   const dir = runDir(env.stateDir, id);
   const view = yield* runView(env, id);
-  if (view !== null && "runId" in view) {
-    if (task !== null && view.task !== task) return outsideTask(id, task);
-    return { _tag: "Hosted", view, dir, evidence: evidenceDir(env.stateDir, id) };
-  }
-  const row = (yield* historyRows(env, null)).rows.find((item) => item.run === id);
-  if (row === undefined) return missing;
-  if (task !== null && row.task !== task) return outsideTask(id, task);
-  // The old engine kept a Run's evidence inside the Run's own directory, which is where
-  // the importer left it: the files are the record, and nothing moved them.
-  return { _tag: "Imported", row, dir, evidence: dir };
+  if (view === null || !("runId" in view)) return missing;
+  if (task !== null && view.task !== task) return outsideTask(id, task);
+  return { _tag: "Hosted", view, dir, evidence: evidenceDir(env.stateDir, id) };
 });
 
 const outsideTask = (id: string, task: string): Located => ({
@@ -204,25 +183,16 @@ const outsideTask = (id: string, task: string): Located => ({
   result: err("run_not_found", `Run "${id}" is not part of task "${task}".`, { run: id, task }),
 });
 
-/** What a located Run is called and what it was for, whichever engine recorded it. */
-export function runFacts(located: Extract<Located, { _tag: "Hosted" | "Imported" }>) {
-  return located._tag === "Hosted"
-    ? {
-        id: located.view.runId,
-        workflow: located.view.workflow,
-        project: located.view.project,
-        task: located.view.task,
-        outcome: located.view.outcome,
-        created: located.view.created,
-      }
-    : {
-        id: located.row.run,
-        workflow: located.row.workflow,
-        project: located.row.project,
-        task: located.row.task,
-        outcome: located.row.outcome,
-        created: located.row.created,
-      };
+/** What a located Run is called and what it was for. */
+export function runFacts(located: Extract<Located, { _tag: "Hosted" }>) {
+  return {
+    id: located.view.runId,
+    workflow: located.view.workflow,
+    project: located.view.project,
+    task: located.view.task,
+    outcome: located.view.outcome,
+    created: located.view.created,
+  };
 }
 
 export const layerDir = Effect.fn("collie.layerDir")(function* (

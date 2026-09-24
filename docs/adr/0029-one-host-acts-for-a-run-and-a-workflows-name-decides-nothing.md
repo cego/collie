@@ -52,8 +52,8 @@ whose agent has gone, and whose Output never came, to a new agent with the same 
 
 ## Consequences
 
-- The Driver, its inbox, its ownership claim and the frozen snapshot appear only in
-  history: `src/history.ts` reads what they left, and nothing else does.
+- The Driver, its inbox, its ownership claim and the frozen snapshot are gone, and nothing
+  reads what they left.
 - Some of what the per-Run process did has no counterpart yet, and the docs say so rather
   than describe it: a Run of a module carries no Intent, so nothing checks it for drift;
   nothing sends the per-Run notifications; and tabs carry no state glyph.

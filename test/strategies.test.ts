@@ -16,7 +16,6 @@ import { branchFor, checkoutFor, type BranchAsk } from "../src/worktree";
 import { linearIssues, shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 import { reviewedTargets } from "../src/inputs";
-import { factsOfHistory } from "../src/runs";
 import { workSourceOf } from "../src/strategies";
 import { runFacts } from "./support/records";
 
@@ -198,23 +197,3 @@ test("the previous review of a change is found whatever the reviewing Run called
       expect(found.map((candidate) => candidate.value)).toEqual(["mr:acme/app!42"]);
     }),
   ));
-
-test("an imported Run keeps which strategy settled each Input, so a reader needs no names", () => {
-  const imported = factsOfHistory(rig.stateDir, {
-    run: "implement-add-picker",
-    workflow: "implement",
-    project: rig.projectDir,
-    status: "done",
-    outcome: "feature",
-    created: "2026-09-01T10:00:00Z",
-    finished: "2026-09-01T11:00:00Z",
-    task: null,
-    parent: null,
-    inputs: asText({ spec: "/tmp/tasks/add-picker", spec_kind: "plan-dir" }),
-    provenance: asText({ sources: { spec: "explicit" }, strategies: RENAMED }),
-    evidence: asText({ dir: `${rig.stateDir}/runs/implement-add-picker`, mr: null }),
-    summary: null,
-  });
-  expect(imported.settled.strategies).toEqual(RENAMED);
-  expect(workSourceOf(imported.settled)?.value).toBe("/tmp/tasks/add-picker");
-});

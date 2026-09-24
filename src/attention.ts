@@ -51,8 +51,7 @@ export const attentionFor = Effect.fn("attention.attentionFor")(function* (run: 
       explanation: `${run.id} and its related runs were never checked against each other; nobody was left to do it.`,
       actions: ["drift", "steer", "show"],
     } satisfies Attention;
-  // What can still be done to an imported Run is read it: nothing is left to resume it.
-  const after = run.imported ? ["show"] : ["show", "actions"];
+  const after = ["show", "actions"];
   switch (run.state) {
     case "succeeded":
       return {

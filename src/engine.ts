@@ -84,7 +84,6 @@ import {
   waitForHelle,
   type HelleClaim,
 } from "./helle";
-import { Kept, describeKept, importHistory } from "./history";
 import { currentPid, signalProcess } from "./lock";
 import type { CheckoutKind, InputStrategy } from "./definitions";
 import { noteVerification } from "./metrics";
@@ -102,7 +101,7 @@ import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
 import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
 import { isOutcome } from "./outcome";
-import { History, RequestConflict, Store, storeLayer, type Admission, type RunRow } from "./store";
+import { RequestConflict, Store, storeLayer, type Admission, type RunRow } from "./store";
 import { TASK_INPUT, checkoutFor, repositoryName } from "./worktree";
 import { Herdr, herdrFailureReason } from "./herdr";
 import type { PluginEnv } from "./env";
@@ -2516,22 +2515,6 @@ export interface RegistryApi {
   /** The same run, again, whenever anything about it changes. */
   readonly watch: (runId: string) => Stream.Stream<RunView | null>;
   /**
-   * The Runs the old engine recorded, imported once and readable ever after. They are
-   * history and nothing else: none of them can be answered, controlled or resumed, and
-   * the only thing to do with one is start a new Run of the same workflow.
-   */
-  readonly history: (task: string | null) => Effect.Effect<ReadonlyArray<typeof History.Type>>;
-  /**
-   * Reads whatever the old engine left that is not a row yet, and says what happened to
-   * each directory. A host does this once when it starts; this is the same pass on
-   * demand, for an installer that wants to show the operator what it found.
-   */
-  readonly importing: Effect.Effect<
-    ReadonlyArray<typeof Kept.Type>,
-    never,
-    HostServices | ChildProcessSpawner.ChildProcessSpawner | Store
-  >;
-  /**
    * Rebuilds what this host could not register from the modules as they are now and hands
    * over anything still outstanding. A repaired file is picked up without a restart.
    */
@@ -2672,22 +2655,6 @@ const makeRegistry: (
   // Staged copies last only as long as this host: every generation below is staged from
   // the module as it is now, never restored.
   yield* clearGenerations(dir);
-  // What the old engine left in directories, read into rows once. Here because a host
-  // is the one owner of this state directory: an import that ran anywhere else would be
-  // a second writer, and one that ran on every command would be a read adapter by
-  // another name. Idempotent, so every start after the first keeps nothing.
-  yield* importHistory(dir).pipe(
-    Effect.flatMap((kept) =>
-      Effect.forEach(
-        kept.filter((item) => item.kind !== "already"),
-        (item) => Effect.logInfo(`history: ${describeKept(item)}`),
-      ),
-    ),
-    Effect.catchCause((cause) =>
-      Effect.logWarning(`history: nothing was imported: ${Cause.pretty(cause)}`),
-    ),
-  );
-
   const register = Effect.fn("Engine.register")(function* (route: {
     readonly workflow: string;
     readonly name: string;
@@ -3586,11 +3553,6 @@ const makeRegistry: (
         Effect.flatMap((rows) =>
           Effect.forEach(task === null ? rows : rows.filter((row) => row.task === task), viewOf),
         ),
-      ),
-    importing: importHistory(dir).pipe(Effect.orDie),
-    history: (task: string | null) =>
-      store.history.pipe(
-        Effect.map((rows) => (task === null ? rows : rows.filter((row) => row.task === task))),
       ),
     watch: (runId: string) =>
       store

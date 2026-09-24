@@ -14,7 +14,6 @@ import type { ChildProcessSpawner } from "effect/unstable/process";
 import type * as RpcClientError from "effect/unstable/rpc/RpcClientError";
 import type { PluginEnv } from "./env";
 import { savedModules, type Fault, type Found } from "./discovery";
-import type { Kept } from "./history";
 import { connect, type HostClient, type HostUnavailable, type HostVersionMismatch } from "./host";
 import {
   REFUSED_INPUT,
@@ -25,7 +24,7 @@ import {
 } from "./engine";
 import { err, taskFor, type Failure, type OpResult } from "./operations";
 import type { TaskChoice } from "./task";
-import type { HistoryRow, RequestConflict } from "./store";
+import type { RequestConflict } from "./store";
 import { renderApproved, type VerifySpec } from "./verify-spec";
 
 export { savedModules } from "./discovery";
@@ -248,70 +247,6 @@ export const runViews = (
           )
         : Effect.succeed({ runs: [], unreadable: null }),
     ),
-  );
-
-/** What the old engine recorded, as a front door lists it beside the Runs a host owns. */
-export interface Historical {
-  readonly rows: ReadonlyArray<HistoryRow>;
-  readonly unreadable: string | null;
-}
-
-/**
- * The Runs the old engine left behind, imported once by whichever host started first.
- * They are readable and nothing more: a row here cannot be answered, controlled or
- * resumed, and `historyRefusal` is what every door says to a caller that tries.
- */
-export const historyRows = (
-  env: PluginEnv,
-  task: string | null,
-): Effect.Effect<Historical, never, Client> =>
-  anyRuns(env).pipe(
-    Effect.flatMap((any) =>
-      any
-        ? asks(env, (client) => client.history({ task })).pipe(
-            Effect.map((answered) =>
-              answered.ok
-                ? { rows: answered.value, unreadable: null }
-                : { rows: [], unreadable: answered.error.message },
-            ),
-          )
-        : Effect.succeed({ rows: [], unreadable: null }),
-    ),
-  );
-
-/**
- * The one pass over what an older Collie left, asked for rather than waited on. The host
- * does the same thing when it starts, and both are idempotent, so this is only ever a way
- * to see what was found.
- */
-export const importHistory = (
-  env: PluginEnv,
-): Effect.Effect<ReadonlyArray<Kept> | Failure, never, Client> =>
-  asks(env, (client) => client.import()).pipe(
-    Effect.map((answered) => (answered.ok ? answered.value : answered)),
-  );
-
-/**
- * What this id is, for a door that could not find a Run for it. Imported work is named
- * as what it is rather than reported missing: the record is right there, and what the
- * caller needs to hear is that it belongs to an engine that is gone and what to do now.
- */
-export const historyRefusal = (
-  env: PluginEnv,
-  runId: string,
-  wanted: string,
-): Effect.Effect<Failure | null, never, Client> =>
-  historyRows(env, null).pipe(
-    Effect.map(({ rows }) => {
-      const row = rows.find((item) => item.run === runId);
-      if (row === undefined) return null;
-      return err(
-        "operation_failed",
-        `${runId} was recorded by the engine Collie no longer has, so it cannot be ${wanted}. ` +
-          `Its record and everything it produced are still here; \`collie run start ${row.workflow}\` begins new work.`,
-        { run: runId, workflow: row.workflow, history: true },
-      );
-    }),
   );
 
 /**

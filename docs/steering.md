@@ -308,9 +308,7 @@ started with `run action <run> <offer>`. Collie never starts one by itself.
 ## Cross-run checks
 
 Sibling runs are judged against each other's Intents, so no Run of a workflow module is
-checked this way. What an older Collie recorded stands: an evaluation nobody finished reads
-`pending` under its run as attention `cross_run_pending`, and a report for a run that had
-already finished is shown under it and never described as delivered.
+checked this way.
 
 ## Proposals
 

@@ -90,50 +90,6 @@ const Generation = Schema.Struct({
 });
 export type GenerationRow = typeof Generation.Type;
 
-/**
- * A Run the old engine recorded in a directory, read into a row once. Its facts, where
- * its values came from and where its evidence still is — never its steps, which were an
- * account of an executor that no longer exists. Nothing here can be executed again.
- */
-export const History = Schema.Struct({
-  run: Schema.String,
-  workflow: Schema.String,
-  /** The checkout it worked in, which is what "has this been done here before" asks. */
-  project: Schema.String,
-  status: Schema.String,
-  /** What it had to prove, as it was classified; `unspecified` where nobody said. */
-  outcome: Schema.String,
-  created: Schema.String,
-  finished: Schema.NullOr(Schema.String),
-  task: Schema.NullOr(Schema.String),
-  parent: Schema.NullOr(Schema.String),
-  /** As the old engine settled them: text, one per Input, as JSON. */
-  inputs: Schema.String,
-  /** Where each came from, and the definition it was frozen against, as JSON. */
-  provenance: Schema.String,
-  /** References to what it produced — its directory, its merge request — as JSON. */
-  evidence: Schema.String,
-  summary: Schema.NullOr(Schema.String),
-});
-export type HistoryRow = typeof History.Type;
-
-/** What an import offers a row; the store decides whether it is the one that kept it. */
-export interface Historical {
-  readonly run: string;
-  readonly workflow: string;
-  readonly project: string;
-  readonly status: string;
-  readonly outcome: string;
-  readonly created: string;
-  readonly finished: string | null;
-  readonly task: string | null;
-  readonly parent: string | null;
-  readonly inputs: Readonly<Record<string, string>>;
-  readonly provenance: Schema.Json;
-  readonly evidence: Schema.Json;
-  readonly summary: string | null;
-}
-
 /** What a start asks to have recorded before anything is executed. */
 export interface Admission {
   readonly request: string;
@@ -179,15 +135,6 @@ export interface StoreApi {
     readonly request: string;
   }) => Effect.Effect<Answered>;
   readonly generations: Effect.Effect<ReadonlyArray<GenerationRow>>;
-  /**
-   * Keeps one old Run, and says whether this call is what kept it. The insert is the
-   * decision, so importing twice — or two installations importing at once — leaves one
-   * row rather than a second copy of work nobody can run again.
-   */
-  readonly keep: (entry: Historical) => Effect.Effect<boolean>;
-  /** Every imported Run, newest first: what a reader asks instead of reading the files. */
-  readonly history: Effect.Effect<ReadonlyArray<HistoryRow>>;
-  readonly historical: (run: string) => Effect.Effect<HistoryRow | null>;
   /**
    * Claims a request id for a run, or hands back the run that already has it. `fresh` is
    * false for a retry, which is what tells a caller not to execute again.
@@ -285,27 +232,6 @@ const MIGRATIONS = {
       )
     `;
   }),
-  "5_history": Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`
-      CREATE TABLE collie_history (
-        run TEXT PRIMARY KEY,
-        workflow TEXT NOT NULL,
-        project TEXT NOT NULL,
-        status TEXT NOT NULL,
-        outcome TEXT NOT NULL,
-        created TEXT NOT NULL,
-        finished TEXT,
-        task TEXT,
-        parent TEXT,
-        inputs TEXT NOT NULL,
-        provenance TEXT NOT NULL,
-        evidence TEXT NOT NULL,
-        summary TEXT,
-        imported TEXT NOT NULL
-      )
-    `;
-  }),
 };
 
 function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | Reactivity.Reactivity> {
@@ -360,21 +286,6 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         sql`SELECT run, decision, prompt, options, answer, request FROM collie_decisions WHERE run = ${key.run} AND decision = ${key.decision}`,
     });
 
-    const historyColumns = sql`run, workflow, project, status, outcome, created, finished, task, parent, inputs, provenance, evidence, summary`;
-
-    const everyHistory = SqlSchema.findAll({
-      Request: Schema.Void,
-      Result: History,
-      execute: () =>
-        sql`SELECT ${historyColumns} FROM collie_history ORDER BY created DESC, run DESC`,
-    });
-
-    const oneHistory = SqlSchema.findAll({
-      Request: Schema.String,
-      Result: History,
-      execute: (run) => sql`SELECT ${historyColumns} FROM collie_history WHERE run = ${run}`,
-    });
-
     const everyGeneration = SqlSchema.findAll({
       Request: Schema.Void,
       Result: Generation,
@@ -395,40 +306,6 @@ function makeStore(): Effect.Effect<StoreApi, never, SqlClient.SqlClient | React
         }).pipe(Effect.orDie),
 
       generations: everyGeneration().pipe(Effect.orDie),
-
-      keep: Effect.fn("Store.keep")(function* (entry: Historical) {
-        const at = yield* nowIso();
-        // The insert is what decides: an import that arrives twice, or two of them at
-        // once, leaves the row that got there first and says so to the other.
-        const kept = yield* reactivity
-          .mutation(
-            RUNS,
-            sql`
-              INSERT INTO collie_history
-                (run, workflow, project, status, outcome, created, finished, task, parent,
-                 inputs, provenance, evidence, summary, imported)
-              VALUES (
-                ${entry.run}, ${entry.workflow}, ${entry.project}, ${entry.status},
-                ${entry.outcome}, ${entry.created}, ${entry.finished}, ${entry.task},
-                ${entry.parent},
-                ${asJsonText(entry.inputs)}, ${asJsonText(entry.provenance)},
-                ${asJsonText(entry.evidence)}, ${entry.summary}, ${at}
-              )
-              ON CONFLICT(run) DO NOTHING
-              RETURNING run
-            `,
-          )
-          .pipe(Effect.orDie);
-        return kept.length > 0;
-      }),
-
-      history: everyHistory().pipe(Effect.orDie),
-
-      historical: (run: string) =>
-        oneHistory(run).pipe(
-          Effect.map((rows) => rows[0] ?? null),
-          Effect.orDie,
-        ),
 
       asking: (question) =>
         Effect.gen(function* () {

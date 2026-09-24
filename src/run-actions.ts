@@ -484,9 +484,6 @@ const admissionFor = Effect.fn("runActions.admissionFor")(function* (
   const id = "run" in action ? action.run : null;
   const run = id === null ? null : yield* findRun(env, id);
   if (run === null) return admit(action, emptyAdmission());
-  // History is read, and nothing else: there is no engine left to carry anything out.
-  if (run.imported && action.kind !== "navigate")
-    return `${run.id} was recorded by the engine Collie no longer has, so it can be read and nothing else`;
   const live = yield* new Herdr(env).agentList().pipe(Effect.catch(() => Effect.succeed([])));
   const agent = "agent" in action ? (action.agent ?? null) : null;
   // An Intent nobody can decode is not an Intent with no constraints. Refusing here is

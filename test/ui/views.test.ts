@@ -422,7 +422,4 @@ effectTest("a Run's detail carries the same interruption facts the CLI reports",
   expect(detail!.attention.category).toBe("interrupted");
   expect(detail!.attention.reason).toBe("failed");
   expect(detail!.attention.actions).toEqual(["show", "actions"]);
-  // What an older Collie recorded can be read, and nothing else.
-  const imported = yield* detailOf(run, { runs: [{ ...run, imported: true }] });
-  expect(imported!.attention.actions).toEqual(["show"]);
 });

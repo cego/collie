@@ -55,14 +55,6 @@ const RUN = "r-does-not-exist";
 
 /** `collie <this>`, as the command tree spells it, and what chat does about it. */
 const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
-  ["history list", { route: "read", tool: "collie_herd" }],
-  [
-    "history import",
-    {
-      route: "human-only",
-      why: "reading what an older Collie left is something an installation does once, on its own; a conversation has nothing to decide about it",
-    },
-  ],
   ["workflow list", { route: "read", tool: "collie_definitions" }],
   ["workflow show", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
   ["workflow check", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],

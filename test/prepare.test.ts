@@ -466,8 +466,7 @@ test("setup configures Claude Code's status line; prepare never touches it", () 
       // runner. The runner is what edits the file, so the step is a call rather than a
       // shell script writing JSON.
       prepare();
-      // Prepare does call the runner — it reads what an older Collie recorded — so what
-      // this is about is the one thing it must never ask for.
+      // Whatever else prepare asks of the runner, it never asks for this.
       const afterPrepare = (yield* exists(`${home}/collie-calls`))
         ? yield* read(`${home}/collie-calls`)
         : "";

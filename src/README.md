@@ -49,8 +49,7 @@ Runner source (Bun/TypeScript). Compiled to `bin/collie` per platform; see ADR-0
 | `host.ts`          | The one local host per state directory: who owns it, how a client reaches it             |
 | `discovery.ts`     | Where a workflow module is looked for, which layer wins, and what counts as an edit      |
 | `authoring.ts`     | What a module says about itself, how it is checked, and the file an author starts from   |
-| `store.ts`         | Rows beside Effect's: request claims, run identity, generations, questions, history      |
-| `history.ts`       | What an older Collie left in directories, read once into rows. The only reader of one    |
+| `store.ts`         | Rows beside Effect's: request claims, run identity, generations, questions               |
 | `run-actions.ts`   | What a confirmed action does to a Run, and the one place each kind is carried out        |
 | `lifecycle.ts`     | A Run from both front doors: start it, watch it, and pick it up again                    |
 | `sdk.ts`           | `collie`: what a module exports, declares, waits on, and starts as a child               |

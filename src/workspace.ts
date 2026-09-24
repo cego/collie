@@ -231,9 +231,9 @@ function workspaceOf(run: RunFacts, tasks: ReadonlyMap<string, TaskRecord>): str
 
 /**
  * Whether a Run belongs to this workspace: the one it lives in, by id. One that names no
- * workspace — imported work from before Tasks — belongs here only if one of its agents is
- * alive here, and never to one group of the wide scope: an agent herdr reports no
- * workspace for is not proof of any one of them.
+ * workspace belongs here only if one of its agents is alive here, and never to one group
+ * of the wide scope: an agent herdr reports no workspace for is not proof of any one of
+ * them.
  */
 function belongs(
   where: string | null,

@@ -370,9 +370,8 @@ are ordinary panes — herdr's own keys move between them and resize them, and r
 Home reopens only a pane that has actually gone, so a divider you dragged stays where you
 put it.
 
-It is a board, not an engine: it draws the Runs the host reports — the ones it is holding
-and the ones an older Collie left, imported once — the register of live agents and the
-steering journals, so closing it loses nothing — the next run opens it again. The run
+It is a board, not an engine: it draws the Runs the host holds, the register of live agents
+and the steering journals, so closing it loses nothing — the next run opens it again. The run
 itself is executed by the host, which has no pane at all.
 
 `prefix+shift+c` reaches it from any pane in any workspace, making the Home first when

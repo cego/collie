@@ -192,9 +192,8 @@ binary still starts.
    through it, under a request id, and never by writing its files.
 4. Plan artefacts live in the run directory ([ADR-0002](docs/adr/0002-plan-artefacts-live-in-the-run-directory.md)).
    Glossary and ADR changes belong in the repository.
-5. Collie has one engine, and what an older one recorded is imported once
-   ([ADR-0027](docs/adr/0027-one-engine-and-history-is-imported-once.md)). `src/history.ts`
-   is the only code that reads a `run.json`; nothing else may grow a second reader.
+5. Collie has one engine, and nothing an older one recorded is carried over
+   ([ADR-0027](docs/adr/0027-one-engine-and-a-hard-cutover.md)). No code reads a `run.json`.
 6. Docs change in the same merge request as the behavior they describe.
 7. A Run proves its outcome ([ADR-0010](docs/adr/0010-a-run-proves-its-outcome.md)):
    evidence is collected against a revision, and no gate is satisfied by an Output field.

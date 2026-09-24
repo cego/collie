@@ -30,11 +30,9 @@ import type { Action } from "../src/evaluator";
 import { carryOutProposal } from "../src/operations";
 import type { PluginEnv } from "../src/env";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
-import { connect } from "../src/host";
 import { herdOf } from "../src/steering";
 import { runEffect } from "./support/effect";
-import { oldRecord, oldRun } from "./support/history";
-import { hosted, hostedRun } from "./support/hosted";
+import { hosted, hostedRun, settledRun } from "./support/hosted";
 import type { World } from "./support/world";
 
 let stateDir: string;
@@ -361,20 +359,19 @@ test(
   () =>
     inHerd(({ world, env, herdFile }) =>
       Effect.gen(function* () {
-        // Work an older Collie recorded, read into history: something nothing can hold,
-        // which a proposal could not know about and only the moment of carrying it out can.
-        const dir = yield* oldRun(world.state, "implement-picker", oldRecord("implement-picker"));
-        yield* (yield* connect(world.state).pipe(Effect.orDie)).import().pipe(Effect.orDie);
-        yield* writeIntent(dir, seedIntent("implement-picker", { goal: "a picker" }));
+        // A Run that has ended: something nothing can hold, which a proposal could not know
+        // about and only the moment of carrying it out can.
+        const { id, dir } = yield* settledRun(world, "hello");
+        yield* writeIntent(dir, seedIntent(id, { goal: "a picker" }));
 
         const proposal = yield* record(herdFile, {
           interpretation: "hold it",
-          targets: [{ run: "implement-picker" }],
+          targets: [{ run: id }],
           actions: [
-            { kind: "hold", run: "implement-picker" },
+            { kind: "hold", run: id },
             {
               kind: "update_intent",
-              run: "implement-picker",
+              run: id,
               change: "set-goal",
               patch: "must not happen",
               base_version: 1,
@@ -382,7 +379,7 @@ test(
           ],
           allowedNow: [],
           // The Intent was v1 when this was proposed, and `seedIntent` wrote v1.
-          intentVersions: { "implement-picker": 1 },
+          intentVersions: { [id]: 1 },
           by: "evaluator:call-1",
         });
 
@@ -392,7 +389,7 @@ test(
         expect(out.ok).toBe(false);
         if (out.ok) return;
         expect(out.error.code).toBe("operation_failed");
-        expect(out.error.message).toContain("recorded by the engine Collie no longer has");
+        expect(out.error.message).toContain("the run is succeeded");
         expect(out.error.details).toMatchObject({ results: [{ kind: "hold", state: "skipped" }] });
         expect((yield* readIntent(dir))?.goal).toBe("a picker");
       }),

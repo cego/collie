@@ -66,8 +66,6 @@ test("the things worth saying are the things a human would want to know", () => 
     eventsIn([record({ id: "r1", state: "succeeded" })], new Map([["r1", "keep-envelope"]]))[0]!
       .text,
   ).toContain("ended succeeded");
-  // What an older Collie recorded is history, not news.
-  expect(eventsIn([record({ id: "r1", state: "failed", imported: true })])).toEqual([]);
 
   // Every one of them names the Run it is about, which is what a proposal would target.
   expect(said({ state: "failed" })!.run).toBe("r1");

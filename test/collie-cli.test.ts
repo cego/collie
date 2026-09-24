@@ -4,7 +4,8 @@ import { runEffect } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
-import { oldRecord, oldRun } from "./support/history";
+import { hosted, settledRun } from "./support/hosted";
+import { evidenceDir } from "../src/engine";
 
 const root = new URL("../", import.meta.url).pathname;
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
@@ -443,14 +444,12 @@ test("the version the CLI reports is the one the manifest declares", () =>
 test(
   "intent defaults round trip, and a Run's Intent is amended through the envelope",
   () =>
-    runEffect(
+    hosted("collie-intent-", ({ world }) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        const home = yield* fs.makeTempDirectory({ prefix: "collie-intent-" });
-        const state = join(home, "state");
         const shared = {
-          HERDR_PLUGIN_STATE_DIR: state,
-          HERDR_PLUGIN_CONFIG_DIR: join(home, "config"),
+          HERDR_PLUGIN_ROOT: world.install,
+          HERDR_PLUGIN_STATE_DIR: world.state,
+          HERDR_PLUGIN_CONFIG_DIR: world.config,
         };
 
         const added = yield* cli(
@@ -473,15 +472,9 @@ test(
           error: { code: "invalid_input" },
         });
 
-        const run = { id: "implement-steering" };
-        const dir = yield* oldRun(state, run.id, oldRecord(run.id, { cwd: root }));
-        yield* writeIntent(dir, seedIntent(run.id, { goal: "ship it" }));
-        // What an older Collie recorded is read into a row before it can be amended: the
-        // command asks the host which Runs there are, and nothing else does.
-        expect((yield* cli(["--json", "history", "import"], shared)).exit).toBe(0);
+        const run = yield* settledRun(world, "hello");
+        yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
 
-        // Work an older Collie recorded is history: its Intent is what it was held to,
-        // and there is nothing left to hold to an amended one.
         const amended = yield* cli(
           [
             "--json",
@@ -496,15 +489,15 @@ test(
           shared,
         );
         expect(yield* parseEnvelope(amended.stdout)).toMatchObject({
-          ok: false,
-          error: { code: "operation_failed", details: { history: true } },
+          ok: true,
+          data: { runId: run.id, version: 2 },
         });
 
-        const intent = yield* readIntent(dir);
-        expect(intent?.version).toBe(1);
-        expect(intent?.constraints).toEqual([]);
-
-        yield* fs.remove(home, { recursive: true, force: true });
+        const intent = yield* readIntent(run.dir);
+        expect(intent?.version).toBe(2);
+        expect(intent?.constraints.map((constraint) => constraint.text)).toEqual([
+          "preserve the public --json envelope",
+        ]);
       }),
     ),
   60_000,
@@ -513,23 +506,12 @@ test(
 test(
   "run metrics reports what a Run produced, and says so when it has produced nothing",
   () =>
-    runEffect(
+    hosted("collie-metrics-", ({ world }) =>
       Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
         // One state directory the Run and the command both see: `cli` makes its own per
         // call, and a Run written into one of those would not be there for the next.
-        const home = yield* fs.makeTempDirectory({ prefix: "collie-metrics-" });
-        const stateDir = join(home, "state");
-        const env = { HERDR_PLUGIN_STATE_DIR: stateDir };
-
-        const run = { id: "implement-add-a-picker" };
-        const dir = yield* oldRun(
-          stateDir,
-          run.id,
-          oldRecord(run.id, { cwd: root, inputs: { plan: "add a picker" }, outcome: "bug" }),
-        );
-
-        expect((yield* cli(["--json", "history", "import"], env)).exit).toBe(0);
+        const env = { HERDR_PLUGIN_STATE_DIR: world.state };
+        const run = yield* settledRun(world, "hello", { outcome: "bug" });
 
         const empty = yield* cli(["--json", "run", "metrics", run.id], env);
         expect(empty.exit).toBe(0);
@@ -546,7 +528,7 @@ test(
         expect(data.metrics.timeToFirstEvidence).toBeNull();
         expect(data.outcome).toBe("bug");
 
-        yield* appendMetric(dir, {
+        yield* appendMetric(evidenceDir(world.state, run.id), {
           at: "2026-09-01T10:00:00Z",
           kind: "verification",
           subject: "v1",
@@ -559,8 +541,6 @@ test(
         expect(shown.stdout).toContain("time to first evidence: 0s");
         expect(shown.stdout).toContain("1 pass, 0 fail, 0 unstable (1 by collie)");
         expect(shown.stdout).toContain("rework: 0");
-
-        yield* fs.remove(home, { recursive: true, force: true });
       }),
     ),
   60_000,

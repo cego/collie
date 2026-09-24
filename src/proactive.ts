@@ -54,8 +54,6 @@ export function eventsIn(
 ): Event[] {
   const out: Event[] = [];
   for (const run of runs) {
-    // History is what happened: nothing an older Collie recorded is news now.
-    if (run.imported) continue;
     const about = runTitle(run);
     const asked = run.asking[0];
     if (asked !== undefined) {

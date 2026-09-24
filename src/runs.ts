@@ -1,19 +1,13 @@
 // Every Run a reader can see, as one shape, from the host's rows.
-//
-// A Run is either one the host is holding or one an older Collie recorded and the importer
-// read into history. Readers — the board, History, chat, inference — ask which Runs there
-// are and what each is; they never ask which engine recorded one, and never open a
-// `run.json` to find out.
 
-import { Effect, Option, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import type { FileSystem } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import type { PluginEnv } from "./env";
-import { historyRows, resultText, runViews } from "./lifecycle";
+import { resultText, runViews } from "./lifecycle";
 import { HOLD, STOP, evidenceDir, runDir, type RunView } from "./engine";
 import type { Settled } from "./strategies";
-import type { HistoryRow } from "./store";
-import { WorktreeRecordSchema, type WorktreeRecord } from "./run";
+import type { WorktreeRecord } from "./run";
 
 /** Where a Run is, in the words every board and listing uses. */
 export type RunState = "running" | "waiting" | "succeeded" | "failed" | "stopped";
@@ -51,8 +45,6 @@ export interface RunFacts {
   readonly dir: string;
   /** Where its verifications are kept. */
   readonly evidence: string;
-  /** Recorded by the engine Collie no longer has: readable, never resumable. */
-  readonly imported: boolean;
   readonly asking: ReadonlyArray<Asked>;
   readonly held: boolean;
   /** Why it is not moving or why it ended, in its own words, where it said. */
@@ -106,7 +98,6 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   worktree: view.worktree,
   dir: runDir(stateDir, view.runId),
   evidence: evidenceDir(stateDir, view.runId),
-  imported: false,
   asking: view.waiting
     .filter((one) => one.answer === null)
     .map((one) => ({ name: one.name, prompt: one.prompt, options: one.options })),
@@ -119,85 +110,17 @@ export const factsOfView = (stateDir: string, view: RunView): RunFacts => ({
   summary: view.status.status === "complete" ? resultText(view.status.value) : null,
 });
 
-const Strings = Schema.Record(Schema.String, Schema.String);
-const Kept = Schema.fromJsonString(
-  Schema.Struct({
-    sources: Schema.optional(Strings),
-    strategies: Schema.optional(Strings),
-  }),
-);
-const Evidence = Schema.fromJsonString(
-  Schema.Struct({
-    dir: Schema.String,
-    mr: Schema.NullOr(Schema.String),
-    worktree: Schema.optional(Schema.Unknown),
-  }),
-);
-const decodeWorktree = Schema.decodeUnknownOption(WorktreeRecordSchema);
-const decodeStrings = Schema.decodeUnknownOption(Schema.fromJsonString(Strings));
-const decodeKept = Schema.decodeUnknownOption(Kept);
-const decodeEvidence = Schema.decodeUnknownOption(Evidence);
-
-/** What an imported Run ended as, in the words a live one uses. */
-const importedState = (status: string): RunState =>
-  status === "done" ? "succeeded" : status === "interrupted" ? "stopped" : "failed";
-
-export const factsOfHistory = (stateDir: string, row: HistoryRow): RunFacts => {
-  const kept = decodeKept(row.provenance);
-  const inputs = decodeStrings(row.inputs);
-  const evidence = decodeEvidence(row.evidence);
-  const dir = evidence._tag === "Some" ? evidence.value.dir : runDir(stateDir, row.run);
-  const worktree =
-    evidence._tag === "Some" && evidence.value.worktree !== undefined
-      ? Option.getOrNull(decodeWorktree(evidence.value.worktree))
-      : null;
-  const given = inputs._tag === "Some" ? inputs.value : {};
-  return {
-    id: row.run,
-    workflow: row.workflow,
-    project: row.project,
-    cwd: row.project,
-    task: row.task,
-    parent: row.parent,
-    outcome: row.outcome,
-    created: row.created,
-    finished: row.finished,
-    state: importedState(row.status),
-    settled: {
-      inputs: given,
-      strategies: kept._tag === "Some" ? (kept.value.strategies ?? {}) : {},
-      sources: kept._tag === "Some" ? (kept.value.sources ?? {}) : {},
-    },
-    // The branch its checkout or inputs named, as a live Run's placement records one.
-    branch: worktree?.branch || given.branch || null,
-    mr: evidence._tag === "Some" ? evidence.value.mr : null,
-    workspace: null,
-    worktree,
-    dir,
-    // The old engine filed a Run's evidence inside its own directory.
-    evidence: dir,
-    imported: true,
-    asking: [],
-    held: false,
-    note: null,
-    summary: row.summary,
-  };
-};
-
 type Client = FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner;
 
 /**
- * Every Run in this state directory, newest first: the host's and the imported ones. A
- * host that will not answer costs the caller the Runs, never the read it was part of.
+ * Every Run in this state directory, newest first. A host that will not answer costs the
+ * caller the Runs, never the read it was part of.
  */
 export const listRuns = Effect.fn("Runs.list")(function* (env: PluginEnv) {
   const live = yield* runViews(env, null);
-  const history = yield* historyRows(env, null);
-  const runs = [
-    ...live.runs.map((view) => factsOfView(env.stateDir, view)),
-    ...history.rows.map((row) => factsOfHistory(env.stateDir, row)),
-  ];
-  return runs.sort((a, b) => b.created.localeCompare(a.created));
+  return live.runs
+    .map((view) => factsOfView(env.stateDir, view))
+    .sort((a, b) => b.created.localeCompare(a.created));
 });
 
 /** One Run by id, or null where there is none. */

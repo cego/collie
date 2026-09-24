@@ -55,8 +55,7 @@ checkout gone — parks with the reason and the repair, and `run resume` picks i
 Beside the database, a Run's files are its audit trail: `agents/<run>/<operation>.prompt.md`
 with the Output it came back with, `evidence/<run>/` with the verifications it was granted
 and the ones collected, and `runs/<run>/` with its cards, its `plan/` and the review it left.
-A Run an older Collie recorded is a row `history.ts` imported once, with its directory left
-exactly as it was ([ADR-0027](adr/0027-one-engine-and-history-is-imported-once.md)).
+Nothing an older Collie recorded is read ([ADR-0027](adr/0027-one-engine-and-a-hard-cutover.md)).
 
 <!-- prettier-ignore -->
 > [!IMPORTANT]

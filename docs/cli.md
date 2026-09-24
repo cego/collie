@@ -1091,27 +1091,6 @@ so "nothing to do" reads differently from "the runner updated but the skills ste
 not run". A skipped step is not a failure: `upgrade` still succeeds. Under `--json` the
 same steps are in `data.steps`.
 
-## What an older Collie recorded
-
-Collie used to run Markdown workflows from a process of its own, and a machine that ran
-that version has its Runs in directories. They are read into this installation once:
-
-```sh
-collie --json history import   # safe to run again; every run after the first keeps nothing
-collie --json history list     # what was imported, newest first
-```
-
-`prepare.sh` runs the import, so an upgrade does it for you, and so does the host when it
-starts. What it found that a human should know about is said out loud: a `run.json` nobody
-can decode is reported and left exactly where it is, and a Run something is still working
-on is skipped until that finishes — nothing is adopted, signalled or rewritten.
-
-Imported work is readable and nothing else. It cannot be answered, controlled, resumed or
-amended, and every command says the same thing about it: its record and everything it
-produced are still here, and `collie run start <workflow>` begins new work. Its directory
-is untouched, so its cards, its drift, its verifications and its outputs are where they
-have always been.
-
 ## Checking an installation
 
 ```sh
@@ -1171,8 +1150,7 @@ never adopted and never signalled.
 
 Clients talk to it over a unix socket in that same directory, with Effect's own RPC: the
 same schemas at both ends, and nothing listening off this machine. It answers `identity`,
-`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `history`, `import`,
-`watch`, `recover`, `answer`, `offers`, `invoke`, `control`, `grant` and `steer` — one
+`discover`, `load`, `registrations`, `start`, `status`, `run`, `runs`, `watch`, `recover`, `answer`, `offers`, `invoke`, `control`, `grant` and `steer` — one
 registry, in front of as many clients as ask. `run` and `runs` are the read model the front
 doors show; `watch` streams it, current state first and a whole state each time; `recover`
 registers what current files now allow and hands over what is outstanding; `control` sets

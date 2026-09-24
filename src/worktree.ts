@@ -1199,8 +1199,8 @@ function fromRuns(runs: ReadonlyArray<RunFacts>, registered: ReadonlyArray<Agent
   const panes = new Map<string, Set<string>>();
   for (const run of runs) {
     const going = run.state === "running" || run.state === "waiting";
-    // A stop suspends a live Run rather than ending it; imported history never resumes.
-    const resumable = run.state === "stopped" && !run.imported;
+    // A stop suspends a live Run rather than ending it.
+    const resumable = run.state === "stopped";
     if (going) paths.set(run.cwd, "a run is still working in it");
     else if (resumable) paths.set(run.cwd, "a stopped run can resume in it");
     const worktree = run.worktree;

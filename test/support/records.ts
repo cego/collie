@@ -27,7 +27,6 @@ export function runFacts(over: Partial<RunFacts> = {}): RunFacts {
     worktree: null,
     dir: `/state/runs/${id}`,
     evidence: `/state/evidence/${id}`,
-    imported: false,
     asking: [],
     held: false,
     note: null,

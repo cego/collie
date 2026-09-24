@@ -1987,17 +1987,6 @@ test("a stopped run keeps the checkout a resume carries on in", () =>
     }),
   ));
 
-test("a stopped run read in from history keeps nothing, since history never resumes", () =>
-  runEffect(
-    Effect.gen(function* () {
-      yield* collieWorktree("wt");
-      recorded = recorded.map((run) => ({ ...run, state: "stopped" as const, imported: true }));
-      yield* settledGit();
-      yield* mergedMr();
-      expect(yield* prune()).toEqual(["♻ removed wt · merged in !14"]);
-    }),
-  ));
-
 test("an agent that started elsewhere and moved into a checkout keeps it", () =>
   runEffect(
     Effect.gen(function* () {

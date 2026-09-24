@@ -433,14 +433,14 @@ const BACKEND: readonly Check[] = [
   {
     id: "backend/disposition-never-touches-the-run-record",
     statement:
-      "Recording what became of a Run's work through the CLI leaves `run.json` byte-identical, replays a repeated request id without recording twice, and reads without writing.",
+      "Recording what became of a Run's work through the CLI leaves how the Run ended as it was, replays a repeated request id without recording twice, and reads without writing.",
     owner: RETRO,
     needs: "backend",
     proof: {
       kind: "test",
       layer: "backend",
       file: "test/disposition.test.ts",
-      name: "the CLI records a disposition and leaves run.json byte-identical",
+      name: "the CLI records a disposition and leaves the Run's status as it was",
     },
   },
 ];
@@ -575,19 +575,6 @@ const WORKFLOWS: readonly Check[] = [
       layer: "backend",
       file: "test/engine.test.ts",
       name: "two stop and resume cycles keep the run's work and it still completes",
-    },
-  },
-  {
-    id: "workflows/history-is-imported-once",
-    statement:
-      "Work the previous engine left behind is imported into the host's rows once; importing again imports nothing, and its files are left as they were.",
-    owner: MODULES,
-    needs: "backend",
-    proof: {
-      kind: "test",
-      layer: "backend",
-      file: "test/history.test.ts",
-      name: "an old Run is imported once, and importing again imports nothing",
     },
   },
   {

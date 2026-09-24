@@ -8,11 +8,18 @@ import { resetExecutors } from "../../src/executors";
 import { connect } from "../../src/host";
 import { seedIntent, writeIntent, type Authority } from "../../src/intent";
 import { runDir } from "../../src/engine";
+import { isSettled } from "../../src/lifecycle";
 import { stopHost, until } from "./host";
 import { proves, type World } from "./world";
 
-/** The fixture a hosted Run is started from: it records one launch and waits to be answered. */
-const MODULES = ["proof.workflow.ts", "helper.ts", "notes.md"];
+/** A Run that waits to be answered, and ones that end as soon as they start. */
+export const MODULES = [
+  "proof.workflow.ts",
+  "helper.ts",
+  "notes.md",
+  "hello.workflow.ts",
+  "retains.workflow.ts",
+];
 
 /**
  * One test, in an installation of its own whose host is stopped when it ends. Executors
@@ -62,5 +69,26 @@ export const hostedRun = Effect.fn("test.hostedRun")(function* (
   yield* (yield* FileSystem.FileSystem).makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
   const intent = seedIntent(started.runId, { goal });
   yield* writeIntent(dir, authority === undefined ? intent : { ...intent, authority });
+  return { id: started.runId, dir };
+});
+
+/** A Run the host no longer holds: `hello` succeeds and `retains` fails, as soon as they start. */
+export const settledRun = Effect.fn("test.settledRun")(function* (
+  world: World,
+  workflow: "hello" | "retains",
+  options?: Readonly<Record<string, string>>,
+) {
+  const client = yield* connect(world.state).pipe(Effect.orDie);
+  const request = yield* (yield* Crypto.Crypto).randomUUIDv4;
+  const input = workflow === "hello" ? { name: "picker" } : { note: "picker" };
+  const started = yield* client
+    .start({ project: world.project, id: workflow, request, input, options })
+    .pipe(Effect.orDie);
+  yield* until(
+    () => client.run({ runId: started.runId }).pipe(Effect.orDie),
+    (view) => view !== null && isSettled(view),
+  );
+  const dir = runDir(world.state, started.runId);
+  yield* (yield* FileSystem.FileSystem).makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
   return { id: started.runId, dir };
 });
