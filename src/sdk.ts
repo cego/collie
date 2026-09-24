@@ -625,8 +625,11 @@ export const requireApproved = (
  * anything exists, so a value it will not take is the parent's failure and not a child.
  */
 export interface ChildAsk {
-  /** The parent's run id: what the child belongs to, and half of its identity. */
-  readonly runId: string;
+  /**
+   * The parent's run id: what the child belongs to, and half of its identity. The Run the
+   * parent executes as, where it is left out.
+   */
+  readonly runId?: string;
   readonly invocation: string;
   readonly workflow: string;
   readonly input: Readonly<Record<string, Schema.Json>>;
@@ -658,7 +661,10 @@ export interface ChildrenApi {
 
 export class Children extends Context.Service<Children, ChildrenApi>()("collie/Children") {}
 
-/** One child workflow, started and waited on. Anything else is Effect's own operators. */
+/**
+ * One child workflow, started and waited on. Anything else is Effect's own operators. It
+ * prefers the agents its parent prefers where it is started, unless its options say else.
+ */
 export const child = (ask: ChildAsk): Effect.Effect<unknown, WorkflowError, Children> =>
   Effect.gen(function* () {
     const children = yield* Children;
@@ -709,6 +715,8 @@ export interface WorkflowEntry {
   readonly description: string;
   readonly input: InputFields;
   readonly metadata?: WorkflowMetadata;
+  /** What the workflow prefers for its own agents, under a Run's own and its scopes'. */
+  readonly agents?: AgentPreferences;
   readonly make: (registrationName: string) => Registration;
 }
 

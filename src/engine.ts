@@ -49,6 +49,7 @@ import {
   Children,
   Host,
   RESERVED_INPUTS,
+  AgentScopes,
   Run,
   WorkflowAgents,
   WorkflowError,
@@ -64,6 +65,7 @@ import {
   type InputField,
   type InputFields,
   type WorkflowMetadata,
+  type AgentPreferences,
   type HostCodec,
   type HostPayload,
   type HostWorkflow,
@@ -71,7 +73,8 @@ import {
   type WorkflowDefinition,
   type WorkflowEntry,
 } from "./sdk";
-import { configValue, readConfig } from "./config";
+import { FALLBACK_DEFAULTS, configValue, loadDefaults, readConfig } from "./config";
+import { foldPreferences, preferencesIn, resolveChoice } from "./harness";
 import { currentEnv } from "./env";
 import {
   HelleClaimSchema,
@@ -458,7 +461,8 @@ export const SDK_DECLARATIONS = `declare module "collie" {
 
   /** What a parent asks for when part of its own work is another workflow. */
   export interface ChildAsk {
-    readonly runId: string;
+    /** The parent's run id; the Run the parent executes as, where it is left out. */
+    readonly runId?: string;
     /** Stable within the parent: the same one twice is the same child. */
     readonly invocation: string;
     /** A public id, or "self" for the parent's own. */
@@ -1263,6 +1267,7 @@ const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
     description: definition.description,
     input: definition.input.fields as InputFields,
     metadata: declared,
+    agents: definition.agents,
     make: (name) => registrationOf(definition, name),
   };
 };
@@ -2474,6 +2479,8 @@ export interface Generation {
   readonly metadata: Schema.Json;
   /** What a finished Run of this module offers next, with the author's own eligibility. */
   readonly offers: ReadonlyArray<Declared>;
+  /** What the workflow prefers for its own agents. */
+  readonly agents: AgentPreferences | undefined;
   readonly registration: Registration;
 }
 
@@ -2787,6 +2794,7 @@ const makeRegistry: (
       source: yield* sourceOf(route.entry),
       metadata: describeMetadata(entry.metadata),
       offers: declaredByModule(entry.metadata),
+      agents: entry.agents,
       registration,
     };
     live.set(route.name, generation);
@@ -2807,7 +2815,30 @@ const makeRegistry: (
     );
 
   /** A child's run id: its parent's, and what the parent called this invocation. */
-  const childRunId = (ask: ChildAsk) => `${ask.runId}.${ask.invocation}`;
+  const childRunId = (ask: ChildAsk & { readonly runId: string }) =>
+    `${ask.runId}.${ask.invocation}`;
+
+  /**
+   * A Run's own harness, model and effort, checked the way its agents will be given them:
+   * over the operator's configuration and under what the workflow prefers.
+   */
+  const refuseAgent = Effect.fn("Engine.refuseAgent")(function* (
+    generation: Generation,
+    options: Readonly<Record<string, string>>,
+  ) {
+    const asked = preferencesIn(options);
+    if (Object.keys(asked).length === 0) return;
+    const defaults = yield* loadDefaults(configDir).pipe(
+      Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
+    );
+    const configured = {
+      harness: defaults.harness,
+      model: defaults.model,
+      effort: defaults.effort,
+    };
+    const resolved = resolveChoice([configured, generation.agents, asked], defaults.models);
+    if (!resolved.ok) return yield* refusedInput(resolved.problem);
+  });
 
   const refused = (reason: string) => new WorkflowError({ reason });
 
@@ -3034,7 +3065,10 @@ const makeRegistry: (
     result: (child: ChildRun) => lending(runChild(child)),
   };
 
-  const admitChild = Effect.fn("Engine.children.start")(function* (ask: ChildAsk) {
+  const admitChild = Effect.fn("Engine.children.start")(function* (given: ChildAsk) {
+    const parentId = given.runId ?? Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
+    if (parentId === undefined) return yield* refused("a child is started from inside a Run");
+    const ask = { ...given, runId: parentId };
     const parent = yield* store.run(ask.runId);
     if (parent === null) {
       return yield* refused(`no run "${ask.runId}" was started here`);
@@ -3044,10 +3078,19 @@ const makeRegistry: (
       id: ask.workflow === "self" ? parent.workflow : ask.workflow,
     }).pipe(Effect.mapError((failure) => refused(failure.reason)));
     const runId = childRunId(ask);
+    const parentOptions = yield* decodeStrings(parent.options ?? "{}").pipe(
+      Effect.orElseSucceed((): Record<string, string> => ({})),
+    );
+    // What the parent prefers where it starts the child, as options the child is given:
+    // serializable, so no Context, service or Layer of the parent's crosses over.
+    const inherited = foldPreferences([preferencesIn(parentOptions), ...(yield* AgentScopes)]);
     // The host's own options, held to the same rule a front door's are: a name that is
     // not the host's would be a field the child's author never declared.
-    const asked = ask.options ?? {};
+    const asked = { ...inherited, ...ask.options };
     yield* refuseOptions(generation, asked).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    yield* refuseAgent(generation, asked).pipe(
       Effect.mapError((failure) => refused(failure.reason)),
     );
     const request = yield* checkoutRequest(generation, asked).pipe(
@@ -3062,15 +3105,7 @@ const makeRegistry: (
       Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
     );
     // Where its parent works, unless it named a checkout of its own.
-    const from =
-      request.kind === "existing"
-        ? request.path
-        : placedOf(
-            parent,
-            yield* decodeStrings(parent.options ?? "{}").pipe(
-              Effect.orElseSucceed((): Record<string, string> => ({})),
-            ),
-          ).cwd;
+    const from = request.kind === "existing" ? request.path : placedOf(parent, parentOptions).cwd;
     const claimed = yield* claimAndPlace({
       // The invocation is the claim, so replaying the parent admits nothing new and
       // changing what an invocation is given is refused rather than run twice.
@@ -3564,6 +3599,7 @@ const makeRegistry: (
       options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
     const asked = options.options ?? {};
     yield* refuseOptions(generation, asked);
+    yield* refuseAgent(generation, asked);
     const request = yield* checkoutRequest(generation, asked);
     const launch = launchOptions(generation, asked);
     // Settled before anything exists to clean up: an input the workflow's own schema

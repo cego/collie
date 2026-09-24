@@ -46,6 +46,7 @@ import {
   foldPreferences,
   isPermissionMode,
   personaPrefix,
+  preferencesIn,
   resolveChoice,
   startArgs,
   type AgentChoice,
@@ -457,20 +458,6 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
         }),
       ),
     ),
-  );
-
-/** The harness, model and effort a set of options names, and nothing else of it. */
-const preferencesIn = (options: {
-  readonly harness?: string | undefined;
-  readonly model?: string | undefined;
-  readonly effort?: string | undefined;
-}): Preferences =>
-  Object.fromEntries(
-    Object.entries({
-      harness: options.harness,
-      model: options.model,
-      effort: options.effort,
-    }).filter(([, value]) => value !== undefined),
   );
 
 /** Whether what is asked for here is what an agent already running is. */

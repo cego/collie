@@ -6,9 +6,14 @@ import { Effect } from "effect";
 import { connect } from "../src/host";
 import { savedModules } from "../src/discovery";
 import { stopHost, until } from "./support/host";
-import { proves } from "./support/world";
+import { collie, proves } from "./support/world";
 
-const MODULES = ["hello.workflow.ts", "quiet.workflow.ts", "branches.workflow.ts"];
+const MODULES = [
+  "hello.workflow.ts",
+  "quiet.workflow.ts",
+  "branches.workflow.ts",
+  "delegates.workflow.ts",
+];
 
 test(
   "a default-exported definition is found, described with its defaults, and run",
@@ -96,6 +101,74 @@ test(
             (view) => view?.status.status === "complete",
           ).pipe(Effect.orDie);
           expect(answered?.status).toEqual({ status: "complete", value: "review-first" });
+          yield* stopHost(world.state);
+        }),
+      MODULES,
+    ),
+  300_000,
+);
+
+test(
+  "a child inherits the agent its parent prefers, and a preference no harness takes starts nothing",
+  () =>
+    proves(
+      "collie-definition-agents-",
+      (world) =>
+        Effect.gen(function* () {
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const parent = yield* client
+            .start({ project: world.project, id: "delegates", request: "req-1", input: {} })
+            .pipe(Effect.orDie);
+          yield* until(
+            () => client.run({ runId: parent.runId }),
+            (view) => view?.status.status === "complete",
+          ).pipe(Effect.orDie);
+          const runs = yield* client.runs({ task: null }).pipe(Effect.orDie);
+          const child = runs.find((one) => one.parent === parent.runId);
+          expect(child?.workflow).toBe("quiet");
+          expect(child?.options.model).toBe("sonnet");
+
+          const refused = yield* client
+            .start({
+              project: world.project,
+              id: "hello",
+              request: "req-2",
+              input: { name: "mk" },
+              options: { model: "gpt-5" },
+            })
+            .pipe(Effect.flip);
+          expect(String(refused.reason)).toContain('"gpt-5" is not a model claude takes');
+          yield* stopHost(world.state);
+        }),
+      MODULES,
+    ),
+  300_000,
+);
+
+test(
+  "the command line starts a Run on the agent it is asked for, and refuses one no harness takes",
+  () =>
+    proves(
+      "collie-definition-flags-",
+      (world) =>
+        Effect.gen(function* () {
+          const started = yield* collie(world, [
+            "run",
+            "start",
+            "quiet",
+            "--harness",
+            "codex",
+            "--model",
+            "gpt-5",
+          ]);
+          expect(started.exit).toBe(0);
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const [run] = yield* client.runs({ task: null }).pipe(Effect.orDie);
+          expect(run?.options).toMatchObject({ harness: "codex", model: "gpt-5" });
+
+          const refused = yield* collie(world, ["run", "start", "quiet", "--model", "gpt-5"]);
+          expect(refused.exit).toBe(2);
+          expect(refused.envelope.error?.message).toContain('"gpt-5" is not a model claude takes');
           yield* stopHost(world.state);
         }),
       MODULES,

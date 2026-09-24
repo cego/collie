@@ -247,6 +247,18 @@ const runStart = Command.make(
       Flag.withDescription("Continue the Task whose workspace this is; fails outside one"),
       Flag.withDefault(false),
     ),
+    harness: Flag.String("harness").pipe(
+      Flag.withDescription("The harness this Run's agents run on, over the workflow's own"),
+      Flag.optional,
+    ),
+    model: Flag.String("model").pipe(
+      Flag.withDescription("The model this Run's agents run on, over the workflow's own"),
+      Flag.optional,
+    ),
+    effort: Flag.String("effort").pipe(
+      Flag.withDescription("The effort this Run's agents are asked for, over the workflow's own"),
+      Flag.optional,
+    ),
     requestId: requestIdFlag,
   },
   ({
@@ -259,6 +271,9 @@ const runStart = Command.make(
     severity,
     task: taskId,
     continueTask,
+    harness,
+    model,
+    effort,
     requestId: request,
   }) =>
     Effect.gen(function* () {
@@ -291,6 +306,9 @@ const runStart = Command.make(
                 // The host's own options are settled apart from the author's payload, so
                 // nothing the host supplies is ever injected into a module's input.
                 const launch = hostOptions(explicit.given);
+                const agent = Object.entries({ harness, model, effort }).flatMap(([name, value]) =>
+                  Option.isSome(value) ? [[name, value.value] as const] : [],
+                );
                 // What it declares and nobody gave, with the schemas to answer it by, so
                 // a caller can fill the gaps and retry under the same request id.
                 const needed = "inputs" in saved ? neededInputs(saved, launch.input) : null;
@@ -299,7 +317,7 @@ const runStart = Command.make(
                   id: workflow,
                   request: requestId,
                   input: launch.input,
-                  options: launch.options,
+                  options: { ...launch.options, ...Object.fromEntries(agent) },
                   task: task.choice,
                 });
                 if (!started.ok) return started;

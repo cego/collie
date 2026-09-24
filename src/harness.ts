@@ -186,6 +186,20 @@ export interface Preferences {
   readonly effort?: string;
 }
 
+/** The harness, model and effort a set of options names, and nothing else of it. */
+export const preferencesIn = (options: {
+  readonly harness?: string | undefined;
+  readonly model?: string | undefined;
+  readonly effort?: string | undefined;
+}): Preferences =>
+  Object.fromEntries(
+    Object.entries({
+      harness: options.harness,
+      model: options.model,
+      effort: options.effort,
+    }).filter(([, value]) => value !== undefined),
+  );
+
 /** The agent a piece of work is given, decided before anything starts it. */
 export interface AgentChoice {
   readonly harness: string;
