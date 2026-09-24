@@ -47,7 +47,7 @@ const layers = Effect.fn("DiscoveryTest.layers")(function* (prefix: string) {
 test("a workflow is looked for in the project, then the user's, then the shipped", () => {
   const roots = searchPath({ pluginRoot: "/home/someone/.collie", project: "/work/thing" });
   expect(roots).toEqual([
-    { layer: "project", dir: "/work/thing/.herdr/workflows" },
+    { layer: "project", dir: "/work/thing/.collie/workflows" },
     { layer: "user", dir: "/home/someone/.collie/user/workflows" },
     { layer: "shipped", dir: "/home/someone/.collie/workflows" },
   ]);

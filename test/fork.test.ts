@@ -126,7 +126,7 @@ test("forking a persona into the project layer is what that project's agents rea
       const result = yield* forkDefinition(
         reviewer.path,
         "personas",
-        join(rig.projectDir, ".herdr"),
+        join(rig.projectDir, ".collie"),
         {
           full: true,
         },
@@ -226,15 +226,15 @@ test("a fork of the baseline leaves the baseline file untouched", () =>
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("implementer")!;
       const before = yield* readText(source.path);
 
-      yield* forkDefinition(source.path, "personas", join(rig.projectDir, ".herdr"));
+      yield* forkDefinition(source.path, "personas", join(rig.projectDir, ".collie"));
       Bun.spawnSync([
         "sh",
         "-c",
-        `printf 'changed\\n' >> ${join(rig.projectDir, ".herdr", "personas", "implementer.md")}`,
+        `printf 'changed\\n' >> ${join(rig.projectDir, ".collie", "personas", "implementer.md")}`,
       ]);
 
       expect(yield* readText(source.path)).toBe(before);
-      expect(yield* exists(join(rig.projectDir, ".herdr", "personas", "implementer.md"))).toBe(
+      expect(yield* exists(join(rig.projectDir, ".collie", "personas", "implementer.md"))).toBe(
         true,
       );
     }),
@@ -275,9 +275,14 @@ test("re-forking a full copy records the copy's own hash, not its grandparent's"
 
       const first = yield* forkDefinition(source.path, "personas", rig.configDir, { full: true });
       const parentText = yield* readText(first.path);
-      const second = yield* forkDefinition(first.path, "personas", join(rig.projectDir, ".herdr"), {
-        full: true,
-      });
+      const second = yield* forkDefinition(
+        first.path,
+        "personas",
+        join(rig.projectDir, ".collie"),
+        {
+          full: true,
+        },
+      );
 
       const text = yield* readText(second.path);
       expect(text.match(/^forked_from_hash:/gm)).toHaveLength(1);

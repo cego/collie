@@ -264,7 +264,7 @@ accounted for and the release succeeded, but one or more updates were deferred w
 operator's approval. The exceptions are named in the checklist entry. An unresolved
 blocker is not an exception: it leaves the entry unchecked and the Run open.
 
-**Layer** — Where a definition is looked up, later wins by name. A Workflow is one `*.workflow.ts` entry, found project `.herdr/workflows/` first, then the user's `~/.collie/user/workflows/`, then the installation's `workflows/`; a broken override is reported, never fallen through. A Persona is Markdown, found project `.herdr/` over the user config dir over the plugin baseline. Forking takes a baseline definition into a later Layer.
+**Layer** — Where a definition is looked up, later wins by name. A Workflow is one `*.workflow.ts` entry, found project `.collie/workflows/` first, then the user's `~/.collie/user/workflows/`, then the installation's `workflows/`; a broken override is reported, never fallen through. A Persona is Markdown, found project `.herdr/` over the user config dir over the plugin baseline. Forking takes a baseline definition into a later Layer.
 
 **Override** — A Persona that declares `extends: <name>` and changes only what it names; everything else still follows the parent in the Layer below. A file without `extends:` replaces the whole Persona, and a full copy records `forked_from_hash` so a parent that has moved on can be marked stale. The merge rules are canonical in `src/definitions.ts` and `docs/authoring.md`. A Workflow is overridden by an entry with the same id, and customised by importing what it keeps.
 
@@ -286,7 +286,7 @@ What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 **Outcome** — The kind of result a Run has to prove, and the evidence that closes it: a feature names what it built, a bug reproduces before it is fixed, a refactor preserves behaviour, an investigation reaches a supported conclusion and may have no patch, docs run what they document, a migration proves it can go back. A Run nobody classified is `unspecified` and proves only its approved verifications — never a feature by default.
 
-**Approved set** — The verifications Collie may run itself for one Run, each bound argument for argument: `.herdr/verify.json` in the project, else `verify.json` in the config directory, read at start and kept with the Run as its grant — its Intent's `run_verification`, or the host's record for a workflow module's Run. From then on that grant is the set, amended only by `run intent verification`, and a Run whose outcome needs it with nothing granted stops before its first agent. An agent may `collie verify` anything; only the approved set is what Collie runs at the gate.
+**Approved set** — The verifications Collie may run itself for one Run, each bound argument for argument: `.collie/verify.json` in the project, else `verify.json` in the config directory, read at start and kept with the Run as its grant — its Intent's `run_verification`, or the host's record for a workflow module's Run. From then on that grant is the set, amended only by `run intent verification`, and a Run whose outcome needs it with nothing granted stops before its first agent. An agent may `collie verify` anything; only the approved set is what Collie runs at the gate.
 
 **Evidence** — A Verification collected at a revision. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 

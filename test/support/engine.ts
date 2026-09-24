@@ -65,7 +65,7 @@ export function approveVerifications(
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const file = path.join(rig.projectDir, ".herdr", "verify.json");
+    const file = path.join(rig.projectDir, ".collie", "verify.json");
     yield* fs.makeDirectory(path.dirname(file), { recursive: true });
     yield* fs.writeFileString(
       file,

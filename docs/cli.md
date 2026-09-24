@@ -180,7 +180,7 @@ or an execution exists — so a value one of them refuses costs nothing to refus
 `collie verify --run <run-id> -- <command>` records against a module's Run as it does
 against any other: the same collector, the same binding to the tree the command ran on, and
 the same refusal for a directory that is not that Run's. A module can ask for one itself,
-but only for a command `.herdr/verify.json` named when the Run started, or one a human has
+but only for a command `.collie/verify.json` named when the Run started, or one a human has
 granted it since with `run intent verification`.
 
 A module may be made of other modules. A child is a Run of its own — `run list` has it,
@@ -856,7 +856,7 @@ nothing approved is told so rather than passed — an empty set would make the g
 to anything — and it is told before any agent works: a run whose outcome needs the approved
 set, started with none, parks at once, and `run show` gives both repairs. `collie run intent
 verification <run-id> --name … -- <command>` and then `collie run resume <run-id>` carry this
-run on; `.herdr/verify.json` only helps the runs started after it, because a run reads that
+run on; `.collie/verify.json` only helps the runs started after it, because a run reads that
 file when it starts. A grant withdrawn while the run works parks it at its gate the same way.
 
 An investigation that concludes there is nothing to change skips the merge request with a
@@ -929,7 +929,7 @@ collie verify --run <run-id> --name regression --expect fail -- bun test test/bu
 ### What Collie may run itself
 
 An agent may `collie verify` anything; Collie runs only this run's
-[approved set](../CONTEXT.md), matched argument for argument. The set is read when the run starts — `.herdr/verify.json`
+[approved set](../CONTEXT.md), matched argument for argument. The set is read when the run starts — `.collie/verify.json`
 in the project, else `verify.json` in the config directory, whichever is found first and
 taken whole — and copied into `run.json` and into the run's Intent as its
 `run_verification` grant. Editing the file afterwards changes the next run and never a
@@ -976,11 +976,11 @@ collie --json workflow fork implement --layer user --name ours
 collie --json persona fork reviewer --layer project --name strict-reviewer
 ```
 
-| Flag           | What it does                                                                      |
-| -------------- | --------------------------------------------------------------------------------- |
-| `--layer`      | `user` (where you save workflow modules) or `project` (this project's `.herdr/`). |
-| `--name`       | The id the fork takes; it wins over the one it forked from.                       |
-| `--request-id` | Idempotency key.                                                                  |
+| Flag           | What it does                                                                       |
+| -------------- | ---------------------------------------------------------------------------------- |
+| `--layer`      | `user` (where you save workflow modules) or `project` (this project's `.collie/`). |
+| `--name`       | The id the fork takes; it wins over the one it forked from.                        |
+| `--request-id` | Idempotency key.                                                                   |
 
 A workflow is forked by importing it: the fork imports everything it does not name, so
 there is nothing to merge and no step to pick. A persona is Markdown and is copied whole.
@@ -1162,7 +1162,7 @@ stopping the host with `kill` leaves suspended work suspended, and the next clie
 host that picks it up.
 
 `discover` and `start` name the project asking, because one host serves the machine and a
-project's own `.herdr/workflows` is its own: two projects can run different implementations
+project's own `.collie/workflows` is its own: two projects can run different implementations
 of one public id at the same time, each on its own registration.
 [`sdk.md`](sdk.md#where-a-module-lives) is where a module is saved and when an edit takes
 effect.

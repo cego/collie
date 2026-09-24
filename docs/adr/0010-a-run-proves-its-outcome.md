@@ -49,7 +49,7 @@ Run never started.
 agent ran through the collector, with the tree fingerprinted before and after. A result on
 a tree that moved is `unstable` and never `pass`. `--expect fail` is how a bug is proved
 to exist. What _Collie itself_ may run is a Run's approved set, read from
-`.herdr/verify.json` or the config directory when the Run starts and copied into
+`.collie/verify.json` or the config directory when the Run starts and copied into
 `run.json`: a permission that moved under a Run is not a permission.
 
 **D3. An outcome decides what closes a Run.** One pure table (`src/outcome.ts`): a feature
@@ -116,7 +116,7 @@ timings — and never enforced. The budget machinery removed in 0.8.0 is not rei
 A Run started before this resumes only while its workflow still has the steps it recorded.
 That is visible and intended: the alternative is a Run silently doing something else.
 
-A project with no `.herdr/verify.json` is told so at the gate rather than passed: an empty
+A project with no `.collie/verify.json` is told so at the gate rather than passed: an empty
 approved set would make the gate say yes to anything.
 
 The gate asks before it collects: it is a decision on the board, answered with **Approve**,

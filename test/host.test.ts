@@ -48,7 +48,7 @@ const proves = <A, E>(
 const workspace = Effect.fn("HostTest.workspace")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix });
-  const wf = `${dir}/project/.herdr/workflows`;
+  const wf = `${dir}/project/.collie/workflows`;
   yield* fs.makeDirectory(wf, { recursive: true });
   yield* fs.makeDirectory(`${dir}/state`, { recursive: true });
   for (const name of ["proof.workflow.ts", "helper.ts", "notes.md"]) {

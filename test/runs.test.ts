@@ -9,7 +9,7 @@ const view = (over: Partial<RunView> = {}): RunView => ({
   task: null,
   parent: null,
   registration: "builds@1",
-  entry: "/project/.herdr/workflows/builds.workflow.ts",
+  entry: "/project/.collie/workflows/builds.workflow.ts",
   input: {},
   provenance: {},
   strategies: {},

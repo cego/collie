@@ -114,7 +114,7 @@ root, each with the shared plan directory, its own `repo` and every other option
 started with — `risks`, `outcome` — and all on one branch name: the `branch` you gave,
 else `<login>/<task>`, else one named after the Run that fanned out, so the sibling merge
 requests are findable by it. Each is held to the verifications its own checkout approves
-in `.herdr/verify.json`. See [Repo run](../CONTEXT.md) for the term.
+in `.collie/verify.json`. See [Repo run](../CONTEXT.md) for the term.
 
 They start in **waves**. A repository's run starts once every repository its tickets are
 blocked by has been built; repositories that block nothing start together. Ticket order

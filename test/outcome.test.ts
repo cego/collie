@@ -108,7 +108,7 @@ test("a Run with nothing approved is told so and how to repair it, rather than p
   const gaps = evidenceGaps("unspecified", collected({ approved: [], verifications: [] }));
   expect(gaps).toHaveLength(1);
   expect(gaps[0]).toContain("collie run intent verification");
-  expect(gaps[0]).toContain(".herdr/verify.json");
+  expect(gaps[0]).toContain(".collie/verify.json");
   expect(gaps[0]).toContain("only when it starts");
 });
 

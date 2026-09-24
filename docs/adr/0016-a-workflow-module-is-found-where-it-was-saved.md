@@ -12,7 +12,7 @@ different projects, because a project override is the point of having one.
 
 ## Decision
 
-**D1. Three directories, nearest first.** `.herdr/workflows` in the project, then
+**D1. Three directories, nearest first.** `.collie/workflows` in the project, then
 `user/workflows` beside the installation — `~/.collie/user/workflows` for a standard
 install — then the `workflows/` Collie ships. It is the order the Markdown definitions
 already use, so there is one thing to learn rather than two.

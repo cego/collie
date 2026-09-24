@@ -109,7 +109,7 @@ export function nothingApproved(run = "<run>"): string {
   return (
     "nothing is approved for Collie to run, so no command can prove this Run. " +
     `Grant it one with \`collie run intent verification ${run} --name <name> -- <command>\` ` +
-    `and \`collie run resume ${run}\`; for Runs started later, add .herdr/verify.json, ` +
+    `and \`collie run resume ${run}\`; for Runs started later, add .collie/verify.json, ` +
     "or verify.json in your Collie config — a Run reads that file only when it starts"
   );
 }

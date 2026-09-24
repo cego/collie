@@ -376,7 +376,7 @@ test(
           const parked = (yield* payloadOf((yield* collie(world, ["run", "show", runId])).envelope))
             .run?.parked;
           expect(parked).toContain(`collie run intent verification ${runId} --name`);
-          expect(parked).toContain(".herdr/verify.json");
+          expect(parked).toContain(".collie/verify.json");
 
           const grant = (...args: ReadonlyArray<string>) =>
             collie(world, ["run", "intent", "verification", runId, ...args]);

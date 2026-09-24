@@ -241,7 +241,7 @@ export const runIdArg = Argument.String("run-id").pipe(
 
 export const forkFlags = {
   layer: Flag.Literals("layer", ["user", "project"]).pipe(
-    Flag.withDescription("Which Layer to fork into: your config dir, or this project's `.herdr/`"),
+    Flag.withDescription("Which Layer to fork into: your config dir, or this project's `.collie/`"),
   ),
   name: Flag.String("name").pipe(
     Flag.withDescription("Name the fork takes; it wins over the one it forked from"),

@@ -310,7 +310,7 @@ test(
         // The project layer, so nothing outside this scratch directory is written.
         const cwd = yield* fs.makeTempDirectory({ prefix: "collie-authoring-" });
         const scratch = { COLLIE_CWD: cwd };
-        const saved = join(cwd, ".herdr", "workflows");
+        const saved = join(cwd, ".collie", "workflows");
 
         const made = yield* cli(
           ["--json", "workflow", "create", "tally", "--layer", "project"],
@@ -369,7 +369,7 @@ test(
           scratch,
         );
         expect(forked.exit).toBe(0);
-        const path = join(cwd, ".herdr", "workflows", "ours.workflow.ts");
+        const path = join(cwd, ".collie", "workflows", "ours.workflow.ts");
         expect(yield* parseEnvelope(forked.stdout)).toMatchObject({ ok: true, data: { path } });
         // Ordinary composition: it imports the original and spreads it under its own id.
         const text = yield* fs.readFileString(path);
@@ -403,7 +403,7 @@ test(
           ok: false,
           error: { code: "invalid_input", message: expect.stringContaining("--mode") },
         });
-        expect(yield* fs.exists(join(cwd, ".herdr", "workflows", "theirs.workflow.ts"))).toBe(
+        expect(yield* fs.exists(join(cwd, ".collie", "workflows", "theirs.workflow.ts"))).toBe(
           false,
         );
 

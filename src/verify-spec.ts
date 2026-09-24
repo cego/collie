@@ -35,7 +35,7 @@ export class ApprovedUnreadable extends Data.TaggedError("ApprovedUnreadable")<{
 const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
 
 /** The project's own list, and then the user's. Relative to the Run's root. */
-export const PROJECT_FILE = ".herdr/verify.json";
+export const PROJECT_FILE = ".collie/verify.json";
 export const USER_FILE = "verify.json";
 
 /**

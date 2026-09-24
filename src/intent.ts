@@ -217,7 +217,7 @@ export interface SeedOptions {
   /** What the human typed, and what the work source's own text asked for. */
   readonly constraints?: ReadonlyArray<Omit<Constraint, "since"> & { since?: number }>;
   /**
-   * The approved set the Run was started with — `.herdr/verify.json` as read at start.
+   * The approved set the Run was started with — `.collie/verify.json` as read at start.
    * Written into `run_verification` so the Intent *is* the set from version 1, and `run
    * intent verification` amends one list rather than a list that shadows another.
    */

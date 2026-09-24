@@ -34,7 +34,7 @@ export const searchPath = (where: {
   readonly pluginRoot: string;
   readonly project: string;
 }): ReadonlyArray<Root> => [
-  { layer: "project", dir: `${where.project}/.herdr/workflows` },
+  { layer: "project", dir: `${where.project}/.collie/workflows` },
   { layer: "user", dir: `${where.pluginRoot}/user/workflows` },
   { layer: "shipped", dir: `${where.pluginRoot}/workflows` },
 ];

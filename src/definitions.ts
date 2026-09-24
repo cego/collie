@@ -1,5 +1,5 @@
 // Workflow and Persona definitions across the three Layers: baseline (this repo),
-// the user's plugin config dir, and the project's .herdr/. Later wins by name.
+// the user's plugin config dir, and the project's .collie/. Later wins by name.
 
 import { skillsIn } from "./template";
 import { unsafePathComponent } from "./naming";
@@ -123,7 +123,7 @@ export const layers = Effect.fn("Definitions.layers")(function* (env: {
   const path = yield* Path.Path;
   const baseline: Layer = { name: "baseline", dir: env.pluginRoot };
   const user: Layer = { name: "user", dir: env.configDir };
-  const project: Layer = { name: "project", dir: path.join(env.cwd, ".herdr") };
+  const project: Layer = { name: "project", dir: path.join(env.cwd, ".collie") };
   return { baseline, user, project, all: [baseline, user, project] };
 });
 

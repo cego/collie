@@ -37,7 +37,7 @@ const projectOf = Effect.fn("ChildrenTest.project")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const project = `${world.project}/${name}`;
-  const saved = `${project}/.herdr/workflows`;
+  const saved = `${project}/.collie/workflows`;
   yield* save(saved, MODULES);
   yield* fs
     .writeFileString(`${saved}/house.ts`, `export const HOUSE = "${house}";\n`)
@@ -291,7 +291,7 @@ test(
           // and the contract it reads is the file saved beside it there.
           yield* save(world.user, MODULES);
           const project = `${world.project}/half`;
-          const saved = `${project}/.herdr/workflows`;
+          const saved = `${project}/.collie/workflows`;
           yield* save(saved, ["graded.workflow.ts", "capability.ts", "house.ts"]);
           yield* fs
             .writeFileString(`${saved}/house.ts`, `export const HOUSE = "override";\n`)

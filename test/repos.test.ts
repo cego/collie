@@ -47,7 +47,7 @@ const projectOf = Effect.fn("ReposTest.project")(function* (
 ) {
   const fs = yield* FileSystem.FileSystem;
   const project = `${world.project}/work`;
-  yield* save(`${project}/.herdr/workflows`, MODULES);
+  yield* save(`${project}/.collie/workflows`, MODULES);
   yield* fs.makeDirectory(`${project}/plan/issues`, { recursive: true }).pipe(Effect.orDie);
   // A `.git` that is there at all is a checkout to root a run at.
   for (const repo of checkouts) {

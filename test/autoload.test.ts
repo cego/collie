@@ -78,8 +78,8 @@ const proves = <A, E>(
         project: (name: string) =>
           Effect.gen(function* () {
             const root = `${dir}/${name}`;
-            yield* fs.makeDirectory(`${root}/.herdr/workflows`, { recursive: true });
-            return { root, dir: `${root}/.herdr/workflows` };
+            yield* fs.makeDirectory(`${root}/.collie/workflows`, { recursive: true });
+            return { root, dir: `${root}/.collie/workflows` };
           }).pipe(Effect.orDie),
       };
       for (const made of [world.user, `${install}/workflows`, world.state]) {

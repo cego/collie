@@ -140,7 +140,7 @@ Done when `run show` reports the state the user asked for.
 ## Write, check or fork a workflow
 
 A workflow is a TypeScript module saved where a Run looks for one:
-`~/.collie/user/workflows/<id>.workflow.ts` for the user's own, `.herdr/workflows/` for a
+`~/.collie/user/workflows/<id>.workflow.ts` for the user's own, `.collie/workflows/` for a
 project's. Saving the file is the whole of it — there is no registry to edit, nothing to
 rebuild and no host to restart. Never write workflow YAML: it is not what runs.
 

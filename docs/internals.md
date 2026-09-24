@@ -281,7 +281,7 @@ falls all the way through to the current directory.
 
 ## Definitions and layers
 
-`discovery.ts` owns where a workflow module is found: project `.herdr/workflows/`, then the
+`discovery.ts` owns where a workflow module is found: project `.collie/workflows/`, then the
 user's `~/.collie/user/workflows/`, then the installation's `workflows/`. Two entries with
 one id in a layer are an error, and a broken override is reported rather than fallen
 through. `authoring.ts` reads a module without running it — it loads, constructs and

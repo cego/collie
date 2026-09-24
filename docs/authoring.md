@@ -20,7 +20,7 @@ collie run start tally --input note=hi
 ```
 
 `create` writes `~/.collie/user/workflows/tally.workflow.ts` — `--layer project` writes
-`.herdr/workflows/` instead — and provisions the setup to typecheck it beside the file:
+`.collie/workflows/` instead — and provisions the setup to typecheck it beside the file:
 `package.json`, `tsconfig.json` and `collie.d.ts`, installed with the executable's
 own embedded Bun, so a machine with neither Bun nor Node can still compile a module. What
 the setup needs is merged into a `package.json` or `tsconfig.json` you already have — the
@@ -43,7 +43,7 @@ Three directories, nearest first. The same id in a nearer one wins:
 
 | Layer   | Workflow modules                         | Personas and Markdown definitions            |
 | ------- | ---------------------------------------- | -------------------------------------------- |
-| project | `.herdr/workflows/*.workflow.ts`         | `.herdr/workflows`, `.herdr/personas`        |
+| project | `.collie/workflows/*.workflow.ts`        | `.collie/workflows`, `.collie/personas`      |
 | user    | `~/.collie/user/workflows/*.workflow.ts` | `$(herdr plugin config-dir cego.collie)/…`   |
 | shipped | `workflows/*.workflow.ts` in the install | `workflows/`, `personas/` in the Collie repo |
 

@@ -1569,7 +1569,7 @@ scenario(
         // This Run can still be proved; the file only helps the Runs started after it.
         expect(why).toContain("collie run intent verification r-impl-none --name");
         expect(why).toContain("collie run resume r-impl-none");
-        expect(why).toContain(".herdr/verify.json");
+        expect(why).toContain(".collie/verify.json");
         expect(why).toContain("only when it starts");
       }),
     ),

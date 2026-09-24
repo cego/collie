@@ -29,7 +29,7 @@ const MODULES = [
 
 const projectOf = Effect.fn("ActionsTest.project")(function* (world: World) {
   const project = `${world.project}/work`;
-  yield* save(`${project}/.herdr/workflows`, MODULES);
+  yield* save(`${project}/.collie/workflows`, MODULES);
   return project;
 });
 
@@ -196,7 +196,7 @@ test(
 
           // The author edits the module: the action is gone, and the card a moment ago
           // is not authority for anything.
-          const entry = `${project}/.herdr/workflows/offered.workflow.ts`;
+          const entry = `${project}/.collie/workflows/offered.workflow.ts`;
           const source = yield* fs.readFileString(entry);
           yield* fs.writeFileString(
             entry,

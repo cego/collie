@@ -539,11 +539,11 @@ test(
         const fs = yield* FileSystem.FileSystem;
         const plan = yield* twoRepoPlan;
         for (const repo of ["api", "web"]) {
-          yield* fs.makeDirectory(`${rig.projectDir}/${repo}/.herdr`, { recursive: true });
+          yield* fs.makeDirectory(`${rig.projectDir}/${repo}/.collie`, { recursive: true });
           gitRepo(`${rig.projectDir}/${repo}`);
         }
         yield* fs.writeFileString(
-          `${rig.projectDir}/api/.herdr/verify.json`,
+          `${rig.projectDir}/api/.collie/verify.json`,
           '[{"name":"api-unit","executable":"true","argv":[],"cwd":"worktree"}]',
         );
 

@@ -41,7 +41,7 @@ the revision it bound the result to, not where the line was written.
 
 **D6. The approved set is frozen when the Run starts.** `host.verify` will run only a
 command named in the list the Run was admitted under, argument for argument. Editing
-`.herdr/verify.json` changes the next Run and never a live one, and a workflow cannot add
+`.collie/verify.json` changes the next Run and never a live one, and a workflow cannot add
 to its own authority.
 
 **D7. The outcome is a fact on the Run, never a reading of its name.** What a Run has to

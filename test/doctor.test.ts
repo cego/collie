@@ -330,7 +330,7 @@ test("what is overridden here is named, never judged and never edited", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* healthy();
-      const project = `${rig.projectDir}/.herdr`;
+      const project = `${rig.projectDir}/.collie`;
 
       // A module of an author's own, claiming a shipped id — the customisation the whole
       // search path exists for. It is named, with no opinion about what is in it.
