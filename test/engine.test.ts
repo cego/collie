@@ -324,7 +324,7 @@ test(
         const beside = yield* host.ask({ op: "check", dir: wf, entry: `${wf}/plain.workflow.ts` });
         expect(beside.diagnostics).toEqual([]);
         // A definition is typechecked against the same declarations authors are given.
-        for (const defined of ["hello", "quiet", "branches", "delegates"]) {
+        for (const defined of ["hello", "quiet", "branches", "delegates", "declines"]) {
           const checked = yield* host.ask({
             op: "check",
             dir: wf,

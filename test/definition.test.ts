@@ -13,6 +13,7 @@ const MODULES = [
   "quiet.workflow.ts",
   "branches.workflow.ts",
   "delegates.workflow.ts",
+  "declines.workflow.ts",
 ];
 
 test(
@@ -169,6 +170,34 @@ test(
           const refused = yield* collie(world, ["run", "start", "quiet", "--model", "gpt-5"]);
           expect(refused.exit).toBe(2);
           expect(refused.envelope.error?.message).toContain('"gpt-5" is not a model claude takes');
+          yield* stopHost(world.state);
+        }),
+      MODULES,
+    ),
+  300_000,
+);
+
+test(
+  "a failure of the workflow's own is shown as its schema writes it",
+  () =>
+    proves(
+      "collie-definition-error-",
+      (world) =>
+        Effect.gen(function* () {
+          const client = yield* connect(world.state).pipe(Effect.orDie);
+          const { runId } = yield* client
+            .start({ project: world.project, id: "declines", request: "req-1", input: {} })
+            .pipe(Effect.orDie);
+          const failed = yield* until(
+            () => client.run({ runId }),
+            (view) => view?.status.status === "failed",
+          ).pipe(Effect.orDie);
+          expect(failed?.status).toMatchObject({
+            status: "failed",
+            error: { _tag: "Declined", why: "too big to take on" },
+          });
+          const reason = failed?.status.status === "failed" ? failed.status.reason : "";
+          expect(reason).toContain("too big to take on");
           yield* stopHost(world.state);
         }),
       MODULES,

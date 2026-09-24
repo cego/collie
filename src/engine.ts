@@ -1990,13 +1990,20 @@ export const RunStatus = Schema.Union([
   Schema.Struct({ status: Schema.Literals(["pending", "suspended"]) }),
   /** The result as the workflow's own success schema encodes it. */
   Schema.Struct({ status: Schema.Literal("complete"), value: Schema.Json }),
-  Schema.Struct({ status: Schema.Literal("failed"), reason: Schema.String, entry: Schema.String }),
+  Schema.Struct({
+    status: Schema.Literal("failed"),
+    reason: Schema.String,
+    entry: Schema.String,
+    /** A failure of the workflow's own, as its error schema encodes it. */
+    error: Schema.optionalKey(Schema.Json),
+  }),
 ]);
 
 export const pollStatus = (
   result: Option.Option<Workflow.Result<unknown, unknown>>,
   entry: string,
   success?: Schema.Codec<unknown, unknown, never, never>,
+  error?: Schema.Codec<unknown, unknown, never, never>,
 ): typeof RunStatus.Type => {
   if (Option.isNone(result)) return { status: "pending" };
   const value = result.value;
@@ -2012,6 +2019,15 @@ export const pollStatus = (
       return { status: "complete", value: encoded.value };
     }
     return { status: "complete", value: isJson(result) ? result : String(result) };
+  }
+  // A failure of the workflow's own is what it says it is, in the words its schema writes.
+  const failure = Cause.findErrorOption(value.exit.cause);
+  const written =
+    error === undefined || Option.isNone(failure) || isWorkflowError(failure.value)
+      ? Option.none()
+      : Schema.encodeUnknownOption(Schema.toCodecJson(error))(failure.value);
+  if (Option.isSome(written) && isJson(written.value)) {
+    return { status: "failed", reason: asJsonText(written.value), entry, error: written.value };
   }
   return { status: "failed", reason: reasonOf(value.exit.cause), entry };
 };
@@ -3320,6 +3336,7 @@ const makeRegistry: (
       result,
       generation.entry,
       generation.registration.workflow.successSchema,
+      generation.registration.workflow.errorSchema,
     );
     // A failed Run keeps a claim it may have left shared work half-done under.
     const kept = status.status === "failed" ? yield* claimOf(row.run) : null;
@@ -3759,7 +3776,12 @@ const makeRegistry: (
       const found = yield* routed(runId);
       const workflow = found.generation.registration.workflow;
       const result = yield* engine.poll(workflow, found.execution);
-      return pollStatus(result, found.generation.entry, workflow.successSchema);
+      return pollStatus(
+        result,
+        found.generation.entry,
+        workflow.successSchema,
+        workflow.errorSchema,
+      );
     }),
 
     answer: Effect.fn("Engine.Registry.answer")(function* (options: {
