@@ -178,3 +178,79 @@ export function startArgs(
 export function personaPrefix(harness: HarnessAdapter, persona: string): string {
   return harness.personaArgs ? "" : persona;
 }
+
+/** What a layer of configuration or code says about the agent; each field it leaves out is inherited. */
+export interface Preferences {
+  readonly harness?: string;
+  readonly model?: string;
+  readonly effort?: string;
+}
+
+/** The agent a piece of work is given, decided before anything starts it. */
+export interface AgentChoice {
+  readonly harness: string;
+  /** `default` is the harness's own pinned or native default. */
+  readonly model: string;
+  readonly effort: string | null;
+}
+
+/**
+ * Layers of preferences as one, lowest first. A layer that switches harness keeps nothing
+ * chosen below it: a model and an effort are for the harness they were chosen with.
+ */
+export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>): Preferences {
+  let harness: string | undefined;
+  let model: string | undefined;
+  let effort: string | undefined;
+  for (const layer of layers) {
+    if (layer === undefined) continue;
+    if (layer.harness !== undefined && layer.harness !== harness) {
+      harness = layer.harness;
+      model = undefined;
+      effort = undefined;
+    }
+    model = layer.model ?? model;
+    effort = layer.effort ?? effort;
+  }
+  return Object.fromEntries(
+    Object.entries({ harness, model, effort }).filter(([, value]) => value !== undefined),
+  );
+}
+
+/**
+ * Harness, model and effort decided together, lowest layer first, and checked as one.
+ * What is left open is the harness's own default; a combination the harness does not take
+ * is refused with what it would take, never quietly replaced.
+ */
+export function resolveChoice(
+  layers: ReadonlyArray<Preferences | undefined>,
+  extraModels: Readonly<Record<string, ReadonlyArray<string>>> = {},
+):
+  | { readonly ok: true; readonly choice: AgentChoice }
+  | { readonly ok: false; readonly problem: string } {
+  const { harness = "", model = DEFAULT_MODEL, effort } = foldPreferences(layers);
+  const adapter = HARNESSES[harness];
+  if (adapter === undefined) {
+    return { ok: false, problem: `no harness called "${harness}" (${harnessNames().join(", ")})` };
+  }
+  const extra = extraModels[harness] ?? [];
+  if (!knownModel(adapter, model, extra)) {
+    return {
+      ok: false,
+      problem: `"${model}" is not a model ${harness} takes (${modelHint(adapter, extra)}): name one of those, or the harness it belongs to`,
+    };
+  }
+  if (effort !== undefined && adapter.efforts === undefined) {
+    return {
+      ok: false,
+      problem: `${harness} takes no effort, so "${effort}" cannot be asked of it`,
+    };
+  }
+  if (effort !== undefined && !adapter.efforts?.includes(effort)) {
+    return {
+      ok: false,
+      problem: `"${effort}" is not an effort ${harness} takes (${adapter.efforts?.join(", ")})`,
+    };
+  }
+  return { ok: true, choice: { harness, model, effort: effort ?? null } };
+}

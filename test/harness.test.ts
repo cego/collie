@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import {
+  foldPreferences,
+  resolveChoice,
   DEFAULT_MODEL,
   HARNESSES,
   knownModel,
@@ -168,4 +170,62 @@ test("every harness that prompts is started with its unattended switch, unless `
     ])
       expect(asked).not.toContain(flag);
   }
+});
+
+const configured = { harness: "claude", model: "opus", effort: "high" };
+
+test("the agent is decided layer over layer, and the nearest one that names a field wins", () => {
+  expect(resolveChoice([configured, { model: "sonnet" }, undefined, { effort: "low" }])).toEqual({
+    ok: true,
+    choice: { harness: "claude", model: "sonnet", effort: "low" },
+  });
+  expect(resolveChoice([configured])).toEqual({
+    ok: true,
+    choice: { harness: "claude", model: "opus", effort: "high" },
+  });
+});
+
+test("switching harness keeps nothing chosen for the one below, and falls back to its default", () => {
+  // Opus and a high effort were Claude's; codex takes neither, so neither comes along.
+  expect(resolveChoice([configured, { harness: "codex" }])).toEqual({
+    ok: true,
+    choice: { harness: "codex", model: "default", effort: null },
+  });
+  expect(resolveChoice([configured, { harness: "codex", model: "gpt-5" }])).toEqual({
+    ok: true,
+    choice: { harness: "codex", model: "gpt-5", effort: null },
+  });
+  // Naming the harness already in force is not a switch.
+  expect(resolveChoice([configured, { harness: "claude" }])).toEqual({
+    ok: true,
+    choice: { harness: "claude", model: "opus", effort: "high" },
+  });
+});
+
+test("a combination no harness takes is refused with what would be taken instead", () => {
+  const model = resolveChoice([configured, { model: "gpt-5" }]);
+  expect(model.ok).toBe(false);
+  expect(!model.ok && model.problem).toContain('"gpt-5" is not a model claude takes');
+  expect(!model.ok && model.problem).toContain("sonnet");
+
+  const effort = resolveChoice([configured, { harness: "codex", effort: "high" }]);
+  expect(!effort.ok && effort.problem).toContain("codex takes no effort");
+
+  const harness = resolveChoice([configured, { harness: "gemini" }]);
+  expect(!harness.ok && harness.problem).toContain('no harness called "gemini"');
+
+  // A model the operator added for a harness is one it takes.
+  expect(
+    resolveChoice([configured, { model: "claude-next" }], { claude: ["claude-next"] }).ok,
+  ).toBe(true);
+});
+
+test("preferences fold the same way without a harness to check them against", () => {
+  expect(foldPreferences([{ harness: "claude", model: "opus" }, { harness: "codex" }])).toEqual({
+    harness: "codex",
+  });
+  expect(foldPreferences([{ model: "opus" }, undefined, { effort: "low" }])).toEqual({
+    model: "opus",
+    effort: "low",
+  });
 });
