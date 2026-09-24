@@ -1846,7 +1846,7 @@ scenario(
 );
 
 scenario(
-  "a stage that was not proved merges nothing, and says so rather than carrying on",
+  "a stage that was not proved merges nothing, and keeps the claim for whoever recovers stage",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -1867,10 +1867,10 @@ scenario(
         });
         yield* bin.restore();
 
-        expect(said(result)).toBe("REN-1: stage was not verified");
+        expect(reasonOf(result)).toContain("stage was not verified");
         expect(yield* prompts()).toHaveLength(4);
-        // Finished with nothing merged, so nothing is half-done for the claim to guard.
-        expect(claimed).toEqual(["claim r-stage", "release r-stage"]);
+        // Nothing says stage is back on its stable release, so the claim stays with the Run.
+        expect(claimed).toEqual(["claim r-stage"]);
       }),
     ),
   120_000,

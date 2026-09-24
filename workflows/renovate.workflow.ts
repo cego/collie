@@ -17,7 +17,7 @@ import {
   Agents,
   Host,
   Run,
-  type WorkflowError,
+  WorkflowError,
   agentWork,
   ask,
   contentOf,
@@ -346,9 +346,12 @@ export const renovation = (landing: Landing = shippedLanding) =>
             instructions: renovateText("stage"),
             output: Staged,
           });
+          // Nothing here shows stage is back on its stable release, so the claim stays with
+          // this failed Run until someone recovers stage.
           if (!staged.verified) {
-            yield* host.record(runId, "stage was not verified, so nothing is merged");
-            return yield* finished(`${tracked.issue}: stage was not verified`);
+            return yield* new WorkflowError({
+              reason: `${tracked.issue}: stage was not verified, so nothing is merged`,
+            });
           }
           // The batch is approved by another team member, never by the Run that wrote it.
           const approval = yield* agentWork({

@@ -227,12 +227,14 @@ merge request's own branch.
 Either way it then chooses a version from the whole diff since the previous tag, tags
 annotated with changelog-style notes (and creates a GitLab release only where the repository
 is a package), waits for the tag pipeline to publish or deploy, and checks the repository
-off. Helle is released when the run finishes, and also when a stage that was not proved or a
-batch nobody approved ends it with nothing merged. A run that fails keeps the claim, since
-what it guards may be half-done: the run says `claim retained; recovery required` beside
-where it failed, and **Recover the retained claim** starts a renovation of the same
-repository that takes the claim over, stopping the failed run and closing its agents first.
-An agent that will not close stops the takeover rather than being left to work on.
+off. Helle is released when the run finishes, and also when a batch nobody approved ends it
+with nothing merged. A run that fails keeps the claim, since what it guards may be
+half-done, and so does a stage that was not proved: nothing shows stage is back on its
+stable release. The run says `claim retained; recovery required` beside where it failed, and
+**Recover the retained claim** starts a renovation of the same repository that takes the
+claim over, stopping the failed run, closing its agents and waiting for it to stop first.
+An agent that will not close, or a run still in the middle of a step, stops the takeover
+rather than being left to work on.
 
 **It asks you** at the points where asking is the work: a breaking or substantial
 migration, an update that cannot be merged safely, a bounded retry that made no progress,
