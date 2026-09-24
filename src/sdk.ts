@@ -223,6 +223,32 @@ export interface AgentPreferences {
   readonly effort?: string;
 }
 
+/** The agent preferences in force where work is asked for, outermost first. */
+export const AgentScopes = Context.Reference<ReadonlyArray<AgentPreferences>>(
+  "collie/AgentScopes",
+  {
+    defaultValue: () => [],
+  },
+);
+
+/** What a definition prefers for its own work, under anything a Run or a scope prefers. */
+export const WorkflowAgents = Context.Reference<AgentPreferences | undefined>(
+  "collie/WorkflowAgents",
+  { defaultValue: () => undefined },
+);
+
+/**
+ * Every piece of agent work inside `effect` prefers these — through any helper and into any
+ * child — unless something nearer says otherwise. Parallel branches each keep their own.
+ */
+export const withAgents =
+  (preferences: AgentPreferences) =>
+  <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+    Effect.gen(function* () {
+      const scopes = yield* AgentScopes;
+      return yield* Effect.provideService(effect, AgentScopes, [...scopes, preferences]);
+    });
+
 /** What a workflow's own code may use without providing it: the host lends all of it. */
 export type Lent =
   | Run
@@ -780,6 +806,9 @@ export const RESERVED_INPUTS = {
   outcome: "The selectable outcome, where the workflow does not fix one",
   risks: "Additional review axes, passed as declared context",
   previous: "Previous review context attached to the selected work",
+  harness: "The harness this Run's agents run on, over the workflow's own preference",
+  model: "The model this Run's agents run on, over the workflow's own preference",
+  effort: "The effort this Run's agents are asked for, over the workflow's own preference",
 } as const;
 
 const IDENTITY = /^[a-z][a-z0-9-]*$/;

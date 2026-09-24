@@ -43,10 +43,14 @@ import { layers, skillDirs } from "./definitions";
 import { currentEnv, type PluginEnv } from "./env";
 import {
   HARNESSES,
+  foldPreferences,
   isPermissionMode,
   personaPrefix,
+  resolveChoice,
   startArgs,
+  type AgentChoice,
   type PermissionMode,
+  type Preferences,
 } from "./harness";
 import { Herdr } from "./herdr";
 import { agentName, reason, shellQuote, unsafePathComponent } from "./naming";
@@ -55,8 +59,10 @@ import { liveAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } f
 import {
   contentOf,
   jsonSchemaFor,
+  AgentScopes,
   Host,
   Run,
+  WorkflowAgents,
   WorkflowError,
   type HostApi,
   type Projection,
@@ -112,8 +118,17 @@ export const Launched = Schema.Struct({
   role: Schema.String,
   workflow: Schema.String,
   harness: Schema.String,
+  model: Schema.optionalKey(Schema.String),
+  effort: Schema.optionalKey(Schema.NullOr(Schema.String)),
   /** herdr's id for the process given this work: the name alone is reused by the next one. */
   terminalId: Schema.optionalKey(Schema.String),
+});
+
+/** The agent chosen for one piece of work, recorded before anything starts it. */
+export const AgentChoiceSchema = Schema.Struct({
+  harness: Schema.String,
+  model: Schema.String,
+  effort: Schema.NullOr(Schema.String),
 });
 export type Launched = typeof Launched.Type;
 
@@ -154,6 +169,12 @@ export interface AgentsApi {
   readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
   /** How often anything here looks again, which a workflow's own watch for a stop shares. */
   readonly pollMs: number;
+  /** The agent these preferences come to over the operator's configuration, lowest first. */
+  readonly choose: (
+    layers: ReadonlyArray<Preferences | undefined>,
+  ) => Effect.Effect<AgentChoice, WorkflowError>;
+  /** What this Run's agent of that name runs on, where it is running; null where it is not. */
+  readonly choiceOf: (runId: string, agent: string) => Effect.Effect<AgentChoice | null>;
   readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
   /**
    * Starts this work's agent again with its prompt where it is gone and its Output never
@@ -320,6 +341,33 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
     // Where each skill the instructions mention lives, so a mention is the path to read
     // rather than a name the agent has to go looking for.
     const skills = yield* agents.skills(skillsIn(work.instructions));
+    // An agent already running on this work's name is the conversation this continues, and
+    // a conversation cannot become another agent: what is asked for here has to agree with
+    // it, and what only defaults below that does not apply.
+    const scopes = yield* AgentScopes;
+    const held = work.agent === undefined ? null : yield* agents.choiceOf(runId, work.agent);
+    const requested = foldPreferences([...scopes, preferencesIn(given)]);
+    if (held !== null && !agrees(held, requested)) {
+      return yield* new WorkflowError({
+        reason: `${work.operation}: ${work.agent} is already running as ${held.harness}/${held.model}, and this work asks for ${requested.harness ?? held.harness}/${requested.model ?? held.model}. A conversation cannot become another agent: give this work an agent of its own, or ask for the one it is.`,
+      });
+    }
+    // Decided and recorded before anything is started, so a recovery, a revival and a
+    // restart all start the agent this work was given, whatever is configured by then.
+    const choice = yield* Activity.make({
+      name: `${work.operation}.agent`,
+      success: AgentChoiceSchema,
+      error: WorkflowError,
+      execute:
+        held === null
+          ? agents.choose([
+              yield* WorkflowAgents,
+              preferencesIn(place.options),
+              ...scopes,
+              preferencesIn(given),
+            ])
+          : Effect.succeed(held),
+    });
     const ask: AgentAsk = {
       runId: work.runId,
       operation: work.operation,
@@ -341,9 +389,9 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
         contract: plain ? null : jsonSchemaFor(work.output),
       }),
       skill: work.skill ?? null,
-      harness: work.harness ?? null,
-      model: work.model ?? null,
-      effort: work.effort ?? null,
+      harness: choice.harness,
+      model: choice.model,
+      effort: choice.effort,
       permissions: work.permissions ?? null,
     };
 
@@ -410,6 +458,26 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
       ),
     ),
   );
+
+/** The harness, model and effort a set of options names, and nothing else of it. */
+const preferencesIn = (options: {
+  readonly harness?: string | undefined;
+  readonly model?: string | undefined;
+  readonly effort?: string | undefined;
+}): Preferences =>
+  Object.fromEntries(
+    Object.entries({
+      harness: options.harness,
+      model: options.model,
+      effort: options.effort,
+    }).filter(([, value]) => value !== undefined),
+  );
+
+/** Whether what is asked for here is what an agent already running is. */
+const agrees = (held: AgentChoice, requested: Preferences) =>
+  (requested.harness === undefined || requested.harness === held.harness) &&
+  (requested.model === undefined || requested.model === held.model) &&
+  (requested.effort === undefined || requested.effort === held.effort);
 
 /**
  * A message handed, as an Activity, to another Run's live agent in this role: the agent it
@@ -601,6 +669,10 @@ export interface AgentHost {
   readonly herdr: Herdr;
   readonly harness: string;
   readonly model: string;
+  /** The operator's effort, where they configured one. */
+  readonly effort?: string;
+  /** Models the operator added per harness, beside the ones each adapter knows. */
+  readonly models?: Readonly<Record<string, ReadonlyArray<string>>>;
   readonly permissions: PermissionMode;
   readonly compactAtTokens: number;
   readonly pollMs?: number;
@@ -891,6 +963,8 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           role: ask.role,
           workflow: ask.workflow,
           harness: ask.harness ?? host.harness,
+          model: ask.model ?? host.model,
+          effort: ask.effort,
         };
         const launched = terminalId === undefined ? landed : { ...landed, terminalId };
         const adapter = adapterFor(launched.harness);
@@ -1187,6 +1261,25 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         }).pipe(Effect.orElseSucceed(() => askRouteTo(null))),
       ),
     pollMs: host.pollMs ?? DEFAULT_POLL_MS,
+    choose: (layers) => {
+      const configured = { harness: host.harness, model: host.model, effort: host.effort };
+      const resolved = resolveChoice([configured, ...layers], host.models);
+      return resolved.ok
+        ? Effect.succeed(resolved.choice)
+        : Effect.fail(new WorkflowError({ reason: resolved.problem }));
+    },
+    choiceOf: (runId, agent) =>
+      under(
+        Effect.gen(function* () {
+          const name = agentName(runId, agent, null, 1);
+          const held = (yield* launchesOf(runId)).findLast((one) => one.agent === name);
+          if (held === undefined) return null;
+          const listing = yield* host.herdr.agentList().pipe(Effect.option);
+          const alive = Option.exists(listing, (agents) => agents.some((one) => one.name === name));
+          if (!alive || held.model === undefined) return null;
+          return { harness: held.harness, model: held.model, effort: held.effort ?? null };
+        }),
+      ),
     launch,
     revive,
     handOff,
@@ -1312,6 +1405,8 @@ export const configuredAgents = Effect.fn("Agents.configured")(function* (dir: s
     herdr: new Herdr(env),
     harness: defaults.harness,
     model: defaults.model,
+    effort: defaults.effort,
+    models: defaults.models,
     permissions: isPermissionMode(defaults.permissions) ? defaults.permissions : "bypass",
     compactAtTokens: defaults.compactAtTokens,
   });

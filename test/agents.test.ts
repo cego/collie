@@ -23,7 +23,7 @@ import {
   promptFor,
   type AgentHost,
 } from "../src/agents";
-import { Run, defineWorkflow, jsonSchemaFor } from "../src/sdk";
+import { Run, defineWorkflow, jsonSchemaFor, withAgents } from "../src/sdk";
 import { PARKED, controlPath, foundationLayer, pollStatus } from "../src/engine";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
@@ -444,6 +444,111 @@ test("the agent is started on the operator's harness, model and permissions, wit
     }),
   ));
 
+/** Every agent's `--` arguments, in the order the agents were started. */
+const everyLaunch = (calls: ReadonlyArray<Call>) =>
+  calls
+    .filter((call) => (call.argv ?? [])[1] === "start")
+    .map((call) => (call.argv ?? []).slice((call.argv ?? []).indexOf("--") + 1));
+
+/** Two pieces of work under one scope of preferences, the second with a model of its own. */
+const scoped = defineWorkflow({ name: "agent-scoped", input: {}, success: Schema.String });
+const scopedBody = scoped.toLayer(
+  Effect.fnUntraced(function* (payload) {
+    const both = Effect.all([
+      agentWork({ operation: "first", instructions: "One." }),
+      agentWork({ operation: "second", instructions: "Two.", model: "haiku" }),
+    ]);
+    const [first, second] = yield* both.pipe(
+      withAgents({ model: "sonnet" }),
+      Effect.provideService(Run, Run.of({ id: payload.runId, workflow: "agent-scoped" })),
+    );
+    return `${first}+${second}`;
+  }),
+);
+
+test("preferences in scope reach the work inside it, and the work's own still win", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs(["one", "two"]);
+      const said = yield* scoped
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.provide(scopedBody),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      expect(said).toBe("one+two");
+      expect(everyLaunch(yield* rig.calls()).map((args) => args.slice(0, 2))).toEqual([
+        ["--model", "sonnet"],
+        ["--model", "haiku"],
+      ]);
+    }),
+  ));
+
+test(
+  "the agent chosen for a piece of work is the one it comes back to, whatever is configured now",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
+        yield* interrupted("r1", 600);
+        yield* session(halted("r1"));
+
+        // The operator changes the model between the two hosts; the work already has one.
+        const result = yield* session(started("r1"), { model: "sonnet" });
+        expect(result._tag === "Success" && result.success.note).toBe("back");
+        expect(everyLaunch(yield* rig.calls()).map((args) => args.slice(0, 2))).toEqual([
+          ["--model", "opus"],
+          ["--model", "opus"],
+        ]);
+      }),
+    ),
+  120_000,
+);
+
+/** One agent handed two pieces of work, the second asking for another model. */
+const shared = defineWorkflow({ name: "agent-shared", input: {}, success: Schema.String });
+const sharedBody = shared.toLayer(
+  Effect.fnUntraced(function* (payload) {
+    const run = Run.of({ id: payload.runId, workflow: "agent-shared" });
+    const build = agentWork({ operation: "build", agent: "implementer", instructions: "Build." });
+    const fix = agentWork({
+      operation: "fix",
+      agent: "implementer",
+      instructions: "Fix.",
+      model: "sonnet",
+    });
+    return yield* Effect.all([build, fix]).pipe(
+      Effect.map((both) => both.join("+")),
+      Effect.provideService(Run, run),
+    );
+  }),
+);
+
+test("an agent is not handed work that asks for a different one than it is", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs(["built", "fixed"]);
+      const result = yield* shared
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.result,
+          Effect.provide(sharedBody),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      expect(result._tag).toBe("Failure");
+      const reason = result._tag === "Failure" ? result.failure.reason : "";
+      expect(reason).toContain("claude/opus");
+      expect(reason).toContain("claude/sonnet");
+      expect(everyLaunch(yield* rig.calls())).toHaveLength(1);
+    }),
+  ));
+
 onMachineWith("claude")(
   "compaction controls are installed into the launch, as they are for a Step",
   () =>
@@ -661,10 +766,9 @@ test("a delivery this harness has not been shown to take is refused rather than 
   runEffect(
     Effect.gen(function* () {
       yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
-      yield* session(started("r1"), { harness: "codex" });
-      const told = yield* session(say("r1", "stop what you are doing", "steer-now", "now"), {
-        harness: "codex",
-      });
+      const codex = { harness: "codex", model: "default" };
+      yield* session(started("r1"), codex);
+      const told = yield* session(say("r1", "stop what you are doing", "steer-now", "now"), codex);
       expect(told.delivered).toBe(false);
       expect(told.detail).toContain("capability_unproven");
       // Nothing was typed at it: the gate is in the sender, not in front of it.

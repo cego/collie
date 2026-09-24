@@ -50,6 +50,7 @@ import {
   Host,
   RESERVED_INPUTS,
   Run,
+  WorkflowAgents,
   WorkflowError,
   checkEntry,
   definitionOf,
@@ -335,6 +336,14 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly model?: string;
     readonly effort?: string;
   }
+
+  /**
+   * Every piece of agent work inside the effect prefers these — through any helper and into
+   * any child — unless something nearer says otherwise. Parallel branches keep their own.
+   */
+  export function withAgents(
+    preferences: AgentPreferences,
+  ): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
 
   /** What a workflow's own code may use without providing it: the host lends all of it. */
   export type Lent =
@@ -1283,7 +1292,12 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
     // SAFETY: the envelope decoded against the definition's own input struct.
     const input = envelope.input as never;
     const run = Run.of({ id: readEnvelope(envelope).runId, workflow: definition.id });
-    return definition.run({ input }).pipe(Effect.provideService(Run, run));
+    return definition
+      .run({ input })
+      .pipe(
+        Effect.provideService(Run, run),
+        Effect.provideService(WorkflowAgents, definition.agents),
+      );
   });
   const layer = definition.layer === undefined ? body : body.pipe(Layer.provide(definition.layer));
   return { workflow, layer, decisions: {} };
