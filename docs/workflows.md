@@ -227,7 +227,8 @@ merge request's own branch.
 Either way it then chooses a version from the whole diff since the previous tag, tags
 annotated with changelog-style notes (and creates a GitLab release only where the repository
 is a package), waits for the tag pipeline to publish or deploy, and checks the repository
-off. Helle is released when the run finishes successfully.
+off. Helle is released when the run finishes, and also when a stage that was not proved or a
+batch nobody approved ends it with nothing merged.
 
 **It asks you** at the points where asking is the work: a breaking or substantial
 migration, an update that cannot be merged safely, a bounded retry that made no progress,

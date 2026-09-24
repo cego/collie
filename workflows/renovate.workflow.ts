@@ -332,6 +332,10 @@ export const renovation = (options: {
         adopting: ask(runId, adopt).pipe(Effect.map((answer) => answer === "yes")),
         say: (line) => host.record(runId, line),
       });
+      // Given back once the work is finished, merged or not, and not before: holding it
+      // across a consultation is what stops anyone deploying on a half-finished renovation.
+      const finished = (outcome: string) =>
+        (claim === null ? Effect.void : host.release(runId)).pipe(Effect.as(outcome));
 
       if (!assessed.is_package) {
         // An application's updates land together: one batch branch, one merge request,
@@ -349,7 +353,7 @@ export const renovation = (options: {
         });
         if (!staged.verified) {
           yield* host.record(runId, "stage was not verified, so nothing is merged");
-          return `${tracked.issue}: stage was not verified`;
+          return yield* finished(`${tracked.issue}: stage was not verified`);
         }
         // The batch is approved by another team member, never by the Run that wrote it.
         const approval = yield* agentWork({
@@ -359,7 +363,7 @@ export const renovation = (options: {
         });
         if ((approval.approved_by ?? []).length === 0) {
           yield* host.record(runId, "the batch was not approved, so nothing is merged");
-          return `${tracked.issue}: the batch was not approved`;
+          return yield* finished(`${tracked.issue}: the batch was not approved`);
         }
       } else {
         yield* host.record(runId, "a package has no batch branch: skipped batch, stage, approval");
@@ -368,10 +372,9 @@ export const renovation = (options: {
       yield* landing.merge(here);
       const released = yield* landing.release(here);
       const recorded = yield* landing.record(here, released);
-      // Given back once the work is done and not before: holding it across a consultation
-      // is what stops anyone deploying on a half-finished renovation.
-      if (claim !== null) yield* host.release(runId);
-      return `${tracked.issue}: ${recorded.status}${released.version ? ` ${released.version}` : ""}`;
+      return yield* finished(
+        `${tracked.issue}: ${recorded.status}${released.version ? ` ${released.version}` : ""}`,
+      );
     }),
   );
 

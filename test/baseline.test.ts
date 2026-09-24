@@ -1831,6 +1831,7 @@ scenario(
     runEffect(
       Effect.gen(function* () {
         const bin = yield* renovatable();
+        claimed.length = 0;
         yield* rig.queueOutputs([
           TRACKED,
           { verdict: "clean", up_to_date: false, is_package: false, merge_requests: BUMPS },
@@ -1848,6 +1849,38 @@ scenario(
 
         expect(said(result)).toBe("REN-1: stage was not verified");
         expect(yield* prompts()).toHaveLength(4);
+        // Finished with nothing merged, so nothing is half-done for the claim to guard.
+        expect(claimed).toEqual(["claim r-stage", "release r-stage"]);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a batch nobody approved merges nothing, and gives the claim back",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* renovatable();
+        claimed.length = 0;
+        yield* rig.queueOutputs([
+          TRACKED,
+          { verdict: "clean", up_to_date: false, is_package: false, merge_requests: BUMPS },
+          { verdict: "clean", mr_url: "https://gitlab.example.com/x!99" },
+          { verdict: "clean", verified: true, verified_by: "e2e-stage" },
+          { verdict: "clean", approved_by: [] },
+        ]);
+
+        const result = yield* ran({
+          entry: shipped("renovate"),
+          runId: "r-unapproved",
+          input: {},
+          host: withoutHelle,
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe("REN-1: the batch was not approved");
+        expect(claimed).toEqual(["claim r-unapproved", "release r-unapproved"]);
       }),
     ),
   120_000,
