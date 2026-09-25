@@ -238,7 +238,7 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
         // the value it takes, exactly as a typed `run start` does.
         input: { text: { ...action.inputs }, json: {} },
         options: {},
-        task: { mode: "new" },
+        task: action.here === true ? { mode: "here" } : { mode: "new" },
       });
       return started.ok
         ? { state: "applied" as const, note: `started ${started.runId}` }

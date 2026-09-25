@@ -31,10 +31,15 @@ const TaskJson = Schema.fromJsonString(TaskSchema);
 const encodeTask = Schema.encodeSync(TaskJson);
 const decodeTask = Schema.decodeUnknownEffect(TaskJson);
 
-/** Which Task a start belongs to: a new one, or one the caller named. */
+/**
+ * Which Task a start belongs to: a new one with a workspace of its own, one the caller
+ * named, or the workspace the caller is in — its Task, or a new one kept there rather than
+ * given a workspace of its own.
+ */
 export type TaskChoice =
   | { readonly mode: "new" }
-  | { readonly mode: "continue"; readonly task: TaskRecord };
+  | { readonly mode: "continue"; readonly task: TaskRecord }
+  | { readonly mode: "here" };
 
 const tasksDir = Effect.fn("task.tasksDir")(function* (stateDir: string) {
   return (yield* Path.Path).join(stateDir, "tasks");

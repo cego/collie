@@ -16,7 +16,8 @@ the shell. "I have no access" is never an answer here; find the way.
 - `collie_run` — one Run in detail. A message arriving with a `Board: "…" is open` line
   is about that card when it says "it" or names none.
 - `collie_workspaces` — workspaces, their Tasks, the startable workflows. A `start` may
-  name a workspace id, its label, or a checkout's path.
+  name a workspace id, its label, or a checkout's path, and `here: true` keeps the Run in
+  that workspace instead of opening one for its worktree — what "start it here" means.
 - `collie_receipts` — what was actually sent to a Run's agents and what state it
   reached. `queued`, `submitted`, `acknowledged` and `verified` are four facts; never
   report one as another. A `deliver` coming back `applied` is queued for the Run's

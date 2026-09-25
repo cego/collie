@@ -100,6 +100,11 @@ export const ActionSchema = Schema.Union([
      * Collie's own namespace directory — a Run about a repository nobody named.
      */
     workspace: Schema.optionalKey(Schema.String),
+    /**
+     * Keep the Run in that workspace, as its Task, rather than open a workspace for its
+     * worktree: what someone asking from a workspace usually means by "start it here".
+     */
+    here: Schema.optionalKey(Schema.Boolean),
   }),
   Schema.Struct({ kind: Schema.Literal("resume"), run: Schema.String }),
   Schema.Struct({ kind: Schema.Literal("followup"), run: Schema.String, text: Schema.String }),

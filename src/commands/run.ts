@@ -122,9 +122,18 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
   env: PluginEnv,
   named: Option.Option<string>,
   current: boolean,
+  here: boolean,
 ) {
   const refuse = (error: Result) => ({ ok: false as const, error });
   const taken = (choice: TaskChoice) => ({ ok: true as const, choice });
+  if (here && (Option.isSome(named) || current))
+    return refuse(
+      err(
+        "invalid_input",
+        "--here keeps the Run in this workspace; it takes no --task or --continue-task.",
+      ),
+    );
+  if (here) return taken({ mode: "here" });
   if (Option.isSome(named)) {
     const task = yield* readTask(env.stateDir, named.value);
     if (!task)
@@ -134,15 +143,15 @@ const chosenTask = Effect.fn("collie.chosenTask")(function* (
     return taken({ mode: "continue", task });
   }
   if (!current) return taken({ mode: "new" });
-  const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
-  if (!here)
+  const kept = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
+  if (!kept)
     return refuse(
       err(
         "needs_input",
-        "This workspace is not a task workspace; name the Task with --task, as `task list` prints it.",
+        "This workspace is not a task workspace; name the Task with --task, as `task list` prints it, or keep the Run here with --here.",
       ),
     );
-  return taken({ mode: "continue", task: here });
+  return taken({ mode: "continue", task: kept });
 });
 
 /**
@@ -231,6 +240,12 @@ const runStart = Command.make(
       Flag.withDescription("Continue the Task whose workspace this is; fails outside one"),
       Flag.withDefault(false),
     ),
+    here: Flag.Boolean("here").pipe(
+      Flag.withDescription(
+        "Keep the Run in this herdr workspace instead of opening one for its worktree",
+      ),
+      Flag.withDefault(false),
+    ),
     harness: Flag.String("harness").pipe(
       Flag.withDescription("The harness this Run's agents run on, over the workflow's own"),
       Flag.optional,
@@ -255,6 +270,7 @@ const runStart = Command.make(
     severity,
     task: taskId,
     continueTask,
+    here,
     harness,
     model,
     effort,
@@ -280,7 +296,7 @@ const runStart = Command.make(
               // Which Task, before the Workflow is prepared: inference is task-local,
               // so a continuation sees its own Task's plans and a fresh start sees only
               // the Runs recorded before Tasks existed.
-              const task = yield* chosenTask(resolved.env, taskId, continueTask);
+              const task = yield* chosenTask(resolved.env, taskId, continueTask, here);
               if (!task.ok) return task.error;
               // What an id runs is the module saved for this project.
               const saved = yield* moduleFor(resolved.env, workflow);

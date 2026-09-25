@@ -399,26 +399,39 @@ export const continueFlow = Effect.fn("Flows.continueFlow")(function* (
   placement: Placement = "popup",
 ) {
   const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
-  const task = here ?? (yield* pickTask(env, prompts));
+  const task =
+    here === null ? yield* pickTask(env, prompts) : ({ mode: "continue", task: here } as const);
   if (task === null) return 0;
-  return yield* pickFlow(herdr, env, prompts, placement, { mode: "continue", task });
+  return yield* pickFlow(herdr, env, prompts, placement, task);
 });
 
-/** Which Task, when this is not one's workspace. Null is the human backing out. */
+/** The picker's own id for keeping the work in the workspace it was opened from. */
+const HERE = "here";
+
+/**
+ * Which Task, when this is not one's workspace — or this workspace itself, kept as the
+ * work's Task rather than given a workspace of its own. Null is the human backing out.
+ */
 const pickTask = Effect.fn("Flows.pickTask")(function* (env: PluginEnv, prompts: FlowPrompts) {
   const tasks = yield* listTasks(env.stateDir);
-  if (tasks.length === 0) {
+  const kept =
+    env.workspaceId === null
+      ? []
+      : [{ id: HERE, title: "This workspace", subtitle: "keep the work here, beside you" }];
+  if (tasks.length === 0 && kept.length === 0) {
     yield* bail(prompts, "No tasks yet: starting a workflow makes one.");
     return null;
   }
   const chosen = yield* prompts.menu(
-    tasks.map((task) => ({ id: task.id, title: task.label, subtitle: task.cwd })),
+    [...kept, ...tasks.map((task) => ({ id: task.id, title: task.label, subtitle: task.cwd }))],
     {
       header: "Which task?",
       footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
     },
   );
-  return tasks.find((task) => task.id === chosen?.id) ?? null;
+  if (chosen?.id === HERE) return { mode: "here" } as const;
+  const task = tasks.find((one) => one.id === chosen?.id);
+  return task === undefined ? null : ({ mode: "continue", task } as const);
 });
 
 export const pickFlow = Effect.fn("Flows.pickFlow")(function* (

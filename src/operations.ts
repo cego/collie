@@ -24,7 +24,7 @@ export { carryOutAsked, carryOutProposal, registerRunExecutors } from "./run-act
 import { shell, type Runner } from "./mr";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, type RunFacts } from "./runs";
-import type { TaskChoice, TaskRecord } from "./task";
+import { newTask, taskOfWorkspace, writeTask, type TaskChoice, type TaskRecord } from "./task";
 import { nameTask, type LiveNames, type NamingDeps } from "./tasknames";
 import { readIntent, type Authority, type Intent } from "./intent";
 import {
@@ -397,6 +397,7 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
     _tag: "Rejected" as const,
     result: err("operation_failed", message, { cause }),
   });
+  if (choice.mode === "here") return yield* taskHere(env, about);
   if (env.workspaceId === null && env.socketPath === null)
     return kept(choice.mode === "continue" ? choice.task : null);
   const herdr = new Herdr(env);
@@ -426,6 +427,39 @@ export const taskFor = Effect.fn("operations.taskFor")(function* (
     ),
   );
   return kept(null, label);
+});
+
+/**
+ * The workspace this was started from, as the Task the Run belongs to: the Task already
+ * kept there, or a new one kept there. Its checkout is still cut; only the workspace a new
+ * Task would have opened is not, so the Run's agents open beside whoever started it.
+ */
+const taskHere = Effect.fn("operations.taskHere")(function* (
+  env: PluginEnv,
+  about: { readonly workflow: string; readonly named: string },
+) {
+  if (env.workspaceId === null)
+    return {
+      _tag: "Rejected" as const,
+      result: err(
+        "workspace_required",
+        "--here keeps the Run in the herdr workspace it was started from, and this was started outside one.",
+      ),
+    };
+  const kept = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
+  if (kept !== null) return { _tag: "Ok" as const, task: kept, label: null };
+  const open = yield* new Herdr(env)
+    .workspaceList()
+    .pipe(Effect.orElseSucceed((): WorkspaceInfo[] => []));
+  const task = yield* newTask({
+    workspace: env.workspaceId,
+    label:
+      open.find((one) => one.workspaceId === env.workspaceId)?.label ??
+      (about.named || about.workflow),
+    cwd: env.cwd,
+  });
+  yield* writeTask(env.stateDir, task);
+  return { _tag: "Ok" as const, task, label: null };
 });
 
 export const clearOverride = Effect.fn("operations.clearOverride")(function* (

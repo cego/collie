@@ -197,7 +197,9 @@ always new work; unrelated tasks never accumulate beside each other.
 To put more work into a task you already have, continue it rather than starting fresh:
 the `cego.collie.continue` action, or `C` on the Control Plane. Inside the task's own
 workspace that task is meant and nothing is asked. From anywhere else you pick from a list
-of tasks. Nothing continues a task by accident — not a workflow with the same name, not a
+of tasks, headed by **This workspace**: the work stays in the workspace you are in, which
+becomes its task — `collie run start --here` from a shell. A mutating workflow still gets
+its own worktree; its agents simply open beside you rather than in a workspace of its own. Nothing continues a task by accident — not a workflow with the same name, not a
 workspace whose label looks similar, and renaming a task workspace by hand changes nothing
 about what belongs to it.
 

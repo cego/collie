@@ -137,6 +137,7 @@ collie --json run start <workflow> --inputs-json '{"goal":"ship it"}'
 | `--decide s=t`    | Refused: a Run asks its questions when it reaches them.                     |
 | `--task <id>`     | Continue that Task instead of starting a new one, as `task list` prints it. |
 | `--continue-task` | Continue the Task whose workspace this is; `needs_input` outside one.       |
+| `--here`          | Keep the Run in this workspace, as its Task, instead of opening one.        |
 | `--harness <h>`   | The harness this Run's agents run on, over the workflow's own preference.   |
 | `--model <m>`     | The model this Run's agents run on, over the workflow's own preference.     |
 | `--effort <e>`    | The effort this Run's agents are asked for, over the workflow's own.        |
@@ -268,6 +269,11 @@ workspace. Chains, follow-ups and resumes stay in the Task they came from.
 Continuing is explicit. `--task <id>` names one; `--continue-task` means the Task whose
 workspace this command was run in, and is `needs_input` anywhere else rather than a
 prompt. Neither the workflow's name nor a similar label ever continues a Task on its own.
+
+`--here` keeps the work where you are: this workspace becomes the Run's Task — the one
+already kept here, or a new one — and its agents open beside you. A mutating workflow
+still gets its own worktree; only the workspace a fresh start would open is not. A `start`
+proposed from chat does the same with `here: true`.
 
 ```sh
 collie --json task list

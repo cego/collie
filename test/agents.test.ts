@@ -1479,3 +1479,29 @@ test("a fresh start only names its Task, and a continuation goes where its Task 
       expect(yield* rig.cmds()).not.toContain("workspace create");
     }),
   ));
+
+test("a start kept here is the workspace it was started from: its Task, or a new one kept there", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.addWorkspace("wH", "Monorepo | Mine", rig.projectDir);
+      const env = { ...rig.pluginEnv(), workspaceId: "wH" };
+      const about = { workflow: "implement", named: "FRO-343" };
+
+      const made = yield* taskFor(env, { mode: "here" }, about);
+      const task = made._tag === "Ok" ? made.task : null;
+      expect(task).toMatchObject({ workspace: "wH", label: "Monorepo | Mine", cwd: env.cwd });
+      // Nothing to open: the Run goes where whoever started it is.
+      expect(made._tag === "Ok" ? made.label : "").toBeNull();
+      expect(yield* rig.cmds()).not.toContain("workspace create");
+
+      // Kept there, so a second start here is the same Task rather than another one.
+      const again = yield* taskFor(env, { mode: "here" }, about);
+      expect(again._tag === "Ok" && again.task?.id).toBe(task?.id);
+      expect(yield* readTask(env.stateDir, task!.id)).toEqual(task);
+
+      const outside = yield* taskFor({ ...env, workspaceId: null }, { mode: "here" }, about);
+      expect(
+        outside._tag === "Rejected" && outside.result.ok === false && outside.result.error.code,
+      ).toBe("workspace_required");
+    }),
+  ));
