@@ -16,10 +16,19 @@ configuration read as herdr's.
 `.collie/workflows`, `.collie/personas` and `.collie/verify.json`. What herdr provides
 stays where herdr keeps it, such as its worktree directory under `~/.herdr/worktrees`.
 
-**The cutover is hard.** Collie reads nothing from a project's `.herdr/`, and there is no
-fallback to it.
+**A person's own layer has the same shape, in `~/.collie/user/`:** `workflows/`,
+`personas/` and `verify.json`, and their `config.json` beside them. It sits beside the
+installation, which an upgrade fast-forwards, and the installation's git ignores it. It
+used to be split between there (workflows) and herdr's plugin config directory
+(personas, `verify.json`, `config.json`), so one person's Collie files had two homes.
+What Collie keeps for itself — runs, the host's database, tasks — is state, and stays in
+herdr's plugin state directory.
+
+**The cutover is hard.** Collie reads nothing from a project's `.herdr/` or from herdr's
+plugin config directory, and there is no fallback to either.
 
 ## Consequences
 
 A project that saved modules, personas or a verification list under `.herdr/` moves them to
-`.collie/` before Collie sees them again.
+`.collie/` before Collie sees them again, and a person moves their personas, `verify.json`
+and `config.json` from `$(herdr plugin config-dir cego.collie)` to `~/.collie/user/`.

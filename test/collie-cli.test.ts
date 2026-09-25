@@ -27,25 +27,17 @@ const CliEnvelope = Schema.fromJsonString(
 const cli = Effect.fn("test.cli")(function* (
   args: string[],
   extraEnv: Record<string, string> = {},
-  /** Workflow definitions to install in this call's user layer, by file name. */
-  defs: Record<string, string> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
   const watch = yield* watchedBy;
   const dir = yield* fs.makeTempDirectory({ prefix: "collie-cli-" });
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
   yield* installFakeSkills(dir);
-  if (Object.keys(defs).length > 0) {
-    yield* fs.makeDirectory(join(dir, "config", "workflows"), { recursive: true });
-    for (const [name, text] of Object.entries(defs)) {
-      yield* fs.writeFileString(join(dir, "config", "workflows", name), text);
-    }
-  }
   const proc = Bun.spawn([Bun.argv[0] ?? "bun", join(root, "src/main.ts"), ...args], {
     cwd: root,
     env: {
       HERDR_PLUGIN_ROOT: root,
-      HERDR_PLUGIN_CONFIG_DIR: join(dir, "config"),
+      COLLIE_USER_DIR: join(dir, "config"),
       HERDR_PLUGIN_STATE_DIR: join(dir, "state"),
       HOME: dir,
       PWD: root,
@@ -451,7 +443,7 @@ test(
         const shared = {
           HERDR_PLUGIN_ROOT: world.install,
           HERDR_PLUGIN_STATE_DIR: world.state,
-          HERDR_PLUGIN_CONFIG_DIR: world.config,
+          COLLIE_USER_DIR: world.config,
         };
 
         const added = yield* cli(

@@ -58,8 +58,9 @@ const claimedIds = (saved: Catalogued): ReadonlySet<string> =>
 
 /** Where the modules an author writes are saved, by Layer. */
 const moduleDir = (env: PluginEnv, layer: EntryLayer): string =>
-  searchPath({ pluginRoot: env.pluginRoot, project: env.cwd }).find((root) => root.layer === layer)!
-    .dir;
+  searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project: env.cwd }).find(
+    (root) => root.layer === layer,
+  )!.dir;
 
 /** One module as a human reads it: what it takes, what it gives back, and where it is. */
 function describeForHuman(one: Described): string {

@@ -116,10 +116,10 @@ const Models = Schema.Record(Schema.String, Schema.Array(Schema.String));
 const Notifications = Schema.Record(Schema.String, Schema.Boolean);
 
 /** The whole config file, for values only a prompt cares about (e.g. linear.team). */
-export const readConfig = Effect.fn("Config.readConfig")(function* (configDir: string) {
+export const readConfig = Effect.fn("Config.readConfig")(function* (userDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
-  const path = paths.join(configDir, "config.json");
+  const path = paths.join(userDir, "config.json");
   if (!(yield* fs.exists(path))) return {};
   const text = yield* fs.readFileString(path);
   return yield* Schema.decodeUnknownEffect(ConfigJson)(text).pipe(
@@ -147,13 +147,13 @@ export function configValue(raw: YamlMap, dotted: string): YamlValue | undefined
  * configured value, and an empty `harness` is one every Run then fails validation on.
  */
 export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
-  configDir: string,
+  userDir: string,
   dotted: string,
   value: string | number | null,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
-  const raw = yield* readConfig(configDir);
+  const raw = yield* readConfig(userDir);
   const keys = dotted.split(".");
   let node = raw;
   for (const key of keys.slice(0, -1)) {
@@ -166,15 +166,15 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   if (last === undefined) return;
   if (value === null) delete node[last];
   else node[last] = value;
-  yield* fs.makeDirectory(configDir, { recursive: true });
+  yield* fs.makeDirectory(userDir, { recursive: true });
   yield* fs.writeFileString(
-    paths.join(configDir, "config.json"),
+    paths.join(userDir, "config.json"),
     `${Schema.encodeSync(ConfigJson)(raw)}\n`,
   );
 });
 
-export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDir: string) {
-  const raw = yield* readConfig(configDir);
+export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir: string) {
+  const raw = yield* readConfig(userDir);
   const defaults: Defaults = {
     harness: isString(raw.harness) ? raw.harness : FALLBACK_DEFAULTS.harness,
     model: isString(raw.model) ? raw.model : FALLBACK_DEFAULTS.model,

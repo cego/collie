@@ -43,7 +43,7 @@ import { mutation } from "../envelope";
 const status = Command.make("status", {}, () =>
   answering((env) =>
     Effect.gen(function* () {
-      const chosen = yield* chatHarnessOf(env.configDir);
+      const chosen = yield* chatHarnessOf(env.userDir);
       const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
       const record = key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
       const unavailable = whyUnavailable(chosen, Bun.which(chosen));
@@ -99,14 +99,14 @@ const harness = Command.make(
       Effect.gen(function* () {
         const chosen = Option.getOrNull(harness);
         if (chosen === null) {
-          const now = yield* chatHarnessOf(env.configDir);
+          const now = yield* chatHarnessOf(env.userDir);
           return { ok: true as const, data: { preference: now }, human: now };
         }
         if (!isChatHarness(chosen))
           return err("invalid_input", `Chat is ${CHAT_HARNESSES.join(" or ")}.`);
         return yield* mutation(env, "chat-harness", requestId, () =>
           Effect.gen(function* () {
-            yield* writeConfigValue(env.configDir, CHAT_HARNESS_KEY, chosen);
+            yield* writeConfigValue(env.userDir, CHAT_HARNESS_KEY, chosen);
             return {
               ok: true as const,
               data: { preference: chosen },

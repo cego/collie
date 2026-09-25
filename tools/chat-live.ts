@@ -95,16 +95,16 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
   const say = (check: string, result: Result, note: string) => rows.push({ check, result, note });
 
   const stateDir = yield* fs.makeTempDirectory({ prefix: "collie-chat-live-state-" });
-  const configDir = yield* fs.makeTempDirectory({ prefix: "collie-chat-live-config-" });
-  yield* writeConfigValue(configDir, "chat_harness", harness);
+  const userDir = yield* fs.makeTempDirectory({ prefix: "collie-chat-live-config-" });
+  yield* writeConfigValue(userDir, "chat_harness", harness);
 
   const env = readEnv({
     ...process.env,
     HERDR_PLUGIN_STATE_DIR: stateDir,
-    HERDR_PLUGIN_CONFIG_DIR: configDir,
+    COLLIE_USER_DIR: userDir,
   });
   const herdr = new Herdr(env);
-  const chosen = preferredHarness(yield* chatHarnessOf(configDir));
+  const chosen = preferredHarness(yield* chatHarnessOf(userDir));
 
   // A Herd identity of its own, so this never adopts, tokens or reconciles the Home the
   // human's own Collie is using on the same herdr session.
@@ -361,9 +361,9 @@ const live = Effect.fn("live.run")(function* (harness: string, keep: boolean) {
     if (record !== null && record !== UNREADABLE)
       yield* herdr.cli(["workspace", "close", record.workspaceId]).pipe(Effect.ignore);
     yield* fs.remove(stateDir, { recursive: true, force: true });
-    yield* fs.remove(configDir, { recursive: true, force: true });
+    yield* fs.remove(userDir, { recursive: true, force: true });
   } else {
-    yield* Effect.log(`kept ${stateDir} and ${configDir}`);
+    yield* Effect.log(`kept ${stateDir} and ${userDir}`);
   }
   return rows;
 });

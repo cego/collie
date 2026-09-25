@@ -575,7 +575,7 @@ const boardFacts = Effect.fn("Tools.boardFacts")(function* (env: PluginEnv) {
     env,
     alive,
     now,
-    quietMs: (yield* loadDefaults(env.configDir)).boardQuietMs,
+    quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
   });
   if (views.length === 0) return "- (no Runs in this Herd)";
   const lines = [headerSentence(views, now).text];
@@ -882,7 +882,7 @@ const installationFacts = Effect.fn("Tools.installation")(function* (env: Plugin
       }`;
     }),
   );
-  const harness = yield* chatHarnessOf(env.configDir);
+  const harness = yield* chatHarnessOf(env.userDir);
   const chat = key === null ? null : yield* readChat(yield* chatPath(env.stateDir, key));
   return [
     `health: ${health === null ? "could not be checked" : health.ok ? health.human : health.error.message}`,

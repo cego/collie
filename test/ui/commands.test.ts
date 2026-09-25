@@ -73,7 +73,7 @@ function session(): ControlSession {
     herdr: new Herdr(env),
     ...scopeFor(env, env.cwd),
     stateDir: env.stateDir,
-    configDir: env.configDir,
+    userDir: env.userDir,
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
     runsOf: () => Effect.succeed(runs),
@@ -93,7 +93,7 @@ effectTest("a default given a value is written where loadDefaults reads it", fun
   const note = yield* set("harness", "codex");
 
   expect(note).toContain("codex");
-  expect((yield* loadDefaults(rig.pluginEnv().configDir)).harness).toBe("codex");
+  expect((yield* loadDefaults(rig.pluginEnv().userDir)).harness).toBe("codex");
 });
 
 effectTest("clearing a default unsets it rather than configuring an empty one", function* () {
@@ -104,8 +104,8 @@ effectTest("clearing a default unsets it rather than configuring an empty one", 
   // An empty harness is not a harness: every workflow validation would then fail on an
   // unknown one, while Settings showed the key as unset.
   expect(note).toContain("unset");
-  expect(yield* readConfig(rig.pluginEnv().configDir)).not.toHaveProperty("harness");
-  expect((yield* loadDefaults(rig.pluginEnv().configDir)).harness).toBe("claude");
+  expect(yield* readConfig(rig.pluginEnv().userDir)).not.toHaveProperty("harness");
+  expect((yield* loadDefaults(rig.pluginEnv().userDir)).harness).toBe("claude");
 });
 
 effectTest(
@@ -116,9 +116,9 @@ effectTest(
     const note = yield* set("permissions", "yolo");
 
     expect(note).toContain("bypass, harness");
-    expect(yield* readConfig(rig.pluginEnv().configDir)).not.toHaveProperty("permissions");
+    expect(yield* readConfig(rig.pluginEnv().userDir)).not.toHaveProperty("permissions");
     expect(yield* set("permissions", "harness")).toContain("harness");
-    expect((yield* loadDefaults(rig.pluginEnv().configDir)).permissions).toBe("harness");
+    expect((yield* loadDefaults(rig.pluginEnv().userDir)).permissions).toBe("harness");
   },
 );
 
@@ -128,9 +128,9 @@ effectTest("scope is refused unless it is a board the tab can open on", function
   const note = yield* set("scope", "everything");
 
   expect(note).toContain("local, all");
-  expect(yield* readConfig(rig.pluginEnv().configDir)).not.toHaveProperty("scope");
+  expect(yield* readConfig(rig.pluginEnv().userDir)).not.toHaveProperty("scope");
   expect(yield* set("scope", "all")).toContain("all");
-  expect((yield* loadDefaults(rig.pluginEnv().configDir)).scope).toBe("all");
+  expect((yield* loadDefaults(rig.pluginEnv().userDir)).scope).toBe("all");
 });
 
 effectTest("a default is written without the whitespace around it", function* () {
@@ -139,7 +139,7 @@ effectTest("a default is written without the whitespace around it", function* ()
   const note = yield* set("harness", "  codex  ");
 
   expect(note).toBe("harness is now codex");
-  expect((yield* loadDefaults(rig.pluginEnv().configDir)).harness).toBe("codex");
+  expect((yield* loadDefaults(rig.pluginEnv().userDir)).harness).toBe("codex");
 });
 
 /** One run of another workspace, with an agent, a tab and whatever else a test needs. */
@@ -236,7 +236,7 @@ effectTest("questions is refused unless it is a way of presenting one", function
   const note = yield* set("questions", "shout");
 
   expect(note).toContain("focus, notify");
-  expect(yield* readConfig(rig.pluginEnv().configDir)).not.toHaveProperty("questions");
+  expect(yield* readConfig(rig.pluginEnv().userDir)).not.toHaveProperty("questions");
   expect(yield* set("questions", "notify")).toContain("notify");
-  expect((yield* loadDefaults(rig.pluginEnv().configDir)).questions).toBe("notify");
+  expect((yield* loadDefaults(rig.pluginEnv().userDir)).questions).toBe("notify");
 });

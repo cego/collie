@@ -22,7 +22,7 @@ export const board = Command.make("board", {}, () =>
         alive,
         // The human's own threshold, as the pane reads it: a Run is quiet in both or in
         // neither, or the two disagree about what a Task is doing.
-        quietMs: (yield* loadDefaults(env.configDir)).boardQuietMs,
+        quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
       });
       return {
         ok: true as const,

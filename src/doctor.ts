@@ -119,7 +119,7 @@ const minHerdrVersion = Effect.fn("Doctor.minHerdrVersion")(function* (root: str
  * installation needs whatever its workflows turn out to want.
  */
 const asked = Effect.fn("Doctor.asked")(function* (env: PluginEnv) {
-  const defaults = yield* loadDefaults(env.configDir);
+  const defaults = yield* loadDefaults(env.userDir);
   // Every harness a Run could be routed to: the default, and anything a variant may
   // name. A module decides its own at runtime, so what is checked is what the machine
   // would need whichever it picks.

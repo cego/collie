@@ -51,14 +51,11 @@ export const USER_FILE = "verify.json";
  */
 export const approvedFrom = Effect.fn("VerifySpec.approvedFrom")(function* (layers: {
   readonly cwd: string;
-  readonly configDir: string;
+  readonly userDir: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  for (const file of [
-    path.join(layers.cwd, PROJECT_FILE),
-    path.join(layers.configDir, USER_FILE),
-  ]) {
+  for (const file of [path.join(layers.cwd, PROJECT_FILE), path.join(layers.userDir, USER_FILE)]) {
     const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(null)));
     if (text === null) continue;
     const decoded = yield* Schema.decodeUnknownEffect(ApprovedJson)(text.trim()).pipe(

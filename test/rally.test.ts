@@ -80,7 +80,7 @@ const rally = (runId: string, rounds: number) =>
   }).pipe(
     Effect.provide(agentsLayer(hostOf())),
     Effect.provide(Layer.succeed(Children)(Children.of({ start: nothing, result: nothing }))),
-    Effect.provide(foundationLayer({ dir, configDir: rig.configDir })),
+    Effect.provide(foundationLayer({ dir, userDir: rig.userDir })),
     Effect.scoped,
     Effect.orDie,
   );
@@ -285,7 +285,7 @@ test("a command nobody approved is refused, whatever a workflow asks the host fo
           elsewhere: yield* verify("unit", rig.root),
         };
       }).pipe(
-        Effect.provide(foundationLayer({ dir, configDir: rig.configDir })),
+        Effect.provide(foundationLayer({ dir, userDir: rig.userDir })),
         Effect.scoped,
         Effect.orDie,
       );

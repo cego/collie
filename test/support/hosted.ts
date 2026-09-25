@@ -39,7 +39,7 @@ export const hosted = <A, E>(
         const env = readEnv({
           HERDR_PLUGIN_ROOT: world.install,
           HERDR_PLUGIN_STATE_DIR: world.state,
-          HERDR_PLUGIN_CONFIG_DIR: world.config,
+          COLLIE_USER_DIR: world.config,
           HERDR_SOCKET_PATH: `${world.state}/herd.sock`,
           HOME: world.home,
           COLLIE_CWD: world.project,

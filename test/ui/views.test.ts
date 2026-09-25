@@ -155,9 +155,9 @@ effectTest("Settings shows the defaults and remembered values it can write back"
   yield* buildSettings(env);
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  yield* fs.makeDirectory(env.configDir, { recursive: true });
+  yield* fs.makeDirectory(env.userDir, { recursive: true });
   yield* fs.writeFileString(
-    path.join(env.configDir, "config.json"),
+    path.join(env.userDir, "config.json"),
     JSON.stringify({ model: "opus", linear: { team: "CEG" } }),
   );
 
@@ -170,9 +170,9 @@ effectTest("Settings offers every key loadDefaults reads, and repeats none of th
   const env = rig.pluginEnv();
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  yield* fs.makeDirectory(env.configDir, { recursive: true });
+  yield* fs.makeDirectory(env.userDir, { recursive: true });
   yield* fs.writeFileString(
-    path.join(env.configDir, "config.json"),
+    path.join(env.userDir, "config.json"),
     `{ "handoff_timeout_ms": 60000 }`,
   );
 
@@ -186,7 +186,7 @@ effectTest("Settings offers every key loadDefaults reads, and repeats none of th
 
   // And a hand-edited nonsense value still renders, because Settings is where it is put
   // right: a read that threw would take the repair tool down with the problem.
-  yield* fs.writeFileString(path.join(env.configDir, "config.json"), `{ "permissions": "yolo" }`);
+  yield* fs.writeFileString(path.join(env.userDir, "config.json"), `{ "permissions": "yolo" }`);
   const broken = yield* buildSettings(env);
   expect(broken.defaults.find((d) => d.key === "permissions")!.value).toBe("yolo");
 });
@@ -402,8 +402,8 @@ effectTest(
       "focus",
     );
 
-    yield* fs.makeDirectory(env.configDir, { recursive: true });
-    yield* fs.writeFileString(path.join(env.configDir, "config.json"), `{ "questions": "notify" }`);
+    yield* fs.makeDirectory(env.userDir, { recursive: true });
+    yield* fs.writeFileString(path.join(env.userDir, "config.json"), `{ "questions": "notify" }`);
 
     const set = yield* buildSettings(env);
     expect(set.defaults.find((d) => d.key === "questions")!.value).toBe("notify");

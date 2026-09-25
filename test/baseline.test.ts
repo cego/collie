@@ -166,8 +166,8 @@ const session = <A, E>(
     Effect.provide(children),
     Effect.provide(
       override === undefined
-        ? foundationLayer({ dir, configDir: rig.configDir })
-        : override.pipe(Layer.provideMerge(foundationLayer({ dir, configDir: rig.configDir }))),
+        ? foundationLayer({ dir, userDir: rig.userDir })
+        : override.pipe(Layer.provideMerge(foundationLayer({ dir, userDir: rig.userDir }))),
     ),
     Effect.scoped,
     Effect.orDie,
@@ -1335,7 +1335,7 @@ scenario(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         yield* fs.writeFileString(
-          `${rig.configDir}/config.json`,
+          `${rig.userDir}/config.json`,
           asJson({ gitlab: { assignee: "someone-else" } }),
         );
         const bin = yield* FakeBin.make(`${rig.root}/bin`);
@@ -1704,7 +1704,7 @@ const renovatable = () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     yield* fs.writeFileString(
-      `${rig.configDir}/config.json`,
+      `${rig.userDir}/config.json`,
       asJson({
         gitlab: { assignee: "whoever-is-configured" },
         linear: { team: "Platform" },

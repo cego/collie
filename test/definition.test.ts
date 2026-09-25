@@ -23,7 +23,11 @@ test(
       "collie-definition-",
       (world) =>
         Effect.gen(function* () {
-          const found = yield* savedModules({ pluginRoot: world.install, cwd: world.project });
+          const found = yield* savedModules({
+            pluginRoot: world.install,
+            userDir: world.config,
+            cwd: world.project,
+          });
           expect(found.problems).toEqual([]);
           const byId = new Map(found.entries.map((one) => [one.id, one]));
           expect(byId.get("hello")?.title).toBe("Say hello");

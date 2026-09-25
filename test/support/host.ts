@@ -83,7 +83,7 @@ const layoutOf = (state: string) => {
     install: `${dir}/install`,
     user: `${dir}/install/user/workflows`,
     state,
-    config: `${dir}/config`,
+    config: `${dir}/install/user`,
     home: `${dir}/home`,
     project: `${dir}/project`,
   };
@@ -161,7 +161,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
     PATH: "/usr/bin:/bin",
     HERDR_PLUGIN_ROOT: world.install,
     HERDR_PLUGIN_STATE_DIR: state,
-    HERDR_PLUGIN_CONFIG_DIR: world.config,
+    COLLIE_USER_DIR: world.config,
     COLLIE_CWD: world.project,
     COLLIE_HOST: asCommand(command),
     COLLIE_HOST_CRASH_AT: options?.crashAt,

@@ -53,10 +53,10 @@ test("a fork is a stub that extends the original", () =>
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
       expect(source.layer).toBe("baseline");
 
-      const result = yield* forkDefinition(source.path, "personas", rig.configDir);
+      const result = yield* forkDefinition(source.path, "personas", rig.userDir);
 
       expect(result.ok).toBe(true);
-      expect(result.path).toBe(join(rig.configDir, "personas", "reviewer.md"));
+      expect(result.path).toBe(join(rig.userDir, "personas", "reviewer.md"));
       expect(yield* readText(result.path)).toContain("extends: reviewer");
 
       // It wins by name, and everything it does not name is still the baseline's.
@@ -74,7 +74,7 @@ test("a full copy is the whole file, and records what it copied", () =>
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
       const before = yield* readText(source.path);
 
-      const result = yield* forkDefinition(source.path, "personas", rig.configDir, { full: true });
+      const result = yield* forkDefinition(source.path, "personas", rig.userDir, { full: true });
 
       expect(result.ok).toBe(true);
       expect(result.message).toContain("no longer follows the original");
@@ -102,7 +102,7 @@ test("a full copy whose original has changed since is stale", () =>
       const env = rig.pluginEnv();
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
 
-      yield* forkDefinition(source.path, "personas", rig.configDir, { full: true });
+      yield* forkDefinition(source.path, "personas", rig.userDir, { full: true });
       expect(isStale((yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!)).toBe(
         false,
       );
@@ -146,14 +146,14 @@ test("forking never overwrites an existing fork", () =>
       const env = rig.pluginEnv();
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("planner")!;
 
-      expect((yield* forkDefinition(source.path, "personas", rig.configDir)).ok).toBe(true);
+      expect((yield* forkDefinition(source.path, "personas", rig.userDir)).ok).toBe(true);
       Bun.spawnSync([
         "sh",
         "-c",
-        `printf 'edited\\n' >> ${join(rig.configDir, "personas", "planner.md")}`,
+        `printf 'edited\\n' >> ${join(rig.userDir, "personas", "planner.md")}`,
       ]);
 
-      const again = yield* forkDefinition(source.path, "personas", rig.configDir);
+      const again = yield* forkDefinition(source.path, "personas", rig.userDir);
 
       expect(again.ok).toBe(false);
       expect(again.message).toContain("already exists — edit it instead");
@@ -209,10 +209,10 @@ test("forking a definition into the layer it already lives in is refused", () =>
       const env = rig.pluginEnv();
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("planner")!;
 
-      yield* forkDefinition(source.path, "personas", rig.configDir);
+      yield* forkDefinition(source.path, "personas", rig.userDir);
       const forked = (yield* loadDefinitions(yield* layers(env))).personas.get("planner")!;
 
-      const result = yield* forkDefinition(forked.path, "personas", rig.configDir);
+      const result = yield* forkDefinition(forked.path, "personas", rig.userDir);
 
       expect(result.ok).toBe(false);
       expect(result.message).toBe("planner.md is already in that layer");
@@ -246,20 +246,20 @@ test("a fork name that is not a bare scalar is quoted, and a corrupting one is r
       const env = rig.pluginEnv();
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("implementer")!;
 
-      const stub = yield* forkDefinition(source.path, "personas", rig.configDir, {
+      const stub = yield* forkDefinition(source.path, "personas", rig.userDir, {
         name: "foo # bar",
       });
       expect(stub.ok).toBe(true);
       expect(parseDocument(yield* readText(stub.path)).data.name).toBe("foo # bar");
 
-      const copy = yield* forkDefinition(source.path, "personas", rig.configDir, {
+      const copy = yield* forkDefinition(source.path, "personas", rig.userDir, {
         name: "foo: bar",
         full: true,
       });
       expect(copy.ok).toBe(true);
       expect(parseDocument(yield* readText(copy.path)).data.name).toBe("foo: bar");
 
-      const refused = yield* forkDefinition(source.path, "personas", rig.configDir, {
+      const refused = yield* forkDefinition(source.path, "personas", rig.userDir, {
         name: "two\nlines",
       });
       expect(refused.ok).toBe(false);
@@ -273,7 +273,7 @@ test("re-forking a full copy records the copy's own hash, not its grandparent's"
       const env = rig.pluginEnv();
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
 
-      const first = yield* forkDefinition(source.path, "personas", rig.configDir, { full: true });
+      const first = yield* forkDefinition(source.path, "personas", rig.userDir, { full: true });
       const parentText = yield* readText(first.path);
       const second = yield* forkDefinition(
         first.path,

@@ -249,8 +249,9 @@ const handlers = (dir: string) =>
       const registry = yield* Registry;
       const pid = yield* currentPid;
       // The installation this host belongs to, which the client that started it named.
-      const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
-      const catalogue = (project: string) => discover(searchPath({ pluginRoot: install, project }));
+      const env = yield* currentEnv.pipe(Effect.orDie);
+      const catalogue = (project: string) =>
+        discover(searchPath({ pluginRoot: env.pluginRoot, userDir: env.userDir, project }));
 
       return HostRpcs.of({
         identity: () => Effect.succeed({ build: BUILD, pid, dir }),
@@ -365,9 +366,9 @@ const orphaned = (dir: string) =>
  * selects in the parent's own project exactly as a start from a front door does.
  */
 const locateIn =
-  (install: string): Locate =>
+  (install: { readonly pluginRoot: string; readonly userDir: string }): Locate =>
   ({ project, id }) =>
-    discover(searchPath({ pluginRoot: install, project })).pipe(
+    discover(searchPath({ ...install, project })).pipe(
       Effect.flatMap((found) => {
         const entry = found.entries.find((one) => one.id === id);
         if (entry !== undefined) {
@@ -409,8 +410,8 @@ const own = (dir: string) =>
           handlers(dir).pipe(
             Layer.provide(
               registryLayer(dir, {
-                locate: locateIn(env.pluginRoot),
-                configDir: env.configDir,
+                locate: locateIn(env),
+                userDir: env.userDir,
                 crashAt,
               }),
             ),
@@ -422,7 +423,7 @@ const own = (dir: string) =>
         Layer.provide(
           foundationLayer({
             dir,
-            configDir: env.configDir,
+            userDir: env.userDir,
             toast: (title, body, sound) =>
               herdr.notify(title, body, sound).pipe(Effect.provideContext(bun), Effect.ignore),
             herd: { socketPath: env.socketPath, pluginRoot: env.pluginRoot },

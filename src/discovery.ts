@@ -32,19 +32,23 @@ export interface Root {
  */
 export const searchPath = (where: {
   readonly pluginRoot: string;
+  readonly userDir: string;
   readonly project: string;
 }): ReadonlyArray<Root> => [
   { layer: "project", dir: `${where.project}/.collie/workflows` },
-  { layer: "user", dir: `${where.pluginRoot}/user/workflows` },
+  { layer: "user", dir: `${where.userDir}/workflows` },
   { layer: "shipped", dir: `${where.pluginRoot}/workflows` },
 ];
 
 /** Where this project looks: its own workflows, then this machine's, then the shipped. */
 export const savedModules = (where: {
   readonly pluginRoot: string;
+  readonly userDir: string;
   readonly cwd: string;
 }): Effect.Effect<Catalogued, never, FileSystem.FileSystem> =>
-  discover(searchPath({ pluginRoot: where.pluginRoot, project: where.cwd }));
+  discover(
+    searchPath({ pluginRoot: where.pluginRoot, userDir: where.userDir, project: where.cwd }),
+  );
 
 /**
  * One Input a module declares, as a front door needs it: what to call it, whether it may

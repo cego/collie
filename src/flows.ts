@@ -127,7 +127,7 @@ interface BoardSession extends RegistryScope {
   stateDir: string;
   /** The Control Plane's own pane, which is what a temporary pane splits off. */
   paneId?: string | null;
-  configDir?: string;
+  userDir?: string;
   /** What this caller already knows about compaction; absent reads the config file. */
   compaction?: CompactionSettings;
 }
@@ -139,7 +139,7 @@ export interface ControlSession extends BoardSession {
   /** Where the board's Runs come from: the host's, unless a test hands over its own. */
   runsOf?: RunsOf;
   /** Where the defaults live, so the board can read its own quiet threshold. */
-  configDir: string;
+  userDir: string;
   /**
    * What the last worktree sweep said, and whether one is out working right now. A
    * caller that keeps none — a test drawing one board, a view built to be rendered
@@ -211,7 +211,7 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
     env,
     yield* herdOf(env.socketPath),
     home,
-    yield* chatHarnessOf(env.configDir),
+    yield* chatHarnessOf(env.userDir),
     (line) => Console.error(line),
   ).pipe(Effect.catch(() => Effect.succeed(null)));
   if (chat?.kind === "unavailable")
@@ -831,7 +831,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     stateDir: env.stateDir,
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
-    configDir: env.configDir,
+    userDir: env.userDir,
     // The Control Plane runs its actions on one fiber, one at a time, so a hand-off to
     // an agent over the threshold must not hold that queue while a compaction runs. It
     // asks, and reports that the compaction is in the air; the human presses the key
@@ -869,7 +869,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   const opening =
     noted?.filter === "all"
       ? ({ kind: "all" } as const)
-      : openingFilter((yield* loadDefaults(env.configDir)).scope, origin);
+      : openingFilter((yield* loadDefaults(env.userDir)).scope, origin);
   const why =
     (yield* whyNoRenderer()) ??
     (yield* Effect.gen(function* () {
@@ -1004,7 +1004,7 @@ const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   env: PluginEnv,
   runs: ReadonlyArray<RunFacts>,
 ) {
-  if (!(yield* loadDefaults(env.configDir)).proactive) return;
+  if (!(yield* loadDefaults(env.userDir)).proactive) return;
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   if (key === null) return;
   const dir = yield* herdDir(env.stateDir, key);
@@ -1231,7 +1231,7 @@ export function appState(
             ownership,
             region: focus.view === "runs",
           });
-    const defaults = yield* loadDefaults(env.configDir);
+    const defaults = yield* loadDefaults(env.userDir);
     const tasksBuilt = reuse
       ? reuse.state.tasks
       : yield* buildBoard({
@@ -1488,7 +1488,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         return `compact_at_tokens has to be a whole number of tokens above zero, or ${COMPACTION_OFF} to turn compaction off, not "${command.value}"`;
       }
       const value = typed === "" ? null : numeric ? Number(typed) : typed;
-      return yield* writeConfigValue(env.configDir, command.key, value).pipe(
+      return yield* writeConfigValue(env.userDir, command.key, value).pipe(
         // What was written, so the note cannot disagree with the file.
         Effect.as(`${command.key} is now ${value ?? "unset"}`),
         Effect.catch((cause) => Effect.succeed(`${command.key}: ${reason(cause)}`)),
@@ -1641,7 +1641,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   const tasksOf = Effect.fn("Flows.textBoard.tasks")(function* () {
     return yield* buildBoard({
       env,
-      quietMs: (yield* loadDefaults(env.configDir)).boardQuietMs,
+      quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
     });
   });
 
@@ -1688,7 +1688,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     if (waiting && waiting.id !== answering) {
       asking = { index: 0, typed: "" };
       answering = waiting.id;
-      yield* announce(herdr, env, session.configDir);
+      yield* announce(herdr, env, session.userDir);
     }
     if (!waiting) answering = null;
 
@@ -1732,11 +1732,11 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
 const announce = Effect.fn("Flows.announce")(function* (
   herdr: Herdr,
   env: PluginEnv,
-  configDir: string,
+  userDir: string,
 ) {
   // Same opt-out as the Driver's: `questions: notify` leaves the question on the
   // board and in the toast, and only stops it moving the human here.
-  if ((yield* loadDefaults(configDir)).questions === "notify") return;
+  if ((yield* loadDefaults(userDir)).questions === "notify") return;
   if (!env.tabId) return;
   // A tab that will not focus is still a tab the human can reach.
   yield* Effect.ignore(herdr.tabFocus(env.tabId));
@@ -1918,12 +1918,12 @@ const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession, scann
 const QUIET_FOR_MS = 30_000;
 const quietSeen = new Map<string, { at: number; quietMs: number }>();
 
-const boardQuietMs = Effect.fn("Flows.boardQuietMs")(function* (configDir: string) {
+const boardQuietMs = Effect.fn("Flows.boardQuietMs")(function* (userDir: string) {
   const now = yield* Clock.currentTimeMillis;
-  const seen = quietSeen.get(configDir);
+  const seen = quietSeen.get(userDir);
   if (seen && now - seen.at < QUIET_FOR_MS) return seen.quietMs;
-  const quietMs = (yield* loadDefaults(configDir)).boardQuietMs;
-  quietSeen.set(configDir, { at: now, quietMs });
+  const quietMs = (yield* loadDefaults(userDir)).boardQuietMs;
+  quietSeen.set(userDir, { at: now, quietMs });
   return quietMs;
 });
 
@@ -1968,7 +1968,7 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
     alive: live.alive,
     worktrees: session.pruned?.lines ?? [],
     pluginRoot: session.pluginRoot,
-    quietMs: yield* boardQuietMs(session.configDir),
+    quietMs: yield* boardQuietMs(session.userDir),
     ...scanned,
   });
   return view;
@@ -1991,7 +1991,7 @@ const wideOf = Effect.fn("Flows.wideOf")(function* (
     workspaces: live.workspaces,
     alive: live.alive,
     ...scanned,
-    quietMs: yield* boardQuietMs(session.configDir),
+    quietMs: yield* boardQuietMs(session.userDir),
   });
 });
 

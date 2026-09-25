@@ -41,15 +41,18 @@ its top level, which is yours: this is trust, not a sandbox.
 
 Three directories, nearest first. The same id in a nearer one wins:
 
-| Layer   | Workflow modules                         | Personas                                          |
-| ------- | ---------------------------------------- | ------------------------------------------------- |
-| project | `.collie/workflows/*.workflow.ts`        | `.collie/personas`                                |
-| user    | `~/.collie/user/workflows/*.workflow.ts` | `$(herdr plugin config-dir cego.collie)/personas` |
-| shipped | `workflows/*.workflow.ts` in the install | `personas/` in the Collie repo                    |
+| Layer   | Directory                 | Workflow modules          | Personas    |
+| ------- | ------------------------- | ------------------------- | ----------- |
+| project | `.collie/` in the project | `workflows/*.workflow.ts` | `personas/` |
+| user    | `~/.collie/user/`         | `workflows/*.workflow.ts` | `personas/` |
+| shipped | the install, `~/.collie/` | `workflows/*.workflow.ts` | `personas/` |
 
-Your own modules sit beside the installation rather than inside its shipped assets, because
-those are a git checkout an upgrade fast-forwards — a file of yours in there would be
-somebody else's to move.
+The project's `.collie/` and your `~/.collie/user/` have the same shape, and hold the rest
+of what is yours beside them: `verify.json` in each, and your `config.json` in
+`~/.collie/user/`. Your layer sits beside the installation's shipped assets rather than
+among them, because those are a git checkout an upgrade fast-forwards — `user/` is ignored
+by it, so nothing of yours is somebody else's to move. What Collie itself keeps — runs, the
+host's database, tasks — is state, and stays in herdr's state directory for the plugin.
 
 Only entry files take part. A helper or a Markdown prompt beside one is reached because
 your entry imports it, never because it was found. Two files in one layer claiming one id

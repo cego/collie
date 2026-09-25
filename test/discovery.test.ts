@@ -30,7 +30,11 @@ export default defineWorkflow({
 const layers = Effect.fn("DiscoveryTest.layers")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix });
-  const roots = searchPath({ pluginRoot: `${dir}/install`, project: `${dir}/project` });
+  const roots = searchPath({
+    pluginRoot: `${dir}/install`,
+    userDir: `${dir}/install/user`,
+    project: `${dir}/project`,
+  });
   for (const layer of roots) yield* fs.makeDirectory(layer.dir, { recursive: true });
   const dirOf = (layer: EntryLayer) => roots.find((root) => root.layer === layer)!.dir;
   return {
@@ -45,7 +49,11 @@ const layers = Effect.fn("DiscoveryTest.layers")(function* (prefix: string) {
 });
 
 test("a workflow is looked for in the project, then the user's, then the shipped", () => {
-  const roots = searchPath({ pluginRoot: "/home/someone/.collie", project: "/work/thing" });
+  const roots = searchPath({
+    pluginRoot: "/home/someone/.collie",
+    userDir: "/home/someone/.collie/user",
+    project: "/work/thing",
+  });
   expect(roots).toEqual([
     { layer: "project", dir: "/work/thing/.collie/workflows" },
     { layer: "user", dir: "/home/someone/.collie/user/workflows" },

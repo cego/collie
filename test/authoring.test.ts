@@ -28,7 +28,11 @@ const fixtures = new URL("./fixtures/workflows/", import.meta.url).pathname;
 const layers = Effect.fn("AuthoringTest.layers")(function* (prefix: string) {
   const fs = yield* FileSystem.FileSystem;
   const dir = yield* fs.makeTempDirectoryScoped({ prefix });
-  const roots = searchPath({ pluginRoot: `${dir}/install`, project: `${dir}/project` });
+  const roots = searchPath({
+    pluginRoot: `${dir}/install`,
+    userDir: `${dir}/install/user`,
+    project: `${dir}/project`,
+  });
   for (const root of roots) yield* fs.makeDirectory(root.dir, { recursive: true });
   const dirOf = (layer: EntryLayer) => roots.find((root) => root.layer === layer)!.dir;
   return {

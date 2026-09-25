@@ -95,12 +95,12 @@ export const skillDirs = Effect.fn("Definitions.skillDirs")(function* (env: {
 
 export const layers = Effect.fn("Definitions.layers")(function* (env: {
   pluginRoot: string;
-  configDir: string;
+  userDir: string;
   cwd: string;
 }) {
   const path = yield* Path.Path;
   const baseline: Layer = { name: "baseline", dir: env.pluginRoot };
-  const user: Layer = { name: "user", dir: env.configDir };
+  const user: Layer = { name: "user", dir: env.userDir };
   const project: Layer = { name: "project", dir: path.join(env.cwd, ".collie") };
   return { baseline, user, project, all: [baseline, user, project] };
 });

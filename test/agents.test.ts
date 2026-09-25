@@ -520,7 +520,7 @@ test(
     runEffect(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const personas = `${rig.pluginEnv().configDir}/personas`;
+        const personas = `${rig.pluginEnv().userDir}/personas`;
         yield* fs.makeDirectory(personas, { recursive: true });
         yield* fs.writeFileString(`${personas}/reviewer.md`, "Review {{inputs.target}}.\n");
         yield* rig.queueOutputs([{ verdict: "clean", note: "resumed" }]);

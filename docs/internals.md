@@ -273,8 +273,9 @@ from one whose request may never have arrived.
 Because the submission settles all of this, nothing waits again after it: the engine
 watches a prompted agent straight away rather than keeping a readiness wait of its own.
 
-`env.ts` is the plugin environment herdr provides — state directory, config directory,
-socket path, plugin root. `HERDR_PLUGIN_ROOT` is what pins the baseline definitions to the
+`env.ts` is the plugin environment herdr provides — state directory, socket path, plugin
+root — and the user's own layer, `<plugin root>/user`, which `COLLIE_USER_DIR` overrides
+for a test or an embedder. `HERDR_PLUGIN_ROOT` is what pins the baseline definitions to the
 installation the runner came from; the `collie` on PATH is a two-line shim that sets it.
 Without the pin the compiled runner falls back to its own installation (`process.execPath`
 is the binary when bun runs it from `/$bunfs/`), so a `bin/collie` started from another

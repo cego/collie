@@ -1526,7 +1526,7 @@ const append = (path: string, line: string) =>
  */
 export const configuredAgents = Effect.fn("Agents.configured")(function* (dir: string) {
   const env = yield* currentEnv.pipe(Effect.orDie);
-  const defaults = yield* loadDefaults(env.configDir).pipe(
+  const defaults = yield* loadDefaults(env.userDir).pipe(
     Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
   );
   return agentsLayer({

@@ -510,14 +510,14 @@ export const NUMERIC_DEFAULTS: ReadonlyArray<string> = [
 
 export const buildSettings = Effect.fn("Views.buildSettings")(function* (env: PluginEnv) {
   const path = yield* Path.Path;
-  const defaults = yield* loadDefaults(env.configDir);
-  const raw = yield* readConfig(env.configDir);
+  const defaults = yield* loadDefaults(env.userDir);
+  const raw = yield* readConfig(env.userDir);
   const state = yield* claudeTrust(env.home, env.stateDir)
     .state(env.cwd)
     .pipe(Effect.catch(() => Effect.succeed("unknown" as const)));
 
   return {
-    configPath: path.join(env.configDir, "config.json"),
+    configPath: path.join(env.userDir, "config.json"),
     // Named one by one rather than looked up: these are the keys Settings writes back
     // through `config.ts`, and a dictionary would let one drift out of `Defaults`.
     defaults: [

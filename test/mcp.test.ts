@@ -34,7 +34,7 @@ const openServer = Effect.fn("McpTest.open")(function* () {
       env: {
         HOME: dir,
         HERDR_PLUGIN_ROOT: root,
-        HERDR_PLUGIN_CONFIG_DIR: `${dir}/config`,
+        COLLIE_USER_DIR: `${dir}/config`,
         HERDR_PLUGIN_STATE_DIR: `${dir}/state`,
         HERDR_SOCKET_PATH: `${dir}/no-herdr.sock`,
         COLLIE_CWD: dir,

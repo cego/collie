@@ -51,7 +51,7 @@ export const collie = Effect.fn("World.collie")(function* (
       HOME: world.home,
       HERDR_PLUGIN_ROOT: world.install,
       HERDR_PLUGIN_STATE_DIR: world.state,
-      HERDR_PLUGIN_CONFIG_DIR: world.config,
+      COLLIE_USER_DIR: world.config,
       COLLIE_CWD: world.project,
       // The host a client starts is this same program, as an installation's would be.
       COLLIE_HOST: asCommand(command),
@@ -96,7 +96,7 @@ export const proves = <A, E>(
         install: `${dir}/install`,
         user: `${dir}/install/user/workflows`,
         state: `${dir}/state`,
-        config: `${dir}/config`,
+        config: `${dir}/install/user`,
         home: `${dir}/home`,
         project: `${dir}/project`,
       };
@@ -123,7 +123,7 @@ export const proves = <A, E>(
               COLLIE_HOST: asCommand(command),
               HERDR_PLUGIN_ROOT: world.install,
               HERDR_PLUGIN_STATE_DIR: world.state,
-              HERDR_PLUGIN_CONFIG_DIR: world.config,
+              COLLIE_USER_DIR: world.config,
               HOME: world.home,
               COLLIE_CWD: world.project,
             }),

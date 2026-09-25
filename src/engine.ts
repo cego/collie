@@ -1629,14 +1629,14 @@ export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (opti
   readonly dir: string;
   readonly runId: string;
   readonly project: string;
-  readonly configDir: string;
+  readonly userDir: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = approvedPath(options.dir, options.runId);
   if (yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))) return;
   const approved = yield* approvedFrom({
     cwd: options.project,
-    configDir: options.configDir,
+    userDir: options.userDir,
   }).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []));
   yield* fs.makeDirectory(evidenceDir(options.dir, options.runId), { recursive: true });
   yield* fs.writeFileString(path, encodeApproved(approved));
@@ -1745,7 +1745,7 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
 export const hostLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
-  readonly configDir?: string;
+  readonly userDir?: string;
   /** Where a toast goes; left out, nothing is raised. */
   readonly toast?: Toast;
   /** The Herd this host works for; left out, nothing is judged or charged to one. */
@@ -1771,9 +1771,9 @@ export const hostLayer = (options: {
           : under(
               Effect.gen(function* () {
                 const settings =
-                  options.configDir === undefined
+                  options.userDir === undefined
                     ? {}
-                    : (yield* loadDefaults(options.configDir)).notifications;
+                    : (yield* loadDefaults(options.userDir)).notifications;
                 if (!wanted(settings, kind)) return;
                 // ponytail: one line per toast raised, read whole; a Run raises a handful.
                 const said = `${kind}:${(about.key ?? "").replaceAll("\n", " ")}`;
@@ -1926,7 +1926,7 @@ export const hostLayer = (options: {
         approved: (runId) => under(approvedOf(dir, runId)),
         config: (dotted) =>
           under(
-            readConfig(options.configDir ?? dir).pipe(
+            readConfig(options.userDir ?? dir).pipe(
               Effect.map((raw) => {
                 const value = configValue(raw, dotted);
                 return Schema.is(Schema.String)(value) ? value : "";
@@ -1953,7 +1953,7 @@ export const hostLayer = (options: {
                   },
                   strategies: { source: "work-source" },
                   configuredAssignee: configValue(
-                    yield* readConfig(options.configDir ?? dir),
+                    yield* readConfig(options.userDir ?? dir),
                     "gitlab.assignee",
                   ),
                 },
@@ -3058,7 +3058,7 @@ export interface RegistryOptions {
   readonly crashAt?: CrashPoint;
   readonly locate?: Locate;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
-  readonly configDir?: string;
+  readonly userDir?: string;
   /** The herdr checkouts and Task workspaces are made through; the host's own by default. */
   readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
 }
@@ -3080,7 +3080,7 @@ export const registryLayer = (
 export const foundationLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
-  readonly configDir?: string;
+  readonly userDir?: string;
   /** Where a toast goes; left out, nothing is raised. */
   readonly toast?: Toast;
   /** The Herd this host works for; left out, nothing is judged or charged to one. */
@@ -3115,7 +3115,7 @@ const makeRegistry: (
 > = Effect.fn("Engine.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
   const crashAt = options?.crashAt;
   const locate = options?.locate;
-  const configDir = options?.configDir ?? dir;
+  const userDir = options?.userDir ?? dir;
   const engine = yield* WorkflowEngine.WorkflowEngine;
   const fs = yield* FileSystem.FileSystem;
   const store = yield* Store;
@@ -3205,7 +3205,7 @@ const makeRegistry: (
   ) {
     const asked = preferencesIn(options);
     if (Object.keys(asked).length === 0) return;
-    const defaults = yield* loadDefaults(configDir).pipe(
+    const defaults = yield* loadDefaults(userDir).pipe(
       Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
     );
     const configured = {
@@ -3519,7 +3519,7 @@ const makeRegistry: (
       dir,
       runId: claimed.row.run,
       project: request.kind === "existing" ? request.path : parent.project,
-      configDir,
+      userDir,
     }).pipe(Effect.ignore);
     yield* seedIntentOf({ dir, row: claimed.row, generation, seed: undefined, parent }).pipe(
       Effect.provideContext(bun),
@@ -4065,7 +4065,7 @@ const makeRegistry: (
       dir,
       runId: claimed.row.run,
       project: options.project,
-      configDir,
+      userDir,
     }).pipe(Effect.ignore);
     yield* seedIntentOf({
       dir,

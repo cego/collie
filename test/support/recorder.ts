@@ -62,7 +62,7 @@ interface RigEnv {
   HERDR_BIN_PATH: string;
   HERDR_SOCKET_PATH: string;
   HERDR_PLUGIN_ROOT: string;
-  HERDR_PLUGIN_CONFIG_DIR: string;
+  COLLIE_USER_DIR: string;
   HERDR_PLUGIN_STATE_DIR: string;
   HERDR_WORKSPACE_ID: string;
   HERDR_TAB_ID: string;
@@ -180,7 +180,7 @@ export class Rig {
   readonly socketPath: string;
   readonly binPath: string;
   readonly stateDir: string;
-  readonly configDir: string;
+  readonly userDir: string;
   readonly baselineDir: string;
   readonly projectDir: string;
   private listener: { stop(closeActiveConnections?: boolean): void } | null = null;
@@ -197,7 +197,7 @@ export class Rig {
     this.socketPath = path.join(root, "herdr.sock");
     this.binPath = path.join(root, "herdr");
     this.stateDir = path.join(root, "state");
-    this.configDir = path.join(root, "config");
+    this.userDir = path.join(root, "config");
     this.baselineDir = path.join(root, "baseline");
     this.projectDir = path.join(root, "project");
   }
@@ -216,7 +216,7 @@ export class Rig {
   }
 
   private setup(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
-    const dirs = [this.stateDir, this.configDir, this.baselineDir, this.projectDir];
+    const dirs = [this.stateDir, this.userDir, this.baselineDir, this.projectDir];
     const binPath = this.binPath;
     const fakeHerdrPath = this.fakeHerdrPath;
     return Effect.gen(function* () {
@@ -553,7 +553,7 @@ export class Rig {
       HERDR_BIN_PATH: this.binPath,
       HERDR_SOCKET_PATH: this.socketPath,
       HERDR_PLUGIN_ROOT: this.baselineDir,
-      HERDR_PLUGIN_CONFIG_DIR: this.configDir,
+      COLLIE_USER_DIR: this.userDir,
       HERDR_PLUGIN_STATE_DIR: this.stateDir,
       HERDR_WORKSPACE_ID: "1",
       HERDR_TAB_ID: "1:1",

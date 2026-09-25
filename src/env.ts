@@ -20,7 +20,12 @@ export interface PluginEnv {
   pluginRoot: string;
   /** The human's home, where a harness keeps what it remembers between sessions. */
   home: string;
-  configDir: string;
+  /**
+   * This person's own layer, beside the installation and never inside what an upgrade
+   * replaces: their `config.json`, `verify.json`, personas and workflows, in the same
+   * shape a project's `.collie/` has.
+   */
+  userDir: string;
   stateDir: string;
   binPath: string;
   socketPath: string | null;
@@ -107,8 +112,7 @@ export function readEnv(
   return {
     pluginRoot,
     home,
-    configDir:
-      first(env, "HERDR_PLUGIN_CONFIG_DIR") ?? `${home}/.config/herdr/plugins/config/${PLUGIN_ID}`,
+    userDir: first(env, "COLLIE_USER_DIR") ?? `${pluginRoot}/user`,
     stateDir:
       first(env, "HERDR_PLUGIN_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
     binPath: first(env, "HERDR_BIN_PATH") ?? "herdr",
@@ -160,7 +164,7 @@ const environmentKeys = [
   // repository's worktrees go.
   "HERDR_CONFIG_PATH",
   "HERDR_PLUGIN_ROOT",
-  "HERDR_PLUGIN_CONFIG_DIR",
+  "COLLIE_USER_DIR",
   "HERDR_PLUGIN_STATE_DIR",
   "HERDR_PLUGIN_ACTION_ID",
   "HERDR_PLUGIN_ENTRYPOINT_ID",

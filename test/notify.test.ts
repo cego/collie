@@ -81,7 +81,7 @@ const session = <A, E>(
     Effect.provide(
       foundationLayer({
         dir,
-        configDir: rig.pluginEnv().configDir,
+        userDir: rig.pluginEnv().userDir,
         toast: (title, body, sound) => Effect.sync(() => toasts.push(`${sound}|${title}|${body}`)),
       }),
     ),
@@ -159,7 +159,7 @@ test("a kind the operator turned off is not sent", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const config = rig.pluginEnv().configDir;
+      const config = rig.pluginEnv().userDir;
       yield* fs.makeDirectory(config, { recursive: true });
       yield* fs.writeFileString(`${config}/config.json`, `{"notifications":{"run-done":false}}`);
       yield* executed("hello.workflow.ts", "r1", { name: "you" });

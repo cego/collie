@@ -989,7 +989,7 @@ checkout there is no branch and no working tree to review, so the target menu is
 
 ## Your defaults
 
-`config.json` in your config dir (the user layer), all keys optional:
+`~/.collie/user/config.json`, beside your own workflows and personas, all keys optional:
 
 ```json
 {

@@ -69,7 +69,7 @@ function session(): ControlSession {
     herdr: new Herdr(env),
     ...scopeFor(env, env.cwd),
     stateDir: env.stateDir,
-    configDir: env.configDir,
+    userDir: env.userDir,
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
     runsOf: () => Effect.succeed(runs),

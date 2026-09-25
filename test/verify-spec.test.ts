@@ -12,7 +12,7 @@ import { Schema } from "effect";
 const encodeSpecs = Schema.encodeSync(Schema.fromJsonString(Schema.Array(VerifySpecSchema)));
 
 let cwd: string;
-let configDir: string;
+let userDir: string;
 
 const TESTS: VerifySpec = { name: "tests", executable: "bun", argv: ["test"], cwd: "." };
 const LINT: VerifySpec = { name: "lint", executable: "bun", argv: ["run", "lint"], cwd: "." };
@@ -33,7 +33,7 @@ beforeEach(() =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       cwd = yield* fs.makeTempDirectory({ prefix: "hw-approved-cwd-" });
-      configDir = yield* fs.makeTempDirectory({ prefix: "hw-approved-config-" });
+      userDir = yield* fs.makeTempDirectory({ prefix: "hw-approved-config-" });
     }),
   ),
 );
@@ -43,7 +43,7 @@ afterEach(() =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* fs.remove(cwd, { recursive: true, force: true });
-      yield* fs.remove(configDir, { recursive: true, force: true });
+      yield* fs.remove(userDir, { recursive: true, force: true });
     }),
   ),
 );
@@ -51,7 +51,7 @@ afterEach(() =>
 test("no file anywhere approves nothing, which is not an error", () =>
   runEffect(
     Effect.gen(function* () {
-      expect(yield* approvedFrom({ cwd, configDir })).toEqual([]);
+      expect(yield* approvedFrom({ cwd, userDir })).toEqual([]);
     }),
   ));
 
@@ -59,8 +59,8 @@ test("the user's file is used when the project has none", () =>
   runEffect(
     Effect.gen(function* () {
       const path = yield* Path.Path;
-      yield* write(path.join(configDir, "verify.json"), [LINT]);
-      expect(yield* approvedFrom({ cwd, configDir })).toEqual([LINT]);
+      yield* write(path.join(userDir, "verify.json"), [LINT]);
+      expect(yield* approvedFrom({ cwd, userDir })).toEqual([LINT]);
     }),
   ));
 
@@ -68,11 +68,11 @@ test("the project's file wins whole, and the user's is not merged into it", () =
   runEffect(
     Effect.gen(function* () {
       const path = yield* Path.Path;
-      yield* write(path.join(configDir, "verify.json"), [LINT]);
+      yield* write(path.join(userDir, "verify.json"), [LINT]);
       yield* write(path.join(cwd, PROJECT_FILE), [TESTS]);
       // Not [TESTS, LINT]: the project said what this repository's verifications are,
       // and adding the user's global ones would run a command neither file names here.
-      expect(yield* approvedFrom({ cwd, configDir })).toEqual([TESTS]);
+      expect(yield* approvedFrom({ cwd, userDir })).toEqual([TESTS]);
     }),
   ));
 
@@ -82,7 +82,7 @@ test("a file that does not decode names itself, and never reads as approving not
       const path = yield* Path.Path;
       const file = path.join(cwd, PROJECT_FILE);
       yield* writeText(file, `[{"name":"tests","executable":"bun"}]`);
-      const result = yield* approvedFrom({ cwd, configDir }).pipe(Effect.result);
+      const result = yield* approvedFrom({ cwd, userDir }).pipe(Effect.result);
       expect(result._tag).toBe("Failure");
       if (result._tag === "Failure") expect(String(result.failure)).toContain(file);
     }),
@@ -122,13 +122,13 @@ test("a Run keeps the set it started with, whatever the file says later", () =>
       // Read at start, and written into the Run's Intent: from there, the Intent is the set.
       yield* writeIntent(
         dir,
-        seedIntent("r1", { runVerification: yield* approvedFrom({ cwd, configDir }) }),
+        seedIntent("r1", { runVerification: yield* approvedFrom({ cwd, userDir }) }),
       );
 
       // Someone edits the project's file after the Run is going. A permission that moved
       // under a Run is not a permission, so the Run is unchanged.
       yield* write(path.join(cwd, PROJECT_FILE), [LINT]);
-      const now = yield* approvedFrom({ cwd, configDir });
+      const now = yield* approvedFrom({ cwd, userDir });
       expect(now).toEqual([LINT]);
       expect(approvedFor(now, yield* readIntent(dir))).toEqual([TESTS]);
     }),

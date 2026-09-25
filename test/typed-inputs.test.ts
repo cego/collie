@@ -43,7 +43,6 @@ const collie = Effect.fn("TypedTest.collie")(function* (world: World, args: Read
       HOME: world.project,
       HERDR_PLUGIN_ROOT: world.install,
       HERDR_PLUGIN_STATE_DIR: world.state,
-      HERDR_PLUGIN_CONFIG_DIR: `${world.state}/config`,
       COLLIE_CWD: world.project,
       COLLIE_HOST: asCommand(command),
     },

@@ -92,11 +92,11 @@ const hosted = <A, E>(
     Effect.provide(
       registryLayer(dir(), {
         placing: { herdr: new FakeHerdr(env()), env: env() },
-        configDir: rig.configDir,
+        userDir: rig.userDir,
       }),
     ),
     Effect.provide(agentsLayer({ ...hostOf(), ...agents })),
-    Effect.provide(foundationLayer({ dir: dir(), configDir: rig.configDir })),
+    Effect.provide(foundationLayer({ dir: dir(), userDir: rig.userDir })),
     Effect.scoped,
     Effect.orDie,
   );
@@ -121,7 +121,7 @@ const aTask = Effect.gen(function* () {
 const approvedByOperator = FileSystem.FileSystem.pipe(
   Effect.flatMap((fs) =>
     fs.writeFileString(
-      `${rig.configDir}/verify.json`,
+      `${rig.userDir}/verify.json`,
       '[{"name":"unit","executable":"true","argv":[],"cwd":"worktree"}]',
     ),
   ),
