@@ -26,7 +26,7 @@ import {
   targetKind,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
-import { reviewPass, reviewText } from "./reviewing.ts";
+import { FIX_PROMPT, reviewPass } from "./reviewing.ts";
 
 const FIX = "Fix findings";
 const IMPLEMENT = "Fix findings in a full implement run";
@@ -116,7 +116,7 @@ export default defineWorkflow({
         plan: asked.plan ?? "",
         outcome: asked.proves ?? "",
       };
-      const vars = {
+      const input = {
         run: { dir: place.dir, id: run.id },
         previous: { review: before, fix: "" },
         iteration: "1",
@@ -180,9 +180,8 @@ export default defineWorkflow({
         const fixed = yield* agentWork({
           operation: "fix",
           role: "implementer",
-          instructions: reviewText("fix"),
-          inputs,
-          vars,
+          instructions: FIX_PROMPT,
+          input: { inputs, ...input },
           output: FixOutputSchema,
         });
         yield* host.record(

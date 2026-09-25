@@ -30,10 +30,27 @@ import * as Activity from "effect/unstable/workflow/Activity";
 import markdown from "./plan.md" with { type: "text" };
 
 const content = contentOf(markdown);
-const prompt = (section: string) =>
-  [content.preamble, content.sections.get(section) ?? ""]
-    .filter((part) => part !== "")
-    .join("\n\n");
+const text = Schema.String;
+
+/** What every planning prompt is told: what to plan, and where this Run keeps its work. */
+const planning = {
+  inputs: Schema.Struct({ goal: text, ticket: text }),
+  run: Schema.Struct({ dir: text, id: text }),
+};
+
+const prompts = {
+  grill: content.template("grill", planning),
+  spec: content.template("spec", planning),
+  tickets: content.template("tickets", planning),
+  unbuildable: content.template("unbuildable", { ...planning, refusal: text }),
+  secondOpinion: content.template("second-opinion", planning),
+  revise: content.template("revise", { ...planning, findings: text }),
+  offload: content.template("offload", {
+    ...planning,
+    config: Schema.Struct({ linear: Schema.Struct({ team: text }) }),
+  }),
+  refine: content.template("refine", planning),
+};
 
 /** What the interview settles: the name of the work, and what kind of result it is. */
 const Grilled = Schema.Struct({
@@ -132,8 +149,10 @@ export default defineWorkflow({
       const children = yield* Children;
       const run = yield* Run;
       const place = yield* host.place(run.id);
-      const inputs = { goal: asked.goal, ticket: asked.ticket ?? "" };
-      const vars = { run: { dir: place.dir, id: run.id } };
+      const input = {
+        inputs: { goal: asked.goal, ticket: asked.ticket ?? "" },
+        run: { dir: place.dir, id: run.id },
+      };
       const planDir = `${place.dir}/plan`;
       // Why the plan's tickets cannot be built, recorded so a replay is handed the same answer.
       const refusalOf = (at: string) =>
@@ -144,29 +163,29 @@ export default defineWorkflow({
             Effect.map((plan) => plan.refusal?.message ?? null),
           ),
         });
-      const planner = { agent: PLANNER, role: "planner", inputs };
+      const planner = { agent: PLANNER, role: "planner" };
 
       const grilled = yield* agentWork({
         ...planner,
         operation: "grill",
-        instructions: prompt("grill"),
-        vars,
+        instructions: prompts.grill,
+        input,
         output: Grilled,
       });
       yield* agentWork({
         ...planner,
         operation: "spec",
         skill: "to-spec",
-        instructions: prompt("spec"),
-        vars,
+        instructions: prompts.spec,
+        input,
         output: Spec,
       });
       const written = yield* agentWork({
         ...planner,
         operation: "tickets",
         skill: "to-tickets",
-        instructions: prompt("tickets"),
-        vars,
+        instructions: prompts.tickets,
+        input,
         output: PlanOutputSchema,
       });
       // A plan whose tickets nobody can build is not a finished plan: its planner is told once.
@@ -175,8 +194,8 @@ export default defineWorkflow({
         yield* agentWork({
           ...planner,
           operation: "unbuildable",
-          instructions: prompt("unbuildable"),
-          vars: { ...vars, refusal },
+          instructions: prompts.unbuildable,
+          input: { ...input, refusal },
           output: PlanOutputSchema,
         });
         const still = yield* refusalOf("unbuildable");
@@ -230,9 +249,8 @@ export default defineWorkflow({
             role: "reviewer",
             model: "opus",
             effort: "xhigh",
-            instructions: prompt("second-opinion"),
-            inputs,
-            vars,
+            instructions: prompts.secondOpinion,
+            input,
             output: ReviewOutputSchema,
           });
           // A second opinion with nothing to say is not a round of revision.
@@ -240,8 +258,8 @@ export default defineWorkflow({
           yield* agentWork({
             ...planner,
             operation: `revise-${opinions}`,
-            instructions: prompt("revise"),
-            vars: { ...vars, findings: formatFindings(opinion.findings) },
+            instructions: prompts.revise,
+            input: { ...input, findings: formatFindings(opinion.findings) },
             output: Revised,
           });
           continue;
@@ -255,8 +273,8 @@ export default defineWorkflow({
           yield* agentWork({
             ...planner,
             operation: `offload-${round}`,
-            instructions: prompt("offload"),
-            vars: { ...vars, config: { linear: { team: board } } },
+            instructions: prompts.offload,
+            input: { ...input, config: { linear: { team: board } } },
             output: Offloaded,
           });
           continue;
@@ -265,8 +283,8 @@ export default defineWorkflow({
         yield* agentWork({
           ...planner,
           operation: `refine-${round}`,
-          instructions: prompt("refine"),
-          vars,
+          instructions: prompts.refine,
+          input,
           output: Revised,
         });
       }

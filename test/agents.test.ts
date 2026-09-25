@@ -77,8 +77,8 @@ const body = work.toLayer((payload) =>
       role: "reviewer",
       workflow: "agent-work",
       cwd: rig.projectDir,
-      instructions: "Review {{inputs.target}} as the {{role}}.",
-      inputs: { target: "the diff" },
+      instructions: "Review {{target}} as the {{role}}.",
+      input: { target: "the diff" },
       output: Verdict,
     });
   }).pipe(asRun(payload)),
@@ -146,8 +146,8 @@ const sent = (calls: ReadonlyArray<Call>, about: string) =>
 test("the contract an agent is held to is in the prompt it is sent, with the judgment asked for", () => {
   const prompt = promptFor({
     role: "reviewer",
-    instructions: "Review {{inputs.target}} as the {{role}}.",
-    inputs: { target: "the diff" },
+    instructions: "Review {{target}} as the {{role}}.",
+    input: { target: "the diff" },
     output: "/state/agents/r1/review.json",
     contract: jsonSchemaFor(Verdict),
   });
@@ -443,6 +443,33 @@ test("the agent is started on the operator's harness, model and permissions, wit
       expect(yield* read(persona)).toContain("You are the reviewer.");
     }),
   ));
+
+test(
+  "a persona naming what nothing fills parks the launch, and the fixed file is what resumes",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const personas = `${rig.pluginEnv().configDir}/personas`;
+        yield* fs.makeDirectory(personas, { recursive: true });
+        yield* fs.writeFileString(`${personas}/reviewer.md`, "Review {{inputs.target}}.\n");
+        yield* rig.queueOutputs([{ verdict: "clean", note: "resumed" }]);
+        yield* interrupted("r1", 1_500);
+
+        expect(yield* statusNow("r1")).toBe("suspended");
+        expect(yield* read(controlPath(dir, PARKED, "r1"))).toContain(
+          `the reviewer persona in ${personas}/reviewer.md names {{inputs.target}}`,
+        );
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toEqual([]);
+
+        yield* fs.writeFileString(`${personas}/reviewer.md`, "You review.\n");
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("resumed");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      }),
+    ),
+  120_000,
+);
 
 /** Every agent's `--` arguments, in the order the agents were started. */
 const everyLaunch = (calls: ReadonlyArray<Call>) =>
@@ -973,8 +1000,8 @@ const listingBody = listing.toLayer((payload) =>
         role: "implementer",
         workflow: "agent-listing",
         cwd: rig.projectDir,
-        instructions: "Do {{inputs.item}}.",
-        inputs: { item },
+        instructions: "Do {{item}}.",
+        input: { item },
         output: Verdict,
       });
       notes.push(`${item}:${done.note}`);
@@ -1023,6 +1050,40 @@ test("an item whose identity is not a name of its own starts no agent at all", (
         'operation "../escape" contains a path separator',
       );
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toEqual([]);
+    }),
+  ));
+
+const unfilled = enveloped({ name: "agent-unfilled", input: {}, success: Verdict });
+const unfilledBody = unfilled.toLayer((payload) =>
+  agentWork({
+    operation: "review",
+    role: "reviewer",
+    workflow: "agent-unfilled",
+    cwd: rig.projectDir,
+    instructions: "Review {{target}} against {{plan.file}} as the {{role}}. {{not a name}}",
+    input: { target: "the diff" },
+    output: Verdict,
+  }).pipe(asRun(payload)),
+);
+
+test("instructions naming what nothing fills are refused before any tab or agent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const result = yield* unfilled
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.result,
+          Effect.provide(unfilledBody),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      expect(result._tag === "Failure" && result.failure.reason).toBe(
+        "review: its instructions name {{plan.file}}, {{not a name}}, which nothing this work was given fills",
+      );
+      const cmds = yield* rig.cmds();
+      expect(cmds.filter((cmd) => cmd === "tab create" || cmd === "agent start")).toEqual([]);
     }),
   ));
 

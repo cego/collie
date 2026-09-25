@@ -28,12 +28,30 @@ import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/
 import markdown from "./renovate.md" with { type: "text" };
 
 const content = contentOf(markdown);
+const text = Schema.String;
 
-/** A section of the renovate content, under the preamble every step of it shares. */
-export const renovateText = (section: string): string =>
-  [content.preamble, content.sections.get(section) ?? ""]
-    .filter((part) => part !== "")
-    .join("\n\n");
+/** What every step of a renovation is told, under the names its content asks for them by. */
+export const RenovateInput = Schema.Struct({
+  inputs: Schema.Struct({ repository: text, team: text, issue: text }),
+  run: Schema.Struct({ dir: text, id: text }),
+  mr: Schema.Struct({ assignee: text }),
+  config: Schema.Struct({
+    linear: Schema.Struct({ team: text }),
+    renovate: Schema.Struct({ logs: text }),
+  }),
+});
+
+/** Each step's section of the shipped content, under the preamble they share. */
+export const RENOVATE = {
+  track: content.template("track", RenovateInput.fields),
+  assess: content.template("assess", RenovateInput.fields),
+  batch: content.template("batch", RenovateInput.fields),
+  stage: content.template("stage", RenovateInput.fields),
+  approval: content.template("approval", RenovateInput.fields),
+  merge: content.template("merge", RenovateInput.fields),
+  release: content.template("release", RenovateInput.fields),
+  record: content.template("record", RenovateInput.fields),
+};
 
 const verdict = {
   verdict: Schema.Literals(["clean", "findings"]),
@@ -166,9 +184,8 @@ export type Renovating = Run | Agents | Host | WorkflowEngine | WorkflowInstance
 /** Where a landing step stands: its Run's directory, its content, and what came before it. */
 export interface Landed {
   readonly dir: string;
-  /** What every step of this Run is told, under the names the content asks for them by. */
-  readonly inputs: Readonly<Record<string, string>>;
-  readonly vars: Readonly<Record<string, Schema.Json>>;
+  /** What every step of this Run is told. */
+  readonly input: typeof RenovateInput.Type;
   readonly tracked: typeof Tracked.Type;
   readonly assessed: typeof Assessed.Type;
 }
@@ -191,12 +208,11 @@ export interface Landing {
 export const TRACKER = "track";
 
 /** What every step of this Run is asked as, and on which agent. */
-export const asRenovator = (at: Pick<Landed, "inputs" | "vars">, operation: string) => ({
+export const asRenovator = (at: Pick<Landed, "input">, operation: string) => ({
   operation,
   agent: TRACKER,
   role: "renovate",
-  inputs: at.inputs,
-  vars: at.vars,
+  input: at.input,
 });
 
 /** The shipped landing: merge what was assessed, tag it, and check the repository off. */
@@ -204,19 +220,19 @@ export const shippedLanding: Landing = {
   merge: (at) =>
     agentWork({
       ...asRenovator(at, "merge"),
-      instructions: renovateText("merge"),
+      instructions: RENOVATE.merge,
       output: Merged,
     }),
   release: (at) =>
     agentWork({
       ...asRenovator(at, "release"),
-      instructions: renovateText("release"),
+      instructions: RENOVATE.release,
       output: Released,
     }),
   record: (at) =>
     agentWork({
       ...asRenovator(at, "record"),
-      instructions: renovateText("record"),
+      instructions: RENOVATE.record,
       output: Recorded,
     }),
 };
@@ -276,7 +292,8 @@ export const renovation = (landing: Landing = shippedLanding) =>
           yield* host.record(runId, `nothing to renovate here: ${gitlab.reason}`);
           return `nothing to renovate here: ${gitlab.reason}`;
         }
-        const vars = {
+        const input = {
+          inputs,
           run: { dir: place.dir, id: runId },
           mr: { assignee: gitlab.assignee },
           // What the operator configured, so nothing team-specific or company-specific
@@ -286,21 +303,21 @@ export const renovation = (landing: Landing = shippedLanding) =>
             renovate: { logs: yield* host.config("renovate.logs") },
           },
         };
-        const started = { inputs, vars };
+        const started = { input };
         const tracked = yield* agentWork({
           ...asRenovator(started, "track"),
           // Claude Code's configured auto mode; this agent is reused by every later step.
           permissions: "harness",
-          instructions: renovateText("track"),
+          instructions: RENOVATE.track,
           output: Tracked,
         });
         // The issue this Run bound itself to, in the preamble every later step shares: a
         // long wait, a resume or a cycle rollover cannot split the repository across two.
-        const bound = { ...started, inputs: { ...inputs, issue: tracked.issue } };
+        const bound = { input: { ...input, inputs: { ...inputs, issue: tracked.issue } } };
         // Nothing shared is touched yet: no claim is held, so the assessment reads only.
         const assessed = yield* agentWork({
           ...asRenovator(bound, "assess"),
-          instructions: renovateText("assess"),
+          instructions: RENOVATE.assess,
           output: Assessed,
         });
         const here: Landed = { ...bound, dir: place.dir, tracked, assessed };
@@ -337,13 +354,13 @@ export const renovation = (landing: Landing = shippedLanding) =>
           // proved on stage once and reviewed once.
           const batched = yield* agentWork({
             ...asRenovator(here, "batch"),
-            instructions: renovateText("batch"),
+            instructions: RENOVATE.batch,
             output: Batched,
           });
           if (batched.mr_url !== undefined) yield* host.mergeRequest(runId, batched.mr_url);
           const staged = yield* agentWork({
             ...asRenovator(here, "stage"),
-            instructions: renovateText("stage"),
+            instructions: RENOVATE.stage,
             output: Staged,
           });
           // Nothing here shows stage is back on its stable release, so the claim stays with
@@ -356,7 +373,7 @@ export const renovation = (landing: Landing = shippedLanding) =>
           // The batch is approved by another team member, never by the Run that wrote it.
           const approval = yield* agentWork({
             ...asRenovator(here, "approval"),
-            instructions: renovateText("approval"),
+            instructions: RENOVATE.approval,
             output: Approved,
           });
           if ((approval.approved_by ?? []).length === 0) {

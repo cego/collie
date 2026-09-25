@@ -54,10 +54,37 @@ import markdown from "./implement.md" with { type: "text" };
 import { reviewPass } from "./reviewing.ts";
 
 const content = contentOf(markdown);
-const prompt = (section: string) =>
-  [content.preamble, content.sections.get(section) ?? ""]
-    .filter((part) => part !== "")
-    .join("\n\n");
+const text = Schema.String;
+
+/** What every implement prompt is told: the plan, what it proves, and what may prove it. */
+const Implementing = Schema.Struct({
+  inputs: Schema.Struct({ plan: text, plan_kind: text, repo: text, outcome: text }),
+  run: Schema.Struct({ dir: text, id: text }),
+  verify: text,
+});
+
+const prompts = {
+  build: content.template("build", {
+    ...Implementing.fields,
+    ticket: Schema.Struct({ file: text, title: text }),
+    progress: text,
+    session: Schema.Struct({ ask: text }),
+    obstacle: text,
+  }),
+  fix: content.template("fix", {
+    ...Implementing.fields,
+    iteration: text,
+    max_iterations: text,
+    findings: text,
+  }),
+  mr: content.template("mr", {
+    ...Implementing.fields,
+    evidence: text,
+    unreviewed: text,
+    mr: Schema.Struct({ assignee: text, template: text, issues: text }),
+    target_repo: text,
+  }),
+};
 
 /** What an implementer is held to when it says a ticket is built. */
 const Built = Schema.Struct({
@@ -145,15 +172,15 @@ export default defineWorkflow({
       eligible: (facts) => facts.branch !== null,
     },
   ],
-  run: ({ input }) =>
+  run: ({ input: asked }) =>
     Effect.gen(function* () {
       const host = yield* Host;
       const agents = yield* Agents;
       const runId = (yield* Run).id;
       const place = yield* host.place(runId);
       const cwd = place.cwd;
-      const source = yield* classifyWorkSource(input.plan).pipe(
-        Effect.orElseSucceed(() => ({ kind: "text", value: input.plan })),
+      const source = yield* classifyWorkSource(asked.plan).pipe(
+        Effect.orElseSucceed(() => ({ kind: "text", value: asked.plan })),
       );
       const kind = place.options.outcome ?? "";
       const share = place.options.repo ?? "";
@@ -193,21 +220,20 @@ export default defineWorkflow({
         share === "" ? Effect.succeed(reason) : Effect.fail(new WorkflowError({ reason }));
       const approved = yield* requireApproved(kind);
 
-      const inputs = {
-        plan: source.value,
-        plan_kind: source.kind,
-        // The host's own launch options, under the names the content asks for them by.
-        repo: place.options.repo ?? "",
-        outcome: kind,
-      };
-      const vars = {
+      const input: typeof Implementing.Type = {
+        inputs: {
+          plan: source.value,
+          plan_kind: source.kind,
+          // The host's own launch options, under the names the content asks for them by.
+          repo: place.options.repo ?? "",
+          outcome: kind,
+        },
         run: { dir: place.dir, id: runId },
         verify: renderApproved(approved),
-        // Where a question the plan does not cover goes: the planner's own pane while one
-        // is live, and otherwise the human's.
-        session: { ask: yield* agents.askRoute("planner", cwd) },
-        obstacle: "",
       };
+      // Where a question the plan does not cover goes: the planner's own pane while one
+      // is live, and otherwise the human's.
+      const session = { ask: yield* agents.askRoute("planner", cwd) };
 
       // The tickets as they stand at each boundary: one added, removed or reordered while
       // another is being built is the plan from then on, and what is built stays built by
@@ -247,16 +273,13 @@ export default defineWorkflow({
           harness: "claude",
           model: "opus",
           effort: "xhigh",
-          instructions: prompt("build"),
-          inputs,
-          vars: {
-            ...vars,
-            ticket: {
-              file: ticket?.file ?? "",
-              number: ticket?.number ?? "",
-              title: ticket?.title ?? "",
-            },
+          instructions: prompts.build,
+          input: {
+            ...input,
+            ticket: { file: ticket?.file ?? "", title: ticket?.title ?? "" },
             progress: renderProgress(handed),
+            session,
+            obstacle: "",
           },
           output: Built,
         });
@@ -290,8 +313,7 @@ export default defineWorkflow({
         plan: source.kind === "plan-dir" ? source.value : "",
         proves: kind,
         risks: place.options.risks ?? "",
-        inputs,
-        vars,
+        input,
       });
       if (rallied.halted !== null) {
         yield* host.record(runId, rallied.halted);
@@ -334,17 +356,15 @@ export default defineWorkflow({
         operation: "mr",
         agent: BUILDER,
         role: "implementer",
-        instructions: prompt("mr"),
-        inputs,
-        vars: {
-          ...vars,
+        instructions: prompts.mr,
+        input: {
+          ...input,
           evidence: renderEvidence(evidence),
           unreviewed: rallied.unreviewed,
           mr: {
             assignee: gitlab.assignee,
             template: gitlab.template,
             issues: gitlab.issues.join(", "),
-            has_issues: gitlab.issues.length > 0 ? "yes" : "no",
           },
           target_repo: "",
         },
@@ -476,8 +496,7 @@ const rally = (ask: {
   readonly plan: string;
   readonly proves: string;
   readonly risks: string;
-  readonly inputs: Readonly<Record<string, string>>;
-  readonly vars: Readonly<Record<string, Schema.Json>>;
+  readonly input: typeof Implementing.Type;
 }): Effect.Effect<
   Rallied,
   WorkflowError,
@@ -517,14 +536,12 @@ const rally = (ask: {
         operation: `fix-${at}`,
         agent: BUILDER,
         role: "implementer",
-        instructions: prompt("fix"),
-        inputs: ask.inputs,
-        vars: {
-          ...ask.vars,
+        instructions: prompts.fix,
+        input: {
+          ...ask.input,
           iteration: String(at),
           max_iterations: String(ROUNDS),
           findings: formatFindings(round.live),
-          disputed: formatFindings(disputed),
         },
         output: FixOutputSchema,
       });

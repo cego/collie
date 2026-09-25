@@ -25,16 +25,42 @@ import {
   type Finding,
   type SynthesisReport,
 } from "collie";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import markdown from "./review.md" with { type: "text" };
 
 const content = contentOf(markdown);
+const text = Schema.String;
 
-/** A section of the review content, under the preamble every step of it shares. */
-export const reviewText = (section: string): string =>
-  [content.preamble, content.sections.get(section) ?? ""]
-    .filter((part) => part !== "")
-    .join("\n\n");
+/** What every review prompt is told: the change, what it is held to, and where it lives. */
+const change = {
+  inputs: Schema.Struct({ target: text, target_kind: text, plan: text, outcome: text }),
+  target_repo: text,
+};
+
+/** A reviewer's round: the one before it, what was disputed, and where this Run keeps its work. */
+const REVIEW = content.template("review", {
+  ...change,
+  run: Schema.Struct({ dir: text, id: text }),
+  previous: Schema.Struct({ review: text, fix: text }),
+  iteration: text,
+  max_iterations: text,
+  disputed: text,
+  risks: text,
+  obstacle: text,
+});
+
+/** The reviews to reconcile, and the one before them. */
+const SYNTHESIZE = content.template("synthesize", {
+  ...change,
+  previous: Schema.Struct({ review: text }),
+  fan_in: text,
+});
+
+/** An implementer fixing what a review found. */
+export const FIX_PROMPT = content.template("fix", {
+  ...change,
+  run: Schema.Struct({ dir: text }),
+});
 
 /**
  * One complete review. A second reviewer and the model that reconciles them are what a
@@ -71,16 +97,14 @@ const told = (ask: ReviewAsk, run: { readonly dir: string; readonly id: string }
     // What the change has to prove, under the name the prose asks for it by.
     outcome: ask.proves,
   },
-  vars: {
-    run,
-    previous: { review: ask.previous, fix: ask.answered },
-    iteration: String(ask.at),
-    max_iterations: String(ask.of),
-    disputed: formatFindings(ask.disputed),
-    risks: riskLine(ask.risks),
-    target_repo: repoArgs(parseMrTarget(ask.target)?.project ?? null).join(" "),
-    obstacle: "",
-  },
+  run,
+  previous: { review: ask.previous, fix: ask.answered },
+  iteration: String(ask.at),
+  max_iterations: String(ask.of),
+  disputed: formatFindings(ask.disputed),
+  risks: riskLine(ask.risks),
+  target_repo: repoArgs(parseMrTarget(ask.target)?.project ?? null).join(" "),
+  obstacle: "",
 });
 
 /**
@@ -92,7 +116,7 @@ export const reviewPass = (ask: ReviewAsk) =>
     const agents = yield* Agents;
     const { id } = yield* Run;
     const { dir } = yield* (yield* Host).place(id);
-    const { inputs, vars } = told(ask, { dir, id });
+    const input = told(ask, { dir, id });
     // The round comes first, and the first round keeps the plain names: a Run with one
     // review reads as one, and a rally's rounds sort in the order they happened.
     const reviewOp = (n: number) => (ask.at === 1 ? `review-${n}` : `review-${ask.at}-${n}`);
@@ -105,9 +129,8 @@ export const reviewPass = (ask: ReviewAsk) =>
         harness: reviewer.harness,
         model: reviewer.model,
         effort: reviewer.effort,
-        instructions: reviewText("review"),
-        inputs,
-        vars,
+        instructions: REVIEW,
+        input,
         output: ReviewOutputSchema,
       }),
     );
@@ -115,10 +138,9 @@ export const reviewPass = (ask: ReviewAsk) =>
     const reconciled: SynthesisReport = yield* agentWork({
       operation: synthesis,
       role: "reviewer",
-      instructions: reviewText("synthesize"),
-      inputs,
-      vars: {
-        ...vars,
+      instructions: SYNTHESIZE,
+      input: {
+        ...input,
         fan_in: reviews.map((_, at) => `- ${agents.outputFor(id, reviewOp(at + 1))}`).join("\n"),
       },
       output: SynthesisSchema,

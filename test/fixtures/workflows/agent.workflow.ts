@@ -32,7 +32,7 @@ export default defineWorkflow({
         role: "reviewer",
         cwd: input.cwd,
         instructions: notes,
-        inputs: { target: input.target },
+        input: { target: input.target },
         output: Verdict,
       });
       return `${verdict.verdict}: ${verdict.note}`;

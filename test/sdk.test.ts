@@ -12,10 +12,12 @@ import {
   RESERVED_INPUTS,
   WorkflowError,
   checkEntry,
+  contentOf,
   defineWorkflow,
   definitionOf,
   describeMetadata,
   jsonSchemaFor,
+  template,
   type Registration,
   type WorkflowEntry,
   type WorkflowMetadata,
@@ -264,4 +266,48 @@ test("what a card is given is ids, titles and projections — never the closures
     ],
   });
   expect(JSON.stringify(described)).not.toContain("eligible");
+});
+
+test("a template takes what it declares, what every agent is given, and any key of a map", () => {
+  const made = template(
+    "{{inputs.plan}} for {{run.dir}}, {{config.linear.team}}, as the {{role}} in {{cwd}} to {{output_path}}. {{skill:tdd}}",
+    {
+      inputs: Schema.Struct({ plan: Schema.String }),
+      run: Schema.Struct({ dir: Schema.String }),
+      config: Schema.Record(Schema.String, Schema.Json),
+    },
+  );
+  expect(made.text).toContain("{{inputs.plan}}");
+});
+
+test("a template refuses every name it does not declare, and anything that is not a name", () => {
+  expect(() =>
+    template("{{inputs.plan}} {{inputs.goal}} {{run}} {{not a name}}", {
+      inputs: Schema.Struct({ plan: Schema.String }),
+    }),
+  ).toThrow(
+    "this template names {{inputs.goal}}, {{run}}, {{not a name}}, which nothing fills: declare them among what it takes, or remove them",
+  );
+  // A declared leaf has nothing under it to name.
+  expect(() =>
+    template("{{run.dir.more}}", { run: Schema.Struct({ dir: Schema.String }) }),
+  ).toThrow("{{run.dir.more}}");
+});
+
+test("Markdown is content: front matter is refused, and a section it lacks is never sent empty", () => {
+  expect(() => contentOf("---\ninputs:\n  plan: p\n---\n\n## build\n\nBuild it.\n")).toThrow(
+    "this Markdown has front matter",
+  );
+
+  const content = contentOf("Shared words.\n\n## build\n\nBuild {{inputs.plan}}.\n");
+  expect(content.prompt("build")).toBe("Shared words.\n\nBuild {{inputs.plan}}.");
+  expect(() => content.prompt("ship")).toThrow(
+    'there is no "## ship" section here; there is build',
+  );
+  expect(() => content.template("build", {})).toThrow(
+    '"## build": this template names {{inputs.plan}}',
+  );
+  expect(
+    content.template("build", { inputs: Schema.Struct({ plan: Schema.String }) }).text,
+  ).toContain("Build {{inputs.plan}}.");
 });

@@ -130,8 +130,10 @@ never installed as harness-native config.
 | `extends`          | string | Follow another persona and replace only the sections named. |
 | `forked_from_hash` | string | Written by a `copy` fork. Do not write it by hand.          |
 
-The body is the persona. Sections merge the same way a workflow body's do, so a fork can
-replace `## Output` and keep everything else.
+The body is the persona. Sections merge by name, so a fork can replace `## Output` and keep
+everything else. A persona is told nothing but where its skills are: `{{skill:name}}` is the
+only expression it may use, `collie doctor` names a persona using any other, and a Run
+launching an agent as one parks until the file is fixed.
 
 ## Skills
 

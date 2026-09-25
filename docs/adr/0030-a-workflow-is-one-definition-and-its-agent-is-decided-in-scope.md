@@ -71,6 +71,16 @@ name is the same logical work, and a loop names its items; we rejected automatic
 another identity registry. Preferring a model never changes permissions or which commands
 Collie may run for the Run.
 
+**Markdown is content, and a template declares what it takes.** What a workflow takes,
+does and asks is its definition's, where the schema checks it; a copy in the front matter of
+its Markdown checked nothing and drifted, so `contentOf` refuses front matter. A prompt is a
+template made from a section or from code, over the `Schema.Struct` fields it reads, and
+`agentWork`'s `input` is typed by them. A name the fields do not declare throws where the
+template is made, which is where its module loads, so `collie workflow check` and `collie
+doctor` report it against its workflow; an expression still unfilled at the work fails it
+before an agent starts. We rejected rendering an unfilled expression empty: an agent told
+nothing where a plan should be does something else, and nobody learns why.
+
 **Effect stays available directly.** Custom Activities, services and Layers, concurrency,
 typed failures and direct `LanguageModel` calls wrapped in an Activity are Effect's own.
 Collie adds no classifier API, and a harness preference never overrides a provider an author
@@ -81,8 +91,11 @@ supplied.
 A module is shorter, and a question, an agent or a child can appear anywhere the code
 reaches without being declared first. A shipped workflow expresses its ordinary preference
 as `agents` on its definition, so an operator's `--model` reaches all of its work. A fork is
-a spread of the definition it forks under a new id.
+a spread of the definition it forks under a new id, and one that keeps a shipped prompt's
+words starts from that template's text.
 
 A module in the old shape no longer loads, and a workflow that switched harness on a call
 while relying on the configured model is now refused where it used to start an agent with a
-model its harness did not take.
+model its harness did not take. Markdown with front matter, and a prompt naming what
+nothing gives it, stop loading or stop the work where they used to send an agent less than
+it was written to be told.

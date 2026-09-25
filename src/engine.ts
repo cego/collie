@@ -573,14 +573,26 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   export type Agents = AgentsApi;
 
   /** What you ask for: the work, not the steps it takes. */
-  export interface AgentWork<Output extends OutputContract> {
+  export type AgentWork<
+    Output extends OutputContract,
+    Input extends Readonly<Record<string, Schema.Json>> = never,
+  > = Doing<Output> & Told<Input>;
+
+  /**
+   * What the agent is told: a template and the input it declares, or text of your own
+   * with input for any "{{name}}" in it. An expression nothing fills is refused before an
+   * agent starts.
+   */
+  export type Told<Input extends Readonly<Record<string, Schema.Json>>> =
+    | { readonly instructions: Template<Input>; readonly input: Input }
+    | { readonly instructions: string; readonly input?: Readonly<Record<string, Schema.Json>> };
+
+  export interface Doing<Output extends OutputContract> {
     readonly operation: string;
     /** Where the agent works; the checkout the host placed the Run on where it is left out. */
     readonly cwd?: string;
-    readonly instructions: string;
     /** What the Output has to be. Left out, the agent answers in plain text. */
     readonly output?: Output;
-    readonly inputs?: Readonly<Record<string, unknown>>;
     readonly role?: string;
     /** The agent this work goes to, where several operations are one agent's list. */
     readonly agent?: string;
@@ -591,8 +603,6 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly model?: string;
     readonly effort?: string;
     readonly permissions?: "bypass" | "harness";
-    /** What the instructions render beside the inputs, for Markdown that names its own. */
-    readonly vars?: Readonly<Record<string, unknown>>;
   }
 
   /** A message handed to another Run's live agent in this role: the agent, or null where none. */
@@ -609,8 +619,11 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   >;
 
   /** One agent, once, and its Output as a value of your own type. */
-  export function agentWork<Output extends OutputContract = typeof Schema.String>(
-    work: AgentWork<Output>,
+  export function agentWork<
+    Output extends OutputContract = typeof Schema.String,
+    Input extends Readonly<Record<string, Schema.Json>> = never,
+  >(
+    work: AgentWork<Output, Input>,
   ): Effect.Effect<
     Output["Type"],
     WorkflowError,
@@ -624,8 +637,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly output: string;
     /** What the Output is drawn to; null asks for plain text. */
     readonly contract: Projection | null;
-    readonly inputs?: Readonly<Record<string, unknown>>;
-    readonly vars?: Readonly<Record<string, unknown>>;
+    readonly input?: Readonly<Record<string, unknown>>;
     /** Where each mentioned skill is installed; a mention of one that is not says so. */
     readonly skills?: ReadonlyMap<string, string>;
     readonly cwd?: string;
@@ -897,13 +909,46 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   >;
 
   /**
-   * A Markdown file as the content it is: what stands above the first heading, and one
-   * entry per "## name" section below it. Front matter is not content and is left out.
+   * Instructions whose "{{name}}" expressions read only the input it declares: template
+   * refuses any other when it is made, and agentWork refuses one left unfilled before any
+   * agent starts.
    */
-  export function contentOf(markdown: string): {
+  export class Template<Input> {
+    declare readonly input: Input;
+    constructor(text: string);
+    readonly text: string;
+  }
+
+  /**
+   * Instructions, and the input they take. What the text names and fields does not
+   * declare is refused here — role, cwd and output_path are always given — so a template
+   * made where a module loads is checked by every load of it, collie doctor and collie
+   * workflow check among them.
+   */
+  export function template<const Fields extends Schema.Struct.Fields>(
+    text: string,
+    fields: Fields,
+  ): Template<Schema.Struct<Fields>["Type"]>;
+
+  /** What agents are told, read from Markdown. */
+  export interface Content {
     readonly preamble: string;
     readonly sections: ReadonlyMap<string, string>;
-  };
+    /** A section under the preamble; one the file does not have is refused, never sent empty. */
+    readonly prompt: (section: string) => string;
+    /** A section under the preamble, as a template of what it takes. */
+    readonly template: <const Fields extends Schema.Struct.Fields>(
+      section: string,
+      fields: Fields,
+    ) => Template<Schema.Struct<Fields>["Type"]>;
+  }
+
+  /**
+   * A Markdown file as the content it is: what stands above the first heading, and one
+   * entry per "## name" section below it. Front matter is refused: a workflow's inputs,
+   * steps and questions are its definition's.
+   */
+  export function contentOf(markdown: string): Content;
 
   /** One item of work that finished, and what it left for the ones after it. */
   export interface Handed {

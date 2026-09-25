@@ -1,7 +1,7 @@
 // Workflow and Persona definitions across the three Layers: baseline (this repo),
 // the user's plugin config dir, and the project's .collie/. Later wins by name.
 
-import { skillsIn } from "./template";
+import { expressionsIn, malformedIn, skillsIn } from "./template";
 import { unsafePathComponent } from "./naming";
 import { exclusiveClashes } from "./strategies";
 import { isYamlMap, parseDocument, YamlError, type YamlMap, type YamlValue } from "./yaml";
@@ -160,6 +160,12 @@ const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
     try: () => parseDocument(text),
     catch: (cause) => (cause instanceof YamlError ? cause : new Error(String(cause))),
   });
+  const unfilled = personaHoles(body);
+  if (unfilled.length > 0) {
+    return yield* Effect.fail(
+      new Error(`it names ${unfilled.join(", ")}; a persona is told nothing but {{skill:name}}`),
+    );
+  }
   const persona: PersonaDef = {
     name: str(data.name, path.basename(file, ".md")),
     description: str(data.description),
@@ -171,6 +177,12 @@ const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
   if (isString(data.forked_from_hash)) persona.forkedFromHash = data.forked_from_hash;
   return persona;
 });
+
+/** Every expression in a persona that nothing fills: all of them but a skill. */
+export const personaHoles = (body: string): string[] => [
+  ...expressionsIn(body).map((name) => `{{${name}}}`),
+  ...malformedIn(body),
+];
 
 export const loadDefinitions = Effect.fn("Definitions.loadDefinitions")(function* (
   layers: Layer[] | { readonly all: Layer[] },
@@ -214,7 +226,7 @@ const loadLayer = Effect.fn("Definitions.loadLayer")(function* <
     if (Result.isSuccess(result)) parsed.set(result.success.name, result.success);
     else
       errors.push(
-        `${path}: ${result.failure instanceof YamlError ? result.failure.message : String(result.failure)}`,
+        `${path}: ${result.failure instanceof Error ? result.failure.message : String(result.failure)}`,
       );
   }
 

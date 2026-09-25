@@ -21,6 +21,7 @@ import {
   isBlocking,
   orderedTicketsOf,
   renderProgress,
+  template,
   type Finding,
   type Handed,
 } from "collie";
@@ -29,11 +30,20 @@ import { Effect, Schema } from "effect";
 /** One agent for the whole list, so the item after this one is a hand-off, not a re-read. */
 const IMPLEMENTER = "implementer";
 
-const INSTRUCTIONS = `Build {{inputs.ticket}} — {{inputs.title}}, item {{inputs.at}} of {{inputs.of}}.
+const INSTRUCTIONS = template(
+  `Build {{ticket}} — {{title}}, item {{at}} of {{of}}.
 
 What the items before it left:
 
-{{inputs.progress}}`;
+{{progress}}`,
+  {
+    ticket: Schema.String,
+    title: Schema.String,
+    at: Schema.Number,
+    of: Schema.Number,
+    progress: Schema.String,
+  },
+);
 
 /** The body both entries spread under an id of their own. */
 export const listing = defineWorkflow({
@@ -72,7 +82,7 @@ export const listing = defineWorkflow({
           role: "implementer",
           cwd: asked.cwd,
           instructions: INSTRUCTIONS,
-          inputs: {
+          input: {
             ticket: ticket.file,
             title: ticket.title,
             at: at + 1,

@@ -190,37 +190,35 @@ expects to be varied it takes the varying parts as ordinary functions, and a for
 its own:
 
 ```ts
-import { agentWork, defineWorkflow } from "collie";
+import { agentWork, defineWorkflow, template } from "collie";
 import {
   Merged,
-  Released,
+  RENOVATE,
   Recorded,
-  TRACKER,
-  renovateText,
+  Released,
+  RenovateInput,
+  asRenovator,
   renovation,
   type Landing,
 } from "./renovate.workflow.ts";
 
+const fastForward = template(
+  `${RENOVATE.merge.text}\n\nHere, merge fast-forward only.`,
+  RenovateInput.fields,
+);
+const deploy = template(
+  "Deploy the default branch of {{inputs.repository}} rather than tag it.",
+  RenovateInput.fields,
+);
+
 const landing: Landing = {
   merge: (at) =>
-    agentWork({
-      operation: "merge",
-      agent: TRACKER,
-      inputs: at.inputs,
-      instructions: renovateText("merge"),
-      output: Merged,
-    }),
+    agentWork({ ...asRenovator(at, "merge"), instructions: fastForward, output: Merged }),
   release: (at) =>
-    agentWork({
-      operation: "release",
-      agent: TRACKER,
-      instructions: "Deploy it rather than tag it.",
-      output: Released,
-    }),
+    agentWork({ ...asRenovator(at, "release"), instructions: deploy, output: Released }),
   record: (at) =>
     agentWork({
-      operation: "record",
-      agent: TRACKER,
+      ...asRenovator(at, "record"),
       instructions: "Write it off on our own board.",
       output: Recorded,
     }),
@@ -231,8 +229,9 @@ export default defineWorkflow({ ...renovation(landing), id: "landing" });
 
 Everything the fork did not write — what it assesses, what it batches, the claim it takes,
 the teammate's approval it waits for — is the shipped orchestration, and a baseline change
-to any of it reaches the fork. `renovateText` is how a fork keeps a shipped section's
-words and adds its own sentence to them.
+to any of it reaches the fork. `RENOVATE` holds the shipped sections as templates, so a fork
+keeps a section's words by starting from its `text` and adds its own sentence; `asRenovator`
+is who does the work and the `input` every shipped section reads.
 
 Nothing was added to Collie to make that possible, and nothing needs to be. A workflow
 that wants to be varied takes functions, or takes a service and lets a fork provide a
@@ -252,23 +251,25 @@ const Verdict = Schema.Struct({
   note: Schema.String.annotate({ description: "one sentence a human reads" }),
 });
 
+const review = template("Review {{target}} as the {{role}}.", { target: Schema.String });
+
 const verdict =
   yield *
   agentWork({
     operation: "review",
     role: "reviewer",
-    instructions: notes,
-    inputs: { target: input.target },
+    instructions: review,
+    input: { target: input.target },
     output: Verdict,
   });
 ```
 
 - **`operation` is the identity.** The Activity names and the agent's name come from it, so
   it has to be stable within the run and different from every other operation in it.
-- **`instructions` is your Markdown**, rendered with `{{inputs.x}}` from the values you
-  pass, plus `{{role}}`, `{{cwd}}` and `{{output_path}}`. The prompt then names where the
-  Output goes and carries the JSON Schema `output` draws to. A field's `description` is the
-  judgment being asked for, so write it as one.
+- **`instructions` is a template or text of your own**, rendered with `{{name}}` from
+  `input`, plus `{{role}}`, `{{cwd}}` and `{{output_path}}`, which every piece of work is
+  given. The prompt then names where the Output goes and carries the JSON Schema `output`
+  draws to. A field's `description` is the judgment being asked for, so write it as one.
 - **`output` decides.** A file that does not decode is unusable however plausible it reads,
   and every issue with it is reported at once. Leave `output` out and the agent answers in
   plain text, which is what you are handed; a schema is how you opt into a structured,
@@ -293,9 +294,9 @@ const verdict =
   with the first message — which is the only way to reach a skill that refuses to be called
   by a model. A skill _mentioned_ in your Markdown as `{{skill:name}}` renders as the path
   to read instead, so a prompt never spells one harness's syntax.
-- **`vars` is what your Markdown names.** `{{inputs.x}}` comes from `inputs`, and everything
-  else a body asks for — `{{run.dir}}`, `{{findings}}`, `{{iteration}}` — is yours to supply.
-  A variable nobody supplied renders empty rather than failing.
+- **`input` is what the instructions name.** With a template it is exactly what the
+  template declares, so the compiler checks it; with text, `{{run.dir}}` reads `input.run.dir`.
+  An expression nothing fills fails the work before any agent starts, never renders empty.
 
 Skipped work is work you do not ask for: return without calling `agentWork` and no tab
 opens, no agent starts and no Output is fabricated. Say why in what you return.
@@ -419,17 +420,27 @@ its work should.
 
 ## Markdown as content
 
-`contentOf(markdown)` reads a Markdown file as what stands above its first heading and one
-entry per `## name` section below it. A module that ships beside its prose imports the file
-and picks the section each piece of work is about, so there is one copy of the words and the
-code decides what happens to them:
+A workflow's Markdown is what its agents are told, and nothing else: what it takes, what it
+does and what it asks are its definition's, where they are checked, so `contentOf` refuses a
+file with front matter. `contentOf(markdown)` reads the file as what stands above its first
+heading and one entry per `## name` section below it, and `content.template(section,
+fields)` is that section, with the preamble above it, as a template:
 
 ```ts
-import markdown from "./review.md" with { type: "text" };
+import markdown from "./architecture.md" with { type: "text" };
 const content = contentOf(markdown);
-const prompt = (section: string) =>
-  [content.preamble, content.sections.get(section) ?? ""].join("\n\n");
+const attended = content.template("attended", { run: Schema.Struct({ dir: Schema.String }) });
+
+agentWork({ operation: "architecture", instructions: attended, input: { run: { dir } } });
 ```
+
+`template(text, fields)` is the same for text of your own — a template literal, a string
+built in code. The fields are a `Schema.Struct`'s, and they are the whole of what the text
+may name besides `{{role}}`, `{{cwd}}`, `{{output_path}}` and `{{skill:name}}`: a name they
+do not declare, or a `{{…}}` that is not a name, throws where the template is made. Made
+where the module loads, as the shipped ones are, it is checked by every load of that module,
+so `collie workflow check` and `collie doctor` report it against the workflow it is in. A
+section the file does not have is refused the same way, never sent empty.
 
 ## Waiting for a human
 

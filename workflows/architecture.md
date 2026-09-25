@@ -1,32 +1,3 @@
----
-name: architecture
-title: architecture — look at what is there, then improve it
-description: Runs the architecture skill over this project, writes a report into the run dir, then asks what next.
-inputs:
-  # Forwarded to the implement this chains into, which is where it means anything.
-  workspace: optional
-steps:
-  - id: architecture
-    persona: architect
-    prompt: attended
-    skill: improve-codebase-architecture
-    output: architecture.json
-  - id: next
-    standalone: true
-    choices:
-      - title: Implement now
-        run: implement
-        inputs:
-          plan: "{{run.dir}}/plan"
-          task: "{{outputs.architecture.slug}}"
-          # Architectural work is a refactor unless the report says otherwise: behaviour
-          # is what it must not change, and that is what the review is asked to confirm.
-          outcome: "{{outputs.architecture.outcome}}"
-          workspace: "{{inputs.workspace}}"
-      - title: Stop here
-        stop: true
----
-
 Project root: {{cwd}}
 Report: {{run.dir}}/plan/ARCHITECTURE.md
 

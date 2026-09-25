@@ -17,12 +17,17 @@ import {
   settleFinalFix,
   settleRound,
   splitDisputed,
+  template,
   type Finding,
 } from "collie";
 import { Effect, Schema } from "effect";
 
-const REVIEW = "Review {{inputs.target}}. Report every finding you can stand behind.";
-const FIX = "Fix what the review raised in {{inputs.target}}, or say why you will not.";
+const REVIEW = template("Review {{target}}. Report every finding you can stand behind.", {
+  target: Schema.String,
+});
+const FIX = template("Fix what the review raised in {{target}}, or say why you will not.", {
+  target: Schema.String,
+});
 
 export default defineWorkflow({
   id: "rally",
@@ -50,7 +55,7 @@ export default defineWorkflow({
           role: "reviewer",
           cwd: asked.cwd,
           instructions: REVIEW,
-          inputs: { target: asked.target },
+          input: { target: asked.target },
           output: ReviewOutputSchema,
         });
         const split = splitDisputed(review.findings, disputed);
@@ -70,7 +75,7 @@ export default defineWorkflow({
           role: "implementer",
           cwd: asked.cwd,
           instructions: FIX,
-          inputs: { target: asked.target },
+          input: { target: asked.target },
           output: FixOutputSchema,
         });
         // A dispute is carried, not re-argued: the next review either answers it with a

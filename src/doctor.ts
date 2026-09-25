@@ -295,6 +295,17 @@ const overrides = Effect.fn("Doctor.overrides")(function* (env: PluginEnv) {
 });
 
 /**
+ * Every persona the layers define, read as a launch reads it: one that will not parse, or
+ * that names anything but a skill, is named with why.
+ */
+const personas = Effect.fn("Doctor.personas")(function* (env: PluginEnv) {
+  const found = yield* loadDefinitions(yield* layers(env));
+  return found.errors.length === 0
+    ? passed(`${found.personas.size} read, each one telling its agent only what it can fill`)
+    : noted(found.errors.join("; "), "fix each file named");
+});
+
+/**
  * Every check, in one pass, whatever the state of the machine: a prerequisite that
  * is missing must not stop the ones after it from being reported, or `doctor` is one
  * failed Run at a time again.
@@ -449,6 +460,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const glabDir = yield* onPath(search, "glab");
   const auth = glabDir ? yield* answered(run("glab", ["auth", "status"], root)) : null;
   checks.push({ name: "workflows", ...(yield* overrides(env)) });
+  checks.push({ name: "personas", ...(yield* personas(env)) });
   checks.push({ name: "old workflow files", ...(yield* oldWorkflowFiles(env)) });
 
   checks.push({

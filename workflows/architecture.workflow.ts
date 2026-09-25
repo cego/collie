@@ -24,10 +24,8 @@ import markdown from "./architecture.md" with { type: "text" };
 // not there yet — so it is the architect's own answer below rather than a kind fixed here.
 
 const content = contentOf(markdown);
-const prompt = (section: string) =>
-  [content.preamble, content.sections.get(section) ?? ""]
-    .filter((part) => part !== "")
-    .join("\n\n");
+/** What the architect is asked; the report goes in this Run's own directory. */
+const attended = content.template("attended", { run: Schema.Struct({ dir: Schema.String }) });
 
 /** What the architect is held to: the report, what it applied, and what it left. */
 const Report = Schema.Struct({
@@ -74,8 +72,8 @@ export default defineWorkflow({
         operation: "architecture",
         role: "architect",
         skill: "improve-codebase-architecture",
-        instructions: prompt("attended"),
-        vars: { run: { dir: place.dir, id: run.id } },
+        instructions: attended,
+        input: { run: { dir: place.dir } },
         output: Report,
       });
       const next = yield* ask({ name: "next", prompt: "What next?", options: [IMPLEMENT, STOP] });

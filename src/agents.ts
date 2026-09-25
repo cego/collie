@@ -39,7 +39,7 @@ import {
 import { COMPACTION_PORTS } from "./compactors";
 import { FALLBACK_DEFAULTS, loadDefaults } from "./config";
 import * as dispatch from "./dispatcher";
-import { layers, skillDirs } from "./definitions";
+import { bodySections, layers, personaHoles, skillDirs } from "./definitions";
 import { currentEnv, type PluginEnv } from "./env";
 import {
   HARNESSES,
@@ -58,19 +58,19 @@ import { agentName, reason, shellQuote, unsafePathComponent } from "./naming";
 import { askRouteTo } from "./handoff";
 import { liveAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
 import {
-  contentOf,
   jsonSchemaFor,
   AgentScopes,
   Host,
   Run,
   WorkflowAgents,
+  Template,
   WorkflowError,
   type HostApi,
   type Projection,
 } from "./sdk";
 import { deliveriesOf } from "./steering";
 import { readTask, withTaskLock, writeTask } from "./task";
-import { renderTemplate, skillMention, skillsIn } from "./template";
+import { malformedIn, renderTemplate, skillMention, skillsIn } from "./template";
 
 /** A schema that decodes an agent's Output without services of the author's own. */
 export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
@@ -255,19 +255,30 @@ export interface Halted {
 export class Agents extends Context.Service<Agents, AgentsApi>()("collie/Agents") {}
 
 /** What an author asks for: the work, not the steps it takes. */
-export interface AgentWork<Output extends OutputContract> {
+export type AgentWork<
+  Output extends OutputContract,
+  Input extends Readonly<Record<string, Schema.Json>> = never,
+> = Doing<Output> & Told<Input>;
+
+/**
+ * What the agent is told: a template and the input it declares, or text of the author's
+ * own — a template literal, say — with `input` for any `{{name}}` in it. Either way an
+ * expression nothing fills is refused before an agent starts.
+ */
+export type Told<Input extends Readonly<Record<string, Schema.Json>>> =
+  | { readonly instructions: Template<Input>; readonly input: Input }
+  | { readonly instructions: string; readonly input?: Readonly<Record<string, Schema.Json>> };
+
+interface Doing<Output extends OutputContract> {
   /** Stable within the run: the Activity names and the agent's name are derived from it. */
   readonly operation: string;
   /** Where the agent works; the checkout the host placed the Run on where it is left out. */
   readonly cwd?: string;
-  /** The Markdown the agent is given, with `{{inputs.x}}` rendered from the decoded input. */
-  readonly instructions: string;
   /**
    * What the Output has to be: the prompt carries its drawing, and this decides. Left out,
    * the agent answers in plain text.
    */
   readonly output?: Output;
-  readonly inputs?: Readonly<Record<string, Schema.Json>>;
   readonly role?: string;
   /**
    * The agent this work goes to. Several operations naming one agent are one agent's
@@ -282,11 +293,6 @@ export interface AgentWork<Output extends OutputContract> {
   readonly model?: string;
   readonly effort?: string;
   readonly permissions?: PermissionMode;
-  /**
-   * What the instructions render beside `inputs` — the round it is in, the review before
-   * it, what a human disputed — so Markdown keeps the variable names it was written with.
-   */
-  readonly vars?: Readonly<Record<string, Schema.Json>>;
 }
 
 /**
@@ -298,8 +304,11 @@ export interface AgentWork<Output extends OutputContract> {
  * comes back to an Output it has already had repaired finds the repair recorded and is
  * left with the failure, not with a fresh allowance.
  */
-export const agentWork = <Output extends OutputContract = typeof Schema.String>(
-  given: AgentWork<Output>,
+export const agentWork = <
+  Output extends OutputContract = typeof Schema.String,
+  Input extends Readonly<Record<string, Schema.Json>> = never,
+>(
+  given: AgentWork<Output, Input>,
 ): Effect.Effect<
   Output["Type"],
   WorkflowError,
@@ -316,6 +325,8 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
     const contract = (given.output ?? Schema.String) as Output;
     const work = {
       ...given,
+      instructions:
+        given.instructions instanceof Template ? given.instructions.text : given.instructions,
       runId,
       cwd: given.cwd ?? place.cwd,
       workflow: given.workflow ?? run.workflow,
@@ -340,6 +351,20 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
     // Where each skill the instructions mention lives, so a mention is the path to read
     // rather than a name the agent has to go looking for.
     const skills = yield* agents.skills(skillsIn(work.instructions));
+    const prompt = renderPrompt({
+      role,
+      instructions: work.instructions,
+      input: work.input,
+      skills,
+      cwd: work.cwd,
+      output,
+      contract: plain ? null : jsonSchemaFor(work.output),
+    });
+    if (prompt.unfilled.length > 0) {
+      return yield* new WorkflowError({
+        reason: `${work.operation}: its instructions name ${prompt.unfilled.join(", ")}, which nothing this work was given fills`,
+      });
+    }
     // An agent already running on this work's name is the conversation this continues, and
     // a conversation cannot become another agent: what is asked for here has to agree with
     // it, and what only defaults below that does not apply.
@@ -377,16 +402,7 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
       workspace: place.workspace,
       cwd: work.cwd,
       output,
-      prompt: promptFor({
-        role,
-        instructions: work.instructions,
-        inputs: work.inputs,
-        vars: work.vars,
-        skills,
-        cwd: work.cwd,
-        output,
-        contract: plain ? null : jsonSchemaFor(work.output),
-      }),
+      prompt: prompt.text,
       skill: work.skill ?? null,
       harness: choice.harness,
       model: choice.model,
@@ -614,9 +630,8 @@ export interface PromptParts {
   readonly output: string;
   /** What the Output is drawn to; null asks for plain text. */
   readonly contract: Projection | null;
-  readonly inputs?: Readonly<Record<string, Schema.Json>>;
-  /** What the instructions render beside `inputs`, as the module supplies them. */
-  readonly vars?: Readonly<Record<string, Schema.Json>>;
+  /** What the instructions' `{{name}}` expressions read, as the module supplies it. */
+  readonly input?: Readonly<Record<string, Schema.Json>>;
   /** Where each mentioned skill is installed; a mention of one that is not says so. */
   readonly skills?: ReadonlyMap<string, string>;
   readonly cwd?: string;
@@ -629,24 +644,32 @@ export interface PromptParts {
  * reaches a body here as `{{role}}`.
  */
 export function promptFor(parts: PromptParts): string {
-  const rendered = renderTemplate(
-    parts.instructions,
-    {
-      ...parts.vars,
-      inputs: { ...parts.inputs },
-      role: parts.role,
-      cwd: parts.cwd ?? "",
-      output_path: parts.output,
-    },
-    { skill: skillMention(parts.skills ?? new Map()) },
-  );
-  return [
+  return renderPrompt(parts).text;
+}
+
+/** The prompt, and every expression in the instructions nothing filled. */
+function renderPrompt(parts: PromptParts) {
+  const given = {
+    ...parts.input,
+    role: parts.role,
+    cwd: parts.cwd ?? "",
+    output_path: parts.output,
+  };
+  const rendered = renderTemplate(parts.instructions, given, {
+    skill: skillMention(parts.skills ?? new Map()),
+  });
+  const unfilled = [
+    ...rendered.missing.map((name) => `{{${name}}}`),
+    ...malformedIn(parts.instructions),
+  ];
+  const text = [
     rendered.text.trim(),
     `When you are done, write your result ${parts.contract === null ? "as plain text" : "as JSON"} to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${parts.output}`,
     parts.contract === null ? "" : contractSection(parts.contract),
   ]
     .filter((part) => part !== "")
     .join("\n\n");
+  return { text, unfilled };
 }
 
 /**
@@ -752,8 +775,15 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       const file = `${layer.dir}/personas/${role}.md`;
       if (!(yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false)))) continue;
       const markdown = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
-      const body = contentOf(markdown).preamble;
+      const body = bodySections(markdown.replace(PERSONA_FRONT_MATTER, "")).preamble;
       if (body.trim() === "") continue;
+      const unfilled = personaHoles(body);
+      if (unfilled.length > 0) {
+        return yield* new AgentParked({
+          operation: role,
+          reason: `the ${role} persona in ${file} names ${unfilled.join(", ")}, and a persona is told nothing but {{skill:name}}: fix it, then resume this Run`,
+        });
+      }
       const named = yield* skills(skillsIn(body));
       return renderTemplate(body, {}, { skill: skillMention(named) }).text;
     }
@@ -1324,6 +1354,9 @@ const isParked = Schema.is(AgentParked);
 const isUncertain = Schema.is(AgentUncertain);
 const asUncertain = (operation: string, cause: unknown): AgentUncertain =>
   isUncertain(cause) ? cause : new AgentUncertain({ operation, reason: reason(cause) });
+
+/** A persona's own front matter, which its definition reads and its agent is not told. */
+const PERSONA_FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;
 
 /** What the role is stated as, in the persona and in the prompt alike. */
 const roleBody = (role: string) => `You are the ${role}.`;

@@ -25,6 +25,7 @@ import * as Workflow from "effect/unstable/workflow/Workflow";
 import type { Agents } from "./agents";
 import { bodySections, INPUT_STRATEGIES, type InputStrategy } from "./definitions";
 import { exclusiveClashes } from "./strategies";
+import { expressionsIn, malformedIn } from "./template";
 import {
   KINDS,
   REQUESTABLE,
@@ -140,16 +141,104 @@ export {
 } from "./plan";
 
 /**
- * A Markdown file as the content it is: what stands above the first heading, and one
- * entry per `## name` section below it. A module reads the file it ships beside rather
- * than carrying the same prose twice, and what a definition put in front matter is not
- * content — so it is left out rather than rendered at an agent.
+ * Instructions whose `{{name}}` expressions read only the input it declares: `template`
+ * refuses any other when it is made, so a module that loads has none, and `agentWork`
+ * refuses one left unfilled before any agent starts.
  */
-export function contentOf(markdown: string): {
+export class Template<Input> {
+  declare readonly input: Input;
+  constructor(readonly text: string) {}
+}
+
+/** What every agent's instructions may name without declaring it: `agentWork` gives it. */
+const GIVEN: ReadonlySet<string> = new Set(["role", "cwd", "output_path"]);
+
+const isStruct = (schema: unknown): schema is { readonly fields: Schema.Struct.Fields } =>
+  Predicate.hasProperty(schema, "fields") && Predicate.isObject(schema.fields);
+
+/** Whether `path` names a declared field, or one a field that is a map may hold. */
+const declares = (
+  fields: Schema.Struct.Fields,
+  [head = "", ...rest]: ReadonlyArray<string>,
+): boolean => {
+  const field = fields[head];
+  if (field === undefined) return false;
+  if (rest.length === 0) return true;
+  if (isStruct(field)) return declares(field.fields, rest);
+  // A record's keys are its values', and nothing here can know them ahead.
+  return Predicate.hasProperty(field, "key") && Predicate.hasProperty(field, "value");
+};
+
+/**
+ * Instructions, and the input they take. What the text names and `fields` does not
+ * declare is refused here, so a template made where a module loads is checked by every
+ * load of it — `collie doctor` and `collie workflow check` among them.
+ */
+export function template<const Fields extends Schema.Struct.Fields>(
+  text: string,
+  fields: Fields,
+): Template<Schema.Struct<Fields>["Type"]> {
+  const undeclared = expressionsIn(text).filter(
+    (name) => !(GIVEN.has(name) || declares(fields, name.split("."))),
+  );
+  const wrong = [...undeclared.map((name) => `{{${name}}}`), ...malformedIn(text)];
+  if (wrong.length > 0) {
+    throw new Error(
+      `this template names ${wrong.join(", ")}, which nothing fills: declare ${wrong.length === 1 ? "it" : "them"} among what it takes, or remove ${wrong.length === 1 ? "it" : "them"}`,
+    );
+  }
+  return new Template(text);
+}
+
+/** What agents are told, read from Markdown: see `contentOf`. */
+export interface Content {
   readonly preamble: string;
   readonly sections: ReadonlyMap<string, string>;
-} {
-  return bodySections(markdown.replace(FRONT_MATTER, ""));
+  /** A section under the preamble; one the file does not have is refused, never sent empty. */
+  readonly prompt: (section: string) => string;
+  /** A section under the preamble, as a template of what it takes: see `template`. */
+  readonly template: <const Fields extends Schema.Struct.Fields>(
+    section: string,
+    fields: Fields,
+  ) => Template<Schema.Struct<Fields>["Type"]>;
+}
+
+/**
+ * A Markdown file as the content it is: what stands above the first heading, and one
+ * entry per `## name` section below it. Front matter is refused: what a workflow takes
+ * and does is its definition's, where it is checked, and a second copy here would drift.
+ */
+export function contentOf(markdown: string): Content {
+  if (FRONT_MATTER.test(markdown)) {
+    throw new Error(
+      "this Markdown has front matter, and a workflow's inputs, steps and questions belong in its definition: keep only what agents are told here",
+    );
+  }
+  const { preamble, sections } = bodySections(markdown);
+  const prompt = (section: string) => {
+    const body = sections.get(section);
+    if (body === undefined) {
+      throw new Error(
+        `there is no "## ${section}" section here; there is ${[...sections.keys()].join(", ") || "none"}`,
+      );
+    }
+    return [preamble, body].filter((part) => part !== "").join("\n\n");
+  };
+  return {
+    preamble,
+    sections,
+    prompt,
+    template: (section, fields) => {
+      const text = prompt(section);
+      try {
+        return template(text, fields);
+      } catch (cause) {
+        throw new Error(
+          `"## ${section}": ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      }
+    },
+  };
 }
 
 const FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;

@@ -123,6 +123,7 @@ test("a healthy machine passes every check and says so", () =>
         "status line",
         "up to date",
         "workflows",
+        "personas",
         "old workflow files",
         "glab",
         "helle",
@@ -366,6 +367,50 @@ test("what is overridden here is named, never judged and never edited", () =>
       expect(broken.detail).toContain("review:");
       expect(broken.fix).toContain(mine);
       expect(yield* fs.readFileString(mine)).toBe("export const id = 1;\n");
+
+      yield* fs.remove(project, { recursive: true, force: true });
+    }),
+  ));
+
+test("a template or a persona naming what nothing fills is named with the file it is in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* healthy();
+      const project = `${rig.projectDir}/.collie`;
+      yield* fs.makeDirectory(`${project}/workflows`, { recursive: true });
+      yield* fs.makeDirectory(`${project}/personas`, { recursive: true });
+
+      // A template is checked where its module loads, against the input it declares.
+      const module = `${project}/workflows/templated.workflow.ts`;
+      yield* fs.writeFileString(
+        module,
+        [
+          `import { defineWorkflow, template } from "collie";`,
+          `import { Effect } from "effect";`,
+          `const told = template("Build {{plan}} as the {{role}}.", {});`,
+          `export default defineWorkflow({`,
+          `  id: "templated",`,
+          `  title: "Templated",`,
+          `  description: "Names a plan it never declares.",`,
+          `  run: () => Effect.succeed(told.text),`,
+          `});`,
+        ].join("\n"),
+      );
+      const workflows = check(yield* report(), "workflows");
+      expect(workflows.detail).toContain("templated:");
+      expect(workflows.detail).toContain("{{plan}}");
+      expect(workflows.detail).not.toContain("{{role}}");
+      expect(workflows.fix).toContain(module);
+
+      // A persona is told nothing but where its skills are.
+      const persona = `${project}/personas/nosy.md`;
+      yield* fs.writeFileString(persona, "Review {{inputs.target}} with {{skill:code-review}}.\n");
+      const personas = check(yield* report(), "personas");
+      expect(personas.detail).toBe(
+        `${persona}: it names {{inputs.target}}; a persona is told nothing but {{skill:name}}`,
+      );
+      expect(personas.fix).toBe("fix each file named");
 
       yield* fs.remove(project, { recursive: true, force: true });
     }),

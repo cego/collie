@@ -27,8 +27,8 @@ export default defineWorkflow({
       yield* agentWork({
         operation: "build",
         role: "implementer",
-        instructions: "Build {{inputs.work}}.",
-        inputs: { work: input.work },
+        instructions: "Build {{work}}.",
+        input: { work: input.work },
         output: Schema.Struct({ verdict: Schema.String }),
       });
       return place.cwd;
