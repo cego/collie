@@ -173,23 +173,15 @@ const isText = Schema.is(Schema.String);
 const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 
 /**
- * The launch flags a saved module does not take yet. Refused rather than dropped: a goal
- * nobody recorded and a decision nobody answered are worse than being told so here.
+ * `--decide` answers a question before it is asked, which a module never does: its
+ * questions are asked when the work reaches them. Refused rather than dropped, since a
+ * decision nobody answered is worse than being told so here.
  */
-function unsupportedFlags(flags: {
-  readonly decide: ReadonlyArray<string>;
-  readonly goal: Option.Option<string>;
-  readonly constraint: ReadonlyArray<string>;
-}): Failure | null {
-  const given = [
-    ...(flags.decide.length > 0 ? ["--decide"] : []),
-    ...(Option.isSome(flags.goal) ? ["--goal"] : []),
-    ...(flags.constraint.length > 0 ? ["--constraint"] : []),
-  ];
-  if (given.length === 0) return null;
+function unsupportedDecide(decide: ReadonlyArray<string>): Failure | null {
+  if (decide.length === 0) return null;
   return err(
     "invalid_input",
-    `A workflow saved as a module takes its own inputs; ${given.join(", ")} is not one of them yet.`,
+    "A workflow saved as a module asks its questions when its work reaches them; --decide is not one of its inputs.",
   );
 }
 
@@ -293,7 +285,7 @@ const runStart = Command.make(
               // What an id runs is the module saved for this project.
               const saved = yield* moduleFor(resolved.env, workflow);
               if (saved !== null) {
-                const unsupported = unsupportedFlags({ decide, goal, constraint });
+                const unsupported = unsupportedDecide(decide);
                 if (unsupported !== null) return unsupported;
                 // The host's own options are settled apart from the author's payload, so
                 // nothing the host supplies is ever injected into a module's input.
@@ -311,6 +303,9 @@ const runStart = Command.make(
                   input: launch.input,
                   options: { ...launch.options, ...Object.fromEntries(agent) },
                   task: task.choice,
+                  intent: Option.isSome(goal)
+                    ? { goal: goal.value, constraints: named.constraints }
+                    : { constraints: named.constraints },
                 });
                 if (!started.ok) return started;
                 return {

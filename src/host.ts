@@ -56,6 +56,7 @@ import { configuredAgents } from "./agents";
 import { Catalogue, discover, searchPath } from "./discovery";
 import { RequestConflict } from "./store";
 import { VerifySpecSchema } from "./verify-spec";
+import { IntentSeedSchema } from "./intent";
 import { currentEnv } from "./env";
 import { Herdr } from "./herdr";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
@@ -138,6 +139,7 @@ export const HostRpcs = RpcGroup.make(
       /** A new Task to open for it under this label, once its checkout is known. */
       taskLabel: Schema.optional(Schema.String),
       parent: Schema.optional(Schema.String),
+      intent: Schema.optional(IntentSeedSchema),
     },
     success: Started,
     error: Schema.Union([HostRefused, RequestConflict]),
@@ -276,7 +278,7 @@ const handlers = (dir: string) =>
               problems: found.problems,
             })),
           ),
-        start: ({ project, id, request, input, text, options, task, taskLabel, parent }) =>
+        start: ({ project, id, request, input, text, options, task, taskLabel, parent, intent }) =>
           registry.resolve({ project, id }).pipe(
             Effect.flatMap((generation) =>
               registry.start({
@@ -289,6 +291,7 @@ const handlers = (dir: string) =>
                 task,
                 taskLabel,
                 parent,
+                intent,
               }),
             ),
           ),

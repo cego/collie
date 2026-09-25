@@ -105,6 +105,22 @@ export const DefaultsSchema = Schema.Struct({
 export type Defaults = Schema.Schema.Type<typeof DefaultsSchema>;
 export const DefaultsJson = Schema.fromJsonString(DefaultsSchema);
 
+/**
+ * What a front door knows of a new Run's Intent: the defaults of the workspace it was
+ * started from, and the goal and constraints named at launch. The host adds what the work
+ * source asks for and what the Run may verify, and writes version 1 before any work runs.
+ */
+export const IntentSeedSchema = Schema.Struct({
+  defaults: Schema.optionalKey(DefaultsSchema),
+  goal: Schema.optionalKey(Schema.String),
+  constraints: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({ ...ConstraintSchema.fields, since: Schema.optionalKey(Schema.Int) }),
+    ),
+  ),
+});
+export type IntentSeed = typeof IntentSeedSchema.Type;
+
 const IntentJson = Schema.fromJsonString(IntentSchema);
 const encodeIntent = Schema.encodeSync(IntentJson);
 

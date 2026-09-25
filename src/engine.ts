@@ -101,6 +101,15 @@ import {
 import { Notifier, SOUND, notificationTitle, wanted, type Sound } from "./notify";
 import { Oversight, cardCheckpoints, writeCard, type Watched } from "./oversight";
 import type { Card } from "./cards";
+import { reason } from "./naming";
+import {
+  fromWorkSource,
+  propagate,
+  readIntent,
+  seedIntent,
+  writeIntent,
+  type IntentSeed,
+} from "./intent";
 import { latest, readDispositions, type Disposition } from "./disposition";
 import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
@@ -2526,6 +2535,77 @@ const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (
 });
 
 /**
+ * A new Run's Intent, version 1: the workspace's defaults and what was named at launch
+ * from the front door, what its work source asks for, and what it may verify. A Run
+ * started from another inherits that one's Intent as it stands. Written once, before the
+ * engine has the work; a retry of the same request finds it written.
+ */
+const seedIntentOf = (options: {
+  readonly dir: string;
+  readonly row: RunRow;
+  readonly generation: Generation;
+  readonly seed: IntentSeed | undefined;
+  readonly parent: RunRow | null;
+}) =>
+  writeSeed(options).pipe(
+    // Said where the Run's own events are: a Run without its Intent still runs, and
+    // whoever reads why its drift was never checked is told.
+    Effect.catch((cause) =>
+      FileSystem.FileSystem.pipe(
+        Effect.flatMap((fs) =>
+          fs.writeFileString(
+            `${options.dir}/events.${options.row.run}.log`,
+            `intent v1 not written: ${reason(cause)}\n`,
+            { flag: "a" },
+          ),
+        ),
+        Effect.ignore,
+      ),
+    ),
+  );
+
+const writeSeed = Effect.fn("Engine.writeSeed")(function* (options: {
+  readonly dir: string;
+  readonly row: RunRow;
+  readonly generation: Generation;
+  readonly seed: IntentSeed | undefined;
+  readonly parent: RunRow | null;
+}) {
+  const at = runDir(options.dir, options.row.run);
+  if ((yield* readIntent(at).pipe(Effect.orElseSucceed(() => null))) !== null) return;
+  const input = yield* decodeInput(options.row.input).pipe(
+    Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
+  );
+  const textOf = (hint: string) => {
+    const field = fieldWith(options.generation.hints, hint);
+    const value = field === undefined ? undefined : input[field];
+    return isText(value) ? value : "";
+  };
+  const source = textOf("work-source");
+  const kind = yield* classifyWorkSource(source).pipe(
+    Effect.map((found) => found.kind),
+    Effect.orElseSucceed(() => null),
+  );
+  const work = yield* fromWorkSource(kind, source).pipe(
+    Effect.orElseSucceed(() => ({ goal: null, constraints: [] })),
+  );
+  const seeded = seedIntent(options.row.run, {
+    defaults: options.seed?.defaults ?? null,
+    goal: options.seed?.goal ?? (textOf("goal") || work.goal),
+    constraints: [...work.constraints, ...(options.seed?.constraints ?? [])],
+    runVerification: yield* approvedOf(options.dir, options.row.run),
+  });
+  const inherited =
+    options.parent === null
+      ? null
+      : yield* readIntent(runDir(options.dir, options.parent.run)).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+  yield* (yield* FileSystem.FileSystem).makeDirectory(at, { recursive: true });
+  yield* writeIntent(at, inherited === null ? seeded : propagate(inherited, seeded).intent);
+});
+
+/**
  * What a launch records beside the author's own input: the caller's host options, and the
  * outcome this Run has to prove — the module's own fixed kind, or the one the caller
  * selected. A card reads this and never the workflow's id.
@@ -2744,6 +2824,8 @@ export interface RegistryApi {
     /** A new Task to open for it, under this label, on the checkout it is given. */
     readonly taskLabel?: string | undefined;
     readonly parent?: string | null;
+    /** What the front door knows of the Run's Intent. */
+    readonly intent?: IntentSeed;
   }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
   readonly status: (
     runId: string,
@@ -3325,6 +3407,10 @@ const makeRegistry: (
       project: request.kind === "existing" ? request.path : parent.project,
       configDir,
     }).pipe(Effect.ignore);
+    yield* seedIntentOf({ dir, row: claimed.row, generation, seed: undefined, parent }).pipe(
+      Effect.provideContext(bun),
+      Effect.ignore,
+    );
     // The parent hands its own children over, so the receipt is written here: a host
     // sweep dispatching one would give the engine a child with no parent to wake.
     yield* store.accepted(claimed.row.run);
@@ -3822,6 +3908,7 @@ const makeRegistry: (
     readonly task?: string | null;
     readonly taskLabel?: string | undefined;
     readonly parent?: string | null;
+    readonly intent?: IntentSeed;
   }) {
     const generation = options.generation;
     const runId =
@@ -3866,6 +3953,13 @@ const makeRegistry: (
       project: options.project,
       configDir,
     }).pipe(Effect.ignore);
+    yield* seedIntentOf({
+      dir,
+      row: claimed.row,
+      generation,
+      seed: options.intent,
+      parent: options.parent ? yield* store.run(options.parent) : null,
+    }).pipe(Effect.provideContext(bun), Effect.ignore);
     // A retry of work the engine already has is nothing more to do; one that crashed
     // before it heard is handed over now, under the identity it was admitted with.
     if (claimed.row.accepted === null) yield* handOver(claimed.row);

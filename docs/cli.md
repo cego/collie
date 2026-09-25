@@ -191,8 +191,9 @@ written.
 
 The Run it starts is shown, listed and waited on by the same commands as any other, and
 `--request-id` deduplicates it the same way — the claim goes to the host, so the retry is
-the same Run there too. `--decide`, `--goal` and `--constraint` are refused on a module for
-now rather than accepted and dropped.
+the same Run there too. `--goal` and `--constraint` seed the Run's [Intent](#intent);
+`--decide` is refused rather than accepted and dropped, since a module asks its questions
+when its work reaches them.
 
 The picker asks for exactly what the module declares, in the way its own schema allows: a
 closed set is a menu of the values it takes rather than a text box, and an input the module
@@ -509,12 +510,10 @@ the same work again.
 A run's **Intent** is what it is for, what its work must respect, and what Collie may do
 about it without asking; everything Collie says about drift is a comparison against one.
 
-A Run of a workflow module carries no Intent yet. `run start` refuses `--goal` and
-`--constraint` for one, `run intent set-goal`, `add-constraint`, `remove-constraint` and
-`authority` answer `invalid_state` because there is no Intent to amend, and nothing checks
-it for drift. `run intent verification` is the one that applies: it grants the run a
-command through the host (below). What follows is what an Intent holds and how one was
-written; `run intent show` reads one on a Run an older Collie recorded, and never amends it.
+Every Run has one from the moment the host admits it, written before any of its work
+runs, and a Run started from another — a child, or a follow-up offered on a card —
+inherits that one's as it stands. `run intent` reads and amends it; `run intent
+verification` grants the run a command through the host (below).
 
 ```sh
 collie --json run start implement --input plan=./plans/steering \
@@ -826,10 +825,9 @@ ran is a breach, not a pass; so is an `output_field` rule against a step that wr
 nothing, and an `mr_target` rule with no merge request. "Nobody looked" and "it was fine"
 are different answers.
 
-A Run of a workflow module carries no Intent, so nothing checks it for drift and `run drift`
-reads what a run recorded — the journal an older Collie's run left. An unresolved report
-there shows on the board and as attention `drift_unresolved`, and a cross-run check that was
-owed and never made as `cross_run_pending`.
+Nothing checks a workflow module's Run against its Intent yet, so `run drift` reads an empty
+journal. An unresolved report there shows on the board and as attention `drift_unresolved`,
+and a cross-run check that was owed and never made as `cross_run_pending`.
 
 ## Outcomes
 

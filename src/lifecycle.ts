@@ -26,6 +26,8 @@ import { err, taskFor, type Failure, type OpResult } from "./operations";
 import type { TaskChoice } from "./task";
 import type { RequestConflict } from "./store";
 import { renderApproved, type VerifySpec } from "./verify-spec";
+import { defaultsPath, readDefaults, type IntentSeed } from "./intent";
+import { scopeFor, scopeKey } from "./registry";
 
 export { savedModules } from "./discovery";
 
@@ -154,8 +156,14 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
     readonly options?: Readonly<Record<string, string>>;
     readonly task: TaskChoice;
     readonly parent?: string | null;
+    /** The goal and constraints named at launch, beside the workspace's own defaults. */
+    readonly intent?: Pick<IntentSeed, "goal" | "constraints">;
   },
 ) {
+  // The defaults of the workspace this was started from, which only a front door knows.
+  const defaults = yield* readDefaults(
+    yield* defaultsPath(env.stateDir, scopeKey(scopeFor(env, env.cwd))),
+  ).pipe(Effect.orElseSucceed(() => null));
   const placed = yield* taskFor(env, options.task, {
     workflow: options.id,
     named: Object.values(options.input.text)[0] ?? "",
@@ -172,6 +180,7 @@ export const startRun = Effect.fn("Lifecycle.startRun")(function* (
       task: placed.task?.id,
       taskLabel: placed.label ?? undefined,
       parent: options.parent ?? undefined,
+      intent: defaults === null ? { ...options.intent } : { ...options.intent, defaults },
     }),
   ).pipe(
     Effect.map((answered) =>
