@@ -206,10 +206,15 @@ export interface AgentsApi {
     launched: Launched,
     unless?: string | null,
   ) => Effect.Effect<string | null, AgentUncertain>;
-  /** Hands one unusable Output back to the agent that wrote it. False where it could not be asked. */
+  /**
+   * Hands one unusable Output back to the agent that wrote it. True where it was asked, or
+   * where the Output is already something other than `unusable`; false where it could not
+   * be asked.
+   */
   readonly repair: (
     launched: Launched,
     problem: string,
+    unusable: string,
   ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
   /**
    * Says something of a human's to the agent this run has. The request is the claim on
@@ -422,7 +427,9 @@ export const agentWork = <Output extends OutputContract = typeof Schema.String>(
       error: AgentUncertain,
       execute: stoppable(
         parkedWhenStuck(
-          agents.revive(ask, first).pipe(Effect.andThen(agents.repair(launched, read.problem))),
+          agents
+            .revive(ask, first)
+            .pipe(Effect.andThen(agents.repair(launched, read.problem, first))),
           host,
           work.runId,
         ),
@@ -1019,9 +1026,13 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       }),
     );
 
-  const repair = (launched: Launched, problem: string) =>
+  const repair = (launched: Launched, problem: string, unusable: string) =>
     under(
       Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const now = yield* fs.readFileString(launched.output).pipe(Effect.orElseSucceed(() => ""));
+        // Rewritten while nobody was asking, as across a stop: that Output is the one to read.
+        if (now.trim() !== "" && now !== unusable) return true;
         const text = repairText(launched.output, problem);
         const file = `${dirFor(launched.runId)}/${launched.operation}.repair.md`;
         yield* write(file, text);

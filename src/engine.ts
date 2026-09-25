@@ -547,6 +547,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly repair: (
       launched: Launched,
       problem: string,
+      unusable: string,
     ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
     readonly steer: (options: {
       readonly runId: string;

@@ -904,7 +904,7 @@ class ClosedAtRepair extends FakeHerdr {
 }
 
 test(
-  "a stop while the repair waits on a blocked pane parks the work, and the resume carries the repair on",
+  "a stop while the repair waits on a blocked pane parks the work, and the resume starts the halted agent again",
   () =>
     runEffect(
       Effect.gen(function* () {
@@ -922,9 +922,35 @@ test(
         yield* control("stop", "r1", false);
         const result = yield* releasedInto("r1");
         expect(result._tag === "Success" && result.success.note).toBe("after the stop");
-        // The halted agent is started again with its prompt, and then told what to repair.
+        // The halted agent is started again with its prompt, and what it writes is read:
+        // nobody is asked to repair an Output that agent never wrote.
         expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(2);
-        expect(sent(yield* rig.calls(), "not usable")).toBe(1);
+        expect(sent(yield* rig.calls(), "not usable")).toBe(0);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "an Output made good while the Run was stopping is the answer on resume, with no repair sent",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* rig.queueOutputs([{ verdict: "maybe" }]);
+        yield* interrupted("r1", 1500, {
+          herdr: new ClosedAtRepair(rig.pluginEnv()),
+          patience: { firstMs: 10, maxMs: 20, forMs: 30_000 },
+        });
+        expect(yield* statusNow("r1")).toBe("suspended");
+        // The agent fixed its file on its own before the stop closed it.
+        yield* fs.writeFileString(outputPath("r1"), `{"verdict":"clean","note":"on its own"}`);
+        yield* session(halted("r1"));
+
+        yield* control("stop", "r1", false);
+        const result = yield* releasedInto("r1");
+        expect(result._tag === "Success" && result.success.note).toBe("on its own");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
       }),
     ),
   120_000,
