@@ -371,7 +371,9 @@ test(
         const removed = (yield* workspace("collie-host-removed-")).state;
         const orphan = yield* hostFor(removed, "");
         yield* owned(removed);
-        yield* fs.remove(removed, { recursive: true });
+        // Moved away rather than deleted: a recursive delete races the files the host is
+        // still writing there, where a rename takes the directory away in one step.
+        yield* fs.rename(removed, `${removed}.gone`);
         yield* gone(orphan);
       }),
     ),

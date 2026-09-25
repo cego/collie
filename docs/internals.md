@@ -25,9 +25,10 @@ Work runs in one background **host** per state directory
 <state>`, started by the first client that needs it and owned under `host.lock`. The CLI,
 the board and chat reach it over Effect RPC on `host.sock`, so a Run survives the picker
 closing, the board closing and the terminal being detached, and a client of another build
-is told to restart the host rather than served. A host stops by itself once its state
-directory is gone — there is nothing left for it to serve — or once the process named in
-`COLLIE_HOST_WATCH_PID`, where one is, has exited.
+is told to restart the host rather than served. A host stops by itself once its lock is
+gone with the state directory it was in — there is nothing left for it to serve, even if its
+socket makes the directory again — or once the process named in `COLLIE_HOST_WATCH_PID`,
+where one is, has exited.
 
 A workflow is a TypeScript module, and the host runs it on Effect's own engine
 ([ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md)): a

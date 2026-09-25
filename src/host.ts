@@ -334,10 +334,13 @@ export const serve = (dir: string): Effect.Effect<void, never, BunServices | Sco
   }).pipe(Effect.orDie);
 
 /**
- * Resolves once nothing is left for this host to serve: its state directory was removed,
- * or the process named in `COLLIE_HOST_WATCH_PID` — whatever it was started to live no
- * longer than, a test's own process — has gone. A host is otherwise meant to outlive the
- * client that started it, so nothing else ends it but a stop.
+ * Resolves once nothing is left for this host to serve: its lock is gone with the state
+ * directory it was in, or the process named in `COLLIE_HOST_WATCH_PID` — whatever it was
+ * started to live no longer than, a test's own process — has gone. A host is otherwise
+ * meant to outlive the client that started it, so nothing else ends it but a stop.
+ *
+ * The lock rather than the directory: a host still starting binds its socket in the
+ * directory, which makes one again at that path when the old one was just removed.
  */
 const orphaned = (dir: string) =>
   Effect.gen(function* () {
@@ -355,7 +358,7 @@ const orphaned = (dir: string) =>
     };
     for (;;) {
       yield* Effect.sleep("1 second");
-      if (!(yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => true)))) return;
+      if (!(yield* fs.exists(lockOf(dir)).pipe(Effect.orElseSucceed(() => true)))) return;
       if (Option.isSome(watched) && !alive(watched.value)) return;
     }
   });
