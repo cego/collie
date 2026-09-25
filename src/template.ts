@@ -52,14 +52,14 @@ export function malformedIn(text: string): string[] {
   return [...text.replace(SKILL, "").replace(EXPRESSION, "").matchAll(BRACES)].map(([all]) => all);
 }
 
-export function renderTemplate(text: string, vars: YamlMap, opts: RenderOptions = {}): Rendered {
+export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions = {}): Rendered {
   const missing: string[] = [];
-  // Skills first, so `{{skill:x}}` is never mistaken for a missing variable.
+  // Skills first, so `{{skill:x}}` is never mistaken for missing input.
   const withSkills = text.replace(SKILL, (all, name: string) =>
     opts.skill ? opts.skill(name) : all,
   );
   const out = withSkills.replace(EXPRESSION, (_all, path: string) => {
-    const value = lookup(vars, path.split("."));
+    const value = lookup(input, path.split("."));
     if (value === undefined || value === null) {
       if (!missing.includes(path)) missing.push(path);
       return "";
@@ -69,8 +69,8 @@ export function renderTemplate(text: string, vars: YamlMap, opts: RenderOptions 
   return { text: out, missing };
 }
 
-function lookup(vars: YamlMap, path: string[]): YamlValue | undefined {
-  let node: YamlValue = vars;
+function lookup(input: YamlMap, path: string[]): YamlValue | undefined {
+  let node: YamlValue = input;
   for (const key of path) {
     if (!isYamlMap(node)) return undefined;
     const next: YamlValue | undefined = node[key];

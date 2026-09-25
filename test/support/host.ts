@@ -11,6 +11,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { CrashPoint } from "../../src/engine";
 import { connect, ownerOf, type HostClient } from "../../src/host";
 import { collie, type World } from "./world";
+import { watchedBy } from "./effect";
 
 export const root = new URL("../../", import.meta.url).pathname;
 export const fixtures = `${root}test/fixtures/workflows`;
@@ -154,6 +155,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
   const [executable = "bun", ...prefix] = command;
+  const watch = yield* watchedBy;
   const env = {
     HOME: world.home,
     PATH: "/usr/bin:/bin",
@@ -163,6 +165,7 @@ export const openHost = Effect.fn("HostTest.open")(function* (
     COLLIE_CWD: world.project,
     COLLIE_HOST: asCommand(command),
     COLLIE_HOST_CRASH_AT: options?.crashAt,
+    COLLIE_HOST_WATCH_PID: watch,
   };
   const child = yield* spawner.spawn(
     ChildProcess.make(executable, [...prefix, "host", "--dir", state], {

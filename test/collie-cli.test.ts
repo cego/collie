@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
-import { runEffect } from "./support/effect";
+import { runEffect, watchedBy } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
@@ -31,6 +31,7 @@ const cli = Effect.fn("test.cli")(function* (
   defs: Record<string, string> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
+  const watch = yield* watchedBy;
   const dir = yield* fs.makeTempDirectory({ prefix: "collie-cli-" });
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
   yield* installFakeSkills(dir);
@@ -48,6 +49,7 @@ const cli = Effect.fn("test.cli")(function* (
       HERDR_PLUGIN_STATE_DIR: join(dir, "state"),
       HOME: dir,
       PWD: root,
+      COLLIE_HOST_WATCH_PID: watch,
       ...extraEnv,
     },
     stdout: "pipe",

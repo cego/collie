@@ -329,8 +329,35 @@ export const serve = (dir: string): Effect.Effect<void, never, BunServices | Sco
     yield* ensureLockDir(lock);
     // `withLock` breaks a claim whose holder is gone before its last attempt, so a host
     // that crashed leaves nothing for a human to clear.
-    return yield* withLock(lock, Effect.void, own(dir), 0);
+    return yield* withLock(lock, Effect.void, Effect.race(own(dir), orphaned(dir)), 0);
   }).pipe(Effect.orDie);
+
+/**
+ * Resolves once nothing is left for this host to serve: its state directory was removed,
+ * or the process named in `COLLIE_HOST_WATCH_PID` — whatever it was started to live no
+ * longer than, a test's own process — has gone. A host is otherwise meant to outlive the
+ * client that started it, so nothing else ends it but a stop.
+ */
+const orphaned = (dir: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const watched = yield* Config.option(Config.Int("COLLIE_HOST_WATCH_PID")).pipe(
+      Effect.orElseSucceed(() => Option.none<number>()),
+    );
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (;;) {
+      yield* Effect.sleep("1 second");
+      if (!(yield* fs.exists(dir).pipe(Effect.orElseSucceed(() => true)))) return;
+      if (Option.isSome(watched) && !alive(watched.value)) return;
+    }
+  });
 
 /**
  * Which module this project runs for this id, as the search path answers it. The registry

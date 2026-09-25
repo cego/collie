@@ -1,13 +1,13 @@
-import { Effect, Option } from "effect";
+import { Effect, Option, Stdio, Stream } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import type { PluginEnv } from "../env";
 import { err } from "../operations";
 import { runView, treeOf } from "../lifecycle";
 import { noteVerification } from "../metrics";
 import { evidenceDir } from "../engine";
-import { collect, insideRun } from "../verify";
+import { collect, insideRun, type Echo } from "../verify";
 import { printResult } from "../envelope";
-import { answering } from "./shared";
+import { answering, root } from "./shared";
 
 /** A Run to verify against: where its journal goes, and the tree it is about. */
 interface Target {
@@ -18,6 +18,22 @@ interface Target {
   /** Whether the collector records the metric: a Run with steps does it at its gate. */
   readonly note: boolean;
 }
+
+/**
+ * The command's own output, shown as it runs: a failure says why the first time, rather
+ * than after running it again outside Collie. Under `--json` both streams go to stderr,
+ * since stdout is the one envelope.
+ */
+const echoed = Effect.fn("collie.verify.echoed")(function* () {
+  const stdio = yield* Stdio.Stdio;
+  const json = (yield* root).json;
+  const to = (sink: typeof stdio.stdout) => (text: string) =>
+    Stream.make(text).pipe(Stream.run(sink({ endOnDone: false })), Effect.ignore);
+  return {
+    stdout: to(json ? stdio.stderr : stdio.stdout),
+    stderr: to(stdio.stderr),
+  } satisfies Echo;
+});
 
 /** The Run this verification is about, as the host has it. Null where it has no such Run. */
 const targetOf = Effect.fn("collie.verify.target")(function* (env: PluginEnv, runId: string) {
@@ -83,15 +99,19 @@ export const verify = Command.make(
           "invalid_input",
           `"${where}" is not inside run ${target.id}; a verification names the tree it ran on.`,
         );
-      return yield* collect(target.dir, {
-        run: target.id,
-        name: Option.getOrElse(name, () => executable),
-        executable,
-        argv,
-        cwd: where,
-        by: "agent",
-        expect: wanted,
-      }).pipe(
+      return yield* collect(
+        target.dir,
+        {
+          run: target.id,
+          name: Option.getOrElse(name, () => executable),
+          executable,
+          argv,
+          cwd: where,
+          by: "agent",
+          expect: wanted,
+        },
+        yield* echoed(),
+      ).pipe(
         Effect.tap((record) => (target.note ? noteVerification(target.dir, record) : Effect.void)),
         Effect.map((record) => {
           // The command's own exit, passed through: a wrapper around this must behave

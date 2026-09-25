@@ -908,6 +908,10 @@ That pair is the point: a pass on a tree that changed while the command ran says
 about either tree, so such a result is `unstable` and never `pass`. So is a tree too large
 to fingerprint at all, because two unmeasured trees are not one tree.
 
+What the command prints is shown as it runs — its stdout on stdout and its stderr on
+stderr, or both on stderr under `--json`, where stdout is the one envelope — and the exit
+status is the command's own, so a failure says why the first time.
+
 | Flag       | What it does                                                                |
 | ---------- | --------------------------------------------------------------------------- |
 | `--run`    | Required. The run this is a verification of, and whose tree is snapshotted. |

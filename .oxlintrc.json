@@ -28,6 +28,9 @@
     // The acceptance gate: it shells out to `bun test` and `git` and prints a table, and
     // runs as a plain script for the same reason the build does.
     "tools/acceptance.ts",
+    // The test preload: it runs before any Effect program does, sets the environment every
+    // test inherits, and asks `ps` which hosts outlived their test.
+    "test/support/hosts.ts",
     "tools/oxlint/anti-slop/**"
   ],
   "jsPlugins": [

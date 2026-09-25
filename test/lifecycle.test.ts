@@ -597,6 +597,21 @@ test(
           yield* fs.readFileString(`${world.state}/evidence/${started.runId}/metrics.jsonl`),
         ).toContain(`"kind":"verification"`);
 
+        // What a failing command said is shown as it ran, so nobody has to run it again to
+        // learn why; under --json on stderr, beside the one envelope on stdout.
+        const failing = yield* collie(world, [
+          "verify",
+          "--run",
+          started.runId,
+          "--",
+          "sh",
+          "-c",
+          "echo the reason it failed; exit 3",
+        ]);
+        expect(failing.exit).toBe(3);
+        expect(failing.stderr).toContain("the reason it failed");
+        expect(failing.envelope.ok).toBe(true);
+
         // A Run nobody started is still nobody's, whichever store was asked.
         const nowhere = yield* collie(world, ["verify", "--run", "run-nobody", "--", "true"]);
         expect(nowhere.envelope.ok).toBe(false);

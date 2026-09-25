@@ -17,7 +17,7 @@ import {
   type Disposition,
 } from "../src/disposition";
 import { hosted, settledRun } from "./support/hosted";
-import { runEffect } from "./support/effect";
+import { runEffect, watchedBy } from "./support/effect";
 
 const root = new URL("../", import.meta.url).pathname;
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
@@ -33,9 +33,15 @@ const parseEnvelope = Schema.decodeUnknownEffect(Envelope);
 
 /** The CLI as a person runs it, against a state directory that survives between calls. */
 const cli = Effect.fn("test.cli")(function* (args: string[], env: Record<string, string>) {
+  const watch = yield* watchedBy;
   const proc = Bun.spawn([Bun.argv[0] ?? "bun", join(root, "src/main.ts"), ...args], {
     cwd: root,
-    env: { HERDR_PLUGIN_ROOT: root, PWD: root, ...env },
+    env: {
+      HERDR_PLUGIN_ROOT: root,
+      PWD: root,
+      COLLIE_HOST_WATCH_PID: watch,
+      ...env,
+    },
     stdout: "pipe",
     stderr: "pipe",
   });

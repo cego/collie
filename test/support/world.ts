@@ -6,7 +6,7 @@
 
 import { Config, ConfigProvider, Effect, FileSystem, Option, Schema, Scope } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { runEffect } from "./effect";
+import { runEffect, watchedBy } from "./effect";
 import { fixtures, root } from "./host";
 
 export interface World {
@@ -43,6 +43,7 @@ export const collie = Effect.fn("World.collie")(function* (
 ) {
   const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
   const command = Option.isSome(binary) ? [binary.value] : [process.execPath, `${root}src/main.ts`];
+  const watch = yield* watchedBy;
   const child = Bun.spawn([...command, "--json", ...args], {
     cwd: world.project,
     env: {
@@ -54,18 +55,19 @@ export const collie = Effect.fn("World.collie")(function* (
       COLLIE_CWD: world.project,
       // The host a client starts is this same program, as an installation's would be.
       COLLIE_HOST: asCommand(command),
+      COLLIE_HOST_WATCH_PID: watch,
     },
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [stdout, , exit] = yield* Effect.promise(() =>
+  const [stdout, stderr, exit] = yield* Effect.promise(() =>
     Promise.all([
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
       child.exited,
     ]),
   );
-  return { exit, envelope: yield* asEnvelope(stdout).pipe(Effect.orDie) };
+  return { exit, stderr, envelope: yield* asEnvelope(stdout).pipe(Effect.orDie) };
 });
 
 /** Fixture files, saved where an author saves them. */

@@ -25,7 +25,9 @@ Work runs in one background **host** per state directory
 <state>`, started by the first client that needs it and owned under `host.lock`. The CLI,
 the board and chat reach it over Effect RPC on `host.sock`, so a Run survives the picker
 closing, the board closing and the terminal being detached, and a client of another build
-is told to restart the host rather than served.
+is told to restart the host rather than served. A host stops by itself once its state
+directory is gone — there is nothing left for it to serve — or once the process named in
+`COLLIE_HOST_WATCH_PID`, where one is, has exited.
 
 A workflow is a TypeScript module, and the host runs it on Effect's own engine
 ([ADR-0014](adr/0014-native-workflows-run-on-effects-own-engine.md)): a
@@ -519,6 +521,11 @@ fake.
 `check` runs formatting, lint, and type checking in parallel, then tests after all three
 pass. Keeping those phases separate avoids CPU contention with the subprocess-heavy tests.
 The individual scripts in `package.json` still work for focused feedback.
+
+Every host a test starts ends with that test. `test/support/hosts.ts`, a preload, gives
+each test file a temporary root of its own and tells every host started under it
+(`COLLIE_HOST_WATCH_PID`) to live no longer than the test process; after each test, a host
+still holding a directory under that root is killed and fails the test that left it.
 
 `bun run test` uses [Bun's process-parallel runner](https://bun.com/docs/test/parallel)
 with four workers and a fresh global per file. Tests within each file stay sequential:

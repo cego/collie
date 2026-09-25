@@ -319,3 +319,61 @@ test(
     ),
   120_000,
 );
+
+test(
+  "a host stops once its directory is gone, or the process it was to outlive no longer is",
+  () =>
+    proves(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const binary = yield* Config.option(Config.String("COLLIE_TEST_BINARY"));
+        const command = Option.isSome(binary)
+          ? [binary.value]
+          : [process.execPath, `${root}src/main.ts`];
+        const [executable = "bun", ...prefix] = command;
+        // What it lives no longer than: a process of the test's own, stopped at will.
+        const outlived = yield* spawner.spawn(
+          ChildProcess.make("sleep", ["60"], { stdout: "ignore", stderr: "ignore" }),
+        );
+        const hostFor = (state: string, watch: string) =>
+          spawner.spawn(
+            ChildProcess.make(executable, [...prefix, "host", "--dir", state], {
+              env: {
+                HOME: state,
+                PATH: "/usr/bin:/bin",
+                HERDR_PLUGIN_ROOT: root,
+                COLLIE_HOST_WATCH_PID: watch,
+              },
+              extendEnv: false,
+              stdout: "ignore",
+              stderr: "ignore",
+            }),
+          );
+        const owned = (state: string) =>
+          until(
+            () => ownerOf(state),
+            (owner) => owner !== null,
+          );
+        const gone = (pid: number) =>
+          until(
+            () => signalProcess(pid),
+            (alive) => !alive,
+          );
+
+        const watching = (yield* workspace("collie-host-watched-")).state;
+        const watcher = yield* hostFor(watching, String(outlived.pid));
+        yield* owned(watching);
+        yield* outlived.kill();
+        yield* gone(watcher.pid);
+        expect(yield* ownerOf(watching)).toBeNull();
+
+        const removed = (yield* workspace("collie-host-removed-")).state;
+        const orphan = yield* hostFor(removed, "");
+        yield* owned(removed);
+        yield* fs.remove(removed, { recursive: true });
+        yield* gone(orphan.pid);
+      }),
+    ),
+  120_000,
+);

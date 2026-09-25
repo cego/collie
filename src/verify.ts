@@ -184,6 +184,12 @@ function tail(text: string): string {
   return text.length <= TAIL_BYTES ? text : text.slice(-TAIL_BYTES);
 }
 
+/** Where a command's two streams are shown while it runs. */
+export interface Echo {
+  readonly stdout: (text: string) => Effect.Effect<void>;
+  readonly stderr: (text: string) => Effect.Effect<void>;
+}
+
 export interface Collected {
   readonly run: string;
   readonly name: string;
@@ -202,6 +208,8 @@ export interface Collected {
 export const collect = Effect.fn("Verify.collect")(function* (
   runDir: string,
   what: Collected,
+  /** Where each stream is shown as it arrives, for a caller watching the command run. */
+  echo?: Echo,
 ): Effect.fn.Return<Verification, VerifyRefused, Services> {
   const absolute = yield* resolveExecutable(what.executable, what.cwd);
   if (absolute === null)
@@ -223,17 +231,21 @@ export const collect = Effect.fn("Verify.collect")(function* (
     );
     // Tailed as it arrives, never folded whole: only the last 4 KiB is recorded, and a
     // verification that prints for an hour must not allocate for an hour to say so.
-    const drain = (stream: typeof handle.stdout) =>
+    const drain = (stream: typeof handle.stdout, shown?: (text: string) => Effect.Effect<void>) =>
       stream.pipe(
         Stream.decodeText(),
+        Stream.tap((chunk) => (shown === undefined ? Effect.void : shown(chunk))),
         Stream.runFold(
           () => "",
           (kept: string, chunk: string) => tail(kept + chunk),
         ),
       );
-    return yield* Effect.all([drain(handle.stdout), drain(handle.stderr), handle.exitCode], {
-      concurrency: "unbounded",
-    });
+    return yield* Effect.all(
+      [drain(handle.stdout, echo?.stdout), drain(handle.stderr, echo?.stderr), handle.exitCode],
+      {
+        concurrency: "unbounded",
+      },
+    );
   }).pipe(Effect.scoped, Effect.orDie);
   const end = yield* fingerprint(what.cwd);
   const at = yield* nowIso();
