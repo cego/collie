@@ -545,11 +545,6 @@ export const judge = Effect.fn("Drift.judge")(function* (
 // Correcting what was found
 // ---------------------------------------------------------------------------
 
-/** The work a correction is about, so two attempts at one constraint are one piece of work. */
-export function correctionCause(report: DriftReport) {
-  return { kind: "correction" as const, ref: report.constraint };
-}
-
 export interface CorrectionContext {
   /** Whether the agent this would go to has been typed into by a human. */
   readonly overridden: boolean;
