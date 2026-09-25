@@ -526,10 +526,11 @@ function handle(
           cwd: flag("--cwd") ?? null,
         };
         state.workspaces.push(workspace);
-        yield* writeJson(statePath, state);
-        // herdr's own reply: the new workspace comes with a shell tab.
+        // herdr's own reply: the new workspace comes with a shell tab, listed like any pane.
         const tab = { tab_id: `${workspace.workspace_id}-t1`, label: "1" };
         const root_pane = { pane_id: `${workspace.workspace_id}-p1`, tab_id: tab.tab_id };
+        state.paneList.push({ ...root_pane, label: null, workspace_id: workspace.workspace_id });
+        yield* writeJson(statePath, state);
         result = { type: "workspace_created", workspace, tab, root_pane };
         break;
       }

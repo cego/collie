@@ -388,9 +388,14 @@ test(
         expect(created.map((call) => call.argv)).toEqual([
           expect.arrayContaining(["--cwd", worktree]),
         ]);
-        expect(tabs(yield* rig.calls())).toEqual([
-          { workspace: task?.workspace ?? "", cwd: worktree },
-        ]);
+        // The first agent takes over the shell the workspace came with, rather than leaving
+        // it an empty first tab beside one of its own.
+        expect(tabs(yield* rig.calls())).toEqual([]);
+        const agentStart = (yield* rig.calls()).find((call) => call.cmd === "agent start");
+        expect(agentStart?.argv).toEqual(
+          expect.arrayContaining(["--pane", `${task?.workspace}-p1`]),
+        );
+        expect(task?.root_pane ?? null).toBeNull();
       }),
     ),
   120_000,
@@ -807,10 +812,9 @@ test(
         expect(views.fresh?.workspace).toBeNull();
         expect(fresh).toMatchObject({ label: "Project | Menu", cwd: views.fresh?.cwd });
         expect(yield* rig.cmds()).not.toContain("workspace create");
-        expect(tabs(yield* rig.calls()).map((tab) => tab.workspace)).toEqual([
-          own,
-          fresh?.workspace ?? "",
-        ]);
+        // The fresh Task's agent takes over the shell herdr opened its workspace with.
+        expect(tabs(yield* rig.calls()).map((tab) => tab.workspace)).toEqual([own]);
+        expect(fresh?.root_pane ?? null).toBeNull();
         expect((yield* rig.cmds()).filter((cmd) => cmd === "worktree create")).toHaveLength(2);
       }),
     ),

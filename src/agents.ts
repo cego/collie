@@ -984,7 +984,11 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           });
         }
         const reopened = yield* host.herdr.workspaceCreate({ cwd: ask.cwd, label: task.label });
-        yield* writeTask(stateDir, { ...task, workspace: reopened.workspaceId });
+        yield* writeTask(stateDir, {
+          ...task,
+          workspace: reopened.workspaceId,
+          root_pane: reopened.rootTab?.paneId ?? null,
+        });
         yield* log(
           ask.runId,
           `${id}'s workspace ${task.workspace} had closed; reopened on ${ask.cwd} as ${reopened.workspaceId}`,
@@ -992,6 +996,32 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         return reopened.workspaceId;
       }),
     );
+  });
+
+  /**
+   * The shell pane the Task's workspace was made with, for its first agent to take over
+   * rather than leave an empty first tab beside one of its own. Taken once, under the
+   * Task's lock, and used only while it is still there with nothing running in it.
+   */
+  const rootPane = Effect.fn("Agents.rootPane")(function* (ask: AgentAsk) {
+    const id = ask.task;
+    if (id === null) return null;
+    const stateDir = host.env.stateDir;
+    const taken = yield* withTaskLock(
+      stateDir,
+      id,
+      Effect.gen(function* () {
+        const task = yield* readTask(stateDir, id);
+        const pane = task?.root_pane ?? null;
+        if (task === null || pane === null) return null;
+        yield* writeTask(stateDir, { ...task, root_pane: null });
+        return pane;
+      }),
+    );
+    if (taken === null) return null;
+    const panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
+    const pane = panes.find((one) => one.paneId === taken && one.agent === null);
+    return pane === undefined ? null : { tabId: pane.tabId, paneId: pane.paneId };
   });
 
   /** A reused agent's work boundary: compacted past the limit, held while a compaction is unresolved. */
@@ -1031,7 +1061,10 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
           cwd: ask.cwd,
         });
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
-        const tab = yield* host.herdr.tabCreate({ label: ask.role, cwd: ask.cwd, workspace });
+        const reused = ask.workspace ? null : yield* rootPane(ask);
+        if (reused !== null) yield* Effect.ignore(host.herdr.tabRename(reused.tabId, ask.role));
+        const tab =
+          reused ?? (yield* host.herdr.tabCreate({ label: ask.role, cwd: ask.cwd, workspace }));
         // herdr ignores --cwd on tab create, so the pane is told where it is explicitly.
         yield* host.herdr.paneRun(tab.paneId, `cd ${shellQuote(ask.cwd)}`);
         yield* host.herdr

@@ -1569,9 +1569,12 @@ test(
         expect(reopened).not.toBe("wT");
         const create = (yield* rig.calls()).find((call) => call.cmd === "workspace create");
         expect(create?.argv).toContain(rig.projectDir);
-        // Every id this Run's place is known by is the new one: the Task, the tab the new
-        // agent was opened in, and the register a later step looks the agent up in.
-        expect(tabsIn(yield* rig.calls())).toEqual(["wT", reopened]);
+        // Every id this Run's place is known by is the new one: the Task, the pane the new
+        // agent was started in — the shell the reopened workspace came with, not a tab
+        // beside it — and the register a later step looks the agent up in.
+        expect(tabsIn(yield* rig.calls())).toEqual(["wT"]);
+        const starts = (yield* rig.calls()).filter((call) => call.cmd === "agent start");
+        expect(starts.at(-1)?.argv).toEqual(expect.arrayContaining(["--pane", `${reopened}-p1`]));
         const env = hostOf().env;
         const registered = yield* readRegistry(
           yield* registryPath(env.stateDir, scopeFor(env, rig.projectDir)),

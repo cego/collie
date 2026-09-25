@@ -3388,9 +3388,15 @@ const makeRegistry: (
         }),
       );
       yield* ask.record({ workspace: made.workspaceId });
-      return made.workspaceId;
+      return { workspace: made.workspaceId, rootPane: made.rootTab?.paneId ?? null };
     });
-    const workspace = opened?.id ?? ask.workspace ?? (yield* openWorkspace);
+    // The shell a workspace Collie made comes with, for the Task's first agent to take.
+    const { workspace, rootPane } =
+      opened !== null
+        ? { workspace: opened.id, rootPane: placed.worktree?.root_pane_id ?? null }
+        : typeof ask.workspace === "string"
+          ? { workspace: ask.workspace, rootPane: null }
+          : yield* openWorkspace;
     // A workspace an earlier attempt recorded may already have its Task.
     const known =
       ask.workspace === undefined
@@ -3398,7 +3404,7 @@ const makeRegistry: (
         : yield* taskOfWorkspace(placing.env.stateDir, workspace).pipe(Effect.orDie);
     const task =
       known ??
-      (yield* newTask({ workspace, label, cwd: placed.cwd }).pipe(
+      (yield* newTask({ workspace, label, cwd: placed.cwd, rootPane }).pipe(
         Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
         Effect.orDie,
       ));
