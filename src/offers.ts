@@ -111,17 +111,6 @@ export const NEEDS = {
   succeeded: "having finished the work",
 } as const;
 export type Need = keyof typeof NEEDS;
-/** The names themselves, for a schema that has to name them; the type keeps them in step. */
-export const NEEDS_NAMES: ReadonlyArray<Need> = [
-  "findings",
-  "diff-target",
-  "branch",
-  "merge-request",
-  "plan",
-  "succeeded",
-];
-export const isNeed = (value: string): value is Need => value in NEEDS;
-
 /**
  * What an offer passes to the workflow it starts, by where the value comes from. Also a
  * closed list: Collie fills these from the Run, and anything else is the caller's to give.

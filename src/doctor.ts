@@ -15,7 +15,7 @@ import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect"
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { loadDefaults } from "./config";
 import { savedModules } from "./discovery";
-import { DefinitionError, layers, loadDefinitions, skillDirs, skillInstalled } from "./definitions";
+import { layers, loadDefinitions, skillDirs, skillInstalled } from "./definitions";
 import type { PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
@@ -124,26 +124,6 @@ const asked = Effect.fn("Doctor.asked")(function* (env: PluginEnv) {
   // name. A module decides its own at runtime, so what is checked is what the machine
   // would need whichever it picks.
   return { harnesses: [defaults.harness] };
-});
-
-/**
- * The Markdown workflows an older Collie left in the operator's own layer. Listed and
- * never read: nothing interprets one any more, and an installation that still has them
- * should be told what they are rather than have them silently ignored. Its `config.json`
- * is the operator's and stays exactly where it is.
- */
-const oldWorkflowFiles = Effect.fn("Doctor.oldWorkflowFiles")(function* (env: PluginEnv) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const dir = path.join(env.configDir, "workflows");
-  const none: ReadonlyArray<string> = [];
-  const files = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed(none)));
-  const markdown = files.filter((name) => name.endsWith(".md")).sort();
-  if (markdown.length === 0) return passed("nothing an older Collie left behind");
-  return noted(
-    `${dir} still holds ${markdown.join(", ")}`,
-    "Collie runs TypeScript modules now and reads none of these. `collie workflow create <id>` writes one to start from, `collie workflow check` tells you whether it runs, and the Markdown is yours to keep or delete.",
-  );
 });
 
 /**
@@ -461,7 +441,6 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const auth = glabDir ? yield* answered(run("glab", ["auth", "status"], root)) : null;
   checks.push({ name: "workflows", ...(yield* overrides(env)) });
   checks.push({ name: "personas", ...(yield* personas(env)) });
-  checks.push({ name: "old workflow files", ...(yield* oldWorkflowFiles(env)) });
 
   checks.push({
     name: "glab",

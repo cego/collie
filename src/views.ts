@@ -7,7 +7,6 @@
 import { Effect, FileSystem, Path, Stream } from "effect";
 import { attentionFor, type Attention } from "./attention";
 import { loadDefaults, readConfig } from "./config";
-import { isStale, type Provenance } from "./definitions";
 import { readIntent } from "./intent";
 import { savedModules } from "./discovery";
 import { checkModule, readModule } from "./authoring";
@@ -87,19 +86,10 @@ export interface DefinitionRow {
   name: string;
   title: string;
   layer: string;
-  /** `(stale …)`: whether a fork has fallen behind what it forked. */
-  provenance: string;
   path: string;
   inputs: string[];
   /** What checking it says, so a module that will not run is visible without running it. */
   problems: string[];
-}
-
-function provenanceOf(def: Provenance): string {
-  const parts: string[] = [];
-  if (def.extends) parts.push(`extends ${def.extends}`);
-  if (isStale(def)) parts.push("stale — the original has changed since this copy");
-  return parts.join(" · ");
 }
 
 /**
@@ -123,7 +113,6 @@ export const buildWorkflows = Effect.fn("Views.buildWorkflows")(function* (env: 
       name: one.id,
       title: one.title,
       layer: one.layer,
-      provenance: "",
       path: one.path,
       inputs: one.inputs.map((input) => input.name),
       problems: [...(problemsOf.get(one.path) ?? []), ...(one.broken === null ? [] : [one.broken])],

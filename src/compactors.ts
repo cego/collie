@@ -28,16 +28,12 @@ import {
   createSession,
 } from "./opencode";
 import {
-  COMPACTION_WAIT_MS,
   Unsubmitted,
-  type CompactionDeps,
-  type CompactionSettings,
   type CompactionPort,
   type CompactionPorts,
   type AgentContext,
   type LaunchContext,
 } from "./compaction";
-import { loadDefaults } from "./config";
 import { withLock } from "./lock";
 import { DELIVERY_TOKEN } from "./dispatcher";
 
@@ -68,7 +64,6 @@ const submitCompaction = (ctx: AgentContext, requestId: string, text: string) =>
               : Effect.fail(new Unsubmitted({ message: outcome.detail })),
       ),
     );
-import type { Herdr } from "./herdr";
 import { selfCommand } from "./env";
 import { shell } from "./mr";
 import { reason, shellQuote } from "./naming";
@@ -1061,50 +1056,6 @@ const opencode: CompactionPort = {
 };
 
 export const COMPACTION_PORTS: CompactionPorts = { claude, codex, opencode, pi };
-
-/**
- * The shared policy's dependencies, assembled once. Every caller supplies only what it
- * alone knows — its herdr, its state directory, and the two channels a warning goes to
- * — and the defaults that must not disagree between callers (the real four ports, the
- * five-minute budget, the poll interval) live here. Here rather than in `compaction.ts`
- * because the threshold comes from the config file and the policy must not know where
- * that is — the same reason the four adapters live here and not there.
- *
- * `known` is what the caller already has in hand: a Run keeps the threshold it was
- * launched with rather than the config file's, and a test scripts a harness interface
- * and shortens the budget through the same field. Without one, the threshold is read
- * from the config file.
- */
-export const compactionFor = Effect.fn("Compactors.compactionFor")(function* (opts: {
-  herdr: Pick<Herdr, "agentPrompt" | "agentList">;
-  stateDir: string;
-  /** Where the threshold comes from when `known` does not carry one. */
-  configDir: string;
-  /** The Run's audit trail. */
-  log: CompactionDeps["log"];
-  /** The Run's own channel, which the CLI and the board read. A hand-off has none, so
-   * its warnings go to the audit trail the sending Run keeps. */
-  warn?: CompactionDeps["warn"];
-  /** Where a context sample is recorded; a hand-off, with no Run to record it on, has none. */
-  sample?: CompactionDeps["sample"];
-  pollMs?: number;
-  known?: CompactionSettings;
-}) {
-  const configured =
-    opts.known?.configured ?? (yield* loadDefaults(opts.configDir)).compactAtTokens;
-  const deps: CompactionDeps = {
-    ports: opts.known?.ports ?? COMPACTION_PORTS,
-    stateDir: opts.stateDir,
-    configured,
-    herdr: opts.herdr,
-    log: opts.log,
-    warn: opts.warn ?? opts.log,
-    waitMs: opts.known?.waitMs ?? COMPACTION_WAIT_MS,
-    pollMs: opts.pollMs ?? 2000,
-  };
-  if (opts.sample) deps.sample = opts.sample;
-  return deps;
-});
 
 /**
  * Submissions this agent has taken that Collie did not make. Claude's `UserPromptSubmit`

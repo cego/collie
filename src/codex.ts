@@ -312,11 +312,6 @@ export const compactionItems = Effect.fn("Codex.compactionItems")(function* (
     .map((entry): CompactionItem => ({ id: entry.item.id, turnId: entry.turnId }));
 });
 
-export type TurnOutcome =
-  | { readonly kind: "running" }
-  | { readonly kind: "completed" }
-  | { readonly kind: "failed"; readonly reason: string };
-
 /**
  * What became of the turn a compaction ran in. A compaction is a turn of its own, so
  * this is the protocol's own terminal mapping rather than a guess from idleness:

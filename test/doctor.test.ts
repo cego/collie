@@ -7,7 +7,7 @@ import { Effect, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeHerdr, Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
-import { installFakeSkills, writeDef } from "./support/defs";
+import { installFakeSkills } from "./support/defs";
 import { FakeBin } from "./support/bin";
 import { doctor } from "../src/doctor";
 import { claudeSettingsPath, installStatusLine } from "../src/statusline";
@@ -124,7 +124,6 @@ test("a healthy machine passes every check and says so", () =>
         "up to date",
         "workflows",
         "personas",
-        "old workflow files",
         "glab",
         "helle",
         "linear mcp",

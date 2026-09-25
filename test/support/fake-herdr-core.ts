@@ -140,25 +140,7 @@ const StateJson = Schema.fromJsonString(
   }),
 );
 const FailuresJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
-const OutputWrites = Schema.Record(Schema.String, Schema.String);
-const QueuedObjectJson = Schema.Union([
-  Schema.Struct({
-    __delay_ms: Schema.Number,
-    __write: Schema.optionalKey(OutputWrites),
-    output: Schema.optionalKey(Schema.Any),
-  }),
-  Schema.Struct({
-    __delay_ms: Schema.optionalKey(Schema.Number),
-    __write: OutputWrites,
-    output: Schema.optionalKey(Schema.Any),
-  }),
-]);
-const QueuedOutputJson = Schema.Union([
-  Schema.String,
-  Schema.Null,
-  QueuedObjectJson,
-  Schema.JsonObject,
-]);
+const QueuedOutputJson = Schema.Union([Schema.String, Schema.Null, Schema.JsonObject]);
 const QueueJson = Schema.fromJsonString(Schema.Array(QueuedOutputJson));
 const JsonRecord = Schema.fromJsonString(Schema.Any);
 const encodeJson = Schema.encodeSync(JsonRecord);
@@ -486,41 +468,12 @@ function handle(
         state.outputs += 1;
         if (next !== undefined && next !== null) {
           const outputPath = match[1]!.trim();
-          const delayed = Schema.decodeUnknownOption(QueuedObjectJson)(next);
           yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
-          if (Option.isSome(delayed) && delayed.value.__write) {
-            let dir = path.dirname(outputPath);
-            while (dir !== "/" && !(yield* fs.exists(path.join(dir, "run.json"))))
-              dir = path.dirname(dir);
-            for (const [rel, body] of Object.entries(delayed.value.__write)) {
-              const writePath = path.join(dir, rel);
-              yield* fs.makeDirectory(path.dirname(writePath), { recursive: true });
-              yield* fs.writeFileString(writePath, body);
-            }
-          }
-          if (Option.isSome(delayed) && Number.isFinite(delayed.value.__delay_ms)) {
-            const body = encodeJson(delayed.value.output ?? {});
-            yield* Effect.sync(() => {
-              Bun.spawn(
-                [
-                  "bun",
-                  "-e",
-                  `await Bun.sleep(${delayed.value.__delay_ms}); await Bun.write(${encodeJson(outputPath)}, ${encodeJson(body)});`,
-                ],
-                { stdout: "ignore", stderr: "ignore", stdin: "ignore" },
-              ).unref();
-            });
-          } else if (Option.isSome(delayed) && delayed.value.__write) {
-            yield* fs.writeFileString(outputPath, encodeJson(delayed.value.output ?? {}));
-          } else if (Option.isSome(delayed)) {
-            yield* fs.writeFileString(outputPath, encodeJson(delayed.value));
-          } else {
-            const plain = Schema.decodeUnknownOption(Schema.String)(next);
-            yield* fs.writeFileString(
-              outputPath,
-              Option.isSome(plain) ? plain.value : encodeJson(next),
-            );
-          }
+          const plain = Schema.decodeUnknownOption(Schema.String)(next);
+          yield* fs.writeFileString(
+            outputPath,
+            Option.isSome(plain) ? plain.value : encodeJson(next),
+          );
         }
       }
       if (code === "timeout") return answered;

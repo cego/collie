@@ -21,7 +21,7 @@ import {
   type Found,
 } from "./discovery";
 import { reason } from "./naming";
-import { loadEntry, provisionToolchain, revisionOf, typecheckEntry } from "./engine";
+import { loadEntry, provisionToolchain, typecheckEntry } from "./engine";
 import {
   RESERVED_INPUTS,
   describeMetadata,

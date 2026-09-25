@@ -10,7 +10,6 @@ import { Effect, FileSystem, Layer, Schema } from "effect";
 import {
   EXCLUSIVE_STRATEGIES,
   RESERVED_INPUTS,
-  WorkflowError,
   checkEntry,
   contentOf,
   defineWorkflow,

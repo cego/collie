@@ -570,15 +570,6 @@ export const decodeWorkspaceList = (res: BoundaryValue) =>
  */
 export type AgentsAlive = "unasked" | "absent" | "live" | "unverified";
 
-/**
- * The one question anything classifying a Run asks about agents. Named on its own so a
- * caller that redraws can hand over something that remembers the last answer instead of
- * a live `Herdr`, and so that what is asked is visible in the signature.
- */
-export interface AsksAgents {
-  agentsAlive(names: ReadonlyArray<string>): Effect.Effect<AgentsAlive, never, BunServices>;
-}
-
 export class Herdr {
   private seq = 0;
 

@@ -1,6 +1,5 @@
 import {
   Cause,
-  Clock,
   Duration,
   Effect,
   FileSystem,
@@ -9,8 +8,6 @@ import {
   PlatformError,
   Ref,
   Schema,
-  Semaphore,
-  Stream,
 } from "effect";
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { Argument, Command, Flag } from "effect/unstable/cli";
@@ -29,7 +26,6 @@ import {
   steerRun,
   moduleFor,
   neededInputs,
-  runView,
   runViews,
   isSettled,
   resumeRun,
@@ -557,42 +553,6 @@ const outputFiles = Effect.fn("run.outputFiles")(function* (dir: string) {
   });
   yield* walk(dir, 0);
   return found.sort();
-});
-
-/**
- * How often an attention wait re-reads a Run whose Driver may have died silently, and
- * the ceiling it backs off to. The check costs a process probe — a `ps` on a system with
- * no `/proc` — and a Run that takes two hours does not need one every two seconds for
- * all of it. Quick at first, because a Driver that dies is most likely to die early and a
- * caller who has just started waiting is the one still watching; then rarer, because a
- * wait that has gone on for an hour is a wait on something that is working. The ceiling
- * is what keeps it bounded: a lost Driver is always noticed, within half a minute.
- */
-const HEALTH_CHECK_MS = 2_000;
-const HEALTH_CHECK_CEILING_MS = 30_000;
-
-/**
- * How often filesystem events are acted on: at most one look per window, with the
- * first of each window passing straight through. Short enough that nobody notices,
- * long enough that a Run writing a burst of log lines is one look rather than twenty.
- */
-const EVENT_WINDOW = {
-  cost: () => 1,
-  units: 1,
-  duration: "100 millis",
-  strategy: "enforce",
-} as const;
-
-/** The bounded re-read itself: it ends the moment the Run has something to say. */
-const healthCheck = Effect.fn("collie.runWait.healthCheck")(function* (
-  emit: () => Effect.Effect<boolean, CollieError, BunServices>,
-) {
-  let wait = HEALTH_CHECK_MS;
-  for (;;) {
-    yield* Effect.sleep(wait);
-    if (yield* emit()) return;
-    wait = Math.min(wait * 2, HEALTH_CHECK_CEILING_MS);
-  }
 });
 
 type ParsedTimeout = { ok: true; ms: number | null } | { ok: false; error: Result };

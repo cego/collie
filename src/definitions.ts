@@ -1,25 +1,10 @@
-// Workflow and Persona definitions across the three Layers: baseline (this repo),
-// the user's plugin config dir, and the project's .collie/. Later wins by name.
+// Persona definitions across the three Layers: baseline (this repo), the user's plugin
+// config dir, and the project's .collie/. Later wins by name.
 
-import { expressionsIn, malformedIn, skillsIn } from "./template";
-import { unsafePathComponent } from "./naming";
-import { exclusiveClashes } from "./strategies";
-import { isYamlMap, parseDocument, YamlError, type YamlMap, type YamlValue } from "./yaml";
-import { Crypto, Data, Effect, FileSystem, Path, Result, type PlatformError } from "effect";
-import {
-  DEFAULT_MODEL,
-  HARNESSES,
-  harnessNames,
-  isPermissionMode,
-  knownModel,
-  modelHint,
-  PERMISSION_MODES,
-  permissionsAsWritten,
-} from "./harness";
-import type { Defaults } from "./config";
-import { isBoolean, isNumber, isString } from "./schema";
-import { SELF, isNeed, isSource, type OfferDef, type Source } from "./offers";
-import { KINDS, isOutcome } from "./outcome";
+import { expressionsIn, malformedIn } from "./template";
+import { parseDocument, YamlError, type YamlValue } from "./yaml";
+import { Crypto, Effect, FileSystem, Path, Result, type PlatformError } from "effect";
+import { isString } from "./schema";
 
 export type LayerName = "baseline" | "user" | "project";
 
@@ -59,9 +44,8 @@ export interface Provenance {
 
 /**
  * What a Workflow needs of the repository, and so which checkout a Run of it gets.
- * Declared in the Workflow's own front matter rather than inferred from its name, so
- * a fork is whatever it says it is and inherits this like everything else it does not
- * restate.
+ * Declared as its definition's `checkout` rather than inferred from its name, so a fork
+ * is whatever it says it is and inherits this like everything else it does not restate.
  *
  * - `none` reads a diff or the caller's own tree, and works where it was started.
  * - `branch` owns the checkout of the branch it builds, so two Runs never share an
@@ -69,13 +53,7 @@ export interface Provenance {
  * - `roaming` is detached at the default branch and moves across the branches it
  *   merges, binding none of them to itself.
  */
-export const CHECKOUT_KINDS = ["none", "branch", "roaming"] as const;
-export type CheckoutKind = (typeof CHECKOUT_KINDS)[number];
-
-const CHECKOUT_NAMES: readonly string[] = CHECKOUT_KINDS;
-
-export const isCheckoutKind = (value: string): value is CheckoutKind =>
-  CHECKOUT_NAMES.includes(value);
+export type CheckoutKind = "none" | "branch" | "roaming";
 
 export interface PersonaDef extends Provenance {
   name: string;
@@ -141,14 +119,7 @@ function str(value: YamlValue | undefined, fallback = ""): string {
   return value !== undefined && isString(value) ? value : fallback;
 }
 
-/**
- * What a Workflow says a finished Run of it offers to do next. Declared rather than known
- * here: "fix what is open" is what a reviewing Workflow offers, and Collie has no opinion
- * about which Workflow that is or what it is called.
- *
- * Anything malformed is left out rather than failing the file: an offer nobody can make
- * is a card with one fewer button, and the Runs are still readable.
- */
+/** One persona file, refused when its body names anything but a skill. */
 const parsePersona = Effect.fn("Definitions.parsePersona")(function* (
   file: string,
   layer: LayerName,
@@ -363,16 +334,3 @@ export const skillInstalled = Effect.fn("Definitions.skillInstalled")(function* 
   }
   return false;
 });
-
-/**
- * Every skill this Workflow asks for, and what asked for it: the ones a Step or a
- * Choice round *starts*, and the ones a prompt or a Persona mentions. `doctor` and
- * validation ask the same question, so they ask it in one place.
- */
-export class DefinitionError extends Data.TaggedError("DefinitionError")<{ message: string }> {
-  constructor(message: string) {
-    super({ message });
-  }
-}
-
-/** The error for one Workflow-controlled name, or nothing when it is safe. */

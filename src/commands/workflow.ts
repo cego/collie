@@ -14,20 +14,13 @@ import type { PluginEnv } from "../env";
 import { savedModules } from "../lifecycle";
 import { loadEntry } from "../engine";
 import { isWorkflowId } from "../sdk";
-import { loadDefaults } from "../config";
-import { KINDED_STRATEGIES } from "../inputs";
-import { reason } from "../naming";
-import { branchListed, mutates, roams } from "../worktree";
-import { renderTemplate } from "../template";
 import { err } from "../operations";
 import { attempt, mutation } from "../envelope";
 import {
   UnknownJson,
   context,
-  definitions,
   discoveryContext,
   forkFlags,
-  layerDir,
   mutating,
   requestIdFlag,
   root,
@@ -115,19 +108,6 @@ const BRANCH_HELP = [
   "    too long, or with nothing in it, is cut to fit and given a digest of the work.",
 ].join("\n");
 
-/** One workflow as `check` reports it, and what it is wrong about, one per line. */
-type Checked = { name: string; layer: string; problems: string[] };
-
-function checkReport(checked: Checked[], errors: ReadonlyArray<string>): string {
-  const lines = checked.map((item) =>
-    [
-      `${item.name}\t${item.layer}\t${item.problems.length === 0 ? "ok" : `${item.problems.length} problem(s)`}`,
-      ...item.problems.map((problem) => `  ${problem}`),
-    ].join("\n"),
-  );
-  return [...lines, ...errors.map((error) => `  ${error}`)].join("\n");
-}
-
 /**
  * One module as `check` reports it. Not typechecked is said out loud: silence there
  * would read as a module the compiler was happy with, and nothing compiled it.
@@ -151,18 +131,6 @@ const toolchainNotes = (modules: ReadonlyArray<ModuleCheck>): ReadonlyArray<stri
   [...new Set(modules.map((item) => item.toolchain).filter((note) => note !== null))].map(
     (note) => `not typechecked: ${note}`,
   );
-
-/**
- * Whether a load error is about this workflow's own file. A definition that would not
- * parse is skipped by `loadDefinitions` and shows up only here and in the picker's
- * banner — and it has no name to match on, because its name is what failed to parse.
- * The file name is what attributes it, which is what tells an author who broke a
- * higher layer's `review.md` that `review` is not fine, however well the layer below
- * checks out.
- */
-function brokeFile(workflow: string): (error: string) => boolean {
-  return (error) => error.split(":")[0]?.endsWith(`/${workflow}.md`) === true;
-}
 
 const workflowCheck = Command.make(
   "check",

@@ -22,7 +22,6 @@ import { carryOutProposal } from "./run-actions";
 // here so a front door still has one import for "what a human asked Collie to do".
 export { carryOutAsked, carryOutProposal, registerRunExecutors } from "./run-actions";
 import { shell, type Runner } from "./mr";
-import type { Resolution } from "./inputs";
 import { everyRegistered, type AgentEntry } from "./registry";
 import { listRuns, type RunFacts } from "./runs";
 import type { TaskChoice, TaskRecord } from "./task";
@@ -311,28 +310,6 @@ export function prepareSteps(
 /** `git rev-parse` prints one line; anything else means it did not answer. */
 function short(result: { code: number; stdout: string }): string {
   return result.code === 0 ? result.stdout.trim() : "";
-}
-
-/**
- * What this Run is named after: its first settled Input, both ways round. `value` is
- * what the caller gave, whole. `short` is the name to show — a path value would put the
- * whole path on a tab, so a strategy may offer something shorter — and it is only ever
- * that, because a label is cut to fit a menu and says so to nobody. A length cap is
- * judged against `value`, which is what a chained Run's branch does with the parent's
- * recorded name.
- *
- * Exported for the test harness, which starts Runs without going through `startRun`
- * and had a second copy of this that quietly disagreed with it.
- *
- * Empty where no Input was settled at all: `architecture` declares none that name the
- * work. A stand-in like "run" would slug cleanly and so pass the very guard that exists
- * to stop two Runs keying one checkout — every such Run would be named the same thing.
- * `slugify` still has its own fallback for the tab, which is a label and not an identity.
- */
-export function primaryName(resolutions: Resolution[]) {
-  const first = resolutions.find((r) => r.value !== "");
-  if (!first) return { value: "", short: "" };
-  return { value: first.value, short: first.label ?? first.value };
 }
 
 /**

@@ -331,10 +331,6 @@ export const registerRunExecutors = Effect.fn("runActions.register")(function* (
   yield* Effect.void;
 });
 
-/** What a caller is told about an id nothing is running. */
-export const noSuchRun = (runId: string): Failure =>
-  err("run_not_found", `Run "${runId}" was not found.`, { run: runId });
-
 export const carryOutProposal = Effect.fn("runActions.carryOutProposal")(function* (
   env: PluginEnv,
   proposalId: string,

@@ -8,7 +8,7 @@
 // once under the shipped names, once renamed — asserted to behave identically.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, Schema } from "effect";
+import { Effect } from "effect";
 import { runEffect } from "./support/effect";
 import { Rig, TEST_LOGIN as LOGIN } from "./support/recorder";
 import { FakeBin } from "./support/bin";
@@ -16,10 +16,7 @@ import { branchFor, checkoutFor, type BranchAsk } from "../src/worktree";
 import { linearIssues, shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 import { reviewedTargets } from "../src/inputs";
-import { workSourceOf } from "../src/strategies";
 import { runFacts } from "./support/records";
-
-const asText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
 
 let rig: Rig;
 let bin: FakeBin;

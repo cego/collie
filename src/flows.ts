@@ -76,7 +76,6 @@ import {
   registerRunExecutors,
   steer,
   workspaceCwdFromPanes,
-  type ExpectedError,
 } from "./operations";
 import {
   answerFor,
@@ -157,13 +156,6 @@ export type Mode = "pick" | "continue" | "resume" | "fork";
  * open elsewhere.
  */
 export type Placement = "popup" | "inline";
-
-const ProblemDetails = Schema.Struct({ problems: Schema.Array(Schema.String) });
-
-export interface AnswerKeyResult {
-  asking: Asking;
-  note?: string;
-}
 
 /** An action: open the popup that does the actual work. */
 export const openPicker = Effect.fn("Flows.openPicker")(function* (
@@ -611,16 +603,6 @@ function choicesOf(field: Declared): ReadonlyArray<string> | null {
 }
 
 const isDrawing = Schema.is(Schema.Record(Schema.String, Schema.Json));
-
-/**
- * The same failure the CLI reports as one line plus `details`, as the several lines a
- * pane has room for. Validation problems are the only detail worth spelling out.
- */
-function whyNotRunnable(workflow: string, error: ExpectedError): string {
-  const detail = Schema.decodeUnknownOption(ProblemDetails)(error.details);
-  if (Option.isNone(detail)) return error.message;
-  return [`${workflow} is not runnable:`, ...detail.value.problems.map((p) => `  ${p}`)].join("\n");
-}
 
 export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   herdr: Herdr,

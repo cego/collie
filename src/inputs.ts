@@ -713,14 +713,6 @@ function textLabel(text: string): string {
 }
 
 /** Inputs as the prompts see them: a work-source also exposes `<name>_kind`. */
-/**
- * The strategies whose values carry a kind, and so render a `<name>_kind` companion
- * beside the Input itself. Named here because `inputValues` below is what puts them
- * in a Run's inputs: a checker that renders a workflow ahead of a Run reads this to
- * know which `_kind` placeholders can ever be filled.
- */
-export const KINDED_STRATEGIES: ReadonlySet<string> = new Set(["work-source", "diff-target"]);
-
 export function inputValues(resolutions: Resolution[]) {
   const values: Record<string, string> = {};
   for (const r of resolutions) {
@@ -728,25 +720,6 @@ export function inputValues(resolutions: Resolution[]) {
     if (r.kind) values[`${r.name}_kind`] = r.kind;
   }
   return values;
-}
-
-/** Only real Inputs have a provenance; a `<name>_kind` is a companion of its own Input. */
-export function inputSources(resolutions: Resolution[]) {
-  const sources: Record<string, string> = {};
-  for (const r of resolutions) sources[r.name] = r.source;
-  return sources;
-}
-
-/** Which strategy settled each Input, which is how everything downstream finds one. */
-export function inputStrategies(resolutions: Resolution[]) {
-  const strategies: Record<string, string> = {};
-  for (const r of resolutions) strategies[r.name] = r.strategy;
-  return strategies;
-}
-
-/** True for the `<name>_kind` companion `inputValues` adds next to a kinded Input. */
-export function isKindCompanion(name: string, inputs: Record<string, string>): boolean {
-  return name.endsWith("_kind") && name.slice(0, -"_kind".length) in inputs;
 }
 
 export function confirmLine(

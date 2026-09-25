@@ -89,20 +89,6 @@ export function scopeFor(
 }
 
 /**
- * The register a Run's own agents are on, which is not the register of whoever is
- * asking about them. A Run's agents are registered under its session, its workspace and
- * its checkout — and a board of every workspace stops and hands off runs that were never
- * this Session's.
- */
-export function scopeOfRun(record: {
-  session: string | null;
-  workspace: string | null;
-  cwd: string;
-}): RegistryScope {
-  return { session: record.session, workspaceId: record.workspace, cwd: record.cwd };
-}
-
-/**
  * The Session's live agents, or none. A register half-written or edited by hand is a
  * cache of what herdr was last seen to have, not a source of truth, so it is read as
  * empty rather than failing a stop, a hand-off or the Control Plane. The decode runs

@@ -1,18 +1,16 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
+import { Effect, FileSystem, Option, Schema, Stdio, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { Argument, Command, Flag } from "effect/unstable/cli";
-import type { PlatformError } from "effect/PlatformError";
 import { layers, loadDefinitions, type PersonaDef } from "../definitions";
 import { currentEnv, type PluginEnv } from "../env";
 import { Herdr, type WorkspaceInfo } from "../herdr";
-import { reason, unsafePathComponent } from "../naming";
+import { unsafePathComponent } from "../naming";
 import { err, resolveWorkspace, type Failure } from "../operations";
 import { evidenceDir, runDir, type Given, type RunView } from "../engine";
 import { runView } from "../lifecycle";
 import { actorName, type Actor } from "../proposals";
 import { taskOfWorkspace } from "../task";
-import { branchListed } from "../worktree";
 import { attempt, mutation, type CollieError, type Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 

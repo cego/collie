@@ -134,17 +134,6 @@ const asks = <A>(
     ),
   );
 
-/** What a start became, or why there is no Run. */
-export type RunStart =
-  | {
-      readonly ok: true;
-      readonly runId: string;
-      readonly registration: string;
-      /** False where the request had already been admitted: a retry, not a second Run. */
-      readonly fresh: boolean;
-    }
-  | Failure;
-
 /**
  * Starts the module this id names, under the caller's own claim on the work. The same
  * request twice is the same Run — which is what makes a retried command, a re-clicked

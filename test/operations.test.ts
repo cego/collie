@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Effect, FileSystem } from "effect";
 import { runEffect } from "./support/effect";
-import { Rig, TEST_LOGIN } from "./support/recorder";
+import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 import { installFakeSkills } from "./support/defs";
 import { FakeBin } from "./support/bin";

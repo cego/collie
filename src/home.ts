@@ -23,19 +23,6 @@ import { Herdr, type PaneInfo, type WorkspaceInfo } from "./herdr";
 /** The token a workspace carries to say it is this Herd's Home. Refreshed on every ensure. */
 export const HOME_TOKEN = "collie_home";
 
-/** Collie's state namespace is not a project directory. */
-export const isHomeDirectory = Effect.fn("Home.isHomeDirectory")(function* (
-  stateDir: string,
-  cwd: string,
-) {
-  const path = yield* Path.Path;
-  const relative = path.relative(path.join(stateDir, "herd"), cwd);
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-  );
-});
-
 /** A day. Long enough to survive a machine sleeping, short enough that a stale claim goes. */
 export const TOKEN_TTL_MS = 86_400_000;
 
@@ -365,10 +352,6 @@ export const REQUIRED_RUNTIME = [
   "WorkspaceInfo",
   "PaneInfo",
 ] as const;
-
-export class CapabilityMissing extends Data.TaggedError("CapabilityMissing")<{
-  missing: ReadonlyArray<string>;
-}> {}
 
 /**
  * Whether the installed binary has what the Home rests on. Checked against its own

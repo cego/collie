@@ -41,11 +41,11 @@ its top level, which is yours: this is trust, not a sandbox.
 
 Three directories, nearest first. The same id in a nearer one wins:
 
-| Layer   | Workflow modules                         | Personas and Markdown definitions            |
-| ------- | ---------------------------------------- | -------------------------------------------- |
-| project | `.collie/workflows/*.workflow.ts`        | `.collie/workflows`, `.collie/personas`      |
-| user    | `~/.collie/user/workflows/*.workflow.ts` | `$(herdr plugin config-dir cego.collie)/…`   |
-| shipped | `workflows/*.workflow.ts` in the install | `workflows/`, `personas/` in the Collie repo |
+| Layer   | Workflow modules                         | Personas                                          |
+| ------- | ---------------------------------------- | ------------------------------------------------- |
+| project | `.collie/workflows/*.workflow.ts`        | `.collie/personas`                                |
+| user    | `~/.collie/user/workflows/*.workflow.ts` | `$(herdr plugin config-dir cego.collie)/personas` |
+| shipped | `workflows/*.workflow.ts` in the install | `personas/` in the Collie repo                    |
 
 Your own modules sit beside the installation rather than inside its shipped assets, because
 those are a git checkout an upgrade fast-forwards — a file of yours in there would be

@@ -25,13 +25,6 @@ import type { Selection } from "../selection";
 
 /** What the nav switches between. One at a time, each a projection of state. */
 export type ViewName = "runs" | "history" | "workflows" | "settings";
-export const VIEWS: ReadonlyArray<{ name: ViewName; title: string }> = [
-  { name: "runs", title: "Runs" },
-  { name: "history", title: "History" },
-  { name: "workflows", title: "Workflows" },
-  { name: "settings", title: "Settings" },
-];
-
 /**
  * What the Runs view is a board of. One Herd has one board (ADR-0009), so "this
  * workspace" is a filter over it rather than a board of its own — and a run filter is
@@ -573,11 +566,7 @@ function definitionRow(d: DefinitionRow): Row {
     // A fork that cannot run should be visible here rather than at launch.
     glyph: d.problems.length > 0 ? GLYPH.failed : GLYPH.done,
     title: d.title || d.name,
-    detail: [
-      `[${d.layer}]`,
-      d.provenance,
-      d.problems.length > 0 ? `${d.problems.length} problem(s)` : "",
-    ]
+    detail: [`[${d.layer}]`, d.problems.length > 0 ? `${d.problems.length} problem(s)` : ""]
       .filter((part) => part !== "")
       .join(" · "),
     definition: d,
@@ -951,17 +940,6 @@ export function clampSelection(
   return after[Math.min(Math.max(was, 0), after.length - 1)]!.id;
 }
 
-/**
- * The detail of the Selection, and nothing while a newer Selection is still being read.
- * The read happens in a fiber, so `state.detail` lags the row the human has just moved
- * to — and a panel that drew it anyway attributed the previous Run's review, Outputs and
- * merge request to the new row, `c` copying the wrong URL with it.
- */
-export function detailFor(state: AppState, row: Row | null): RunDetail | null {
-  const detail = state.detail;
-  return detail !== null && row !== null && row.runId === detail.id ? detail : null;
-}
-
 export interface Action {
   key: string;
   label: string;
@@ -1107,44 +1085,6 @@ export function optionWindow<T>(items: readonly T[], at: number, room: number): 
 export interface Windowed<T> {
   shown: readonly T[];
   hidden: number;
-}
-
-/**
- * The footer's buttons: the Selection's own, and the one board-wide action there is.
- * Each is offered only where there is something to act on and the key beside it does
- * what the label says — a button whose key would type a character is a lie, and both
- * kinds of lie are read off the one fact about who has the keyboard.
- *
- * The Selection's own drop out for any field, because Enter and every letter belong to
- * it. The next-question button drops out only for a field taking text: a menu takes
- * none, and a board of several asking Runs is exactly when `n` is wanted.
- */
-export function footerActions(opts: {
-  row: Row | null;
-  filter: Filter;
-  /** Whether anything on this board is asking, which is what `n` can act on. */
-  questions: boolean;
-  on: Keyboarding;
-}): Action[] {
-  return [
-    ...(fieldHasKeys(opts.on) ? [] : actionsFor(opts.row, opts.filter)),
-    ...(opts.questions && !takesText(opts.on)
-      ? [
-          {
-            key: NEXT_QUESTION,
-            label: "next question",
-            command: { _tag: "NextQuestion" } as const,
-          },
-        ]
-      : []),
-  ];
-}
-
-/** Whether anything but the board has the keys: a question, the filter, a value. */
-function fieldHasKeys(on: Keyboarding): boolean {
-  return (
-    on._tag === "Choice" || on._tag === "Filter" || on._tag === "Setting" || on._tag === "Proposal"
-  );
 }
 
 /** One line of a card's menu: what it says, the key beside it, and what it does. */

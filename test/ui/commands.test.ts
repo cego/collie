@@ -3,7 +3,7 @@
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { ConfigProvider, Effect, Layer, PlatformError } from "effect";
+import { Effect, PlatformError } from "effect";
 import { Rig, type RigError } from "../support/recorder";
 import { installBaseline } from "../support/engine";
 import { installFakeSkills } from "../support/defs";
@@ -66,16 +66,6 @@ afterEach(() =>
     }),
   ),
 );
-
-/** With a Driver the runs can actually start, which is how the picker's own tests run. */
-const withDriver = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-  Effect.provide(
-    effect,
-    Layer.succeed(
-      ConfigProvider.ConfigProvider,
-      ConfigProvider.fromUnknown({ COLLIE_DRIVER: `${rig.root}/bin/stub-driver` }),
-    ),
-  );
 
 function session(): ControlSession {
   const env = rig.pluginEnv();
@@ -241,30 +231,6 @@ effectTest("w on another workspace's run opens its merge request, not this repo'
   expect(note).toContain("opened");
   expect((yield* fs.readFileString(marker)).trim()).toBe(checkout);
 });
-
-/** A prompts that answers from a script and records every header it was shown. */
-function scripted(answers: ReadonlyArray<string | null>) {
-  const asked: string[] = [];
-  const left = [...answers];
-  const next = () => (left.length > 0 ? (left.shift() ?? null) : null);
-  return {
-    asked,
-    left: () => left.length,
-    prompts: {
-      menu: (items: ReadonlyArray<{ id: string; title: string }>, opts: { header: string }) => {
-        asked.push(opts.header);
-        const answer = next();
-        return Effect.succeed(
-          answer === null ? null : (items.find((i) => i.id === answer) ?? null),
-        );
-      },
-      ask: (question: string) => {
-        asked.push(question);
-        return Effect.succeed(next());
-      },
-    },
-  };
-}
 
 effectTest("questions is refused unless it is a way of presenting one", function* () {
   const note = yield* set("questions", "shout");

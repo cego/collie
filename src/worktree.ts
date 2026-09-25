@@ -781,24 +781,6 @@ export interface Checkout {
 }
 
 /**
- * What a Run created for this Checkout is called: the whole of what it is named after,
- * and the shorter form its slug is cut from.
- *
- * The branch already resolves what the Run is about, so it names the Run — but only its
- * task half reaches the slug: the login is the same on every branch one operator
- * generates, and spending the slug's length cap on it makes two Runs one row.
- *
- * `otherwise` is for a Run with no checkout of its own: what it was pointed at, and the
- * short label beside it, exactly as `primaryName` answers with them.
- */
-export function runNames(checkout: Checkout, otherwise: { value: string; short: string }) {
-  return {
-    namedAfter: checkout.branch ?? otherwise.value,
-    slugFrom: checkout.task ?? otherwise.short,
-  };
-}
-
-/**
  * Where this Run works. A Workflow that changes the repository owns its branch's
  * checkout; every other Workflow works in the directory it was started from.
  *

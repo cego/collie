@@ -30,7 +30,6 @@ ledger, so a steer that did not go out as asked has an answer rather than a sile
 
 | State          | What it means                                                                                                                                        |
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `queued`       | A boundary delivery an older Collie held for an agent's next prompt. Read in the ledgers it left; nothing writes it now.                             |
 | `reserved`     | Written **before** herdr was called. A crash here leaves this.                                                                                       |
 | `deferred`     | herdr answered that the pane cannot take a prompt yet, with a code that says it clears by itself. Nothing was delivered; the same id is tried again. |
 | `submitted`    | herdr took it. Not: the agent read it.                                                                                                               |

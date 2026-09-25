@@ -928,8 +928,7 @@ nothing.
 
 A workflow edited in a way that changes its shape has no promise of a seamless resume, and
 not every such edit can be detected: start a new run where one would not carry on. A run
-an older Collie recorded is imported read-only and cannot be resumed; `collie run start`
-begins the same work again.
+an older Collie recorded is not read at all; `collie run start` begins the same work again.
 
 ## Hand-offs between runs
 
@@ -1234,8 +1233,8 @@ command that fixes each. It exits non-zero when any check fails. Helle credentia
 Linear MCP in Claude Code are reported too, as `!` when they are set up and not working, and
 never fail it: see [Optional integrations](#optional-integrations). It also names the
 workflows here: every one a user or project entry overrides — which is what a run in this
-project would actually do — and any Markdown workflow an older Collie left in your layer,
-which nothing reads now. Neither is edited: both are yours.
+project would actually do — and every persona that will not load, with why. Nothing is
+edited: they are yours.
 
 **A keybinding does nothing over SSH.** The bindings use plain letters after the
 prefix on purpose, because `alt` chords are not delivered reliably over SSH or through some

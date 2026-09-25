@@ -32,25 +32,6 @@ export function took(ms: number): string {
 }
 
 /**
- * How long a step has been going, or took: its own two stamps against this clock.
- * `null` for one that was skipped rather than run — it has no start — and for a Run
- * recorded before the timings were kept.
- *
- * Structurally typed rather than importing `StepRecord`, so the one module that answers
- * "how long" for every caller stays free of the record it happens to be asked about.
- */
-export function stepDuration(
-  step: { started_at: string | null; finished_at: string | null },
-  nowMs: number,
-): string | null {
-  if (step.started_at === null) return null;
-  const from = Date.parse(step.started_at);
-  if (Number.isNaN(from)) return null;
-  const to = step.finished_at === null ? nowMs : Date.parse(step.finished_at);
-  return took((Number.isNaN(to) ? nowMs : to) - from);
-}
-
-/**
  * How long something has lasted, spelled out: `49 hours`, `3 minutes`. What a sentence
  * wants where `took`'s `49h` is a code to expand — a card saying "silent for 49h" reads
  * as a measurement, and "silent for 49 hours" reads as the problem it is.
@@ -95,29 +76,3 @@ export function agoShort(atMs: number, nowMs: number): string {
   }
   return "now";
 }
-
-const DAY_MS = 86_400_000;
-
-/**
- * A time to read on a card, on the reader's own clock. Today's is the clock alone,
- * tomorrow's says so, and anything further off carries its date — "held until 02:00"
- * with no day is wrong by a day.
- */
-export function atClock(iso: string, nowMs: number): string {
-  const ms = Date.parse(iso);
-  if (Number.isNaN(ms)) return iso;
-  const when = DateTime.toParts(local(ms));
-  const clock = `${pad(when.hour)}:${pad(when.minute)}`;
-  const days = Math.round((startOfDay(ms) - startOfDay(nowMs)) / DAY_MS);
-  if (days <= 0) return clock;
-  const date = `${when.year}-${pad(when.month)}-${pad(when.day)}`;
-  return days === 1 ? `${clock} tomorrow` : `${date} ${clock}`;
-}
-
-const pad = (n: number) => String(n).padStart(2, "0");
-
-/** That instant on the reader's own clock, which is what a time to act on is in. */
-const local = (ms: number) => DateTime.setZone(DateTime.makeUnsafe(ms), DateTime.zoneMakeLocal());
-
-/** Midnight before that instant, on the same clock. */
-const startOfDay = (ms: number) => DateTime.toEpochMillis(DateTime.startOf(local(ms), "day"));

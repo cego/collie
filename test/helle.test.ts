@@ -15,7 +15,7 @@ import {
   type HelleClaim,
   type HelleProject,
 } from "../src/helle";
-import { controlPath, handOverClaim } from "../src/engine";
+import { handOverClaim } from "../src/engine";
 
 const ME = "6b9ba520-user";
 const OTHER = "2dd236ac-other";

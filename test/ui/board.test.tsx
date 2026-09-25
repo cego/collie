@@ -788,11 +788,8 @@ const WORKFLOW = {
   name: "implement",
   title: "Implement",
   layer: "baseline" as const,
-  provenance: "[baseline]",
-  path: "/w/implement.md",
+  path: "/w/implement.workflow.ts",
   inputs: ["plan"],
-  steps: ["build", "review"],
-  decisions: [],
   problems: [],
 };
 
