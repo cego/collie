@@ -579,15 +579,50 @@ test("a status herdr could not give is not read as an agent between turns", () =
     }),
   ));
 
-test("a submission nobody could vouch for is unobserved, not failed and not pressed", () =>
+test("a submission the wait ran out on is finished with one Enter at an agent between turns", () =>
   runEffect(
     Effect.gen(function* () {
-      // A wait the caller ran out of says nothing, so nothing is pressed on it.
+      // A freshly started agent gives herdr no turn to see, so the wait runs out with the
+      // text still in its editor. Left there, the Run sits forever with an idle agent.
       const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_PROMPT_ERROR: "timeout" }));
-      expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
-      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+      expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("observed");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent prompt")).toHaveLength(1);
+      expect((yield* rig.calls()).filter((call) => call.cmd === "agent send-keys")).toMatchObject([
+        { argv: ["agent", "send-keys", "reviewer", "enter"] },
+      ]);
     }),
   ));
+
+test("a stall at an agent with no status yet waits for one before the Enter", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // herdr has no status for an agent it has only just seen start: that is "not yet",
+      // not "mid-turn", so the Enter waits for a status that says it is between turns.
+      const herdr = new Herdr(
+        rig.pluginEnv({
+          FAKE_HERDR_PROMPT_ERROR: "agent_prompt_stalled",
+          FAKE_HERDR_AGENT_STATUS: "unknown,unknown,unknown,idle",
+        }),
+      );
+      expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("observed");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toHaveLength(1);
+    }),
+  ));
+
+test(
+  "an agent that never says it is between turns is not pressed, and the submission is unobserved",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const herdr = new Herdr(
+          rig.pluginEnv({ FAKE_HERDR_PROMPT_ERROR: "timeout", FAKE_HERDR_AGENT_STATUS: "unknown" }),
+        );
+        expect(yield* herdr.agentPrompt("reviewer", "do the thing")).toBe("unobserved");
+        expect((yield* rig.cmds()).filter((cmd) => cmd === "agent send-keys")).toEqual([]);
+      }),
+    ),
+  30_000,
+);
 
 test("an agent already working cannot vouch for a new prompt, so nothing pretends it did", () =>
   runEffect(
