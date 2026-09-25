@@ -72,7 +72,7 @@ const session = <A, E>(
         herdr: new FakeHerdr(rig.pluginEnv()),
         harness: "claude",
         model: "opus",
-        permissions: "bypass",
+        permissions: "auto",
         compactAtTokens: 0,
       }),
     ),

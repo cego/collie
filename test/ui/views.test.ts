@@ -182,7 +182,7 @@ effectTest("Settings offers every key loadDefaults reads, and repeats none of th
   expect(settings.defaults.find((d) => d.key === "handoff_timeout_ms")!.value).toBe("60000");
   expect(settings.remembered.map((r) => r.key)).not.toContain("handoff_timeout_ms");
   // Nothing about unattended agents is silent: the mode is a row like any other.
-  expect(settings.defaults.find((d) => d.key === "permissions")!.value).toBe("bypass");
+  expect(settings.defaults.find((d) => d.key === "permissions")!.value).toBe("auto");
 
   // And a hand-edited nonsense value still renders, because Settings is where it is put
   // right: a read that threw would take the repair tool down with the problem.

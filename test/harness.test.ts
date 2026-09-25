@@ -136,39 +136,42 @@ test("a body names a skill and every harness is pointed at the same file", () =>
   expect(plain.text).toBe("{{skill:tdd}} and g");
 });
 
-test("every harness that prompts is started with its unattended switch, unless `harness`", () => {
+test("every harness with an auto mode is started in it, unless `harness`", () => {
   expect(startArgs(HARNESSES.claude!, "opus", "/p/i.md")).toEqual([
     "--model",
     "opus",
     "--append-system-prompt-file",
     "/p/i.md",
     "--permission-mode",
-    "bypassPermissions",
+    "auto",
   ]);
   expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/i.md")).toEqual([
     "-m",
     "gpt-5",
-    "--dangerously-bypass-approvals-and-sandbox",
+    "--approve-for-me",
   ]);
+  // opencode's `--auto` approves every call rather than reviewing it, so it has no auto mode.
   expect(startArgs(HARNESSES.opencode!, "anthropic/claude-sonnet-4", "/p/i.md")).toEqual([
     "--model",
     "anthropic/claude-sonnet-4",
-    "--auto",
   ]);
-  // pi has no tool-approval prompt, so bypass is the same start as `harness`.
+  // pi has no tool-approval prompt, so auto is the same start as `harness`.
   expect(startArgs(HARNESSES.pi!, "openai-codex/gpt-5.6-sol", "/p/i.md")).toEqual(
     startArgs(HARNESSES.pi!, "openai-codex/gpt-5.6-sol", "/p/i.md", undefined, "harness"),
   );
 
-  // Whichever harness a step names, `harness` passes none of the switches above.
+  // No harness is ever started past its prompts, and `harness` passes no switch at all.
   for (const adapter of Object.values(HARNESSES)) {
+    const auto = startArgs(adapter, DEFAULT_MODEL, "/p/i.md", undefined, "auto");
     const asked = startArgs(adapter, DEFAULT_MODEL, "/p/i.md", undefined, "harness");
     for (const flag of [
-      "--permission-mode",
+      "bypassPermissions",
+      "--dangerously-skip-permissions",
       "--dangerously-bypass-approvals-and-sandbox",
       "--auto",
     ])
-      expect(asked).not.toContain(flag);
+      expect(auto).not.toContain(flag);
+    for (const flag of ["--permission-mode", "--approve-for-me"]) expect(asked).not.toContain(flag);
   }
 });
 

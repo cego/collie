@@ -629,7 +629,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly harness?: string;
     readonly model?: string;
     readonly effort?: string;
-    readonly permissions?: "bypass" | "harness";
+    readonly permissions?: "auto" | "harness";
   }
 
   /** A message handed to another Run's live agent in this role: the agent, or null where none. */

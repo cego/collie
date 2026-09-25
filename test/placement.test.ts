@@ -78,7 +78,7 @@ const hostOf = (): AgentHost => ({
   herdr: new FakeHerdr(env()),
   harness: "claude",
   model: "opus",
-  permissions: "bypass",
+  permissions: "auto",
   compactAtTokens: 0,
   pollMs: 20,
   collectMs: 60_000,

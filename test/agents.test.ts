@@ -93,7 +93,7 @@ const hostOf = (): AgentHost => ({
   herdr: new FakeHerdr(rig.pluginEnv()),
   harness: "claude",
   model: "opus",
-  permissions: "bypass",
+  permissions: "auto",
   compactAtTokens: 0,
   pollMs: 20,
   collectMs: 400,
@@ -508,7 +508,9 @@ test("the agent is started on the operator's harness, model and permissions, wit
 
       const args = launchArgs(yield* rig.calls());
       expect(args.slice(0, 2)).toEqual(["--model", "opus"]);
-      expect(args).toContain("--permission-mode");
+      expect(
+        args.slice(args.indexOf("--permission-mode"), args.indexOf("--permission-mode") + 2),
+      ).toEqual(["--permission-mode", "auto"]);
       const persona = args[args.indexOf("--append-system-prompt-file") + 1] ?? "";
       expect(yield* read(persona)).toContain("You are the reviewer.");
     }),

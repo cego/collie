@@ -117,7 +117,7 @@ const hostOf = (): AgentHost => ({
   herdr: new FakeHerdr(rig.pluginEnv({ HERDR_PLUGIN_ROOT: ROOT })),
   harness: "claude",
   model: "opus",
-  permissions: "bypass",
+  permissions: "auto",
   compactAtTokens: 0,
   pollMs: 20,
   collectMs: 1000,

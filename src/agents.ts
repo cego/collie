@@ -1537,7 +1537,7 @@ export const configuredAgents = Effect.fn("Agents.configured")(function* (dir: s
     model: defaults.model,
     effort: defaults.effort,
     models: defaults.models,
-    permissions: isPermissionMode(defaults.permissions) ? defaults.permissions : "bypass",
+    permissions: isPermissionMode(defaults.permissions) ? defaults.permissions : "auto",
     compactAtTokens: defaults.compactAtTokens,
   });
 });

@@ -295,7 +295,7 @@ splits a persona's frontmatter from its body over Effect's YAML parser and write
 when forking. The merge semantics are canonical there and in
 [Authoring](authoring.md#forking) — change both together.
 
-An unknown harness, model, effort or permissions mode, and a persona or skill that is not
+An unknown harness, model or effort, and a persona or skill that is not
 installed, are refused before an agent's tab opens.
 
 ## Trust

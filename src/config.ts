@@ -69,9 +69,9 @@ export interface Defaults {
   /** What to do about a directory the harness has not been trusted with yet. */
   trust: "auto" | "never";
   /**
-   * Whether Collie decides an agent's tool calls up front, or the harness asks. As
+   * Whether the harness reviews an agent's tool calls itself, or asks in its pane. As
    * written, like `harness` and `model`: validation names an unknown one, and the engine
-   * refuses to start an agent it cannot resolve rather than falling back to `bypass`.
+   * starts an agent it cannot resolve in `auto`, the default.
    */
   permissions: string;
   /** Which scope the Control Plane opens on. `g` changes it for that tab only. */
@@ -103,7 +103,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   compactAtTokens: COMPACT_AT_TOKENS,
   models: {},
   trust: "auto",
-  permissions: "bypass",
+  permissions: "auto",
   scope: "local",
   density: "comfortable",
   notifications: {},
@@ -195,7 +195,7 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir:
     trust: raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
     // As written rather than coerced: `loadDefaults` is read by the Settings and
     // Workflows views and by Doctor, so a file hand-edited into nonsense still has to
-    // return — and coercing it would fall back to `bypass`. Validation names it.
+    // return — and coercing it would hide it. Validation names it.
     permissions: permissionsAsWritten(raw.permissions) ?? FALLBACK_DEFAULTS.permissions,
     // Coerced rather than kept as written: the board has to open on one of the two
     // whatever the file says. A value that is neither is refused where it is written.

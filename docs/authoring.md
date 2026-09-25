@@ -168,12 +168,12 @@ first, then `~/.agents/skills`.
 
 ## Harnesses, models and effort
 
-| Harness    | Model flag                 | Persona                                                  | Effort                                                   | Unattended switch                            |
-| ---------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------- |
-| `claude`   | `--model`                  | `--append-system-prompt-file`                            | `--effort low\|medium\|high\|xhigh\|max`                 | `--permission-mode bypassPermissions`        |
-| `codex`    | `-m`                       | prompt prefix                                            | —                                                        | `--dangerously-bypass-approvals-and-sandbox` |
-| `pi`       | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` | none — pi has no tool-approval prompt        |
-| `opencode` | `--model <provider/model>` | prompt prefix                                            | —                                                        | `--auto`                                     |
+| Harness    | Model flag                 | Persona                                                  | Effort                                                   | Auto mode                                          |
+| ---------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
+| `claude`   | `--model`                  | `--append-system-prompt-file`                            | `--effort low\|medium\|high\|xhigh\|max`                 | `--permission-mode auto`                           |
+| `codex`    | `-m`                       | prompt prefix                                            | —                                                        | `--approve-for-me`                                 |
+| `pi`       | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` | none — pi has no tool-approval prompt              |
+| `opencode` | `--model <provider/model>` | prompt prefix                                            | —                                                        | none — its `--auto` approves every call unreviewed |
 
 `claude` accepts `fable`, `opus`, `sonnet`, `haiku`, `opusplan` and any `claude-…` id. `codex`
 accepts `gpt-5-codex`, `gpt-5`, `gpt-5-mini` and any `gpt…`/`o…` id. `pi` and `opencode`
@@ -192,17 +192,18 @@ that switches harness keeps nothing chosen for the one below, and a combination 
 does not take is refused rather than replaced. [The SDK](sdk.md#which-agent-does-the-work)
 has the whole of it.
 
-The unattended switch is passed unless `permissions` says `harness`, in your `config.json`
-or on the operation; see [Permissions](using.md#permissions-unattended-by-default) for what it
-means. pi's column says none because it does not ask before a tool call — its `--approve`
-only trusts project-local files — so `bypass` and `harness` start it identically.
+The auto mode is passed unless `permissions` says `harness`, in your `config.json` or on
+the operation; see [Permissions](using.md#permissions-auto-by-default) for what it means.
+pi's column says none because it does not ask before a tool call — its `--approve` only
+trusts project-local files — and opencode's because its one switch is a bypass, which
+Collie never passes. Both start the same under `auto` and `harness`.
 
 A module asks for one piece of work at a time and says what that piece needs, so an
 operation that should ask is the one that asks for `permissions: "harness"`.
 
 The mode is settled when an agent starts, so work handed to an agent that is already
-running keeps the mode that agent was started in. An unknown harness, model, effort or
-permissions mode is refused before a single tab opens.
+running keeps the mode that agent was started in. An unknown harness, model or effort is
+refused before a single tab opens.
 
 ## Worked example: a reviewer on another harness
 
