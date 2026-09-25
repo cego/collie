@@ -14,6 +14,8 @@
 
 **Persona** — Harness-agnostic instructions injected when an agent starts (e.g. implementer, reviewer). Not a harness-native config file.
 
+**Panel** — The seats a Workflow's definition gives a role (`agents.roles.<role>`): one, or a list. A **Seat** is an agent (harness, model, effort) and optionally the Persona it is started as and the instructions it is told in place of the work's own. `panelOf(role)` reads it and `agentWork({ seat })` sits work at a seat; what a workflow does with the seats is its own. A fork moves or adds seats and keeps everything else the original's.
+
 **Harness** — The agent CLI an operation's agent runs in (claude, codex, opencode, …). Decided with its Model and effort, layer over layer: the user's default, the Workflow's own, the Run's, a scope around the work, the operation's own. Switching it keeps no Model chosen for another; an agent already running cannot switch.
 
 **Model** — The model a Harness is asked to use, decided with its Harness. One the Harness does not take is refused before any Tab opens; left open, it is the Harness's own default.

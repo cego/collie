@@ -1,8 +1,9 @@
 // One complete review of a target, reconciled into the one review a human reads.
 //
-// A reviewer per declared axis — the baseline is one, and a second is a list entry rather
-// than a new primitive — then the synthesis that reconciles them, written into the Run's
-// own directory as prose for the human and findings for the card.
+// A reviewer per seat of the reviewer panel the definition declares — one by default, and a
+// second is a seat in a fork rather than a new step — then the synthesis that reconciles
+// them, written into the Run's own directory as prose for the human and findings for the
+// card.
 //
 // Shared, because the workflow that reviews and the workflow that builds want the same
 // pass: an ordinary function over the same content and the same schemas, not a step one
@@ -16,6 +17,7 @@ import {
   SynthesisSchema,
   agentWork,
   contentOf,
+  panelOf,
   formatFindings,
   leaveReview,
   parseMrTarget,
@@ -63,10 +65,12 @@ export const FIX_PROMPT = content.template("fix", {
 });
 
 /**
- * One complete review. A second reviewer and the model that reconciles them are what a
- * specialist axis or a layer override is for, not what every change gets.
+ * The reviewer panel's one seat, as a definition declares it for the role rather than as
+ * the work pins it, so a fork's `agents.roles.reviewer` reaches every reviewer and the
+ * synthesis. A second reviewer is what a specialist axis or a fork is for, not what every
+ * change gets.
  */
-export const REVIEWERS = [{ harness: "claude", model: "opus", effort: "medium" }];
+export const REVIEWER = { harness: "claude", model: "opus", effort: "medium" };
 
 /** What one pass is about, and where in a rally it stands. */
 export interface ReviewAsk {
@@ -119,20 +123,26 @@ export const reviewPass = (ask: ReviewAsk) =>
     const input = told(ask, { dir, id });
     // The round comes first, and the first round keeps the plain names: a Run with one
     // review reads as one, and a rally's rounds sort in the order they happened.
-    const reviewOp = (n: number) => (ask.at === 1 ? `review-${n}` : `review-${ask.at}-${n}`);
+    const reviewOp = (seat: string) =>
+      ask.at === 1 ? `review-${seat}` : `review-${ask.at}-${seat}`;
     const synthesis = ask.at === 1 ? "synthesize" : `synthesize-${ask.at}`;
 
-    const reviews = yield* Effect.forEach(REVIEWERS, (reviewer, at) =>
-      agentWork({
-        operation: reviewOp(at + 1),
-        role: "reviewer",
-        harness: reviewer.harness,
-        model: reviewer.model,
-        effort: reviewer.effort,
-        instructions: REVIEW,
-        input,
-        output: ReviewOutputSchema,
-      }),
+    const seats = (yield* panelOf("reviewer")).map((seat, at) => ({
+      seat,
+      operation: reviewOp(seat.name ?? String(at + 1)),
+    }));
+    yield* Effect.forEach(
+      seats,
+      ({ seat, operation }) =>
+        agentWork({
+          operation,
+          role: "reviewer",
+          seat,
+          instructions: REVIEW,
+          input,
+          output: ReviewOutputSchema,
+        }),
+      { concurrency: "unbounded" },
     );
 
     const reconciled: SynthesisReport = yield* agentWork({
@@ -141,7 +151,7 @@ export const reviewPass = (ask: ReviewAsk) =>
       instructions: SYNTHESIZE,
       input: {
         ...input,
-        fan_in: reviews.map((_, at) => `- ${agents.outputFor(id, reviewOp(at + 1))}`).join("\n"),
+        fan_in: seats.map(({ operation }) => `- ${agents.outputFor(id, operation)}`).join("\n"),
       },
       output: SynthesisSchema,
     });

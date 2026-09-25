@@ -209,10 +209,29 @@ refused before a single tab opens.
 
 ## Worked example: a reviewer on another harness
 
-The canonical fork. You want one reviewer on a different harness, and nothing else changed.
+The canonical fork. You want the reviewer on a different harness, and nothing else changed.
 `collie workflow fork review --layer user --name review` writes a module that spreads the
-original's definition; you change the one thing you came to change — here
-`agents: { harness: "codex", model: "gpt-5" }` — and leave the rest importing.
+original's definition; you add the one thing you came to change — the reviewer role's
+agent, over the original's own choices — and leave the rest importing:
+
+```ts
+export default defineWorkflow({
+  ...original,
+  id: "review",
+  agents: {
+    ...original.agents,
+    roles: { ...original.agents?.roles, reviewer: { harness: "codex", model: "gpt-5" } },
+  },
+});
+```
+
+Everything else — the prompts, the steps, the offers, the title — is still the shipped
+review's, so `collie upgrade` keeps reaching it. Give `reviewer` a list instead and it is a
+panel: one reviewer per seat, each on its own harness, model and effort — and persona or
+instructions, where a seat names them — reconciled into one review
+([the SDK](sdk.md#panels-several-agents-for-one-role) has the shape). The same shape moves plan's planner
+(`harness`, `model` and `effort` beside `...original.agents`) while its second opinion keeps
+the reviewer role's own choice.
 
 Check it before you rely on it:
 

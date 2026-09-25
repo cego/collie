@@ -51,7 +51,7 @@ import { DateTime, Effect, FileSystem, Schema } from "effect";
 import type { WorkflowEngine, WorkflowInstance } from "effect/unstable/workflow/WorkflowEngine";
 import * as Activity from "effect/unstable/workflow/Activity";
 import markdown from "./implement.md" with { type: "text" };
-import { reviewPass } from "./reviewing.ts";
+import { REVIEWER, reviewPass } from "./reviewing.ts";
 
 const content = contentOf(markdown);
 const text = Schema.String;
@@ -153,6 +153,12 @@ export default defineWorkflow({
     plan: Schema.String,
   }),
   output: Schema.String,
+  agents: {
+    roles: {
+      implementer: { harness: "claude", model: "opus", effort: "xhigh" },
+      reviewer: REVIEWER,
+    },
+  },
   hints: { plan: "work-source" },
   // The branch it builds, on a worktree of its own, so two Runs never share an index.
   checkout: "branch",
@@ -270,9 +276,6 @@ export default defineWorkflow({
           agent: BUILDER,
           role: "implementer",
           skill: "implement",
-          harness: "claude",
-          model: "opus",
-          effort: "xhigh",
           instructions: prompts.build,
           input: {
             ...input,

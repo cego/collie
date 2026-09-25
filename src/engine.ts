@@ -66,7 +66,7 @@ import {
   type InputField,
   type InputFields,
   type WorkflowMetadata,
-  type AgentPreferences,
+  type WorkflowAgentPreferences,
   type HostCodec,
   type HostPayload,
   type HostWorkflow,
@@ -367,6 +367,34 @@ export const SDK_DECLARATIONS = `declare module "collie" {
   }
 
   /**
+   * One place at a panel: the agent that sits there, and what it is and is told where that
+   * is not its role's persona and its work's own instructions.
+   */
+  export interface Seat extends AgentPreferences {
+    /** Tells this seat's work apart from the others', in its operation's name. */
+    readonly name?: string;
+    /** The persona it is started as, in place of its role's. */
+    readonly persona?: string;
+    /** What it is told in place of its work's instructions, filled from the same input. */
+    readonly instructions?: string | Template<unknown>;
+  }
+
+  /**
+   * What a definition prefers: for all of its work, and over that for the work of a role —
+   * one seat, or a panel of them — which is how a fork moves one role's agents and leaves
+   * everything else the original's.
+   */
+  export interface WorkflowAgentPreferences extends AgentPreferences {
+    readonly roles?: Readonly<Record<string, Seat | ReadonlyArray<Seat>>>;
+  }
+
+  /**
+   * The panel this workflow's definition seats for a role: every seat it names, or one that
+   * prefers nothing of its own where it names none. Work given a seat sits at it.
+   */
+  export function panelOf(role: string): Effect.Effect<ReadonlyArray<Seat>>;
+
+  /**
    * Every piece of agent work inside the effect prefers these — through any helper and into
    * any child — unless something nearer says otherwise. Parallel branches keep their own.
    */
@@ -410,7 +438,7 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     /** A typed failure of the workflow's own, beside the WorkflowError every workflow has. */
     readonly error?: Err;
     /** The agent every piece of work defaults to, over the operator's configuration. */
-    readonly agents?: AgentPreferences;
+    readonly agents?: WorkflowAgentPreferences;
     /** The services run needs that the host does not lend. */
     readonly layer?: Layer.Layer<Provided, never, Exclude<Lent, Run | WorkflowInstance>>;
     readonly run: (context: {
@@ -629,7 +657,13 @@ export const SDK_DECLARATIONS = `declare module "collie" {
     readonly harness?: string;
     readonly model?: string;
     readonly effort?: string;
-    readonly permissions?: "auto" | "harness";
+    readonly permissions?: "auto" | "bypass" | "harness";
+    /**
+     * The panel seat this work sits at: its agent over the role's, and its persona and
+     * instructions where it names them. Work for a role given none takes the agent of the
+     * role's first seat, and keeps its own persona and instructions.
+     */
+    readonly seat?: Seat;
   }
 
   /** A message handed to another Run's live agent in this role: the agent, or null where none. */
@@ -2873,7 +2907,7 @@ export interface Generation {
   /** What a finished Run of this module offers next, with the author's own eligibility. */
   readonly offers: ReadonlyArray<Declared>;
   /** What the workflow prefers for its own agents. */
-  readonly agents: AgentPreferences | undefined;
+  readonly agents: WorkflowAgentPreferences | undefined;
   readonly registration: Registration;
 }
 
