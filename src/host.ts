@@ -398,6 +398,7 @@ const own = (dir: string) =>
             configDir: env.configDir,
             toast: (title, body, sound) =>
               herdr.notify(title, body, sound).pipe(Effect.provideContext(bun), Effect.ignore),
+            herd: { socketPath: env.socketPath, pluginRoot: env.pluginRoot },
           }),
         ),
         Layer.provide(yield* configuredAgents(dir)),

@@ -8,7 +8,8 @@
 // proposal; `validate` says which of a proposal's actions the target's own authority
 // already grants and which need a human. Running them is somebody else's module.
 
-import { Clock, Data, Effect, Schema, Option } from "effect";
+import { Clock, Data, Effect, Path, Schema, Option } from "effect";
+import { herdOf } from "./steering";
 import { isArray, isRecord, isString } from "./schema";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { Stream } from "effect";
@@ -537,3 +538,31 @@ function refusalFor(action: Action, ctx: ValidationContext): string | null {
   }
   return null;
 }
+
+/**
+ * What asking the evaluator takes on this machine: the Herd its calls are charged to, the
+ * model's own system prompt, and the bounds a call runs within. Execution bounds, not
+ * spending ones: what a call costs is recorded in `budget.jsonl` and never used to refuse
+ * the next one.
+ */
+export const evaluationDeps = Effect.fn("Evaluator.evaluationDeps")(function* (env: {
+  readonly socketPath: string | null;
+  readonly pluginRoot: string;
+}) {
+  const path = yield* Path.Path;
+  const limits = {
+    maxSeconds: 120,
+    maxOutputBytes: 256 * 1024,
+    model: "sonnet",
+    effort: "medium",
+  };
+  return {
+    herdKey: yield* herdOf(env.socketPath),
+    evaluator: {
+      help: Effect.promise(() => Bun.$`claude --help`.text().catch(() => "")),
+      systemPromptFile: path.join(env.pluginRoot, "prompts", "steward.md"),
+      limits,
+    },
+    limits,
+  };
+});

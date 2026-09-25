@@ -379,6 +379,14 @@ export const agentWork = <
         reason: `${work.operation}: ${work.agent} is already running as ${held.harness}/${held.model}, and this work asks for ${requested.harness ?? held.harness}/${requested.model ?? held.model}. A conversation cannot become another agent: give this work an agent of its own, or ask for the one it is.`,
       });
     }
+    // A boundary: the work so far is judged against the Intent before more is started.
+    // Recorded, because a judgement is paid for and a replay must not pay again.
+    if (Option.isSome(oversight)) {
+      yield* Activity.make({
+        name: `${work.operation}.boundary`,
+        execute: oversight.value.drift(work.runId, `boundary before ${work.operation}`, "boundary"),
+      });
+    }
     // Decided and recorded before anything is started, so a recovery, a revival and a
     // restart all start the agent this work was given, whatever is configured by then.
     const choice = yield* Activity.make({
@@ -428,16 +436,22 @@ export const agentWork = <
       ).pipe(Effect.tap(() => look));
     };
     // Its own Activity, so a replay that comes back through here writes no second card.
+    // The work's rules are checked against what it left before the card is written, so
+    // the card says what drifted.
     const carded = <A>(value: A) =>
       Option.isNone(oversight)
         ? Effect.succeed(value)
         : Activity.make({
             name: `${work.operation}.card`,
-            execute: oversight.value.card(work.runId, {
-              kind: kindForRole(role),
-              step: work.operation,
-              claims: [`wrote ${output}`],
-            }),
+            execute: oversight.value.drift(work.runId, `${work.operation} collected`, "none").pipe(
+              Effect.andThen(
+                oversight.value.card(work.runId, {
+                  kind: kindForRole(role),
+                  step: work.operation,
+                  claims: [`wrote ${output}`],
+                }),
+              ),
+            ),
           }).pipe(Effect.as(value));
 
     const launched = yield* Activity.make({

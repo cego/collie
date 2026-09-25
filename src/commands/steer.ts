@@ -8,13 +8,8 @@
 
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
-import {
-  carryOutProposal,
-  declineProposal,
-  err,
-  evaluationDeps,
-  steer as steerRun,
-} from "../operations";
+import { carryOutProposal, declineProposal, err, steer as steerRun } from "../operations";
+import { evaluationDeps } from "../evaluator";
 import { findRun } from "../runs";
 import { proposalsPath, reconcileStep } from "../proposals";
 import {

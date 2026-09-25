@@ -27,6 +27,8 @@ import { Children, Run, jsonSchemaFor, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
 import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus, runDir } from "../src/engine";
 import { readCards } from "../src/cards";
+import { readDrift } from "../src/drift";
+import { seedIntent, writeIntent } from "../src/intent";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
 import { readTask, writeTask } from "../src/task";
@@ -312,10 +314,26 @@ test("finished work leaves a card of what it wrote, and a ticket it said it fini
   ));
 
 test(
-  "work that parked and came back leaves one card, not one per attempt",
+  "work that parked and came back is judged and carded once, not once per attempt",
   () =>
     runEffect(
       Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(runDir(dir, "r1"), { recursive: true });
+        yield* writeIntent(
+          runDir(dir, "r1"),
+          seedIntent("r1", {
+            constraints: [
+              {
+                id: "small",
+                kind: "semantic",
+                text: "keep it small",
+                severity: "warn",
+                source: "human",
+              },
+            ],
+          }),
+        );
         yield* rig.queueOutputs([{ verdict: "clean", note: "resumed" }]);
         yield* interrupted("r1", 1_500, {
           herdr: busyPane(),
@@ -326,6 +344,8 @@ test(
         expect(result._tag).toBe("Success");
         yield* session(started("r1"));
         expect(yield* cardsOf("r1")).toEqual([`review:review:wrote ${outputPath("r1")}`]);
+        // The boundary before the work, once: no Herd here, so the judgement says so.
+        expect((yield* readDrift(runDir(dir, "r1"))).map((line) => line.kind)).toEqual(["skipped"]);
       }),
     ),
   120_000,

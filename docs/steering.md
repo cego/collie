@@ -184,9 +184,11 @@ write is the only moment anyone holds the lock.
 ## Drift
 
 **Drift** is a recorded mismatch between the evidence and the run's Intent
-([CLI](cli.md#drift)). A Run carries its Intent from the moment it is admitted, but nothing
-in this section, [Correcting drift](#correcting-drift), [Finishing](#finishing) or
-[Cross-run checks](#cross-run-checks) checks a workflow module's Run against it yet. Two
+([CLI](cli.md#drift)). A Run carries its Intent from the moment it is admitted, and the
+checks below run for it: rules after each piece of agent work is collected and before the
+next starts, and a judgement before each piece of work and at the finish.
+[Correcting drift](#correcting-drift), [Finishing](#finishing) and
+[Cross-run checks](#cross-run-checks) are not yet made for a workflow module's Run. Two
 kinds, kept apart on purpose.
 
 A **rule** constraint is a fact Collie can establish by itself: which files changed,

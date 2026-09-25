@@ -40,6 +40,7 @@ import {
 import { append, conversationPath, tail, type NewTurn } from "./conversation";
 import {
   evaluate,
+  evaluationDeps,
   validate,
   type Action,
   type CallLimits as EvaluatorLimits,
@@ -779,27 +780,6 @@ const CARDS_IN_CONTEXT = 3;
  * Shared: the evidence pack below and the tools native chat calls both read this, so
  * Collie and the row a human is looking at cannot tell different stories about one Run.
  */
-
-export const evaluationDeps = Effect.fn("operations.evaluationDeps")(function* (env: PluginEnv) {
-  const path = yield* Path.Path;
-  // Execution bounds, not spending ones: a clock and an output cap. What a call costs is
-  // recorded in `budget.jsonl` and never used to refuse the next one.
-  const limits = {
-    maxSeconds: 120,
-    maxOutputBytes: 256 * 1024,
-    model: "sonnet",
-    effort: "medium",
-  };
-  return {
-    herdKey: yield* herdOf(env.socketPath),
-    evaluator: {
-      help: Effect.promise(() => Bun.$`claude --help`.text().catch(() => "")),
-      systemPromptFile: path.join(env.pluginRoot, "prompts", "steward.md"),
-      limits,
-    },
-    limits,
-  };
-});
 
 /**
  * What the human said, and what Collie makes of it — as a proposal nobody has acted on.

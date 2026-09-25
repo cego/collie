@@ -11,6 +11,8 @@ import { Children, Host } from "../src/sdk";
 import { foundationLayer, loadEntry, runDir } from "../src/engine";
 import { Oversight } from "../src/oversight";
 import { readCards } from "../src/cards";
+import { currentReports, readDrift } from "../src/drift";
+import { seedIntent, writeIntent, type Constraint } from "../src/intent";
 import type { Store } from "../src/store";
 import { fixtures } from "./support/host";
 
@@ -147,5 +149,101 @@ test("a ticket an agent says it finished is carded once, with its own words as c
         ["parses the file"],
       ]);
       expect(cards[0]!.step).toBe("build");
+    }),
+  ));
+
+/** A Run with an Intent holding these constraints, and nothing else about it written yet. */
+const intended = (runId: string, constraints: ReadonlyArray<Constraint>) =>
+  Effect.gen(function* () {
+    const at = runDir(dir, runId);
+    yield* (yield* FileSystem.FileSystem).makeDirectory(at, { recursive: true });
+    yield* writeIntent(at, seedIntent(runId, { constraints }));
+  });
+
+/**
+ * The host's own directory as a repository with one commit: where a Run nobody placed
+ * works. The host's records are kept there too, so git is told to look only at the work.
+ */
+const repository = () =>
+  Effect.gen(function* () {
+    for (const args of [
+      ["init", "-q"],
+      ["config", "user.email", "t@example.com"],
+      ["config", "user.name", "t"],
+      ["commit", "-q", "--allow-empty", "-m", "first"],
+    ])
+      Bun.spawnSync(["git", ...args], { cwd: dir });
+    yield* (yield* FileSystem.FileSystem).writeFileString(
+      `${dir}/.git/info/exclude`,
+      "/*\n!/notes.txt\n!/src/\n",
+    );
+  });
+
+test("a rule the work breaks is reported where it was collected, and cleared once the work comes back", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* repository();
+      yield* intended("r1", [
+        {
+          id: "src-only",
+          kind: "rule",
+          text: "only src changes",
+          severity: "block",
+          source: "human",
+          since: 1,
+          rule: { kind: "protected_paths", globs: ["src/**"] },
+        },
+      ]);
+      yield* fs.writeFileString(`${dir}/notes.txt`, "somewhere it should not be\n");
+      const checked = Oversight.pipe(
+        Effect.flatMap((one) => one.drift("r1", "build collected", "none")),
+      );
+      yield* session(checked);
+      const found = currentReports(yield* readDrift(runDir(dir, "r1")));
+      expect(found.map((one) => `${one.constraint}:${one.resolution}`)).toEqual(["src-only:open"]);
+      expect(found[0]!.evidence.map((ref) => ref.path)).toContain("notes.txt");
+
+      // The same tree again is the same finding, not a second one.
+      yield* session(checked);
+      expect(currentReports(yield* readDrift(runDir(dir, "r1")))).toHaveLength(1);
+
+      yield* fs.remove(`${dir}/notes.txt`);
+      yield* session(checked);
+      expect(
+        currentReports(yield* readDrift(runDir(dir, "r1"))).map((one) => one.resolution),
+      ).toEqual(["verified"]);
+    }),
+  ));
+
+test("a judgement no Herd can be charged for is recorded as skipped, and the card says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* intended("r1", [
+        {
+          id: "small",
+          kind: "semantic",
+          text: "keep it small",
+          severity: "warn",
+          source: "human",
+          since: 1,
+        },
+      ]);
+      yield* session(
+        Effect.gen(function* () {
+          const oversight = yield* Oversight;
+          yield* oversight.drift("r1", "boundary before build", "boundary");
+          yield* oversight.card("r1", { kind: "slice", step: "build", claims: [] });
+        }),
+      );
+      const lines = yield* readDrift(runDir(dir, "r1"));
+      expect(lines.map((line) => (line.kind === "skipped" ? line.reason : line.kind))).toEqual([
+        "there is no Herd to charge a judgement to",
+      ]);
+      const [card] = yield* cardsOf("r1");
+      expect(card!.missing).toContain(
+        "a judgement was skipped: there is no Herd to charge a judgement to",
+      );
+      expect(card!.aligned).toBe("unverified");
     }),
   ));

@@ -66,12 +66,12 @@ import { recordDisposition, statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
 import { actorName } from "./proposals";
+import { evaluationDeps } from "./evaluator";
 import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
 import {
   carryOutAsked,
   carryOutProposal,
   declineProposal,
-  evaluationDeps,
   newRequestId,
   registerRunExecutors,
   steer,

@@ -99,7 +99,10 @@ import {
   shell as runShell,
 } from "./mr";
 import { Notifier, SOUND, notificationTitle, wanted, type Sound } from "./notify";
-import { Oversight, cardCheckpoints, writeCard, type Watched } from "./oversight";
+import { Oversight, cardCheckpoints, checkDrift, writeCard, type Watched } from "./oversight";
+import { evaluationDeps } from "./evaluator";
+import { budgetPath } from "./steering";
+import type { JudgementDeps } from "./drift";
 import type { Card } from "./cards";
 import { reason } from "./naming";
 import {
@@ -1279,14 +1282,21 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
 };
 
 /**
- * A Run's ending, as the host tells it: the card that closes it, then the toast. A
- * suspension is not an ending, and a question or a stop says so for itself.
+ * A Run's ending, as the host tells it: its work judged against its Intent one last time,
+ * the card that closes it, then the toast. A suspension is not an ending, and a question
+ * or a stop says so for itself.
  */
 const ended = (runId: string, status: typeof RunStatus.Type) =>
   Effect.serviceOption(Oversight).pipe(
     Effect.flatMap((found) =>
       Option.isSome(found)
-        ? found.value.card(runId, { kind: "final", step: "finish", claims: [] })
+        ? found.value
+            .drift(runId, "finish", "finish")
+            .pipe(
+              Effect.andThen(
+                found.value.card(runId, { kind: "final", step: "finish", claims: [] }),
+              ),
+            )
         : Effect.void,
     ),
     Effect.andThen(told(runId, status)),
@@ -1738,11 +1748,9 @@ export const hostLayer = (options: {
   readonly configDir?: string;
   /** Where a toast goes; left out, nothing is raised. */
   readonly toast?: Toast;
-}): Layer.Layer<
-  Host | Notifier | Oversight,
-  never,
-  Store | FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
-> =>
+  /** The Herd this host works for; left out, nothing is judged or charged to one. */
+  readonly herd?: Herd;
+}): Layer.Layer<Host | Notifier | Oversight, never, Store | BunServices> =>
   Layer.effectContext(
     Effect.gen(function* () {
       const dir = options.dir;
@@ -2090,17 +2098,17 @@ export const hostLayer = (options: {
                   ),
                 );
           const worktree = placed?.worktree?.path ?? null;
-          const env = yield* currentEnv.pipe(Effect.option);
           return {
             runId,
             stateDir: dir,
             runDir: runDir(dir, runId),
             evidenceDir: evidenceDir(dir, runId),
+            agentsDir: `${dir}/agents/${runId}`,
             cwd: worktree ?? placed?.cwd ?? dir,
             worktree,
             mr: yield* mergeRequestOf(fs, dir, runId),
             asking: (yield* store.asked(runId)).some((one) => one.answer === null),
-            socketPath: Option.match(env, { onNone: () => null, onSome: (one) => one.socketPath }),
+            socketPath: options.herd?.socketPath ?? null,
           };
         });
       /** A card that is something a human could go and try is worth telling them about. */
@@ -2110,6 +2118,27 @@ export const hostLayer = (options: {
             ? notify(runId, "slice-ready", card.readiness, { key: card.id })
             : Effect.void,
         );
+      const bun = yield* Effect.context<BunServices>();
+      /** What judging a Run's drift takes, or null where there is no Herd to charge it to. */
+      const judging = (at: Watched) =>
+        Effect.gen(function* () {
+          if (options.herd === undefined) return null;
+          const built = yield* evaluationDeps(options.herd);
+          if (built.herdKey === null) return null;
+          return {
+            evaluator: built.evaluator,
+            budgetFile: yield* budgetPath(dir, built.herdKey),
+            limits: built.limits,
+            newId: Crypto.Crypto.pipe(
+              Effect.flatMap((one) => one.randomUUIDv4),
+              Effect.orDie,
+            ),
+            log: (line: string) =>
+              fs
+                .writeFileString(`${dir}/events.${at.runId}.log`, `${line}\n`, { flag: "a" })
+                .pipe(Effect.ignore),
+          } satisfies JudgementDeps;
+        }).pipe(Effect.orElseSucceed(() => null));
       const oversight = Oversight.of({
         card: (runId, what) =>
           watched(runId).pipe(
@@ -2123,6 +2152,16 @@ export const hostLayer = (options: {
             Effect.flatMap((cards) => told(runId, cards)),
             Effect.ignore,
           ),
+        drift: (runId, where, judged) =>
+          watched(runId).pipe(
+            Effect.flatMap((at) =>
+              (judged === "none" ? Effect.succeed(null) : judging(at)).pipe(
+                Effect.flatMap((deps) => checkDrift(at, where, judged, deps)),
+              ),
+            ),
+            Effect.provideContext(bun),
+            Effect.ignore,
+          ),
       });
       return Context.make(Host, host).pipe(
         Context.add(Notifier, Notifier.of({ notify })),
@@ -2133,6 +2172,12 @@ export const hostLayer = (options: {
 
 /** Where a toast is raised: herdr's, in a host. */
 export type Toast = (title: string, body: string, sound: Sound) => Effect.Effect<void>;
+
+/** The Herd a host works for: whose budget a judgement is charged to, and whose prompts it reads. */
+export interface Herd {
+  readonly socketPath: string | null;
+  readonly pluginRoot: string;
+}
 
 /** Which toasts a Run has raised, so a replay or a second host does not raise them again. */
 const notifiedPath = (dir: string, runId: string) => `${dir}/notified.${runId}`;
@@ -2971,6 +3016,8 @@ export const foundationLayer = (options: {
   readonly configDir?: string;
   /** Where a toast goes; left out, nothing is raised. */
   readonly toast?: Toast;
+  /** The Herd this host works for; left out, nothing is judged or charged to one. */
+  readonly herd?: Herd;
 }): Layer.Layer<
   | Host
   | Notifier
@@ -2980,7 +3027,7 @@ export const foundationLayer = (options: {
   | SqlClient.SqlClient
   | Reactivity.Reactivity,
   ConfigError,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  BunServices
 > =>
   hostLayer(options).pipe(
     Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),

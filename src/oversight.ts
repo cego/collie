@@ -1,20 +1,33 @@
-// What the host keeps an eye on while a Run works: the cards a human reads its progress
-// from. Everything here is a view of what is already recorded — the tree, the journal,
-// the Intent and its drift — so nothing a card says is a claim nobody can check.
+// What the host keeps an eye on while a Run works: whether the work still matches its
+// Intent, and the cards a human reads its progress from. Everything here is a view of what
+// is already recorded — the tree, the journal, the Intent and its drift — so nothing a
+// card or a report says is a claim nobody can check.
 
-import { Clock, Context, Effect, FileSystem, Path } from "effect";
+import type { BunServices } from "@effect/platform-bun/BunServices";
+import { Clock, Context, Effect, FileSystem, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { appendCard, buildCard, inspectFor, readCheckpoints, type Card } from "./cards";
 import {
+  NOT_JUDGED,
   alignment,
-  evaluatedFor,
+  appendDrift,
+  checkRules,
   electionsPath,
+  evaluatedFor,
+  flattenOutput,
+  judge,
+  newReports,
   openReports,
   pendingEvaluation,
   readDrift,
   readElections,
+  recordSkipped,
+  type Judged,
+  type JudgementDeps,
+  type RuleFacts,
 } from "./drift";
-import { readIntent } from "./intent";
+import { readIntent, type Intent } from "./intent";
+import { reason } from "./naming";
 import { shell } from "./mr";
 import { pendingFor, proposalsPath, read as readProposals } from "./proposals";
 import { deliveriesOf, herdOf } from "./steering";
@@ -27,6 +40,8 @@ export interface Watched {
   readonly stateDir: string;
   readonly runDir: string;
   readonly evidenceDir: string;
+  /** Where each piece of agent work's Output is, as `<operation>.json`. */
+  readonly agentsDir: string;
   /** Where the work is: the Run's own worktree, or the checkout it was started in. */
   readonly cwd: string;
   readonly worktree: string | null;
@@ -81,12 +96,6 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     readonly kind: Card["kind"];
     readonly step: string;
     readonly claims: ReadonlyArray<string>;
-    /** Whether a model's judgement of the Intent was made, as far as this Run got. */
-    readonly judged?: {
-      readonly semantic: boolean;
-      readonly truncated: boolean;
-      readonly goal: boolean;
-    };
   },
 ): Effect.fn.Return<Card, never, Services> {
   const base = yield* baseOf(at.cwd);
@@ -139,11 +148,7 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
     deliveries: (yield* deliveriesOf(at.stateDir, at.runId).pipe(
       Effect.orElseSucceed(() => []),
     )).map((entry) => entry.delivery.id),
-    aligned: alignment(
-      intent,
-      drift,
-      what.judged ?? { semantic: false, truncated: false, goal: false },
-    ).aligned,
+    aligned: alignment(intent, drift, yield* judgedOf(at)).aligned,
     crossRun: yield* crossRunOf(at),
     significance: {
       readiness: "claimed",
@@ -161,6 +166,157 @@ export const writeCard = Effect.fn("Oversight.writeCard")(function* (
   });
   yield* appendCard(at.runDir, card).pipe(Effect.ignore);
   return card;
+});
+
+/** Where a Run's events are written, beside its other records in the host's directory. */
+const said = (at: Watched, line: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs.writeFileString(`${at.stateDir}/events.${at.runId}.log`, `${line}\n`, { flag: "a" }),
+    ),
+    Effect.ignore,
+  );
+
+const JudgedJson = Schema.fromJsonString(
+  Schema.Struct({ semantic: Schema.Boolean, truncated: Schema.Boolean, goal: Schema.Boolean }),
+);
+const judgedPath = (runDir: string) => `${runDir}/steering/judged.json`;
+
+/** What the last judgement of this Run got to, which is what `aligned` may claim. */
+const judgedOf = (at: Watched) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(judgedPath(at.runDir))),
+    Effect.flatMap(Schema.decodeUnknownEffect(JudgedJson)),
+    Effect.orElseSucceed((): Judged => NOT_JUDGED),
+  );
+
+/** What a rule check compares against: the tree, every Output, and what was verified. */
+export const ruleFacts = Effect.fn("Oversight.ruleFacts")(function* (at: Watched) {
+  const fs = yield* FileSystem.FileSystem;
+  const base = yield* baseOf(at.cwd);
+  const committed = yield* shell("git", ["diff", "--name-only", `${base}..HEAD`], at.cwd);
+  const dirty = yield* shell("git", ["diff", "--name-only", "HEAD"], at.cwd);
+  // Untracked too: a file an agent created is exactly what a `protected_paths` rule is
+  // for, and it is in no diff until somebody commits it.
+  const untracked = yield* shell("git", ["ls-files", "--others", "--exclude-standard"], at.cwd);
+  const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], at.cwd);
+  const outputs: Record<string, Record<string, string>> = {};
+  const names = yield* fs.readDirectory(at.agentsDir).pipe(Effect.orElseSucceed(() => []));
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const text = yield* fs
+      .readFileString(`${at.agentsDir}/${name}`)
+      .pipe(Effect.orElseSucceed(() => ""));
+    if (text !== "") outputs[name.slice(0, -".json".length)] = flattenOutput(text);
+  }
+  const verifications: Record<string, { exit: number; ref: string }> = {};
+  const verified = yield* readVerifications(at.evidenceDir).pipe(Effect.orElseSucceed(() => []));
+  for (const one of verified) verifications[one.name] = { exit: one.exit, ref: one.id };
+  const mr = /https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/.exec(at.mr ?? "");
+  return {
+    changedFiles: [...new Set(lines(`${committed.stdout}\n${dirty.stdout}\n${untracked.stdout}`))],
+    branch: branch.code === 0 ? branch.stdout.trim() : null,
+    mrTarget: mr === null ? null : { project: mr[1]!, iid: mr[2]! },
+    outputs,
+    verifications,
+  } satisfies RuleFacts;
+});
+
+/** The half Collie establishes itself: what the rules say about the evidence, recorded. */
+const checkRuleDrift = Effect.fn("Oversight.checkRuleDrift")(function* (
+  at: Watched,
+  intent: Intent,
+  where: string,
+) {
+  const found = checkRules(intent, yield* ruleFacts(at), yield* nowIso());
+  const before = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
+  for (const report of newReports(found, before)) {
+    yield* appendDrift(at.runDir, report).pipe(Effect.ignore);
+    yield* said(
+      at,
+      `drift at ${where}: ${report.constraint} (${report.severity}) — ${report.evidence
+        .map((ref) => ref.path ?? ref.excerpt ?? ref.kind)
+        .join(", ")}`,
+    );
+  }
+  // A report that was open and is no longer found is one the work came back from — but
+  // only where the check found fewer things: an unchanged tree finds the same ones, and
+  // calling that a fix would clear a report nobody acted on.
+  for (const report of openReports(before)) {
+    if (found.some((still) => still.constraint === report.constraint)) continue;
+    yield* appendDrift(at.runDir, { ...report, at: yield* nowIso(), resolution: "verified" }).pipe(
+      Effect.ignore,
+    );
+    yield* said(at, `drift ${report.constraint} cleared at ${where}`);
+  }
+});
+
+/**
+ * The half only a model can make: one Judgement, of the semantic constraints at every
+ * boundary and of the goal as well at the finish. A judgement that could not be made is
+ * recorded as skipped, which keeps the Run `unverified` rather than reading as checked.
+ */
+const judgeDrift = Effect.fn("Oversight.judgeDrift")(function* (
+  at: Watched,
+  intent: Intent,
+  where: string,
+  final: boolean,
+  deps: JudgementDeps | null,
+) {
+  // A goal is judged once, at the finish: nothing mid-Run is corrected from it, so judging
+  // it at every boundary would pay for the same question over and over.
+  const semantic = intent.constraints.some((constraint) => constraint.kind === "semantic");
+  if (!final && !semantic) return;
+  if (deps === null) {
+    yield* recordSkipped(at.runDir, at.runId, "there is no Herd to charge a judgement to").pipe(
+      Effect.ignore,
+    );
+    return;
+  }
+  const outcome = yield* judge(deps, intent, {
+    runDir: at.runDir,
+    worktree: at.cwd,
+    base: yield* baseOf(at.cwd),
+    at: yield* nowIso(),
+  }).pipe(
+    Effect.catch((cause) =>
+      recordSkipped(at.runDir, at.runId, `the judgement failed: ${reason(cause)}`).pipe(
+        Effect.ignore,
+        Effect.as({ judged: NOT_JUDGED, reports: [] }),
+      ),
+    ),
+  );
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.makeDirectory(`${at.runDir}/steering`, { recursive: true }).pipe(Effect.ignore);
+  yield* fs
+    .writeFileString(judgedPath(at.runDir), Schema.encodeSync(JudgedJson)(outcome.judged))
+    .pipe(Effect.ignore);
+  const before = yield* readDrift(at.runDir).pipe(Effect.orElseSucceed(() => []));
+  for (const report of newReports(outcome.reports, before)) {
+    yield* appendDrift(at.runDir, report).pipe(Effect.ignore);
+    yield* said(
+      at,
+      `drift at ${where}: ${report.constraint} (${report.severity}) — judged against ${report.evidence.length} piece(s) of evidence`,
+    );
+  }
+});
+
+/**
+ * Where this Run's work stands against its Intent, at one moment: after a piece of work
+ * is collected (the rules only, which cost nothing), before the next one starts, and at
+ * the finish, where a model judges what no rule can. A Run with no Intent is not checked.
+ */
+export const checkDrift = Effect.fn("Oversight.checkDrift")(function* (
+  at: Watched,
+  where: string,
+  judging: "none" | "boundary" | "finish",
+  deps: JudgementDeps | null,
+): Effect.fn.Return<void, never, BunServices> {
+  const intent = yield* readIntent(at.runDir).pipe(Effect.orElseSucceed(() => null));
+  if (intent === null) return;
+  if (judging !== "none") yield* judgeDrift(at, intent, where, judging === "finish", deps);
+  if (intent.constraints.some((constraint) => constraint.kind === "rule"))
+    yield* checkRuleDrift(at, intent, where);
 });
 
 /** Which checkpoints have a card already, so a restart does not card them twice. */
@@ -208,5 +364,11 @@ export class Oversight extends Context.Service<
     ) => Effect.Effect<void>;
     /** Cards for the tickets an agent has said it finished since the last look. */
     readonly checkpoints: (runId: string, step: string) => Effect.Effect<void>;
+    /** The Run's work against its Intent, at one of the moments `checkDrift` names. */
+    readonly drift: (
+      runId: string,
+      where: string,
+      judging: "none" | "boundary" | "finish",
+    ) => Effect.Effect<void>;
   }
 >()("collie/Oversight") {}

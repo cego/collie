@@ -825,9 +825,9 @@ ran is a breach, not a pass; so is an `output_field` rule against a step that wr
 nothing, and an `mr_target` rule with no merge request. "Nobody looked" and "it was fine"
 are different answers.
 
-Nothing checks a workflow module's Run against its Intent yet, so `run drift` reads an empty
-journal. An unresolved report there shows on the board and as attention `drift_unresolved`,
-and a cross-run check that was owed and never made as `cross_run_pending`.
+`run drift` reads what those checks recorded. An unresolved report there shows on the board
+and as attention `drift_unresolved`, and a cross-run check that was owed and never made as
+`cross_run_pending`.
 
 ## Outcomes
 
