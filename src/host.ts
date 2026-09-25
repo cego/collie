@@ -57,6 +57,7 @@ import { Catalogue, discover, searchPath } from "./discovery";
 import { RequestConflict } from "./store";
 import { VerifySpecSchema } from "./verify-spec";
 import { currentEnv } from "./env";
+import { Herdr } from "./herdr";
 import { currentPid, ensureLockDir, lockHolder, withLock, type LockHolder } from "./lock";
 
 /** What a host says it is. A client that is not this stops rather than guessing. */
@@ -367,6 +368,8 @@ const own = (dir: string) =>
     const fs = yield* FileSystem.FileSystem;
     const env = yield* currentEnv.pipe(Effect.orDie);
     const crashAt = yield* crashPoint;
+    const bun = yield* Effect.context<BunServices>();
+    const herdr = new Herdr(env);
     // Under the lock, so anything at this path belongs to a host that is gone: a unix
     // socket cannot be bound while its file is there, and a dead host's is still there.
     yield* fs.remove(socketOf(dir), { force: true }).pipe(Effect.orDie);
@@ -386,7 +389,14 @@ const own = (dir: string) =>
         Layer.provide(RpcServer.layerProtocolSocketServer),
         Layer.provide(serialization),
         Layer.provide(BunSocketServer.layer({ path: socketOf(dir) })),
-        Layer.provide(foundationLayer({ dir, configDir: env.configDir })),
+        Layer.provide(
+          foundationLayer({
+            dir,
+            configDir: env.configDir,
+            toast: (title, body, sound) =>
+              herdr.notify(title, body, sound).pipe(Effect.provideContext(bun), Effect.ignore),
+          }),
+        ),
         Layer.provide(yield* configuredAgents(dir)),
       ),
     );

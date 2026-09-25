@@ -93,10 +93,12 @@ import {
   gitlabReadiness,
   mrFacts,
   parseMrTarget,
+  parseMrUrl,
   postNote,
   projectHere,
   shell as runShell,
 } from "./mr";
+import { Notifier, SOUND, notificationTitle, wanted, type Sound } from "./notify";
 import { latest, readDispositions, type Disposition } from "./disposition";
 import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
@@ -1251,16 +1253,41 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
     // SAFETY: the envelope decoded against the definition's own input struct.
     const input = envelope.input as never;
     const run = Run.of({ id: readEnvelope(envelope).runId, workflow: definition.id });
-    return definition
-      .run({ input })
-      .pipe(
-        Effect.provideService(Run, run),
-        Effect.provideService(WorkflowAgents, definition.agents),
-      );
+    return definition.run({ input }).pipe(
+      Effect.provideService(Run, run),
+      Effect.provideService(WorkflowAgents, definition.agents),
+      Effect.onExit((exit) =>
+        // A suspension is an interruption, and a question or a stop says so for itself.
+        Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+          ? Effect.void
+          : ended(run.id, exitStatus(exit, definition.id, workflow.successSchema, error)),
+      ),
+    );
   });
   const layer = definition.layer === undefined ? body : body.pipe(Layer.provide(definition.layer));
   return { workflow, layer };
 };
+
+/** What an ending says to whoever started the Run, in the words the board reads it in. */
+const ended = (runId: string, status: typeof RunStatus.Type) =>
+  Effect.serviceOption(Notifier).pipe(
+    Effect.flatMap((found) => {
+      if (Option.isNone(found)) return Effect.void;
+      if (status.status === "complete") {
+        return found.value.notify(
+          runId,
+          "run-done",
+          isText(status.value) ? status.value : asJsonText(status.value),
+        );
+      }
+      if (status.status !== "failed") return Effect.void;
+      return found.value.notify(
+        runId,
+        status.reason.startsWith("output-unusable:") ? "output-unusable" : "run-failed",
+        status.reason,
+      );
+    }),
+  );
 
 /**
  * Where entries are staged to be read: this account's own cache, and only while nobody
@@ -1685,12 +1712,14 @@ export const hostLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly configDir?: string;
+  /** Where a toast goes; left out, nothing is raised. */
+  readonly toast?: Toast;
 }): Layer.Layer<
-  Host,
+  Host | Notifier,
   never,
   Store | FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > =>
-  Layer.effect(Host)(
+  Layer.effectContext(
     Effect.gen(function* () {
       const dir = options.dir;
       const fs = yield* FileSystem.FileSystem;
@@ -1703,7 +1732,41 @@ export const hostLayer = (options: {
       const set = (control: string, runId: string) =>
         fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
       yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
-      return Host.of({
+      const toast = options.toast;
+      const notify: Notifier["Service"]["notify"] = (runId, kind, body, about = {}) =>
+        toast === undefined
+          ? Effect.void
+          : under(
+              Effect.gen(function* () {
+                const settings =
+                  options.configDir === undefined
+                    ? {}
+                    : (yield* loadDefaults(options.configDir)).notifications;
+                if (!wanted(settings, kind)) return;
+                // ponytail: one line per toast raised, read whole; a Run raises a handful.
+                const said = `${kind}:${(about.key ?? "").replaceAll("\n", " ")}`;
+                const file = notifiedPath(dir, runId);
+                const before = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+                if (before.split("\n").includes(said)) return;
+                yield* fs.writeFileString(file, `${said}\n`, { flag: "a" });
+                const row = yield* store.run(runId);
+                const cwd =
+                  row === null
+                    ? dir
+                    : placedOf(
+                        row,
+                        yield* decodeStrings(row.options ?? "{}").pipe(
+                          Effect.orElseSucceed((): Record<string, string> => ({})),
+                        ),
+                      ).cwd;
+                yield* toast(
+                  notificationTitle(kind, cwd, row?.task ?? runId, about.subject),
+                  body,
+                  SOUND[kind],
+                );
+              }),
+            ).pipe(Effect.ignore);
+      const host = Host.of({
         dir,
         place: (runId) =>
           under(
@@ -1754,17 +1817,30 @@ export const hostLayer = (options: {
             .pipe(Effect.orDie),
         parked: (runId, why) => {
           const path = controlPath(dir, PARKED, runId);
-          return (
-            why === null ? fs.remove(path, { force: true }) : fs.writeFileString(path, why)
-          ).pipe(Effect.orDie);
+          return why === null
+            ? fs.remove(path, { force: true }).pipe(Effect.orDie)
+            : fs
+                .writeFileString(path, why)
+                .pipe(
+                  Effect.orDie,
+                  Effect.andThen(notify(runId, "needs-you", why, { key: `parked:${why}` })),
+                );
         },
         asking: (runId, question) =>
-          store.asking({
-            run: runId,
-            decision: question.name,
-            prompt: question.prompt,
-            options: question.options,
-          }),
+          store
+            .asking({
+              run: runId,
+              decision: question.name,
+              prompt: question.prompt,
+              options: question.options,
+            })
+            .pipe(
+              Effect.andThen(
+                notify(runId, "needs-you", `${question.name}: ${question.prompt}`, {
+                  key: `ask:${question.name}`,
+                }),
+              ),
+            ),
         evidence: (runId, cwd) =>
           under(
             Effect.all({
@@ -1949,13 +2025,20 @@ export const hostLayer = (options: {
             yield* fs.remove(file, { force: true });
           }).pipe(Effect.provideContext(services), Effect.ignore),
         mergeRequest: (runId, url) =>
-          fs
-            .makeDirectory(runDir(dir, runId), { recursive: true })
-            .pipe(
-              Effect.andThen(fs.writeFileString(mergeRequestPath(dir, runId), `${url}\n`)),
-              Effect.andThen(store.announce),
-              Effect.orDie,
+          fs.makeDirectory(runDir(dir, runId), { recursive: true }).pipe(
+            Effect.andThen(fs.writeFileString(mergeRequestPath(dir, runId), `${url}\n`)),
+            Effect.andThen(store.announce),
+            Effect.orDie,
+            Effect.andThen(
+              notify(runId, "mr-opened", url, {
+                key: url,
+                subject: Option.fromNullishOr(parseMrUrl(url)).pipe(
+                  Option.map((mr) => `!${mr.iid}`),
+                  Option.getOrUndefined,
+                ),
+              }),
             ),
+          ),
         post: (asked) =>
           under(
             fs.readFileString(asked.file).pipe(
@@ -1969,8 +2052,15 @@ export const hostLayer = (options: {
             ),
           ),
       });
+      return Context.make(Host, host).pipe(Context.add(Notifier, Notifier.of({ notify })));
     }),
   );
+
+/** Where a toast is raised: herdr's, in a host. */
+export type Toast = (title: string, body: string, sound: Sound) => Effect.Effect<void>;
+
+/** Which toasts a Run has raised, so a replay or a second host does not raise them again. */
+const notifiedPath = (dir: string, runId: string) => `${dir}/notified.${runId}`;
 
 /**
  * The next generation of an entry: opaque, distinct, and never a name already used. A
@@ -2027,9 +2117,19 @@ export const pollStatus = (
   if (Option.isNone(result)) return { status: "pending" };
   const value = result.value;
   if (value._tag === "Suspended") return { status: "suspended" };
-  if (Exit.isSuccess(value.exit)) {
+  return exitStatus(value.exit, entry, success, error);
+};
+
+/** A finished execution as a client reads it. */
+const exitStatus = (
+  exit: Exit.Exit<unknown, unknown>,
+  entry: string,
+  success?: Schema.Codec<unknown, unknown, never, never>,
+  error?: Schema.Codec<unknown, unknown, never, never>,
+): typeof RunStatus.Type => {
+  if (Exit.isSuccess(exit)) {
     // Encoded by its own schema, so a client can decode it again; as it is where that fails.
-    const result = value.exit.value;
+    const result = exit.value;
     const encoded =
       success === undefined
         ? Option.none()
@@ -2040,7 +2140,7 @@ export const pollStatus = (
     return { status: "complete", value: isJson(result) ? result : String(result) };
   }
   // A failure of the workflow's own is what it says it is, in the words its schema writes.
-  const failure = Cause.findErrorOption(value.exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   const written =
     error === undefined || Option.isNone(failure) || isWorkflowError(failure.value)
       ? Option.none()
@@ -2048,7 +2148,7 @@ export const pollStatus = (
   if (Option.isSome(written) && isJson(written.value)) {
     return { status: "failed", reason: asJsonText(written.value), entry, error: written.value };
   }
-  return { status: "failed", reason: reasonOf(value.exit.cause), entry };
+  return { status: "failed", reason: reasonOf(exit.cause), entry };
 };
 
 const isJson = Schema.is(Schema.Json);
@@ -2721,12 +2821,19 @@ export const foundationLayer = (options: {
   readonly dir: string;
   /** Where a user's own `verify.json` is, for a project that wrote none. */
   readonly configDir?: string;
+  /** Where a toast goes; left out, nothing is raised. */
+  readonly toast?: Toast;
 }): Layer.Layer<
-  Host | Store | WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
+  | Host
+  | Notifier
+  | Store
+  | WorkflowEngine.WorkflowEngine
+  | SqlClient.SqlClient
+  | Reactivity.Reactivity,
   ConfigError,
   FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > =>
-  hostLayer({ dir: options.dir, configDir: options.configDir }).pipe(
+  hostLayer(options).pipe(
     Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
   );
 

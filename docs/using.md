@@ -1040,10 +1040,16 @@ model, effort, permissions mode or scope fails validation before a single tab op
 [Authoring](authoring.md#harnesses-models-and-effort) for what each harness accepts, and
 [Permissions](#permissions-unattended-by-default) for what `permissions` decides.
 
-`max_iterations`, `handoff_timeout_ms`, `quiet_ms` and `notifications` are still read and
-shown under Settings, but a run of a workflow module consults none of them: `implement`
-carries its own ceiling of four review and fix rounds, there is no hand-off between runs
-to time out, no quiet agent is nudged, and no toast is raised.
+`notifications` turns a kind of toast off: `{"run-done": false}`, and a kind left out is on.
+The host raises one when a run finishes (`run-done`), fails (`run-failed`, or
+`output-unusable` where an agent's Output could not be used after its repair), asks you
+something or parks until you act (`needs-you`), or records a merge request it opened
+(`mr-opened`) — each once per run, however often the work is replayed or its host restarts.
+
+`max_iterations`, `handoff_timeout_ms` and `quiet_ms` are still read and shown under
+Settings, but a run of a workflow module consults none of them: `implement` carries its own
+ceiling of four review and fix rounds, there is no hand-off between runs to time out, and no
+quiet agent is nudged.
 
 `board_quiet_ms` is how long a running run's directory may go unchanged before its card
 reads `…but silent for 9m` and takes the quiet edge. Five minutes by default. Nothing is
