@@ -794,6 +794,41 @@ scenario(
   120_000,
 );
 
+/**
+ * A fork of a shipped workflow as a person keeps one: it spreads the original and changes
+ * only which agent does which work, so every other part of it follows the original.
+ */
+const fork = (name: Shipped, id: string, agents: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) =>
+      fs.writeFileString(
+        `${rig.root}/user/workflows/${id}.workflow.ts`,
+        [
+          `import shipped from "${ROOT}workflows/${name}.workflow.ts";`,
+          `import { defineWorkflow } from "collie";`,
+          `export default defineWorkflow({ ...shipped, id: "${id}", agents: ${agents} });`,
+          "",
+        ].join("\n"),
+      ),
+    ),
+    Effect.as(`${rig.root}/user/workflows/${id}.workflow.ts`),
+    Effect.orDie,
+  );
+
+/** Each agent started, as the harness it runs on and the arguments it was started with. */
+const launched = () =>
+  rig.calls().pipe(
+    Effect.map((calls) =>
+      calls
+        .map((call) => call.argv ?? [])
+        .filter((argv) => argv[1] === "start")
+        .map((argv) => ({
+          kind: argv[argv.indexOf("--kind") + 1],
+          args: argv.slice(argv.indexOf("--") + 1).join(" "),
+        })),
+    ),
+  );
+
 const REVIEW = {
   verdict: "findings",
   findings: [{ severity: "major", title: "the guard is on the wrong side", file: "src/a.ts" }],
@@ -805,6 +840,109 @@ const SYNTHESIS = {
   dropped: [],
   fixed: [],
 };
+
+test(
+  "a fork that moves the reviewer role has every reviewer of review there, and the rest is the original's",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const entry = yield* fork(
+          "review",
+          "review-on-pi",
+          `{ ...shipped.agents, roles: { ...shipped.agents?.roles, reviewer: { harness: "pi", model: "openai-codex/gpt-6-astra", effort: "max" } } }`,
+        );
+        yield* rig.queueOutputs([REVIEW, SYNTHESIS]);
+        yield* parked({
+          entry,
+          runId: "r-review-pi",
+          input: { target: "branch:main...HEAD" },
+          decision: "post-1",
+        });
+
+        for (const one of yield* launched()) {
+          expect(one.kind).toBe("pi");
+          expect(one.args).toContain("--model openai-codex/gpt-6-astra --thinking max");
+        }
+        expect(yield* launched()).toHaveLength(2);
+        // What the reviewers are told is still the shipped review's.
+        expect(yield* asked("r-review-pi", "review-1")).toContain(
+          "Review target: branch:main...HEAD",
+        );
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a fork that seats a panel of reviewers has one review from each, reconciled on the first seat",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const entry = yield* fork(
+          "review",
+          "review-panel",
+          `{ ...shipped.agents, roles: { ...shipped.agents?.roles, reviewer: [{ harness: "claude", model: "opus", effort: "medium" }, { harness: "pi", model: "openai-codex/gpt-6-astra", effort: "max" }] } }`,
+        );
+        yield* rig.queueOutputs([REVIEW, REVIEW, SYNTHESIS]);
+        yield* parked({
+          entry,
+          runId: "r-review-panel",
+          input: { target: "branch:main...HEAD" },
+          decision: "post-1",
+        });
+
+        const byPersona = Object.fromEntries(
+          (yield* launched()).map((one) => [
+            /agents\/r-review-panel\/([^ ]+)\.persona\.md/.exec(one.args)?.[1],
+            one.kind,
+          ]),
+        );
+        expect(byPersona).toEqual({ "review-1": "claude", "review-2": "pi", synthesize: "claude" });
+        const fanIn = yield* asked("r-review-panel", "synthesize");
+        expect(fanIn).toContain(`${dir}/agents/r-review-panel/review-1.json`);
+        expect(fanIn).toContain(`${dir}/agents/r-review-panel/review-2.json`);
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "a fork that moves plan's planner leaves the second opinion on the reviewer plan chose",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const entry = yield* fork(
+          "plan",
+          "plan-on-pi",
+          `{ ...shipped.agents, harness: "pi", model: "openai-codex/gpt-6-astra", effort: "medium" }`,
+        );
+        const opinion = {
+          verdict: "findings",
+          findings: [
+            { severity: "major", title: "ticket 3 cannot land on its own", file: "plan/issues" },
+          ],
+        };
+        const revised = { verdict: "clean", findings: [], changelog: "split ticket 3 in two" };
+        yield* rig.queueOutputs([GRILLED, SPEC, TICKETS, opinion, revised]);
+        yield* parked({ entry, runId: "r-plan-pi", input: GOAL, decision: "next-1" });
+        yield* answeredThen({
+          entry,
+          runId: "r-plan-pi",
+          input: GOAL,
+          decision: "next-1",
+          value: "Second opinion",
+          until: "next-2",
+        });
+
+        const [planner, reviewer] = yield* launched();
+        expect(planner?.kind).toBe("pi");
+        expect(planner?.args).toContain("--model openai-codex/gpt-6-astra --thinking medium");
+        expect(reviewer?.kind).toBe("claude");
+        expect(reviewer?.args).toContain("--model opus --effort xhigh");
+      }),
+    ),
+  120_000,
+);
 
 scenario(
   "review reviews the target, reconciles it, and leaves the prose and the findings behind",

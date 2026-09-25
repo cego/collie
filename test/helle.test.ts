@@ -4,7 +4,7 @@
 // exactly the ones a real Helle will not produce on demand.
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { Effect, Fiber, FileSystem, Path, Result } from "effect";
+import { Effect, Fiber, FileSystem, Path, Result, Schedule } from "effect";
 import { runEffect } from "./support/effect";
 import {
   credentials,
@@ -277,10 +277,15 @@ test("the gate claims, reports the queue as it moves, and returns once it is the
         const recorded: (HelleClaim | null)[] = [];
         const fiber = yield* Effect.forkScoped(gate({ file: yield* envFile(), lines, recorded }));
 
-        // The queue moves up, and then the project becomes this token's own.
-        yield* Effect.sleep(30);
+        // The queue moves up once the gate has said where it stands, and then the project
+        // becomes this token's own: moved on what the gate has seen, not on the clock.
+        const saidSoFar = (text: string) =>
+          Effect.sync(() => lines.some((line) => line.includes(text))).pipe(
+            Effect.repeat({ until: (seen) => seen, schedule: Schedule.spaced("5 millis") }),
+          );
+        yield* saidSoFar("position 2");
         fake.projects[0]!.queue = [{ user_id: ME }];
-        yield* Effect.sleep(30);
+        yield* saidSoFar("position 1");
         fake.projects[0]!.holder = { user_id: ME, display_name: "mk" };
         fake.projects[0]!.queue = [];
 

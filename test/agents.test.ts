@@ -706,6 +706,86 @@ test("a definition's own preference sits under a scope's, and parallel scopes ke
     }),
   ));
 
+test("a definition's preference for a role reaches that role's work, under a scope's and the work's own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs(["one", "two", "three", "four"]);
+      const entry = yield* loadEntry(
+        new URL("fixtures/workflows/prefers-roles.workflow.ts", import.meta.url).pathname,
+      ).pipe(Effect.orDie);
+      const { workflow, layer } = entry.make("prefers-roles@1");
+      const none = Effect.die("this workflow starts no child");
+      yield* workflow
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.provide(layer),
+          Effect.provide(
+            Layer.succeed(Children)(Children.of({ start: () => none, result: () => none })),
+          ),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      const chosen = everyLaunch(yield* rig.calls()).map((args) => {
+        const effort = args.indexOf("--effort");
+        return `${args[1]}${effort === -1 ? "" : `/${args[effort + 1]}`}`;
+      });
+      // The role's model and effort over the workflow's; the work's own model and a scope's
+      // over the role's, each keeping the role's effort where it names none of its own.
+      expect([...chosen].sort()).toEqual(["fable/high", "haiku", "opus/high", "sonnet/high"]);
+    }),
+  ));
+
+test("each seat of a panel is its own agent, persona and instructions; the role's other work takes the first seat's agent", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const personas = `${rig.pluginEnv().userDir}/personas`;
+      yield* fs.makeDirectory(personas, { recursive: true });
+      yield* fs.writeFileString(`${personas}/strict-critic.md`, "You are strict.\n");
+      yield* rig.queueOutputs(["one", "two", "three"]);
+      const entry = yield* loadEntry(
+        new URL("fixtures/workflows/panel.workflow.ts", import.meta.url).pathname,
+      ).pipe(Effect.orDie);
+      const { workflow, layer } = entry.make("panel@1");
+      const none = Effect.die("this workflow starts no child");
+      yield* workflow
+        .execute({ runId: "r1", input: {} })
+        .pipe(
+          Effect.provide(layer),
+          Effect.provide(
+            Layer.succeed(Children)(Children.of({ start: () => none, result: () => none })),
+          ),
+          Effect.provide(agentsLayer(hostOf())),
+          Effect.provide(foundationLayer({ dir })),
+          Effect.scoped,
+          Effect.orDie,
+        );
+      // Each launch as the operation its persona file is named for, and the agent it got.
+      const chosen = Object.fromEntries(
+        everyLaunch(yield* rig.calls()).map((args) => {
+          const persona = args[args.indexOf("--append-system-prompt-file") + 1] ?? "";
+          const effort = args.indexOf("--effort");
+          const operation = persona.slice(persona.lastIndexOf("/") + 1, -".persona.md".length);
+          return [operation, `${args[1]}${effort === -1 ? "" : `/${args[effort + 1]}`}`];
+        }),
+      );
+      expect(chosen).toEqual({
+        "critique-1": "sonnet/high",
+        "critique-strict": "opus",
+        summary: "sonnet/high",
+      });
+      const at = `${dir}/agents/r1`;
+      expect(yield* read(`${at}/critique-1.prompt.md`)).toContain("Critique the plan.");
+      expect(yield* read(`${at}/critique-strict.prompt.md`)).toContain("Be strict about the plan.");
+      expect(yield* read(`${at}/summary.prompt.md`)).toContain("Sum up.");
+      expect(yield* read(`${at}/critique-strict.persona.md`)).toContain("You are strict.");
+      expect(yield* read(`${at}/critique-1.persona.md`)).not.toContain("You are strict.");
+      expect(yield* read(`${at}/summary.persona.md`)).not.toContain("You are strict.");
+    }),
+  ));
+
 onMachineWith("claude")(
   "compaction controls are installed into the launch, as they are for a Step",
   () =>

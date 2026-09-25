@@ -330,7 +330,5 @@ import original from "${from}";
 export default defineWorkflow({
   ...original,
   id: "${id}",
-  title: ${JSON.stringify(parent.title)},
-  description: ${JSON.stringify(parent.description)},
 });
 `;

@@ -67,8 +67,10 @@ import {
   WorkflowAgents,
   Template,
   WorkflowError,
+  panelOf,
   type HostApi,
   type Projection,
+  type Seat,
 } from "./sdk";
 import { deliveriesOf } from "./steering";
 import { readTask, withTaskLock, writeTask } from "./task";
@@ -83,6 +85,8 @@ export interface AgentAsk {
   readonly operation: string;
   /** What this agent is being asked to be, stated rather than inferred from a name. */
   readonly role: string;
+  /** The persona it is started as, where it is not its role's. */
+  readonly persona?: string | null;
   /** The agent this work goes to, where several pieces share one. Null gives it its own. */
   readonly agent: string | null;
   readonly workflow: string;
@@ -309,6 +313,12 @@ interface Doing<Output extends OutputContract> {
   readonly model?: string;
   readonly effort?: string;
   readonly permissions?: PermissionMode;
+  /**
+   * The panel seat this work sits at: its agent over the role's, and its persona and
+   * instructions where it names them. Work for a role given none takes the agent of the
+   * role's first seat, and keeps its own persona and instructions.
+   */
+  readonly seat?: Seat;
 }
 
 /**
@@ -340,10 +350,10 @@ export const agentWork = <
     const plain = given.output === undefined;
     // SAFETY: Output defaults to Schema.String exactly where no output was given.
     const contract = (given.output ?? Schema.String) as Output;
+    const told = given.seat?.instructions ?? given.instructions;
     const work = {
       ...given,
-      instructions:
-        given.instructions instanceof Template ? given.instructions.text : given.instructions,
+      instructions: told instanceof Template ? told.text : told,
       runId,
       cwd: given.cwd ?? place.cwd,
       workflow: given.workflow ?? run.workflow,
@@ -403,6 +413,8 @@ export const agentWork = <
     }
     // Decided and recorded before anything is started, so a recovery, a revival and a
     // restart all start the agent this work was given, whatever is configured by then.
+    const preferred = yield* WorkflowAgents;
+    const seated = given.seat ?? (yield* panelOf(role))[0] ?? {};
     const choice = yield* Activity.make({
       name: `${work.operation}.agent`,
       success: AgentChoiceSchema,
@@ -410,7 +422,8 @@ export const agentWork = <
       execute:
         held === null
           ? agents.choose([
-              yield* WorkflowAgents,
+              preferred,
+              preferencesIn(seated),
               preferencesIn(place.options),
               ...scopes,
               preferencesIn(given),
@@ -421,6 +434,7 @@ export const agentWork = <
       runId: work.runId,
       operation: work.operation,
       role,
+      persona: given.seat?.persona ?? null,
       agent: work.agent ?? null,
       workflow: work.workflow ?? work.operation,
       task: place.task,
@@ -988,7 +1002,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         : false;
     const permissions = forbidden ? "auto" : asked;
     const persona = `${dirFor(ask.runId)}/${ask.operation}.persona.md`;
-    yield* write(persona, `${yield* personaOf(ask.role)}\n`);
+    yield* write(persona, `${yield* personaOf(ask.persona ?? ask.role)}\n`);
     return yield* withControlLock(
       host.env.stateDir,
       agent,
@@ -1070,7 +1084,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         };
         const launched = terminalId === undefined ? landed : { ...landed, terminalId };
         const adapter = adapterFor(launched.harness);
-        const prefix = personaPrefix(adapter, yield* personaOf(ask.role));
+        const prefix = personaPrefix(adapter, yield* personaOf(ask.persona ?? ask.role));
         const file = `${dirFor(ask.runId)}/${ask.operation}.prompt.md`;
         // Written before it goes out and never rewritten: what a human reads to see what
         // was actually asked, rather than what a prompt would be built as now.
