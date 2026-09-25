@@ -55,7 +55,7 @@ import {
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr } from "./herdr";
+import { Herdr, herdrFailureReason, type HerdrError } from "./herdr";
 import { agentName, reason, shellQuote, unsafePathComponent } from "./naming";
 import { askRouteTo } from "./handoff";
 import { liveAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
@@ -786,6 +786,23 @@ export interface AgentHost {
 type AgentServices = FileSystem.FileSystem | Path.Path | BunServices;
 
 const DEFAULT_POLL_MS = 2000;
+
+/**
+ * How long a harness may take to be ready. In a checkout it has never opened it settles
+ * trust, loads plugins and starts MCP servers, which outlasts herdr's own 30s.
+ */
+const START_TIMEOUT_MS = 180_000;
+
+/** herdr says this of a pane that exists but whose shell has not come up yet. */
+const paneNotReady = (error: HerdrError) =>
+  /agent_pane_busy|not an available shell/.test(error.detail);
+
+/**
+ * herdr keeps the name of an agent blocked during startup — a first-run dialog in its
+ * pane — so it is there, and its prompt waits for it as any blocked agent's does.
+ */
+const blockedAtStartup = (error: HerdrError) =>
+  error.code === "agent_not_ready" || /blocked during startup/.test(error.detail);
 const DEFAULT_COLLECT_MS = 2 * 60 * 60 * 1000;
 
 /**
@@ -1017,21 +1034,29 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         const tab = yield* host.herdr.tabCreate({ label: ask.role, cwd: ask.cwd, workspace });
         // herdr ignores --cwd on tab create, so the pane is told where it is explicitly.
         yield* host.herdr.paneRun(tab.paneId, `cd ${shellQuote(ask.cwd)}`);
-        yield* host.herdr.agentStart({
-          name: agent,
-          kind: adapter.kind,
-          paneId: tab.paneId,
-          args: [
-            ...startArgs(
-              adapter,
-              ask.model ?? host.model,
-              persona,
-              ask.effort ?? undefined,
-              permissions,
+        yield* host.herdr
+          .agentStart({
+            name: agent,
+            kind: adapter.kind,
+            paneId: tab.paneId,
+            timeoutMs: START_TIMEOUT_MS,
+            args: [
+              ...startArgs(
+                adapter,
+                ask.model ?? host.model,
+                persona,
+                ask.effort ?? undefined,
+                permissions,
+              ),
+              ...controls,
+            ],
+          })
+          .pipe(
+            Effect.retry({ while: paneNotReady, times: 5, schedule: Schedule.spaced("1 second") }),
+            Effect.catchIf(blockedAtStartup, () =>
+              log(ask.runId, `${agent}: blocked during startup in ${tab.paneId}; its prompt waits`),
             ),
-            ...controls,
-          ],
-        });
+          );
         yield* log(
           ask.runId,
           `${agent}: ${adapter.id} in ${tab.paneId}, permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}`,
@@ -1461,7 +1486,7 @@ const isParked = Schema.is(AgentParked);
 /** Anything a launch failed on, said as what it means: nobody can be sure what happened. */
 const isUncertain = Schema.is(AgentUncertain);
 const asUncertain = (operation: string, cause: unknown): AgentUncertain =>
-  isUncertain(cause) ? cause : new AgentUncertain({ operation, reason: reason(cause) });
+  isUncertain(cause) ? cause : new AgentUncertain({ operation, reason: herdrFailureReason(cause) });
 
 /** A persona's own front matter, which its definition reads and its agent is not told. */
 const PERSONA_FRONT_MATTER = /^---\r?\n[\s\S]*?\r?\n---\r?\n?/;

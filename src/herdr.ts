@@ -45,7 +45,8 @@ export class HerdrError extends Data.TaggedError("HerdrError")<{
 }> {}
 
 export function herdrFailureReason(cause: unknown): string {
-  return cause instanceof HerdrError ? `${cause.message}: ${cause.detail}` : reason(cause);
+  if (!(cause instanceof HerdrError)) return reason(cause);
+  return cause.detail === "" ? cause.message : `${cause.message}: ${cause.detail}`;
 }
 
 type HerdrEffect<A> = Effect.Effect<A, HerdrError, BunServices>;

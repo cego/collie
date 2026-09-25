@@ -800,6 +800,67 @@ onMachineWith("claude")(
   60_000,
 );
 
+test("an agent is given longer than herdr's default to be ready in a checkout it has never opened", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      const argv = (yield* rig.calls()).find((call) => call.cmd === "agent start")?.argv ?? [];
+      // herdr waits 30s by default, and a first start — trust, plugins, MCP servers — takes longer.
+      expect(argv.slice(argv.indexOf("--timeout"), argv.indexOf("--timeout") + 2)).toEqual([
+        "--timeout",
+        "180000",
+      ]);
+    }),
+  ));
+
+test("a pane whose shell is not up yet is started in again, not failed", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      const result = yield* session(started("r1"), {
+        herdr: new FakeHerdr(
+          rig.pluginEnv({
+            FAKE_HERDR_FAIL: `{"agent start":"agent target pane 1-2 is not an available shell"}`,
+            FAKE_HERDR_FAIL_TIMES: "2",
+          }),
+        ),
+      });
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(3);
+    }),
+  ));
+
+test("an agent blocked during startup is waited for, not taken for a failed start", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      // herdr answers agent_not_ready at once and keeps the name: the agent is there,
+      // behind a first-run dialog a human answers.
+      const result = yield* session(started("r1"), {
+        herdr: new FakeHerdr(rig.pluginEnv({ FAKE_HERDR_BLOCK_START: "2" })),
+      });
+      expect(result._tag === "Success" && result.success.note).toBe("done");
+      expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(1);
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain("blocked during startup");
+    }),
+  ));
+
+test("a start herdr refused says what herdr said", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const result = yield* session(started("r1"), {
+        herdr: new FakeHerdr(
+          rig.pluginEnv({ FAKE_HERDR_FAIL: `{"agent start":"claude exited: no API key"}` }),
+        ),
+      });
+      expect(result._tag).toBe("Failure");
+      expect(result._tag === "Failure" ? result.failure.reason : "").toContain(
+        "claude exited: no API key",
+      );
+    }),
+  ));
+
 test("a herdr that cannot say what it has blocks the work rather than starting an agent", () =>
   runEffect(
     Effect.gen(function* () {
