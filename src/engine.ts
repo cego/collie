@@ -99,6 +99,8 @@ import {
   shell as runShell,
 } from "./mr";
 import { Notifier, SOUND, notificationTitle, wanted, type Sound } from "./notify";
+import { Oversight, cardCheckpoints, writeCard, type Watched } from "./oversight";
+import type { Card } from "./cards";
 import { latest, readDispositions, type Disposition } from "./disposition";
 import { openFindingsIn } from "./output";
 import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
@@ -1257,7 +1259,6 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
       Effect.provideService(Run, run),
       Effect.provideService(WorkflowAgents, definition.agents),
       Effect.onExit((exit) =>
-        // A suspension is an interruption, and a question or a stop says so for itself.
         Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
           ? Effect.void
           : ended(run.id, exitStatus(exit, definition.id, workflow.successSchema, error)),
@@ -1268,8 +1269,22 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
   return { workflow, layer };
 };
 
-/** What an ending says to whoever started the Run, in the words the board reads it in. */
+/**
+ * A Run's ending, as the host tells it: the card that closes it, then the toast. A
+ * suspension is not an ending, and a question or a stop says so for itself.
+ */
 const ended = (runId: string, status: typeof RunStatus.Type) =>
+  Effect.serviceOption(Oversight).pipe(
+    Effect.flatMap((found) =>
+      Option.isSome(found)
+        ? found.value.card(runId, { kind: "final", step: "finish", claims: [] })
+        : Effect.void,
+    ),
+    Effect.andThen(told(runId, status)),
+  );
+
+/** What an ending says to whoever started the Run, in the words the board reads it in. */
+const told = (runId: string, status: typeof RunStatus.Type) =>
   Effect.serviceOption(Notifier).pipe(
     Effect.flatMap((found) => {
       if (Option.isNone(found)) return Effect.void;
@@ -1715,7 +1730,7 @@ export const hostLayer = (options: {
   /** Where a toast goes; left out, nothing is raised. */
   readonly toast?: Toast;
 }): Layer.Layer<
-  Host | Notifier,
+  Host | Notifier | Oversight,
   never,
   Store | FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > =>
@@ -2052,7 +2067,58 @@ export const hostLayer = (options: {
             ),
           ),
       });
-      return Context.make(Host, host).pipe(Context.add(Notifier, Notifier.of({ notify })));
+      /** A Run as a card sees it: where it works, and where its records are. */
+      const watched = (runId: string): Effect.Effect<Watched> =>
+        Effect.gen(function* () {
+          const row = yield* store.run(runId);
+          const placed =
+            row === null
+              ? null
+              : placedOf(
+                  row,
+                  yield* decodeStrings(row.options ?? "{}").pipe(
+                    Effect.orElseSucceed((): Record<string, string> => ({})),
+                  ),
+                );
+          const worktree = placed?.worktree?.path ?? null;
+          const env = yield* currentEnv.pipe(Effect.option);
+          return {
+            runId,
+            stateDir: dir,
+            runDir: runDir(dir, runId),
+            evidenceDir: evidenceDir(dir, runId),
+            cwd: worktree ?? placed?.cwd ?? dir,
+            worktree,
+            mr: yield* mergeRequestOf(fs, dir, runId),
+            asking: (yield* store.asked(runId)).some((one) => one.answer === null),
+            socketPath: Option.match(env, { onNone: () => null, onSome: (one) => one.socketPath }),
+          };
+        });
+      /** A card that is something a human could go and try is worth telling them about. */
+      const told = (runId: string, cards: ReadonlyArray<Card>) =>
+        Effect.forEach(cards, (card) =>
+          card.significance === "try-it"
+            ? notify(runId, "slice-ready", card.readiness, { key: card.id })
+            : Effect.void,
+        );
+      const oversight = Oversight.of({
+        card: (runId, what) =>
+          watched(runId).pipe(
+            Effect.flatMap((at) => under(writeCard(at, what))),
+            Effect.flatMap((card) => told(runId, [card])),
+            Effect.ignore,
+          ),
+        checkpoints: (runId, step) =>
+          watched(runId).pipe(
+            Effect.flatMap((at) => under(cardCheckpoints(at, step))),
+            Effect.flatMap((cards) => told(runId, cards)),
+            Effect.ignore,
+          ),
+      });
+      return Context.make(Host, host).pipe(
+        Context.add(Notifier, Notifier.of({ notify })),
+        Context.add(Oversight, oversight),
+      );
     }),
   );
 
@@ -2826,6 +2892,7 @@ export const foundationLayer = (options: {
 }): Layer.Layer<
   | Host
   | Notifier
+  | Oversight
   | Store
   | WorkflowEngine.WorkflowEngine
   | SqlClient.SqlClient

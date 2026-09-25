@@ -25,7 +25,8 @@ import {
 } from "../src/agents";
 import { Children, Run, jsonSchemaFor, withAgents } from "../src/sdk";
 import { asRun, enveloped } from "./support/enveloped";
-import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus } from "../src/engine";
+import { PARKED, controlPath, foundationLayer, loadEntry, pollStatus, runDir } from "../src/engine";
+import { readCards } from "../src/cards";
 import { appendLine, deliveriesOf, readLedger, reconcile } from "../src/steering";
 import { Store } from "../src/store";
 import { readTask, writeTask } from "../src/task";
@@ -280,6 +281,55 @@ test("an agent that is already there is reattached to rather than started a seco
       expect((yield* rig.cmds()).filter((cmd) => cmd === "agent start")).toHaveLength(0);
     }),
   ));
+
+const cardsOf = (runId: string) =>
+  readCards(runDir(dir, runId)).pipe(
+    Effect.orDie,
+    Effect.map((cards) =>
+      cards.map(
+        (card) => `${card.kind}:${card.step}:${card.claims.map((claim) => claim.text).join(",")}`,
+      ),
+    ),
+  );
+
+test("finished work leaves a card of what it wrote, and a ticket it said it finished one of its own", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const progress = `${runDir(dir, "r1")}/steering/progress`;
+      yield* fs.makeDirectory(progress, { recursive: true });
+      yield* fs.writeFileString(
+        `${progress}/01-parse.json`,
+        `{"ticket":"01-parse.md","status":"done","claims":["parses the file"],"at":"2026-09-25T00:00:00Z"}`,
+      );
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"));
+      expect(yield* cardsOf("r1")).toEqual([
+        "slice:review:parses the file",
+        `review:review:wrote ${outputPath("r1")}`,
+      ]);
+    }),
+  ));
+
+test(
+  "work that parked and came back leaves one card, not one per attempt",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([{ verdict: "clean", note: "resumed" }]);
+        yield* interrupted("r1", 1_500, {
+          herdr: busyPane(),
+          patience: { firstMs: 10, maxMs: 20, forMs: 100 },
+        });
+        expect(yield* cardsOf("r1")).toEqual([]);
+        const result = yield* releasedInto("r1");
+        expect(result._tag).toBe("Success");
+        yield* session(started("r1"));
+        expect(yield* cardsOf("r1")).toEqual([`review:review:wrote ${outputPath("r1")}`]);
+      }),
+    ),
+  120_000,
+);
 
 test("work the workflow skips opens no tab and starts no agent", () =>
   runEffect(

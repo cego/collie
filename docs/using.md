@@ -649,8 +649,8 @@ clicked, so it drops the selection.
 
 ### What a card says
 
-A card's header names what it is about: `slice · build · iteration 2 · abc1234 · try-it` —
-the kind, the step, the iteration, the revision it was written against, and how
+A card's header names what it is about: `slice · build · abc1234 · try-it` — the kind,
+the piece of work, the revision it was written against, and how
 [significant](steering.md) it is. Then what was asked for, what changed, and the evidence:
 
 - **verifications** are what somebody actually ran, bound to that revision: `bun test pass`.

@@ -37,6 +37,8 @@ import {
   type CompactionPorts,
 } from "./compaction";
 import { COMPACTION_PORTS } from "./compactors";
+import { kindForRole } from "./cards";
+import { Oversight } from "./oversight";
 import { FALLBACK_DEFAULTS, loadDefaults } from "./config";
 import * as dispatch from "./dispatcher";
 import { bodySections, layers, personaHoles, skillDirs } from "./definitions";
@@ -317,6 +319,7 @@ export const agentWork = <
   Effect.gen(function* () {
     const agents = yield* Agents;
     const host = yield* Host;
+    const oversight = yield* Effect.serviceOption(Oversight);
     const run = yield* Run;
     const runId = run.id;
     const place = yield* host.place(runId);
@@ -410,6 +413,33 @@ export const agentWork = <
       permissions: work.permissions ?? null,
     };
 
+    // Tickets an agent says it finished are carded while it is still working, so a human
+    // sees each one land rather than waiting for the whole piece — and looked for once
+    // more at the end, for one written just before the Output.
+    const watching = <A, E, R>(collecting: Effect.Effect<A, E, R>) => {
+      if (Option.isNone(oversight)) return collecting;
+      const look = oversight.value.checkpoints(work.runId, work.operation);
+      return Effect.race(
+        collecting,
+        look.pipe(
+          Effect.repeat(Schedule.spaced(Duration.millis(agents.pollMs))),
+          Effect.andThen(Effect.never),
+        ),
+      ).pipe(Effect.tap(() => look));
+    };
+    // Its own Activity, so a replay that comes back through here writes no second card.
+    const carded = <A>(value: A) =>
+      Option.isNone(oversight)
+        ? Effect.succeed(value)
+        : Activity.make({
+            name: `${work.operation}.card`,
+            execute: oversight.value.card(work.runId, {
+              kind: kindForRole(role),
+              step: work.operation,
+              claims: [`wrote ${output}`],
+            }),
+          }).pipe(Effect.as(value));
+
     const launched = yield* Activity.make({
       name: `${work.operation}.launch`,
       success: Launched,
@@ -422,7 +452,7 @@ export const agentWork = <
       error: AgentUncertain,
       execute: stoppable(
         parkedWhenStuck(agents.revive(ask), host, work.runId).pipe(
-          Effect.andThen(agents.collect(launched)),
+          Effect.andThen(watching(agents.collect(launched))),
         ),
         host,
         work.runId,
@@ -433,7 +463,7 @@ export const agentWork = <
       return yield* unusable(launched, `wrote nothing to ${output}`);
     }
     const read = decodeOutput(work.output, first, plain);
-    if (read.ok) return read.value;
+    if (read.ok) return yield* carded(read.value);
 
     // The repair is its own Activity, so what a restart finds is a repair that happened
     // rather than an allowance that has come back.
@@ -462,7 +492,7 @@ export const agentWork = <
           error: AgentUncertain,
           execute: stoppable(
             parkedWhenStuck(agents.revive(ask, first), host, work.runId).pipe(
-              Effect.andThen(agents.collect(launched, first)),
+              Effect.andThen(watching(agents.collect(launched, first))),
             ),
             host,
             work.runId,
@@ -473,7 +503,7 @@ export const agentWork = <
       return yield* unusable(launched, `did not write ${output} again: ${read.problem}`);
     }
     const repaired = decodeOutput(work.output, again, plain);
-    if (repaired.ok) return repaired.value;
+    if (repaired.ok) return yield* carded(repaired.value);
     return yield* unusable(launched, `${output} is still unusable: ${repaired.problem}`);
   }).pipe(
     Effect.catchTag("AgentUncertain", (cause) =>

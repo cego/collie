@@ -244,10 +244,11 @@ The narrative is an input the rule ignores. There is no path by which a model ma
 own work look more important by describing it that way, and nothing that writes a card
 takes focus — a card arriving must never move a human off what they are doing.
 
-The implementer writes a **progress checkpoint** per ticket, and `implement` writes one
-itself when a slice lands, whether or not the agent remembered. The board reads them while
-the build is still running. That is the point: a human sees a slice land without waiting an
-hour for the whole build.
+The implementer writes a **progress checkpoint** per ticket, and the host cards each one
+while the agent is still working — a human sees a slice land without waiting an hour for
+the whole build. Every piece of agent work also leaves a card when its Output is accepted,
+so a ticket's build has one whether or not the agent remembered its checkpoint, and a Run
+ends with a `final` card.
 
 The Home board draws them under a task's record, in
 [Cards](using.md#what-a-card-says), where the same discipline is on screen: a claim is
