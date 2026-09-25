@@ -368,8 +368,9 @@ const namingDeps = Effect.fn("operations.namingDeps")(function* (env: PluginEnv)
  * A fresh start gets a workspace of its own, whatever workspace it was launched from:
  * that is what keeps one human's several pieces of work from accumulating beside each
  * other. It is only named here. The host opens it at admission, on the checkout the Run
- * is given, and its shell tab is left where it is, because it is what keeps the
- * workspace open once the Run's agents' panes have closed.
+ * is given, and the Task's first agent takes over the shell it comes with; a stop that
+ * would close the workspace's last pane leaves a shell there first, since herdr drops a
+ * workspace with its last pane.
  *
  * A continuation is given its Task, and goes where that Task already is. Membership is
  * the record, never the label: two Tasks may be called much the same thing, and a

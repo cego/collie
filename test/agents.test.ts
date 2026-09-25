@@ -625,7 +625,9 @@ test(
       Effect.gen(function* () {
         yield* rig.queueOutputs([null, { verdict: "clean", note: "back" }]);
         yield* interrupted("r1", 600);
-        yield* session(halted("r1"));
+        // The halting host recovers the work too, and must not give up its wait while the
+        // agent it is halting is still there to be seen.
+        yield* session(halted("r1"), { collectMs: 30_000 });
 
         // The operator changes the model between the two hosts; the work already has one.
         const result = yield* session(started("r1"), { model: "sonnet" });
@@ -1147,7 +1149,7 @@ test(
           collectMs: 900,
         });
         expect(sent(yield* rig.calls(), "not usable")).toBe(1);
-        yield* session(halted("r1"));
+        yield* session(halted("r1"), { collectMs: 30_000 });
 
         yield* control("stop", "r1", false);
         const result = yield* releasedInto("r1");

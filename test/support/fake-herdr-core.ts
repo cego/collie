@@ -494,7 +494,7 @@ function handle(
           };
         }
         const tab = newTab(flag("--label") ?? String(state.tabs + 1));
-        result = { type: "tab_created", tab, root_pane: newPane(tab.tab_id) };
+        result = { type: "tab_created", tab, root_pane: newPane(tab.tab_id, null, into) };
         break;
       }
       case "tab close": {

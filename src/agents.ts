@@ -55,7 +55,7 @@ import {
   type PermissionMode,
   type Preferences,
 } from "./harness";
-import { Herdr, herdrFailureReason, type HerdrError } from "./herdr";
+import { Herdr, herdrFailureReason, type HerdrError, type PaneInfo } from "./herdr";
 import { agentName, reason, shellQuote, unsafePathComponent } from "./naming";
 import { askRouteTo } from "./handoff";
 import { liveAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
@@ -73,7 +73,7 @@ import {
   type Seat,
 } from "./sdk";
 import { deliveriesOf } from "./steering";
-import { readTask, withTaskLock, writeTask } from "./task";
+import { readTask, taskOfWorkspace, withTaskLock, writeTask } from "./task";
 import { malformedIn, renderTemplate, skillMention, skillsIn } from "./template";
 
 /** A schema that decodes an agent's Output without services of the author's own. */
@@ -1339,6 +1339,35 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       ),
     );
 
+  /**
+   * herdr drops a workspace with its last pane, and a stop never takes a Task's workspace:
+   * where this pane is the last one in its workspace, a shell is opened there first, and
+   * left as the Task's first pane for its next agent to take over.
+   */
+  const keepWorkspace = (paneId: string, panes: ReadonlyArray<PaneInfo>) =>
+    Effect.gen(function* () {
+      const pane = panes.find((one) => one.paneId === paneId);
+      const workspace = pane?.workspaceId ?? null;
+      if (workspace === null) return;
+      if (panes.some((one) => one.workspaceId === workspace && one.paneId !== paneId)) return;
+      const shell = yield* host.herdr.tabCreate({
+        label: "shell",
+        cwd: pane?.cwd ?? host.env.cwd,
+        workspace,
+      });
+      const stateDir = host.env.stateDir;
+      const task = yield* taskOfWorkspace(stateDir, workspace);
+      if (task === null) return;
+      yield* withTaskLock(
+        stateDir,
+        task.id,
+        Effect.gen(function* () {
+          const current = yield* readTask(stateDir, task.id);
+          if (current !== null) yield* writeTask(stateDir, { ...current, root_pane: shell.paneId });
+        }),
+      );
+    }).pipe(Effect.ignore);
+
   const halt = (runId: string) =>
     under(
       Effect.gen(function* () {
@@ -1353,6 +1382,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         }
         const stopped: string[] = [];
         const left: string[] = [];
+        let panes = yield* host.herdr.paneList().pipe(Effect.orElseSucceed(() => []));
         for (const one of listing.success) {
           const ours = launches.findLast((launched) => launched.agent === one.name);
           if (ours === undefined) continue;
@@ -1361,7 +1391,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
             continue;
           }
           if (ours.terminalId !== one.terminalId) continue;
+          yield* keepWorkspace(one.paneId, panes);
           const closed = yield* host.herdr.paneClose(one.paneId).pipe(Effect.result);
+          panes = panes.filter((pane) => pane.paneId !== one.paneId);
           if (closed._tag === "Success") stopped.push(one.name);
           else
             left.push(

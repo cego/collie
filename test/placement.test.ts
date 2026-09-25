@@ -687,6 +687,55 @@ test(
 );
 
 test(
+  "a stop that closes the last pane in a Task's workspace leaves a shell there, and the resume takes it",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        yield* rig.queueOutputs([null, { verdict: "clean" }]);
+        const view = yield* hosted(
+          Effect.gen(function* () {
+            const registry = yield* Registry;
+            const [builds] = yield* loaded(registry, [`${fixtures}/builds.workflow.ts`]);
+            const started = yield* start(builds!, {
+              request: "r1",
+              text: { work: "Add a picker" },
+              taskLabel: "Project | Picker",
+            });
+            if (started._tag === "Failure") return yield* Effect.die(started.failure);
+            const runId = started.success.runId;
+            yield* until(
+              () => rig.cmds().pipe(Effect.orDie),
+              (cmds) => cmds.includes("agent prompt"),
+            );
+            yield* registry.control({ runId, control: "stop", set: true });
+            yield* until(
+              () => registry.view(runId),
+              (seen) => seen?.status.status === "suspended",
+            );
+            yield* registry.control({ runId, control: "stop", set: false });
+            return yield* finished(runId);
+          }),
+        );
+
+        expect(view?.status.status).toBe("complete");
+        const task = yield* readTask(env().stateDir, view?.task ?? "");
+        const calls = yield* rig.calls();
+        // The agent had the workspace's only pane, and herdr drops a workspace with its
+        // last pane: the stop opened a shell there before it closed the agent's.
+        const opened = tabs(calls);
+        expect(opened).toEqual([{ workspace: task?.workspace ?? "", cwd: expect.any(String) }]);
+        const cmds = calls.map((call) => call.cmd);
+        expect(cmds.indexOf("tab create")).toBeLessThan(cmds.indexOf("pane close"));
+        // And the resumed agent took that shell over: that one tab is the only one opened.
+        expect(cmds.filter((cmd) => cmd === "agent start")).toHaveLength(2);
+        expect(cmds.lastIndexOf("agent start")).toBeGreaterThan(cmds.indexOf("tab create"));
+        expect(task?.root_pane ?? null).toBeNull();
+      }),
+    ),
+  120_000,
+);
+
+test(
   "a stop that cannot close the Run's agent says so rather than confirming it",
   () =>
     runEffect(

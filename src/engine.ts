@@ -3394,7 +3394,7 @@ const makeRegistry: (
     const { workspace, rootPane } =
       opened !== null
         ? { workspace: opened.id, rootPane: placed.worktree?.root_pane_id ?? null }
-        : typeof ask.workspace === "string"
+        : ask.workspace !== undefined && ask.workspace !== null
           ? { workspace: ask.workspace, rootPane: null }
           : yield* openWorkspace;
     // A workspace an earlier attempt recorded may already have its Task.
