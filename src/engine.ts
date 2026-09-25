@@ -1560,26 +1560,39 @@ const recordedClaim = (
     Effect.orElseSucceed((): HelleClaim | null => null),
   );
 
-/** Whether a Run's execution has stopped: suspended, finished, or not one this host runs. */
+/** A Run's execution as the host that runs it can stop it and see it stopped. */
 export class Executions extends Context.Service<
   Executions,
-  { readonly stopped: (runId: string) => Effect.Effect<boolean> }
+  {
+    /**
+     * An operator's stop: the Run and every child it started, flagged, woken and their
+     * agents closed. Answers the Runs it reached and the agents that did not close.
+     */
+    readonly stop: (runId: string) => Effect.Effect<{
+      readonly runs: ReadonlyArray<string>;
+      readonly left: ReadonlyArray<string>;
+    }>;
+    /** Whether its execution has stopped: suspended, finished, or not one this host runs. */
+    readonly stopped: (runId: string) => Effect.Effect<boolean>;
+  }
 >()("collie/Executions") {}
 
 /**
- * Takes a claim over from this operator's other Runs that recorded it. Each is stopped,
- * its agents closed, and its execution waited out before its record of the claim is
- * removed, so nothing it left running goes on changing what the claim guards. An agent
- * that will not close, or a Run still in a step when patience runs out, refuses the
- * adoption. Answers the Runs it was taken from.
+ * Takes a claim over from this operator's other Runs that recorded it. Each is stopped
+ * with every child it started, as an operator's stop does; their executions are waited
+ * out; and their agents are closed again, for any that started before they stopped. Only
+ * then is its record of the claim removed, so nothing it left running goes on changing
+ * what the claim guards. An agent that will not close, or a Run still in a step when
+ * patience runs out, refuses the adoption. Answers the Runs it was taken from.
  */
 export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (options: {
   readonly dir: string;
   readonly slug: string;
   readonly to: string;
   readonly runs: ReadonlyArray<string>;
+  readonly stop: typeof Executions.Service.stop;
+  readonly stopped: typeof Executions.Service.stopped;
   readonly halt: (runId: string) => Effect.Effect<AgentsSdk.Halted>;
-  readonly stopped: (runId: string) => Effect.Effect<boolean>;
   readonly patience?: { readonly everyMs: number; readonly forMs: number };
 }) {
   const fs = yield* FileSystem.FileSystem;
@@ -1589,22 +1602,26 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
     if (runId === options.to) continue;
     const file = claimPath(options.dir, runId);
     if ((yield* recordedClaim(file))?.slug !== options.slug) continue;
-    yield* fs.writeFileString(controlPath(options.dir, STOP, runId), "").pipe(Effect.orDie);
-    const { left } = yield* options.halt(runId);
-    if (left.length > 0) {
-      return yield* new HelleError({
+    const refused = (left: ReadonlyArray<string>) =>
+      new HelleError({
         message: `the claim on ${options.slug} is ${runId}'s, and its agents did not all close (${left.join("; ")}); close them, then resume ${options.to}`,
       });
-    }
+    const tree = yield* options.stop(runId);
+    if (tree.left.length > 0) return yield* refused(tree.left);
     const deadline = (yield* Clock.currentTimeMillis) + patience.forMs;
-    while (!(yield* options.stopped(runId))) {
-      if ((yield* Clock.currentTimeMillis) >= deadline) {
-        return yield* new HelleError({
-          message: `the claim on ${options.slug} is ${runId}'s, and ${runId} is still running a step its stop has not reached; resume ${options.to} once ${runId} has stopped`,
-        });
+    for (const one of tree.runs) {
+      while (!(yield* options.stopped(one))) {
+        if ((yield* Clock.currentTimeMillis) >= deadline) {
+          return yield* new HelleError({
+            message: `the claim on ${options.slug} is ${runId}'s, and ${one} is still running a step its stop has not reached; resume ${options.to} once ${one} has stopped`,
+          });
+        }
+        yield* Effect.sleep(Duration.millis(patience.everyMs));
       }
-      yield* Effect.sleep(Duration.millis(patience.everyMs));
     }
+    const late: string[] = [];
+    for (const one of tree.runs) late.push(...(yield* options.halt(one)).left);
+    if (late.length > 0) return yield* refused(late);
     yield* fs.remove(file, { force: true }).pipe(Effect.orDie);
     yield* fs
       .writeFileString(
@@ -1835,6 +1852,10 @@ export const hostLayer = (options: {
                       slug: claim.slug,
                       to: asked.runId,
                       runs: (yield* store.runs).map((row) => row.run),
+                      stop: (runId) =>
+                        Option.isSome(executions)
+                          ? executions.value.stop(runId)
+                          : Effect.succeed({ runs: [runId], left: ["nothing here can stop it"] }),
                       halt: (runId) =>
                         Option.isSome(agents)
                           ? agents.value.halt(runId)
@@ -2995,12 +3016,8 @@ const makeRegistry: (
       }),
     );
 
-  /**
-   * Another workflow, as part of this one. Selected in the parent's own project and
-   * decoded against the child's own schema before a row exists, so input the child will
-   * not take is the parent's failure rather than a half-made Run.
-   */
   const executions: typeof Executions.Service = {
+    stop: (runId) => stopTree(runId).pipe(Effect.provideContext(hostServices)),
     stopped: (runId) =>
       routed(runId).pipe(
         Effect.flatMap((found) =>
@@ -3012,6 +3029,11 @@ const makeRegistry: (
       ),
   };
 
+  /**
+   * Another workflow, as part of this one. Selected in the parent's own project and
+   * decoded against the child's own schema before a row exists, so input the child will
+   * not take is the parent's failure rather than a half-made Run.
+   */
   const children: ChildrenApi = {
     start: (ask: ChildAsk) => lending(admitChild(ask)),
     result: (child: ChildRun) => lending(runChild(child)),
@@ -3413,6 +3435,40 @@ const makeRegistry: (
     return { generation, execution: row.execution };
   });
 
+  /** Sets a control, and a stop over every child the Run started, then wakes what must look again. */
+  const applyControl = Effect.fn("Engine.applyControl")(function* (
+    runId: string,
+    control: string,
+    set: boolean,
+  ) {
+    // A stop reaches the children a Run started: they are its work too.
+    const runs = control === STOP ? [runId, ...descendantsOf(yield* store.runs, runId)] : [runId];
+    // Written before anything is woken, so a run that wakes up never finds the request
+    // that stopped it still there.
+    for (const one of runs) yield* setControl(one, control, set);
+    // A file, not a row: nothing tells a watcher about it unless this does.
+    yield* store.announce;
+    // A hold is read at the next boundary and needs no waking. Everything else does: a
+    // run parked on its question has nothing that would make it look again.
+    if (!(control === HOLD && set)) {
+      for (const one of runs) {
+        const found = yield* routed(one).pipe(Effect.option);
+        if (Option.isSome(found)) yield* wake(found.value);
+      }
+    }
+    return runs;
+  });
+
+  /** A stop, and the agents of every Run it reached closed: the Runs, and what did not close. */
+  const stopTree = Effect.fn("Engine.stopTree")(function* (runId: string) {
+    const runs = yield* applyControl(runId, STOP, true);
+    // Closing their panes is what stops the agents; the Run only stops looking.
+    const agents = yield* Agents;
+    const left: string[] = [];
+    for (const one of runs) left.push(...(yield* agents.halt(one)).left);
+    return { runs, left };
+  });
+
   // One registration at a time. Two clients starting different modules of one id at the
   // same moment would otherwise mint one name for both and stage over each other.
   const registering = yield* Semaphore.make(1);
@@ -3772,31 +3828,11 @@ const makeRegistry: (
       readonly control: string;
       readonly set: boolean;
     }) {
-      // A stop reaches the children a Run started: they are its work too.
-      const runs =
-        options.control === STOP
-          ? [options.runId, ...descendantsOf(yield* store.runs, options.runId)]
-          : [options.runId];
-      // Written before anything is woken, so a run that wakes up never finds the
-      // request that stopped it still there.
-      for (const runId of runs) yield* setControl(runId, options.control, options.set);
-      // A file, not a row: nothing tells a watcher about it unless this does.
-      yield* store.announce;
       const found = yield* routed(options.runId).pipe(Effect.result);
-      // A hold is read at the next boundary and needs no waking. Everything else does:
-      // a run parked on its question has nothing that would make it look again.
-      if (!(options.control === HOLD && options.set)) {
-        for (const runId of runs) {
-          const one = yield* routed(runId).pipe(Effect.option);
-          if (Option.isSome(one)) yield* wake(one.value);
-        }
-      }
-      // Closing their panes is what stops the agents; the Run only stops looking.
-      const left: string[] = [];
-      if (options.control === STOP && options.set) {
-        const agents = yield* Agents;
-        for (const runId of runs) left.push(...(yield* agents.halt(runId)).left);
-      }
+      const left =
+        options.control === STOP && options.set
+          ? (yield* stopTree(options.runId)).left
+          : yield* applyControl(options.runId, options.control, options.set).pipe(Effect.as([]));
       const recorded = { runId: options.runId, control: options.control, set: options.set, left };
       if (found._tag === "Failure") {
         return { ...recorded, applied: false, detail: found.failure.reason };

@@ -232,9 +232,9 @@ with nothing merged. A run that fails keeps the claim, since what it guards may 
 half-done, and so does a stage that was not proved: nothing shows stage is back on its
 stable release. The run says `claim retained; recovery required` beside where it failed, and
 **Recover the retained claim** starts a renovation of the same repository that takes the
-claim over, stopping the failed run, closing its agents and waiting for it to stop first.
-An agent that will not close, or a run still in the middle of a step, stops the takeover
-rather than being left to work on.
+claim over, first stopping the failed run and every child it started as `run stop` does,
+waiting for them to stop, and closing their agents again. An agent that will not close, or
+a run still in the middle of a step, stops the takeover rather than being left to work on.
 
 **It asks you** at the points where asking is the work: a breaking or substantial
 migration, an update that cannot be merged safely, a bounded retry that made no progress,
