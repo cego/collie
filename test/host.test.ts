@@ -332,10 +332,11 @@ test(
           ? [binary.value]
           : [process.execPath, `${root}src/main.ts`];
         const [executable = "bun", ...prefix] = command;
-        // What it lives no longer than: a process of the test's own, stopped at will.
-        const outlived = yield* spawner.spawn(
-          ChildProcess.make("sleep", ["60"], { stdout: "ignore", stderr: "ignore" }),
-        );
+        // What it lives no longer than: a process stopped at will, and nobody's child here —
+        // a child of this test would linger as a zombie once killed, which a signal still
+        // reaches, where a test process that exits is reaped by whoever started it.
+        const detached = Bun.spawnSync(["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"]);
+        const outlived = Number(detached.stdout.toString().trim());
         const hostFor = (state: string, watch: string) =>
           spawner.spawn(
             ChildProcess.make(executable, [...prefix, "host", "--dir", state], {
@@ -355,24 +356,23 @@ test(
             () => ownerOf(state),
             (owner) => owner !== null,
           );
-        const gone = (pid: number) =>
-          until(
-            () => signalProcess(pid),
-            (alive) => !alive,
-          );
+        // Its exit, as the handle sees it: a signal would still reach it as a zombie until
+        // it is reaped, which is not the host still serving.
+        const gone = (host: { readonly exitCode: Effect.Effect<unknown, unknown> }) =>
+          host.exitCode.pipe(Effect.timeout("20 seconds"), Effect.orDie);
 
         const watching = (yield* workspace("collie-host-watched-")).state;
-        const watcher = yield* hostFor(watching, String(outlived.pid));
+        const watcher = yield* hostFor(watching, String(outlived));
         yield* owned(watching);
-        yield* outlived.kill();
-        yield* gone(watcher.pid);
+        yield* signalProcess(outlived, "SIGKILL");
+        yield* gone(watcher);
         expect(yield* ownerOf(watching)).toBeNull();
 
         const removed = (yield* workspace("collie-host-removed-")).state;
         const orphan = yield* hostFor(removed, "");
         yield* owned(removed);
         yield* fs.remove(removed, { recursive: true });
-        yield* gone(orphan.pid);
+        yield* gone(orphan);
       }),
     ),
   120_000,
