@@ -63,6 +63,7 @@ interface RigEnv {
   HERDR_SOCKET_PATH: string;
   HERDR_PLUGIN_ROOT: string;
   COLLIE_USER_DIR: string;
+  COLLIE_CLAUDE_MANAGED_DIR: string;
   HERDR_PLUGIN_STATE_DIR: string;
   HERDR_WORKSPACE_ID: string;
   HERDR_TAB_ID: string;
@@ -554,6 +555,7 @@ export class Rig {
       HERDR_SOCKET_PATH: this.socketPath,
       HERDR_PLUGIN_ROOT: this.baselineDir,
       COLLIE_USER_DIR: this.userDir,
+      COLLIE_CLAUDE_MANAGED_DIR: `${this.root}/claude-managed`,
       HERDR_PLUGIN_STATE_DIR: this.stateDir,
       HERDR_WORKSPACE_ID: "1",
       HERDR_TAB_ID: "1:1",

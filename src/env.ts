@@ -26,6 +26,8 @@ export interface PluginEnv {
    * shape a project's `.collie/` has.
    */
   userDir: string;
+  /** Where Claude Code's managed settings live: an organisation's, beyond any flag. */
+  claudeManagedDir: string;
   stateDir: string;
   binPath: string;
   socketPath: string | null;
@@ -113,6 +115,11 @@ export function readEnv(
     pluginRoot,
     home,
     userDir: first(env, "COLLIE_USER_DIR") ?? `${pluginRoot}/user`,
+    claudeManagedDir:
+      first(env, "COLLIE_CLAUDE_MANAGED_DIR") ??
+      (process.platform === "darwin"
+        ? "/Library/Application Support/ClaudeCode"
+        : "/etc/claude-code"),
     stateDir:
       first(env, "HERDR_PLUGIN_STATE_DIR") ?? `${home}/.local/state/herdr/plugins/${PLUGIN_ID}`,
     binPath: first(env, "HERDR_BIN_PATH") ?? "herdr",
@@ -165,6 +172,7 @@ const environmentKeys = [
   "HERDR_CONFIG_PATH",
   "HERDR_PLUGIN_ROOT",
   "COLLIE_USER_DIR",
+  "COLLIE_CLAUDE_MANAGED_DIR",
   "HERDR_PLUGIN_STATE_DIR",
   "HERDR_PLUGIN_ACTION_ID",
   "HERDR_PLUGIN_ENTRYPOINT_ID",

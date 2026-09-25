@@ -1199,32 +1199,36 @@ for you — the dialog shuffles its options between runs, so there is no safe ke
 Most harnesses ask before running a tool call they have no rule for, and they ask in the
 agent's own pane — the one place a Run nobody is watching cannot answer. So agents start in
 their harness's auto mode, where the harness reviews each call itself instead of asking,
-and `permissions` in `config.json` says so. Collie never starts an agent past its
-harness's prompts: a bypass is what an organisation's managed settings are most likely to
-forbid, and the review is the one check left between an agent and your checkout. (pi and
-opencode have no auto mode, so both values start them the same way.)
+and `permissions` in `config.json` says so. (pi has no tool-approval prompt, so every value
+starts it the same way; opencode has no auto mode, so `auto` starts it as `harness` does.)
 
-| Value     | What a Run does                                                                       |
-| --------- | ------------------------------------------------------------------------------------- |
-| `auto`    | Default. Each agent is started in its harness's auto mode, where it has one.          |
-| `harness` | No switch. The harness's own settings decide, and a prompt waits in the agent's pane. |
+| Value     | What a Run does                                                                              |
+| --------- | -------------------------------------------------------------------------------------------- |
+| `auto`    | Default. Each agent is started in its harness's auto mode, where it has one.                 |
+| `bypass`  | Opt-in. Each agent is started with its harness's switch past every prompt, where it has one. |
+| `harness` | No switch. The harness's own settings decide, and a prompt waits in the agent's pane.        |
+
+Where Claude Code's managed settings — your organisation's, which no flag gets past —
+disable bypass mode (`permissions.disableBypassPermissionsMode` in
+`/etc/claude-code/managed-settings.json` or a file in `managed-settings.d/` beside it,
+`/Library/Application Support/ClaudeCode/` on macOS), a claude agent asked for `bypass` is
+started in auto mode instead, and the run's `agents.log` says so.
 
 Know what `auto` buys: the agents run commands, edit files and install things with nobody
 asking you, inside the checkout the Run is working in, and the harness's review is the
-only check on them. `implement` and
+only check on them. `bypass` takes that check away too. `implement` and
 `renovate` are the workflows Collie gives a checkout of their own, so their agents work in
 a worktree rather than in yours, and what `implement` does is reviewed before it becomes a
 merge request. Every other workflow — `plan`, `review`, a standalone `architecture` — runs its agents **in the
 checkout you started them from**, with your uncommitted work in it and neither of those
-fences in the way. That is the case to weigh before leaving the default on.
+fences in the way. That is the case to weigh before leaving the default on, and more so before choosing `bypass`.
 
 Set `permissions: harness` in Settings if you would rather answer the prompts yourself, or
 `permissions: harness` on a single operation (see
 [authoring](authoring.md#harnesses-models-and-effort)) for one that should ask.
 
-An unknown value is refused by Settings. One hand-edited into `config.json` — including
-`bypass`, which Collie no longer has — still opens in Settings, where you would put it
-right, and starts agents in `auto` until you do.
+An unknown value is refused by Settings. One hand-edited into `config.json` still opens in
+Settings, where you would put it right, and starts agents in `auto` until you do.
 
 Trust is unaffected and still answered first: it decides whether the harness will work in
 the directory at all, and permissions only decide what it asks about once it does.

@@ -500,6 +500,10 @@ const launchArgs = (calls: ReadonlyArray<Call>) => {
   return at === -1 ? [] : argv.slice(at + 1);
 };
 
+/** The permission mode the agent was started in, as the launch passed it to claude. */
+const permissionModeOf = (args: ReadonlyArray<string>) =>
+  args[args.indexOf("--permission-mode") + 1];
+
 test("the agent is started on the operator's harness, model and permissions, with the role as its persona", () =>
   runEffect(
     Effect.gen(function* () {
@@ -508,11 +512,39 @@ test("the agent is started on the operator's harness, model and permissions, wit
 
       const args = launchArgs(yield* rig.calls());
       expect(args.slice(0, 2)).toEqual(["--model", "opus"]);
-      expect(
-        args.slice(args.indexOf("--permission-mode"), args.indexOf("--permission-mode") + 2),
-      ).toEqual(["--permission-mode", "auto"]);
+      expect(permissionModeOf(args)).toBe("auto");
       const persona = args[args.indexOf("--append-system-prompt-file") + 1] ?? "";
       expect(yield* read(persona)).toContain("You are the reviewer.");
+    }),
+  ));
+
+test("an operator who opts into bypass has the agent started past its prompts", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { permissions: "bypass" });
+
+      expect(permissionModeOf(launchArgs(yield* rig.calls()))).toBe("bypassPermissions");
+    }),
+  ));
+
+test("bypass falls back to auto mode where Claude Code's managed settings forbid it, and says so", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = rig.pluginEnv().claudeManagedDir;
+      yield* fs.makeDirectory(managed, { recursive: true });
+      yield* fs.writeFileString(
+        `${managed}/managed-settings.json`,
+        `{ "permissions": { "disableBypassPermissionsMode": "disable" } }`,
+      );
+      yield* rig.queueOutputs([{ verdict: "clean", note: "done" }]);
+      yield* session(started("r1"), { permissions: "bypass" });
+
+      expect(permissionModeOf(launchArgs(yield* rig.calls()))).toBe("auto");
+      expect(yield* read(`${dir}/agents/r1/agents.log`)).toContain(
+        "permissions auto: claude's managed settings forbid bypass",
+      );
     }),
   ));
 

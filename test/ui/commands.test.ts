@@ -115,7 +115,7 @@ effectTest(
     // that would be used to put it right.
     const note = yield* set("permissions", "yolo");
 
-    expect(note).toContain("auto, harness");
+    expect(note).toContain("auto, bypass, harness");
     expect(yield* readConfig(rig.pluginEnv().userDir)).not.toHaveProperty("permissions");
     expect(yield* set("permissions", "harness")).toContain("harness");
     expect((yield* loadDefaults(rig.pluginEnv().userDir)).permissions).toBe("harness");

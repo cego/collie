@@ -1,6 +1,8 @@
 // How to start each supported agent CLI, pass it a model, and inject a Persona.
 // Personas are injected, never installed as harness-native config (CONTEXT.md, Persona).
 
+import { Effect, FileSystem, Option, Schema } from "effect";
+import type { PluginEnv } from "./env";
 import { isString } from "./schema";
 import { claudeTrust, type Trust } from "./trust";
 import type { YamlValue } from "./yaml";
@@ -11,13 +13,13 @@ import type { YamlValue } from "./yaml";
 export const DEFAULT_MODEL = "default";
 
 /**
- * Who decides whether a tool call runs: the harness's own automatic review (`auto`), or
- * the harness's prompt in the agent's own pane (`harness`). `auto` is the default because
- * a prompt nobody is watching stops the Run instead of protecting it. Never a bypass: an
- * organisation's managed settings may forbid one, and the review is what stands between
- * an agent and the checkout it works in.
+ * Who decides whether a tool call runs: the harness's own automatic review (`auto`), no
+ * one (`bypass`), or the harness's prompt in the agent's own pane (`harness`). `auto` is
+ * the default because a prompt nobody is watching stops the Run instead of protecting it,
+ * and the review is what stands between an agent and the checkout it works in; `bypass`
+ * is an operator's to opt into.
  */
-export const PERMISSION_MODES = ["auto", "harness"] as const;
+export const PERMISSION_MODES = ["auto", "bypass", "harness"] as const;
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
@@ -39,6 +41,43 @@ export function permissionsAsWritten(value: YamlValue | undefined): string | und
   return isString(value) ? value : JSON.stringify(value);
 }
 
+const ManagedSettingsJson = Schema.fromJsonString(
+  Schema.Struct({
+    permissions: Schema.optional(
+      Schema.Struct({ disableBypassPermissionsMode: Schema.optional(Schema.String) }),
+    ),
+  }),
+);
+
+/**
+ * Whether Claude Code's managed settings — an organisation's, which no flag overrides —
+ * disable its bypass mode, in the file itself or any file in its drop-in directory.
+ */
+export const claudeForbidsBypass = Effect.fn("Harness.claudeForbidsBypass")(function* (
+  dir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const dropIns = yield* fs
+    .readDirectory(`${dir}/managed-settings.d`)
+    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+  const files = [
+    `${dir}/managed-settings.json`,
+    ...dropIns
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => `${dir}/managed-settings.d/${name}`),
+  ];
+  for (const file of files) {
+    const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+    const settings = Schema.decodeUnknownOption(ManagedSettingsJson)(text);
+    if (
+      Option.isSome(settings) &&
+      settings.value.permissions?.disableBypassPermissionsMode === "disable"
+    )
+      return true;
+  }
+  return false;
+});
+
 export interface HarnessAdapter {
   id: string;
   /** herdr agent kind, i.e. the canonical executable. */
@@ -54,10 +93,18 @@ export interface HarnessAdapter {
   /** Present when the harness lets a Step ask for a reasoning effort level. */
   effortArgs?(effort: string): string[];
   /**
-   * How this harness is told to review its own tool calls rather than ask. Absent where
-   * it has no such review, so `auto` and `harness` start it identically.
+   * How this harness is told to review its own tool calls rather than ask (`auto`), or to
+   * run them unasked (`bypass`). A mode left out starts it as `harness` does.
    */
-  permissionArgs?(): string[];
+  permissionArgs?: {
+    readonly auto?: ReadonlyArray<string>;
+    readonly bypass?: ReadonlyArray<string>;
+  };
+  /**
+   * Present where an organisation's managed settings can forbid the bypass switch, which
+   * no flag overrides. A bypass they forbid is started in auto mode instead.
+   */
+  bypassForbidden?(env: PluginEnv): Effect.Effect<boolean, never, FileSystem.FileSystem>;
   /** Present when the harness asks before it will work in a directory. */
   trust?(home: string, backupDir: string): Trust;
   /**
@@ -93,7 +140,11 @@ export const HARNESSES: Harnesses = {
     defaultModel: "opus",
     personaArgs: (file) => ["--append-system-prompt-file", file],
     effortArgs: (effort) => ["--effort", effort],
-    permissionArgs: () => ["--permission-mode", "auto"],
+    permissionArgs: {
+      auto: ["--permission-mode", "auto"],
+      bypass: ["--permission-mode", "bypassPermissions"],
+    },
+    bypassForbidden: (env) => claudeForbidsBypass(env.claudeManagedDir),
     trust: claudeTrust,
     models: ["fable", "opus", "sonnet", "haiku", "opusplan"],
     modelPattern: /^claude-[a-z0-9.-]+$/,
@@ -104,7 +155,10 @@ export const HARNESSES: Harnesses = {
     kind: "codex",
     skillCommand: (name) => `the ${JSON.stringify(name)} skill`,
     modelArgs: (model) => ["-m", model],
-    permissionArgs: () => ["--approve-for-me"],
+    permissionArgs: {
+      auto: ["--approve-for-me"],
+      bypass: ["--dangerously-bypass-approvals-and-sandbox"],
+    },
     models: ["gpt-5-codex", "gpt-5", "gpt-5-mini"],
     modelPattern: /^(?:gpt|o)[0-9][a-z0-9.-]*$/,
   },
@@ -128,7 +182,8 @@ export const HARNESSES: Harnesses = {
     kind: "opencode",
     skillCommand: (name) => `the ${JSON.stringify(name)} skill`,
     modelArgs: (model) => ["--model", model],
-    // No permissionArgs: its `--auto` approves every call rather than reviewing it.
+    // No auto mode: its `--auto` approves every call rather than reviewing it.
+    permissionArgs: { bypass: ["--auto"] },
     // opencode models are provider-qualified, so the shape is the check.
     models: [],
     modelPattern: /^[a-z0-9-]+\/[A-Za-z0-9._:-]+$/,
@@ -170,7 +225,7 @@ export function startArgs(
     ...(selectedModel ? harness.modelArgs(selectedModel) : []),
     ...(effort ? (harness.effortArgs?.(effort) ?? []) : []),
     ...(harness.personaArgs?.(personaFile) ?? []),
-    ...(permissions === "auto" ? (harness.permissionArgs?.() ?? []) : []),
+    ...(permissions === "harness" ? [] : (harness.permissionArgs?.[permissions] ?? [])),
   ];
 }
 

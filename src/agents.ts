@@ -981,7 +981,12 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
   const start = Effect.fn("Agents.start")(function* (ask: AgentAsk, agent: string) {
     const adapter = adapterFor(ask.harness ?? host.harness);
     const wanted = ask.permissions ?? undefined;
-    const permissions = isPermissionMode(wanted) ? wanted : host.permissions;
+    const asked = isPermissionMode(wanted) ? wanted : host.permissions;
+    const forbidden =
+      asked === "bypass" && adapter.bypassForbidden !== undefined
+        ? yield* adapter.bypassForbidden(host.env)
+        : false;
+    const permissions = forbidden ? "auto" : asked;
     const persona = `${dirFor(ask.runId)}/${ask.operation}.persona.md`;
     yield* write(persona, `${yield* personaOf(ask.role)}\n`);
     return yield* withControlLock(
@@ -1015,7 +1020,7 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         });
         yield* log(
           ask.runId,
-          `${agent}: ${adapter.id} in ${tab.paneId}, permissions ${permissions}`,
+          `${agent}: ${adapter.id} in ${tab.paneId}, permissions ${permissions}${forbidden ? `: ${adapter.id}'s managed settings forbid bypass` : ""}`,
         );
         const found = yield* entryFor(ask, agent, { paneId: tab.paneId, workspaceId: workspace });
         if (found.entry === null) return undefined;

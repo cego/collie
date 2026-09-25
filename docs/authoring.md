@@ -168,12 +168,12 @@ first, then `~/.agents/skills`.
 
 ## Harnesses, models and effort
 
-| Harness    | Model flag                 | Persona                                                  | Effort                                                   | Auto mode                                          |
-| ---------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | -------------------------------------------------- |
-| `claude`   | `--model`                  | `--append-system-prompt-file`                            | `--effort low\|medium\|high\|xhigh\|max`                 | `--permission-mode auto`                           |
-| `codex`    | `-m`                       | prompt prefix                                            | —                                                        | `--approve-for-me`                                 |
-| `pi`       | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` | none — pi has no tool-approval prompt              |
-| `opencode` | `--model <provider/model>` | prompt prefix                                            | —                                                        | none — its `--auto` approves every call unreviewed |
+| Harness    | Model flag                 | Persona                                                  | Effort                                                   | Auto mode                | Bypass                                       |
+| ---------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------- | ------------------------ | -------------------------------------------- |
+| `claude`   | `--model`                  | `--append-system-prompt-file`                            | `--effort low\|medium\|high\|xhigh\|max`                 | `--permission-mode auto` | `--permission-mode bypassPermissions`        |
+| `codex`    | `-m`                       | prompt prefix                                            | —                                                        | `--approve-for-me`       | `--dangerously-bypass-approvals-and-sandbox` |
+| `pi`       | `--model <provider/model>` | `--append-system-prompt` (reads the persona file's path) | `--thinking off\|minimal\|low\|medium\|high\|xhigh\|max` | none                     | none                                         |
+| `opencode` | `--model <provider/model>` | prompt prefix                                            | —                                                        | none                     | `--auto`                                     |
 
 `claude` accepts `fable`, `opus`, `sonnet`, `haiku`, `opusplan` and any `claude-…` id. `codex`
 accepts `gpt-5-codex`, `gpt-5`, `gpt-5-mini` and any `gpt…`/`o…` id. `pi` and `opencode`
@@ -192,11 +192,13 @@ that switches harness keeps nothing chosen for the one below, and a combination 
 does not take is refused rather than replaced. [The SDK](sdk.md#which-agent-does-the-work)
 has the whole of it.
 
-The auto mode is passed unless `permissions` says `harness`, in your `config.json` or on
-the operation; see [Permissions](using.md#permissions-auto-by-default) for what it means.
-pi's column says none because it does not ask before a tool call — its `--approve` only
-trusts project-local files — and opencode's because its one switch is a bypass, which
-Collie never passes. Both start the same under `auto` and `harness`.
+The auto mode is passed unless `permissions` says `bypass` or `harness`, in your
+`config.json` or on the operation; see [Permissions](using.md#permissions-auto-by-default)
+for what each means. pi says none because it does not ask before a tool call — its
+`--approve` only trusts project-local files. opencode has no auto mode: its `--auto`
+approves every call unreviewed, so it is the bypass, and under `auto` opencode starts as
+it does under `harness`. A claude bypass that Claude Code's managed settings forbid is
+started in auto mode instead.
 
 A module asks for one piece of work at a time and says what that piece needs, so an
 operation that should ask is the one that asks for `permissions: "harness"`.

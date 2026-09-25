@@ -275,7 +275,8 @@ watches a prompted agent straight away rather than keeping a readiness wait of i
 
 `env.ts` is the plugin environment herdr provides — state directory, socket path, plugin
 root — and the user's own layer, `<plugin root>/user`, which `COLLIE_USER_DIR` overrides
-for a test or an embedder. `HERDR_PLUGIN_ROOT` is what pins the baseline definitions to the
+for a test or an embedder. `COLLIE_CLAUDE_MANAGED_DIR` does the same for where Claude Code's
+managed settings are read, so a test's bypass does not depend on the machine's. `HERDR_PLUGIN_ROOT` is what pins the baseline definitions to the
 installation the runner came from; the `collie` on PATH is a two-line shim that sets it.
 Without the pin the compiled runner falls back to its own installation (`process.execPath`
 is the binary when bun runs it from `/$bunfs/`), so a `bin/collie` started from another
