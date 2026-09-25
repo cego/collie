@@ -233,6 +233,20 @@ export interface AgentsApi {
     readonly agent?: string;
     readonly mode?: DeliveryMode;
   }) => Effect.Effect<Steered>;
+  /** The agent this Run launched last, which is whose work a correction is about; null for none. */
+  readonly newest: (runId: string) => Effect.Effect<Launched | null>;
+  /** One correction Collie decided on, to that agent, through the one sender; whether it went. */
+  readonly correct: (
+    runId: string,
+    correction: {
+      readonly text: string;
+      readonly constraint: string;
+      readonly requestId: string;
+      readonly attempt: number;
+      readonly intentVersion: number;
+      readonly mode: DeliveryMode;
+    },
+  ) => Effect.Effect<boolean>;
 }
 
 export type DeliveryMode = "boundary" | "now" | "interrupt";
@@ -870,10 +884,14 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     about: Launched,
     text: string,
     delivery: {
-      readonly kind: "step" | "repair" | "steer";
+      readonly kind: "step" | "repair" | "steer" | "correction";
       /** What this delivery is about; the ledger's causal key is built from it. */
       readonly ref: string;
       readonly mode?: DeliveryMode;
+      /** A correction is about one version of the Intent, and counts its attempts. */
+      readonly intentVersion?: number;
+      readonly attempt?: number;
+      readonly requestId?: string;
     },
   ) {
     const found = yield* entryFor(about, about.agent, null);
@@ -884,15 +902,16 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
       harness: adapterFor(about.harness).id,
       cause: { kind: delivery.kind, ref: delivery.ref },
       mode: delivery.mode ?? "boundary",
-      // A Run of a module has no Intent, so every delivery about one piece of work
-      // shares a causal key: that is what makes the second copy refusable.
-      intentVersion: 0,
-      attempt: 1,
-      requestId: `${about.runId}-${delivery.ref}-${delivery.kind}`,
+      // Work, a repair and a steer share a causal key per thing they are about, which is
+      // what makes the second copy refusable; a correction's is its constraint's.
+      intentVersion: delivery.intentVersion ?? 0,
+      attempt: delivery.attempt ?? 1,
+      requestId: delivery.requestId ?? `${about.runId}-${delivery.ref}-${delivery.kind}`,
     };
     // A human's own words go out once: they are waiting on the answer, and can say it again.
+    // So does a correction: another attempt at one is Collie's to decide, not a retry's.
     const outcome = yield* (
-      delivery.kind === "steer"
+      delivery.kind === "steer" || delivery.kind === "correction"
         ? dispatch.transaction(deps, entry, (channel) => channel.submit(text, draft))
         : dispatch.submitPatiently(deps, entry, text, draft, host.patience)
     ).pipe(Effect.catch((cause) => Effect.succeed(undeliverable(cause))));
@@ -1369,6 +1388,32 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
     collect,
     repair,
     steer,
+    newest: (runId) =>
+      under(launchesOf(runId).pipe(Effect.map((launches) => launches.at(-1) ?? null))).pipe(
+        Effect.orElseSucceed(() => null),
+      ),
+    correct: (runId, correction) =>
+      under(
+        Effect.gen(function* () {
+          const launched = (yield* launchesOf(runId)).at(-1);
+          if (launched === undefined) return false;
+          const sent = yield* deliver(launched, correction.text, {
+            kind: "correction",
+            ref: correction.constraint,
+            mode: correction.mode,
+            intentVersion: correction.intentVersion,
+            attempt: correction.attempt,
+            requestId: correction.requestId,
+          });
+          yield* log(
+            runId,
+            sent.sent
+              ? `${launched.agent}: corrected about ${correction.constraint}`
+              : `${launched.agent}: could not be corrected about ${correction.constraint} (${sent.why})`,
+          );
+          return sent.sent;
+        }),
+      ).pipe(Effect.orElseSucceed(() => false)),
   };
 };
 

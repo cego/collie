@@ -17,7 +17,7 @@ import { openReports, readDrift } from "./drift";
 import { capabilitiesOf } from "./steering-caps";
 import { DriftReportSchema, type DriftReport } from "./evaluator";
 import { readIntent } from "./intent";
-import { readJournal } from "./journal";
+import { appendJournal, readJournal } from "./journal";
 import {
   newsPath,
   pending as pendingNews,
@@ -89,6 +89,16 @@ export const pendingReportsPath = Effect.fn("Live.pendingReportsPath")(function*
 ) {
   const path = yield* Path.Path;
   return path.join(yield* herdDir(stateDir, herdKey), "pending-reports", `${run}.jsonl`);
+});
+
+/** A report about a Run that had already ended when it was judged, to be said on the board. */
+export const appendPendingReport = Effect.fn("Live.appendPendingReport")(function* (
+  stateDir: string,
+  herdKey: string,
+  run: string,
+  report: DriftReport,
+) {
+  yield* appendJournal(yield* pendingReportsPath(stateDir, herdKey, run), DriftJson, report);
 });
 
 export const readPendingReports = Effect.fn("Live.readPendingReports")(function* (

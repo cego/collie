@@ -99,7 +99,18 @@ import {
   shell as runShell,
 } from "./mr";
 import { Notifier, SOUND, notificationTitle, wanted, type Sound } from "./notify";
-import { Oversight, cardCheckpoints, checkDrift, writeCard, type Watched } from "./oversight";
+import {
+  Oversight,
+  cardCheckpoints,
+  checkDrift,
+  grantedToRun,
+  said,
+  settleAtFinish,
+  standForElection,
+  writeCard,
+  type Correcting,
+  type Watched,
+} from "./oversight";
 import { evaluationDeps } from "./evaluator";
 import { budgetPath } from "./steering";
 import type { JudgementDeps } from "./drift";
@@ -1282,23 +1293,12 @@ const registrationOf = (definition: WorkflowDefinition, name: string): Registrat
 };
 
 /**
- * A Run's ending, as the host tells it: its work judged against its Intent one last time,
- * the card that closes it, then the toast. A suspension is not an ending, and a question
- * or a stop says so for itself.
+ * A Run's ending, as the host tells it: what Oversight settles as it finishes, then the
+ * toast. A suspension is not an ending, and a question or a stop says so for itself.
  */
 const ended = (runId: string, status: typeof RunStatus.Type) =>
   Effect.serviceOption(Oversight).pipe(
-    Effect.flatMap((found) =>
-      Option.isSome(found)
-        ? found.value
-            .drift(runId, "finish", "finish")
-            .pipe(
-              Effect.andThen(
-                found.value.card(runId, { kind: "final", step: "finish", claims: [] }),
-              ),
-            )
-        : Effect.void,
-    ),
+    Effect.flatMap((found) => (Option.isSome(found) ? found.value.finish(runId) : Effect.void)),
     Effect.andThen(told(runId, status)),
   );
 
@@ -2108,6 +2108,9 @@ export const hostLayer = (options: {
             worktree,
             mr: yield* mergeRequestOf(fs, dir, runId),
             asking: (yield* store.asked(runId)).some((one) => one.answer === null),
+            held: yield* set(HOLD, runId),
+            family: row === null ? [runId] : familyOf(yield* store.runs, row),
+            dirOf: (id: string) => runDir(dir, id),
             socketPath: options.herd?.socketPath ?? null,
           };
         });
@@ -2133,12 +2136,47 @@ export const hostLayer = (options: {
               Effect.flatMap((one) => one.randomUUIDv4),
               Effect.orDie,
             ),
-            log: (line: string) =>
-              fs
-                .writeFileString(`${dir}/events.${at.runId}.log`, `${line}\n`, { flag: "a" })
-                .pipe(Effect.ignore),
+            log: (line: string) => said(at, line).pipe(Effect.provideContext(services)),
           } satisfies JudgementDeps;
         }).pipe(Effect.orElseSucceed(() => null));
+      const drift: Oversight["Service"]["drift"] = (runId, where, judged) =>
+        Effect.gen(function* () {
+          const at = yield* watched(runId);
+          const deps =
+            judged === "none" ? null : yield* judging(at).pipe(Effect.provideContext(bun));
+          // Corrected through the caller's own agents: the work that drifted is theirs.
+          // Not at the finish, where there is no next piece of work to bring back.
+          const agents = yield* Effect.serviceOption(Agents);
+          const newest =
+            Option.isNone(agents) || judged === "finish" ? null : yield* agents.value.newest(runId);
+          const to =
+            Option.isNone(agents) || newest === null
+              ? null
+              : {
+                  agent: newest,
+                  send: (correction: Parameters<Correcting["send"]>[0]) =>
+                    agents.value.correct(runId, correction),
+                };
+          const done = yield* checkDrift(at, where, judged, deps, to).pipe(
+            Effect.provideContext(bun),
+          );
+          // The Herd's cross-run check, stood for at every boundary; at the finish the Run
+          // stands as it leaves, which is what writes an unanswered check down as owed.
+          if (judged !== "none")
+            yield* standForElection(at, where, judged === "finish", deps).pipe(
+              Effect.provideContext(bun),
+            );
+          for (const constraint of done.sent)
+            yield* notify(runId, "correction-sent", constraint, {
+              key: `correction:${constraint}`,
+              subject: constraint,
+            });
+          for (const constraint of done.escalated)
+            yield* notify(runId, "drift-unresolved", constraint, {
+              key: `escalated:${constraint}`,
+              subject: constraint,
+            });
+        }).pipe(Effect.ignore);
       const oversight = Oversight.of({
         card: (runId, what) =>
           watched(runId).pipe(
@@ -2152,16 +2190,37 @@ export const hostLayer = (options: {
             Effect.flatMap((cards) => told(runId, cards)),
             Effect.ignore,
           ),
-        drift: (runId, where, judged) =>
-          watched(runId).pipe(
-            Effect.flatMap((at) =>
-              (judged === "none" ? Effect.succeed(null) : judging(at)).pipe(
-                Effect.flatMap((deps) => checkDrift(at, where, judged, deps)),
-              ),
-            ),
-            Effect.provideContext(bun),
-            Effect.ignore,
-          ),
+        drift,
+        finish: (runId) =>
+          Effect.gen(function* () {
+            const at = yield* watched(runId);
+            // Bounded: an approved command that hangs would hold the Run's ending for ever.
+            for (const name of yield* under(grantedToRun(at))) {
+              const outcome = yield* host.verify({ runId, name, cwd: at.cwd }).pipe(
+                Effect.map((one) => `${one.result} (exit ${one.exit})`),
+                Effect.catch((cause) => Effect.succeed(`refused — ${cause.reason}`)),
+                Effect.timeoutOption(Duration.minutes(10)),
+              );
+              yield* under(
+                said(
+                  at,
+                  `verification ${name}: ${Option.getOrElse(outcome, () => "gave up after 10 minutes")}`,
+                ),
+              );
+            }
+            yield* drift(runId, "finish", "finish");
+            const proposed = yield* settleAtFinish(at).pipe(Effect.provideContext(bun));
+            if (proposed !== null)
+              yield* notify(runId, "proposal-pending", `a follow-up for what is still blocking`, {
+                key: proposed,
+              });
+            const card = yield* under(writeCard(at, { kind: "final", step: "finish", claims: [] }));
+            yield* told(runId, [card]);
+            // Once, here: the finish is the only moment at which nobody is left to make an
+            // owed cross-run check, which is what makes it something a human has to know.
+            if (card.cross_run === "pending")
+              yield* notify(runId, "drift-unresolved", "cross_run_pending", { key: "cross_run" });
+          }).pipe(Effect.ignore),
       });
       return Context.make(Host, host).pipe(
         Context.add(Notifier, Notifier.of({ notify })),
@@ -2169,6 +2228,20 @@ export const hostLayer = (options: {
       );
     }),
   );
+
+/**
+ * A Run and every Run the cross-run question relates it to: its children, its parent, and
+ * that parent's other children.
+ */
+const familyOf = (rows: ReadonlyArray<RunRow>, row: RunRow): ReadonlyArray<string> => {
+  const related = new Set([row.run]);
+  for (const one of rows) {
+    if (one.parent === row.run) related.add(one.run);
+    if (row.parent !== null && (one.run === row.parent || one.parent === row.parent))
+      related.add(one.run);
+  }
+  return [...related];
+};
 
 /** Where a toast is raised: herdr's, in a host. */
 export type Toast = (title: string, body: string, sound: Sound) => Effect.Effect<void>;
@@ -2593,18 +2666,12 @@ const seedIntentOf = (options: {
   readonly parent: RunRow | null;
 }) =>
   writeSeed(options).pipe(
-    // Said where the Run's own events are: a Run without its Intent still runs, and
-    // whoever reads why its drift was never checked is told.
+    // Said in the Run's own log: a Run without its Intent still runs, and whoever reads
+    // why its drift was never checked is told.
     Effect.catch((cause) =>
-      FileSystem.FileSystem.pipe(
-        Effect.flatMap((fs) =>
-          fs.writeFileString(
-            `${options.dir}/events.${options.row.run}.log`,
-            `intent v1 not written: ${reason(cause)}\n`,
-            { flag: "a" },
-          ),
-        ),
-        Effect.ignore,
+      said(
+        { runDir: runDir(options.dir, options.row.run) },
+        `intent v1 not written: ${reason(cause)}`,
       ),
     ),
   );

@@ -186,10 +186,10 @@ write is the only moment anyone holds the lock.
 **Drift** is a recorded mismatch between the evidence and the run's Intent
 ([CLI](cli.md#drift)). A Run carries its Intent from the moment it is admitted, and the
 checks below run for it: rules after each piece of agent work is collected and before the
-next starts, and a judgement before each piece of work and at the finish.
-[Correcting drift](#correcting-drift), [Finishing](#finishing) and
-[Cross-run checks](#cross-run-checks) are not yet made for a workflow module's Run. Two
-kinds, kept apart on purpose.
+next starts, and a judgement before each piece of work and at the finish. What they find is
+[corrected](#correcting-drift) through the agent that did the work last, a Run
+[finishes](#finishing) the same way whatever its workflow, and related Runs are
+[checked against each other](#cross-run-checks). Two kinds, kept apart on purpose.
 
 A **rule** constraint is a fact Collie can establish by itself: which files changed,
 which branch it is on, what a step's Output field says, what a named verification exited
@@ -290,8 +290,9 @@ a re-check of an unchanged tree clears nothing.
 
 A finished run is immutable, so `finish` settles rather than acts:
 
-- Anything queued as a boundary delivery is `expired` with the reason — there is no next
-  piece of work to compose it into, and leaving it pending for ever would be a lie.
+- A verification the run was granted, that a `command_exit` rule names and nobody ran, is
+  run by Collie first — bounded at ten minutes, so a command that hangs cannot hold the
+  ending for ever.
 - The run gets an **alignment** verdict. `true` is the strong claim and needs everything
   actually checked: every rule passing, every semantic constraint judged against evidence
   that was not truncated, no open report, and the goal judged where there is one. `false`
@@ -309,8 +310,18 @@ started with `run action <run> <offer>`. Collie never starts one by itself.
 
 ## Cross-run checks
 
-Sibling runs are judged against each other's Intents, so no Run of a workflow module is
-checked this way.
+Related runs — a parent, its children, and siblings of one parent — are judged against
+each other's Intents, once per boundary for the whole Herd rather than once per Run. Each
+Run with relatives stands for the check at every boundary and at its finish; one wins and
+asks the model about all of them, and a loser writes down that it moved, which is what
+tells the winner its snapshot is behind — it judges again, a bounded number of times.
+
+A report is filed on the Run it is about: its drift journal while it is working, and the
+board's pending reports once it has ended, since a finished Run's record does not change.
+A check nobody could make is written down as owed by the Run leaving without an answer,
+and while one is owed every Run in the Herd stands for it — otherwise an owed check waits
+for a Run that may never work again. A Run's final card says `cross_run: pending` while
+one about it is owed, and the finish toasts `drift-unresolved` once.
 
 ## Proposals
 

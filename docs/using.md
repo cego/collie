@@ -611,9 +611,10 @@ is showing at a time:
   without leaving the tab.
 - **Cards** — the evidence: every card Collie wrote for this run, the drift nobody has
   settled, and what each message sent to its agents actually reached.
-- **Log** — the end of a `log.txt` the run left in its directory, where it left one; a
-  run that wrote none says so, because its agents' panes are its record. It is read only
-  while this tab is showing it, because a log can be any size.
+- **Log** — the end of the run's `log.txt`: what the host saw of its work — drift found
+  and cleared, corrections sent, verifications it ran, and how aligned the run finished.
+  A run with nothing to say there says so, because its agents' panes are its record. It is
+  read only while this tab is showing it, because a log can be any size.
 
 The review and the plan's spec are capped and paged: `… truncated` says so, and `m` reads
 another cap of it. They are rendered a line at a time — headings in accent and bold, list
@@ -1044,7 +1045,10 @@ model, effort, permissions mode or scope fails validation before a single tab op
 The host raises one when a run finishes (`run-done`), fails (`run-failed`, or
 `output-unusable` where an agent's Output could not be used after its repair), asks you
 something or parks until you act (`needs-you`), or records a merge request it opened
-(`mr-opened`) — each once per run, however often the work is replayed or its host restarts.
+(`mr-opened`); when a card is something you could go and try (`slice-ready`); and when
+Collie corrects a run's drift by itself (`correction-sent`) or gives up on it
+(`drift-unresolved`) — each once per run and thing, however often the work is replayed or
+its host restarts.
 
 `max_iterations`, `handoff_timeout_ms` and `quiet_ms` are still read and shown under
 Settings, but a run of a workflow module consults none of them: `implement` carries its own
