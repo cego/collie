@@ -117,33 +117,21 @@ test("the repo's own MR template is found when it has one", () =>
     }),
   ));
 
-test("Linear ids come from the work source, the branch and the plan run, deduplicated", () =>
+test("Linear ids come from the work source and the branch, deduplicated", () =>
   runEffect(
     Effect.gen(function* () {
-      const runDir = join(rig.stateDir, "runs", "plan-linear");
-      yield* mkdir(runDir);
-      yield* writeFile(join(runDir, "run.json"), "{}\n");
-      const choice = join(runDir, "steps", "next", "offload-to-linear-1");
-      yield* mkdir(choice);
-      yield* writeFile(join(choice, "next.json"), `{"verdict":"clean","issue":"ENG-42","url":"u"}`);
-      const planDir = join(runDir, "plan");
-
       const git = runner({
         "git rev-parse --abbrev-ref HEAD": { stdout: "feature/FRO-149-modal\n" },
       });
 
-      // A plan dir contributes what the plan offloaded; the branch contributes its own.
-      expect(
-        yield* linearIssues(
-          { cwd: rig.projectDir, inputs: { plan: planDir, plan_kind: "plan-dir" } },
-          git,
-        ),
-      ).toEqual(["FRO-149", "ENG-42"]);
-
       // A linear work source contributes itself, and is not repeated by the branch.
       expect(
         yield* linearIssues(
-          { cwd: rig.projectDir, inputs: { plan: "FRO-149", plan_kind: "linear" } },
+          {
+            cwd: rig.projectDir,
+            inputs: { plan: "FRO-149", plan_kind: "linear" },
+            strategies: { plan: "work-source" },
+          },
           git,
         ),
       ).toEqual(["FRO-149"]);
@@ -158,7 +146,7 @@ test("Linear ids come from the work source, the branch and the plan run, dedupli
     }),
   ));
 
-test("a branch with no ticket and a plan that offloaded nothing yields no ids", () =>
+test("a branch with no ticket and a work source with none yields no ids", () =>
   runEffect(
     Effect.gen(function* () {
       const git = runner({ "git rev-parse --abbrev-ref HEAD": { stdout: "add-a-picker\n" } });

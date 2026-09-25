@@ -15,12 +15,15 @@ import {
   targetCandidates,
   workSourceCandidates,
 } from "../src/inputs";
-import { Run, RunStore, type RunRecord, type RunStatus } from "../src/run";
+import type { RunFacts, RunState } from "../src/runs";
+import { runFacts } from "./support/records";
 import { Rig } from "./support/recorder";
 import { FakeBin } from "./support/bin";
 
 let rig: Rig;
 let bin: FakeBin;
+/** The Runs this test has made, which is what inference is given to look back at. */
+let planned: RunFacts[];
 
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
 const mkdir = (path: string) =>
@@ -33,6 +36,7 @@ beforeEach(() =>
     Effect.gen(function* () {
       rig = yield* Rig.make();
       bin = yield* FakeBin.make(join(rig.root, "bin"));
+      planned = [];
     }),
   ),
 );
@@ -217,30 +221,24 @@ test("the confirm line shows every input with where it came from", () =>
 test("plan-dir takes the newest finished run with a SPEC in this repo, else asks", () =>
   runEffect(
     Effect.gen(function* () {
-      const ctxWithState = () => ({ cwd: rig.projectDir, stateDir: rig.stateDir });
+      const ctxWithState = withState;
 
       expect(yield* inferInput("plan", "plan-dir", ctxWithState())).toMatchObject({
         needsAsking: true,
         value: "",
       });
 
-      const make = (slug: string, cwd: string, status: RunStatus, spec: boolean, created: string) =>
+      const make = (slug: string, cwd: string, status: RunState, spec: boolean, created: string) =>
         makePlanRun(slug, cwd, created, status, spec);
 
-      yield* make("other-repo", "/somewhere/else", "done", true, "2026-08-27T12:00:00.000Z");
-      yield* make("unfinished", rig.projectDir, "blocked", true, "2026-08-27T11:00:00.000Z");
-      yield* make("no-spec", rig.projectDir, "done", false, "2026-08-27T10:00:00.000Z");
-      const older = yield* make(
-        "older-goal",
-        rig.projectDir,
-        "done",
-        true,
-        "2026-08-27T08:00:00.000Z",
-      );
+      yield* make("other-repo", "/somewhere/else", "succeeded", true, "2026-08-27T12:00:00.000Z");
+      yield* make("unfinished", rig.projectDir, "failed", true, "2026-08-27T11:00:00.000Z");
+      yield* make("no-spec", rig.projectDir, "succeeded", false, "2026-08-27T10:00:00.000Z");
+      yield* make("older-goal", rig.projectDir, "succeeded", true, "2026-08-27T08:00:00.000Z");
       const newest = yield* make(
         "newest-goal",
         rig.projectDir,
-        "done",
+        "succeeded",
         true,
         "2026-08-27T09:00:00.000Z",
       );
@@ -251,7 +249,6 @@ test("plan-dir takes the newest finished run with a SPEC in this repo, else asks
         label: "newest-goal",
         needsAsking: false,
       });
-      expect(older.record.slug).toBe("plan-older-goal");
     }),
   ));
 
@@ -474,86 +471,39 @@ test("prompts see the resolved kind alongside the value", () =>
   ));
 
 function withState() {
-  return { cwd: rig.projectDir, stateDir: rig.stateDir };
+  return { cwd: rig.projectDir, runs: planned };
 }
 
-/**
- * A finished `plan` Run on disk. It is written as a whole record rather than the few
- * fields this suite reads, because RunStore decodes `run.json` and a partial file is
- * a broken Run, not an old one.
- */
+/** A finished `plan` Run, with its directory on disk and a SPEC in it unless told otherwise. */
 function makePlanRun(
   slug: string,
   cwd: string,
   created: string,
-  status: RunStatus = "done",
+  state: RunState = "succeeded",
   spec = true,
-  extra: Partial<RunRecord> = {},
+  extra: Partial<RunFacts> = {},
 ) {
   return Effect.gen(function* () {
-    const id = slug;
-    const dir = join(rig.stateDir, "runs", id);
-    const record: RunRecord = {
-      id,
-      seq: 1,
-      slug: `plan-${slug}`,
-      named_after: slug,
+    const dir = join(rig.stateDir, "runs", slug);
+    const run = runFacts({
+      id: slug,
       workflow: "plan",
-      worktree: null,
-      decisions: {},
-      previous_review: null,
-      definition: null,
-      approved_verifications: [],
-      outcome: null,
-      evidence_gaps: [],
-      obstacle: null,
-      halt: null,
-      blocking_seen: null,
-      unreviewed: null,
-      notified: [],
-      fixed: 0,
-      unpushed: null,
+      project: cwd,
       cwd,
-      session: null,
-      workspace: null,
-      task: null,
-      workspace_label: null,
-      workspace_worktree: null,
-      activated_cwd: null,
-      created_at: created,
-      finished_at: status === "done" ? created : null,
-      status,
-      iteration: 1,
-      max_iterations: 1,
-      inputs: {},
-      input_sources: {},
-      steps: [],
-      parent: null,
-      children: [],
-      choices: [],
-      awaiting: null,
-      fanout: null,
-      handoffs: [],
-      disputed: [],
-      deferred: [],
-      outstanding: [],
-      target_label: null,
-      synthesis: null,
-      mr_url: null,
-      linear_issues: [],
-      helle: null,
-      held: null,
-      summary: null,
+      created,
+      finished: state === "succeeded" ? created : null,
+      state,
+      dir,
       ...extra,
-    };
+    });
     yield* mkdir(dir);
-    // Saved the way a Driver saves, so the fixture cannot drift from the real shape.
-    yield* new Run(dir, record).save();
     if (spec) {
       yield* mkdir(join(dir, "plan"));
       yield* writeFile(join(dir, "plan", "SPEC.md"), "# spec\n");
     }
-    return { id, dir, record };
+    // Newest first, as the host lists them.
+    planned = [...planned, run].sort((a, b) => b.created.localeCompare(a.created));
+    return run;
   });
 }
 
@@ -818,12 +768,12 @@ test("the targets this repo has already reviewed are offered without pasting the
   runEffect(
     Effect.gen(function* () {
       const reviewed = (slug: string, target: string, created: string, cwd = rig.projectDir) =>
-        makePlanRun(slug, cwd, created, "done", false, {
+        makePlanRun(slug, cwd, created, "succeeded", false, {
           workflow: "review",
-          slug: `review-${slug}`,
-          inputs: { target, target_kind: targetKind(target) },
-          target_label: null,
-          synthesis: "steps/synthesize/synthesized.json",
+          settled: {
+            inputs: { target, target_kind: targetKind(target) },
+            strategies: { target: "diff-target" },
+          },
         });
       yield* reviewed("old", "mr:gitlab/x!7", "2026-08-01T10:00:00Z");
       yield* reviewed("new", "branch:main...feature", "2026-08-30T10:00:00Z");
@@ -831,7 +781,7 @@ test("the targets this repo has already reviewed are offered without pasting the
       yield* reviewed("again", "mr:gitlab/x!7", "2026-08-31T10:00:00Z");
       yield* reviewed("elsewhere", "mr:other!1", "2026-08-31T11:00:00Z", "/somewhere/else");
 
-      const remembered = yield* reviewedTargets(rig.stateDir, rig.projectDir, 5);
+      const remembered = yield* reviewedTargets(planned, rig.projectDir, 5);
 
       expect(remembered.map((c) => [c.value, c.kind])).toEqual([
         ["mr:gitlab/x!7", "mr"],
@@ -842,40 +792,10 @@ test("the targets this repo has already reviewed are offered without pasting the
       // And they come after what inference offers, never in front of it.
       yield* bin.add("glab", `exit 1`);
       yield* bin.add("git", gitOn("add-picker"));
-      const candidates = yield* targetCandidates({ cwd: rig.projectDir, stateDir: rig.stateDir });
+      const candidates = yield* targetCandidates({ cwd: rig.projectDir, runs: planned });
       const values = candidates.map((c) => c.value);
       expect(values.indexOf("mr:gitlab/x!7")).toBeGreaterThan(values.indexOf("worktree"));
       // Already offered by inference, so not offered twice.
       expect(values.filter((v) => v === "branch:main...feature")).toHaveLength(1);
-    }),
-  ));
-
-test("the newest finished review of this target is the one a re-review is given", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const reviewed = (
-        slug: string,
-        created: string,
-        status: RunStatus,
-        synthesis: string | null,
-      ) =>
-        makePlanRun(slug, rig.projectDir, created, status, false, {
-          workflow: "review",
-          slug: `review-${slug}`,
-          inputs: { target: "mr:gitlab/x!7", target_kind: "mr" },
-          synthesis,
-        });
-      yield* reviewed("first", "2026-08-01T10:00:00Z", "done", "s.json");
-      yield* reviewed("second", "2026-08-20T10:00:00Z", "done", "s.json");
-      // Unfinished, and finished-but-never-synthesised, are not reviews to compare to.
-      yield* reviewed("running", "2026-08-29T10:00:00Z", "running", "s.json");
-      yield* reviewed("empty", "2026-08-30T10:00:00Z", "done", null);
-      yield* reviewed("current", "2026-08-31T10:00:00Z", "done", "s.json");
-
-      const store = new RunStore(rig.stateDir);
-      const found = yield* store.previousReview(rig.projectDir, "mr:gitlab/x!7", "current");
-      expect(found?.id).toBe("second");
-      // A run never finds itself, and a target nobody reviewed has nothing.
-      expect(yield* store.previousReview(rig.projectDir, "worktree", "current")).toBeNull();
     }),
   ));

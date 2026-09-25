@@ -12,7 +12,7 @@ export HERDR_PLUGIN_ROOT="$ROOT"
 STATE=$(mktemp -d)
 trap 'rm -rf "$STATE"' EXIT
 export HERDR_PLUGIN_STATE_DIR="$STATE/state"
-export HERDR_PLUGIN_CONFIG_DIR="$STATE/config"
+export COLLIE_USER_DIR="$STATE/config"
 # Run as a release consumer would: no herdr, and none of the context a shell inside
 # herdr exports, or the workspace-scoped commands would try to resolve a live one.
 export HERDR_BIN_PATH="$STATE/no-herdr"

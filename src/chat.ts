@@ -298,8 +298,8 @@ export function preferredHarness(value: string | undefined): ChatHarness {
  * worker harness default: a Herd whose Runs are on Codex still talks in Claude Code
  * unless somebody said otherwise, on an existing installation as much as a new one.
  */
-export const chatHarnessOf = Effect.fn("Chat.harnessOf")(function* (configDir: string) {
-  const raw = yield* readConfig(configDir);
+export const chatHarnessOf = Effect.fn("Chat.harnessOf")(function* (userDir: string) {
+  const raw = yield* readConfig(userDir);
   const value = raw[CHAT_HARNESS_KEY];
   return preferredHarness(isString(value) ? value : undefined);
 });
@@ -588,7 +588,7 @@ export const ensureChatFor = Effect.fn("Chat.ensureFor")(function* (
       // An empty value reads as unset, which is what a CLI launch with no socket has.
       const serverEnv = {
         HERDR_PLUGIN_STATE_DIR: env.stateDir,
-        HERDR_PLUGIN_CONFIG_DIR: env.configDir,
+        COLLIE_USER_DIR: env.userDir,
         HERDR_SOCKET_PATH: env.socketPath ?? "",
         COLLIE_CWD: yield* herdDir(env.stateDir, key),
       };

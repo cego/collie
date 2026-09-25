@@ -7,6 +7,7 @@ import type { PlatformError } from "effect/PlatformError";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { YamlValue } from "./yaml";
 import { isString } from "./schema";
+import { workSourceOf, type Settled } from "./strategies";
 
 export type Runner<R = never> = (
   cmd: string,
@@ -15,9 +16,6 @@ export type Runner<R = never> = (
 ) => Effect.Effect<{ code: number; stdout: string }, never, R>;
 
 const UserJson = Schema.fromJsonString(Schema.Struct({ username: Schema.String }));
-const IssueJson = Schema.fromJsonString(
-  Schema.Struct({ issue: Schema.optionalKey(Schema.String) }),
-);
 
 export const MR_TEMPLATE = ".gitlab/merge_request_templates/default.md";
 
@@ -108,8 +106,62 @@ export function assignedTo<R>(
   });
 }
 
+/** What became of a note: whether it landed, and the sentence a human reads either way. */
+export interface Posted {
+  readonly ok: boolean;
+  readonly message: string;
+}
+
+/**
+ * A review on the merge request it is about, as one note that Collie sends.
+ *
+ * Every refusal is the message rather than an error: a target that is not a merge
+ * request, a GitLab this machine cannot reach, and — the one worth saying out loud — a
+ * merge request assigned to whoever is running this, whose findings are theirs to fix
+ * rather than to write to themselves.
+ */
+export function postNote<R>(
+  options: { readonly target: string; readonly cwd: string; readonly body: string },
+  run: Runner<R>,
+): Effect.Effect<Posted, never, R> {
+  return Effect.gen(function* () {
+    const mr = parseMrTarget(options.target);
+    if (!mr)
+      return { ok: false, message: `${options.target || "this run"} is not a merge request` };
+    const ready = yield* gitlabForProject(mr.project, options.cwd, run);
+    if (!ready.ok) return { ok: false, message: ready.reason };
+    const me = yield* glabLogin(options.cwd, run);
+    if (me !== null && (yield* assignedTo(mr, me, options.cwd, run))) {
+      return {
+        ok: false,
+        message: `${options.target} is assigned to you, so its findings are yours to fix rather than to post`,
+      };
+    }
+    const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
+    // `--repo` is what lets this work from a directory that is not that checkout.
+    const note = yield* run(
+      "glab",
+      ["mr", "note", mr.iid, ...repoArgs(mr.project), "--message", options.body],
+      options.cwd,
+    );
+    return note.code === 0
+      ? { ok: true, message: `posted the review to ${where}` }
+      : { ok: false, message: `glab mr note ${where} failed (exit ${note.code})` };
+  });
+}
+
 export function mrTarget(project: string | null, iid: string): string {
   return project ? `mr:${project}!${iid}` : `mr:${iid}`;
+}
+
+/**
+ * Which of the three kinds of change a settled diff target names, and empty for a target
+ * nothing can be made of. What a reviewer is told to run to see the change depends on it.
+ */
+export function targetKind(target: string): "mr" | "branch" | "worktree" | "" {
+  if (parseMrTarget(target) !== null) return "mr";
+  if (branchTargetHead(target) !== null) return "branch";
+  return target.trim() === "worktree" ? "worktree" : "";
 }
 
 /** The glab arguments that point a command at a project rather than at the cwd. */
@@ -486,12 +538,12 @@ export function templateFile(
 
 /**
  * Every Linear ticket this branch could be answering: the work source when the
- * human named one, the branch name, and whatever a `plan` run put on the board.
+ * human named one, and the branch name.
  */
 export function linearIssues<R>(
-  opts: { cwd: string; inputs: Record<string, string>; planInput?: string },
+  opts: { cwd: string } & Settled,
   run: Runner<R>,
-): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path | R> {
+): Effect.Effect<string[], never, R> {
   return Effect.gen(function* () {
     const found: string[] = [];
     const add = (id: string) => {
@@ -499,17 +551,11 @@ export function linearIssues<R>(
       if (!found.includes(up)) found.push(up);
     };
 
-    const plan = opts.planInput ?? "plan";
-    if (opts.inputs[`${plan}_kind`] === "linear") {
-      for (const id of matchAll(opts.inputs[plan] ?? "")) add(id);
-    }
+    const work = workSourceOf(opts);
+    if (work?.kind === "linear") for (const id of matchAll(work.value)) add(id);
 
     const branch = yield* run("git", ["rev-parse", "--abbrev-ref", "HEAD"], opts.cwd);
     for (const id of matchAll(branch.stdout)) add(id);
-
-    if (opts.inputs[`${plan}_kind`] === "plan-dir") {
-      for (const id of yield* offloadedIssues(opts.inputs[plan] ?? "")) add(id);
-    }
     return found;
   });
 }
@@ -518,62 +564,11 @@ function matchAll(text: string): string[] {
   return [...text.matchAll(LINEAR_ID)].map((m) => m[1]!);
 }
 
-/**
- * A `plan` run that took "Offload to Linear" wrote the issue id into that choice's
- * Output. The plan dir is inside the run dir, so the outputs are one level up.
- */
-function offloadedIssues(
-  planDir: string,
-): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const pathService = yield* Path.Path;
-    const runDir = pathService.dirname(planDir);
-    if (planDir === "" || !(yield* fs.exists(pathService.join(runDir, "run.json")))) return [];
-    const out: string[] = [];
-    for (const file of yield* jsonFiles(pathService.join(runDir, "steps"))) {
-      const text = yield* fs
-        .readFileString(file, "utf8")
-        .pipe(Effect.catch(() => Effect.succeed("")));
-      const parsed = Schema.decodeUnknownOption(IssueJson)(text);
-      if (Option.isSome(parsed) && parsed.value.issue !== undefined)
-        out.push(...matchAll(parsed.value.issue));
-    }
-    return out;
-  });
-}
-
-function jsonFiles(
-  dir: string,
-  depth = 0,
-): Effect.Effect<string[], PlatformError, FileSystem.FileSystem | Path.Path> {
-  return Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const pathService = yield* Path.Path;
-    if (depth > 3 || !(yield* fs.exists(dir))) return [];
-    const out: string[] = [];
-    const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed([])));
-    for (const name of names) {
-      const file = pathService.join(dir, name);
-      const info = yield* fs.stat(file).pipe(Effect.option);
-      if (Option.isNone(info)) {
-        // Raced with a step writing its Output; the next run will see it.
-        continue;
-      }
-      if (info.value.type === "Directory") out.push(...(yield* jsonFiles(file, depth + 1)));
-      else if (name.endsWith(".json")) out.push(file);
-    }
-    return out;
-  });
-}
-
 export function mrFacts<R>(
   opts: {
     cwd: string;
-    inputs: Record<string, string>;
     configuredAssignee?: YamlValue;
-    planInput?: string;
-  },
+  } & Settled,
   run: Runner<R>,
 ): Effect.Effect<MrFacts, PlatformError, FileSystem.FileSystem | Path.Path | R> {
   return Effect.gen(function* () {

@@ -1,22 +1,23 @@
 ---
 name: collie
-description: Operate Collie runs through its CLI. Use when the user wants to start a workflow (plan, implement, review, architecture), check or watch a run, answer a run's question, resume or stop a run, or fork a workflow or persona.
+description: Operate Collie runs through its CLI. Use when the user wants to start a workflow (plan, implement, review, architecture), check or watch a run, answer a run's question, resume or stop a run, or write, check or fork a workflow or persona.
 ---
 
 # Operating Collie
 
-`collie` runs codified agent workflows. You drive it; the Run itself is executed by a
-detached Driver that owns its own state.
+`collie` runs codified agent workflows. You drive it; the Run itself is executed by the one
+Collie host in the background, which the CLI, the board and chat all reach, and which keeps
+the Run going when you disconnect.
 
 Every command takes `--json` and prints exactly one envelope: `{"ok":true,"data":{…}}` or
 `{"ok":false,"error":{"code":…,"message":…,"details":{…}}}`. Read the `data`, not the human
-line. The exception is `run wait --follow`, which streams newline-delimited events instead.
+line. The exception is `run wait --follow`, which streams newline-delimited lines instead.
 Full flags, envelope shapes and error codes are in `docs/cli.md` in the Collie repository
 (`~/.collie/docs/cli.md` for a standard install) — go there for anything past the happy
-path. Vocabulary — Run, Driver, Choice, Hand-off — is in `CONTEXT.md` beside it.
+path. Vocabulary — Run, host, Choice, Hand-off — is in `CONTEXT.md` beside it.
 
-**Coordinate with a Run through these commands.** The run directory belongs to its Driver:
-`run show`, `run wait` and `run answer` are how you read and change a Run.
+**Coordinate with a Run through these commands.** The host holds the Run: `run show`,
+`run wait` and `run answer` are how you read and change it, never its files.
 
 ## Discover what is available
 
@@ -28,7 +29,11 @@ collie --json workflow list
 collie --json workflow show <workflow>
 ```
 
-`workflow show` prints the resolved workflow — the inputs and steps a Run actually gets.
+A workflow is a TypeScript module, and `workflow show` prints what a Run actually gets: its
+`layer` and `path`, each entry of `inputs` with its `strategy` and its JSON `schema`, the
+`options` the host settles beside your input, and the `success` and `error` schemas. A
+`limits` list is a place the drawn schema says less than the real one — not a fault. The
+same reading answers `collie_definitions` and fills a `needs_input` refusal, so ask it once.
 
 Done when you can name the workflow and every input it declares.
 
@@ -49,12 +54,13 @@ Inputs Collie can infer it will infer. What it cannot comes back as `needs_input
 `details.inputs` naming each missing input and its question — ask the user those questions,
 then retry with the same `--request-id`.
 
-`branch` is an input of every mutating workflow that no workflow declares: it names the
-branch the Run works on, is derived from the target or the plan directory when you leave it
-out, and comes back as `needs_input` when nothing names one.
+`branch` is one of the names the host settles rather than one a workflow declares —
+`workflow show` lists them under `options`, with what each means. It names the branch the
+Run works on, is derived from the target or the plan directory when you leave it out, and
+comes back as `needs_input` when nothing names one.
 
-Add `--decide <step>=<title>` for a Choice step you already know the answer to, so the Run
-does not stop there. `workflow show` lists each Choice step's titles.
+A Run asks its questions when it reaches them. `--decide`, `--goal` and `--constraint`
+are refused rather than recorded: answer the question when the wait returns it.
 
 Done when you have reported the Run id to the user and said how you will watch it.
 
@@ -66,92 +72,107 @@ Wait until there is something to do, rather than polling on a timer:
 collie --json run wait <run-id> --until attention --timeout "2 hours"
 ```
 
-It returns the moment the Run has a question or reaches a terminal state — immediately if
-that is already true — so you never sit through a question you should be relaying. Read
-`data.attention`:
+It returns the moment the Run is suspended — at a question, held, stopped or parked — or
+has ended, immediately if that is already true, so you never sit through a question you
+should be relaying. Read `data.run`:
 
-- `category: "question"` — go to [Answer a question](#answer-a-question). `attention.choice`
-  has the id, the question text and every option, so you can relay it without a `run show`.
-- `category: "completed"` — it finished.
-- `category: "interrupted"` — work stopped with something left to do. `attention.reason`
-  says what (`review_exhausted`, `step_blocked`, `stopped`, `driver_lost`, or `failed`
-  where nothing recorded says why), `attention.explanation` says it in a sentence you
-  can relay, `attention.preserved` names the Steps a resume keeps, and `attention.actions`
-  names what is safe. Offer the user exactly those: `resume` appears only where no Driver
-  owns the Run **and** `attention.agentsAlive` is `absent` — an agent herdr still has
-  working, or one it could not be asked about, is something a resume would restart a Step
-  underneath. Never resume to "see if it works" — `run resume` re-checks both and refuses
-  with `run_already_active` where either is there or cannot be ruled out. `unverified` is
-  a retry once herdr is reachable, not a Run that can never be recovered.
+- `status.status` is `pending` (working), `suspended`, `complete` (with its `value`, as the
+  workflow's success schema encodes it) or `failed` (with its `reason`).
+- `waiting` lists every question it has been asked, oldest first: `name`, `prompt`,
+  `options`, and `answer`, which is `null` while it is open. An open one: go to
+  [Answer a question](#answer-a-question).
+- `controls` names a `hold` or a `stop` someone set over it.
+- `parked` is why the Run parked its own work and what picks it up again — a pane that
+  would not take a prompt, nothing approved to prove it, a workspace that closed with its
+  checkout gone. Relay it as written; it names the repair.
+- `diagnostic` is why the engine could not be asked, such as a module that is missing,
+  with the file named.
 
-`attention.actions` names the `run` subcommands that make sense next. A `timeout` error
-code means neither happened in the time you gave it; wait again.
+A `timeout` error code means none of that happened in the time you gave it; wait again.
 
-A plain `collie run wait <run-id>` — or `--until terminal` — is the older behavior: it waits
-straight through questions to a terminal state. Use it only when the Run cannot ask
-anything. `--follow` streams `{"type":"snapshot"…}`, `{"type":"progress"…}` and
-`{"type":"terminal"…}` lines rather than one envelope, which is useful for narrating
-progress; under `--until attention` it also emits `{"type":"attention"…}`.
+A plain `collie run wait <run-id>` — or `--until terminal` — waits until the Run has ended,
+straight through questions, holds and stops. Use it only when the Run cannot ask anything.
+`--follow` prints one `{"type":"status","run":…}` line each time the status changes rather
+than one envelope, which is useful for narrating progress.
 
-Done when the wait reports a terminal status, or a question to relay.
+Done when the wait reports an ended Run, or something to relay.
 
 ## Answer a question
 
-A pending question is in `data.attention.choice`: `id`, `header`, and `items`. A Run's
-`awaiting` field can instead name an agent or step being waited on; it is not the question.
+An open question is an entry in `data.run.waiting` with `answer: null`.
 
 1. Use the answer already given in the user's request. Ask only when a decision is missing;
-   when presenting options, preserve their titles so the answer matches.
-2. Send the answer by its title, naming the question you are answering:
+   when presenting options, preserve them so the answer matches.
+2. Send the answer, naming the question you are answering:
 
    ```sh
-   collie --json run answer <run-id> "<title>" \
-     --expect-choice "<attention.choice.id>" --request-id "$(uuidgen)"
+   collie --json run answer <run-id> "<option>" \
+     --decision "<name>" --request-id "$(uuidgen)"
    ```
 
-   `--expect-choice` is what stops a late answer from landing on the next question: if the
-   Run has moved on, it comes back as `choice_mismatch` and changes nothing.
+   `--decision` is what stops a late answer from landing on another question: one already
+   answered is refused with what the Run already has, and an option the question does not
+   take is refused with the ones it does.
 
 3. Confirm with `collie --json run show <run-id>`.
 
-Done when `run show` no longer reports that id in `data.attention.choice`.
+Done when `run show` reports that question with its answer.
 
 ## Resume or stop
 
 ```sh
 collie --json run list
-collie --json run resume <run-id> --request-id "$(uuidgen)"
-collie --json run stop <run-id>   --request-id "$(uuidgen)"
+collie --json run resume <run-id>  --request-id "$(uuidgen)"
+collie --json run stop <run-id>    --request-id "$(uuidgen)"
+collie --json run release <run-id> --request-id "$(uuidgen)"
 ```
 
 `run list` finds the Run when the user names it by repo, workflow or "the one from this
-morning" rather than by id. `resume` skips finished steps and keeps their Outputs; it
-refuses with `run_already_active` while a Driver still owns the Run — or while whether one
-does could not be determined — so `stop` first. `run show`'s `attention` says which case
-you are in before you try.
+morning" rather than by id. `resume` asks the host to pick a suspended Run up again: it
+re-enters the workflow's current code and reuses everything already done, so finished work
+is kept, a live agent is reattached to, one a stop closed is started again with its prompt,
+and a parked Run is handed the same prompt. `stop` parks the Run where it is and closes its
+agents' panes, keeping its workspace; a held Run carries on with `release`. A Run an older Collie recorded is read-only: begin its work again with
+`run start`.
 
 Done when `run show` reports the state the user asked for.
 
-## Fork a workflow or persona
+## Write, check or fork a workflow
+
+A workflow is a TypeScript module saved where a Run looks for one:
+`~/.collie/user/workflows/<id>.workflow.ts` for the user's own, `.collie/workflows/` for a
+project's. Saving the file is the whole of it — there is no registry to edit, nothing to
+rebuild and no host to restart. Never write workflow YAML: it is not what runs.
 
 ```sh
-collie --json workflow fork <name> --layer user --mode extends --step <step-id> \
-  --request-id "$(uuidgen)"
-collie --json persona fork <name> --layer user --request-id "$(uuidgen)"
+collie --json workflow create <id> --request-id "$(uuidgen)"
+collie --json workflow fork <id> --layer user --name <yours> --request-id "$(uuidgen)"
+collie --json workflow check <id>
 ```
 
-`--layer user` is the user's own config directory; `--layer project` is this project's
-`.herdr/`. `--mode extends` keeps following the baseline and changes only what the fork
-names; `--mode copy` takes the whole definition and stops following. The result envelope
-carries the path — tell the user where the file landed, then `collie --json workflow check
-<name>` before they rely on it.
+`create` writes a runnable module and the setup to typecheck it beside it — what it needs is
+merged into an existing `package.json` or `tsconfig.json`, and no module is written over a
+file that is already there. `fork` writes one that imports the original and hands `make` on, so
+everything it does not name is still the original's; there is no step to merge, so `--mode`
+and `--step` are refused on a module. Both return `data.path` — tell the user where the
+file landed. `data.toolchain` is not null when nothing could be installed to typecheck
+with: the module still runs, and say so rather than implying it was checked.
+
+Then edit the file with your editor and run `workflow check <id>` — it loads, constructs and
+typechecks the module without starting a Run. `problem(s)` is what stops it running,
+`drawn without:` is a projection limit and not a fault, and `ok, not typechecked` means
+nothing compiled it. Read `~/.collie/docs/sdk.md` before writing the body.
+
+`collie --json persona fork <name> --layer user --request-id "$(uuidgen)"` forks a persona,
+which is Markdown and is copied whole.
 
 Done when the file exists and `workflow check` passes.
 
 ## Retrying
 
-Every mutation — `run start`, `run answer`, `run stop`, `run resume`, both forks — takes
-`--request-id`. Generate one per intended action and reuse it for every retry of that
+Every mutation — `run start`, `run answer`, `run stop`, `run resume`, `workflow create` and
+both forks — takes `--request-id`. Generate one per intended action and reuse it for every
+retry of that
 action: Collie returns the first result instead of repeating the effect. Without one, a
 retried `run start` is a second Run. A failure carries the id back in
 `error.details.requestId`, so there is always something to retry with. Exit statuses and

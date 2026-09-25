@@ -1,10 +1,11 @@
 import { expect, test } from "bun:test";
 import { Effect, FileSystem, Schema } from "effect";
-import { runEffect } from "./support/effect";
+import { runEffect, watchedBy } from "./support/effect";
 import { installFakeSkills } from "./support/defs";
 import { readIntent, seedIntent, writeIntent } from "../src/intent";
 import { appendMetric } from "../src/metrics";
-import { RunStore } from "../src/run";
+import { hosted, settledRun } from "./support/hosted";
+import { evidenceDir } from "../src/engine";
 
 const root = new URL("../", import.meta.url).pathname;
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
@@ -28,6 +29,7 @@ const cli = Effect.fn("test.cli")(function* (
   extraEnv: Record<string, string> = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
+  const watch = yield* watchedBy;
   const dir = yield* fs.makeTempDirectory({ prefix: "collie-cli-" });
   yield* fs.makeDirectory(join(dir, "config"), { recursive: true });
   yield* installFakeSkills(dir);
@@ -35,10 +37,11 @@ const cli = Effect.fn("test.cli")(function* (
     cwd: root,
     env: {
       HERDR_PLUGIN_ROOT: root,
-      HERDR_PLUGIN_CONFIG_DIR: join(dir, "config"),
+      COLLIE_USER_DIR: join(dir, "config"),
       HERDR_PLUGIN_STATE_DIR: join(dir, "state"),
       HOME: dir,
       PWD: root,
+      COLLIE_HOST_WATCH_PID: watch,
       ...extraEnv,
     },
     stdout: "pipe",
@@ -53,14 +56,33 @@ const cli = Effect.fn("test.cli")(function* (
 
 const parseEnvelope = Schema.decodeUnknownEffect(CliEnvelope);
 
+/** `workflow show` for a module: what a caller may give it, and what it gives back. */
+const ShownModule = Schema.fromJsonString(
+  Schema.Struct({
+    data: Schema.Struct({
+      workflow: Schema.Struct({
+        layer: Schema.String,
+        path: Schema.String,
+        broken: Schema.NullOr(Schema.String),
+        inputs: Schema.Array(
+          Schema.Struct({ name: Schema.String, strategy: Schema.NullOr(Schema.String) }),
+        ),
+        options: Schema.Array(Schema.Struct({ name: Schema.String, meaning: Schema.String })),
+        success: Schema.Struct({ schema: Schema.NullOr(Schema.Json) }),
+        error: Schema.Struct({ schema: Schema.NullOr(Schema.Json) }),
+      }),
+    }),
+  }),
+);
+
 /** `workflow list`, just far enough to read each workflow's inputs back. */
 const WorkflowRows = Schema.fromJsonString(
   Schema.Struct({
     data: Schema.Struct({
       workflows: Schema.Array(
         Schema.Struct({
-          name: Schema.String,
-          inputs: Schema.Record(Schema.String, Schema.String),
+          id: Schema.String,
+          inputs: Schema.Array(Schema.Struct({ name: Schema.String })),
         }),
       ),
     }),
@@ -100,16 +122,6 @@ test("persona discovery uses the same command boundary", () =>
     }),
   ));
 
-test("human workflow show includes its steps and source", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const shown = yield* cli(["workflow", "show", "architecture"]);
-      expect(shown.exit).toBe(0);
-      expect(shown.stdout).toContain("Steps:");
-      expect(shown.stdout).toContain("Defined in:");
-    }),
-  ));
-
 test("invalid input is one envelope on stdout, its reason on stderr, and exit 2", () =>
   runEffect(
     Effect.gen(function* () {
@@ -143,6 +155,67 @@ test("invalid input is one envelope on stdout, its reason on stderr, and exit 2"
     }),
   ));
 
+test("a hold takes no time to lift at and no reason, because nothing would read either", () =>
+  runEffect(
+    Effect.gen(function* () {
+      for (const [command, flag] of [
+        ["hold", "--reason"],
+        ["release", "--reason"],
+      ]) {
+        const given = yield* cli(["--json", "run", command!, "r1", flag!, "lunch"]);
+        expect(yield* parseEnvelope(given.stdout)).toMatchObject({
+          ok: false,
+          error: { message: `Unrecognized flag: ${flag} in command collie run ${command}` },
+        });
+      }
+      const timed = yield* cli(["--json", "run", "hold", "r1", "--until", "14:00"]);
+      expect(yield* parseEnvelope(timed.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: "invalid_input",
+          message: "Unrecognized flag: --until in command collie run hold",
+        },
+      });
+      expect(timed.exit).toBe(2);
+    }),
+  ));
+
+test("an answer names its question with --decision, not a flag nothing reads", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const expecting = yield* cli([
+        "--json",
+        "run",
+        "answer",
+        "r1",
+        "yes",
+        "--expect-choice",
+        "c1",
+      ]);
+      expect(yield* parseEnvelope(expecting.stdout)).toMatchObject({
+        ok: false,
+        error: {
+          code: "invalid_input",
+          message: "Unrecognized flag: --expect-choice in command collie run answer",
+        },
+      });
+      expect(expecting.exit).toBe(2);
+    }),
+  ));
+
+test("a workflow is forked by importing it, so fork takes no Markdown merge flags", () =>
+  runEffect(
+    Effect.gen(function* () {
+      for (const flag of ["--mode", "--step"]) {
+        const given = yield* cli(["--json", "workflow", "fork", "implement", flag, "copy"]);
+        expect(yield* parseEnvelope(given.stdout)).toMatchObject({
+          ok: false,
+          error: { message: `Unrecognized flag: ${flag} in command collie workflow fork` },
+        });
+      }
+    }),
+  ));
+
 test("a command group named with no subcommand is invalid input, not success", () =>
   runEffect(
     Effect.gen(function* () {
@@ -160,20 +233,6 @@ test("a command group named with no subcommand is invalid input, not success", (
         expect(stopped.stdout.startsWith("{")).toBe(true);
         expect(stopped.stdout.trimEnd().split("\n")).toHaveLength(1);
       }
-    }),
-  ));
-
-test("a Driver that cannot be started fails the Run rather than orphaning it", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const started = yield* cli(["--json", "run", "start", "architecture", "--request-id", "r1"], {
-        COLLIE_DRIVER: "/nonexistent/collie-bin",
-      });
-      expect(yield* parseEnvelope(started.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "operation_failed" },
-      });
-      expect(started.exit).toBe(1);
     }),
   ));
 
@@ -201,233 +260,152 @@ test("discovery is global when an inherited workspace id no longer resolves", ()
     }),
   ));
 
-test("--decide is validated against the workflow before any run exists", () =>
-  runEffect(
-    Effect.gen(function* () {
-      // A typo that degraded to "ask me then" would hang the unattended run this
-      // flag exists to make possible, so both halves are checked up front.
-      const step = yield* cli([
-        "--json",
-        "run",
-        "start",
-        "review",
-        "--input",
-        "target=worktree",
-        "--decide",
-        "nope=Don't post",
-      ]);
-      expect(yield* parseEnvelope(step.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "invalid_input", message: expect.stringContaining("post") },
-      });
-
-      const title = yield* cli([
-        "--json",
-        "run",
-        "start",
-        "review",
-        "--input",
-        "target=worktree",
-        "--decide",
-        "post=Ship it",
-      ]);
-      expect(yield* parseEnvelope(title.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "invalid_input", message: expect.stringContaining("Don't post") },
-      });
-
-      // And the titles are discoverable without reading the markdown.
-      const shown = yield* cli(["workflow", "show", "review"]);
-      expect(shown.stdout).toContain("post — decide one of: Fix findings");
-    }),
-  ));
-
-test("a previous review named by hand has to exist", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const unknown = yield* cli([
-        "--json",
-        "run",
-        "start",
-        "review",
-        "--input",
-        "target=worktree",
-        "--input",
-        "previous=review-nope-20260101-000000",
-      ]);
-      expect(yield* parseEnvelope(unknown.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "invalid_input", message: expect.stringContaining("review-nope") },
-      });
-    }),
-  ));
-
-test(
-  "workflow check validates every layer without starting a run",
-  () =>
-    runEffect(
-      Effect.gen(function* () {
-        const fs = yield* FileSystem.FileSystem;
-        // The project layer is `<cwd>/.herdr`, and a checkout's own is a human's forked
-        // workflows — never test data. This one is a scratch directory the run is
-        // rooted at with COLLIE_CWD, so nothing outside it is written or removed.
-        const cwd = yield* fs.makeTempDirectory({ prefix: "collie-project-" });
-        const scratch = { COLLIE_CWD: cwd };
-
-        // The baseline is the acceptance test for the rule set: it must come out clean.
-        const clean = yield* cli(["workflow", "check"], scratch);
-        expect(clean.exit).toBe(0);
-        expect(clean.stdout).toContain("implement\tbaseline\tok");
-        expect(clean.stdout).toContain("review\tbaseline\tok");
-
-        const project = join(cwd, ".herdr", "workflows");
-        yield* fs.makeDirectory(project, { recursive: true });
-        yield* fs.writeFileString(
-          join(project, "broken.md"),
-          `---
-name: broken
-inputs:
-  goal: goal
-steps:
-  - id: one
-    persona: planner
-    model: opus-9
-    output: one.json
----
-{{inputs.goal}} and {{inputs.nope}} and {{inputs.goal_kind}} and {{findings}} and {{skill:tdd}}
-`,
-        );
-        yield* fs.writeFileString(join(project, "unparseable.md"), "no frontmatter here\n");
-        // A Choice round drives a skill the same way a step does, and what a Choice
-        // forwards to the workflow it chains is rendered from the same variables.
-        yield* fs.writeFileString(
-          join(project, "chains.md"),
-          `---
-name: chains
-inputs:
-  goal: goal
-steps:
-  - id: next
-    choices:
-      - title: Grill it
-        prompt: grill
-        persona: planner
-        skill: not-a-real-skill
-        output: grill.json
-      - title: Build it
-        run: implement
-        inputs:
-          plan: "{{inputs.plna}}"
-          target: "{{target_repo}}"
-          task: "{{outputs.gril.slug}}"
----
-Goal: {{inputs.goal}}
-
-## grill
-Grill me.
-`,
-        );
-
-        const bad = yield* cli(["--json", "workflow", "check"], scratch);
-        const envelope = yield* parseEnvelope(bad.stdout);
-
-        expect(bad.exit).not.toBe(0);
-        const problems = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown))(
-          envelope.error?.details ?? {},
-        );
-        expect(problems).toContain("opus-9");
-        // A placeholder no input can fill is reported; the ones the engine supplies at
-        // step time are not.
-        expect(problems).toContain("inputs.nope");
-        // A `goal` never carries a kind, so `goal_kind` is a placeholder the Run cannot
-        // fill either — only a work-source and a diff-target render one.
-        expect(problems).toContain("inputs.goal_kind");
-        // A round's `skill:` is a prerequisite like a step's...
-        expect(problems).toContain("not-a-real-skill");
-        // ...and a typo in what a Choice forwards would otherwise render empty, be
-        // treated as settled, and start the child without the Input it needed.
-        expect(problems).toContain("inputs.plna");
-        // A forwarded input is rendered with `run`, `inputs`, `cwd` and `outputs` and
-        // nothing else, so a family a step's prompt may name is still unresolvable here.
-        expect(problems).toContain("target_repo");
-        // An Output is named by the step that writes it, so a mistyped step id is caught
-        // too — it would otherwise render empty and chain the child without its task.
-        expect(problems).toContain("outputs.gril.slug");
-        expect(problems).not.toContain("findings");
-        expect(problems).not.toContain("skill:tdd");
-        // A file with nothing in it is reported rather than silently skipped by the
-        // loader, the way the picker's banner used to be the only place it showed.
-        expect(problems).toContain('"name":"unparseable"');
-        expect(problems).toContain("has no steps");
-        // And the workflows that are fine are still listed.
-        expect(problems).toContain('"name":"plan","layer":"baseline","problems":[]');
-
-        // Asked about one workflow, a broken file elsewhere is not its problem — the
-        // targeted check has to stay usable while another definition is being edited.
-        const named = yield* cli(["workflow", "check", "review"], scratch);
-        expect(named.exit).toBe(0);
-        expect(named.stdout).toContain("review\tbaseline\tok");
-        expect(named.stdout).not.toContain("broken");
-
-        // Its own broken file is its problem, though: a project-layer `review.md` that
-        // will not parse leaves the baseline answering for `review`, and an author who
-        // just broke it must not be told their workflow is fine.
-        yield* fs.writeFileString(join(project, "review.md"), "---\nname: [unclosed\n---\nbody\n");
-        const shadowed = yield* cli(["workflow", "check", "review"], scratch);
-        expect(shadowed.exit).not.toBe(0);
-        expect(shadowed.stdout).toContain("review.md");
-
-        yield* fs.remove(cwd, { recursive: true, force: true });
-      }),
-    ),
-  // Four real CLI startups: this checks validation, not a five-second startup SLO.
-  20_000,
-);
-
-test("workflow show prints what a run actually gets, not what was authored", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const shown = yield* cli(["workflow", "show", "implement"]);
-
-      expect(shown.exit).toBe(0);
-      // `target` reaches implement only through the embedded review; a run takes it,
-      // and this is the command an author checks that with.
-      expect(shown.stdout).toContain('"target":"diff-target"');
-      expect(shown.stdout).toContain("Inherited from an embedded workflow: target");
-      expect(shown.stdout).toContain("review.synthesize");
-      const steps = shown.stdout.split("Steps:")[1]!.split("Defined in:")[0]!.trim().split("\n");
-      // build, review, review.synthesize, fix, mr — the resolved shape, `use:` flattened.
-      expect(steps).toHaveLength(5);
-    }),
-  ));
-
-test("a mutating workflow lists the branch input no workflow declares", () =>
+test("the names the host settles are published beside the ones a module declares", () =>
   runEffect(
     Effect.gen(function* () {
       // An agent driving Collie cannot pass an Input nothing names, and `branch` is
-      // the one that decides which checkout the run gets.
+      // the one that decides which checkout the run gets. A module never declares it —
+      // declaring it is refused — so it is published as the host's, with what it means.
       const implement = yield* cli(["--json", "workflow", "show", "implement"]);
-      expect(implement.stdout).toContain('"branch"');
+      const described = Schema.decodeUnknownSync(ShownModule)(implement.stdout).data.workflow;
+      expect(described.inputs.map((one) => one.name)).not.toContain("branch");
+      expect(described.options.map((one) => one.name)).toEqual([
+        "branch",
+        "task",
+        "workspace",
+        "repo",
+        "outcome",
+        "risks",
+        "previous",
+        "harness",
+        "model",
+        "effort",
+      ]);
+
+      // And for a human, the order `branch` is resolved in, which is the whole of it.
       const human = yield* cli(["workflow", "show", "implement"]);
       expect(human.stdout).toContain("branch:");
       expect(human.stdout).toContain("--input branch=");
 
-      // A declared strategy, never one invented here: an agent reading this map acts on
-      // the strategy, and `branch` is optional in exactly that sense.
-      expect(implement.stdout).toContain('"branch":"optional"');
-
-      // Wherever the inputs are listed, not only in `show`.
+      // `branch` is the host's, not a module's: it is never among what a module declares.
       const listed = yield* cli(["--json", "workflow", "list"]);
       const workflows = Schema.decodeUnknownSync(WorkflowRows)(listed.stdout).data.workflows;
-      const named = (name: string) => workflows.find((w) => w.name === name)!;
-      expect(Object.keys(named("implement").inputs)).toContain("branch");
-
-      // A workflow that changes nothing has no branch of its own to work on.
-      const review = yield* cli(["--json", "workflow", "show", "review"]);
-      expect(review.stdout).not.toContain('"branch"');
-      expect(Object.keys(named("review").inputs)).not.toContain("branch");
+      const row = workflows.find((w) => w.id === "implement")!;
+      expect(row.inputs.map((input) => input.name)).not.toContain("branch");
     }),
   ));
+
+test(
+  "an agent saves a workflow, checks it and finds it, with nothing to register by hand",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        // The project layer, so nothing outside this scratch directory is written.
+        const cwd = yield* fs.makeTempDirectory({ prefix: "collie-authoring-" });
+        const scratch = { COLLIE_CWD: cwd };
+        const saved = join(cwd, ".collie", "workflows");
+
+        const made = yield* cli(
+          ["--json", "workflow", "create", "tally", "--layer", "project"],
+          scratch,
+        );
+        expect(made.exit).toBe(0);
+        expect(yield* parseEnvelope(made.stdout)).toMatchObject({
+          ok: true,
+          data: { path: join(saved, "tally.workflow.ts"), toolchain: null },
+        });
+        // The setup to typecheck it is beside it, provisioned with the embedded Bun.
+        for (const name of ["package.json", "tsconfig.json", "collie.d.ts"]) {
+          expect(yield* fs.exists(join(saved, name))).toBe(true);
+        }
+
+        // Saving it is the whole of it: no registry to edit, no rebuild, no restart.
+        const listed = yield* cli(["workflow", "list"], scratch);
+        expect(listed.stdout).toContain("tally\tproject");
+
+        // And it compiles against the declarations it was written against.
+        const checked = yield* cli(["workflow", "check", "tally"], scratch);
+        expect(checked.exit).toBe(0);
+        expect(checked.stdout).toContain("tally\tproject\tok");
+        expect(checked.stdout).not.toContain("not typechecked");
+
+        // Never over a file that is already there — it is the one they already edited.
+        const before = yield* fs.readFileString(join(saved, "tally.workflow.ts"));
+        const again = yield* cli(
+          ["--json", "workflow", "create", "tally", "--layer", "project"],
+          scratch,
+        );
+        expect(again.exit).not.toBe(0);
+        expect(yield* parseEnvelope(again.stdout)).toMatchObject({
+          ok: false,
+          error: { code: "target_exists" },
+        });
+        expect(yield* fs.readFileString(join(saved, "tally.workflow.ts"))).toBe(before);
+
+        yield* fs.remove(cwd, { recursive: true, force: true });
+      }),
+    ),
+  120_000,
+);
+
+test(
+  "forking a module writes a file that imports what it keeps, and the merge flags are a migration",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const cwd = yield* fs.makeTempDirectory({ prefix: "collie-forking-" });
+        const scratch = { COLLIE_CWD: cwd };
+
+        const forked = yield* cli(
+          ["--json", "workflow", "fork", "implement", "--layer", "project", "--name", "ours"],
+          scratch,
+        );
+        expect(forked.exit).toBe(0);
+        const path = join(cwd, ".collie", "workflows", "ours.workflow.ts");
+        expect(yield* parseEnvelope(forked.stdout)).toMatchObject({ ok: true, data: { path } });
+        // Ordinary composition: it imports the original and spreads it under its own id.
+        const text = yield* fs.readFileString(path);
+        expect(text).toContain("workflows/implement.workflow.ts");
+        expect(text).toContain("...original");
+        expect(text).toContain('id: "ours"');
+
+        // Both are runnable, each under its own id, and the fork takes what it inherited.
+        const shown = yield* cli(["--json", "workflow", "show", "ours"], scratch);
+        const described = Schema.decodeUnknownSync(ShownModule)(shown.stdout).data.workflow;
+        expect(described.layer).toBe("project");
+        expect(described.inputs.map((one) => one.name)).toEqual(["plan"]);
+
+        // There is nothing to merge in a module, so the flags that merged steps say so.
+        const merged = yield* cli(
+          [
+            "--json",
+            "workflow",
+            "fork",
+            "implement",
+            "--layer",
+            "project",
+            "--name",
+            "theirs",
+            "--mode",
+            "extends",
+          ],
+          scratch,
+        );
+        expect(yield* parseEnvelope(merged.stdout)).toMatchObject({
+          ok: false,
+          error: { code: "invalid_input", message: expect.stringContaining("--mode") },
+        });
+        expect(yield* fs.exists(join(cwd, ".collie", "workflows", "theirs.workflow.ts"))).toBe(
+          false,
+        );
+
+        yield* fs.remove(cwd, { recursive: true, force: true });
+      }),
+    ),
+  120_000,
+);
 
 test("upgrade is a command of its own, and says what it would do", () =>
   runEffect(
@@ -457,124 +435,107 @@ test("the version the CLI reports is the one the manifest declares", () =>
     }),
   ));
 
-test("intent defaults round trip, and a Run's Intent is amended through the envelope", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const home = yield* fs.makeTempDirectory({ prefix: "collie-intent-" });
-      const state = join(home, "state");
-      const shared = {
-        HERDR_PLUGIN_STATE_DIR: state,
-        HERDR_PLUGIN_CONFIG_DIR: join(home, "config"),
-      };
+test(
+  "intent defaults round trip, and a Run's Intent is amended through the envelope",
+  () =>
+    hosted("collie-intent-", ({ world }) =>
+      Effect.gen(function* () {
+        const shared = {
+          HERDR_PLUGIN_ROOT: world.install,
+          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+        };
 
-      const added = yield* cli(
-        ["--json", "run", "intent", "defaults", "add-constraint", "no new dependencies"],
-        shared,
-      );
-      expect(added.exit).toBe(0);
-      expect(yield* parseEnvelope(added.stdout)).toMatchObject({ ok: true });
-      const shown = yield* cli(["--json", "run", "intent", "defaults", "show"], shared);
-      expect(shown.stdout).toContain("no new dependencies");
+        const added = yield* cli(
+          ["--json", "run", "intent", "defaults", "add-constraint", "no new dependencies"],
+          shared,
+        );
+        expect(added.exit).toBe(0);
+        expect(yield* parseEnvelope(added.stdout)).toMatchObject({ ok: true });
+        const shown = yield* cli(["--json", "run", "intent", "defaults", "show"], shared);
+        expect(shown.stdout).toContain("no new dependencies");
 
-      // A grant nobody named is not a grant: the file is refused, not silently ignored.
-      const bogus = yield* cli(
-        ["--json", "run", "intent", "defaults", "set-authority", "invented=true"],
-        shared,
-      );
-      expect(bogus.exit).toBe(2);
-      expect(yield* parseEnvelope(bogus.stdout)).toMatchObject({
-        ok: false,
-        error: { code: "invalid_input" },
-      });
+        // A grant nobody named is not a grant: the file is refused, not silently ignored.
+        const bogus = yield* cli(
+          ["--json", "run", "intent", "defaults", "set-authority", "invented=true"],
+          shared,
+        );
+        expect(bogus.exit).toBe(2);
+        expect(yield* parseEnvelope(bogus.stdout)).toMatchObject({
+          ok: false,
+          error: { code: "invalid_input" },
+        });
 
-      const run = yield* new RunStore(state).create({
-        workflow: "implement",
-        cwd: root,
-        inputs: {},
-        inputSources: {},
-        stepIds: ["build"],
-        maxIterations: 1,
-        namedAfter: "steering",
-      });
-      yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
+        const run = yield* settledRun(world, "hello");
+        yield* writeIntent(run.dir, seedIntent(run.id, { goal: "ship it" }));
 
-      const amended = yield* cli(
-        [
-          "--json",
-          "run",
-          "intent",
-          "add-constraint",
-          run.id,
+        const amended = yield* cli(
+          [
+            "--json",
+            "run",
+            "intent",
+            "add-constraint",
+            run.id,
+            "preserve the public --json envelope",
+            "--severity",
+            "block",
+          ],
+          shared,
+        );
+        expect(yield* parseEnvelope(amended.stdout)).toMatchObject({
+          ok: true,
+          data: { runId: run.id, version: 2 },
+        });
+
+        const intent = yield* readIntent(run.dir);
+        expect(intent?.version).toBe(2);
+        expect(intent?.constraints.map((constraint) => constraint.text)).toEqual([
           "preserve the public --json envelope",
-          "--severity",
-          "block",
-        ],
-        shared,
-      );
-      expect(yield* parseEnvelope(amended.stdout)).toMatchObject({
-        ok: true,
-        data: { version: 2 },
-      });
+        ]);
+      }),
+    ),
+  60_000,
+);
 
-      const intent = yield* readIntent(run.dir);
-      expect(intent?.version).toBe(2);
-      expect(intent?.history).toHaveLength(1);
-      expect(intent?.constraints[0]?.severity).toBe("block");
+test(
+  "run metrics reports what a Run produced, and says so when it has produced nothing",
+  () =>
+    hosted("collie-metrics-", ({ world }) =>
+      Effect.gen(function* () {
+        // One state directory the Run and the command both see: `cli` makes its own per
+        // call, and a Run written into one of those would not be there for the next.
+        const env = { HERDR_PLUGIN_STATE_DIR: world.state };
+        const run = yield* settledRun(world, "hello", { outcome: "bug" });
 
-      yield* fs.remove(home, { recursive: true, force: true });
-    }),
-  ));
+        const empty = yield* cli(["--json", "run", "metrics", run.id], env);
+        expect(empty.exit).toBe(0);
+        const bare = yield* parseEnvelope(empty.stdout);
+        expect(bare.ok).toBe(true);
+        // SAFETY: the envelope decoded `ok: true` above, and `run metrics` puts exactly
+        // these fields in `data` — asserted immediately below, so a shape that changed
+        // fails here rather than passing silently.
+        const data = bare.data as {
+          metrics: { timeToFirstEvidence: number | null };
+          outcome: string;
+        };
+        // Null rather than zero: "nothing yet" and "immediately" are different facts.
+        expect(data.metrics.timeToFirstEvidence).toBeNull();
+        expect(data.outcome).toBe("bug");
 
-test("run metrics reports what a Run produced, and says so when it has produced nothing", () =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      // One state directory the Run and the command both see: `cli` makes its own per
-      // call, and a Run written into one of those would not be there for the next.
-      const home = yield* fs.makeTempDirectory({ prefix: "collie-metrics-" });
-      const stateDir = join(home, "state");
-      const env = { HERDR_PLUGIN_STATE_DIR: stateDir };
+        yield* appendMetric(evidenceDir(world.state, run.id), {
+          at: "2026-09-01T10:00:00Z",
+          kind: "verification",
+          subject: "v1",
+          value: 1,
+          note: "pass",
+        });
 
-      const run = yield* new RunStore(stateDir).create({
-        workflow: "implement",
-        cwd: root,
-        inputs: { plan: "add a picker", outcome: "bug" },
-        inputSources: { plan: "asked" },
-        stepIds: ["build"],
-        maxIterations: 1,
-        namedAfter: "add a picker",
-      });
-
-      const empty = yield* cli(["--json", "run", "metrics", run.id], env);
-      expect(empty.exit).toBe(0);
-      const bare = yield* parseEnvelope(empty.stdout);
-      expect(bare.ok).toBe(true);
-      // SAFETY: the envelope decoded `ok: true` above, and `run metrics` puts exactly
-      // these fields in `data` — asserted immediately below, so a shape that changed
-      // fails here rather than passing silently.
-      const data = bare.data as {
-        metrics: { timeToFirstEvidence: number | null };
-        outcome: string;
-      };
-      // Null rather than zero: "nothing yet" and "immediately" are different facts.
-      expect(data.metrics.timeToFirstEvidence).toBeNull();
-      expect(data.outcome).toBe("bug");
-
-      yield* appendMetric(run.dir, {
-        at: run.record.created_at,
-        kind: "verification",
-        subject: "v1",
-        value: 1,
-        note: "pass",
-      });
-
-      const shown = yield* cli(["run", "metrics", run.id], env);
-      expect(shown.exit).toBe(0);
-      expect(shown.stdout).toContain("time to first evidence: 0s");
-      expect(shown.stdout).toContain("1 pass, 0 fail, 0 unstable (1 by collie)");
-      expect(shown.stdout).toContain("rework: 0");
-
-      yield* fs.remove(home, { recursive: true, force: true });
-    }),
-  ));
+        const shown = yield* cli(["run", "metrics", run.id], env);
+        expect(shown.exit).toBe(0);
+        expect(shown.stdout).toContain("time to first evidence: 0s");
+        expect(shown.stdout).toContain("1 pass, 0 fail, 0 unstable (1 by collie)");
+        expect(shown.stdout).toContain("rework: 0");
+      }),
+    ),
+  60_000,
+);

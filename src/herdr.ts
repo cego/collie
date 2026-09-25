@@ -5,8 +5,9 @@
 // `test/support/` enough to test everything above it.
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Data, Deferred, Effect, FileSystem, Option, Path, Result, Schema, Stream } from "effect";
+import { Data, Effect, FileSystem, Option, Path, Result, Schema, Stream } from "effect";
 import * as BunSocket from "@effect/platform-bun/BunSocket";
+import * as Socket from "effect/unstable/socket/Socket";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { PlatformError } from "effect/PlatformError";
 import type { PluginEnv } from "./env";
@@ -569,15 +570,6 @@ export const decodeWorkspaceList = (res: BoundaryValue) =>
  */
 export type AgentsAlive = "unasked" | "absent" | "live" | "unverified";
 
-/**
- * The one question anything classifying a Run asks about agents. Named on its own so a
- * caller that redraws can hand over something that remembers the last answer instead of
- * a live `Herdr`, and so that what is asked is visible in the signature.
- */
-export interface AsksAgents {
-  agentsAlive(names: ReadonlyArray<string>): Effect.Effect<AgentsAlive, never, BunServices>;
-}
-
 export class Herdr {
   private seq = 0;
 
@@ -663,56 +655,39 @@ export class Herdr {
     const id = `hw-${++this.seq}`;
     const payload = `${encodeJson({ id, method, params })}\n`;
 
-    const exchange: HerdrEffect<Schema.Json | undefined> = Effect.gen(function* () {
-      const socket = yield* BunSocket.makeNet({ path }).pipe(
-        Effect.catch((cause) => herdrFail(`${method} failed`, String(cause))),
-      );
-      const answer = yield* Deferred.make<Schema.Json | undefined, HerdrError>();
-      // Acquired in this scope, not inside onOpen: releasing the writer ends the
-      // socket's write side, and doing that the moment the request was sent closed the
-      // exchange before herdr had answered it.
-      const write = yield* socket.writer;
+    return Effect.gen(function* () {
+      const socket = yield* BunSocket.makeNet({ path });
+      // Reading before writing, so no part of the reply can land before we are pulling.
+      const pull = yield* Socket.readerString(socket);
+      const writer = yield* socket.writer;
+      yield* writer.write(payload);
+
       let buffered = "";
-
-      const read = socket.runString(
-        (chunk) =>
-          Effect.gen(function* () {
-            buffered += chunk;
-            const newline = buffered.indexOf("\n");
-            if (newline < 0) return;
-            yield* Deferred.complete(answer, decodeReply(method, buffered.slice(0, newline)));
-          }),
-        {
-          onOpen: Effect.orDie(write(payload)),
-        },
-      );
-
-      // The read loop ends when herdr closes the socket. If that happens before a line
-      // arrived, nobody is going to answer, and waiting on the deferred would hang.
-      yield* Effect.forkScoped(
-        read.pipe(
-          Effect.matchEffect({
-            onSuccess: () =>
-              Deferred.complete(
-                answer,
-                herdrFail(`${method} failed`, "socket closed with no response"),
-              ),
-            onFailure: (cause) =>
-              Deferred.complete(answer, herdrFail(`${method} failed`, String(cause))),
-          }),
-        ),
-      );
-      return yield* Deferred.await(answer);
-    }).pipe(Effect.scoped);
-    return exchange;
+      // A herdr that closes without answering fails the pull rather than hanging here.
+      while (true) {
+        buffered += (yield* pull).join("");
+        const newline = buffered.indexOf("\n");
+        if (newline >= 0) return yield* decodeReply(method, buffered.slice(0, newline));
+      }
+    }).pipe(
+      Effect.scoped,
+      Effect.catchTag("SocketError", (cause) => herdrFail(`${method} failed`, String(cause))),
+    );
   }
 
-  tabCreate(opts: { label?: string; cwd?: string; focus?: boolean }): HerdrEffect<StartedTab> {
+  tabCreate(opts: {
+    label?: string;
+    cwd?: string;
+    focus?: boolean;
+    /** Where the tab goes; this process's own workspace where none is named. */
+    workspace?: string | null;
+  }): HerdrEffect<StartedTab> {
     const env = this.env;
     const cli = this.cli.bind(this);
     return Effect.gen(function* () {
       const args = ["tab", "create"];
-      if (env.workspaceId) args.push("--workspace", env.workspaceId);
+      const workspace = opts.workspace ?? env.workspaceId;
+      if (workspace) args.push("--workspace", workspace);
       if (opts.cwd) args.push("--cwd", opts.cwd);
       if (opts.label) args.push("--label", opts.label);
       args.push(opts.focus ? "--focus" : "--no-focus");

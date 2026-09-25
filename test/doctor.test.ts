@@ -7,7 +7,7 @@ import { Effect, FileSystem, Schema } from "effect";
 import { runEffect } from "./support/effect";
 import { FakeHerdr, Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
-import { installFakeSkills, writeDef } from "./support/defs";
+import { installFakeSkills } from "./support/defs";
 import { FakeBin } from "./support/bin";
 import { doctor } from "../src/doctor";
 import { claudeSettingsPath, installStatusLine } from "../src/statusline";
@@ -123,11 +123,12 @@ test("a healthy machine passes every check and says so", () =>
         "status line",
         "up to date",
         "workflows",
+        "personas",
         "glab",
         "helle",
         "linear mcp",
       ]);
-      expect(check(result, "workflows").detail).toBe("implement and review are the bundled ones");
+      expect(check(result, "workflows").detail).toBe("every workflow here is the one Collie ships");
     }),
   ));
 
@@ -164,22 +165,20 @@ test("a shim whose directory is not on PATH is its own state, not 'installed'", 
     }),
   ));
 
-test("a removed skill is named, from the definitions rather than a list in the code", () =>
+test("a skill store that is not there is named, with the routine that fills it", () =>
   runEffect(
     Effect.gen(function* () {
       yield* healthy();
-      yield* remove(`${rig.root}/.agents/skills/tdd`);
+      yield* remove(`${rig.root}/.agents/skills/collie`);
 
       const result = yield* report();
 
       expect(result.ok).toBe(false);
       const skills = check(result, "skills");
-      expect(skills.detail).toContain("tdd");
+      expect(skills.detail).toContain("operator skill");
       // The fix is the routine that owns the sources and the store, not a bare
       // `npx skills add`, which would install a name into neither reliably.
       expect(skills.fix).toBe(`sh ${rig.baselineDir}/prepare.sh`);
-      // The ones that are still there are not reported as missing.
-      expect(skills.detail).not.toContain("code-review");
     }),
   ));
 
@@ -326,60 +325,93 @@ test("every failing check carries its fix, and the message lists them", () =>
     }),
   ));
 
-test("an override that keeps the old expensive flow is reported with the edit, and never edited", () =>
+test("what is overridden here is named, never judged and never edited", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* healthy();
-      const project = `${rig.projectDir}/.herdr`;
-      const bundled = yield* fs.readFileString(`${rig.baselineDir}/workflows/implement.md`);
-      // The 0.7 shape: architecture and simplify between the build and the review.
-      const old = bundled.replace(
-        /^  - id: review$/m,
+      const project = `${rig.projectDir}/.collie`;
+
+      // A module of an author's own, claiming a shipped id — the customisation the whole
+      // search path exists for. It is named, with no opinion about what is in it.
+      const modules = `${project}/workflows`;
+      yield* fs.makeDirectory(modules, { recursive: true });
+      const mine = `${modules}/review.workflow.ts`;
+      yield* fs.writeFileString(
+        mine,
         [
-          "  - id: architecture",
-          "    persona: architect",
-          "    output: architecture.json",
-          "  - id: simplify",
-          "    persona: implementer",
-          "    agent: build",
-          "    output: simplify.json",
-          "  - id: review",
+          `import { defineWorkflow } from "collie";`,
+          `import { Effect } from "effect";`,
+          `export default defineWorkflow({`,
+          `  id: "review",`,
+          `  title: "Our review",`,
+          `  description: "One reviewer, ours.",`,
+          `  run: () => Effect.void,`,
+          `});`,
         ].join("\n"),
       );
-      yield* writeDef(project, "workflows", "implement", old);
-      const review = yield* fs.readFileString(`${rig.baselineDir}/workflows/review.md`);
-      yield* writeDef(
-        project,
-        "workflows",
-        "review",
-        review.replace(
-          /^    parallel:\n      - \{ harness: claude, model: opus, effort: medium \}$/m,
-          "    parallel:\n      - { harness: claude, model: opus, effort: medium }\n      - { harness: codex, model: gpt-5, effort: high }",
-        ),
-      );
-      const before = yield* fs.readFileString(`${project}/workflows/implement.md`);
-
-      const result = yield* report();
-
-      const found = check(result, "workflows");
+      const found = check(yield* report(), "workflows");
       // Not a failure: a customisation is the user's, and doctor still exits clean.
       expect(found.ok).toBe(true);
-      expect(found.detail).toContain("implement still runs architecture and simplify");
-      expect(found.detail).toContain("review still runs 2 reviewers");
-      expect(found.fix).toContain(
-        `remove the architecture and simplify step(s) from ${project}/workflows/implement.md`,
-      );
-      expect(found.fix).toContain("keep one entry under `parallel:` of step review");
-      expect(yield* fs.readFileString(`${project}/workflows/implement.md`)).toBe(before);
+      expect(found.detail).toContain(`review (project, ${mine})`);
+      expect(found.fix).toBe("");
+      // Nothing about what any of them contains: an id doctor recognised would be the
+      // start of a shipped workflow being privileged over one somebody wrote.
+      expect(found.detail).not.toContain("still runs");
 
-      // An override that already has the current flow is just named.
-      yield* writeDef(project, "workflows", "implement", bundled);
-      yield* fs.remove(`${project}/workflows/review.md`);
-      const current = check(yield* report(), "workflows");
-      expect(current.ok).toBe(true);
-      expect(current.detail).toContain("overridden here, current flow: implement (project");
-      expect(current.fix).toBe("");
+      // A module that answers for an id and will not load is the one exception: the
+      // layer below it is not consulted, so nothing would run that id at all.
+      yield* fs.writeFileString(mine, "export const id = 1;\n");
+      const broken = check(yield* report(), "workflows");
+      expect(broken.detail).toContain("review:");
+      expect(broken.fix).toContain(mine);
+      expect(yield* fs.readFileString(mine)).toBe("export const id = 1;\n");
+
+      yield* fs.remove(project, { recursive: true, force: true });
+    }),
+  ));
+
+test("a template or a persona naming what nothing fills is named with the file it is in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      yield* healthy();
+      const project = `${rig.projectDir}/.collie`;
+      yield* fs.makeDirectory(`${project}/workflows`, { recursive: true });
+      yield* fs.makeDirectory(`${project}/personas`, { recursive: true });
+
+      // A template is checked where its module loads, against the input it declares.
+      const module = `${project}/workflows/templated.workflow.ts`;
+      yield* fs.writeFileString(
+        module,
+        [
+          `import { defineWorkflow, template } from "collie";`,
+          `import { Effect } from "effect";`,
+          `const told = template("Build {{plan}} as the {{role}}.", {});`,
+          `export default defineWorkflow({`,
+          `  id: "templated",`,
+          `  title: "Templated",`,
+          `  description: "Names a plan it never declares.",`,
+          `  run: () => Effect.succeed(told.text),`,
+          `});`,
+        ].join("\n"),
+      );
+      const workflows = check(yield* report(), "workflows");
+      expect(workflows.detail).toContain("templated:");
+      expect(workflows.detail).toContain("{{plan}}");
+      expect(workflows.detail).not.toContain("{{role}}");
+      expect(workflows.fix).toContain(module);
+
+      // A persona is told nothing but where its skills are.
+      const persona = `${project}/personas/nosy.md`;
+      yield* fs.writeFileString(persona, "Review {{inputs.target}} with {{skill:code-review}}.\n");
+      const personas = check(yield* report(), "personas");
+      expect(personas.detail).toBe(
+        `${persona}: it names {{inputs.target}}; a persona is told nothing but {{skill:name}}`,
+      );
+      expect(personas.fix).toBe("fix each file named");
+
+      yield* fs.remove(project, { recursive: true, force: true });
     }),
   ));
 

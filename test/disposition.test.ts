@@ -3,8 +3,8 @@
 // directions — leave the row red, or tidy the status — loses one of them.
 //
 // The nonmutation claim is worth nothing asserted over an object the code never saw, so
-// it is made against a real Run on disk, through the CLI a person actually types: the
-// bytes of `run.json` before and after, a repeated request id, and a read that reads.
+// it is made against a real Run, through the CLI a person actually types: its status
+// before and after, a repeated request id, and a read that reads.
 
 import { Effect, FileSystem, Schema } from "effect";
 import { expect, test } from "bun:test";
@@ -16,8 +16,8 @@ import {
   statusLine,
   type Disposition,
 } from "../src/disposition";
-import { RunStore } from "../src/run";
-import { runEffect } from "./support/effect";
+import { hosted, settledRun } from "./support/hosted";
+import { runEffect, watchedBy } from "./support/effect";
 
 const root = new URL("../", import.meta.url).pathname;
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
@@ -33,9 +33,15 @@ const parseEnvelope = Schema.decodeUnknownEffect(Envelope);
 
 /** The CLI as a person runs it, against a state directory that survives between calls. */
 const cli = Effect.fn("test.cli")(function* (args: string[], env: Record<string, string>) {
+  const watch = yield* watchedBy;
   const proc = Bun.spawn([Bun.argv[0] ?? "bun", join(root, "src/main.ts"), ...args], {
     cwd: root,
-    env: { HERDR_PLUGIN_ROOT: root, PWD: root, ...env },
+    env: {
+      HERDR_PLUGIN_ROOT: root,
+      PWD: root,
+      COLLIE_HOST_WATCH_PID: watch,
+      ...env,
+    },
     stdout: "pipe",
     stderr: "pipe",
   });
@@ -55,104 +61,68 @@ const line = (over: Partial<Disposition> = {}): Disposition => ({
 });
 
 test(
-  "the CLI records a disposition and leaves run.json byte-identical",
+  "the CLI records a disposition and leaves the Run's status as it was",
   () =>
-    runEffect(
+    hosted("hw-disposition-", ({ world }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const home = yield* fs.makeTempDirectory({ prefix: "collie-disposition-" });
-        const state = join(home, "state");
         const env = {
-          HERDR_PLUGIN_STATE_DIR: state,
-          HERDR_PLUGIN_CONFIG_DIR: join(home, "config"),
-          HOME: home,
+          HERDR_PLUGIN_ROOT: world.install,
+          HERDR_PLUGIN_STATE_DIR: world.state,
+          COLLIE_USER_DIR: world.config,
+          HOME: world.home,
         };
-
-        const store = new RunStore(state);
-        const run = yield* store.create({
-          workflow: "implement",
-          cwd: root,
-          inputs: {},
-          inputSources: {},
-          stepIds: ["build"],
-          maxIterations: 1,
-          namedAfter: "retro-delivery-evidence",
-        });
         // A Run that failed, which is the case this exists for.
-        run.record.status = "failed";
-        run.record.finished_at = "2026-09-10T09:00:00.000Z";
-        yield* run.save();
-
-        const file = join(run.dir, "run.json");
-        const before = yield* fs.readFileString(file);
+        const run = yield* settledRun(world, "retains");
+        const failed = "failed: merge: picker";
 
         // Reading before anything is recorded reads, and writes nothing.
         const empty = yield* cli(["--json", "run", "disposition", run.id], env);
         expect(empty.exit).toBe(0);
         expect(yield* parseEnvelope(empty.stdout)).toMatchObject({
           ok: true,
-          data: { status: "failed", disposition: null },
+          data: { status: failed, disposition: null },
         });
         expect(yield* fs.exists(yield* dispositionPath(run.dir))).toBe(false);
-        expect(yield* fs.readFileString(file)).toBe(before);
 
-        const recorded = yield* cli(
-          [
-            "--json",
-            "run",
-            "disposition",
-            run.id,
-            "--as",
-            "merged",
-            "--ref",
-            "cego/collie!43",
-            "--request-id",
-            "req-1",
-          ],
-          env,
-        );
+        const record = [
+          "--json",
+          "run",
+          "disposition",
+          run.id,
+          "--as",
+          "merged",
+          "--ref",
+          "cego/collie!43",
+          "--request-id",
+          "req-1",
+        ];
+        const recorded = yield* cli(record, env);
         expect(recorded.exit).toBe(0);
         expect(yield* parseEnvelope(recorded.stdout)).toMatchObject({
           ok: true,
-          data: { status: "failed", disposition: { kind: "merged", ref: "cego/collie!43" } },
+          data: { status: failed, disposition: { kind: "merged", ref: "cego/collie!43" } },
         });
-
-        // The whole point: the Run's own record is untouched, to the byte.
-        expect(yield* fs.readFileString(file)).toBe(before);
-        expect((yield* store.load(run.id)).record.status).toBe("failed");
         expect((yield* readDispositions(run.dir)).length).toBe(1);
 
         // A replayed request id returns the first result rather than recording twice.
-        const replay = yield* cli(
-          [
-            "--json",
-            "run",
-            "disposition",
-            run.id,
-            "--as",
-            "merged",
-            "--ref",
-            "cego/collie!43",
-            "--request-id",
-            "req-1",
-          ],
-          env,
-        );
+        const replay = yield* cli(record, env);
         expect(replay.exit).toBe(0);
         expect(yield* parseEnvelope(replay.stdout)).toMatchObject({ ok: true });
         expect((yield* readDispositions(run.dir)).length).toBe(1);
-        expect(yield* fs.readFileString(file)).toBe(before);
 
-        // And `run show` says both facts, without having written anything either.
+        // The whole point: how the Run ended is still how it ended.
+        expect(
+          yield* parseEnvelope((yield* cli(["--json", "run", "disposition", run.id], env)).stdout),
+        ).toMatchObject({ ok: true, data: { status: failed } });
+
+        // And `run show` says both facts.
         const shown = yield* cli(["run", "show", run.id], env);
         expect(shown.exit).toBe(0);
-        expect(shown.stdout).toContain("failed · merged cego/collie!43");
-        expect(yield* fs.readFileString(file)).toBe(before);
-
-        yield* fs.remove(home, { recursive: true, force: true });
+        expect(shown.stdout).toContain(`${failed} · merged cego/collie!43`);
       }),
-      // Four CLI spawns of a TypeScript entrypoint; the default 5s is not enough.
     ),
+  // Five CLI spawns of a TypeScript entrypoint; the default 5s is not enough.
   60_000,
 );
 

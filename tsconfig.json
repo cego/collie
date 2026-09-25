@@ -22,5 +22,8 @@
       }
     ]
   },
+  // Workflow modules an author would write, typechecked by the toolchain Collie
+  // provisions rather than by this project — one of them is deliberately wrong.
+  "exclude": ["test/fixtures/workflows"],
   "include": ["src", "test"]
 }

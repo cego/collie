@@ -51,7 +51,7 @@ function resultNote(result: Card["verifications"][number]["result"]): string {
 export function cardLines(card: Card): Line[] {
   const lines: Line[] = [
     line(
-      `${card.kind} · ${card.step} · iteration ${card.iteration} · ${short(card.revision.head_sha)} · ${card.significance}`,
+      `${card.kind} · ${card.step} · ${short(card.revision.head_sha)} · ${card.significance}`,
       "accent",
     ),
   ];

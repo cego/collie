@@ -3,11 +3,11 @@
 // checkout, two Runs building different branches cannot collide, and nothing has to
 // invent an identity for a directory.
 //
-// By default Collie makes the checkout with git and the Run stays in the workspace it
-// was activated from, because a Run belongs where it was started and herdr groups a
-// workspace by Git provenance alone (ADR-0006). `--input workspace=new` asks herdr for
-// the checkout instead, which gives the Run a workspace of its own. A record says which
-// it was, because that is who takes the checkout away again.
+// By default Collie makes the checkout with git and the Run stays in its Task's
+// workspace, because a Run belongs where its Task is and herdr groups a workspace by Git
+// provenance alone (ADR-0006). A Run that asks for a workspace of its own has herdr make
+// the checkout instead. A record says which it was, because that is who takes the
+// checkout away again.
 
 import { Clock, Effect, FileSystem, Option, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
@@ -19,6 +19,7 @@ import {
   type WorktreeListing,
 } from "./herdr";
 import type { CheckoutKind } from "./definitions";
+import { diffTargetOf, gitlabRepositoryOf, workSourceOf } from "./strategies";
 import { defaultBase } from "./inputs";
 import { disambiguate, GLYPH, tabLabel } from "./naming";
 import {
@@ -33,7 +34,10 @@ import {
   type Runner,
 } from "./mr";
 import { withLock } from "./lock";
-import { resumable, RunStore, type WorktreeRecord } from "./run";
+import type { AgentEntry } from "./registry";
+import type { WorktreeRecord } from "./run";
+// Type-only: the host imports this module, and `runs.ts` reads through the host.
+import type { RunFacts } from "./runs";
 import { slugify } from "./template";
 
 /**
@@ -61,13 +65,11 @@ export function roams(checkout: CheckoutKind): boolean {
 }
 
 /**
- * The Input naming which local checkout a roaming Run is cut from; empty is the cwd.
- * Not `repo`, which `implement` already declares for a plan's own `Repo:` value.
+ * What a roaming Run's checkout is called under the repository's worktrees directory. The
+ * workflow that first needed one was `renovate`, and naming the directory after it made
+ * every other roaming workflow look like that one.
  */
-export const REPOSITORY_INPUT = "repository";
-
-/** What a roaming Run's checkout is called under the repository's worktrees directory. */
-const ROAMING_DIR = "renovate";
+const ROAMING_DIR = "roaming";
 
 const remoteRepository = (value: string) =>
   /^(?:https?:\/\/|ssh:\/\/|[^@\s]+@)/.test(value) && projectFromRemote(value) !== null;
@@ -93,8 +95,10 @@ export interface BranchAsk {
   /** What this Run is called, which is what a new branch is named after. */
   name: string;
   inputs: Record<string, string>;
+  /** Which strategy settled each Input, which is how the work source and target are found. */
+  strategies?: Record<string, string> | undefined;
   /**
-   * Where each Input's value came from, which for `target` is the whole question: a
+   * Where each Input's value came from, which for a diff target is the whole question: a
    * target Collie inferred names the branch the caller is *standing on*, and building
    * that branch would hand the Run the checkout that branch already has — the
    * operator's own tree. Only a target a human gave names a branch to build.
@@ -119,14 +123,19 @@ export interface CheckoutAsk extends BranchAsk {
   workflow: string;
   /** What the Workflow declared it needs of the repository. */
   checkout: CheckoutKind;
-  /** The workspace the Run was activated from, and stays in. */
+  /** Whether the Run asked for a herdr worktree workspace of its own. */
+  separate?: boolean;
+  /** The workspace the Run lives in, which is its Task's. */
   workspaceId?: string | null;
   workspaceLabel?: string | null;
   /** What to call a workspace herdr opens for this checkout, where it opens one. */
   openLabel?: string | null;
-  /** Where the Run records live, which is what says who already holds a checkout. */
   stateDir: string;
+  /** Which Run recorded the checkout at a path, where one did. */
+  recordedBy?: RecordedBy;
 }
+
+export type RecordedBy = (at: string) => Effect.Effect<string | null>;
 
 /** Where a branch came from, for the line that tells the operator what was decided. */
 export type BranchSource =
@@ -297,23 +306,24 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   // has to be cut from that work, and a name for work that does not exist yet cannot be.
   // A review-source Run reads the target itself, and refuses a head that is not a
   // branch — so the target rule after this one is for Runs starting fresh work.
-  if (opts.inputs.plan_kind === "review") {
-    const reviewed = yield* reviewedBranch(opts.cwd, opts.inputs, run);
+  const work = workSourceOf(opts);
+  if (work?.kind === "review") {
+    const reviewed = yield* reviewedBranch(opts.cwd, opts, run);
     // Nothing the caller could say settles a review with no branch to fix: the work
     // being fixed is on a branch or it is not.
     if (reviewed.refused !== undefined) return refusedName(reviewed.refused);
     return verbatim(reviewed.branch, "from the reviewed branch", reviewed.reviewed);
   }
-  const fromTarget = said(opts, "target") ? targetBranch(opts.inputs.target ?? "") : null;
+  const target = diffTargetOf(opts);
+  const fromTarget = target && said(opts, target.name) ? targetBranch(target.value) : null;
   if (fromTarget) return verbatim(fromTarget, "from target");
   const task = opts.inputs[TASK_INPUT]?.trim();
   if (task) return generated(task, "from the task");
-  const work = workSource(opts.inputs);
   // The plan directory's own name, not the path to it: every plan under one `tasks/`
   // directory slugs the same way. Only one the operator named, though — a plan
   // directory Collie itself pointed at is `<run.dir>/plan`, from a chained Run or from
   // the picker's offer of a finished plan, and every one of those is called `plan`.
-  if (work?.kind === "plan-dir" && said(opts, "plan")) {
+  if (work?.kind === "plan-dir" && said(opts, work.name)) {
     return generated(path.basename(work.value), "from plan", work.value);
   }
   // The work itself where the operator described it — the whole of what they said, not
@@ -324,7 +334,7 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   // Two sources, because they are two answers: a description the operator typed is the
   // work itself, and the confirm line saying "from the run name" for it would name the
   // wrong thing as what decided.
-  const described = work !== null && said(opts, "plan");
+  const described = work !== null && said(opts, work.name);
   if (described) return generated(work.value, "from the work");
   // The Run's own name, told apart by the work behind it: a Workflow that declares no
   // Input naming the work — `architecture` — is called nothing at all, and two of those
@@ -428,26 +438,16 @@ function targetBranch(target: string): string | null {
 }
 
 /**
- * The work this Run was pointed at, and null for a Workflow that takes none. `plan` by
- * name, as `branchName`'s review rule reads `plan_kind`: a work source under any other
- * name is already invisible to both, and one of them quietly coping would only hide it.
- */
-function workSource(inputs: Record<string, string>): { kind: string; value: string } | null {
-  const value = inputs.plan?.trim();
-  return value ? { kind: inputs.plan_kind ?? "", value } : null;
-}
-
-/**
  * The branch the reviewed target lives on. Anything this cannot establish is a
  * refusal, not a guess: `glab` that would not answer, a merge request with no source
  * branch, a diff of two shas, a detached HEAD.
  */
 const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
   cwd: string,
-  inputs: Record<string, string>,
+  opts: BranchAsk,
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>,
 ) {
-  const target = inputs.target ?? "";
+  const target = diffTargetOf(opts)?.value ?? "";
   const mr = parseMrTarget(target);
   if (mr) {
     // A merge request in another project cannot be fixed from this checkout at all:
@@ -512,9 +512,6 @@ const isBranch = Effect.fn("worktree.isBranch")(function* (
   return false;
 });
 
-/** `--input workspace=new`: today's separate herdr worktree workspace, asked for. */
-const SEPARATE_WORKSPACE = "new";
-
 /**
  * A branch as a path under the worktrees directory. Its own segments, so `feature/foo`
  * nests rather than being flattened: flattening it to `feature-foo` would collide with
@@ -553,7 +550,7 @@ const gitWorktrees = Effect.fn("worktree.gitWorktrees")(function* (
 /**
  * The repository a checkout belongs to, by name — git's own main worktree, not the
  * directory the Run happens to be standing in. A mutating Run's cwd is named after its
- * branch, and a roaming one's is the literal `renovate`, so neither basename is the
+ * branch, and a roaming one's after nothing at all, so neither basename is the
  * repository's. Null where git will not say.
  */
 export const repositoryName = Effect.fn("worktree.repositoryName")(function* (
@@ -680,14 +677,6 @@ const occupant = Effect.fn("worktree.occupant")(function* (at: string) {
   return { owner: /gitdir:\s*(.+?)\/\.git\/worktrees\//.exec(marker)?.[1] ?? null };
 });
 
-/** The Run that recorded this checkout, where one did. Proof, not inference. */
-const recordedBy = Effect.fn("worktree.recordedBy")(function* (stateDir: string, at: string) {
-  for (const run of yield* new RunStore(stateDir).list()) {
-    if (run.record.worktree?.path === at) return run.record.id;
-  }
-  return null;
-});
-
 /**
  * Why this destination cannot be used, from what is actually known about it: which
  * repository git says owns it, and which Run — if any — recorded it. Neither is
@@ -695,7 +684,7 @@ const recordedBy = Effect.fn("worktree.recordedBy")(function* (stateDir: string,
  */
 const occupiedBy = Effect.fn("worktree.occupiedBy")(function* (opts: {
   at: string;
-  stateDir: string;
+  recordedBy?: RecordedBy | undefined;
 }) {
   const taken = yield* occupant(opts.at);
   if (!taken) return null;
@@ -703,7 +692,7 @@ const occupiedBy = Effect.fn("worktree.occupiedBy")(function* (opts: {
     taken.owner === null
       ? "a checkout that does not say which repository it belongs to"
       : `a checkout of ${taken.owner}`;
-  const run = yield* recordedBy(opts.stateDir, opts.at);
+  const run = opts.recordedBy === undefined ? null : yield* opts.recordedBy(opts.at);
   return `${opts.at} is ${owner}${run === null ? "" : `, recorded by Run ${run}`}`;
 });
 
@@ -721,6 +710,7 @@ const roamingCheckout = Effect.fn("worktree.roamingCheckout")(function* (opts: {
   cwd: string;
   worktrees: string;
   stateDir: string;
+  recordedBy?: RecordedBy | undefined;
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
 }) {
   const path = yield* Path.Path;
@@ -743,14 +733,14 @@ const roamingCheckout = Effect.fn("worktree.roamingCheckout")(function* (opts: {
 const claimRoaming = Effect.fn("worktree.claimRoaming")(function* (opts: {
   at: string;
   repo: string;
-  stateDir: string;
+  recordedBy?: RecordedBy | undefined;
   run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
 }) {
   const { at, run } = opts;
   // Never a shared working tree, and never a takeover: whatever is there — this
   // repository's earlier Run, another repository of the same name, or something that
   // will not say — is a refusal that reports what is known about it.
-  const occupied = yield* occupiedBy({ at, stateDir: opts.stateDir });
+  const occupied = yield* occupiedBy({ at, recordedBy: opts.recordedBy });
   if (occupied !== null) return { refused: occupied };
 
   // "As the remote has it" is a fetch, not this checkout's memory of the last one: a
@@ -791,32 +781,13 @@ export interface Checkout {
 }
 
 /**
- * What a Run created for this Checkout is called: the whole of what it is named after,
- * and the shorter form its slug is cut from.
- *
- * The branch already resolves what the Run is about, so it names the Run — but only its
- * task half reaches the slug: the login is the same on every branch one operator
- * generates, and spending the slug's length cap on it makes two Runs one row.
- *
- * `otherwise` is for a Run with no checkout of its own: what it was pointed at, and the
- * short label beside it, exactly as `primaryName` answers with them.
- */
-export function runNames(checkout: Checkout, otherwise: { value: string; short: string }) {
-  return {
-    namedAfter: checkout.branch ?? otherwise.value,
-    slugFrom: checkout.task ?? otherwise.short,
-  };
-}
-
-/**
  * Where this Run works. A Workflow that changes the repository owns its branch's
  * checkout; every other Workflow works in the directory it was started from.
  *
- * The Run stays in the workspace it was activated from, and only its cwd moves: the
- * work surrounding a task is encapsulated in its workspace, and a checkout of its own
- * is about not sharing an index, not about being somewhere else in the sidebar.
- * `workspace=new` asks herdr for the checkout instead and takes the workspace herdr
- * opens on it.
+ * The Run stays in its Task's workspace, and only its cwd moves: the work surrounding a
+ * task is encapsulated in its workspace, and a checkout of its own is about not sharing
+ * an index, not about being somewhere else in the sidebar. `separate` asks herdr for the
+ * checkout instead and takes the workspace herdr opens on it.
  *
  * A mutating Workflow that cannot be given a worktree does not start. Falling back to
  * the directory it was launched from is what this whole mechanism exists to prevent:
@@ -842,7 +813,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   if (!mutates(opts.checkout)) return here;
 
   if (roams(opts.checkout)) {
-    const repository = opts.inputs[REPOSITORY_INPUT]?.trim() || "";
+    const repository = gitlabRepositoryOf(opts)?.value ?? "";
     let from = repository || opts.cwd;
     const project = remoteRepository(repository)
       ? (projectFromRemote(repository)?.split("/-/")[0] ?? null)
@@ -891,6 +862,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
       cwd: from,
       worktrees: yield* herdr.worktreesDirectory(),
       stateDir: opts.stateDir,
+      recordedBy: opts.recordedBy,
       run: (cmd, args, cwd) => shell(cmd, args, cwd, "say"),
     });
     if (made.refused !== undefined) {
@@ -927,10 +899,7 @@ export const checkoutFor = Effect.fn("worktree.checkoutFor")(function* (
   const refuse = (why: string) =>
     ({ ...here, refused: `no worktree for ${plan.branch}: ${why}` }) satisfies Checkout;
 
-  // The Workflow's own `workspace` Input, so both front doors and a chained Run reach
-  // it the same way: `startRun` settles it from `--input`, and the Choice that chains
-  // `implement` forwards the parent's answer.
-  if (opts.inputs.workspace?.trim() === SEPARATE_WORKSPACE) {
+  if (opts.separate === true) {
     // The Task's own name where the caller worked one out, so the workspace herdr opens
     // reads like every other task workspace rather than like the branch under it.
     const label =
@@ -1044,7 +1013,7 @@ const inUse = Effect.fn("worktree.inUse")(function* (
   opts: {
     paths: ReadonlyMap<string, string>;
     keep?: string | undefined;
-    /** The tabs finished Runs left behind, whose agents hold nothing unless still working. */
+    /** The panes finished Runs' agents were left in, which hold nothing unless still working. */
     leftovers: ReadonlySet<string>;
   },
 ) {
@@ -1056,7 +1025,7 @@ const inUse = Effect.fn("worktree.inUse")(function* (
     if (!pane.agent) continue;
     // A Run's own agent, idle in the tab it left behind, is what the removal closes —
     // counting it as work in progress kept every finished Run's checkout forever.
-    if (opts.leftovers.has(pane.tabId) && pane.agentStatus !== "working") continue;
+    if (opts.leftovers.has(pane.paneId) && pane.agentStatus !== "working") continue;
     // Both directories: an agent started in the repository and `cd`-ed into a checkout
     // is working in the checkout, whatever the pane was opened on.
     for (const dir of [pane.cwd, pane.foregroundCwd]) {
@@ -1077,8 +1046,8 @@ const inside = (at: string, dir: string | null | undefined) =>
 /**
  * Closes the tabs a removed checkout leaves behind: shells still sitting in a
  * directory that is gone, which nothing else would ever close. Only the tabs the
- * finished Runs of that checkout recorded, and only while every pane in one is inside
- * it — a tab a human has since split or reused is theirs, not the Run's leftovers.
+ * finished Runs of that checkout left their agents in, and only while every pane in one
+ * is inside it — a tab a human has since split or reused is theirs, not a leftover.
  *
  * Answers with how many would not close. This is the only chance: the checkout is
  * already gone from herdr's listing, so it is no longer a candidate and no later sweep
@@ -1201,39 +1170,32 @@ const unpushedWork = Effect.fn("worktree.unpushedWork")(function* (
 });
 
 /**
- * What the run records say about the worktrees of this machine: the ones Collie made,
- * by path, and the ones a Run is still driving. A checkout a human made appears in no
- * record, so it is never a candidate for removal.
+ * What the Runs say about the worktrees of this machine: the ones Collie made, by path,
+ * and the ones a Run is still working in. A checkout a human made appears in no Run, so
+ * it is never a candidate for removal.
  */
-const fromRuns = Effect.fn("worktree.fromRuns")(function* (stateDir: string) {
+function fromRuns(runs: ReadonlyArray<RunFacts>, registered: ReadonlyArray<AgentEntry>) {
   const mine = new Map<string, WorktreeRecord>();
   const paths = new Map<string, string>();
-  /** The tabs each checkout's finished Runs opened, which are the ones left in it. */
-  const tabs = new Map<string, Set<string>>();
-  for (const run of yield* new RunStore(stateDir).list()) {
-    // Anything a `resume` could pick up again, by the same rule `run resume` lists
-    // them: a Run left `blocked` at a Choice, or by an agent that stopped, restarts in
-    // the directory it recorded. And whatever its Driver is doing, since a crashed or
-    // restarting Driver is not evidence that the Run is over.
-    const resumeCould = resumable(run);
-    if (resumeCould) paths.set(run.record.cwd, "a run could still be resumed in it");
-
-    const worktree = run.record.worktree;
+  /** The panes each checkout's finished Runs left their agents in. */
+  const panes = new Map<string, Set<string>>();
+  for (const run of runs) {
+    const going = run.state === "running" || run.state === "waiting";
+    // A stop suspends a live Run rather than ending it.
+    const resumable = run.state === "stopped";
+    if (going) paths.set(run.cwd, "a run is still working in it");
+    else if (resumable) paths.set(run.cwd, "a stopped run can resume in it");
+    const worktree = run.worktree;
     if (!worktree?.created_by_collie) continue;
     mine.set(worktree.path, worktree);
-    // A Run that could still be resumed keeps its checkout anyway, so its tabs are
-    // nobody's leftovers yet.
-    if (resumeCould) continue;
-    const opened = tabs.get(worktree.path) ?? new Set<string>();
-    for (const step of run.record.steps) {
-      for (const variant of step.variants) {
-        if (variant.tabId) opened.add(variant.tabId);
-      }
-    }
-    tabs.set(worktree.path, opened);
+    // A Run that may still go keeps its checkout anyway, so its agents are nobody's leftovers.
+    if (going || resumable) continue;
+    const left = panes.get(worktree.path) ?? new Set<string>();
+    for (const entry of registered) if (entry.runId === run.id) left.add(entry.paneId);
+    panes.set(worktree.path, left);
   }
-  return { mine, paths, tabs };
-});
+  return { mine, paths, panes };
+}
 
 /**
  * Removes the worktrees this repository has that are settled, and reports what it did
@@ -1245,6 +1207,10 @@ const fromRuns = Effect.fn("worktree.fromRuns")(function* (stateDir: string) {
 interface PruneOptions {
   herdr: Herdr;
   stateDir: string;
+  /** Every Run there is, which says which checkouts Collie made and which are in use. */
+  runs: ReadonlyArray<RunFacts>;
+  /** Every agent registered, which says which panes a finished Run left behind. */
+  registered: ReadonlyArray<AgentEntry>;
   cwd: string;
   /** A checkout the caller is about to work in, which is therefore in use. */
   keep?: string;
@@ -1255,7 +1221,7 @@ interface PruneOptions {
 /** One repository's round: what herdr lists for it, against what the Runs recorded. */
 const prune = Effect.fn("worktree.prune")(function* (
   opts: PruneOptions & {
-    runs: Effect.Success<ReturnType<typeof fromRuns>>;
+    recorded: ReturnType<typeof fromRuns>;
     listing: WorktreeListing | null;
   },
 ) {
@@ -1278,7 +1244,7 @@ const prune = Effect.fn("worktree.prune")(function* (
   );
   const before = `${Schema.encodeSync(PruneStateJson)(state)}\n`;
 
-  const { mine, paths, tabs } = opts.runs;
+  const { mine, paths, panes } = opts.recorded;
   const listing = opts.listing;
   // Path, branch and the moment git wrote the checkout, all from the record that made
   // it: a Collie worktree removed by hand and a human's worktree later made at the
@@ -1324,7 +1290,7 @@ const prune = Effect.fn("worktree.prune")(function* (
   // this round rather than judged on an empty list. The board still hears about every
   // candidate being held, and nothing is written down: an unverified round is not a
   // verdict, so the next refresh asks again rather than waiting out the debounce.
-  const leftovers = new Set([...tabs.values()].flatMap((opened) => [...opened]));
+  const leftovers = new Set([...panes.values()].flatMap((left) => [...left]));
   const use = yield* inUse(opts.herdr, { paths, keep: opts.keep, leftovers });
   if (!use) {
     const standing = yield* conclude(round);
@@ -1347,7 +1313,11 @@ const prune = Effect.fn("worktree.prune")(function* (
             repo,
             run,
             managedBy: mine.get(worktree.path)?.managed_by ?? "herdr",
-            tabs: tabs.get(worktree.path) ?? new Set<string>(),
+            tabs: new Set(
+              use.panes
+                .filter((pane) => panes.get(worktree.path)?.has(pane.paneId) ?? false)
+                .map((pane) => pane.tabId),
+            ),
             panes: use.panes,
           })
         : { line: `kept ${name} · ${verdict.keep}`, removed: false };
@@ -1410,7 +1380,7 @@ const removeWorktree = Effect.fn("worktree.removeWorktree")(function* (
     run: Runner<ChildProcessSpawner.ChildProcessSpawner>;
     /** Who made this checkout, which is who is allowed to take it away. */
     managedBy: "git" | "herdr";
-    /** The tabs its finished Runs opened, closed with the checkout they sit in. */
+    /** The tabs its finished Runs' agents were left in, closed with the checkout. */
     tabs: ReadonlySet<string>;
     panes: ReadonlyArray<PaneInfo>;
   },
@@ -1501,11 +1471,11 @@ export const pruneWorktrees = (opts: PruneOptions) =>
  */
 const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
   const fs = yield* FileSystem.FileSystem;
-  const runs = yield* fromRuns(opts.stateDir);
+  const recorded = fromRuns(opts.runs, opts.registered);
   const lines: string[] = [];
   const listed = new Set<string>();
   // One `herdr worktree list` per live checkout, every sweep. Cheap while checkouts are few.
-  for (const cwd of new Set([opts.cwd, ...runs.mine.keys()])) {
+  for (const cwd of new Set([opts.cwd, ...recorded.mine.keys()])) {
     const own = cwd === opts.cwd;
     // A checkout an earlier listing named is in a repository already swept.
     if (!own && (listed.has(cwd) || !(yield* fs.exists(cwd)))) continue;
@@ -1514,7 +1484,7 @@ const sweep = Effect.fn("worktree.sweep")(function* (opts: PruneOptions) {
       .pipe(Effect.catch(() => Effect.succeed<WorktreeListing | null>(null)));
     if (!own && (listing === null || listing.worktrees.every((w) => listed.has(w.path)))) continue;
     for (const worktree of listing?.worktrees ?? []) listed.add(worktree.path);
-    lines.push(...(yield* prune({ ...opts, cwd, runs, listing })));
+    lines.push(...(yield* prune({ ...opts, cwd, recorded, listing })));
   }
   return lines;
 });

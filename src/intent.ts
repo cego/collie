@@ -6,9 +6,7 @@
 // `extractRequirements` returns constraints and a goal and has no way to return a grant.
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
-import { withRunLock } from "./run";
-// The schema lives there and not here because `run.json` records an approved set too, and
-// `run.ts` cannot import this module: this one imports `withRunLock` from it.
+import { withDirLock } from "./lock";
 import { VerifySpecSchema, type VerifySpec } from "./verify-spec";
 
 export { VerifySpecSchema, type VerifySpec };
@@ -107,6 +105,22 @@ export const DefaultsSchema = Schema.Struct({
 export type Defaults = Schema.Schema.Type<typeof DefaultsSchema>;
 export const DefaultsJson = Schema.fromJsonString(DefaultsSchema);
 
+/**
+ * What a front door knows of a new Run's Intent: the defaults of the workspace it was
+ * started from, and the goal and constraints named at launch. The host adds what the work
+ * source asks for and what the Run may verify, and writes version 1 before any work runs.
+ */
+export const IntentSeedSchema = Schema.Struct({
+  defaults: Schema.optionalKey(DefaultsSchema),
+  goal: Schema.optionalKey(Schema.String),
+  constraints: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({ ...ConstraintSchema.fields, since: Schema.optionalKey(Schema.Int) }),
+    ),
+  ),
+});
+export type IntentSeed = typeof IntentSeedSchema.Type;
+
 const IntentJson = Schema.fromJsonString(IntentSchema);
 const encodeIntent = Schema.encodeSync(IntentJson);
 
@@ -132,7 +146,7 @@ export const readIntent = Effect.fn("Intent.read")(function* (dir: string) {
 });
 
 /**
- * The write itself, for a caller already inside `withRunLock`. An amendment is a read,
+ * The write itself, for a caller already inside `withDirLock`. An amendment is a read,
  * a decision and a write, and only all three under one lock stop two of them reading the
  * same version and the later rename erasing the earlier.
  */
@@ -150,7 +164,7 @@ export const writeIntentHeld = Effect.fn("Intent.writeHeld")(function* (
 });
 
 export const writeIntent = Effect.fn("Intent.write")(function* (dir: string, intent: Intent) {
-  yield* withRunLock(dir, writeIntentHeld(dir, intent));
+  yield* withDirLock(dir, writeIntentHeld(dir, intent));
 });
 
 /** A constraint is identified by what it says, so the same text is the same entry. */
@@ -219,7 +233,7 @@ export interface SeedOptions {
   /** What the human typed, and what the work source's own text asked for. */
   readonly constraints?: ReadonlyArray<Omit<Constraint, "since"> & { since?: number }>;
   /**
-   * The approved set the Run was started with — `.herdr/verify.json` as read at start.
+   * The approved set the Run was started with — `.collie/verify.json` as read at start.
    * Written into `run_verification` so the Intent *is* the set from version 1, and `run
    * intent verification` amends one list rather than a list that shadows another.
    */

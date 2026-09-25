@@ -1,5 +1,9 @@
 # Collie steers through the Driver
 
+[ADR-0029](0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md) puts the host where this decision puts the Driver:
+the host is the one actor over a Run's agents. The Dispatcher, the ledger and its states
+stand as decided here.
+
 **Status: proposed.** The design is implemented and tested; what is outstanding is the
 live evidence it depends on — see Consequences.
 

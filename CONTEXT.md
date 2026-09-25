@@ -2,25 +2,25 @@
 
 ## Glossary
 
-**Workflow** — A named, ordered list of Steps with declared Inputs. Deterministic in sequence; agents may hand off to each other. Defined in one markdown file (frontmatter + prompt body). May embed another Workflow by reference (`use:`).
+**Workflow** — A TypeScript module saved as `<id>.workflow.ts` whose default export is its definition: its public id, what it takes and gives back, what it declares — hints, outcome, checkout, offers and the agents it prefers — and `run`, ordinary Effect code the host executes as a Run. It asks an agent with `agentWork`, a human with `ask` and another Workflow with `child`, each when the work reaches it, and composes everything else as ordinary TypeScript. Found where it was saved (see **Layer**); a shipped Workflow is one more module and gets nothing a user's does not.
 
-**Step** — One unit of agent work inside a Workflow. Runs in its own Tab. Has a Persona, a Harness, a Model, optionally the Skill it drives, and optionally a structured Output. May be `fresh` (new agent each iteration) or continue the existing agent.
+**Operation** — One piece of agent work inside a Run, named by the Workflow that asks for it. The name is its identity: the agent's name, its prompt and Output files and the Activities that make it durable come from it, so it is stable within a Run and differs from every other. It has a role, injected as a Persona, a Harness, a Model, optionally the Skill it starts, and the schema its Output must decode against. An agent it starts gets a Tab of its own in its Task's workspace, labelled with its role; an operation that reuses an agent opens nothing.
 
 **Trust** — A Harness's own answer to "may I work in this directory". Starting a Run grants it for the selected directory by default, without a duplicate Collie question. `never` leaves the question to the harness.
 
-**Permissions** — Who decides whether an agent's tool call runs: Collie up front (`bypass`, the default, which starts each agent with its harness's unattended switch), or the harness in the agent's own pane (`harness`). Trust is answered once per directory; this is decided per agent start, and a Step may name its own mode. Trust is about the directory, Permissions about the calls made inside it.
+**Permissions** — Who decides whether an agent's tool call runs: the harness's own automatic review (`auto`, the default, which starts each agent in its harness's auto mode), no one (`bypass`, which an operator opts into, and which is auto mode wherever the harness's managed settings forbid it), or the harness's prompt in the agent's own pane (`harness`). Trust is answered once per directory; this is decided per agent start, and an operation may name its own mode. Trust is about the directory, Permissions about the calls made inside it.
 
-**Skill** — A named routine the harnesses share. Installed globally by the skills.sh CLI (`npx skills add … -g`) into `~/.agents/skills`, which is the standard location every harness but Claude Code reads directly; Claude Code gets an explicit symlink from the same CLI. A Step names the one it drives, and the prompt is sent as `/<skill> …`: many skills refuse an agent that starts them itself, and only the human's channel may invoke those.
+**Skill** — A named routine the harnesses share. Installed globally by the skills.sh CLI (`npx skills add … -g`) into `~/.agents/skills`, which is the standard location every harness but Claude Code reads directly; Claude Code gets an explicit symlink from the same CLI. An operation names the one it starts, and the prompt is sent as `/<skill> …`: many skills refuse an agent that starts them itself, and only the human's channel may invoke those.
 
 **Persona** — Harness-agnostic instructions injected when an agent starts (e.g. implementer, reviewer). Not a harness-native config file.
 
-**Harness** — The agent CLI a Step runs in (claude, codex, opencode, …). User default, per-Step override.
+**Harness** — The agent CLI an operation's agent runs in (claude, codex, opencode, …). Decided with its Model and effort, layer over layer: the user's default, the Workflow's own, the Run's, a scope around the work, the operation's own. Switching it keeps no Model chosen for another; an agent already running cannot switch.
 
-**Model** — The model a Harness is asked to use. User default, per-Step override. Unknown model ⇒ launch fails before any Tab opens.
+**Model** — The model a Harness is asked to use, decided with its Harness. One the Harness does not take is refused before any Tab opens; left open, it is the Harness's own default.
 
 **Input** — A value a Workflow needs (plan directory, diff target, goal). Inferred from context (branch, cwd, earlier plan Runs, glab); the human is asked only when inference fails.
 
-**Output** — A structured JSON file a Step writes to the Run directory (e.g. a review verdict + findings). Gates and loops read Outputs, never terminal text.
+**Output** — A structured JSON file an agent writes to the Run directory for one operation (e.g. a review verdict + findings). It is decoded against the Workflow's schema before anything believes it, and one that does not decode buys one repair. Workflows read Outputs, never terminal text.
 
 **Herd** — One herdr session: every workspace in it. The scope of the Collie tab, the
 conversation, proposals, the budget and elections. Keyed by the canonical path of the
@@ -87,10 +87,11 @@ the one path that may is `collie_do`, which carries the yes the human said in th
 records it as `chat:`. No action kind confirms anything, so a Proposal can never contain
 its own.
 
-**Delivery** — One message to one live agent incarnation, with states `queued` (held by
-the Driver for the agent's next prompt), `reserved`, `submitted`, `acknowledged`,
-`verified` and the terminal `failed`, `unknown`, `superseded`, `expired`. They are separate
-because they are separate facts. A `deliver` with no mode is `now`.
+**Delivery** — One message to one live agent incarnation, with states `queued` (a boundary
+delivery an older Collie held for the agent's next prompt), `reserved`, `deferred` (herdr answered that the
+pane cannot take it yet, so it is tried again under the same id), `submitted`,
+`acknowledged`, `verified` and the terminal `failed`, `unknown`, `superseded`, `expired`.
+They are separate because they are separate facts. A `deliver` with no mode is `now`.
 
 **Dispatcher** — The only code that sends text to an agent. Holds that agent's ledger lock
 across the compaction decision, the composition and the send.
@@ -114,15 +115,14 @@ corrections to it stop until an explicit `run clear-override`; nothing times it 
 before and after. A result whose snapshots differ is `unstable`, never `pass`. An agent's
 statement about tests is a **claim**, and is shown as one.
 
-**Card** — A Driver-written record of one slice of work: what was asked for, what changed,
+**Card** — Collie's record of one slice of work: what was asked for, what changed,
 what backs it, and what nobody checked. Its **readiness** — `claimed`, `inspect-ready`,
 `verified` — says how far the evidence goes and no further.
 
 **Significance** — Whether a Card is worth interrupting a human for, decided by rules over
 facts: `decision` > `consequential` > `try-it` > `routine`. A narrative never raises it.
 
-**Hold** — The Driver dispatches no new work until released. It takes effect at a work
-boundary, so what is already running finishes.
+**Hold** — A Run under a hold starts no new work until a human releases it. It takes effect at the Run's next boundary, so what is already running finishes. Nothing lifts a hold at a time.
 
 **Conversation** — The durable journal of human and Collie turns for a Herd, plus the turns
 the board starts (`event`) when something meaningful changes — recorded as the board's, never
@@ -132,13 +132,13 @@ never a worker transcript.
 **Follow-up Run** — A child Run started from a finished one to act on its outcome, reusing
 its worktree under guards. A finished Run is immutable; there is no mode that reopens one.
 
-**Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request. Everything Collie says about drift is a comparison against it.
+**Intent** — A Run's goal, the Constraints its work must respect, and the Authority delegated to Collie over it. Versioned; v1 is written at start from the workspace's defaults, the work source's own text and what was named at launch, and amended by an explicit request. Everything Collie says about drift is a comparison against it. A Run of a Workflow module carries none yet — `run start` refuses `--goal` and `--constraint` for one — so nothing checks it for drift; what imported Runs recorded stays readable.
 
 **Constraint** — One thing a Run's work must respect. `kind: rule` is checked by Collie itself; `kind: semantic` is judged. `severity: block | warn`. Its `source` says where it came from — `human`, `workspace-default`, `parent` or `plan` — and a `plan` entry carries the file, heading and line it was read from. Text is evidence: no Constraint, wherever it came from, grants Authority.
 
 **Authority** — What Collie may do to a Run without a new request: correct drift, send at a work boundary or interrupt, stop the Run, and how many corrections a constraint gets. Per Run, every grant off by default, and set by an explicit command or request — never inferred from repository content or worker output. Model-call usage is recorded per Run and per Herd but is not an Authority: it is data, and never a quota that blocks work.
 
-**Run** — One execution of a Workflow: its Inputs, Step Outputs and status, kept as an audit trail. A Run can be resumed: finished Steps are skipped, unfinished ones restart with fresh agents. Its **slug** — `<workflow>-<what it is named after>` — names its agents, its tab and its row on the board, and for a mutating Run it is named after the task half of the Worktree's branch — the branch without the login it is namespaced under — so two Runs on different work can never read as the same row.
+**Run** — One execution of a Workflow: its Inputs, its operations' Outputs and its status, kept as an audit trail. The host holds it. A restart or a resume re-enters the Workflow's current code and reuses every Activity already done, so finished work is not done again and a pending question is still pending; a Run whose code has since changed shape has no such promise, and one whose module is missing waits, naming the file. Nothing the previous engine recorded is carried over (ADR-0027). Its **slug** — `<workflow>-<what it is named after>` — names its agents, its tab and its row on the board, and for a mutating Run it is named after the task half of the Worktree's branch — the branch without the login it is namespaced under — so two Runs on different work can never read as the same row.
 
 **Task** — One piece of work a human is doing, and the Runs it takes: a plan, the
 implementation it chains into, the review of that. Recorded on every Run at creation and
@@ -148,42 +148,41 @@ still its Task's. A Run started fresh is a new Task; only an explicit **Continue
 puts new work in an existing one.
 
 **Task workspace** — The herdr workspace a Task's Runs, tabs and agents live in. One per
-Task, made and focused when the Task is started, and kept when the work is finished until
-the human closes it. Its label is inferred once, at creation — `<Project or theme> | <what
+Task, made and focused when its first Run is admitted, on the checkout that Run is given,
+and kept when the work is finished until the human closes it. Its label is inferred once, at creation — `<Project or theme> | <what
 this work is>`, from the work and from the names already live in the session — and is
 display only: a label never decides membership, and a label a human changed is theirs,
 never written again. It is where Collie scopes a Run lookup: a workspace that is not a
 Task's narrows nothing. It gives no file or branch isolation — that is the Worktree's job.
+A stop closes only its Run's agents' panes, and its own shell tab is never handed to an
+agent, so it outlives them. One herdr has dropped anyway is reopened on the Run's checkout
+at the next launch, and the Task records the new id.
 
 **TaskView** — One Task as the board draws it: name, project, state, the step glyphs, one
 plain sentence about what is happening, its age, drift, hold, pending **Decision**, agents,
-children, branch, merge request and disposition. Built by one function from the Runs, the
-live agents and the run directories, so the Home's cards, the one-screen text view and
+children, branch, merge request and disposition. Built by one function from the Runs the
+host reports, the live agents and what each Run left in its directory, so the Home's cards, the one-screen text view and
 `collie --json board` are the same model rather than three readings of it. A Run belonging
 to no Task is a TaskView of its own.
 
 **Decision** — What a Task is waiting on a human for, and one of the two things that put
 it in **Needs you**: a **question** a Run asked, a **Proposal** Collie made, or an evidence
-**gate** asking which verifications this Run is to be held to. All three live in the Run
-directory, are answered on the card, from the CLI or from chat, and survive the board
-closing. One answered ahead of the step that would ask is **decided at launch**.
+**gate** asking which verifications this Run is to be held to. All three are answered on
+the card, from the CLI or from chat, and survive the board closing.
 
 **Stalled** — The other way into **Needs you**, and the one with nothing on the card to
-answer: an agent is waiting for a human in its own pane, either at its harness's own
-dialog (which herdr reports as a `blocked` agent, and which no Driver ever learns about)
-or having gone idle without producing its Output (which the Driver records as the Run's
-`awaiting`). Either way the work has stopped, so the card says which pane to go to rather
-than what the step was doing. A Run nothing drives is **Abandoned** first.
+answer: an agent is waiting for a human in its own pane — at its harness's own dialog,
+which herdr reports as a `blocked` agent — or a Run parked because its agent's pane would
+not take a prompt. Either way the work has stopped, so the card says which pane to go to
+rather than what the step was doing.
 
-**Working** — A Task something is actually doing: a Run with a Driver that owns it, or an
-agent herdr still has. A Run whose record says `running` but which nothing drives and no
-agent works on is not Working, whatever the record says — it is **Abandoned**, and
-**Waiting on you**.
+**Working** — A Task something is actually doing: a Run the host holds that has not
+settled, or an agent herdr still has.
 
 **Waiting on you** — A Task whose work has ended without **landing**, and which nobody has
 asked you about: an implement Run that succeeded and whose merge request is open, a plan
-that is ready to implement, a Run that failed, was stopped or was Abandoned with a branch
-or merge request behind it and has neither been resumed nor disposed of. The board's third
+that is ready to implement, a Run that failed or was stopped with a branch or merge
+request behind it and has neither been resumed nor disposed of. The board's third
 section. Not a **Decision**: a Decision is Collie asking; this is work in your hands that
 has not been mentioned. A Run that ended with nothing to file — no branch, no merge
 request, no plan, no question — has **Landed** and is not waiting on anyone.
@@ -194,38 +193,36 @@ Workflow that produces nothing to land, such as a review, or it ended with nothi
 could file: no branch, no merge request, no plan, no question. A Task whose work has landed
 is **Finished**, the board's last section.
 
-**Abandoned (Run)** — A Run recorded `running` whose Driver is gone and whose agents herdr
-no longer has, once a minute has passed since it last wrote anything. Distinct from the
-`abandoned` Disposition, which a human records about the work.
-
 **Held** — A Task whose Runs are under a **Hold**, drawn as a `⏸` line under its sentence
-and lifted either by a human or, where the hold named a time, by the Driver at that time.
+and lifted by a human.
 
 **Session** — One herdr session and one workspace, taken together. It is the
 scope of a Control Plane tab and of the register of live agents, so only Runs in the same
 Session can hand work to each other. There is only ever one agent per role in a Session.
 One workspace, always: a mutating Run's checkout does not take it out of the Session it
-was started in, which is what keeps a hand-off between `plan` and `implement` working.
+was started in, which is what lets `implement` ask the live `plan` agent a question.
 
-**Hand-off** — Giving one Run's result to another Run's live agent in the same Session
-instead of starting a second one. Both Runs record it. Routed through the receiving Run's
-inbox and composed by its own Driver, never typed into the pane: a Run nobody is driving
-has nothing to hold the message behind a compaction or record whether it was understood,
-so a hand-off to one is refused. Which hand-offs exist and what each sends: `docs/using.md`.
+**Hand-off** — What one Run's agent is told about another Run's live agent: the implementer's
+prompt names the planner's pane in the same Session and tells it to ask there rather than
+stop, and with no planner live, to stop and ask the human. Nothing is typed into another
+Run's pane on its behalf.
 
 **Worktree** — The checkout a mutating Run owns: one per branch, because git allows
 exactly one worktree per checked-out branch. The branch names the work rather than the path
 to it, and new work is generated as `<GitLab login>/<task>` rather than asked for, so two
 Runs on different work can never key the same checkout
 ([the order it is resolved in](docs/cli.md#start-a-run)). Only the Run's cwd moves; its tabs stay in
-the workspace it was activated from and are `cd`-ed into the checkout, because a Run
-belongs where it was started (ADR-0006). `implement` and `renovate` get one, and
-`plan`/`architecture` get one where they chain into `implement`; `review` reads the diff or
-the caller's own tree. A Renovate Run's is the one that holds no branch — see Renovate Run.
+its Task's workspace and are `cd`-ed into the checkout, because a Run belongs where its
+Task is (ADR-0006). A Workflow declares one — `checkout` in its metadata — and the host
+cuts it at admission, before the Run exists, from the checkout the Run starts from: a
+directory that is not a git checkout is refused, named. `implement` and `renovate` declare
+one; `plan`, `architecture` and `review` declare none, and the `implement` they chain into
+is placed by its own declaration, in the same Task. A Renovate Run's is the one that holds
+no branch — see Renovate Run.
 
 Two managers, and a Run records which: Collie makes the checkout with `git worktree add`
 by default, and `--input workspace=new` asks herdr for it instead, which opens it as a
-workspace of its own. It outlives the merge request and is removed only once **Settled** —
+workspace of the Run's own — or, for a fresh Task, as the Task's. It outlives the merge request and is removed only once **Settled** —
 a git-managed checkout with `git worktree remove` then `git branch -d`, and the Run's
 tabs whose shells sit inside it closed with it; one herdr has a workspace open on through
 `herdr worktree remove`, whoever made it, so herdr never lists a checkout that is gone.
@@ -233,9 +230,8 @@ tabs whose shells sit inside it closed with it; one herdr has a workspace open o
 A Run records the branch, the path, its manager, whether Collie created it, and the
 moment git wrote the checkout — which is what tells Collie's own checkout from one a
 human later made at the same path on the same branch. Where herdr opened a workspace for
-it, the Run also records the shell tab that workspace came with, which its first agent
-takes over so no empty tab is left beside the Run's own. A checkout a human made is never
-removed.
+it, that workspace's shell tab is left where it is, as a Task workspace's is. A checkout a
+human made is never removed.
 
 **Settled** — A Collie-created Worktree that holds nothing which exists only there: the
 tree is clean, it holds no commit that is not on the remote already, nothing is working in
@@ -268,15 +264,13 @@ accounted for and the release succeeded, but one or more updates were deferred w
 operator's approval. The exceptions are named in the checklist entry. An unresolved
 blocker is not an exception: it leaves the entry unchecked and the Run open.
 
-**Layer** — A directory of Workflow/Persona definitions. Three Layers, later wins by name: plugin baseline (git) → user config dir → project `.herdr/`. Forking takes a baseline definition into a Layer.
+**Layer** — Where a definition is looked up, later wins by name. A Workflow is one `*.workflow.ts` entry, found project `.collie/workflows/` first, then the user's `~/.collie/user/workflows/`, then the installation's `workflows/`; a broken override is reported, never fallen through. A Persona is Markdown, found the same way: the project's `.collie/personas/`, then the user's `~/.collie/user/personas/`, then the installation's `personas/`. Forking takes a baseline definition into a later Layer.
 
-**Definition snapshot** — The resolved Workflow a Run is actually running — after `extends:` and `use:`, with rebased step ids, merged variant settings and each Step's prompt text — frozen as JSON in the Run directory when the Run is created and never rewritten. A Driver resolves from it, so editing a Layer changes the next Run and not a running or resumed one. A Run recorded before snapshots is resumed only while the Layers still resolve to the steps it recorded; otherwise `definition_changed`.
+**Override** — A Persona that declares `extends: <name>` and changes only what it names; everything else still follows the parent in the Layer below. A file without `extends:` replaces the whole Persona, and a full copy records `forked_from_hash` so a parent that has moved on can be marked stale. The merge rules are canonical in `src/definitions.ts` and `docs/authoring.md`. A Workflow is overridden by an entry with the same id, and customised by importing what it keeps.
 
-**Override** — A definition that declares `extends: <name>` and changes only what it names; everything else still follows the parent in the Layer below. A file without `extends:` replaces the whole definition, and a full copy records `forked_from_hash` so a parent that has moved on can be marked stale. The merge rules are canonical in `src/definitions.ts` and `docs/authoring.md`.
+**Fan-in** — Combining several parallel Outputs into one: an operation handed the other operations' Output files, which reconciles them itself. Nothing unions findings for it.
 
-**Fan-in** — Combining several parallel Outputs into one. A Step declares `fan_in: <step>`, is given that Step's Output files, and reconciles them itself; it sits in that Step's tab. The engine no longer unions findings.
-
-**Synthesis** — What a fan-in Step over reviewers writes: one review of the change, deduplicated across models, disagreements settled from the diff, plus a `summary` and the findings it `dropped` with a reason for each. The engine renders it to `review.md`, which is what a human reads and what a Choice may post. It is the loop's gate: the fix Step sees the Synthesis, never the raw reviews.
+**Synthesis** — What the fan-in over reviewers writes: one review of the change, deduplicated across models, disagreements settled from the diff, plus a `summary` and the findings it `dropped` with a reason for each. It is rendered to `review.md`, which is what a human reads and what a review may post. It is the loop's gate: the fix sees the Synthesis, never the raw reviews.
 
 **Disputed** — A finding the implementer declined, with its reason. The reviewers are shown the reason, and a disputed finding no longer drives the loop, so the Run converges and the human decides. A reviewer who can answer the reason raises it again with a `rebuttal`, which puts the finding back in front of the implementer.
 
@@ -285,30 +279,28 @@ blocker is not an exception: it leaves the entry unchecked and the Run open.
 What each is for, what it needs, and how they chain: `docs/workflows.md`.
 
 - `plan` — interviews the human, then writes `SPEC.md` and one ticket per slice into its Run's plan directory (ADR-0002).
-- `implement` — builds from a work source, embeds `review`, loops on the findings, and ends at `mr`, the only step that opens or updates the merge request. No architecture or simplification pass: those are work the change asks for, not work every Run does.
-- `review` — standalone; you pick the target; one complete review, and a fan-in that reconciles several where a layer asks for several.
+- `implement` — builds from a work source, reviews what it built with the same pass `review` runs, loops on the findings, and opens or updates the merge request last, only where the evidence is there. No architecture or simplification pass: those are work the change asks for, not work every Run does.
+- `review` — standalone; you pick the target; one complete review, and a synthesis that reconciles the reviewers where more than one axis is asked for.
 - `architecture` — runs the architect over the project and reports into its Run's plan directory.
 - `renovate` — claims the repository in Helle, merges or accounts for every Renovate Bot merge request, tags and watches the release, and records the result on the team's Renovate issue.
 
 **Outcome** — The kind of result a Run has to prove, and the evidence that closes it: a feature names what it built, a bug reproduces before it is fixed, a refactor preserves behaviour, an investigation reaches a supported conclusion and may have no patch, docs run what they document, a migration proves it can go back. A Run nobody classified is `unspecified` and proves only its approved verifications — never a feature by default.
 
-**Approved set** — The verifications Collie may run itself for one Run, each bound argument for argument: `.herdr/verify.json` in the project, else `verify.json` in the config directory, read at start and written into the Run's Intent as its `run_verification` grant. From then on the Intent is the set, amended only by `run intent verification`. An agent may `collie verify` anything; only the approved set is what Collie runs at the gate.
+**Approved set** — The verifications Collie may run itself for one Run, each bound argument for argument: `.collie/verify.json` in the project, else `~/.collie/user/verify.json`, read at start and kept with the Run as its grant — its Intent's `run_verification`, or the host's record for a workflow module's Run. From then on that grant is the set, amended only by `run intent verification`, and a Run whose outcome needs it with nothing granted stops before its first agent. An agent may `collie verify` anything; only the approved set is what Collie runs at the gate.
 
 **Evidence** — A Verification collected at a revision. An Output field saying the tests pass is a claim, and is shown as one. The gate before a merge request reads evidence, never claims.
 
 **Obstacle** — What is identifiably in a Run's way, in one sentence: a command failing several times in a row the same way. It is shown to the human and given to the next prompt so the approach can change. It stops nothing.
 
-**Slice** — One ticket's build within a Step that declares `each: tickets`. It has its own prompt, its own Output and its own record under `steps[].slices`, runs on the Step's one agent, and is handed only its ticket and a few lines of fact about the slices before it — their commits and what they verified, never their transcripts. A resumed Run skips the slices that are done.
+**Slice** — One item of a list of work — a ticket's build — known by its name, never by where it sits. It has its own prompt and its own Output, runs on the list's one agent, and is handed only its ticket and a few lines of fact about the items before it — their commits and what they verified, never their transcripts. A replayed or resumed Run reuses the items already done and does only what is left.
 
-**Choice** — A Step that asks the human to pick from a menu instead of running an agent. A choice chains to another Workflow (`run`), prompts a named agent (`prompt`), posts the run's review to the merge request it reviewed (`post`), or just ends the Step (`stop`). A Choice with one thing left to offer is taken rather than asked.
+**Choice** — A question a Run asks the human with `ask`, from a closed set of options: what the answer does next — start another Workflow, prompt an agent, post a review, stop — is the Workflow's own code. An answer outside the options, or a second answer to one already answered, is refused and starts nothing.
 
-**Decided at launch** — An answer given before the step that would ask for it is reached, kept in the Run record by step id. `run start --decide <step>=<title>` is the only way to give one: launching a Workflow asks its Inputs and nothing else, and every Choice is asked when the Run reaches it. Taken only if that choice is still available when the step is reached; otherwise the Run asks, and says why. Titles name decisions, so two choices that can never both be offered — a hand-off and its stand-alone twin — may share one.
-
-**Chain** — Starting a Workflow from a Choice, with Inputs forwarded. The new Run is a child of the current one. A Choice may chain several Runs at once, one per repository a plan touches; see Repo run.
+**Chain** — Starting another Workflow from a Run, with `child`: typed input decoded against the child's schema before it is admitted, a stable invocation name, and the child recorded as this Run's. Replaying the parent reuses the child it already has. A fan-out chains several at once, one per repository a plan touches; see Repo run.
 
 **Plan directory** — The `plan/` folder inside a Run: SPEC.md and the ticket files. It is the hand-off from `plan` to `implement` and never lives in the repository. Every ticket names the repository it changes with a `Repo:` line: a path under the Run's root, `.` for the root itself, never absolute and never containing `..`.
 
-**Repo run** — One `implement` Run of a chained fan-out, owning one repository's branch and merge request and building only the tickets whose `Repo:` names that repository. Every Repo run of one plan uses the same branch name.
+**Repo run** — One child Run of a fan-out, owning one repository's branch and merge request and building only the tickets whose `Repo:` names that repository. Every Repo run of one plan uses the same branch name.
 
 **Wave** — The Repo runs a fan-out starts together: those whose tickets are blocked by no ticket of a Repo run still going. Ticket order inside a repository is the Repo run's; cross-repository order is the wave's. A plan whose repositories block each other in a cycle has no wave order and is refused, as is one whose "Blocked by" line names something that is not a ticket of the plan, or which numbers two tickets the same so that such a line cannot say which it means.
 
@@ -327,7 +319,7 @@ layer, Inputs, decisions and whatever validation says is wrong with it. **Settin
 defaults and remembered values in `config.json`, and whether the harness is trusted here.
 
 **Launch flow** — The questions between "run a workflow" and a Run: which Workflow, its
-Inputs, and the candidates for the ones that have them. Nothing about its Choices — those
+Inputs, and the candidates for the ones that have them. Nothing about its questions — those
 are asked when the Run reaches them, with the work they decide about in front of the
 human. One set of components, two placements — a popup pane for the herdr action, and inline in the
 Collie tab for `＋ New run` — because a question a human answers is a component. A
@@ -351,9 +343,9 @@ request must be read past its cache.
 **Control Plane** — The tab a Session keeps as its control surface, one per workspace, and
 the only pane Collie keeps open. It is a view over the run dirs and the register, always the
 workspace's first tab, and holds no state of its own, so closing it loses nothing. Its Runs
-view is drawn at a **Scope**. What it shows and what its keys do: `docs/using.md`. Behind it the strip reads `plan`, `implement`,
-`review`, then anything else in start order: Collie places each tab by its Run's workflow
-when it creates it, and never moves a tab it does not own or one a human has since dragged.
+view is drawn at a **Scope**. What it shows and what its keys do: `docs/using.md`. A Run's
+own tabs follow in the order its agents started, whatever the Workflow is called, and
+Collie never moves a tab.
 
 **Filter** — What the Home board shows: `all`, one workspace, or one Run. A view property
 and nothing more — supervision never reads it, so a Run outside the current filter is still
@@ -367,8 +359,8 @@ Session's. The board no longer has one — it is the whole Herd's, one card per 
 `config.json` is read at launch and narrows nothing a human sees.
 
 **Work boundary** — The moment immediately before a reused agent that has finished its
-previous work is given the next piece: a Workflow's next step on the same agent, a fix
-round's next iteration, a hand-off from another Run. It is where Collie reads that
+previous work is given the next piece: a Workflow's next operation on the same agent, a
+fix round's next iteration. It is where Collie reads that
 harness's current-context measure and, at or above the user-wide `compact_at_tokens`,
 asks it to compact natively before sending anything. Not a liveness nudge, not a
 mid-step recovery message, and not a human typing in the pane — none of those are work.
@@ -378,28 +370,18 @@ does with each outcome, and what a five-minute unresolved attempt stops:
 
 **Notification** — The only channel from an unattended Run to the person who started it, so what is not worth interrupting for is not sent at all. One title shape — `<repo> · <slug> <what happened>` — one taxonomy in `src/notify.ts`, once per `(run, kind, step)`, and never a reason for a Run to fail.
 
-**Driver** — The process that executes a Run. It has no pane: it is detached from whatever
-started it, writes its progress and any failure into the Run directory, and asks its
-questions through files there. An ownership claim in the Run directory — acquired
-atomically and carrying the process's identity — says whether one is still driving, so
-`resume` never starts a second and a stop signal never reaches an unrelated process.
+**Host** — The one background process that runs work for a state directory. CLI, board and chat all reach it over the same local RPC, and closing any of them leaves its work running. It owns the directory under `host.lock`, keeps its Runs in SQLite, and on restart hands every accepted Run back to the engine, so completed work is reused rather than repeated. A client of another build is told to restart it, not served (ADR-0015).
 
-**Ownership** — What the Driver's claim in the Run directory says, in three answers rather
-than two: `live` (a process is driving), `none` (conclusively nobody — no claim, or a claim
-whose process is gone or whose identity does not match), and `unknown` (a claim whose
-process answers but whose identity could not be read). The third is the point of having
-three: "I could not tell" is not permission to start a second Driver, so only `none` allows
-a resume. Canonical in `src/driver.ts`.
+**Ownership** — Who holds something that must have one owner. A claim stands while its process answers and is still the one that wrote it, and one whose process answers but whose identity cannot be read stands too: "I could not tell" is not permission to take over. It decides which process may be the host for a state directory; canonical in `src/lock.ts`.
 
 **Attention** — What a Run wants from whoever is watching it, as one classification both
-front doors render: a pending Choice, drift Collie could not settle, a completed Run, an
+front doors render: a pending question, drift Collie could not settle, a completed Run, an
 interruption, or nothing yet.
 Additive to the lifecycle status rather than a redefinition of it — `waiting` still means
 "has not settled" for every existing wait and fan-out — and derived from what the Run
-already recorded: its Step results, the findings the loop still owns, the stop marker and
-the Driver's Ownership. It carries a stable reason code, the sentence a human reads, the
-Steps a resume would keep, the agents that may still be live, and the actions that are
-valid now. What none of the recorded facts settle is said to be unsettled, never guessed.
+already recorded: the question it is asking, the drift it left, and how its execution
+ended. It carries a stable reason code, the sentence a human reads and the actions that
+are valid now. What none of the recorded facts settle is said to be unsettled, never guessed.
 `collie run wait --until attention`, `run show` and a card's own record are three readings
 of this one value; canonical in `src/attention.ts`, with the reason codes in
 `docs/cli.md`.

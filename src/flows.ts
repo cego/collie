@@ -4,6 +4,7 @@
 
 import { Cause, Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
 import { currentReports, readDrift } from "./drift";
+import { diffTargetOf } from "./strategies";
 import { buildBoard, type MrState, type TaskView } from "./board";
 import { settleMerges } from "./merges";
 import { nowIso } from "./time";
@@ -36,72 +37,45 @@ import {
   writeOrigin,
   UNREADABLE,
 } from "./home";
-import { liveFor, type Live } from "./live";
+import { liveFor, markedOf, type Live } from "./live";
 import type { IntentUnreadable } from "./intent";
 import { ProposalsBusy, type Actor } from "./proposals";
-import {
-  isStale,
-  layers,
-  loadDefinitions,
-  resolveWorkflow,
-  type Definitions,
-  type Provenance,
-} from "./definitions";
-import { executeRun } from "./engine";
+import { isStale, layers, loadDefinitions, type Definitions, type Provenance } from "./definitions";
 import type { PluginEnv } from "./env";
+import { Herdr, type AgentInfo, type WorkspaceInfo } from "./herdr";
+import { inferInput, type InputPrompts, type PickItem } from "./inputs";
+import type { Declared, Found } from "./discovery";
 import {
-  Herdr,
-  type AgentInfo,
-  type AgentsAlive,
-  type AsksAgents,
-  type WorkspaceInfo,
-} from "./herdr";
-import { confirmLine, resolveCandidates, settle, type InputPrompts, type PickItem } from "./inputs";
+  answerRun,
+  controlRun,
+  invokeOffer,
+  offersOf,
+  resumeRun,
+  savedModules,
+  startRun,
+} from "./lifecycle";
 import { releaseKeyboard, startKeyboard, takeKey } from "./keys";
 import { forkResolvedDefinition, type DefinitionKind } from "./fork";
-import { notify } from "./notify";
-import { COLLIE_TAB, collieOwns, reason, runLabel, shellQuote, tabLabelsFor } from "./naming";
-import { markedFrom, RunStore, type Run, type RunRecord } from "./run";
-import { readSnapshot, stepDifference, stepsDiffer } from "./snapshot";
+import { COLLIE_TAB, reason, runTitle } from "./naming";
+import { listRuns, settled, type RunFacts } from "./runs";
+import { everyRegistered, type AgentEntry } from "./registry";
 import { pruneWorktrees } from "./worktree";
-import { sendReview, sendReviewToImplementer, type Session } from "./handoff";
-import {
-  acquireDriver,
-  clearPreviousDriver,
-  stoppedBefore,
-  appendProgress,
-  driverAlive,
-  filePrompts,
-  releaseDriver,
-  RUNNER_LOG,
-  STOPPED,
-} from "./driver";
-import { scopeFor } from "./registry";
+import { scopeFor, type RegistryScope } from "./registry";
+import type { CompactionSettings } from "./compaction";
 import { recordDisposition, statusLine } from "./disposition";
 import { selectionPath, writeSelection } from "./selection";
 import { everyViewerPaints } from "./outer";
 import { actorName } from "./proposals";
-import { listTasks, taskOfWorkspace, type TaskChoice } from "./task";
+import { evaluationDeps } from "./evaluator";
+import { listTasks, taskOfWorkspace, type TaskChoice, type TaskRecord } from "./task";
 import {
-  answerRun,
-  newRequestId,
-  prepareWorkflow,
-  resolveWorkspace,
-  settleExplicit,
-  type ExpectedError,
-  postReview,
-  resumeRun,
-  startRun,
+  carryOutAsked,
   carryOutProposal,
   declineProposal,
-  evaluationDeps,
-  followUp,
-  steer,
+  newRequestId,
   registerRunExecutors,
+  steer,
   workspaceCwdFromPanes,
-  runSettled,
-  runStatus,
-  stopRun as stopRunOperation,
 } from "./operations";
 import {
   answerFor,
@@ -144,18 +118,28 @@ import {
   type WorkspaceView,
 } from "./workspace";
 
-export interface ControlSession extends Omit<Session, "herdr"> {
+/**
+ * What a board is looking at: which workspace and repository, where the state is, and
+ * the pane it can split off. Its own shape rather than a Run's, because a board outlives
+ * every Run it draws.
+ */
+interface BoardSession extends RegistryScope {
+  stateDir: string;
+  /** The Control Plane's own pane, which is what a temporary pane splits off. */
+  paneId?: string | null;
+  userDir?: string;
+  /** What this caller already knows about compaction; absent reads the config file. */
+  compaction?: CompactionSettings;
+}
+
+export interface ControlSession extends BoardSession {
   herdr: Herdr;
-  /**
-   * What this board last called each tab it reconciled, so a tick that learns nothing
-   * new sends no rename. Per Session rather than per process: two boards computing the
-   * same label is harmless, and a test's board must not inherit another's memory.
-   */
-  tabLabels?: Map<string, string>;
   /** This installation, so the board can say when it is behind its remote. */
   pluginRoot: string;
+  /** Where the board's Runs come from: the host's, unless a test hands over its own. */
+  runsOf?: RunsOf;
   /** Where the defaults live, so the board can read its own quiet threshold. */
-  configDir: string;
+  userDir: string;
   /**
    * What the last worktree sweep said, and whether one is out working right now. A
    * caller that keeps none — a test drawing one board, a view built to be rendered
@@ -172,13 +156,6 @@ export type Mode = "pick" | "continue" | "resume" | "fork";
  * open elsewhere.
  */
 export type Placement = "popup" | "inline";
-
-const ProblemDetails = Schema.Struct({ problems: Schema.Array(Schema.String) });
-
-export interface AnswerKeyResult {
-  asking: Asking;
-  note?: string;
-}
 
 /** An action: open the popup that does the actual work. */
 export const openPicker = Effect.fn("Flows.openPicker")(function* (
@@ -234,7 +211,7 @@ export const boardFlow = Effect.fn("Flows.boardFlow")(function* (herdr: Herdr, e
     env,
     yield* herdOf(env.socketPath),
     home,
-    yield* chatHarnessOf(env.configDir),
+    yield* chatHarnessOf(env.userDir),
     (line) => Console.error(line),
   ).pipe(Effect.catch(() => Effect.succeed(null)));
   if (chat?.kind === "unavailable")
@@ -422,26 +399,39 @@ export const continueFlow = Effect.fn("Flows.continueFlow")(function* (
   placement: Placement = "popup",
 ) {
   const here = yield* taskOfWorkspace(env.stateDir, env.workspaceId);
-  const task = here ?? (yield* pickTask(env, prompts));
+  const task =
+    here === null ? yield* pickTask(env, prompts) : ({ mode: "continue", task: here } as const);
   if (task === null) return 0;
-  return yield* pickFlow(herdr, env, prompts, placement, { mode: "continue", task });
+  return yield* pickFlow(herdr, env, prompts, placement, task);
 });
 
-/** Which Task, when this is not one's workspace. Null is the human backing out. */
+/** The picker's own id for keeping the work in the workspace it was opened from. */
+const HERE = "here";
+
+/**
+ * Which Task, when this is not one's workspace — or this workspace itself, kept as the
+ * work's Task rather than given a workspace of its own. Null is the human backing out.
+ */
 const pickTask = Effect.fn("Flows.pickTask")(function* (env: PluginEnv, prompts: FlowPrompts) {
   const tasks = yield* listTasks(env.stateDir);
-  if (tasks.length === 0) {
+  const kept =
+    env.workspaceId === null
+      ? []
+      : [{ id: HERE, title: "This workspace", subtitle: "keep the work here, beside you" }];
+  if (tasks.length === 0 && kept.length === 0) {
     yield* bail(prompts, "No tasks yet: starting a workflow makes one.");
     return null;
   }
   const chosen = yield* prompts.menu(
-    tasks.map((task) => ({ id: task.id, title: task.label, subtitle: task.cwd })),
+    [...kept, ...tasks.map((task) => ({ id: task.id, title: task.label, subtitle: task.cwd }))],
     {
       header: "Which task?",
       footer: "↑↓ move · type to filter · Enter choose · Esc cancel",
     },
   );
-  return tasks.find((task) => task.id === chosen?.id) ?? null;
+  if (chosen?.id === HERE) return { mode: "here" } as const;
+  const task = tasks.find((one) => one.id === chosen?.id);
+  return task === undefined ? null : ({ mode: "continue", task } as const);
 });
 
 export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
@@ -451,23 +441,22 @@ export const pickFlow = Effect.fn("Flows.pickFlow")(function* (
   placement: Placement = "popup",
   task: TaskChoice = { mode: "new" },
 ) {
-  const layerList = yield* layers(env);
-  const defs = yield* loadDefinitions(layerList);
-
-  const items: PickItem[] = [...defs.workflows.values()]
-    .sort((a, b) => a.name.localeCompare(b.name))
-    .map((wf) => ({ id: wf.name, title: wf.title, subtitle: layerOf(wf) }));
+  const offered = new Map<string, PickItem>();
+  for (const entry of (yield* savedModules(env)).entries) {
+    offered.set(entry.id, {
+      id: entry.id,
+      title: entry.title,
+      subtitle: `[${entry.layer}] ${entry.path}`,
+    });
+  }
+  const items: PickItem[] = [...offered.values()].sort((a, b) => a.id.localeCompare(b.id));
 
   if (items.length === 0) {
-    return yield* bail(
-      prompts,
-      "No workflows found. Check the plugin's workflows/ directory.",
-      banner(defs),
-    );
+    return yield* bail(prompts, "No workflows found. Check the plugin's workflows/ directory.");
   }
 
   const chosen = yield* prompts.menu(items, {
-    header: headed(`Workflows — ${env.cwd}`, banner(defs)),
+    header: headed(`Workflows — ${env.cwd}`),
     footer: "↑↓ move · type to filter · Enter run · Esc cancel",
   });
   if (!chosen) return 0;
@@ -494,7 +483,7 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
     placement: Placement;
     /** Inputs the caller has already settled, which are not asked for again. */
     given?: Record<string, string>;
-    parent?: Run;
+    parent?: RunFacts;
     /** The Task this start belongs to; a fresh one unless the caller named it. */
     task?: TaskChoice;
   },
@@ -505,87 +494,128 @@ const startChosen = Effect.fn("Flows.startChosen")(function* (
   const at = yield* rootedWhere(herdr, env, prompts);
   if (at === null) return null;
   const task = opts.task ?? { mode: "new" };
-  // Resolving, validating and inferring is what `collie run start` does too.
-  const prepared = yield* prepareWorkflow(
-    at,
-    opts.workflow,
-    task.mode === "continue" ? task.task : null,
+  // A workflow saved as a module is started through the host, with the same claim and
+  // the same rows `collie run start` uses — the Run is the same either way.
+  const saved = yield* savedModules(at);
+  const module = saved.entries.find((entry) => entry.id === opts.workflow);
+  if (module) return yield* startModule(herdr, at, prompts, { ...opts, task }, module);
+  const broken = saved.problems.find((problem) => problem.id === opts.workflow);
+  if (broken) {
+    yield* bail(prompts, `${broken.path}: ${broken.message}`);
+    return null;
+  }
+  // Nothing else runs work: an id with no module is one this installation does not have.
+  yield* bail(
+    prompts,
+    `No workflow module is saved as "${opts.workflow}". \`collie workflow list\` is what this installation has.`,
   );
-  if (!prepared.ok) {
-    yield* bail(prompts, whyNotRunnable(opts.workflow, prepared.error));
-    return null;
-  }
-  const resolved = prepared.workflow;
-  const resolutions = prepared.resolutions;
-  // What the caller already knows is not a question: a fix round arrives with its plan
-  // directory settled, and re-asking for it would let the human contradict the row. The
-  // operation layer's own settler, because a given value owes the prompts its kind —
-  // `implement` branches on `plan_kind`, and a hand-rolled settle here recorded none.
-  yield* settleExplicit(at, resolutions, opts.given ?? {});
-  // An embedded workflow's inputs belong to the run that embeds it, which never asks.
-  const embedded = new Set(resolved.embeddedInputs);
-  for (const r of resolutions) {
-    // An Input with candidates is chosen from what this repo offers, not typed blind.
-    if (r.candidates && !embedded.has(r.name)) {
-      if (!(yield* resolveCandidates(r, prompts))) return null;
-      continue;
-    }
-    if (!r.needsAsking) continue;
-    const answer = yield* prompts.ask(r.question);
-    if (answer === null) return null;
-    const value = answer.trim();
-    if (value === "") {
-      yield* bail(prompts, `${resolved.name} needs an input for "${r.name}".`);
-      return null;
-    }
-    settle(r, { value, source: "asked" });
-  }
-
-  // No decision menu here: a Choice is asked when the run reaches it, with the work it
-  // decides about in front of the human. `run start --decide` is the one pre-answer,
-  // for a Run nobody is going to be there for.
-  //
-  // No confirmation either: the human picked the workflow and answered its Inputs, and
-  // Esc at any of those already cancelled. The line is the note.
-  const line = confirmLine(resolved.name, resolutions);
-
-  const start = {
-    workflow: resolved,
-    resolutions,
-    workspace: yield* resolveWorkspace(herdr, at).pipe(Effect.catch(() => Effect.succeed(null))),
-    note: line,
-    parent: opts.parent?.id,
-    task,
-  };
-  const started = yield* startRun(at, start);
-  if (started._tag === "Rejected") {
-    yield* bail(prompts, started.result.error.message);
-    return null;
-  }
-  const parent = opts.parent;
-  if (parent) {
-    parent.record.children.push(started.run.id);
-    yield* parent.save();
-  }
-  // Only a popup can close itself; running the picker in a plain pane is fine..
-  if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
-  // The branch is settled by starting, so the line the human is shown says it — a
-  // derived branch is a decision they did not make and would otherwise not see.
-  return confirmLine(resolved.name, resolutions, {
-    name: started.checkout.branch,
-    source: started.checkout.branchSource,
-  });
+  return null;
 });
 
 /**
- * The same failure the CLI reports as one line plus `details`, as the several lines a
- * pane has room for. Validation problems are the only detail worth spelling out.
+ * A saved module from the name to a started Run: what it declares it takes is what the
+ * human is asked for, and nothing else. Typed values and inference belong to the schema
+ * and are not guessed at here.
  */
-function whyNotRunnable(workflow: string, error: ExpectedError): string {
-  const detail = Schema.decodeUnknownOption(ProblemDetails)(error.details);
-  if (Option.isNone(detail)) return error.message;
-  return [`${workflow} is not runnable:`, ...detail.value.problems.map((p) => `  ${p}`)].join("\n");
+const startModule = Effect.fn("Flows.startModule")(function* (
+  herdr: Herdr,
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  opts: {
+    placement: Placement;
+    given?: Record<string, string>;
+    parent?: RunFacts;
+    task: TaskChoice;
+  },
+  module: Found,
+) {
+  const text = { ...opts.given };
+  for (const field of module.inputs) {
+    if (text[field.name] !== undefined) continue;
+    // A field the module attached a strategy to is worked out the way every other Run's
+    // is — from this checkout, its Task and what finished here — and only asked for when
+    // that comes up empty. The strategy is the module's; the field's name is its own.
+    const strategy = field.strategy;
+    const inferred = strategy === null ? null : yield* infer(env, opts, field.name, strategy);
+    if (inferred !== null) {
+      text[field.name] = inferred;
+      continue;
+    }
+    // What it will take decides how it is asked for: a closed set is a menu, so nobody
+    // types a value the schema is about to refuse.
+    const answer = yield* offer(prompts, module, field);
+    if (answer === null) return null;
+    if (answer === "" && field.required) {
+      yield* bail(prompts, `${module.id} needs an input for "${field.name}".`);
+      return null;
+    }
+    // Absent, not empty: an optional input nobody answered is one the module never sees.
+    if (answer !== "") text[field.name] = answer;
+  }
+  const started = yield* startRun(env, {
+    id: module.id,
+    request: yield* newRequestId(),
+    input: { json: {}, text },
+    task: opts.task,
+    parent: opts.parent?.id ?? null,
+  });
+  if (!started.ok) {
+    yield* bail(prompts, started.error.message);
+    return null;
+  }
+  if (opts.placement === "popup") yield* Effect.ignore(herdr.popupClose());
+  const given = Object.entries(text).map(([name, value]) => `${name}=${value}`);
+  return `${module.id}: ${given.join("  ")} → ${started.runId}`;
+});
+
+/** What the strategy a module attached to this field works out, or null for nothing. */
+const infer = Effect.fn("Flows.infer")(function* (
+  env: PluginEnv,
+  opts: { task: TaskChoice },
+  name: string,
+  strategy: string,
+) {
+  const settled = yield* inferInput(name, strategy, {
+    cwd: env.cwd,
+    runs: yield* listRuns(env),
+    task: opts.task.mode === "continue" ? opts.task.task.id : null,
+  }).pipe(Effect.orElseSucceed(() => null));
+  if (settled === null || settled.needsAsking || settled.value === "") return null;
+  return settled.value;
+});
+
+/**
+ * One Input, asked the way its own schema allows: a menu where the values are a closed
+ * set, and the human's own words otherwise. Null is the human closing the picker; empty
+ * is an answer they declined to give.
+ */
+const offer = Effect.fn("Flows.offer")(function* (
+  prompts: FlowPrompts,
+  module: Found,
+  field: Declared,
+) {
+  const options = choicesOf(field);
+  if (options === null) {
+    const answer = yield* prompts.ask(`${module.title} — ${field.name}?`);
+    return answer === null ? null : answer.trim();
+  }
+  const picked = yield* prompts.menu(
+    options.map((value) => ({ id: value, title: value })),
+    { header: `${module.title} — ${field.name}` },
+  );
+  return picked === null ? null : picked.id;
+});
+
+/** The values a field will take where they are a closed set, and null where they are not. */
+function choicesOf(field: Declared): ReadonlyArray<string> | null {
+  const drawn = field.schema;
+  if (!isDrawing(drawn)) return null;
+  if (drawn.type === "boolean") return ["true", "false"];
+  const options = drawn.enum;
+  return Array.isArray(options) ? options.map((one) => String(one)) : null;
 }
+
+const isDrawing = Schema.is(Schema.Record(Schema.String, Schema.Json));
 
 export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   herdr: Herdr,
@@ -600,15 +630,6 @@ export const forkFlow = Effect.fn("Flows.forkFlow")(function* (
   >();
   const items: PickItem[] = [];
 
-  for (const wf of [...defs.workflows.values()].sort((a, b) => a.name.localeCompare(b.name))) {
-    sources.set(`workflow:${wf.name}`, {
-      kind: "workflows",
-      path: wf.path,
-      steps: wf.steps.map((step) => step.id),
-      body: wf.body,
-    });
-    items.push({ id: `workflow:${wf.name}`, title: `workflow ${wf.name}`, subtitle: layerOf(wf) });
-  }
   for (const persona of [...defs.personas.values()].sort((a, b) => a.name.localeCompare(b.name))) {
     sources.set(`persona:${persona.name}`, {
       kind: "personas",
@@ -692,27 +713,14 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   prompts: FlowPrompts,
   placement: Placement = "popup",
 ) {
-  const store = new RunStore(env.stateDir);
-  // A run something is still driving is not a run to resume: a second driver would
-  // fight the first over the same agents and the same run record.
-  const runs = [];
-  for (const run of yield* store.resumable()) {
-    if (!(yield* driverAlive(run.dir))) runs.push(run);
-  }
-  if (runs.length === 0)
-    return yield* bail(prompts, "No runs with unfinished steps that nothing is already driving.");
+  const runs = (yield* listRuns(env)).filter((run) => !settled(run));
+  if (runs.length === 0) return yield* bail(prompts, "No runs are still going to pick back up.");
 
-  const items: PickItem[] = runs.map((run) => {
-    const left = run
-      .unfinished()
-      .map((s) => s.id)
-      .join(", ");
-    return {
-      id: run.id,
-      title: run.record.slug,
-      subtitle: `${run.record.status} · left: ${left} · ${run.record.created_at.slice(0, 16).replace("T", " ")}`,
-    };
-  });
+  const items: PickItem[] = runs.map((run) => ({
+    id: run.id,
+    title: runTitle(run),
+    subtitle: `${run.state} · ${run.created.slice(0, 16).replace("T", " ")}`,
+  }));
 
   const chosen = yield* prompts.menu(items, {
     header: "Resume a run",
@@ -720,162 +728,65 @@ export const resumeFlow = Effect.fn("Flows.resumeFlow")(function* (
   });
   if (!chosen) return 0;
 
-  const run = yield* store.load(chosen.id);
-  const resumed = yield* resumeRun(env, run, yield* newRequestId());
-  if (!resumed.ok) return yield* bail(prompts, `${run.record.slug}: ${resumed.error.message}`);
+  const resumed = yield* resumeRun(env, chosen.id);
+  if (!resumed.ok) return yield* bail(prompts, `${chosen.id}: ${resumed.error.message}`);
   // Only a popup can close itself; running the picker in a plain pane is fine..
   if (placement === "popup") yield* Effect.ignore(herdr.popupClose());
   return 0;
 });
 
-/**
- * The run driver. No terminal, no pane: it writes what it is doing into the run
- * dir and asks its questions there, and the Control Plane is what renders both.
- * Everything it can say about a failure goes into `runner.log`.
- */
-export const driveFlow = Effect.fn("Flows.driveFlow")(function* (herdr: Herdr, env: PluginEnv) {
-  const maybeRunId = yield* Config.option(Config.string("COLLIE_RUN"));
-  if (maybeRunId._tag === "None") {
-    yield* Console.error("COLLIE_RUN is not set; a driver is started by the picker.");
-    return 2;
+const OfferArguments = Schema.Struct({
+  properties: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+  required: Schema.optional(Schema.Array(Schema.String)),
+});
+const decodeArguments = Schema.decodeUnknownOption(OfferArguments);
+const TextOnly = Schema.Struct({ type: Schema.Literal("string") });
+const isTextField = Schema.is(TextOnly);
+const parseJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Json));
+
+/** Each field an offer takes: text as typed, anything else as JSON where it parses; null on cancel. */
+const offerArguments = Effect.fn("Flows.offerArguments")(function* (
+  prompts: FlowPrompts,
+  drawn: Schema.Json | null,
+) {
+  const takes = decodeArguments(drawn);
+  if (takes._tag === "None") return {};
+  const required = new Set(takes.value.required ?? []);
+  const input: Record<string, Schema.Json> = {};
+  for (const [name, field] of Object.entries(takes.value.properties ?? {})) {
+    const typed = yield* prompts.ask(required.has(name) ? `${name}?` : `${name}? (optional)`);
+    if (typed === null) return null;
+    if (typed === "" && !required.has(name)) continue;
+    const parsed = isTextField(field) ? Option.none() : parseJson(typed);
+    input[name] = Option.isSome(parsed) ? parsed.value : typed;
   }
-  const runId = maybeRunId.value;
-  const store = new RunStore(env.stateDir);
-  const run = yield* store.load(runId);
-  // The record, not the caller: a detached Driver inherits the invoking pane's
-  // workspace and directory, so a `--workspace` run would otherwise open its tabs,
-  // register its agents and root its work wherever the command was typed.
-  env = {
-    ...env,
-    cwd: run.record.cwd,
-    workspaceId: run.record.workspace ?? env.workspaceId,
-  };
-  herdr = new Herdr(env);
-  const out = (line: string) => appendProgress(run.dir, line);
+  return input;
+});
 
-  const drive = Effect.gen(function* () {
-    // Atomic: acquiring is the check. A separate liveness test then a write would
-    // let two resumes race past each other and drive the same run twice.
-    if (!(yield* acquireDriver(run.dir))) {
-      yield* out("a driver is already running this run; this one is stopping");
-      return 1;
-    }
-    /**
-     * A stop that landed before this Driver claimed the Run. `stopRun` writes its inbox
-     * command, sees no owner in the window between the spawn and the claim, and records
-     * the stop itself — so it has already reported success and closed the panes. Driving
-     * on would overwrite that with `running` and start agents nobody is expecting, and
-     * clearing the inbox below would remove the other half of the request too.
-     */
-    if (yield* stoppedBefore(run.dir)) {
-      yield* releaseDriver(run.dir);
-      yield* out("stopped before this driver started; nothing was run");
-      return 0;
-    }
-    // This Driver owns the Run now, so nothing the last one left in the run dir is
-    // addressed to it — except the resume that asked for it, which it records.
-    const resumedBy = yield* clearPreviousDriver(run.dir);
-    if (resumedBy) yield* out(`resumed by request ${resumedBy}`);
-
-    /**
-     * `collie run stop` sends SIGTERM, and the runtime's `runMain` answers it by
-     * interrupting this fibre. Racing a native SIGTERM handler against the run lost
-     * that race every time the marking had anything to await: the interruption tore
-     * the race down first, and only the finalisers ran — claim released, record still
-     * `running`, and the board calling a stopped run abandoned. So the marking is a
-     * finaliser too. A finished or failed run has already left `running` by the time
-     * it runs, so only an interruption reaches the write.
-     */
-    const markStoppedIfInterrupted = Effect.gen(function* () {
-      if (run.record.status !== "running") return;
-      const stoppedAt = yield* nowIso();
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      yield* fs.writeFileString(path.join(run.dir, STOPPED), `${stoppedAt}\n`);
-      run.record.status = "blocked";
-      run.record.finished_at = stoppedAt;
-      yield* run.save();
-      yield* out("stopped");
-    }).pipe(Effect.ignore);
-
-    // Effect.catch and Effect.ensuring, not try/catch/finally: a typed failure out of
-    // executeRun unwinds past both without entering either, which left the Run marked
-    // `running` with no Driver, nothing in the log, and `collie run wait` blocking to
-    // its timeout — with the ownership claim never given back.
-    return yield* Effect.gen(function* () {
-      const defs = yield* loadDefinitions(yield* layers({ ...env, cwd: run.record.cwd }));
-      const defaults = yield* loadDefaults(env.configDir);
-      // The definition this Run was started with, not the one the files say now: a
-      // Driver is resuming a piece of work somebody authorised, and a workflow edited
-      // since would silently change what it does — or crash it, where the record has no
-      // step by the new name. A Run recorded before snapshots existed has none, and
-      // resolves from the layers as it always did, under the guard below.
-      const frozen = yield* readSnapshot(run.dir, run.record.definition);
-      const wf = frozen ?? resolveWorkflow(run.record.workflow, defs, defaults);
-      if (frozen === null) {
-        const recorded = run.record.steps.map((step) => step.id);
-        const now = wf.steps.map((step) => step.id);
-        if (stepsDiffer(recorded, now)) {
-          const note = `definition_changed: ${wf.path} ${stepDifference(recorded, now)}; this Run has no frozen definition, so its steps cannot be matched to it`;
-          yield* run.log(note);
-          yield* out(note);
-          run.record.halt = "definition_changed";
-          run.record.status = "blocked";
-          run.record.finished_at = yield* nowIso();
-          yield* run.save();
-          return 1;
-        }
-        yield* run.log(`no snapshot recorded; resolved ${wf.name} from the ${wf.layer} layer`);
-      }
-      yield* out(`${wf.title}`);
-      const prompts = filePrompts({
-        dir: run.dir,
-        run: run.id,
-        step: () => run.record.steps.find((st) => st.status === "running")?.id ?? "",
-        timeoutMs: defaults.handoffTimeoutMs,
-      });
-
-      const status = yield* executeRun({
-        herdr,
-        defs,
-        defaults,
-        wf,
-        run,
-        env,
-        out,
-        handoffTimeoutMs: defaults.handoffTimeoutMs,
-        // Every question this run asks goes through the run dir to the Control Plane.
-        prompts,
-      });
-      return status === "done" ? 0 : 1;
-    }).pipe(
-      Effect.catch((cause) =>
-        Effect.gen(function* () {
-          // Nobody is watching a pane for this, so the only useful place is the log.
-          const detail = reason(cause);
-          yield* out(`the driver stopped: ${detail.split("\n")[0]}`);
-          yield* run.log(`driver failed: ${detail}`);
-          run.record.status = "failed";
-          run.record.finished_at = yield* nowIso();
-          yield* run.save();
-          // A missing toast must not be the last word — and a kind the human turned
-          // off in config stays off here too, so the settings mean what they say.
-          const settings = (yield* loadDefaults(env.configDir)).notifications;
-          yield* notify(herdr, run, {
-            kind: "run-failed",
-            body: `${detail.split("\n")[0]} — see ${RUNNER_LOG} in the run dir`,
-            settings,
-          });
-          return 1;
-        }),
-      ),
-      // Marker before claim: a reader must never find "no owner, no marker, running".
-      Effect.ensuring(markStoppedIfInterrupted),
-      Effect.ensuring(releaseDriver(run.dir).pipe(Effect.ignore)),
-    );
+/**
+ * One offer of the Run's module, as it stands now, asked for what it takes and then made.
+ * The note for the footer, or null where the human cancelled the asking.
+ */
+export const makeOffer = Effect.fn("Flows.makeOffer")(function* (
+  env: PluginEnv,
+  prompts: FlowPrompts,
+  runId: string,
+  chosen: string,
+) {
+  const listed = yield* offersOf(env, runId);
+  if ("ok" in listed) return listed.error.message;
+  const offer = listed.find((one) => one.id === chosen);
+  if (offer === undefined) return `${runId} no longer offers ${chosen}`;
+  if (offer.unavailable !== null) return `${offer.title}: ${offer.unavailable}`;
+  const input = yield* offerArguments(prompts, offer.arguments);
+  if (input === null) return null;
+  const done = yield* invokeOffer(env, {
+    runId,
+    offer: offer.id,
+    input,
+    request: yield* newRequestId(),
   });
-
-  return yield* drive;
+  return done.ok ? done.human : done.error.message;
 });
 
 /** How often the tab re-reads the files and asks herdr what is still alive. */
@@ -894,7 +805,7 @@ const WIDTH_FLOOR = 40;
 /** Why the app cannot run here, or nothing when it can. */
 const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
   if (!process.stdout.isTTY || !process.stdin.isTTY) return "no terminal on this pane";
-  const term = yield* Config.option(Config.string("TERM"));
+  const term = yield* Config.option(Config.String("TERM"));
   if (term._tag === "Some" && term.value === "dumb") return "TERM is dumb";
   const width = process.stdout.columns ?? 0;
   if (width < WIDTH_FLOOR) return `the pane is ${width} columns, and the app needs ${WIDTH_FLOOR}`;
@@ -920,7 +831,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     stateDir: env.stateDir,
     paneId: env.paneId,
     pluginRoot: env.pluginRoot,
-    configDir: env.configDir,
+    userDir: env.userDir,
     // The Control Plane runs its actions on one fiber, one at a time, so a hand-off to
     // an agent over the threshold must not hold that queue while a compaction runs. It
     // asks, and reports that the compaction is in the air; the human presses the key
@@ -958,7 +869,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   const opening =
     noted?.filter === "all"
       ? ({ kind: "all" } as const)
-      : openingFilter((yield* loadDefaults(env.configDir)).scope, origin);
+      : openingFilter((yield* loadDefaults(env.userDir)).scope, origin);
   const why =
     (yield* whyNoRenderer()) ??
     (yield* Effect.gen(function* () {
@@ -1049,36 +960,6 @@ const redirectBoard = Effect.fn("Flows.redirectBoard")(function* (herdr: Herdr, 
 const MR_TTL_MS = 60_000;
 
 /**
- * How long an answer about a Run's agents stays good for. The panel of a stopped Run is
- * re-produced on every board tick, and asking herdr means a subprocess per agent — so
- * without this, sitting and looking at a broken Run costs one every three seconds. Short,
- * because it is advice about what is safe: `run resume` and the resume flow ask again
- * with no cache, and that is what actually decides.
- */
-const AGENTS_TTL_MS = 15_000;
-
-/**
- * A `herdr` that remembers what it was told about a set of agents. Held by the reader,
- * beside the merge-request and plan caches, for the same reason they are: a redraw must
- * cost nothing a redraw cannot change.
- */
-function remembersAgents(herdr: Herdr): AsksAgents {
-  const answers = new Map<string, { at: number; alive: AgentsAlive }>();
-  return {
-    agentsAlive: (names) =>
-      Effect.gen(function* () {
-        const key = names.join("\u0000");
-        const now = yield* Clock.currentTimeMillis;
-        const cached = answers.get(key);
-        if (cached && now - cached.at < AGENTS_TTL_MS) return cached.alive;
-        const alive = yield* herdr.agentsAlive(names);
-        answers.set(key, { at: now, alive });
-        return alive;
-      }),
-  };
-}
-
-/**
  * Everything the app draws, for whatever it is looking at. One closure, because the
  * merge-request cache belongs with the reads it saves: a History of 40 merge-request
  * Runs must make no `glab` call to draw, one selection makes exactly one, and
@@ -1097,10 +978,10 @@ function remembersAgents(herdr: Herdr): AsksAgents {
  * The Runs still going whose drift was escalated to the human, by constraint. Only the
  * unfinished ones are read: a finished Run's drift is history, and its ending is the event.
  */
-const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: ReadonlyArray<Run>) {
+const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: ReadonlyArray<RunFacts>) {
   const drifting = new Map<string, string>();
   for (const run of runs) {
-    if (run.record.status === "done" || run.record.status === "failed") continue;
+    if (settled(run)) continue;
     const lines = yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
     const stuck = currentReports(lines).find((report) => report.resolution === "escalated");
     if (stuck) drifting.set(run.id, stuck.constraint);
@@ -1121,18 +1002,15 @@ const escalatedDrift = Effect.fn("Flows.escalatedDrift")(function* (runs: Readon
  */
 const sayWhatHappened = Effect.fn("Flows.sayWhatHappened")(function* (
   env: PluginEnv,
-  runs: ReadonlyArray<Run>,
+  runs: ReadonlyArray<RunFacts>,
 ) {
-  if (!(yield* loadDefaults(env.configDir)).proactive) return;
+  if (!(yield* loadDefaults(env.userDir)).proactive) return;
   const key = yield* herdOf(env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
   if (key === null) return;
   const dir = yield* herdDir(env.stateDir, key);
   const said = yield* readSaid(dir);
   const file = yield* newsPath(env.stateDir, key);
-  for (const event of eventsIn(
-    runs.map((run) => run.record),
-    yield* escalatedDrift(runs),
-  )) {
+  for (const event of eventsIn(runs, yield* escalatedDrift(runs))) {
     if (said.has(event.key)) continue;
     // Remembered only once it is in the journal. The journal deduplicates by unread key,
     // so a failed write costs a retry on the next tick — where remembering first would
@@ -1166,6 +1044,7 @@ export function appState(
    */
   ownership: Live["ownership"] = null,
 ) {
+  const runsOf = session.runsOf ?? listRuns;
   const mrCache = new Map<string, { at: number; panel: MrPanel }>();
   /**
    * A finished Run's plan, kept between reads for the same reason the merge request is:
@@ -1174,7 +1053,6 @@ export function appState(
    * read, so `R` re-reads a plan the same way it re-reads the merge request.
    */
   const planCache = new Map<string, PlanPanel | null>();
-  const asksAgents = remembersAgents(session.herdr);
   /**
    * What GitLab last said about each merge request the board waits on, and when it was
    * asked. Asked in the background after a load, never on the load's own path: ten open
@@ -1242,7 +1120,8 @@ export function appState(
     const reuse = again.reuse ? last : null;
     // One scan of the run dirs per read, shared by the board and History: they are two
     // Views over the same directory, and reading it twice doubles the cost of a refresh.
-    const runs = reuse ? undefined : yield* new RunStore(env.stateDir).list();
+    const scanned = reuse ? undefined : yield* scan(env, runsOf);
+    const runs = scanned?.runs;
     // One read of the register and the workspace list for both boards: a wide tick
     // costs the local board's calls plus nothing, and the two boards cannot reconcile
     // a tab label from two different answers about the same agent.
@@ -1265,11 +1144,15 @@ export function appState(
       );
     }
     const live = reuse ? undefined : yield* liveOf(session);
-    const board = reuse ? reuse.state.board : yield* boardOf(session, runs, live);
+    const board = reuse ? reuse.state.board : yield* boardOf(session, scanned!, live);
     // Read only while the Runs view is showing it: a local board, and every other View,
     // must cost no group it is not going to draw.
     const widening = focus.filter.kind !== "workspace" && focus.view === "runs";
-    const wide = widening ? (reuse ? reuse.state.wide : yield* wideOf(session, runs, live)) : null;
+    const wide = widening
+      ? reuse
+        ? reuse.state.wide
+        : yield* wideOf(session, scanned!, live)
+      : null;
     // Before the Selection is resolved, because a History row is a row too: the board
     // keeps five finished runs and History keeps two hundred from every session that ran
     // here, so looking the Selection up in the board alone left every older row's panel
@@ -1277,7 +1160,7 @@ export function appState(
     const history = reuse
       ? reuse.state.history
       : focus.shown.includes("history")
-        ? yield* buildHistory({ stateDir: env.stateDir, cwd: env.cwd, runs })
+        ? yield* buildHistory({ cwd: env.cwd, runs: runs ?? (yield* runsOf(env)) })
         : null;
     const runId = runIdOf(focus.selected);
     // The wide groups too: a row the human is on may belong to another workspace, and
@@ -1295,10 +1178,7 @@ export function appState(
     const selectedRun =
       runId === null
         ? null
-        : ((runs ?? []).find((run) => run.id === runId) ??
-          (yield* new RunStore(env.stateDir)
-            .load(runId)
-            .pipe(Effect.catch(() => Effect.succeed(null)))));
+        : ((runs ?? (yield* runsOf(env))).find((run) => run.id === runId) ?? null);
     const where =
       selected !== undefined
         ? { id: selected.id, dir: selected.dir }
@@ -1308,7 +1188,7 @@ export function appState(
     // Read for the Selection and never for a list, and a badge is only ever filled from
     // what is in the cache. When to read past that cache is `rereads`' decision.
     const mr = yield* merge(
-      mrAbout(selectedRun?.record ?? null) ?? selected?.target ?? null,
+      mrAbout(selectedRun) ?? selected?.target ?? null,
       env.cwd,
       again.forceMr,
     );
@@ -1325,7 +1205,9 @@ export function appState(
       ...(wide?.groups.flatMap((g) => [...g.active, ...g.recent]) ?? []),
     ];
     /** What each Run's record says about it that a row does not carry. */
-    const recorded = new Map((runs ?? []).map((run) => [run.id, markedFrom(run.record)]));
+    const recorded = new Map(
+      (runs ?? []).map((run) => [run.id, markedOf(run, scanned?.registered ?? [])]),
+    );
     /**
      * The Live region and every row's marks, from one pass over the same journals. The
      * region is the Runs view's alone — nothing else draws it, and the journals of every
@@ -1340,24 +1222,24 @@ export function appState(
             stateDir: env.stateDir,
             socketPath: env.socketPath,
             run: where === null ? null : { id: where.id, dir: where.dir },
-            // From the scan this read already made, never a second load per Run: the
-            // record is the only thing the marks need that a row does not carry, and
-            // re-reading every `run.json` per tick is what a shared scan exists to avoid.
+            // From the scan this read already made, never a second read per Run: the
+            // facts are the only thing the marks need that a row does not carry.
             runs: dedupe(onBoard).map((row) => ({
               ...row,
-              ...(recorded.get(row.id) ?? markedFrom(null)),
+              ...(recorded.get(row.id) ?? { held: false, harnesses: [] }),
             })),
             ownership,
             region: focus.view === "runs",
           });
-    const defaults = yield* loadDefaults(env.configDir);
+    const defaults = yield* loadDefaults(env.userDir);
     const tasksBuilt = reuse
       ? reuse.state.tasks
       : yield* buildBoard({
-          stateDir: env.stateDir,
-          socketPath: env.socketPath,
+          env,
           alive: live?.alive ?? [],
           runs,
+          tasks: scanned?.tasks,
+          registered: scanned?.registered,
           quietMs: defaults.boardQuietMs,
           mrStates,
         });
@@ -1392,9 +1274,9 @@ export function appState(
       stopping: [],
       detail: runId
         ? yield* buildRunDetail({
-            stateDir: env.stateDir,
+            env,
             runId,
-            agents: asksAgents,
+            runs: runs ?? (yield* runsOf(env)),
             mr,
             tail: focus.tail,
             pages: focus.reviewPages,
@@ -1414,10 +1296,10 @@ export function appState(
  * Both, because `implement` produces one and `review` is given one — reading only the
  * second left every merge request a Run built without a state, a pipeline or approvals.
  */
-function mrAbout(record: RunRecord | null): string | null {
-  const opened = record?.mr_url ? parseMrUrl(record.mr_url) : null;
+function mrAbout(run: RunFacts | null): string | null {
+  const opened = run?.mr ? parseMrUrl(run.mr) : null;
   if (opened !== null) return mrTarget(opened.project, opened.iid);
-  return record?.inputs.target ?? null;
+  return run === null ? null : (diffTargetOf(run.settled)?.value ?? null);
 }
 
 /** One command, run against the Selection it names. The string becomes the footer note. */
@@ -1427,7 +1309,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
   command: Command,
   prompts: FlowPrompts,
 ) {
-  const runOf = (runId: string) => loadRun(session.stateDir, runId);
+  const runOf = (runId: string) =>
+    (session.runsOf ?? listRuns)(env).pipe(
+      Effect.map((runs) => runs.find((run) => run.id === runId) ?? null),
+    );
   switch (command._tag) {
     /**
      * Enter, as one call. Everything is resolved here rather than when the row was
@@ -1450,15 +1335,18 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       if (jump.kind === "agent") return yield* went(session.herdr.agentFocus(jump.agent));
       const run = yield* runOf(jump.runId);
       if (!run) return `${jump.label} has gone`;
-      // A run's tab is the tab of its newest agent; one that has opened none is only
-      // reachable as the workspace it was recorded against.
-      const tabId = run.record.steps
-        .flatMap((step) => step.variants)
-        .map((variant) => variant.tabId)
-        .filter((id): id is string => id !== null)
-        .at(-1);
-      if (tabId) return yield* went(session.herdr.tabFocus(tabId));
-      const workspace = run.record.workspace;
+      // A run is where its newest agent is; one that has started none is only reachable
+      // as the workspace it lives in.
+      const agent = (yield* everyRegistered(env.stateDir)).findLast(
+        (entry) => entry.runId === run.id,
+      );
+      if (agent) return yield* went(session.herdr.agentFocus(agent.agent));
+      const workspace =
+        run.workspace ??
+        (run.task === null
+          ? null
+          : ((yield* listTasks(env.stateDir)).find((task) => task.id === run.task)?.workspace ??
+            null));
       if (!workspace) return `${jump.label} has no tab to jump to`;
       return yield* went(session.herdr.workspaceFocus(workspace));
     }
@@ -1472,63 +1360,51 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
     // History and every workspace's group it was on — three views built to answer a
     // question the run directory answers on its own.
     case "StopRun": {
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
-      // A Run that ended by itself while the board held the stop is not stopped: the
-      // grace is for the human to change their mind, not a window to kill a finished Run
-      // in. Read from its directory rather than from the board, which may be seconds old.
-      if (runSettled(yield* runStatus(run))) return `${runLabel(run.record)} finished on its own`;
-      return yield* stopRun(session, run);
+      const stopped = yield* controlRun(env, {
+        runId: command.runId,
+        control: "stop",
+        set: true,
+      });
+      return stopped.ok ? stopped.human : stopped.error.message;
     }
-    case "OpenLog": {
-      const run = yield* runOf(command.runId);
-      return run ? yield* openLog(session, run) : `${command.runId} has gone`;
-    }
+    case "OpenLog":
+      return "a Run keeps no log of its own: its agents' panes are the record";
     case "Answer": {
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
-      const name = runLabel(run.record);
-      const answered = yield* answerRun(
-        run,
-        command.value,
-        yield* newRequestId(),
-        command.choiceId,
-      );
-      return answered.ok ? `answered ${name}` : `${name}: ${answered.error.message}`;
+      const answered = yield* answerRun(env, {
+        runId: command.runId,
+        decision: command.choiceId === "" ? null : command.choiceId,
+        value: command.value,
+        request: yield* newRequestId(),
+      });
+      return answered.ok ? `answered ${command.runId}` : answered.error.message;
     }
-    case "SendReview": {
-      // The Selection names the review to send, and a Selection with no Run behind it —
-      // a Settings or Workflows row, and `s` is on the footer in every View — names
-      // nothing. Handing off "the newest review" there is a fix round for a review
-      // nobody chose, so it says what to select instead.
-      if (command.runId === null) return "select the run whose review should be sent";
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
-      return (yield* sendReview(session, run)).message;
-    }
+    case "SendReview":
+      // What a finished Run offers to do next is its own declaration, and a review that
+      // should reach an implementer is one of those offers. `run actions` is where they
+      // are, on the board and everywhere else.
+      return "a review reaches its implementer through the Run's own offers; press the action key";
 
     /**
-     * A run that stopped with findings, as the next run's work source. `implement`
-     * already reads a run directory with a review in it as the spec and its findings as
-     * the tickets, so the whole action is one settled Input.
+     * One of the things the Run's own Workflow says it offers. Nothing here knows what
+     * that is: the offer names the workflow, the facts decide whether it is still on the
+     * table, and both are asked again now rather than taken from the card.
      */
-    case "FixFindings": {
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
-      return yield* launch(session, env, prompts, {
-        workflow: "implement",
-        inputs: { plan: run.dir },
-        note: `fixing what ${run.id} left open`,
-        parent: run,
-      });
-    }
+    case "InvokeOffer":
+      return yield* makeOffer(env, prompts, command.runId, command.offer);
 
-    case "ReviewAgain":
-      return yield* launch(session, env, prompts, {
-        workflow: "review",
-        inputs: { target: command.target },
-        note: `reviewing ${command.target} again`,
-      });
+    /** What the Run's module offers now, the one chosen asked for what it takes, then made. */
+    case "ChooseOffer": {
+      const listed = yield* offersOf(env, command.runId);
+      if ("ok" in listed) return listed.error.message;
+      const open = listed.filter((one) => one.unavailable === null);
+      if (open.length === 0) return `${command.runId} offers nothing now`;
+      const chosen = yield* prompts.menu(
+        open.map((one) => ({ id: one.id, title: one.title, subtitle: one.workflow })),
+        { header: `What next for ${command.runId}?` },
+      );
+      if (chosen === null) return null;
+      return yield* makeOffer(env, prompts, command.runId, chosen.id);
+    }
 
     case "RunWorkflow":
       return yield* launch(session, env, prompts, {
@@ -1537,11 +1413,10 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         note: `started from the Workflows view`,
       });
 
-    case "PostReview": {
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
-      return (yield* postReview(run)).message;
-    }
+    case "PostReview":
+      // A Run posts its own review where its workflow says to; the board does not do it
+      // on the Run's behalf.
+      return "a review is posted by the Run that wrote it";
 
     case "ConfirmProposal":
       return yield* fromBoard(env, (actor) =>
@@ -1568,7 +1443,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
       const opened = yield* shell(
         "glab",
         ["mr", "view", ref.iid, ...repoArgs(ref.project), "--web"],
-        run?.record.cwd ?? env.cwd,
+        run?.cwd ?? env.cwd,
         "say",
       );
       return opened.code === 0
@@ -1613,7 +1488,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
         return `compact_at_tokens has to be a whole number of tokens above zero, or ${COMPACTION_OFF} to turn compaction off, not "${command.value}"`;
       }
       const value = typed === "" ? null : numeric ? Number(typed) : typed;
-      return yield* writeConfigValue(env.configDir, command.key, value).pipe(
+      return yield* writeConfigValue(env.userDir, command.key, value).pipe(
         // What was written, so the note cannot disagree with the file.
         Effect.as(`${command.key} is now ${value ?? "unset"}`),
         Effect.catch((cause) => Effect.succeed(`${command.key}: ${reason(cause)}`)),
@@ -1637,42 +1512,26 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
           return yield* forkFlow(session.herdr, env, prompts).pipe(Effect.as(null));
       }
 
-    /**
-     * A Run nothing is driving, taken up again where it stopped. `resumeRun` re-checks
-     * that for itself: the card it was asked from is minutes old, and a second Driver is
-     * not something to start on a guess.
-     */
+    /** A Run taken up again where it stopped, as every door resumes one. */
     case "ResumeRun": {
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
-      const resumed = yield* resumeRun(env, run, yield* newRequestId());
+      const resumed = yield* resumeRun(env, command.runId);
       return resumed.ok ? resumed.human : resumed.error.message;
     }
 
     /** A finished plan, built: the same launch "Implement now" runs, from the card. */
-    case "ImplementNow": {
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
-      const path = yield* Path.Path;
-      return yield* launch(session, env, prompts, {
-        workflow: "implement",
-        inputs: { plan: path.join(run.dir, "plan") },
-        note: `implementing ${runLabel(run.record)}'s plan`,
-        parent: run,
-      });
-    }
-
     /**
      * A child Run on a finished one's outcome. What it should do is asked for here rather
      * than guessed from the parent: a follow-up with no words is a Run with no spec.
      */
     case "FollowUp": {
-      const run = yield* runOf(command.runId);
-      if (!run) return `${command.runId} has gone`;
-      const text = yield* prompts.ask(`What still needs doing on ${runLabel(run.record)}?`);
+      const text = yield* prompts.ask(`What still needs doing on ${command.runId}?`);
       if (text === null || text.trim() === "") return null;
-      const started = yield* followUp(env, run, text.trim(), yield* newRequestId());
-      return started.ok ? started.human : started.error.message;
+      const done = yield* carryOutAsked(
+        env,
+        [{ kind: "followup", run: command.runId, text: text.trim() }],
+        { origin: "board", requestId: yield* newRequestId() },
+      );
+      return done.map((one) => `${one.state}: ${one.note}`).join("\n");
     }
 
     /**
@@ -1707,7 +1566,7 @@ export const runCommand = Effect.fn("Flows.runCommand")(function* (
             note: null,
           };
           yield* recordDisposition(run.dir, line);
-          return statusLine(run.record.status, line);
+          return statusLine(run.state, line);
         }),
       );
     }
@@ -1744,7 +1603,7 @@ const launch = Effect.fn("Flows.launch")(function* (
   session: ControlSession,
   env: PluginEnv,
   prompts: FlowPrompts,
-  opts: { workflow: string; inputs: Record<string, string>; note: string; parent?: Run },
+  opts: { workflow: string; inputs: Record<string, string>; note: string; parent?: RunFacts },
 ) {
   // The same launch flow the picker runs, for the Workflow the row named and inline in
   // the tab the row was clicked in. It used to start the Run itself whenever every Input
@@ -1781,9 +1640,8 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   /** The board's own Tasks, so the text view and the pane draw the same three sections. */
   const tasksOf = Effect.fn("Flows.textBoard.tasks")(function* () {
     return yield* buildBoard({
-      stateDir: env.stateDir,
-      socketPath: env.socketPath,
-      quietMs: (yield* loadDefaults(env.configDir)).boardQuietMs,
+      env,
+      quietMs: (yield* loadDefaults(env.userDir)).boardQuietMs,
     });
   });
 
@@ -1793,12 +1651,15 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
       stateDir: env.stateDir,
       socketPath: env.socketPath,
       run: null,
-      runs: yield* Effect.forEach(rows, (row) =>
-        Effect.gen(function* () {
-          const run = yield* loadRun(env.stateDir, row.id);
-          return { id: row.id, dir: row.dir, ...markedFrom(run?.record ?? null) };
-        }),
-      ),
+      runs: yield* Effect.gen(function* () {
+        const { runs, registered } = yield* scan(env, session.runsOf);
+        return rows.map((row) => {
+          const run = runs.find((one) => one.id === row.id);
+          return run === undefined
+            ? { id: row.id, dir: row.dir, held: false, harnesses: [] }
+            : markedOf(run, registered);
+        });
+      }),
       ownership: null,
       region: true,
     });
@@ -1807,13 +1668,13 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
   // Nothing to loop on: with no keyboard the board is a report, so it is printed once
   // and the entrypoint ends rather than spinning on a `takeKey` that can never answer.
   if (!process.stdin.isTTY) {
-    const view = yield* boardOf(session);
+    const view = yield* boardOf(session, yield* scan(env, session.runsOf));
     const once = renderWorkspace(view, why, undefined, yield* steeringOf(view));
     process.stdout.write(`${once}\n`);
     return 0;
   }
   startKeyboard();
-  let view = yield* boardOf(session);
+  let view = yield* boardOf(session, yield* scan(env, session.runsOf));
   const open = (mode: Mode) => openMode(herdr, env, mode);
   let note: string | null = why;
   let drawn = "";
@@ -1827,7 +1688,7 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     if (waiting && waiting.id !== answering) {
       asking = { index: 0, typed: "" };
       answering = waiting.id;
-      yield* announce(herdr, env, session.configDir);
+      yield* announce(herdr, env, session.userDir);
     }
     if (!waiting) answering = null;
 
@@ -1840,21 +1701,21 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
     if (key !== null) {
       // While a run is asking, every key belongs to that question.
       if (waiting) {
-        const answered = yield* answerKey(waiting, asking, key);
+        const answered = yield* answerKey(env, waiting, asking, key);
         asking = answered.asking;
         note = answered.note ?? note;
       } else if (key === "q" || key === "\x03") {
         releaseKeyboard();
         return 0;
       } else {
-        note = yield* act(session, view, key, open);
+        note = yield* act(session, env, view, key, open);
       }
-      view = yield* boardOf(session);
+      view = yield* boardOf(session, yield* scan(env, session.runsOf));
       read = yield* Clock.currentTimeMillis;
       continue;
     }
     if ((yield* Clock.currentTimeMillis) - read >= REFRESH_MS) {
-      view = yield* boardOf(session);
+      view = yield* boardOf(session, yield* scan(env, session.runsOf));
       read = yield* Clock.currentTimeMillis;
     }
     yield* Effect.sleep(TICK_MS);
@@ -1871,11 +1732,11 @@ const textBoard = Effect.fn("Flows.textBoard")(function* (
 const announce = Effect.fn("Flows.announce")(function* (
   herdr: Herdr,
   env: PluginEnv,
-  configDir: string,
+  userDir: string,
 ) {
   // Same opt-out as the Driver's: `questions: notify` leaves the question on the
   // board and in the toast, and only stops it moving the human here.
-  if ((yield* loadDefaults(configDir)).questions === "notify") return;
+  if ((yield* loadDefaults(userDir)).questions === "notify") return;
   if (!env.tabId) return;
   // A tab that will not focus is still a tab the human can reach.
   yield* Effect.ignore(herdr.tabFocus(env.tabId));
@@ -1887,6 +1748,7 @@ const announce = Effect.fn("Flows.announce")(function* (
  * answer a question the same way rather than each having their own idea of Esc.
  */
 export const answerKey = Effect.fn("Flows.answerKey")(function* (
+  env: PluginEnv,
   waiting: RunRow,
   asking: Asking,
   key: string,
@@ -1895,7 +1757,12 @@ export const answerKey = Effect.fn("Flows.answerKey")(function* (
   if (!choice) return { asking };
   const next = answerFor(choice, asking, key);
   if (next.value === null) return { asking: next.asking };
-  const answered = yield* answerRun(waiting, next.value, yield* newRequestId());
+  const answered = yield* answerRun(env, {
+    runId: waiting.id,
+    decision: choice.id === "" ? null : choice.id,
+    value: next.value,
+    request: yield* newRequestId(),
+  });
   return {
     asking: next.asking,
     note: answered.ok ? `answered ${waiting.title}` : `${waiting.title}: ${answered.error.message}`,
@@ -1922,6 +1789,7 @@ const openMode = Effect.fn("Flows.openMode")(function* (herdr: Herdr, env: Plugi
 /** What one keypress does. Returns the line to show under the lists, if any. */
 const act = Effect.fn("Flows.act")(function* (
   session: ControlSession,
+  env: PluginEnv,
   view: WorkspaceView,
   key: string,
   open: (mode: Mode) => ReturnType<typeof openMode>,
@@ -1950,32 +1818,19 @@ const act = Effect.fn("Flows.act")(function* (
       Effect.catch((cause) => Effect.succeed(`${mode}: ${reason(cause)}`)),
     );
   }
-  if (key === "s") return (yield* sendReviewToImplementer(session)).message;
   // The text board acts on the newest run it drew rather than on a Selection, so this
   // is where "which run" is decided for it — the operations take the run itself.
   if (key === "l") {
     const row = view.active[0] ?? view.recent[0];
     if (!row) return "no run here to open a log for";
-    const run = yield* loadRun(session.stateDir, row.id);
-    return run ? yield* openLog(session, run) : `${row.title} has gone`;
+    return `${row.title} keeps no log of its own: its agents' panes are the record`;
   }
   if (key === "k") {
     const row = view.active[0];
     if (!row) return "nothing running here to stop";
-    const run = yield* loadRun(session.stateDir, row.id);
-    return run ? yield* stopRun(session, run) : `${row.title} has gone`;
+    return yield* stopRun(env, row.id);
   }
   return null;
-});
-
-/**
- * The Run behind an id, or `null` for one whose directory has gone since the row that
- * names it was drawn. This is the whole of "which run did the human mean": a row is a
- * projection of a run directory, and every board that can show a row — this Session's,
- * History, another workspace's group — is showing a directory this reads directly.
- */
-export const loadRun = Effect.fn("Flows.loadRun")(function* (stateDir: string, runId: string) {
-  return yield* new RunStore(stateDir).load(runId).pipe(Effect.catch(() => Effect.succeed(null)));
 });
 
 /**
@@ -1983,35 +1838,9 @@ export const loadRun = Effect.fn("Flows.loadRun")(function* (stateDir: string, r
  * so this replaces that. Its agents are left where they are: their panes are the
  * transcript of what happened.
  */
-export const stopRun = Effect.fn("Flows.stopRun")(function* (session: ControlSession, run: Run) {
-  const name = runLabel(run.record);
-  const stopped = yield* stopRunOperation(
-    session.stateDir,
-    session.herdr,
-    run,
-    yield* newRequestId(),
-  );
-  return stopped.ok ? `stopped ${name}` : `${name}: ${stopped.error.message}`;
-});
-
-/**
- * A run's `runner.log` in a pane of its own. The driver has no pane, so this is the
- * only place its detail can be read, and a temporary pane is the cheapest way to read
- * it without leaving the board.
- */
-export const openLog = Effect.fn("Flows.openLog")(function* (session: ControlSession, run: Run) {
-  const path = `${run.dir}/${RUNNER_LOG}`;
-  return yield* Effect.gen(function* () {
-    const pane = yield* session.herdr.paneSplit({
-      paneId: session.paneId ?? "",
-      direction: "down",
-      ratio: 0.6,
-    });
-    // The pane is a shell, so the path is quoted: spaces and metacharacters in a
-    // state dir are path characters here, not syntax.
-    yield* session.herdr.paneRun(pane, `less +G ${shellQuote(path)}`);
-    return `opened ${runLabel(run.record)}'s log`;
-  }).pipe(Effect.catch((cause) => Effect.succeed(`${path}: ${reason(cause)}`)));
+export const stopRun = Effect.fn("Flows.stopRun")(function* (env: PluginEnv, runId: string) {
+  const stopped = yield* controlRun(env, { runId, control: "stop", set: true });
+  return stopped.ok ? stopped.human : stopped.error.message;
 });
 
 /** What herdr answers about the session right now: every agent, and every workspace. */
@@ -2057,7 +1886,7 @@ interface Pruned {
  * sweep is forked and the frame goes out with whatever the last one said. One at a
  * time, and the clock starts when it finishes, so a slow sweep does not queue more.
  */
-const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession) {
+const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession, scanned: Scanned) {
   const pruned = session.pruned;
   if (!pruned || pruned.running) return;
   const now = yield* Clock.currentTimeMillis;
@@ -2068,6 +1897,8 @@ const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession) {
       const lines = yield* pruneWorktrees({
         herdr: session.herdr,
         stateDir: session.stateDir,
+        runs: scanned.runs,
+        registered: scanned.registered,
         cwd: session.cwd,
       });
       pruned.lines = lines;
@@ -2087,71 +1918,46 @@ const sweep = Effect.fn("Flows.sweep")(function* (session: ControlSession) {
 const QUIET_FOR_MS = 30_000;
 const quietSeen = new Map<string, { at: number; quietMs: number }>();
 
-const boardQuietMs = Effect.fn("Flows.boardQuietMs")(function* (configDir: string) {
+const boardQuietMs = Effect.fn("Flows.boardQuietMs")(function* (userDir: string) {
   const now = yield* Clock.currentTimeMillis;
-  const seen = quietSeen.get(configDir);
+  const seen = quietSeen.get(userDir);
   if (seen && now - seen.at < QUIET_FOR_MS) return seen.quietMs;
-  const quietMs = (yield* loadDefaults(configDir)).boardQuietMs;
-  quietSeen.set(configDir, { at: now, quietMs });
+  const quietMs = (yield* loadDefaults(userDir)).boardQuietMs;
+  quietSeen.set(userDir, { at: now, quietMs });
   return quietMs;
 });
 
-/**
- * Every tab the board can see, called what the run in it is doing. The Control Plane is
- * the second half of the glyph reconcile: the Driver keeps its own run's tabs true while
- * it lives, and this keeps them true for as long as a board is open — which is what
- * makes a review handed back to a live implementer, or a finished agent prompted from
- * here, go back to ⚙ without anyone renaming anything.
- *
- * Only tabs herdr still has an agent in, and only where the label changed. A finished
- * run's tab is usually closed, and renaming one tab per finished run on every open of
- * the board would be a burst of herdr calls that told nobody anything.
- */
-const reconcileTabs = Effect.fn("Flows.reconcileTabs")(function* (
-  session: ControlSession,
-  runs: ReadonlyArray<Run>,
-  alive: ReadonlyArray<AgentInfo>,
-  rows: ReadonlyArray<RunRow>,
-) {
-  const live = new Map(alive.map((agent) => [agent.name, agent.status]));
-  const written = (session.tabLabels ??= new Map());
-  // What herdr calls each of these tabs now, so a tab a human renamed keeps their name
-  // rather than being put back by the next board tick.
-  const now = new Map(
-    (yield* session.herdr.tabList().pipe(Effect.catch(() => Effect.succeed([])))).map((tab) => [
-      tab.tabId,
-      tab.label,
-    ]),
-  );
-  for (const row of rows) {
-    const run = runs.find((r) => r.id === row.id);
-    if (!run) continue;
-    const inhabited = new Set(
-      run.record.steps
-        .flatMap((step) => step.variants)
-        .filter((variant) => live.has(variant.agent))
-        .map((variant) => variant.tabId),
-    );
-    const labels = tabLabelsFor(run.record, (agent) => live.get(agent), row.choice !== null);
-    for (const [tabId, label] of labels) {
-      if (!inhabited.has(tabId) || written.get(tabId) === label) continue;
-      if (!collieOwns(now.get(tabId), run.record)) continue;
-      written.set(tabId, label);
-      // A tab that will not rename — closed since the read — is not worth a note, and
-      // not worth trying again on every tick either.
-      yield* Effect.ignore(session.herdr.tabRename(tabId, label));
-    }
-  }
+/** Every Run, every Task and every registered agent, read once for all the Views of a load. */
+interface Scanned {
+  readonly runs: ReadonlyArray<RunFacts>;
+  readonly tasks: ReadonlyArray<TaskRecord>;
+  readonly registered: ReadonlyArray<AgentEntry>;
+}
+
+/** Where a board's Runs are read from. */
+type RunsOf = (
+  env: PluginEnv,
+) => Effect.Effect<
+  ReadonlyArray<RunFacts>,
+  never,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+>;
+
+const scan = Effect.fn("Flows.scan")(function* (env: PluginEnv, runsOf: RunsOf = listRuns) {
+  return {
+    runs: yield* runsOf(env),
+    tasks: yield* listTasks(env.stateDir).pipe(Effect.catch(() => Effect.succeed([]))),
+    registered: yield* everyRegistered(env.stateDir),
+  } satisfies Scanned;
 });
 
 const boardOf = Effect.fn("Flows.boardOf")(function* (
   session: ControlSession,
-  scanned?: ReadonlyArray<Run>,
+  scanned: Scanned,
   seen?: SessionNow,
 ) {
-  yield* sweep(session);
+  yield* sweep(session, scanned);
   const live = seen ?? (yield* liveOf(session));
-  const runs = scanned ?? (yield* new RunStore(session.stateDir).list());
   const view = yield* buildView({
     ...session,
     stateDir: session.stateDir,
@@ -2162,10 +1968,9 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
     alive: live.alive,
     worktrees: session.pruned?.lines ?? [],
     pluginRoot: session.pluginRoot,
-    quietMs: yield* boardQuietMs(session.configDir),
-    runs,
+    quietMs: yield* boardQuietMs(session.userDir),
+    ...scanned,
   });
-  yield* reconcileTabs(session, runs, live.alive, [...view.active, ...view.recent]);
   return view;
 });
 
@@ -2176,28 +1981,18 @@ const boardOf = Effect.fn("Flows.boardOf")(function* (
  */
 const wideOf = Effect.fn("Flows.wideOf")(function* (
   session: ControlSession,
-  scanned?: ReadonlyArray<Run>,
+  scanned: Scanned,
   seen?: SessionNow,
 ) {
   const live = seen ?? (yield* liveOf(session));
-  const runs = scanned ?? (yield* new RunStore(session.stateDir).list());
-  const wide = yield* buildWideView({
+  return yield* buildWideView({
     session: session.session,
     stateDir: session.stateDir,
     workspaces: live.workspaces,
     alive: live.alive,
-    runs,
-    quietMs: yield* boardQuietMs(session.configDir),
+    ...scanned,
+    quietMs: yield* boardQuietMs(session.userDir),
   });
-  // Every tab the wide board can see, not just this workspace's: the reconcile is what
-  // keeps a glyph true, and a board of the session is watching the whole session.
-  yield* reconcileTabs(
-    session,
-    runs,
-    live.alive,
-    wide.groups.flatMap((g) => [...g.active, ...g.recent]),
-  );
-  return wide;
 });
 
 /** A banner above a question: definition load errors, above the list they were skipped from. */

@@ -9,13 +9,15 @@
 // marks, rather than the reassuring ones a "clean" default would invent.
 
 import { Clock, Effect, Path, Schema } from "effect";
+import type { AgentEntry } from "./registry";
+import type { RunFacts } from "./runs";
 import { newest, readCards, type Card } from "./cards";
 import type { Marks, RunMarks } from "./lines";
 import { openReports, readDrift } from "./drift";
 import { capabilitiesOf } from "./steering-caps";
 import { DriftReportSchema, type DriftReport } from "./evaluator";
 import { readIntent } from "./intent";
-import { readJournal } from "./journal";
+import { appendJournal, readJournal } from "./journal";
 import {
   newsPath,
   pending as pendingNews,
@@ -89,6 +91,16 @@ export const pendingReportsPath = Effect.fn("Live.pendingReportsPath")(function*
   return path.join(yield* herdDir(stateDir, herdKey), "pending-reports", `${run}.jsonl`);
 });
 
+/** A report about a Run that had already ended when it was judged, to be said on the board. */
+export const appendPendingReport = Effect.fn("Live.appendPendingReport")(function* (
+  stateDir: string,
+  herdKey: string,
+  run: string,
+  report: DriftReport,
+) {
+  yield* appendJournal(yield* pendingReportsPath(stateDir, herdKey, run), DriftJson, report);
+});
+
 export const readPendingReports = Effect.fn("Live.readPendingReports")(function* (
   stateDir: string,
   herdKey: string,
@@ -105,12 +117,24 @@ export const readPendingReports = Effect.fn("Live.readPendingReports")(function*
 const herdOrNull = (socketPath: string | null) =>
   herdOf(socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
 
-/** What a row's marks are read from: the Run, and the two things its record says. */
+/** What a row's marks are read from: the Run, whether it is held, and its agents' harnesses. */
 export interface MarkedRun extends LiveRun {
-  /** The Run's `awaiting`, which is what says it has been held. */
-  awaiting: string | null;
+  held: boolean;
   /** The harnesses this Run's agents are on: attribution is a per-harness capability. */
   harnesses: ReadonlyArray<string>;
+}
+
+/** A Run's marks from its facts and the agents registered for it. */
+export function markedOf(
+  run: Pick<RunFacts, "id" | "dir" | "held">,
+  registered: ReadonlyArray<AgentEntry>,
+): MarkedRun {
+  const harnesses = registered.flatMap((entry) =>
+    entry.runId === run.id && entry.incarnation?.agentSession
+      ? [entry.incarnation.agentSession.kind]
+      : [],
+  );
+  return { id: run.id, dir: run.dir, held: run.held, harnesses: [...new Set(harnesses)] };
 }
 
 export interface BoardLive {
@@ -161,7 +185,7 @@ export const liveFor = Effect.fn("Live.for")(function* (opts: {
       // board does not re-rank what a card already says about itself.
       tryIt: newest(cards).at(-1)?.significance === "try-it",
       drift: openReports(yield* readDrift(run.dir)).length > 0,
-      held: run.awaiting === "hold",
+      held: run.held,
       override: overridden.has(run.id),
       unattributed: yield* unattributed(run),
       proposal: pendingFor(lines, run.id, now).length > 0,

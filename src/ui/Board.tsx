@@ -20,7 +20,7 @@ import {
   sectionOf,
   waitingLabel,
 } from "../board";
-import { ALL_KEYS, goToTab, type Command, type MenuItem, type Older, primaryFor } from "./state";
+import { ALL_KEYS, type Command, type MenuItem, type Older, primaryFor } from "./state";
 import { C, cardEdge, sentenceColour, stateGlyph, stepGlyph } from "./sections";
 
 /**

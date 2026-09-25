@@ -1,5 +1,5 @@
-// {{a.b}} substitution for prompt bodies. Unknown keys render empty and are
-// reported so a typo in a definition is visible instead of silent.
+// {{a.b}} substitution for prompt bodies. Unknown keys render empty and are reported, and
+// the caller refuses a body that reported any.
 
 import { Schema } from "effect";
 import { isYamlMap, type YamlMap, type YamlValue } from "./yaml";
@@ -36,15 +36,30 @@ export function skillsIn(text: string): string[] {
 }
 
 const SKILL = /\{\{\s*skill:\s*([A-Za-z0-9_-]+)\s*\}\}/g;
+const EXPRESSION = /\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g;
+const BRACES = /\{\{[^}]*\}\}/g;
 
-export function renderTemplate(text: string, vars: YamlMap, opts: RenderOptions = {}): Rendered {
+/** Every name a body looks up, skills aside, in the order it first names them. */
+export function expressionsIn(text: string): string[] {
+  const names: string[] = [];
+  for (const [, name] of text.replace(SKILL, "").matchAll(EXPRESSION))
+    if (name && !names.includes(name)) names.push(name);
+  return names;
+}
+
+/** Every `{{…}}` that is neither a skill nor a name to look up: nothing would fill it. */
+export function malformedIn(text: string): string[] {
+  return [...text.replace(SKILL, "").replace(EXPRESSION, "").matchAll(BRACES)].map(([all]) => all);
+}
+
+export function renderTemplate(text: string, input: YamlMap, opts: RenderOptions = {}): Rendered {
   const missing: string[] = [];
-  // Skills first, so `{{skill:x}}` is never mistaken for a missing variable.
+  // Skills first, so `{{skill:x}}` is never mistaken for missing input.
   const withSkills = text.replace(SKILL, (all, name: string) =>
     opts.skill ? opts.skill(name) : all,
   );
-  const out = withSkills.replace(/\{\{\s*([A-Za-z0-9_.]+)\s*\}\}/g, (_all, path: string) => {
-    const value = lookup(vars, path.split("."));
+  const out = withSkills.replace(EXPRESSION, (_all, path: string) => {
+    const value = lookup(input, path.split("."));
     if (value === undefined || value === null) {
       if (!missing.includes(path)) missing.push(path);
       return "";
@@ -54,8 +69,8 @@ export function renderTemplate(text: string, vars: YamlMap, opts: RenderOptions 
   return { text: out, missing };
 }
 
-function lookup(vars: YamlMap, path: string[]): YamlValue | undefined {
-  let node: YamlValue = vars;
+function lookup(input: YamlMap, path: string[]): YamlValue | undefined {
+  let node: YamlValue = input;
   for (const key of path) {
     if (!isYamlMap(node)) return undefined;
     const next: YamlValue | undefined = node[key];

@@ -1,68 +1,3 @@
----
-name: implement
-title: implement — build the plan, review it, fix until nothing blocks
-description: Builds from a plan dir, a Linear issue or a description, gets one complete review, fixes what blocks until a review finds nothing blocking, then opens the merge request.
-# Owns the checkout of the branch it builds, so two Runs never share an index or a
-# stash stack.
-checkout: branch
-inputs:
-  plan: work-source
-  # The short kebab-case name of the work, which a generated branch is named after.
-  task: optional
-  # One repository's share of a plan that spans several, as the tickets' `Repo:` line
-  # names it. Empty means the whole plan, which is every single-repository run.
-  repo: optional
-  # `new` gives the Run a herdr worktree workspace of its own; anything else or absent
-  # keeps it in the workspace it was started from. See docs/using.md.
-  workspace: optional
-  # What kind of result this run has to prove: feature, bug, refactor, investigation,
-  # docs or migration. Empty says nothing, and is held only to the approved
-  # verifications — a run nobody classified is not a feature by default.
-  outcome: optional
-  # Extra review axes, where this change has a risk that earns one. Forwarded to review,
-  # as `outcome` is: the embedded review reads both from this run's inputs.
-  risks: optional
-# A ceiling, not a target: at most four review rounds and four fix passes after the
-# build. The run leaves the loop at the first review with nothing blocking.
-max_iterations: 4
-steps:
-  - id: build
-    persona: implementer
-    skill: implement
-    # A plan of two tickets or more is built one ticket at a time, on this same agent,
-    # with a compact hand-off between them rather than one transcript for the whole plan.
-    each: tickets
-    # One implementer agent for the whole run, so its model is named once, here.
-    # `default` passes no model flag and lets the harness pick its own.
-    harness: claude
-    model: opus
-    effort: xhigh
-    output: build.json
-  - id: review
-    use: review
-    fresh: true
-    # The reviewer names its own model and effort, so this reaches only synthesize.
-    model: default
-    effort: medium
-  - id: fix
-    persona: implementer
-    agent: build
-    output: fix.json
-    repeat:
-      from: review.synthesize
-      # Back to the review, which is the step that judges the fix. `back_to` defaults to
-      # `from`; it is written out because a reader should not have to know that.
-      back_to: review
-      # Only blocking findings drive the loop; the last fix's own dispositions and
-      # checks decide the run, and the merge request says it was not re-reviewed.
-      converge: true
-  - id: mr
-    persona: implementer
-    agent: build
-    requires: gitlab
-    output: mr.json
----
-
 Work source ({{inputs.plan_kind}}): {{inputs.plan}}
 Repository (may be empty): {{inputs.repo}}
 Project root: {{cwd}}
@@ -87,9 +22,7 @@ The work source above is one of five kinds. Do the one that matches
   under **This slice** below; Collie hands them to you one at a time, in an order their
   `Blocked by` lines allow.
 - **review** — a review of work that already exists. `{{inputs.plan}}/review.md` is the
-  spec, and the same findings as JSON are that run's own review Output —
-  `{{inputs.plan}}/steps/review/review.json` where one reviewer wrote it, or
-  `{{inputs.plan}}/steps/synthesize/synthesized.json` where several were reconciled. The
+  spec, and the same findings as JSON are `{{inputs.plan}}/findings.json`. The
   tickets are those findings, worst severity first. You are fixing an existing
   change and this checkout is already on its branch, so there is no branch to pick and
   nothing to check out: the fixes land on the branch that was reviewed, and a merge
@@ -197,13 +130,10 @@ ignore the others; an empty outcome means only the approved verifications have t
 
 {{session.ask}}
 
-Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what is not
-built or not passing, as findings — each with a "severity" of `blocker|major|minor`, a
-"title", and the "file" and "detail" it is about; a failure that pre-dates this branch is
-`minor`>], "branch": "<branch>", "pushed": true, "tickets_done":
-["ticket title", ...], "commits": ["<subject>", ...], "tests": "what you ran and what it
-said"}`, plus whichever of the outcome fields above applies. `clean` means the whole scope is built and the tests pass; anything else is
-`findings`, with one entry per thing that is not.
+Then write your Output, plus whichever of the outcome fields above applies. `clean` means
+the whole scope is built and the tests pass; anything else is `findings`, one entry per
+thing that is not, each with a `severity` of `blocker`, `major` or `minor` — a failure
+that pre-dates this branch is `minor`.
 
 ## fix
 
@@ -252,15 +182,11 @@ Push the fixups before you finish — `git push -u origin HEAD -o ci.skip` — e
 iteration: the next round reviews the remote, and a fix it cannot see is a finding it
 raises again. A push that fails is reported as `"pushed": false`, not fatal.
 
-Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [<what you
-could not finish>], "fixed": [{"file": "path", "title": "the finding", "note": "what you
-changed"}], "disputed": [{"file": "path", "line": 12, "severity": "blocker|major|minor",
-"title": "the finding", "detail": "why I disagree"}], "checks": [{"name": "the verification
-name you ran it under", "note": "what it said"}], "pushed": true}`. `file` and `title` in
-`fixed` and `disputed` are exactly as the finding above gives them, so Collie can match
-them; `checks` names every test and lint command you ran, one entry each, by the name
-`collie verify` recorded it under (the command's first word, unless you gave `--name`). A
-check with no record on this tree is not a passing check, whatever the note says.
+Then write your Output. `file` and `title` in `fixed` and `disputed` are exactly as the
+finding above gives them, so Collie can match them; `checks` names every test and lint
+command you ran, one entry each, by the name `collie verify` recorded it under (the
+command's first word, unless you gave `--name`). A check with no record on this tree is
+not a passing check, whatever the note says.
 
 ## mr
 
@@ -340,7 +266,6 @@ Linear MCP. If the MCP is not configured, skip it and say so in your Output.
 Never write the company package scope with a leading at-sign — in the MR, in a commit
 message, or anywhere else. Write it as a bare name.
 
-Then write the Output JSON: `{"verdict": "clean" | "findings", "findings": [], "mr_url":
-"<url>", "linear_issues": [<the ids you linked>], "branch": "<what you pushed>", "pushed":
-true}`. `clean` means the merge request exists or was updated; a push or `glab` that failed
-is `findings`, saying what.
+Then write your Output, naming the merge request and the issues you linked. `clean` means
+the merge request exists or was updated; a push or `glab` that failed is `findings`, saying
+what.

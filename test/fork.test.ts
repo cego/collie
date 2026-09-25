@@ -3,15 +3,7 @@ import { runEffect } from "./support/effect";
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { forkDefinition } from "../src/fork";
 import { parseDocument } from "../src/yaml";
-import {
-  bodySections,
-  contentHash,
-  isStale,
-  layers,
-  loadDefinitions,
-  resolveWorkflow,
-} from "../src/definitions";
-import { FALLBACK_DEFAULTS } from "../src/config";
+import { contentHash, isStale, layers, loadDefinitions } from "../src/definitions";
 import { Rig } from "./support/recorder";
 import { installBaseline } from "./support/engine";
 
@@ -54,34 +46,24 @@ beforeEach(() =>
 
 afterEach(() => runEffect(rig.close()));
 
-test("a fork is a stub that extends the original and names one step", () =>
+test("a fork is a stub that extends the original", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const source = (yield* loadDefinitions(yield* layers(env))).workflows.get("review")!;
+      const source = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
       expect(source.layer).toBe("baseline");
 
-      const result = yield* forkDefinition(source.path, "workflows", rig.configDir, {
-        step: "review",
-        section: bodySections(source.body).sections.get("review"),
-      });
+      const result = yield* forkDefinition(source.path, "personas", rig.userDir);
 
       expect(result.ok).toBe(true);
-      expect(result.path).toBe(join(rig.configDir, "workflows", "review.md"));
-      const text = yield* readText(result.path);
-      expect(text).toContain("extends: review");
-      expect(text).toContain("  - id: review");
-      expect(text).toContain("## review");
-      // The step's own prompt comes along, so there is something to edit.
-      expect(text).toContain("Review against the project's own standards");
+      expect(result.path).toBe(join(rig.userDir, "personas", "reviewer.md"));
+      expect(yield* readText(result.path)).toContain("extends: reviewer");
 
       // It wins by name, and everything it does not name is still the baseline's.
-      const forked = (yield* loadDefinitions(yield* layers(env))).workflows.get("review")!;
+      const forked = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
       expect(forked.layer).toBe("user");
-      expect(forked.extends).toBe("review");
-      expect(forked.title).toBe(source.title);
-      expect(forked.steps.map((s) => s.id)).toEqual(source.steps.map((s) => s.id));
-      expect(forked.inputs).toEqual(source.inputs);
+      expect(forked.extends).toBe("reviewer");
+      expect(forked.description).toBe(source.description);
     }),
   ));
 
@@ -89,10 +71,10 @@ test("a full copy is the whole file, and records what it copied", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const source = (yield* loadDefinitions(yield* layers(env))).workflows.get("review")!;
+      const source = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
       const before = yield* readText(source.path);
 
-      const result = yield* forkDefinition(source.path, "workflows", rig.configDir, { full: true });
+      const result = yield* forkDefinition(source.path, "personas", rig.userDir, { full: true });
 
       expect(result.ok).toBe(true);
       expect(result.message).toContain("no longer follows the original");
@@ -103,12 +85,12 @@ test("a full copy is the whole file, and records what it copied", () =>
       expect(text).toMatch(new RegExp(`^forked_from_hash: "?${hash}"?$`, "m"));
       // Whichever it is, it survives a round trip as the string it is.
       expect(
-        (yield* loadDefinitions(yield* layers(env))).workflows.get("review")!.forkedFromHash,
+        (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!.forkedFromHash,
       ).toBe(hash);
       // Everything else is the file, byte for byte, after that one line.
       expect(text.replace(/^forked_from_hash: .*\n/m, "")).toBe(before);
 
-      const forked = (yield* loadDefinitions(yield* layers(env))).workflows.get("review")!;
+      const forked = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
       expect(forked.extends).toBeUndefined();
       expect(isStale(forked)).toBe(false);
     }),
@@ -118,23 +100,23 @@ test("a full copy whose original has changed since is stale", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const source = (yield* loadDefinitions(yield* layers(env))).workflows.get("review")!;
+      const source = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
 
-      yield* forkDefinition(source.path, "workflows", rig.configDir, { full: true });
-      expect(isStale((yield* loadDefinitions(yield* layers(env))).workflows.get("review")!)).toBe(
+      yield* forkDefinition(source.path, "personas", rig.userDir, { full: true });
+      expect(isStale((yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!)).toBe(
         false,
       );
 
       // The baseline moves on, which is exactly what a full copy cannot follow.
       Bun.spawnSync(["sh", "-c", `printf '\n<!-- a later change -->\n' >> ${source.path}`]);
 
-      expect(isStale((yield* loadDefinitions(yield* layers(env))).workflows.get("review")!)).toBe(
+      expect(isStale((yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!)).toBe(
         true,
       );
     }),
   ));
 
-test("forking a persona into the project layer changes every workflow that uses it", () =>
+test("forking a persona into the project layer is what that project's agents read", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
@@ -144,7 +126,7 @@ test("forking a persona into the project layer changes every workflow that uses 
       const result = yield* forkDefinition(
         reviewer.path,
         "personas",
-        join(rig.projectDir, ".herdr"),
+        join(rig.projectDir, ".collie"),
         {
           full: true,
         },
@@ -155,12 +137,6 @@ test("forking a persona into the project layer changes every workflow that uses 
       const after = yield* loadDefinitions(yield* layers(env));
       expect(after.personas.get("reviewer")!.layer).toBe("project");
       expect(after.personas.get("reviewer")!.body).toContain("Project reviewer.");
-      // implement embeds review, whose reviewers and synthesiser use that persona.
-      const wf = resolveWorkflow("implement", after, FALLBACK_DEFAULTS);
-      expect(wf.steps.filter((s) => s.persona === "reviewer").map((s) => s.id)).toEqual([
-        "review",
-        "review.synthesize",
-      ]);
     }),
   ));
 
@@ -168,16 +144,16 @@ test("forking never overwrites an existing fork", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const source = (yield* loadDefinitions(yield* layers(env))).workflows.get("plan")!;
+      const source = (yield* loadDefinitions(yield* layers(env))).personas.get("planner")!;
 
-      expect((yield* forkDefinition(source.path, "workflows", rig.configDir)).ok).toBe(true);
+      expect((yield* forkDefinition(source.path, "personas", rig.userDir)).ok).toBe(true);
       Bun.spawnSync([
         "sh",
         "-c",
-        `printf 'edited\\n' >> ${join(rig.configDir, "workflows", "plan.md")}`,
+        `printf 'edited\\n' >> ${join(rig.userDir, "personas", "planner.md")}`,
       ]);
 
-      const again = yield* forkDefinition(source.path, "workflows", rig.configDir);
+      const again = yield* forkDefinition(source.path, "personas", rig.userDir);
 
       expect(again.ok).toBe(false);
       expect(again.message).toContain("already exists — edit it instead");
@@ -231,15 +207,15 @@ test("forking a definition into the layer it already lives in is refused", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const source = (yield* loadDefinitions(yield* layers(env))).workflows.get("plan")!;
+      const source = (yield* loadDefinitions(yield* layers(env))).personas.get("planner")!;
 
-      yield* forkDefinition(source.path, "workflows", rig.configDir);
-      const forked = (yield* loadDefinitions(yield* layers(env))).workflows.get("plan")!;
+      yield* forkDefinition(source.path, "personas", rig.userDir);
+      const forked = (yield* loadDefinitions(yield* layers(env))).personas.get("planner")!;
 
-      const result = yield* forkDefinition(forked.path, "workflows", rig.configDir);
+      const result = yield* forkDefinition(forked.path, "personas", rig.userDir);
 
       expect(result.ok).toBe(false);
-      expect(result.message).toBe("plan.md is already in that layer");
+      expect(result.message).toBe("planner.md is already in that layer");
     }),
   ));
 
@@ -247,18 +223,20 @@ test("a fork of the baseline leaves the baseline file untouched", () =>
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const source = (yield* loadDefinitions(yield* layers(env))).workflows.get("implement")!;
+      const source = (yield* loadDefinitions(yield* layers(env))).personas.get("implementer")!;
       const before = yield* readText(source.path);
 
-      yield* forkDefinition(source.path, "workflows", join(rig.projectDir, ".herdr"));
+      yield* forkDefinition(source.path, "personas", join(rig.projectDir, ".collie"));
       Bun.spawnSync([
         "sh",
         "-c",
-        `printf 'changed\\n' >> ${join(rig.projectDir, ".herdr", "workflows", "implement.md")}`,
+        `printf 'changed\\n' >> ${join(rig.projectDir, ".collie", "personas", "implementer.md")}`,
       ]);
 
       expect(yield* readText(source.path)).toBe(before);
-      expect(yield* exists(join(rig.projectDir, ".herdr", "workflows", "implement.md"))).toBe(true);
+      expect(yield* exists(join(rig.projectDir, ".collie", "personas", "implementer.md"))).toBe(
+        true,
+      );
     }),
   ));
 
@@ -268,20 +246,20 @@ test("a fork name that is not a bare scalar is quoted, and a corrupting one is r
       const env = rig.pluginEnv();
       const source = (yield* loadDefinitions(yield* layers(env))).personas.get("implementer")!;
 
-      const stub = yield* forkDefinition(source.path, "personas", rig.configDir, {
+      const stub = yield* forkDefinition(source.path, "personas", rig.userDir, {
         name: "foo # bar",
       });
       expect(stub.ok).toBe(true);
       expect(parseDocument(yield* readText(stub.path)).data.name).toBe("foo # bar");
 
-      const copy = yield* forkDefinition(source.path, "personas", rig.configDir, {
+      const copy = yield* forkDefinition(source.path, "personas", rig.userDir, {
         name: "foo: bar",
         full: true,
       });
       expect(copy.ok).toBe(true);
       expect(parseDocument(yield* readText(copy.path)).data.name).toBe("foo: bar");
 
-      const refused = yield* forkDefinition(source.path, "personas", rig.configDir, {
+      const refused = yield* forkDefinition(source.path, "personas", rig.userDir, {
         name: "two\nlines",
       });
       expect(refused.ok).toBe(false);
@@ -293,14 +271,14 @@ test("re-forking a full copy records the copy's own hash, not its grandparent's"
   runEffect(
     Effect.gen(function* () {
       const env = rig.pluginEnv();
-      const source = (yield* loadDefinitions(yield* layers(env))).workflows.get("review")!;
+      const source = (yield* loadDefinitions(yield* layers(env))).personas.get("reviewer")!;
 
-      const first = yield* forkDefinition(source.path, "workflows", rig.configDir, { full: true });
+      const first = yield* forkDefinition(source.path, "personas", rig.userDir, { full: true });
       const parentText = yield* readText(first.path);
       const second = yield* forkDefinition(
         first.path,
-        "workflows",
-        join(rig.projectDir, ".herdr"),
+        "personas",
+        join(rig.projectDir, ".collie"),
         {
           full: true,
         },

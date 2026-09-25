@@ -15,12 +15,17 @@ import {
   worktreeFor,
   type BranchAsk,
 } from "../src/worktree";
-import { RunStore, type VariantRecord } from "../src/run";
+import type { AgentEntry } from "../src/registry";
+import type { RunFacts } from "../src/runs";
+import { runFacts } from "./support/records";
 import { shell } from "../src/mr";
 import { Herdr } from "../src/herdr";
 
 let rig: Rig;
 let bin: FakeBin;
+/** The Runs and registered agents this test has, which is what pruning is given. */
+let recorded: RunFacts[];
+let registered: AgentEntry[];
 
 const join = (...parts: string[]) => parts.join("/").replace(/\/+/g, "/");
 
@@ -48,6 +53,8 @@ beforeEach(() =>
     Effect.gen(function* () {
       rig = yield* Rig.make();
       bin = yield* FakeBin.make(join(rig.root, "bin"));
+      recorded = [];
+      registered = [];
     }),
   ),
 );
@@ -150,11 +157,23 @@ const fakeGitWithCheckouts = (
     },
   );
 
+/**
+ * What the shipped workflows declare, which is what these cases are written in. The
+ * strategy is what everything downstream reads; `test/strategies.test.ts` is where the
+ * same values under other names are proved to behave the same.
+ */
+const SHIPPED_STRATEGIES = {
+  plan: "work-source",
+  target: "diff-target",
+  repository: "gitlab-repository",
+};
+
 const plan = (inputs: Record<string, string>, explicit?: string, extra: Partial<BranchAsk> = {}) =>
   branchFor({
     cwd: rig.projectDir,
     name: "Add a picker",
     inputs,
+    strategies: SHIPPED_STRATEGIES,
     // The resolver only names a branch after an Input a human gave, so the default
     // here is what `--input` records — the cases about what Collie itself worked out
     // override it.
@@ -255,6 +274,7 @@ test("a review of a merge request takes that merge request's own branch", () =>
 
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/acme/app!42",
           target_kind: "mr",
@@ -270,13 +290,19 @@ test("a review of a branch diff takes its head, and a review of a tree the branc
 
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "branch:master...their-work",
           target_kind: "branch",
         }),
       ).toMatchObject({ branch: "their-work" });
       expect(
-        yield* plan({ plan_kind: "review", target: "worktree", target_kind: "worktree" }),
+        yield* plan({
+          plan: "/runs/review-1",
+          plan_kind: "review",
+          target: "worktree",
+          target_kind: "worktree",
+        }),
       ).toMatchObject({ branch: "on-this-one" });
     }),
   ));
@@ -575,25 +601,15 @@ test("two unrelated runs never share a checkout", () =>
     }),
   ));
 
-/**
- * A step's agent as the engine records one. Only the tab it was given matters to
- * pruning — that is the tab left holding a shell in the checkout — so the rest is
- * whatever a finished build step looks like.
- */
-const recordedTab = (tabId: string): VariantRecord => ({
-  harness: "claude",
-  model: "default",
-  effort: null,
-  permissions: null,
-  agent: `impl-${tabId}`,
-  label: "build",
-  tabId,
-  paneId: null,
-  status: "done",
-  output: null,
-  error: null,
-  repairs: [],
-  nudges: 0,
+/** An agent a Run was given, registered in the pane herdr opened for it. */
+const agentIn = (runId: string, paneId: string): AgentEntry => ({
+  role: "implementer",
+  agent: `impl-${paneId}`,
+  paneId,
+  workspaceId: "w1",
+  runId,
+  workflow: "implement",
+  at: "2026-09-14T10:00:00Z",
 });
 
 /** A worktree Collie made, as its run record and herdr's list would show it. */
@@ -602,8 +618,8 @@ const collieWorktree = (
   opts: {
     workspaceId?: string | null;
     managedBy?: "git" | "herdr";
-    /** The tabs the run left behind, which a removal is what closes. */
-    tabs?: ReadonlyArray<string>;
+    /** The panes the run's agents were left in, whose tabs a removal is what closes. */
+    panes?: ReadonlyArray<string>;
     /** The workflow that made it; a roaming one records no branch. */
     workflow?: string;
     /** Where it sits, for a checkout whose path is not named after a branch. */
@@ -619,14 +635,12 @@ const collieWorktree = (
     // What the run recorded when it made this checkout, which is how pruning knows it
     // is still the same one.
     const madeAt = yield* fs.stat(`${worktreePath}/.git`);
-    const run = yield* new RunStore(rig.stateDir).create({
+    const run = runFacts({
+      id: `run-${branch}`,
       workflow: opts.workflow ?? "implement",
+      project: rig.projectDir,
       cwd: worktreePath,
-      inputs: {},
-      inputSources: {},
-      stepIds: ["build"],
-      maxIterations: 1,
-      namedAfter: branch,
+      state: "succeeded",
       worktree: {
         path: worktreePath,
         branch,
@@ -638,9 +652,8 @@ const collieWorktree = (
         root_pane_id: null,
       },
     });
-    run.record.status = "done";
-    run.record.steps[0]!.variants.push(...(opts.tabs ?? []).map(recordedTab));
-    yield* run.save();
+    recorded.push(run);
+    registered.push(...(opts.panes ?? []).map((pane) => agentIn(run.id, pane)));
     return worktreePath;
   });
 
@@ -671,6 +684,8 @@ const prune = () =>
   pruneWorktrees({
     herdr: new Herdr(rig.pluginEnv()),
     stateDir: rig.stateDir,
+    runs: recorded,
+    registered,
     cwd: rig.projectDir,
   });
 
@@ -691,7 +706,7 @@ test("a settled worktree is removed, and the board says why", () =>
 test("a Renovate Run's detached checkout is pruned by the same sweep, with no branch to delete", () =>
   runEffect(
     Effect.gen(function* () {
-      const at = join(rig.root, "worktrees", "project", "renovate");
+      const at = join(rig.root, "worktrees", "project", "roaming");
       // No branch, in the record and in herdr's listing alike: that is what a detached
       // checkout is, and it must still be a candidate.
       yield* collieWorktree("", { workflow: "renovate", at, managedBy: "git", workspaceId: null });
@@ -702,7 +717,7 @@ test("a Renovate Run's detached checkout is pruned by the same sweep, with no br
         "rev-list origin/master..HEAD": "",
       });
 
-      expect(yield* prune()).toEqual(["♻ removed renovate · its Run is over and it holds nothing"]);
+      expect(yield* prune()).toEqual(["♻ removed roaming · its Run is over and it holds nothing"]);
       expect(yield* asked()).toContain(`worktree remove ${at}`);
       // Nothing was ever bound to it, so nothing is deleted with it.
       expect((yield* asked()).some((command) => command.startsWith("branch -d"))).toBe(false);
@@ -712,11 +727,11 @@ test("a Renovate Run's detached checkout is pruned by the same sweep, with no br
 test("a Renovate checkout with work still in it is kept, like any other", () =>
   runEffect(
     Effect.gen(function* () {
-      const at = join(rig.root, "worktrees", "project", "renovate");
+      const at = join(rig.root, "worktrees", "project", "roaming");
       yield* collieWorktree("", { workflow: "renovate", at, managedBy: "git", workspaceId: null });
       yield* settledGit({ "status --porcelain": " M package.json" });
 
-      expect(yield* prune()).toEqual(["kept renovate · uncommitted changes"]);
+      expect(yield* prune()).toEqual(["kept roaming · uncommitted changes"]);
       expect((yield* asked()).some((command) => command.startsWith("worktree remove"))).toBe(false);
     }),
   ));
@@ -825,7 +840,7 @@ test("a settled git-managed checkout is removed with git, and its dead tabs go w
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
         workspaceId: null,
-        tabs: ["1:5", "1:6"],
+        panes: ["1-5", "1-6"],
       });
       // The run's own shell, still sitting in a directory that is about to go, and a
       // tab a human has since reused for something outside it.
@@ -857,7 +872,7 @@ test("a dead tab herdr would not close is reported, because nothing comes back f
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
         workspaceId: null,
-        tabs: ["1:5"],
+        panes: ["1-5"],
       });
       yield* rig.addPane("1-5", "1:5", worktreePath);
       yield* settledGit();
@@ -867,9 +882,15 @@ test("a dead tab herdr would not close is reported, because nothing comes back f
       // said here or never said.
       const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"tab close":"pane is busy"}' }));
 
-      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: rig.projectDir })).toEqual(
-        ["♻ removed wt · merged in !14 · 1 tab(s) left open"],
-      );
+      expect(
+        yield* pruneWorktrees({
+          herdr,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: rig.projectDir,
+        }),
+      ).toEqual(["♻ removed wt · merged in !14 · 1 tab(s) left open"]);
       // The checkout itself still went: a tab that will not close is not a reason to
       // keep a settled checkout, only a reason to say so.
       expect(yield* asked()).toContain(`worktree remove ${worktreePath}`);
@@ -883,7 +904,7 @@ test("git's refusal to remove a checkout keeps it, in git's own words", () =>
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
         workspaceId: null,
-        tabs: ["1:5"],
+        panes: ["1-5"],
       });
       yield* rig.addPane("1-5", "1:5", worktreePath);
       yield* settledGit(
@@ -905,7 +926,7 @@ test("a git-managed checkout herdr has a workspace on is still removed through h
       const worktreePath = yield* collieWorktree("wt", {
         managedBy: "git",
         workspaceId: "w7",
-        tabs: ["1:5"],
+        panes: ["1-5"],
       });
       // The run's own tab, which is in the workspace the run was activated from — not
       // in the workspace herdr opened on the checkout, so herdr's removal cannot know
@@ -940,11 +961,17 @@ test("a checkout herdr will not remove is kept, in the words it refused with", (
         }),
       );
 
-      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: rig.projectDir })).toEqual(
-        [
-          `kept wt · herdr worktree remove failed (exit 1): fatal: ${worktreePath} contains modified files`,
-        ],
-      );
+      expect(
+        yield* pruneWorktrees({
+          herdr,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: rig.projectDir,
+        }),
+      ).toEqual([
+        `kept wt · herdr worktree remove failed (exit 1): fatal: ${worktreePath} contains modified files`,
+      ]);
       // Never git behind herdr's back: herdr owns every worktree's whole life.
       expect(yield* asked()).not.toContain(`worktree remove ${worktreePath}`);
       // And the branch is only ever deleted once the checkout has actually gone.
@@ -982,6 +1009,8 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
         yield* pruneWorktrees({
           herdr,
           stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
           cwd: worktreePath,
           keep: worktreePath,
         }),
@@ -994,6 +1023,8 @@ test("a run starting in a checkout keeps it; its own board may still remove it",
         yield* pruneWorktrees({
           herdr,
           stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
           cwd: worktreePath,
           now: (yield* Clock.currentTimeMillis) + 10 * 60_000,
         }),
@@ -1011,29 +1042,38 @@ test("a herdr that will not list panes judges nothing, and says so", () =>
       // herdr that cannot be asked must not have its silence read as "none".
       const herdr = new Herdr(rig.pluginEnv({ FAKE_HERDR_FAIL: '{"pane list":"herdr is gone"}' }));
 
-      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: rig.projectDir })).toEqual(
-        ["kept wt · could not ask herdr what is live"],
-      );
+      expect(
+        yield* pruneWorktrees({
+          herdr,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: rig.projectDir,
+        }),
+      ).toEqual(["kept wt · could not ask herdr what is live"]);
       expect((yield* rig.cmds()).includes("worktree remove")).toBe(false);
 
       // Nothing was written down, so the next round asks again rather than standing on
       // a verdict it never reached.
       const herdrAgain = new Herdr(rig.pluginEnv());
       expect(
-        yield* pruneWorktrees({ herdr: herdrAgain, stateDir: rig.stateDir, cwd: rig.projectDir }),
+        yield* pruneWorktrees({
+          herdr: herdrAgain,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: rig.projectDir,
+        }),
       ).toEqual(["♻ removed wt · merged in !14"]);
     }),
   ));
 
-test("a run still marked running keeps its checkout, driver or no driver", () =>
+test("a run still going keeps its checkout, whether or not an agent is in it", () =>
   runEffect(
     Effect.gen(function* () {
       const worktreePath = yield* collieWorktree("wt");
-      const store = new RunStore(rig.stateDir);
-      const run = (yield* store.list())[0]!;
-      // Nothing is driving it — no claim was ever written — and it is still running.
-      run.record.status = "running";
-      yield* run.save();
+      // Nothing is working in it that herdr can see, and the Run is still going.
+      recorded = recorded.map((run) => ({ ...run, state: "running" as const }));
       yield* settledGit();
       yield* mergedMr();
 
@@ -1041,9 +1081,11 @@ test("a run still marked running keeps its checkout, driver or no driver", () =>
         yield* pruneWorktrees({
           herdr: new Herdr(rig.pluginEnv()),
           stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
           cwd: rig.projectDir,
         }),
-      ).toEqual(["kept wt · a run could still be resumed in it"]);
+      ).toEqual(["kept wt · a run is still working in it"]);
       expect(worktreePath).toContain("wt");
     }),
   ));
@@ -1057,6 +1099,7 @@ test("a review of a merge request whose branch is only on the remote is cut from
       // Not the default branch: a fix round has to continue the work it is fixing.
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/acme/app!42",
           target_kind: "mr",
@@ -1226,7 +1269,7 @@ test("the checkout a branch already has is reused, never added twice", () =>
     }),
   ));
 
-test("workspace=new asks herdr for the checkout and takes the workspace it opens", () =>
+test("a Run that asks for its own workspace has herdr make the checkout, and takes that workspace", () =>
   runEffect(
     Effect.gen(function* () {
       yield* fakeGit();
@@ -1238,7 +1281,8 @@ test("workspace=new asks herdr for the checkout and takes the workspace it opens
         checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
-        inputs: { plan_kind: "text", workspace: "new" },
+        inputs: { plan_kind: "text" },
+        separate: true,
         workspaceId: "wTasks",
       });
 
@@ -1296,7 +1340,8 @@ test("a checkout Collie cannot be given is a run that does not start", () =>
         checkout: "branch",
         name: "Add a picker",
         login: LOGIN,
-        inputs: { plan_kind: "text", workspace: "new" },
+        inputs: { plan_kind: "text" },
+        separate: true,
         workspaceId: "wT",
       });
 
@@ -1315,8 +1360,11 @@ const renovateCheckout = (inputs: Record<string, string> = {}, cwd = rig.project
     checkout: "roaming",
     name: "Renovate spilnu",
     inputs,
+    strategies: SHIPPED_STRATEGIES,
     workspaceId: "wTasks",
     workspaceLabel: "Tasks",
+    recordedBy: (at) =>
+      Effect.succeed(recorded.find((run) => run.worktree?.path === at)?.id ?? null),
   });
 
 test("a Renovate Run gets a detached checkout at the default branch, bound to no branch", () =>
@@ -1326,7 +1374,7 @@ test("a Renovate Run gets a detached checkout at the default branch, bound to no
 
       const checkout = yield* renovateCheckout();
 
-      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       expect(checkout).toMatchObject({
         cwd: at,
         workspaceId: "wTasks",
@@ -1371,7 +1419,7 @@ test("the repository input says which local checkout the Renovate worktree is cu
       // is cut from the repository it names.
       const checkout = yield* renovateCheckout({ repository: elsewhere });
 
-      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "spilnu", "renovate"));
+      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "spilnu", "roaming"));
       expect(yield* askedIn()).toContainEqual({
         cwd: elsewhere,
         command: `worktree add --detach ${checkout.cwd} origin/master`,
@@ -1426,8 +1474,8 @@ test("two Renovate Runs on different repositories do not collide on a checkout p
       yield* fakeGitWithCheckouts([{ path: other, branch: "master" }]);
       const there = yield* renovateCheckout({ repository: other });
 
-      expect(here.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "renovate"));
-      expect(there.cwd).toBe(join(rig.root, ".herdr", "worktrees", "happytiger", "renovate"));
+      expect(here.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "roaming"));
+      expect(there.cwd).toBe(join(rig.root, ".herdr", "worktrees", "happytiger", "roaming"));
       expect(here.cwd).not.toBe(there.cwd);
     }),
   ));
@@ -1438,7 +1486,7 @@ test("the repository a checkout belongs to is git's, never the directory's own n
       const fs = yield* FileSystem.FileSystem;
       // The two cases whose basename lies: a Renovate Run's checkout, always called
       // `renovate`, and a branch-owning one, called after its branch.
-      const roaming = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const roaming = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       const owned = join(rig.root, ".herdr", "worktrees", "project", "add-picker");
       for (const at of [roaming, owned]) yield* fs.makeDirectory(at, { recursive: true });
       yield* fakeGitWithCheckouts([
@@ -1468,7 +1516,7 @@ test("a linked worktree of a repository picks the same destination the repositor
       // the repository's, or one repository would get two Renovate checkouts.
       const checkout = yield* renovateCheckout({ repository: linked });
 
-      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "renovate"));
+      expect(checkout.cwd).toBe(join(rig.root, ".herdr", "worktrees", "project", "roaming"));
       expect(checkout.cwd).not.toContain("some-feature");
     }),
   ));
@@ -1510,7 +1558,7 @@ test("a repository with no remote-tracking default branch is detached at the loc
       const checkout = yield* renovateCheckout();
 
       expect(checkout.refused).toBe(null);
-      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       expect(yield* asked()).toContainEqual(`worktree add --detach ${at} master`);
     }),
   ));
@@ -1527,14 +1575,10 @@ const worktreeOwnedBy = Effect.fn("worktreeTest.worktreeOwnedBy")(function* (
 
 /** A Renovate Run that recorded this checkout, as one that is still running would. */
 const renovateRunAt = Effect.fn("worktreeTest.renovateRunAt")(function* (at: string) {
-  const run = yield* new RunStore(rig.stateDir).create({
+  const run = runFacts({
+    id: "renovate-project",
     workflow: "renovate",
     cwd: at,
-    inputs: {},
-    inputSources: {},
-    stepIds: ["merge"],
-    maxIterations: 1,
-    namedAfter: "renovate",
     worktree: {
       path: at,
       branch: "",
@@ -1546,13 +1590,14 @@ const renovateRunAt = Effect.fn("worktreeTest.renovateRunAt")(function* (at: str
       root_pane_id: null,
     },
   });
-  return run.record.id;
+  recorded.push(run);
+  return run.id;
 });
 
 test("a second Renovate Run on one repository is refused, never handed the first's tree", () =>
   runEffect(
     Effect.gen(function* () {
-      const taken = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
       // The earlier Run's own record, which is the only proof that this checkout is a
       // Renovate Run's rather than something that merely looks like one.
@@ -1591,7 +1636,7 @@ test("two repositories of the same name never share one Renovate checkout", () =
       // directory, because the path is named after the repository, not its location.
       const other = join(rig.root, "elsewhere", "project");
       yield* fs.makeDirectory(other, { recursive: true });
-      const taken = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const taken = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       yield* worktreeOwnedBy(taken, rig.projectDir);
       yield* fakeGitWithCheckouts([{ path: other, branch: "master" }]);
 
@@ -1611,7 +1656,7 @@ test("a path in the way that will not say whose it is refuses, rather than being
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       // Something is there and nothing says what: the answer is a refusal naming it,
       // never a worktree added on top of whatever it is.
       yield* fs.makeDirectory(at, { recursive: true });
@@ -1632,7 +1677,7 @@ test("a destination another Run is claiming right now is refused, not looked at 
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       yield* fakeGitWithCheckouts([{ path: rig.projectDir, branch: "master" }]);
-      const at = join(rig.root, ".herdr", "worktrees", "project", "renovate");
+      const at = join(rig.root, ".herdr", "worktrees", "project", "roaming");
       // A live claim on the destination, as a Run starting at the same moment holds it.
       // Looking and creating happen under it, so the loser never finds the path free.
       yield* fs.writeFileString(
@@ -1706,7 +1751,12 @@ test("a merge request Collie cannot read is a run that does not start", () =>
       // Never `slugify(name)`: the fixes belong on the branch that was reviewed, and a
       // new branch named after the run would leave the merge request untouched.
       expect(
-        yield* plan({ plan_kind: "review", target: "mr:42", target_kind: "mr" }),
+        yield* plan({
+          plan: "/runs/review-1",
+          plan_kind: "review",
+          target: "mr:42",
+          target_kind: "mr",
+        }),
       ).toMatchObject({ refused: "glab could not read !42" });
     }),
   ));
@@ -1723,6 +1773,7 @@ test("a merge request in another project cannot be fixed from this checkout", ()
 
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/other/thing!7",
           target_kind: "mr",
@@ -1763,7 +1814,7 @@ test("an agent in the checkout's own workspace keeps it, directory or no directo
 test("a finished Run's own agent, idle in the tab it left behind, does not keep its checkout", () =>
   runEffect(
     Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt", { tabs: ["1:5"] });
+      const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       yield* settledGit();
       yield* mergedMr();
       // The Run is done and its agent is still sitting there, idle — that is the leftover
@@ -1779,7 +1830,7 @@ test("a finished Run's own agent, idle in the tab it left behind, does not keep 
 test("a finished Run's own agent still working in its tab keeps the checkout", () =>
   runEffect(
     Effect.gen(function* () {
-      const worktreePath = yield* collieWorktree("wt", { tabs: ["1:5"] });
+      const worktreePath = yield* collieWorktree("wt", { panes: ["1-5"] });
       yield* settledGit();
       yield* mergedMr();
       yield* rig.addPane("1-5", "1:5", worktreePath, "claude", null, null, "working");
@@ -1806,9 +1857,15 @@ test("a board outside any repository still sweeps the checkouts the Runs recorde
         }),
       );
 
-      expect(yield* pruneWorktrees({ herdr, stateDir: rig.stateDir, cwd: home })).toEqual([
-        "♻ removed wt · merged in !14",
-      ]);
+      expect(
+        yield* pruneWorktrees({
+          herdr,
+          stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
+          cwd: home,
+        }),
+      ).toEqual(["♻ removed wt · merged in !14"]);
       expect(yield* asked()).toContain(`worktree remove ${worktreePath}`);
     }),
   ));
@@ -1883,12 +1940,18 @@ test("a diff of two refs that are not branches has nothing to fix on", () =>
       // `branch:main...HEAD` is a perfectly good thing to review, and `HEAD` is not
       // even a legal branch name — so there is nothing to commit fixes to.
       expect(
-        yield* plan({ plan_kind: "review", target: "branch:main...HEAD", target_kind: "branch" }),
+        yield* plan({
+          plan: "/runs/review-1",
+          plan_kind: "review",
+          target: "branch:main...HEAD",
+          target_kind: "branch",
+        }),
       ).toMatchObject({
         refused: "HEAD is not a branch, so there is nothing to fix on it",
       });
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "branch:1a2b3c4...9f8e7d6",
           target_kind: "branch",
@@ -1899,20 +1962,28 @@ test("a diff of two refs that are not branches has nothing to fix on", () =>
     }),
   ));
 
-test("a run left blocked keeps the checkout a resume would restart it in", () =>
+test("a run parked for a human keeps the checkout it will carry on in", () =>
   runEffect(
     Effect.gen(function* () {
       yield* collieWorktree("wt");
-      const run = (yield* new RunStore(rig.stateDir).list())[0]!;
-      // A Choice nobody answered, or an agent that stopped: `run resume` picks this up
-      // again, in the directory it recorded.
-      run.record.status = "blocked";
-      run.step("build").status = "pending";
-      yield* run.save();
+      // A question nobody answered, or a pane that would not take a prompt: the Run picks
+      // up again in the directory it works in.
+      recorded = recorded.map((run) => ({ ...run, state: "waiting" as const }));
       yield* settledGit();
       yield* mergedMr();
 
-      expect(yield* prune()).toEqual(["kept wt · a run could still be resumed in it"]);
+      expect(yield* prune()).toEqual(["kept wt · a run is still working in it"]);
+    }),
+  ));
+
+test("a stopped run keeps the checkout a resume carries on in", () =>
+  runEffect(
+    Effect.gen(function* () {
+      yield* collieWorktree("wt");
+      recorded = recorded.map((run) => ({ ...run, state: "stopped" as const }));
+      yield* settledGit();
+      yield* mergedMr();
+      expect(yield* prune()).toEqual(["kept wt · a stopped run can resume in it"]);
     }),
   ));
 
@@ -1968,6 +2039,8 @@ test("one repository's board neither forgets nor reports another's", () =>
         yield* pruneWorktrees({
           herdr: new Herdr(rig.pluginEnv()),
           stateDir: rig.stateDir,
+          runs: recorded,
+          registered,
           cwd: elsewhere,
         }),
       ).toEqual([]);
@@ -2039,6 +2112,7 @@ test("a reviewed branch that is not on the remote at all is refused", () =>
       // fail to push it, or push it over the branch that was reviewed.
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/acme/app!42",
           target_kind: "mr",
@@ -2063,6 +2137,7 @@ test("a checkout with no GitLab remote cannot be shown to be the reviewed projec
 
       expect(
         yield* plan({
+          plan: "/runs/review-1",
           plan_kind: "review",
           target: "mr:gitlab.example.com/acme/app!42",
           target_kind: "mr",

@@ -34,7 +34,8 @@ does not have.
 
 ## Decision
 
-**D1. Freeze the definition per Run.** `RunStore.create` writes the resolved workflow into
+**D1. Freeze the definition per Run.** _Superseded by [ADR-0029](0029-one-host-acts-for-a-run-and-a-workflows-name-decides-nothing.md): a resume runs the module as it
+is now, and reuses the work already done._ `RunStore.create` writes the resolved workflow into
 the run directory and records `definition: {hash, layer, path, snapshot}`. The Driver
 resolves from the snapshot. What is frozen is the _resolved_ workflow — after `extends:`
 and `use:` — because that is what the engine executes; re-emitting Markdown and reading it
@@ -48,7 +49,7 @@ Run never started.
 agent ran through the collector, with the tree fingerprinted before and after. A result on
 a tree that moved is `unstable` and never `pass`. `--expect fail` is how a bug is proved
 to exist. What _Collie itself_ may run is a Run's approved set, read from
-`.herdr/verify.json` or the config directory when the Run starts and copied into
+`.collie/verify.json` or the config directory when the Run starts and copied into
 `run.json`: a permission that moved under a Run is not a permission.
 
 **D3. An outcome decides what closes a Run.** One pure table (`src/outcome.ts`): a feature
@@ -115,7 +116,7 @@ timings — and never enforced. The budget machinery removed in 0.8.0 is not rei
 A Run started before this resumes only while its workflow still has the steps it recorded.
 That is visible and intended: the alternative is a Run silently doing something else.
 
-A project with no `.herdr/verify.json` is told so at the gate rather than passed: an empty
+A project with no `.collie/verify.json` is told so at the gate rather than passed: an empty
 approved set would make the gate say yes to anything.
 
 The gate asks before it collects: it is a decision on the board, answered with **Approve**,

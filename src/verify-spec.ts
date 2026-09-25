@@ -3,8 +3,8 @@
 // A verification Collie collects is the only kind a gate will accept, so the list of what
 // it may run is a permission — and a permission read from the repository would be one the
 // repository granted itself. It comes from a file a human wrote, in the project or in
-// their own config, and it is copied into `run.json` when the Run starts. Editing the file
-// afterwards changes the next Run, never a live one.
+// their own config, and it is copied into the Run's evidence when the Run starts. Editing
+// the file afterwards changes the next Run, never a live one.
 
 import { Data, Effect, FileSystem, Path, Schema } from "effect";
 
@@ -35,7 +35,7 @@ export class ApprovedUnreadable extends Data.TaggedError("ApprovedUnreadable")<{
 const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
 
 /** The project's own list, and then the user's. Relative to the Run's root. */
-export const PROJECT_FILE = ".herdr/verify.json";
+export const PROJECT_FILE = ".collie/verify.json";
 export const USER_FILE = "verify.json";
 
 /**
@@ -51,14 +51,11 @@ export const USER_FILE = "verify.json";
  */
 export const approvedFrom = Effect.fn("VerifySpec.approvedFrom")(function* (layers: {
   readonly cwd: string;
-  readonly configDir: string;
+  readonly userDir: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  for (const file of [
-    path.join(layers.cwd, PROJECT_FILE),
-    path.join(layers.configDir, USER_FILE),
-  ]) {
+  for (const file of [path.join(layers.cwd, PROJECT_FILE), path.join(layers.userDir, USER_FILE)]) {
     const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed(null)));
     if (text === null) continue;
     const decoded = yield* Schema.decodeUnknownEffect(ApprovedJson)(text.trim()).pipe(

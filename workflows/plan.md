@@ -1,74 +1,3 @@
----
-name: plan
-title: plan — turn a goal into a spec and tickets
-description: Uses the goal and repository context to write a spec and tickets, asking only for missing decisions.
-inputs:
-  goal: goal
-  ticket: ticket
-  # Forwarded to the implement this chains into, which is where it means anything.
-  workspace: optional
-steps:
-  - id: grill
-    persona: planner
-    # One planner agent for the whole run, so its model is named once, here.
-    model: fable
-    effort: medium
-    output: grill.json
-  - id: spec
-    persona: planner
-    agent: grill
-    skill: to-spec
-    output: spec.json
-  - id: tickets
-    persona: planner
-    agent: grill
-    skill: to-tickets
-    output: tickets.json
-  - id: next
-    choices:
-      - title: Implement now
-        run: implement
-        inputs:
-          plan: "{{run.dir}}/plan"
-          task: "{{outputs.grill.slug}}"
-          # What kind of result this is, settled during the interview rather than asked
-          # for again at the start of the build.
-          outcome: "{{outputs.grill.outcome}}"
-          workspace: "{{inputs.workspace}}"
-      # Architecture is no longer a pass every implement run takes, so this is where a
-      # plan that actually needs architectural decisions gets them: offered always,
-      # chosen by the human, never inferred from the tickets.
-      - title: Architecture first
-        run: architecture
-        inputs:
-          workspace: "{{inputs.workspace}}"
-      - title: Second opinion
-        prompt: second-opinion
-        persona: reviewer
-        model: opus
-        effort: xhigh
-        fresh: true
-        output: opinion.json
-        max: 2
-        follow_up:
-          agent: grill
-          prompt: revise
-          output: revise.json
-      - title: Offload to Linear
-        agent: grill
-        prompt: offload
-        output: linear.json
-        config:
-          key: linear.team
-          question: Which Linear team do new issues go to
-      - title: Refine
-        agent: grill
-        prompt: refine
-        output: refine.json
-      - title: Finish planning
-        stop: true
----
-
 The goal, in my words:
 
 {{inputs.goal}}
@@ -99,9 +28,7 @@ them — they are domain knowledge. Nothing else does.
 Choose the result kind from the task: `feature`, `bug`, `refactor`, `investigation`,
 `docs` or `migration`. Leave it empty if none fits; this is metadata, not another question.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "slug":
-"<short-kebab-case-name-for-this-work>", "outcome": "<one of the kinds above, or empty>",
-"decided": ["what we settled", ...]}`.
+Then write your Output, with what we settled under `decided`.
 
 ## spec
 
@@ -109,8 +36,7 @@ You were started with {{skill:to-spec}}. Write the spec to `{{run.dir}}/plan/SPE
 paragraph, what is explicitly out of scope, the ordered work with the seams that want
 tests, and how we will know the whole thing works.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "spec":
-"{{run.dir}}/plan/SPEC.md"}`.
+Then write your Output, naming the spec you wrote.
 
 ## tickets
 
@@ -141,8 +67,17 @@ blocked by another's, none of that other one's may be blocked by this one. Put t
 repository that defines the contract first, and prefer one ticket per repository per
 wave.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "issues_dir":
-"{{run.dir}}/plan/issues", "tickets": <how many>}`.
+Then write your Output, naming the directory you wrote them to.
+
+## unbuildable
+
+The tickets in `{{run.dir}}/plan/issues/` cannot be built as they are:
+
+{{refusal}}
+
+Fix the tickets so that reason no longer holds, changing nothing else about the plan.
+
+Then write your Output, naming the directory you wrote them to.
 
 ## second-opinion
 
@@ -161,10 +96,8 @@ A second reviewer read the plan and found:
 Fix the spec and the tickets where you agree. Where you do not, leave them and record
 why under `disputed`.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "disputed": [...],
-"changed": ["what you changed", ...], "changelog": "one or two sentences on what changed
-in the plan"}`. The `changelog` is sent to an implementer already building from this plan,
-with the diff, so write it for that reader.
+Then write your Output. The `changelog` is sent to an implementer already building from
+this plan, with the diff, so write it for that reader.
 
 ## offload
 
@@ -172,15 +105,12 @@ Put this plan on the `{{config.linear.team}}` team's board with the Linear MCP.
 Exactly ONE issue: the spec as its body, the tickets as a checklist inside it — never one
 issue per ticket.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "issue": "<id>",
-"url": "<url>"}`.
+Then write your Output, naming the one issue you created.
 
 ## refine
 
 I want changes to the plan. Ask me what, one question at a time, then rewrite
 `{{run.dir}}/plan/SPEC.md` and the tickets in `{{run.dir}}/plan/issues/` to match.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "changed": ["what you
-changed", ...], "changelog": "one or two sentences on what changed in the plan"}`. The
-`changelog` is sent to an implementer already building from this plan, with the diff, so
-write it for that reader.
+Then write your Output. The `changelog` is sent to an implementer already building from
+this plan, with the diff, so write it for that reader.

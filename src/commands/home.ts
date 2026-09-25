@@ -68,11 +68,11 @@ const show = Command.make("show", {}, () =>
 const reconcile = Command.make(
   "reconcile",
   {
-    adopt: Flag.string("adopt").pipe(
+    adopt: Flag.String("adopt").pipe(
       Flag.withDescription("The workspace that is this Herd's Home, as `home show` lists it"),
       Flag.optional,
     ),
-    forget: Flag.boolean("forget").pipe(
+    forget: Flag.Boolean("forget").pipe(
       Flag.withDescription("Archive the record; the next launch decides again from nothing"),
       Flag.withDefault(false),
     ),
@@ -151,7 +151,7 @@ const reconcile = Command.make(
 const cleanup = Command.make(
   "cleanup",
   {
-    confirm: Flag.boolean("confirm").pipe(
+    confirm: Flag.Boolean("confirm").pipe(
       Flag.withDescription("Actually close them; without it this only lists what it would"),
       Flag.withDefault(false),
     ),

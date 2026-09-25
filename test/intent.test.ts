@@ -16,6 +16,12 @@ import {
   writeIntent,
 } from "../src/intent";
 import { runEffect } from "./support/effect";
+import { Crypto } from "effect";
+import { connect } from "../src/host";
+import { runDir } from "../src/engine";
+import { isSettled } from "../src/lifecycle";
+import { hosted } from "./support/hosted";
+import { until } from "./support/host";
 
 let dir: string;
 
@@ -266,3 +272,77 @@ test("a rule constraint is spelled out, and a misspelled one says how", () => {
     source: "human",
   });
 });
+
+test(
+  "a started Run has its Intent before its work runs, and one started from it inherits it",
+  () =>
+    hosted("hw-intent-seed-", ({ world }) =>
+      Effect.gen(function* () {
+        const client = yield* connect(world.state).pipe(Effect.orDie);
+        const uuid = (yield* Crypto.Crypto).randomUUIDv4;
+        const human = { kind: "semantic", severity: "warn", source: "human" } as const;
+        const started = yield* client
+          .start({
+            project: world.project,
+            id: "hello",
+            request: yield* uuid,
+            input: { name: "seed" },
+            intent: {
+              goal: "greet whoever asks",
+              constraints: [{ ...human, id: "short", text: "keep it short" }],
+              defaults: {
+                constraints: [
+                  {
+                    ...human,
+                    id: "tone",
+                    text: "stay polite",
+                    source: "workspace-default",
+                    since: 1,
+                  },
+                  {
+                    ...human,
+                    id: "short",
+                    text: "be brief",
+                    source: "workspace-default",
+                    since: 1,
+                  },
+                ],
+                authority: { ...DEFAULT_AUTHORITY, auto_correct: true },
+              },
+            },
+          })
+          .pipe(Effect.orDie);
+        const seeded = yield* readIntent(runDir(world.state, started.runId));
+        expect(seeded?.version).toBe(1);
+        expect(seeded?.goal).toBe("greet whoever asks");
+        // What was named at launch replaces the workspace's own entry with the same id.
+        expect(seeded?.constraints.map((one) => `${one.id}: ${one.text}`)).toEqual([
+          "tone: stay polite",
+          "short: keep it short",
+        ]);
+        expect(seeded?.authority.auto_correct).toBe(true);
+
+        const child = yield* client
+          .start({
+            project: world.project,
+            id: "hello",
+            request: yield* uuid,
+            input: { name: "child" },
+            parent: started.runId,
+          })
+          .pipe(Effect.orDie);
+        const inherited = yield* readIntent(runDir(world.state, child.runId));
+        expect(inherited?.goal).toBe("greet whoever asks");
+        expect(inherited?.parent?.run).toBe(started.runId);
+        expect(inherited?.constraints.map((one) => `${one.source}:${one.id}`)).toEqual([
+          "parent:tone",
+          "parent:short",
+        ]);
+        yield* until(
+          () => client.run({ runId: child.runId }).pipe(Effect.orDie),
+          (view) => view !== null && isSettled(view),
+        );
+      }),
+    ),
+  60_000,
+);

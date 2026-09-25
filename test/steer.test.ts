@@ -2,22 +2,26 @@
 // changes something. So: the journal has both turns, a proposal is recorded pending, and
 // nothing at all reached an agent — whatever authority the Run has granted.
 
-import { Effect, FileSystem, Path, Schema } from "effect";
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { Effect, FileSystem, Path, Schema, type Scope } from "effect";
+import type { BunServices } from "@effect/platform-bun/BunServices";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { steer } from "../src/operations";
-import { RunStore } from "../src/run";
-import { DEFAULT_AUTHORITY, readIntent, seedIntent, writeIntent } from "../src/intent";
+import { DEFAULT_AUTHORITY, readIntent, type Authority } from "../src/intent";
 import { conversationPath, read as readConversation } from "../src/conversation";
 import { proposalsPath, read as readProposals } from "../src/proposals";
 import { budgetPath, herdOf, readBudget } from "../src/steering";
-import { resetExecutors } from "../src/executors";
-import { currentEnv, type PluginEnv } from "../src/env";
+import type { PluginEnv } from "../src/env";
 import type { PlatformError } from "effect/PlatformError";
-import { runEffect } from "./support/effect";
+import { hosted, hostedRun } from "./support/hosted";
+import type { World } from "./support/world";
+
+// Every test here stands a host up: the Runs a steer is about are the host's.
+setDefaultTimeout(60_000);
 
 /** What the fake CLI prints, as a real envelope would carry it. */
 const envelope = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
+let world: World;
 let stateDir: string;
 let env: PluginEnv;
 let herdKey: string;
@@ -76,47 +80,32 @@ const fakeClaude = Effect.fn("test.fakeClaude")(function* (dir: string) {
 let setReply: (text: string) => Effect.Effect<void, PlatformError, FileSystem.FileSystem>;
 let originalPath: string;
 
-beforeEach(() =>
-  runEffect(
+/** One test, in a Herd of its own with a host in it, and a `claude` that says what it is told. */
+const inWorld = <A, E>(body: Effect.Effect<A, E, BunServices | Scope.Scope>) =>
+  hosted("hw-steer-", (herd) =>
     Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      stateDir = yield* fs.makeTempDirectory({ prefix: "hw-steer-" });
+      world = herd.world;
+      stateDir = world.state;
+      env = herd.env;
       originalPath = Bun.env.PATH ?? "";
       setReply = yield* fakeClaude(stateDir);
       yield* setReply("{}");
-      env = { ...(yield* currentEnv), stateDir, socketPath: "/tmp/herd.sock" };
       herdKey = yield* herdOf(env.socketPath);
-      resetExecutors();
+      return yield* body.pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            Bun.env.PATH = originalPath;
+          }),
+        ),
+      );
     }),
-  ),
-);
+  );
 
-afterEach(() =>
-  runEffect(
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      Bun.env.PATH = originalPath;
-      yield* fs.remove(stateDir, { recursive: true, force: true });
-    }),
-  ),
-);
-
-const aRun = Effect.fn("test.aRun")(function* (authority = DEFAULT_AUTHORITY) {
-  const run = yield* new RunStore(stateDir).create({
-    workflow: "implement",
-    cwd: stateDir,
-    inputs: {},
-    inputSources: {},
-    stepIds: ["build"],
-    maxIterations: 1,
-    namedAfter: "picker",
-  });
-  yield* writeIntent(run.dir, { ...seedIntent(run.id, { goal: "add a picker" }), authority });
-  return run;
-});
+const aRun = (authority: Authority = DEFAULT_AUTHORITY) =>
+  hostedRun(world, "add a picker", authority);
 
 test("a steer executes the requested change without a confirmation hop", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       const run = yield* aRun({ ...DEFAULT_AUTHORITY, auto_correct: true, now_allowed: true });
       yield* setReply(
@@ -155,16 +144,11 @@ test("a steer executes the requested change without a confirmation hop", () =>
 
       expect((yield* readIntent(run.dir))?.goal).toBe("ship the picker");
       expect(proposals.some((line) => line.kind === "confirmed")).toBe(true);
-
-      // The amendment also notifies the Driver through the normal inbox.
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      expect(yield* fs.exists(path.join(run.dir, "inbox"))).toBe(true);
     }),
   ));
 
 test("a steer with no target is refused before anything is spent", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       yield* aRun();
       const result = yield* steer(env, deps(stateDir), {
@@ -179,7 +163,7 @@ test("a steer with no target is refused before anything is spent", () =>
   ));
 
 test("a turn the board starts is journaled as the board's, never as the human's", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       const run = yield* aRun();
       yield* setReply(
@@ -208,7 +192,7 @@ test("a turn the board starts is journaled as the board's, never as the human's"
   ));
 
 test("a Run nobody named is not one Collie will guess at", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       const result = yield* steer(env, deps(stateDir), {
         text: "stop it",
@@ -220,7 +204,7 @@ test("a Run nobody named is not one Collie will guess at", () =>
   ));
 
 test("every call is counted and costed, and none is refused over the count", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       // An Intent from before spending caps were dropped still decodes, and the quota it
       // carries decides nothing: the user's decision is that usage is data, never a
@@ -262,7 +246,7 @@ test("every call is counted and costed, and none is refused over the count", () 
   ));
 
 test("a dry run prints what it would propose and records nothing", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       const run = yield* aRun();
       yield* setReply(
@@ -291,7 +275,7 @@ test("a dry run prints what it would propose and records nothing", () =>
   ));
 
 test("a model that answers outside its schema is not acted on", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       const run = yield* aRun();
       yield* setReply(envelope({ result: "I think you should stop it" }));
@@ -313,7 +297,7 @@ test("a model that answers outside its schema is not acted on", () =>
   ));
 
 test("the pack names the runs and the target's own intent, and no pane text", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -355,7 +339,7 @@ test("the pack names the runs and the target's own intent, and no pane text", ()
   ));
 
 test("a follow-up is answered with the earlier turns of the same conversation", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -402,7 +386,7 @@ test("a follow-up is answered with the earlier turns of the same conversation", 
   ));
 
 test("the pack says when it is not listing the whole Herd", () =>
-  runEffect(
+  inWorld(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;

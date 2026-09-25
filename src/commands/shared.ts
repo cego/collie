@@ -1,22 +1,20 @@
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Effect, FileSystem, Option, Path, Schema, Stdio, Stream } from "effect";
+import { Effect, FileSystem, Option, Schema, Stdio, Stream } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 import { Argument, Command, Flag } from "effect/unstable/cli";
-import type { PlatformError } from "effect/PlatformError";
-import { choiceAnswerable } from "../attention";
-import { layers, loadDefinitions, type PersonaDef, type WorkflowDef } from "../definitions";
-import { readChoice, readProgress } from "../driver";
+import { layers, loadDefinitions, type PersonaDef } from "../definitions";
 import { currentEnv, type PluginEnv } from "../env";
 import { Herdr, type WorkspaceInfo } from "../herdr";
-import { reason, unsafePathComponent } from "../naming";
-import { err, resolveWorkspace, runStatus, type Failure } from "../operations";
+import { unsafePathComponent } from "../naming";
+import { err, resolveWorkspace, type Failure } from "../operations";
+import { evidenceDir, runDir, type Given, type RunView } from "../engine";
+import { runView } from "../lifecycle";
 import { actorName, type Actor } from "../proposals";
-import { InvalidRunState, Run, RunStore } from "../run";
 import { taskOfWorkspace } from "../task";
-import { branchListed } from "../worktree";
 import { attempt, mutation, type CollieError, type Result } from "../envelope";
 import type { YamlMap } from "../yaml";
 
-const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
+const InputsJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json));
 
 /** Everything on stdin, for `--inputs-json -`, through the Stdio service. */
 const stdinText = Effect.gen(function* () {
@@ -131,19 +129,6 @@ export const definitions = Effect.fn("collie.definitions")(function* (env: Plugi
   return yield* loadDefinitions(yield* layers(env));
 });
 
-export function workflowData(wf: WorkflowDef) {
-  return {
-    name: wf.name,
-    title: wf.title,
-    description: wf.description,
-    inputs: branchListed(wf.checkout ?? "none", wf.inputs),
-    steps: wf.steps.map((step) => step.id),
-    layer: wf.layer,
-    path: wf.path,
-    extends: wf.extends ?? null,
-  };
-}
-
 export function personaData(persona: PersonaDef) {
   return {
     name: persona.name,
@@ -155,84 +140,58 @@ export function personaData(persona: PersonaDef) {
   };
 }
 
-/** A Run named on the command line, or the reason the caller cannot have it. */
-export type RunResolution =
-  | { readonly _tag: "ResolvedRun"; readonly run: Run }
+/**
+ * A Run named on the command line, with the work it produced and the evidence filed about
+ * it, or the reason the caller cannot have it.
+ */
+export type Located =
+  | {
+      readonly _tag: "Hosted";
+      readonly view: RunView;
+      readonly dir: string;
+      readonly evidence: string;
+    }
   | { readonly _tag: "RunFailure"; readonly result: Failure };
 
-const runFailure = (result: Failure): RunResolution => ({ _tag: "RunFailure", result });
-
-export const readRun = Effect.fn("collie.readRun")(function* (
+/** Which of those this id is. */
+export const locateRun = Effect.fn("collie.locateRun")(function* (
   env: PluginEnv,
   id: string,
   /** The Task this lookup is scoped to; null scopes to nothing, as `selectedTask` says. */
   task: string | null,
-): Effect.fn.Return<RunResolution, never, FileSystem.FileSystem | Path.Path> {
-  if (unsafePathComponent(id))
-    return runFailure(err("run_not_found", `Run "${id}" was not found.`, { run: id }));
-  const loaded = yield* new RunStore(env.stateDir).load(id).pipe(
-    Effect.map((run) => ({ _tag: "ResolvedRun" as const, run })),
-    Effect.catch((cause) => Effect.succeed(runFailure(notLoaded(id, cause)))),
-  );
-  if (loaded._tag === "RunFailure") return loaded;
-  if (task && loaded.run.record.task !== task) {
-    return runFailure(
-      err("run_not_found", `Run "${id}" is not part of task "${task}".`, { run: id, task }),
-    );
-  }
-  return loaded;
-});
-
-/**
- * Why a Run would not load. RunStore decodes `run.json`, so a Run that exists but
- * is not a Run is `invalid_state` and anything else is simply absent.
- */
-function notLoaded(id: string, cause: Error | PlatformError): Failure {
-  if (cause instanceof InvalidRunState)
-    return err("invalid_state", `Run "${id}" has invalid persisted state.`, {
-      run: id,
-      cause: cause.cause,
-    });
-  return err("run_not_found", `Run "${id}" was not found.`, { run: id });
-}
-
-/**
- * The Run directories the store declined to hand back, and why: a `run.json` that will
- * not decode, and one that is not there at all — which is what a Run half-created by
- * `run start` looks like, since the directory is claimed before the record is written.
- */
-export const unreadableRuns = Effect.fn("collie.unreadableRuns")(function* (
-  store: RunStore,
-  readable: ReadonlyArray<Run>,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const root = yield* store.rootEffect;
-  if (!(yield* fs.exists(root))) return [];
-  // Only the directories the store did not hand back are loaded again. Reading every
-  // one a second time was the cost of asking, and there is usually nothing broken.
-  const known = new Set(readable.map((run) => run.id));
-  const broken: Array<{ run: string; reason: string }> = [];
-  for (const name of yield* fs.readDirectory(root)) {
-    if (name.startsWith(".") || known.has(name)) continue;
-    const loaded = yield* store.load(name).pipe(Effect.result);
-    if (loaded._tag === "Failure") broken.push({ run: name, reason: reason(loaded.failure) });
-  }
-  return broken;
-});
-
-export const runData = Effect.fn("collie.runData")(function* (run: Run) {
-  // The same Choice `attention` reports, under the same rule: one left behind by a
-  // Driver that has gone is not answerable, and an envelope carrying it here while
-  // `attention.choice` is null would be telling an agent both at once. Asked only where
-  // there is a Choice on disk, so listing Runs costs no ownership probe.
-  const pending = yield* readChoice(run.dir);
-  return {
-    ...run.record,
-    status: yield* runStatus(run),
-    progress: yield* readProgress(run.dir),
-    choice: pending && (yield* choiceAnswerable(run)) ? pending : null,
+): Effect.fn.Return<
+  Located,
+  never,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+> {
+  const missing: Located = {
+    _tag: "RunFailure",
+    result: err("run_not_found", `Run "${id}" was not found.`, { run: id }),
   };
+  if (unsafePathComponent(id)) return missing;
+  const dir = runDir(env.stateDir, id);
+  const view = yield* runView(env, id);
+  if (view === null || !("runId" in view)) return missing;
+  if (task !== null && view.task !== task) return outsideTask(id, task);
+  return { _tag: "Hosted", view, dir, evidence: evidenceDir(env.stateDir, id) };
 });
+
+const outsideTask = (id: string, task: string): Located => ({
+  _tag: "RunFailure",
+  result: err("run_not_found", `Run "${id}" is not part of task "${task}".`, { run: id, task }),
+});
+
+/** What a located Run is called and what it was for. */
+export function runFacts(located: Extract<Located, { _tag: "Hosted" }>) {
+  return {
+    id: located.view.runId,
+    workflow: located.view.workflow,
+    project: located.view.project,
+    task: located.view.task,
+    outcome: located.view.outcome,
+    created: located.view.created,
+  };
+}
 
 export const layerDir = Effect.fn("collie.layerDir")(function* (
   env: PluginEnv,
@@ -242,46 +201,47 @@ export const layerDir = Effect.fn("collie.layerDir")(function* (
   return available[layer].dir;
 });
 
-type ParsedInputs = { ok: true; inputs: Record<string, string> } | { ok: false; error: Result };
+type ParsedInputs = { ok: true; given: Given } | { ok: false; error: Result };
 
 export const parseInput = Effect.fn("collie.parseInput")(function* (
   values: ReadonlyArray<string>,
   json: Option.Option<string>,
 ): Effect.fn.Return<ParsedInputs, never, Stdio.Stdio> {
-  let parsed: Record<string, string> = {};
+  let typed: Record<string, Schema.Json> = {};
   if (Option.isSome(json)) {
     const raw = json.value === "-" ? yield* stdinText : json.value;
     try {
-      parsed = Schema.decodeUnknownSync(InputsJson)(raw);
+      typed = Schema.decodeUnknownSync(InputsJson)(raw);
     } catch {
       return { ok: false, error: err("invalid_input", "--inputs-json must be a JSON object.") };
     }
   }
+  const text: Record<string, string> = {};
   for (const entry of values) {
     const at = entry.indexOf("=");
     if (at <= 0)
       return { ok: false, error: err("invalid_input", `Input "${entry}" must be key=value.`) };
-    parsed[entry.slice(0, at)] = entry.slice(at + 1);
+    text[entry.slice(0, at)] = entry.slice(at + 1);
   }
-  return { ok: true, inputs: parsed };
+  return { ok: true, given: { json: typed, text } };
 });
 
 /** Every mutation takes one, and it means the same thing on all of them. */
-export const requestIdFlag = Flag.string("request-id").pipe(
+export const requestIdFlag = Flag.String("request-id").pipe(
   Flag.withDescription("Idempotency key; retrying it returns the first result"),
   Flag.optional,
 );
 
 /** The Run a `run` subcommand acts on. */
-export const runIdArg = Argument.string("run-id").pipe(
+export const runIdArg = Argument.String("run-id").pipe(
   Argument.withDescription("The Run's id, as `run list` prints it"),
 );
 
 export const forkFlags = {
-  layer: Flag.choice("layer", ["user", "project"]).pipe(
-    Flag.withDescription("Which Layer to fork into: your config dir, or this project's `.herdr/`"),
+  layer: Flag.Literals("layer", ["user", "project"]).pipe(
+    Flag.withDescription("Which Layer to fork into: your config dir, or this project's `.collie/`"),
   ),
-  name: Flag.string("name").pipe(
+  name: Flag.String("name").pipe(
     Flag.withDescription("Name the fork takes; it wins over the one it forked from"),
   ),
   requestId: requestIdFlag,
@@ -289,13 +249,13 @@ export const forkFlags = {
 
 export const root = Command.make("collie").pipe(
   Command.withSharedFlags({
-    workspace: Flag.string("workspace").pipe(
+    workspace: Flag.String("workspace").pipe(
       Flag.withDescription(
         "Scope to this herdr workspace id, and root the run at that workspace's directory",
       ),
       Flag.optional,
     ),
-    json: Flag.boolean("json").pipe(
+    json: Flag.Boolean("json").pipe(
       Flag.withDescription("Emit one machine-readable envelope instead of text"),
       Flag.withDefault(false),
     ),

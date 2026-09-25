@@ -97,6 +97,18 @@ export function newest(cards: ReadonlyArray<Card>): Card[] {
   return [...latest.values()];
 }
 
+/**
+ * The role whose work is a review. A workflow declares its steps' roles, and that is the
+ * domain fact a card is built from: a step called anything at all is a review when a
+ * reviewer did it, and one called `review-the-docs` done by an implementer is not.
+ */
+export const REVIEW_ROLE = "reviewer";
+
+/** Which card the work of this role writes. */
+export function kindForRole(role: string | null | undefined): Card["kind"] {
+  return role === REVIEW_ROLE ? "review" : "slice";
+}
+
 export interface ReadinessFacts {
   /** An agent said something is done: a progress checkpoint, or an Output claim. */
   readonly claimed: boolean;
@@ -286,8 +298,6 @@ const CheckpointSchema = Schema.Struct({
 });
 export type Checkpoint = Schema.Schema.Type<typeof CheckpointSchema>;
 const CheckpointJson = Schema.fromJsonString(CheckpointSchema);
-/** The file as the engine writes one for a slice, in the shape an agent's own is read in. */
-export const encodeCheckpoint = Schema.encodeSync(CheckpointJson);
 
 export const readCheckpoints = Effect.fn("Cards.readCheckpoints")(function* (runDir: string) {
   const fs = yield* FileSystem.FileSystem;

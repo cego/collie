@@ -1,32 +1,3 @@
----
-name: architecture
-title: architecture — look at what is there, then improve it
-description: Runs the architecture skill over this project, writes a report into the run dir, then asks what next.
-inputs:
-  # Forwarded to the implement this chains into, which is where it means anything.
-  workspace: optional
-steps:
-  - id: architecture
-    persona: architect
-    prompt: attended
-    skill: improve-codebase-architecture
-    output: architecture.json
-  - id: next
-    standalone: true
-    choices:
-      - title: Implement now
-        run: implement
-        inputs:
-          plan: "{{run.dir}}/plan"
-          task: "{{outputs.architecture.slug}}"
-          # Architectural work is a refactor unless the report says otherwise: behaviour
-          # is what it must not change, and that is what the review is asked to confirm.
-          outcome: "{{outputs.architecture.outcome}}"
-          workspace: "{{inputs.workspace}}"
-      - title: Stop here
-        stop: true
----
-
 Project root: {{cwd}}
 Report: {{run.dir}}/plan/ARCHITECTURE.md
 
@@ -43,13 +14,9 @@ If we agree on work worth doing, write it up the way the planner would — a spe
 `{{run.dir}}/plan/SPEC.md` and tickets at `{{run.dir}}/plan/issues/NN-<slug>.md` — so
 that Implement now has a plan to build from.
 
-Then write the Output JSON as your persona describes, with everything we agreed not to
-do now under `deferred`, and two more keys. `"slug":
-"<short-kebab-case-name-for-the-work-we-agreed-on>"` is what the branch an Implement now
-would build is named after, so make it name the work rather than the repository.
-`"outcome"` is what kind of result building it would be — usually `refactor`, because
-architectural work is judged on behaviour surviving it, and `feature` only where we agreed
-to build something that is not there yet.
+Then write your Output, with everything we agreed not to do now under `deferred`. The
+`slug` is what the branch an Implement now would build is named after, so make it name the
+work we agreed on rather than the repository.
 
 ## unattended
 

@@ -69,9 +69,9 @@ export interface Defaults {
   /** What to do about a directory the harness has not been trusted with yet. */
   trust: "auto" | "never";
   /**
-   * Whether Collie decides an agent's tool calls up front, or the harness asks. As
+   * Whether the harness reviews an agent's tool calls itself, or asks in its pane. As
    * written, like `harness` and `model`: validation names an unknown one, and the engine
-   * refuses to start an agent it cannot resolve rather than falling back to `bypass`.
+   * starts an agent it cannot resolve in `auto`, the default.
    */
   permissions: string;
   /** Which scope the Control Plane opens on. `g` changes it for that tab only. */
@@ -103,7 +103,7 @@ export const FALLBACK_DEFAULTS: Defaults = {
   compactAtTokens: COMPACT_AT_TOKENS,
   models: {},
   trust: "auto",
-  permissions: "bypass",
+  permissions: "auto",
   scope: "local",
   density: "comfortable",
   notifications: {},
@@ -116,10 +116,10 @@ const Models = Schema.Record(Schema.String, Schema.Array(Schema.String));
 const Notifications = Schema.Record(Schema.String, Schema.Boolean);
 
 /** The whole config file, for values only a prompt cares about (e.g. linear.team). */
-export const readConfig = Effect.fn("Config.readConfig")(function* (configDir: string) {
+export const readConfig = Effect.fn("Config.readConfig")(function* (userDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
-  const path = paths.join(configDir, "config.json");
+  const path = paths.join(userDir, "config.json");
   if (!(yield* fs.exists(path))) return {};
   const text = yield* fs.readFileString(path);
   return yield* Schema.decodeUnknownEffect(ConfigJson)(text).pipe(
@@ -147,13 +147,13 @@ export function configValue(raw: YamlMap, dotted: string): YamlValue | undefined
  * configured value, and an empty `harness` is one every Run then fails validation on.
  */
 export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
-  configDir: string,
+  userDir: string,
   dotted: string,
   value: string | number | null,
 ) {
   const fs = yield* FileSystem.FileSystem;
   const paths = yield* Path.Path;
-  const raw = yield* readConfig(configDir);
+  const raw = yield* readConfig(userDir);
   const keys = dotted.split(".");
   let node = raw;
   for (const key of keys.slice(0, -1)) {
@@ -166,15 +166,15 @@ export const writeConfigValue = Effect.fn("Config.writeConfigValue")(function* (
   if (last === undefined) return;
   if (value === null) delete node[last];
   else node[last] = value;
-  yield* fs.makeDirectory(configDir, { recursive: true });
+  yield* fs.makeDirectory(userDir, { recursive: true });
   yield* fs.writeFileString(
-    paths.join(configDir, "config.json"),
+    paths.join(userDir, "config.json"),
     `${Schema.encodeSync(ConfigJson)(raw)}\n`,
   );
 });
 
-export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDir: string) {
-  const raw = yield* readConfig(configDir);
+export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (userDir: string) {
+  const raw = yield* readConfig(userDir);
   const defaults: Defaults = {
     harness: isString(raw.harness) ? raw.harness : FALLBACK_DEFAULTS.harness,
     model: isString(raw.model) ? raw.model : FALLBACK_DEFAULTS.model,
@@ -195,7 +195,7 @@ export const loadDefaults = Effect.fn("Config.loadDefaults")(function* (configDi
     trust: raw.trust === "auto" || raw.trust === "never" ? raw.trust : FALLBACK_DEFAULTS.trust,
     // As written rather than coerced: `loadDefaults` is read by the Settings and
     // Workflows views and by Doctor, so a file hand-edited into nonsense still has to
-    // return — and coercing it would fall back to `bypass`. Validation names it.
+    // return — and coercing it would hide it. Validation names it.
     permissions: permissionsAsWritten(raw.permissions) ?? FALLBACK_DEFAULTS.permissions,
     // Coerced rather than kept as written: the board has to open on one of the two
     // whatever the file says. A value that is neither is refused where it is written.

@@ -62,7 +62,8 @@ interface RigEnv {
   HERDR_BIN_PATH: string;
   HERDR_SOCKET_PATH: string;
   HERDR_PLUGIN_ROOT: string;
-  HERDR_PLUGIN_CONFIG_DIR: string;
+  COLLIE_USER_DIR: string;
+  COLLIE_CLAUDE_MANAGED_DIR: string;
   HERDR_PLUGIN_STATE_DIR: string;
   HERDR_WORKSPACE_ID: string;
   HERDR_TAB_ID: string;
@@ -180,7 +181,7 @@ export class Rig {
   readonly socketPath: string;
   readonly binPath: string;
   readonly stateDir: string;
-  readonly configDir: string;
+  readonly userDir: string;
   readonly baselineDir: string;
   readonly projectDir: string;
   private listener: { stop(closeActiveConnections?: boolean): void } | null = null;
@@ -197,7 +198,7 @@ export class Rig {
     this.socketPath = path.join(root, "herdr.sock");
     this.binPath = path.join(root, "herdr");
     this.stateDir = path.join(root, "state");
-    this.configDir = path.join(root, "config");
+    this.userDir = path.join(root, "config");
     this.baselineDir = path.join(root, "baseline");
     this.projectDir = path.join(root, "project");
   }
@@ -208,7 +209,7 @@ export class Rig {
       const path = yield* Path.Path;
       const root = yield* fs.makeTempDirectory({ prefix: "hw-test-" });
       const fakeHerdrPath = yield* path.fromFileUrl(new URL("./fake-herdr.ts", import.meta.url));
-      const pathValue = yield* Config.string("PATH").pipe(Config.withDefault(""));
+      const pathValue = yield* Config.String("PATH").pipe(Config.withDefault(""));
       const rig = new Rig(root, path, fakeHerdrPath, pathValue);
       yield* rig.setup();
       return rig;
@@ -216,7 +217,7 @@ export class Rig {
   }
 
   private setup(): Effect.Effect<void, PlatformError.PlatformError, FileSystem.FileSystem> {
-    const dirs = [this.stateDir, this.configDir, this.baselineDir, this.projectDir];
+    const dirs = [this.stateDir, this.userDir, this.baselineDir, this.projectDir];
     const binPath = this.binPath;
     const fakeHerdrPath = this.fakeHerdrPath;
     return Effect.gen(function* () {
@@ -323,6 +324,27 @@ export class Rig {
     return this.appendState("agents", { name, pane_id: paneId });
   }
 
+  /** Another process under this agent's name, in the same pane. */
+  reincarnate(name: string): Effect.Effect<void, RigError, FileSystem.FileSystem> {
+    const statePath = `${this.logPath}.state.json`;
+    const readJsonObject = this.readJsonObject.bind(this);
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* readJsonObject(statePath);
+      const agents = Option.getOrElse(
+        Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state.agents),
+        (): ReadonlyArray<Schema.JsonObject> => [],
+      );
+      const renewed = agents.map((agent) =>
+        agent.name === name ? { ...agent, terminal_id: `${agent.terminal_id}+next` } : agent,
+      );
+      yield* fs.writeFileString(
+        statePath,
+        encodeJson(Object.assign({}, state, { agents: renewed })),
+      );
+    });
+  }
+
   /** A pane herdr already has, with the directory, agent and workspace it is in. */
   addPane(
     paneId: string,
@@ -382,6 +404,41 @@ export class Rig {
       yield* fs.writeFileString(
         statePath,
         encodeJson(Object.assign({}, state, { worktrees: worktrees.map((w) => ({ ...w })) })),
+      );
+    });
+  }
+
+  /**
+   * herdr dropping a workspace, as it does once its last pane closes: the agents in it go
+   * with it, and a tab asked for there is refused as `workspace_not_found`.
+   */
+  closeWorkspace(
+    workspaceId: string,
+    agents: ReadonlyArray<string>,
+  ): Effect.Effect<void, RigError, FileSystem.FileSystem> {
+    const statePath = `${this.logPath}.state.json`;
+    const readJsonObject = this.readJsonObject.bind(this);
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const state = yield* readJsonObject(statePath);
+      const list = (key: string) =>
+        Option.getOrElse(
+          Schema.decodeUnknownOption(Schema.Array(Schema.JsonObject))(state[key]),
+          (): ReadonlyArray<Schema.JsonObject> => [],
+        );
+      const closed = Option.getOrElse(
+        Schema.decodeUnknownOption(Schema.Array(Schema.String))(state.closedWorkspaces),
+        (): ReadonlyArray<string> => [],
+      );
+      yield* fs.writeFileString(
+        statePath,
+        encodeJson(
+          Object.assign({}, state, {
+            workspaces: list("workspaces").filter((w) => w.workspace_id !== workspaceId),
+            agents: list("agents").filter((a) => !agents.includes(String(a.name))),
+            closedWorkspaces: [...closed, workspaceId],
+          }),
+        ),
       );
     });
   }
@@ -497,7 +554,8 @@ export class Rig {
       HERDR_BIN_PATH: this.binPath,
       HERDR_SOCKET_PATH: this.socketPath,
       HERDR_PLUGIN_ROOT: this.baselineDir,
-      HERDR_PLUGIN_CONFIG_DIR: this.configDir,
+      COLLIE_USER_DIR: this.userDir,
+      COLLIE_CLAUDE_MANAGED_DIR: `${this.root}/claude-managed`,
       HERDR_PLUGIN_STATE_DIR: this.stateDir,
       HERDR_WORKSPACE_ID: "1",
       HERDR_TAB_ID: "1:1",
@@ -526,6 +584,7 @@ export class Rig {
       "FAKE_HERDR_FAIL",
       "FAKE_HERDR_AGENT_STATUS",
       "FAKE_HERDR_PROMPT_ERROR",
+      "FAKE_HERDR_PROMPT_ERROR_TIMES",
       "FAKE_HERDR_BLOCK_START",
       "FAKE_HERDR_VERSION",
       "FAKE_HERDR_PLUGINS",

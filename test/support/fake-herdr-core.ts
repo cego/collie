@@ -26,7 +26,7 @@ interface FakePane {
 interface FakeAgent {
   name: string;
   pane_id: string;
-  /** herdr's identity for the process; defaulted per name unless a test pins one. */
+  /** herdr's identity for the process; one per start, or defaulted per name. */
   terminal_id?: string;
 }
 
@@ -60,6 +60,8 @@ interface State {
   paneList: FakePane[];
   agents: FakeAgent[];
   workspaces: FakeWorkspace[];
+  /** Workspaces herdr has dropped, whose ids it never gives out again. */
+  closedWorkspaces: string[];
   worktrees: FakeWorktree[];
   /** The repository's own checkout, which is what herdr answers `list` with. */
   worktreeSource: string | undefined;
@@ -132,30 +134,13 @@ const StateJson = Schema.fromJsonString(
     paneList: Schema.optionalKey(Schema.Array(FakePaneSchema)),
     agents: Schema.optionalKey(Schema.Array(FakeAgentSchema)),
     workspaces: Schema.optionalKey(Schema.Array(FakeWorkspaceSchema)),
+    closedWorkspaces: Schema.optionalKey(Schema.Array(Schema.String)),
     worktrees: Schema.optionalKey(Schema.Array(FakeWorktreeSchema)),
     worktreeSource: Schema.optionalKey(Schema.String),
   }),
 );
 const FailuresJson = Schema.fromJsonString(Schema.Record(Schema.String, Schema.String));
-const OutputWrites = Schema.Record(Schema.String, Schema.String);
-const QueuedObjectJson = Schema.Union([
-  Schema.Struct({
-    __delay_ms: Schema.Number,
-    __write: Schema.optionalKey(OutputWrites),
-    output: Schema.optionalKey(Schema.Any),
-  }),
-  Schema.Struct({
-    __delay_ms: Schema.optionalKey(Schema.Number),
-    __write: OutputWrites,
-    output: Schema.optionalKey(Schema.Any),
-  }),
-]);
-const QueuedOutputJson = Schema.Union([
-  Schema.String,
-  Schema.Null,
-  QueuedObjectJson,
-  Schema.JsonObject,
-]);
+const QueuedOutputJson = Schema.Union([Schema.String, Schema.Null, Schema.JsonObject]);
 const QueueJson = Schema.fromJsonString(Schema.Array(QueuedOutputJson));
 const JsonRecord = Schema.fromJsonString(Schema.Any);
 const encodeJson = Schema.encodeSync(JsonRecord);
@@ -175,6 +160,7 @@ const emptyState = (): State => ({
   paneList: [],
   agents: [],
   workspaces: [],
+  closedWorkspaces: [],
   worktrees: [],
   worktreeSource: undefined,
 });
@@ -201,8 +187,9 @@ function mutableState(state: State | Schema.Schema.Type<typeof StateJson>): Stat
       workspace_id: pane.workspace_id ?? null,
       foreground_cwd: pane.foreground_cwd ?? null,
     })),
-    agents: (state.agents ?? []).map((agent) => ({ name: agent.name, pane_id: agent.pane_id })),
+    agents: (state.agents ?? []).map((agent) => ({ ...agent })),
     workspaces: (state.workspaces ?? []).map((workspace) => ({ ...workspace })),
+    closedWorkspaces: [...(state.closedWorkspaces ?? [])],
     worktrees: (state.worktrees ?? []).map((worktree) => ({ ...worktree })),
     worktreeSource: state.worktreeSource,
   };
@@ -233,7 +220,7 @@ function handle(
     const envString = (name: string, fallback = "") => {
       const value = environment[name];
       return value === undefined
-        ? Config.string(name).pipe(Config.withDefault(Bun.env[name] ?? fallback))
+        ? Config.String(name).pipe(Config.withDefault(Bun.env[name] ?? fallback))
         : Config.succeed(value);
     };
     const log = yield* envString("FAKE_HERDR_LOG");
@@ -452,7 +439,11 @@ function handle(
       // The code `--wait` answers a submission with, exit 1 and an envelope on stdout
       // the way herdr really answers one: `agent_prompt_stalled` for a lost Enter,
       // `timeout` for a wait the caller ran out of.
-      const code = yield* envString("FAKE_HERDR_PROMPT_ERROR", "");
+      // Only the first N prompts are answered with it, where a test sets N: a pane whose
+      // dialog clears after a while.
+      const times = Number.parseInt(yield* envString("FAKE_HERDR_PROMPT_ERROR_TIMES", "0"), 10);
+      const code =
+        times > 0 && state.prompts > times ? "" : yield* envString("FAKE_HERDR_PROMPT_ERROR", "");
       const answered = {
         code: 1,
         stdout: `${encodeJson({
@@ -477,41 +468,12 @@ function handle(
         state.outputs += 1;
         if (next !== undefined && next !== null) {
           const outputPath = match[1]!.trim();
-          const delayed = Schema.decodeUnknownOption(QueuedObjectJson)(next);
           yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
-          if (Option.isSome(delayed) && delayed.value.__write) {
-            let dir = path.dirname(outputPath);
-            while (dir !== "/" && !(yield* fs.exists(path.join(dir, "run.json"))))
-              dir = path.dirname(dir);
-            for (const [rel, body] of Object.entries(delayed.value.__write)) {
-              const writePath = path.join(dir, rel);
-              yield* fs.makeDirectory(path.dirname(writePath), { recursive: true });
-              yield* fs.writeFileString(writePath, body);
-            }
-          }
-          if (Option.isSome(delayed) && Number.isFinite(delayed.value.__delay_ms)) {
-            const body = encodeJson(delayed.value.output ?? {});
-            yield* Effect.sync(() => {
-              Bun.spawn(
-                [
-                  "bun",
-                  "-e",
-                  `await Bun.sleep(${delayed.value.__delay_ms}); await Bun.write(${encodeJson(outputPath)}, ${encodeJson(body)});`,
-                ],
-                { stdout: "ignore", stderr: "ignore", stdin: "ignore" },
-              ).unref();
-            });
-          } else if (Option.isSome(delayed) && delayed.value.__write) {
-            yield* fs.writeFileString(outputPath, encodeJson(delayed.value.output ?? {}));
-          } else if (Option.isSome(delayed)) {
-            yield* fs.writeFileString(outputPath, encodeJson(delayed.value));
-          } else {
-            const plain = Schema.decodeUnknownOption(Schema.String)(next);
-            yield* fs.writeFileString(
-              outputPath,
-              Option.isSome(plain) ? plain.value : encodeJson(next),
-            );
-          }
+          const plain = Schema.decodeUnknownOption(Schema.String)(next);
+          yield* fs.writeFileString(
+            outputPath,
+            Option.isSome(plain) ? plain.value : encodeJson(next),
+          );
         }
       }
       if (code === "timeout") return answered;
@@ -520,6 +482,17 @@ function handle(
     let result = {};
     switch (cmd) {
       case "tab create": {
+        const into = flag("--workspace");
+        if (into !== undefined && state.closedWorkspaces.includes(into)) {
+          return {
+            code: 1,
+            stdout: `${encodeJson({
+              id: "cli:tab:create",
+              error: { code: "workspace_not_found", message: `workspace ${into} not found` },
+            })}\n`,
+            stderr: "",
+          };
+        }
         const tab = newTab(flag("--label") ?? String(state.tabs + 1));
         result = { type: "tab_created", tab, root_pane: newPane(tab.tab_id) };
         break;
@@ -576,6 +549,8 @@ function handle(
       }
       case "pane close":
         state.paneList = state.paneList.filter((p) => p.pane_id !== argv[2]);
+        // The agent in a pane goes with it.
+        state.agents = state.agents.filter((a) => a.pane_id !== argv[2]);
         break;
       case "pane move": {
         const tabId = flag("--tab") ?? "";
@@ -615,10 +590,17 @@ function handle(
         };
         break;
       }
-      case "agent start":
-        state.agents.push({ name: argv[2]!, pane_id: flag("--pane") ?? "" });
+      case "agent start": {
+        const pane = flag("--pane") ?? "";
+        // A process of its own, so the same name started again is a new incarnation.
+        state.agents.push({
+          name: argv[2]!,
+          pane_id: pane,
+          terminal_id: `term-${argv[2]}@${pane}`,
+        });
         result = { type: "agent_started" };
         break;
+      }
       case "agent list": {
         const gone = new Set(
           (yield* envString("FAKE_HERDR_AGENTS_GONE")).split(",").filter((n) => n),
@@ -712,11 +694,17 @@ function handle(
           ({
             path: asked ?? path.join(path.dirname(log), "worktrees", branch),
             branch,
-            open_workspace_id: `w${state.worktrees.length + 1}`,
+            open_workspace_id: `w${state.workspaces.length + 1}`,
           } satisfies FakeWorktree);
         if (!known) {
           state.worktrees.push(worktree);
           state.worktreeSource ??= from;
+          // The workspace herdr opened on it is one it lists from then on.
+          state.workspaces.push({
+            workspace_id: worktree.open_workspace_id ?? "",
+            label: flag("--label") ?? branch,
+            cwd: worktree.path,
+          });
         }
         yield* fs.makeDirectory(worktree.path, { recursive: true });
         // The `.git` file git writes at `worktree add`, which is a checkout's identity.

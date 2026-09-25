@@ -1,8 +1,8 @@
 # Steering a Run
 
-A Run records what it was asked for as its [Intent](cli.md#intent), and everything below
-compares work against that. This page is about the other half: how a message reaches a
-live agent, and what Collie can and cannot say about what happened to it.
+This page is about how a message reaches a live agent, what Collie can and cannot say about
+what happened to it, and what a Run is held to. The drift half compares work against a
+Run's [Intent](cli.md#intent), which a Run of a workflow module does not carry yet.
 
 ## Delivery
 
@@ -18,27 +18,23 @@ Three modes:
 | `now`       | Sent to an agent that is already working.           | A proven `now` for that harness.       |
 | `interrupt` | An interrupt key, then the message.                 | A proven `interrupt` for that harness. |
 
-`boundary` is the only one that works everywhere: it is the next prompt file, which every
-harness already takes. But a human's message is about the work under way, and the next
-prompt can be forty minutes off and about something else — so a `deliver` with no mode
-is `now`. A `now` or `interrupt` goes into the pane from the process that asked for it:
-herdr types it, under the agent's ledger lock so the Driver's own sends stay out of the
-way, and only the Driver is waited for when something has to be _composed into a prompt_,
-which is a boundary delivery. Both are gated on a **recorded live result** per harness,
-and where that harness has none the executor writes a boundary delivery to the inbox
-instead and says so in the Run's log; a `capability_unproven:<harness>:<mode>` refusal is
-on the ledger either way, so a steer that did not go out as asked has an answer rather
-than a silence.
+`boundary` is the only one that works everywhere: it goes out as an ordinary prompt, which
+every harness takes, and a busy agent's harness takes it when the turn it is in ends. A
+human's message is about the work under way, so a `deliver` with no mode is `now`. Every
+mode goes out from the host, through the Dispatcher, under the agent's ledger lock. `now`
+and `interrupt` are gated on a **recorded live result** per harness; where that harness
+has none the delivery is refused, with `capability_unproven:<harness>:<mode>` on the
+ledger, so a steer that did not go out as asked has an answer rather than a silence.
 
 ## The states, and why they are kept apart
 
-| State          | What it means                                                                                                                                                            |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `queued`       | A boundary delivery the Driver holds for the agent's next prompt. Before the Driver has read it, it is a file in the Run's inbox and `collie_receipts` lists it as such. |
-| `reserved`     | Written **before** herdr was called. A crash here leaves this.                                                                                                           |
-| `submitted`    | herdr took it. Not: the agent read it.                                                                                                                                   |
-| `acknowledged` | The agent wrote the ack file naming this delivery, version and attempt.                                                                                                  |
-| `verified`     | An independent check says the thing asked for actually happened.                                                                                                         |
+| State          | What it means                                                                                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reserved`     | Written **before** herdr was called. A crash here leaves this.                                                                                       |
+| `deferred`     | herdr answered that the pane cannot take a prompt yet, with a code that says it clears by itself. Nothing was delivered; the same id is tried again. |
+| `submitted`    | herdr took it. Not: the agent read it.                                                                                                               |
+| `acknowledged` | The agent wrote the ack file naming this delivery, version and attempt.                                                                              |
+| `verified`     | An independent check says the thing asked for actually happened.                                                                                     |
 
 They are separate because they are separate facts. herdr types text into a pane and
 returns; that says the keystrokes went somewhere. Collapsing them would let Collie report
@@ -54,6 +50,19 @@ ignored look the same from here, and the note is what tells a later reader that.
 The terminal states are `failed` (herdr refused), `unknown` (herdr never answered, so
 nobody can say), `superseded` and `expired`. `unknown` blocks further deliveries about the
 same work until a human reconciles it, and Collie never retries out of it on its own.
+
+`deferred` is the one refusal that is retried, because it is the one that proves the prompt
+was not delivered and says why the next try may land. Which refusals count is decided by
+herdr's code, recorded on the line as `code` — today only `agent_blocked`, an agent with a
+dialog up — and never by its message. A step's prompt and its repair are tried again with
+a backoff from two seconds to thirty, each try reserved again under the same id, so every
+attempt is on the ledger and a second copy of the work stays blocked meanwhile. Ten minutes
+after the first refusal the delivery is settled `failed` with the note
+`<code> held for <time> over <n> attempts`, and the Run's log says it `gave up` — which a
+refusal nobody retried never says. The Run then parks rather than failing: its agent
+is alive and its prompt is written, so `run show` says so and `collie run resume` hands that
+prompt to that agent. A human's steer is sent once and told the refusal, since they are
+waiting on the answer.
 
 A step prompt's delivery ends `superseded` with the note `work_collected` once the agent
 has gone quiet and its Output has been read: what the prompt asked for is in the Run, and a
@@ -111,7 +120,7 @@ that turn ends — `submitted` with the note `unobserved`, exactly what the Disp
 records — so `now` is not something pi has been shown to do. Codex and opencode took the
 text but their own sandboxes and permission prompts stood between them and the ack file
 in the probe; a blocked agent is one herdr refuses to prompt at all, and that refusal is
-what the ledger shows (`failed`, `agent_blocked`). Attribution on Claude needs a human
+what the ledger shows (`deferred`, then `failed`, with the code `agent_blocked`). Attribution on Claude needs a human
 typing into a Collie-launched agent's pane and is the one row an operator has to record.
 `boundary` deliveries need none of this and work on every harness.
 
@@ -175,7 +184,12 @@ write is the only moment anyone holds the lock.
 ## Drift
 
 **Drift** is a recorded mismatch between the evidence and the run's Intent
-([CLI](cli.md#drift)). Two kinds, kept apart on purpose.
+([CLI](cli.md#drift)). A Run carries its Intent from the moment it is admitted, and the
+checks below run for it: rules after each piece of agent work is collected and before the
+next starts, and a judgement before each piece of work and at the finish. What they find is
+[corrected](#correcting-drift) through the agent that did the work last, a Run
+[finishes](#finishing) the same way whatever its workflow, and related Runs are
+[checked against each other](#cross-run-checks). Two kinds, kept apart on purpose.
 
 A **rule** constraint is a fact Collie can establish by itself: which files changed,
 which branch it is on, what a step's Output field says, what a named verification exited
@@ -232,9 +246,11 @@ The narrative is an input the rule ignores. There is no path by which a model ma
 own work look more important by describing it that way, and nothing that writes a card
 takes focus — a card arriving must never move a human off what they are doing.
 
-The implementer writes a **progress checkpoint** per ticket, and the Driver turns each
-finished one into a card while the step is still running. That is the point: a human sees
-a slice land without waiting an hour for the step.
+The implementer writes a **progress checkpoint** per ticket, and the host cards each one
+while the agent is still working — a human sees a slice land without waiting an hour for
+the whole build. Every piece of agent work also leaves a card when its Output is accepted,
+so a ticket's build has one whether or not the agent remembered its checkpoint, and a Run
+ends with a `final` card.
 
 The Home board draws them under a task's record, in
 [Cards](using.md#what-a-card-says), where the same discipline is on screen: a claim is
@@ -274,8 +290,9 @@ a re-check of an unchanged tree clears nothing.
 
 A finished run is immutable, so `finish` settles rather than acts:
 
-- Anything queued as a boundary delivery is `expired` with the reason — there is no next
-  piece of work to compose it into, and leaving it pending for ever would be a lie.
+- A verification the run was granted, that a `command_exit` rule names and nobody ran, is
+  run by Collie first — bounded at ten minutes, so a command that hangs cannot hold the
+  ending for ever.
 - The run gets an **alignment** verdict. `true` is the strong claim and needs everything
   actually checked: every rule passing, every semantic constraint judged against evidence
   that was not truncated, no open report, and the goal judged where there is one. `false`
@@ -287,31 +304,24 @@ A finished run is immutable, so `finish` settles rather than acts:
 ## Follow-ups
 
 A finished run is immutable, and there is no mode that reopens one. Where its outcome
-needs more work, that work is a **child run** ([CLI](cli.md#follow-up-a-finished-run)):
-workflow `implement`, on the same branch, updating the same merge request, with the
-parent's Intent inherited as its own v1 and the parent's open drift written into its spec.
-
-Collie proposes one at `finish` when a blocking constraint is still open; it never starts
-one. Confirming that proposal runs the same operation `collie run follow-up` does, so a
-confirmed proposal and a typed command are the same act with the same records.
+needs more work, carrying on is one of the run's own offers
+([CLI](cli.md#carry-on-from-a-finished-run)) — a child run of the workflow it declares,
+started with `run action <run> <offer>`. Collie never starts one by itself.
 
 ## Cross-run checks
 
-Sibling runs need one caller to judge how they relate, and Collie has no daemon to be it.
-The Drivers elect one: each writes that it stood, whichever takes the Herd's evaluator lock
-does the work, and the losers write `dirty` — which is what stops the winner's answer going
-stale silently, since it re-reads afterwards and a newer `dirty` means the Herd moved while
-it was thinking.
+Related runs — a parent, its children, and siblings of one parent — are judged against
+each other's Intents, once per boundary for the whole Herd rather than once per Run. Each
+Run with relatives stands for the check at every boundary and at its finish; one wins and
+asks the model about all of them, and a loser writes down that it moved, which is what
+tells the winner its snapshot is behind — it judges again, a bounded number of times.
 
-The winner never writes another run's journal and never sends to another run's agents. It
-hands each target a `drift_report` through that run's own inbox, and that run's Driver
-revalidates the version vector before appending anything.
-
-An evaluation nobody could finish is written down as `pending`, and a `pending` makes
-**every** Driver in the Herd a candidate — not only ones with siblings. Otherwise it would
-wait for a Driver that may never run again. A report for a run that has already finished
-is kept beside the Herd as an undelivered report, shown under that run and offered to a
-follow-up, and never described as delivered.
+A report is filed on the Run it is about: its drift journal while it is working, and the
+board's pending reports once it has ended, since a finished Run's record does not change.
+A check nobody could make is written down as owed by the Run leaving without an answer,
+and while one is owed every Run in the Herd stands for it — otherwise an owed check waits
+for a Run that may never work again. A Run's final card says `cross_run: pending` while
+one about it is owed, and the finish toasts `drift-unresolved` once.
 
 ## Proposals
 

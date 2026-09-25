@@ -7,7 +7,7 @@ test("plugin env is read from the herdr-provided variables", () => {
     HERDR_BIN_PATH: "/usr/bin/herdr",
     HERDR_SOCKET_PATH: "/run/herdr.sock",
     HERDR_PLUGIN_ROOT: "/plugins/cego.collie",
-    HERDR_PLUGIN_CONFIG_DIR: "/cfg",
+    COLLIE_USER_DIR: "/cfg",
     HERDR_PLUGIN_STATE_DIR: "/state",
     HERDR_PLUGIN_ACTION_ID: "pick",
     HERDR_WORKSPACE_ID: "2",
@@ -53,7 +53,8 @@ test("cwd and ids fall back to the invocation context", () => {
   expect(env.paneId).toBe("3-1");
   expect(env.cwd).toBe("/ws");
   expect(env.binPath).toBe("herdr");
-  expect(env.configDir).toBe("/home/x/.config/herdr/plugins/config/cego.collie");
+  // The user's own layer sits beside the installation, whatever herdr would configure.
+  expect(env.userDir).toBe(`${env.pluginRoot}/user`);
 });
 
 test("a malformed context json does not throw", () => {

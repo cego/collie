@@ -6,46 +6,35 @@ import {
   displayName,
   evenRatio,
   GLYPH,
-  insertIndexFor,
-  rankOf,
   paneLabel,
   stepLabel,
   tabLabel,
   tabNameOf,
   targetLabel,
-  collieOwns,
-  runTabLabel,
-  tabGlyph,
   taskWorkspaceLabel,
-  tabLabelsFor,
-  type LabelledRun,
 } from "../src/naming";
 
 test("a review's target is short and human, and never a sha", () => {
-  expect(targetLabel("review", "review-x", { target: "mr:123" })).toBe("!123");
-  expect(targetLabel("review", "review-x", { target: "worktree" })).toBe("worktree");
-  expect(targetLabel("review", "review-x", { target: "branch:main...add-picker" })).toBe(
-    "add-picker",
-  );
+  expect(targetLabel("review", "review-x", "mr:123")).toBe("!123");
+  expect(targetLabel("review", "review-x", "worktree")).toBe("worktree");
+  expect(targetLabel("review", "review-x", "branch:main...add-picker")).toBe("add-picker");
 
   // The case that produced `review-branch-b5571dc-head` as a run name.
-  const opaque = targetLabel("review", "review-branch-b5571dc-head", {
-    target: "branch:b5571dc...HEAD",
-  });
+  const opaque = targetLabel("review", "review-branch-b5571dc-head", "branch:b5571dc...HEAD");
   expect(opaque).toBe("diff");
   expect(opaque).not.toMatch(/[0-9a-f]{7}/i);
   // A sha base with a real head still shows the head.
-  expect(targetLabel("review", "r", { target: "branch:b5571dc...add-picker" })).toBe("add-picker");
+  expect(targetLabel("review", "r", "branch:b5571dc...add-picker")).toBe("add-picker");
   // A real base with an opaque head falls back to the base rather than a sha.
-  expect(targetLabel("review", "r", { target: "branch:main...HEAD" })).toBe("main");
+  expect(targetLabel("review", "r", "branch:main...HEAD")).toBe("main");
 });
 
 test("workflows with no target are named by their slug, without repeating the workflow", () => {
-  expect(targetLabel("implement", "implement-add-picker", {})).toBe("add-picker");
-  expect(targetLabel("plan", "plan-add-picker", {})).toBe("add-picker");
-  expect(targetLabel("architecture", "architecture-run", {})).toBe("run");
+  expect(targetLabel("implement", "implement-add-picker", "")).toBe("add-picker");
+  expect(targetLabel("plan", "plan-add-picker", "")).toBe("add-picker");
+  expect(targetLabel("architecture", "architecture-run", "")).toBe("run");
   // A slug that does not carry the prefix is left alone.
-  expect(targetLabel("implement", "something-else", {})).toBe("something-else");
+  expect(targetLabel("implement", "something-else", "")).toBe("something-else");
 });
 
 test("a tab is a glyph and one Capitalized word: the workflow, or the step", () => {
@@ -148,30 +137,6 @@ test("agent names stay herdr-legal and are never what a label shows", () => {
   expect(stepLabel("review-x", "review", "claude-opus")).toBe("review-x/review/claude-opus");
 });
 
-test("a new tab lands after the last Collie tab it does not outrank", () => {
-  expect(rankOf("plan")).toBeLessThan(rankOf("implement"));
-  expect(rankOf("implement")).toBeLessThan(rankOf("review"));
-  // A fork, or a workflow nobody ordered, comes after all of them.
-  expect(rankOf("architecture")).toBeGreaterThan(rankOf("review"));
-
-  const board = { rank: null, board: true };
-  const foreign = { rank: null, board: false };
-  const tab = (workflow: string) => ({ rank: rankOf(workflow), board: false });
-
-  expect(insertIndexFor([board], rankOf("review"))).toBe(1);
-  // The case this exists for: review started first, implement still comes first.
-  expect(insertIndexFor([board, tab("plan"), tab("review")], rankOf("implement"))).toBe(2);
-  // Ties keep start order: the second implement run's tab goes after the first's.
-  expect(insertIndexFor([board, tab("implement"), tab("implement")], rankOf("implement"))).toBe(3);
-  // A tab Collie does not own is never an anchor, and never moves.
-  expect(insertIndexFor([board, foreign, tab("review"), foreign], rankOf("plan"))).toBe(1);
-  // Two unknown workflows keep the order they started in.
-  expect(insertIndexFor([board, tab("architecture")], rankOf("architecture"))).toBe(2);
-  // The pin failed, so there is no board: the tab still lands ahead of lower ranks.
-  expect(insertIndexFor([foreign, tab("review")], rankOf("plan"))).toBe(0);
-  expect(insertIndexFor([], rankOf("plan"))).toBe(0);
-});
-
 test("the Collie tab's label survives its own helpers", () => {
   expect(COLLIE_TAB).toBe("🐕 Collie");
   const name = tabNameOf(COLLIE_TAB);
@@ -184,166 +149,6 @@ test("the Collie tab's label survives its own helpers", () => {
 });
 
 /** A run record, as much of one as a tab label is made of. */
-function labelled(over: Partial<LabelledRun> = {}): LabelledRun {
-  return {
-    workflow: "implement",
-    slug: "implement-control-plane-glass",
-    inputs: { target: "branch:master...control-plane-glass" },
-    target_label: "control-plane-glass",
-    status: "running",
-    task: null,
-    max_iterations: 5,
-    steps: [{ id: "fix", status: "running", iteration: 3, variants: [] }],
-    ...over,
-  };
-}
-
-test("a run's tab says which step it is on, and how far into its loop", () => {
-  expect(runTabLabel(GLYPH.running, labelled(), false)).toBe(
-    "⚙ Implement · control-plane-glass · fix 3/5",
-  );
-  // A step that has not looped has no round to report, only its own name — which is
-  // every step of a workflow with no fix loop in it, and every step before one.
-  expect(
-    runTabLabel(
-      GLYPH.running,
-      labelled({
-        workflow: "plan",
-        steps: [{ id: "draft", status: "running", iteration: 1, variants: [] }],
-      }),
-      false,
-    ),
-  ).toBe("⚙ Plan · control-plane-glass · draft");
-  // A question is the one thing worth saying instead of the step it is asked from.
-  expect(runTabLabel(GLYPH.waiting, labelled(), true)).toBe(
-    "⚠ Implement · control-plane-glass · asks you",
-  );
-  // A run that is over is what it was, and no step.
-  expect(runTabLabel(GLYPH.done, labelled({ status: "done" }), false)).toBe(
-    "✓ Implement · control-plane-glass",
-  );
-  expect(runTabLabel(GLYPH.failed, labelled({ status: "failed" }), false)).toBe(
-    "✗ Implement · control-plane-glass",
-  );
-  // Between steps there is no step to name, and the run is not over either.
-  expect(
-    runTabLabel(
-      GLYPH.running,
-      labelled({ steps: [{ id: "fix", status: "done", iteration: 3, variants: [] }] }),
-      false,
-    ),
-  ).toBe("⚙ Implement · control-plane-glass");
-  // A record written before targets were kept still names what it was pointed at.
-  expect(runTabLabel(GLYPH.running, labelled({ target_label: null }), false)).toBe(
-    "⚙ Implement · control-plane-glass · fix 3/5",
-  );
-});
-
-test("a tab's glyph is the state of what is in it, not of the last step that ran", () => {
-  const run = labelled();
-  // Anything working means work is happening in there, whatever the run last recorded.
-  expect(tabGlyph(["idle", "working"], run, false)).toBe(GLYPH.running);
-  expect(tabGlyph(["working"], labelled({ status: "done" }), false)).toBe(GLYPH.running);
-  // A human is needed: herdr's own word for it, and Collie's own question.
-  expect(tabGlyph(["blocked", "idle"], run, false)).toBe(GLYPH.waiting);
-  expect(tabGlyph(["idle"], run, true)).toBe(GLYPH.waiting);
-  // Nothing working: the run's own state, so a finished run's idle agent reads ✓ and
-  // an unfinished one's reads ⚙ — which is what a hand-off leaves behind.
-  expect(tabGlyph(["idle", "done"], labelled({ status: "done" }), false)).toBe(GLYPH.done);
-  expect(tabGlyph(["idle", "done"], run, false)).toBe(GLYPH.running);
-  expect(tabGlyph(["done"], labelled({ status: "failed" }), false)).toBe(GLYPH.failed);
-  expect(tabGlyph(["done"], labelled({ status: "blocked" }), false)).toBe(GLYPH.waiting);
-  // An agent herdr no longer has says nothing either way.
-  expect(tabGlyph([], labelled({ status: "done" }), false)).toBe(GLYPH.done);
-});
-
-test("every tab of a run wears the run's sentence and its own glyph", () => {
-  const run = labelled({
-    steps: [
-      { id: "build", status: "done", iteration: 1, variants: [{ agent: "build-r1", tabId: "t1" }] },
-      {
-        id: "fix",
-        status: "running",
-        iteration: 3,
-        variants: [
-          { agent: "fix-r1", tabId: "t2" },
-          { agent: "fix-r2", tabId: "t2" },
-        ],
-      },
-    ],
-  });
-  const statuses = new Map([
-    ["build-r1", "idle"],
-    ["fix-r1", "idle"],
-    ["fix-r2", "working"],
-  ]);
-  const live = (agent: string) => statuses.get(agent);
-  expect(tabLabelsFor(run, live, false)).toEqual(
-    new Map([
-      // Nothing working in the first tab, and the run is not over: still ⚙.
-      ["t1", "⚙ Implement · control-plane-glass · fix 3/5"],
-      ["t2", "⚙ Implement · control-plane-glass · fix 3/5"],
-    ]),
-  );
-  // The glyph is per tab: the one with the working agent keeps ⚙ once the run is done.
-  expect(tabLabelsFor({ ...run, status: "done" }, live, false)).toEqual(
-    new Map([
-      ["t1", "✓ Implement · control-plane-glass"],
-      ["t2", "⚙ Implement · control-plane-glass"],
-    ]),
-  );
-  // A variant that never opened a tab is not a tab.
-  expect(
-    tabLabelsFor(
-      labelled({
-        steps: [
-          { id: "fix", status: "running", iteration: 1, variants: [{ agent: "a", tabId: null }] },
-        ],
-      }),
-      () => "idle",
-      false,
-    ).size,
-  ).toBe(0);
-});
-
-test("a tab inside a task workspace does not repeat what the workspace already says", () => {
-  // The task workspace is called after the task, so the tab spends its width on the
-  // things the workspace cannot say: which workflow, and which step it is on.
-  const inTask = labelled({ task: "task-1a2b3c4d" });
-  expect(runTabLabel(GLYPH.running, inTask, false)).toBe("⚙ Implement · fix 3/5");
-  expect(runTabLabel(GLYPH.waiting, inTask, true)).toBe("⚠ Implement · asks you");
-  expect(runTabLabel(GLYPH.done, labelled({ task: "task-1a2b3c4d", status: "done" }), false)).toBe(
-    "✓ Implement",
-  );
-  // One repository of a fan-out is still worth telling from its siblings: several of
-  // them run in one task workspace and are otherwise the same sentence.
-  expect(
-    runTabLabel(
-      GLYPH.running,
-      labelled({ task: "task-1a2b3c4d", inputs: { repo: "services/api" } }),
-      false,
-    ),
-  ).toBe("⚙ Implement · services/api · fix 3/5");
-  // A Run belonging to no task is unchanged: nothing else names its work.
-  expect(runTabLabel(GLYPH.running, labelled(), false)).toBe(
-    "⚙ Implement · control-plane-glass · fix 3/5",
-  );
-});
-
-test("a tab a human renamed stops being Collie's to rename", () => {
-  const run = labelled({ task: "task-1a2b3c4d" });
-  // A tab Collie has not seen a label for is one it just made.
-  expect(collieOwns(undefined, run)).toBe(true);
-  expect(collieOwns("⚙ Implement · fix 3/5", run)).toBe(true);
-  // Another glyph is still Collie's: the tab's state moved on between two polls.
-  expect(collieOwns("✓ Implement", run)).toBe(true);
-  // A label a human typed is theirs, whatever it says.
-  expect(collieOwns("Exporter work", run)).toBe(false);
-  expect(collieOwns("⚙ Something else", run)).toBe(false);
-  // And an empty label is nobody's, so Collie may name it.
-  expect(collieOwns("", run)).toBe(true);
-});
-
 test("a task workspace is named for its project and what the task is", () => {
   expect(taskWorkspaceLabel({ project: "Collie", title: "Task workspaces" })).toBe(
     "Collie | Task workspaces",

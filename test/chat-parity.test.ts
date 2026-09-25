@@ -59,6 +59,13 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["workflow show", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
   ["workflow check", { route: "read", tool: "collie_definitions", input: { workflow: "review" } }],
   [
+    "workflow create",
+    {
+      route: "human-only",
+      why: "a new module is source code somebody then writes; chat proposes the fork of one that already exists, and an agent with an editor writes the file itself",
+    },
+  ],
+  [
     "workflow fork",
     {
       route: "propose",
@@ -91,6 +98,13 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run hold", { route: "write", tool: "collie_hold" }],
   ["run release", { route: "write", tool: "collie_do" }],
   [
+    "run steer",
+    {
+      route: "human-only",
+      why: "a human's own words, typed into the agent a workflow module's Run has; a model asking Collie to type into a pane is the boundary this file exists to hold",
+    },
+  ],
+  [
     "run clear-override",
     {
       route: "propose",
@@ -103,7 +117,8 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ["run metrics", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run drift", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["run cards", { route: "read", tool: "collie_run", input: { run: RUN } }],
-  ["run follow-up", { route: "write", tool: "collie_do" }],
+  ["run actions", { route: "read", tool: "collie_run", input: { run: RUN } }],
+  ["run action", { route: "write", tool: "collie_do" }],
   ["run intent show", { route: "read", tool: "collie_run", input: { run: RUN } }],
   [
     "run intent set-goal",
@@ -194,7 +209,6 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
     "run intent defaults set-authority",
     { route: "human-only", why: "the same grant, standing for every Run that follows" },
   ],
-  ["run logs", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["task list", { route: "read", tool: "collie_workspaces" }],
   ["run output", { route: "read", tool: "collie_run", input: { run: RUN } }],
   ["steer", { route: "write", tool: "collie_do" }],
@@ -242,6 +256,13 @@ const INVENTORY: ReadonlyArray<readonly [string, Route]> = [
   ],
   ["tools call", { route: "human-only", why: "the same — this is how a tool call is made" }],
   ["mcp", { route: "human-only", why: "the same, for the harness that reaches Collie over MCP" }],
+  [
+    "host",
+    {
+      route: "human-only",
+      why: "the process the work runs in, started for whoever needs one; not a thing to ask for",
+    },
+  ],
   ["upgrade", { route: "propose", kind: "upgrade", action: { kind: "upgrade" } }],
   ["doctor", { route: "read", tool: "collie_installation" }],
   // Not commands: the board's own operations, and the flags that change what a command

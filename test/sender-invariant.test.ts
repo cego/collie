@@ -57,13 +57,7 @@ test("an action kind is registered by the module that owns the operation, and no
       // An executor is what makes a confirmed action actually happen, so a stub anywhere
       // would be a confirmation that succeeded at nothing. The registry only accepts
       // registrations from the modules that own the operations themselves.
-      const owners = new Set([
-        "executors.ts",
-        "operations.ts",
-        "commands/steer.ts",
-        "home.ts",
-        "followup.ts",
-      ]);
+      const owners = new Set(["executors.ts", "run-actions.ts", "commands/steer.ts", "home.ts"]);
       const strays = (yield* sources())
         .filter((file) => file.text.includes("registerExecutor("))
         .map((file) => file.name)

@@ -33,12 +33,12 @@ needs one. See [Install](docs/using.md#install) and
 
 ## Four keys
 
-| Key              | What it does                               |
-| ---------------- | ------------------------------------------ |
-| `prefix+f`       | Run a workflow                             |
-| `prefix+u`       | Resume a run with unfinished steps         |
-| `prefix+shift+f` | Fork a workflow or persona into your layer |
-| `prefix+shift+c` | Open this session's Control Plane          |
+| Key              | What it does                      |
+| ---------------- | --------------------------------- |
+| `prefix+f`       | Run a workflow                    |
+| `prefix+u`       | Resume a run that stopped         |
+| `prefix+shift+f` | Fork a persona into your layer    |
+| `prefix+shift+c` | Open this session's Control Plane |
 
 `prefix` is `ctrl+b` by default. Each herdr session has one **Control Plane** in a workspace
 of Collie's own: a board with one card per task, grouped by what needs you, what is
@@ -56,9 +56,10 @@ has none yet.
 | `architecture` | Runs the architect over the project, reports into the run directory, then offers: implement now or stop                                                   |
 | `renovate`     | Merges the month's Renovate merge requests on one repository, tags a release, and checks the repository off the team's Renovate issue                     |
 
-The bundled workflows are a shared starting point, not a restriction. Fork any workflow or
-persona into your own layer with `prefix+shift+f`, and change only the keys you disagree
-with.
+The bundled workflows are a shared starting point, not a restriction. `collie workflow
+fork <id>` writes a module of your own that imports what it keeps and replaces what it
+changes, and a workflow you write yourself is found where you saved it. A persona forks into
+your own layer with `prefix+shift+f`, changing only the keys you disagree with.
 
 Every action is also a command, so an agent can drive Collie:
 
@@ -71,9 +72,9 @@ collie run start review --input target=worktree
 - [Using Collie](docs/using.md): install, keybindings, the Control Plane, hand-offs, your
   defaults, troubleshooting.
 - [Workflows](docs/workflows.md): what each workflow is for, what it needs, how they chain.
-- [Authoring](docs/authoring.md): layers, forking, `extends:`, the full frontmatter schema.
+- [Authoring](docs/authoring.md): where a workflow is saved, forking, personas and their frontmatter.
 - [CLI](docs/cli.md): commands, `--json` envelopes, exit statuses, idempotent retries.
-- [Internals](docs/internals.md): architecture, the Driver, build and release, running the
+- [Internals](docs/internals.md): architecture, the host, build and release, running the
   tests.
 - [`CONTEXT.md`](CONTEXT.md): the vocabulary.
 - [ADRs](docs/adr): the decisions and why.

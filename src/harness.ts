@@ -1,6 +1,8 @@
 // How to start each supported agent CLI, pass it a model, and inject a Persona.
 // Personas are injected, never installed as harness-native config (CONTEXT.md, Persona).
 
+import { Effect, FileSystem, Option, Schema } from "effect";
+import type { PluginEnv } from "./env";
 import { isString } from "./schema";
 import { claudeTrust, type Trust } from "./trust";
 import type { YamlValue } from "./yaml";
@@ -11,13 +13,13 @@ import type { YamlValue } from "./yaml";
 export const DEFAULT_MODEL = "default";
 
 /**
- * Who decides whether a tool call runs: Collie up front (`bypass`), or the harness in
- * the agent's own pane (`harness`). `bypass` is the default because a prompt nobody is
- * watching stops the Run instead of protecting it. What backs that up is narrower than
- * it looks: only a mutating Run gets a checkout of its own (`worktree.ts`, MUTATING), so
- * a `plan` or `review` agent works in the checkout the human started it from.
+ * Who decides whether a tool call runs: the harness's own automatic review (`auto`), no
+ * one (`bypass`), or the harness's prompt in the agent's own pane (`harness`). `auto` is
+ * the default because a prompt nobody is watching stops the Run instead of protecting it,
+ * and the review is what stands between an agent and the checkout it works in; `bypass`
+ * is an operator's to opt into.
  */
-export const PERMISSION_MODES = ["bypass", "harness"] as const;
+export const PERMISSION_MODES = ["auto", "bypass", "harness"] as const;
 
 export type PermissionMode = (typeof PERMISSION_MODES)[number];
 
@@ -31,13 +33,50 @@ export function isPermissionMode(value: string | undefined): value is Permission
  * A `permissions` value from a config file or a definition's frontmatter, as written —
  * kept even when it is not a string. Every neighbouring key drops a non-string and falls
  * back, which is harmless when the fallback is the default harness or model. Here the
- * fallback is `bypass`, so a dropped `permissions: false` would start an agent
- * unattended; kept as text, validation names it instead.
+ * fallback is `auto`, so a dropped `permissions: false` would start an agent that
+ * approves its own calls; kept as text, validation names it instead.
  */
 export function permissionsAsWritten(value: YamlValue | undefined): string | undefined {
   if (value === undefined) return undefined;
   return isString(value) ? value : JSON.stringify(value);
 }
+
+const ManagedSettingsJson = Schema.fromJsonString(
+  Schema.Struct({
+    permissions: Schema.optional(
+      Schema.Struct({ disableBypassPermissionsMode: Schema.optional(Schema.String) }),
+    ),
+  }),
+);
+
+/**
+ * Whether Claude Code's managed settings — an organisation's, which no flag overrides —
+ * disable its bypass mode, in the file itself or any file in its drop-in directory.
+ */
+export const claudeForbidsBypass = Effect.fn("Harness.claudeForbidsBypass")(function* (
+  dir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const dropIns = yield* fs
+    .readDirectory(`${dir}/managed-settings.d`)
+    .pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
+  const files = [
+    `${dir}/managed-settings.json`,
+    ...dropIns
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => `${dir}/managed-settings.d/${name}`),
+  ];
+  for (const file of files) {
+    const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+    const settings = Schema.decodeUnknownOption(ManagedSettingsJson)(text);
+    if (
+      Option.isSome(settings) &&
+      settings.value.permissions?.disableBypassPermissionsMode === "disable"
+    )
+      return true;
+  }
+  return false;
+});
 
 export interface HarnessAdapter {
   id: string;
@@ -54,10 +93,18 @@ export interface HarnessAdapter {
   /** Present when the harness lets a Step ask for a reasoning effort level. */
   effortArgs?(effort: string): string[];
   /**
-   * How this harness is told to stop asking before each tool call. Absent where the
-   * harness never asks, so `bypass` and `harness` start it identically.
+   * How this harness is told to review its own tool calls rather than ask (`auto`), or to
+   * run them unasked (`bypass`). A mode left out starts it as `harness` does.
    */
-  permissionArgs?(): string[];
+  permissionArgs?: {
+    readonly auto?: ReadonlyArray<string>;
+    readonly bypass?: ReadonlyArray<string>;
+  };
+  /**
+   * Present where an organisation's managed settings can forbid the bypass switch, which
+   * no flag overrides. A bypass they forbid is started in auto mode instead.
+   */
+  bypassForbidden?(env: PluginEnv): Effect.Effect<boolean, never, FileSystem.FileSystem>;
   /** Present when the harness asks before it will work in a directory. */
   trust?(home: string, backupDir: string): Trust;
   /**
@@ -93,7 +140,11 @@ export const HARNESSES: Harnesses = {
     defaultModel: "opus",
     personaArgs: (file) => ["--append-system-prompt-file", file],
     effortArgs: (effort) => ["--effort", effort],
-    permissionArgs: () => ["--permission-mode", "bypassPermissions"],
+    permissionArgs: {
+      auto: ["--permission-mode", "auto"],
+      bypass: ["--permission-mode", "bypassPermissions"],
+    },
+    bypassForbidden: (env) => claudeForbidsBypass(env.claudeManagedDir),
     trust: claudeTrust,
     models: ["fable", "opus", "sonnet", "haiku", "opusplan"],
     modelPattern: /^claude-[a-z0-9.-]+$/,
@@ -104,7 +155,10 @@ export const HARNESSES: Harnesses = {
     kind: "codex",
     skillCommand: (name) => `the ${JSON.stringify(name)} skill`,
     modelArgs: (model) => ["-m", model],
-    permissionArgs: () => ["--dangerously-bypass-approvals-and-sandbox"],
+    permissionArgs: {
+      auto: ["--approve-for-me"],
+      bypass: ["--dangerously-bypass-approvals-and-sandbox"],
+    },
     models: ["gpt-5-codex", "gpt-5", "gpt-5-mini"],
     modelPattern: /^(?:gpt|o)[0-9][a-z0-9.-]*$/,
   },
@@ -128,7 +182,8 @@ export const HARNESSES: Harnesses = {
     kind: "opencode",
     skillCommand: (name) => `the ${JSON.stringify(name)} skill`,
     modelArgs: (model) => ["--model", model],
-    permissionArgs: () => ["--auto"],
+    // No auto mode: its `--auto` approves every call rather than reviewing it.
+    permissionArgs: { bypass: ["--auto"] },
     // opencode models are provider-qualified, so the shape is the check.
     models: [],
     modelPattern: /^[a-z0-9-]+\/[A-Za-z0-9._:-]+$/,
@@ -163,18 +218,108 @@ export function startArgs(
   model: string,
   personaFile: string,
   effort?: string,
-  permissions: PermissionMode = "bypass",
+  permissions: PermissionMode = "auto",
 ): string[] {
   const selectedModel = model === DEFAULT_MODEL ? harness.defaultModel : model;
   return [
     ...(selectedModel ? harness.modelArgs(selectedModel) : []),
     ...(effort ? (harness.effortArgs?.(effort) ?? []) : []),
     ...(harness.personaArgs?.(personaFile) ?? []),
-    ...(permissions === "bypass" ? (harness.permissionArgs?.() ?? []) : []),
+    ...(permissions === "harness" ? [] : (harness.permissionArgs?.[permissions] ?? [])),
   ];
 }
 
 /** Persona text to prepend to the first prompt when the harness has no flag for it. */
 export function personaPrefix(harness: HarnessAdapter, persona: string): string {
   return harness.personaArgs ? "" : persona;
+}
+
+/** What a layer of configuration or code says about the agent; each field it leaves out is inherited. */
+export interface Preferences {
+  readonly harness?: string;
+  readonly model?: string;
+  readonly effort?: string;
+}
+
+/** The harness, model and effort a set of options names, and nothing else of it. */
+export const preferencesIn = (options: {
+  readonly harness?: string | undefined;
+  readonly model?: string | undefined;
+  readonly effort?: string | undefined;
+}): Preferences =>
+  Object.fromEntries(
+    Object.entries({
+      harness: options.harness,
+      model: options.model,
+      effort: options.effort,
+    }).filter(([, value]) => value !== undefined),
+  );
+
+/** The agent a piece of work is given, decided before anything starts it. */
+export interface AgentChoice {
+  readonly harness: string;
+  /** `default` is the harness's own pinned or native default. */
+  readonly model: string;
+  readonly effort: string | null;
+}
+
+/**
+ * Layers of preferences as one, lowest first. A layer that switches harness keeps nothing
+ * chosen below it: a model and an effort are for the harness they were chosen with.
+ */
+export function foldPreferences(layers: ReadonlyArray<Preferences | undefined>): Preferences {
+  let harness: string | undefined;
+  let model: string | undefined;
+  let effort: string | undefined;
+  for (const layer of layers) {
+    if (layer === undefined) continue;
+    if (layer.harness !== undefined && layer.harness !== harness) {
+      harness = layer.harness;
+      model = undefined;
+      effort = undefined;
+    }
+    model = layer.model ?? model;
+    effort = layer.effort ?? effort;
+  }
+  return Object.fromEntries(
+    Object.entries({ harness, model, effort }).filter(([, value]) => value !== undefined),
+  );
+}
+
+/**
+ * Harness, model and effort decided together, lowest layer first, and checked as one.
+ * What is left open is the harness's own default; a combination the harness does not take
+ * is refused with what it would take, never quietly replaced.
+ */
+export function resolveChoice(
+  layers: ReadonlyArray<Preferences | undefined>,
+  extraModels: Readonly<Record<string, ReadonlyArray<string>>> = {},
+):
+  | { readonly ok: true; readonly choice: AgentChoice }
+  | { readonly ok: false; readonly problem: string } {
+  const { harness = "", model = DEFAULT_MODEL, effort } = foldPreferences(layers);
+  const adapter = HARNESSES[harness];
+  if (adapter === undefined) {
+    return { ok: false, problem: `no harness called "${harness}" (${harnessNames().join(", ")})` };
+  }
+  const extra = extraModels[harness] ?? [];
+  if (!knownModel(adapter, model, extra)) {
+    return {
+      ok: false,
+      problem: `"${model}" is not a model ${harness} takes (${modelHint(adapter, extra)}): name one of those, or the harness it belongs to`,
+    };
+  }
+  if (effort !== undefined && adapter.efforts === undefined) {
+    return {
+      ok: false,
+      problem: `${harness} takes no effort, so "${effort}" cannot be asked of it`,
+    };
+  }
+  if (effort !== undefined && !adapter.efforts?.includes(effort)) {
+    return {
+      ok: false,
+      problem: `"${effort}" is not an effort ${harness} takes (${adapter.efforts?.join(", ")})`,
+    };
+  }
+  return { ok: true, choice: { harness, model, effort: effort ?? null } };
 }

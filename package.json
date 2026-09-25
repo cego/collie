@@ -18,11 +18,11 @@
     "smoke": "sh tools/smoke.sh bin/collie"
   },
   "dependencies": {
-    "@effect/platform-bun": "4.0.0-rc.112",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@effect/platform-bun": "4.0.0-rc.117",
+    "@effect/sql-sqlite-bun": "4.0.0-rc.117",
     "@opentui/core": "^0.5.10",
     "@opentui/solid": "^0.5.10",
-    "effect": "4.0.0-rc.112",
+    "effect": "4.0.0-rc.117",
     "solid-js": "^1.9.15"
   },
   "devDependencies": {

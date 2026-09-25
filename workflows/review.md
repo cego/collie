@@ -1,60 +1,3 @@
----
-name: review
-title: review — an MR, a branch diff, or the working tree
-description: You pick the target — an MR, a branch diff or the working tree — one complete review comes out, and what happens next is your call: fix the findings here, hand them to a live implementer, run a full implement, or post the review to somebody else's merge request.
-inputs:
-  target: diff-target
-  # Empty unless a workflow embedding this one has a spec to hold the change to.
-  plan: optional
-  # A run id, when you want a particular earlier review as the one to compare against.
-  previous: optional
-  # Extra axes to apply on top of the complete review, when this change has a risk that
-  # earns one — `security`, `performance`. Empty is the ordinary case.
-  risks: optional
-  # What kind of result the change under review has to prove — forwarded by `implement`,
-  # empty for a review started on its own. Decides which one judgement field is asked for.
-  outcome: optional
-steps:
-  - id: review
-    persona: reviewer
-    output: review.json
-    # One complete review. A second reviewer and the model that reconciles them are what
-    # a specialist axis or a layer override is for, not what every change gets.
-    parallel:
-      - { harness: claude, model: opus, effort: medium }
-  - id: synthesize
-    persona: reviewer
-    fan_in: review
-    output: synthesized.json
-  - id: post
-    standalone: true
-    choices:
-      # One decision, two implementations: exactly one of these is ever offered, so
-      # "Fix findings" means the same thing whether or not an implementer is live.
-      - title: Fix findings
-        handoff: implementer
-      - title: Fix findings
-        unless: implementer
-        prompt: fix
-        persona: implementer
-        fresh: true
-        output: fix.json
-        max: 1
-      - title: Fix findings in a full implement run
-        run: implement
-        inputs:
-          plan: "{{run.dir}}"
-          target: "{{inputs.target}}"
-      # Offered for somebody else's merge request, where the findings are feedback they
-      # need. On your own, fixing them here is the whole job and a note would be you
-      # writing to yourself.
-      - title: Post to MR
-        post: true
-        requires: [mr-target, gitlab, someone-elses-mr]
-      - title: Don't post
-        stop: true
----
-
 Review target: {{inputs.target}}
 Project root: {{cwd}}
 Spec: {{inputs.plan}}
@@ -86,8 +29,7 @@ comprehensive one: both review skills, the whole spec, the whole change, and the
 around it. A later iteration is a follow-up, and so is any review with an earlier review
 above it: do not run the full review skills again over the whole change. The previous
 round's review is at `{{run.dir}}/review.md` and the implementer's account of it — what
-it fixed, what it disputed, what it checked — is that step's Output under
-`{{run.dir}}/steps/` (in the implement workflow, `steps/fix/fix.json`). Check each of its
+it fixed, what it disputed, what it checked — is its Output at `{{previous.fix}}`. Check each of its
 findings against the code as it is now and say what happened to it — still there,
 changed but not fixed, or fixed. Then review what has changed since that review, and the
 callers and tests the fixes touched, and raise what is new. A finding you carry forward
@@ -199,10 +141,8 @@ fixed"}]}`, plus the one outcome field where the outcome names one.
 ## fix
 
 The review is written and you are fixing it, in this run, on this target. The findings
-are `{{run.dir}}/review.md`, and the same findings as JSON are the review's own Output —
-`{{run.dir}}/steps/review/review.json` where one reviewer wrote it, or
-`{{run.dir}}/steps/synthesize/synthesized.json` where several were reconciled. Worst
-severity first.
+are `{{run.dir}}/review.md`, and the same findings as JSON are
+`{{run.dir}}/findings.json`. Worst severity first.
 
 Work where the review was pointed — `target_kind` is `{{inputs.target_kind}}`:
 

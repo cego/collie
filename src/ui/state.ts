@@ -8,7 +8,7 @@
 // transitive graph: the value imports below reach `effect` through their own imports, and
 // what matters is that nothing in this file or the components can run an Effect.
 
-import type { PendingChoice } from "../driver";
+import type { PendingChoice } from "../board";
 import type { PickItem } from "../inputs";
 import { GLYPH } from "../naming";
 import { markFor, marksOf, NO_MARKS, worstOf, type Marks } from "../lines";
@@ -25,13 +25,6 @@ import type { Selection } from "../selection";
 
 /** What the nav switches between. One at a time, each a projection of state. */
 export type ViewName = "runs" | "history" | "workflows" | "settings";
-export const VIEWS: ReadonlyArray<{ name: ViewName; title: string }> = [
-  { name: "runs", title: "Runs" },
-  { name: "history", title: "History" },
-  { name: "workflows", title: "Workflows" },
-  { name: "settings", title: "Settings" },
-];
-
 /**
  * What the Runs view is a board of. One Herd has one board (ADR-0009), so "this
  * workspace" is a filter over it rather than a board of its own — and a run filter is
@@ -246,8 +239,9 @@ export type Command =
    * asks the operation directly rather than through a command.
    */
   | { _tag: "SendReview"; runId: string | null }
-  | { _tag: "FixFindings"; runId: string }
-  | { _tag: "ReviewAgain"; target: string }
+  | { _tag: "InvokeOffer"; runId: string; offer: string }
+  /** Every offer the Run's module makes now, chosen from and asked about when pressed. */
+  | { _tag: "ChooseOffer"; runId: string }
   | { _tag: "PostReview"; runId: string }
   /**
    * The merge request in a browser. It names the run as well as the target, because
@@ -298,8 +292,6 @@ export type Command =
       kind: "merged" | "abandoned" | "superseded";
       ref: string;
     }
-  /** Start `implement` on a finished plan's own plan directory, in the plan's Task. */
-  | { _tag: "ImplementNow"; runId: string }
   /**
    * Go to the next unanswered question. The app answers this itself, like
    * `EditSetting`: it moves the Selection and clears a filter hiding the row, neither
@@ -574,11 +566,7 @@ function definitionRow(d: DefinitionRow): Row {
     // A fork that cannot run should be visible here rather than at launch.
     glyph: d.problems.length > 0 ? GLYPH.failed : GLYPH.done,
     title: d.title || d.name,
-    detail: [
-      `[${d.layer}]`,
-      d.provenance,
-      d.problems.length > 0 ? `${d.problems.length} problem(s)` : "",
-    ]
+    detail: [`[${d.layer}]`, d.problems.length > 0 ? `${d.problems.length} problem(s)` : ""]
       .filter((part) => part !== "")
       .join(" · "),
     definition: d,
@@ -952,17 +940,6 @@ export function clampSelection(
   return after[Math.min(Math.max(was, 0), after.length - 1)]!.id;
 }
 
-/**
- * The detail of the Selection, and nothing while a newer Selection is still being read.
- * The read happens in a fiber, so `state.detail` lags the row the human has just moved
- * to — and a panel that drew it anyway attributed the previous Run's review, Outputs and
- * merge request to the new row, `c` copying the wrong URL with it.
- */
-export function detailFor(state: AppState, row: Row | null): RunDetail | null {
-  const detail = state.detail;
-  return detail !== null && row !== null && row.runId === detail.id ? detail : null;
-}
-
 export interface Action {
   key: string;
   label: string;
@@ -1012,19 +989,11 @@ export function actionsFor(row: Row | null, filter: Filter): Action[] {
   // A finished run has no driver left to stop, so the key is not offered for one.
   if (row.kind === "active") {
     actions.push({ key: "k", label: "stop", command: { _tag: "StopRun", runId } });
-  } else if (row.fixable && sessionLocal(filter)) {
-    // Only for a run that has stopped: a fix round over a run still writing its own
-    // review would build from half of it.
-    actions.push({ key: "x", label: "fix what is open", command: { _tag: "FixFindings", runId } });
+  } else if (sessionLocal(filter)) {
+    // Only once it has stopped: work started from a Run still writing builds on half of it.
+    actions.push({ key: "x", label: "offers", command: { _tag: "ChooseOffer", runId } });
   }
   if (row.target) {
-    if (sessionLocal(filter)) {
-      actions.push({
-        key: "a",
-        label: "review again",
-        command: { _tag: "ReviewAgain", target: row.target },
-      });
-    }
     if (row.target.startsWith("mr:")) {
       // Posting needs a review to post, and `fixable` is the row's only word on whether
       // one was written. Looking at the merge request needs nothing but the target, so a
@@ -1118,44 +1087,6 @@ export interface Windowed<T> {
   hidden: number;
 }
 
-/**
- * The footer's buttons: the Selection's own, and the one board-wide action there is.
- * Each is offered only where there is something to act on and the key beside it does
- * what the label says — a button whose key would type a character is a lie, and both
- * kinds of lie are read off the one fact about who has the keyboard.
- *
- * The Selection's own drop out for any field, because Enter and every letter belong to
- * it. The next-question button drops out only for a field taking text: a menu takes
- * none, and a board of several asking Runs is exactly when `n` is wanted.
- */
-export function footerActions(opts: {
-  row: Row | null;
-  filter: Filter;
-  /** Whether anything on this board is asking, which is what `n` can act on. */
-  questions: boolean;
-  on: Keyboarding;
-}): Action[] {
-  return [
-    ...(fieldHasKeys(opts.on) ? [] : actionsFor(opts.row, opts.filter)),
-    ...(opts.questions && !takesText(opts.on)
-      ? [
-          {
-            key: NEXT_QUESTION,
-            label: "next question",
-            command: { _tag: "NextQuestion" } as const,
-          },
-        ]
-      : []),
-  ];
-}
-
-/** Whether anything but the board has the keys: a question, the filter, a value. */
-function fieldHasKeys(on: Keyboarding): boolean {
-  return (
-    on._tag === "Choice" || on._tag === "Filter" || on._tag === "Setting" || on._tag === "Proposal"
-  );
-}
-
 /** One line of a card's menu: what it says, the key beside it, and what it does. */
 export interface MenuItem {
   key: string;
@@ -1179,8 +1110,15 @@ export function primaryFor(view: TaskView): MenuItem | null {
   if (view.state === "active" || view.state === "quiet")
     return { key: "g", label: "Go to tab", command: goToTab(view) };
   if (view.landed) return null;
+  // Whatever the plan's module offers first, under its own title; none, no button.
   if (view.planReady)
-    return { key: "i", label: "Implement now", command: { _tag: "ImplementNow", runId } };
+    return view.offer === null
+      ? null
+      : {
+          key: "i",
+          label: view.offer.title,
+          command: { _tag: "InvokeOffer", runId, offer: view.offer.id },
+        };
   if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned")
     return { key: "u", label: "Resume", command: { _tag: "ResumeRun", runId } };
   if (view.mrState === "closed")
@@ -1220,9 +1158,14 @@ export function menuFor(view: TaskView): MenuItem[] {
       command: { _tag: "OpenMr", target: mrTarget(mr.project, mr.iid), runId },
     });
   }
-  if (view.planReady) {
-    items.push({ key: "i", label: "Implement now", command: { _tag: "ImplementNow", runId } });
+  if (view.offer !== null) {
+    items.push({
+      key: "i",
+      label: view.offer.title,
+      command: { _tag: "InvokeOffer", runId, offer: view.offer.id },
+    });
   }
+  items.push({ key: "o", label: "What it offers…", command: { _tag: "ChooseOffer", runId } });
   if (view.state === "failed" || view.state === "stopped" || view.state === "abandoned") {
     items.push({ key: "u", label: "Resume run", command: { _tag: "ResumeRun", runId } });
   }
@@ -1324,6 +1267,8 @@ export const ALL_KEYS: ReadonlyArray<{ key: string; what: string }> = [
   { key: "s", what: "Steer…" },
   { key: "w", what: "Open merge request" },
   { key: "u", what: "Resume run" },
+  { key: "o", what: "What its workflow offers next" },
+  { key: "i", what: "The first of those, on a plan that is ready" },
   { key: "x", what: "Follow-up run" },
   { key: "k", what: "Stop run" },
 ];

@@ -14,16 +14,8 @@
 import { Clock, Effect, FileSystem, Option, Path, Result, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { loadDefaults } from "./config";
-import {
-  DefinitionError,
-  layers,
-  loadDefinitions,
-  requiredSkills,
-  resolveWorkflow,
-  skillDirs,
-  skillInstalled,
-  stepVariants,
-} from "./definitions";
+import { savedModules } from "./discovery";
+import { layers, loadDefinitions, skillDirs, skillInstalled } from "./definitions";
 import type { PluginEnv } from "./env";
 import { HARNESSES } from "./harness";
 import { Herdr } from "./herdr";
@@ -121,33 +113,17 @@ const minHerdrVersion = Effect.fn("Doctor.minHerdrVersion")(function* (root: str
 });
 
 /**
- * What the loaded Workflows need of this machine: the skills they name and the
- * harnesses they route steps to. Read from the definitions rather than hard-coded,
- * so a forked Workflow naming a new skill or harness is checked against that one.
+ * What this machine needs to run work: the skills the operator's own guidance names, and
+ * every harness the defaults may route an agent to. A workflow is a module now, so what
+ * it asks for is TypeScript rather than a list to read — what is checked here is what an
+ * installation needs whatever its workflows turn out to want.
  */
 const asked = Effect.fn("Doctor.asked")(function* (env: PluginEnv) {
-  const defs = yield* loadDefinitions(yield* layers(env));
-  const defaults = yield* loadDefaults(env.configDir);
-  const skills = new Set<string>();
-  const harnesses = new Set<string>();
-  const waits = new Set<string>();
-  for (const name of defs.workflows.keys()) {
-    let workflow;
-    try {
-      workflow = resolveWorkflow(name, defs, defaults);
-    } catch (cause) {
-      // A Workflow that will not resolve is a definition error, which validation
-      // reports on its own terms; it is not a missing prerequisite.
-      if (cause instanceof DefinitionError) continue;
-      throw cause;
-    }
-    for (const skill of requiredSkills(workflow, defs).keys()) skills.add(skill);
-    for (const step of workflow.steps) {
-      for (const variant of stepVariants(step, defaults)) harnesses.add(variant.harness);
-      for (const wait of step.waits ?? []) waits.add(wait);
-    }
-  }
-  return { skills: [...skills].sort(), harnesses: [...harnesses].sort(), waits };
+  const defaults = yield* loadDefaults(env.userDir);
+  // Every harness a Run could be routed to: the default, and anything a variant may
+  // name. A module decides its own at runtime, so what is checked is what the machine
+  // would need whichever it picks.
+  return { harnesses: [defaults.harness] };
 });
 
 /**
@@ -273,59 +249,40 @@ const count = Effect.fn("Doctor.count")(function* (
 });
 
 /**
- * The steps the bundled `implement` shed and the second reviewer `review` shed, so an
- * override that still carries them is recognisable as the old flow rather than as a
- * customisation. A user's own `architecture` step is their business; the report names
- * the edit and edits nothing.
- */
-const OLD_IMPLEMENT_STEPS = new Set(["architecture", "simplify"]);
-
-/**
- * What the effective `implement` and `review` resolve to on this machine, in this
- * project. A user or project override wins over the bundled definition, so a change to
- * the bundled flow is not in effect where one exists — and one that keeps the old flow
- * is what a Run here would actually run. Reported with the exact edit, never applied.
+ * What this machine answers a workflow id with, where that is not what Collie ships. A
+ * customisation is the operator's, so it is named and never judged: nothing here knows
+ * what any workflow is supposed to contain, and an id it recognised would be the start
+ * of a shipped workflow being privileged over one somebody wrote.
+ *
+ * A file that claims an id and will not load is the exception, because it answers for
+ * that id and cannot run — the layer below it is not consulted.
  */
 const overrides = Effect.fn("Doctor.overrides")(function* (env: PluginEnv) {
-  const loaded = yield* layers(env).pipe(Effect.flatMap(loadDefinitions), Effect.result);
-  if (Result.isFailure(loaded))
-    return failed(`the definitions do not load: ${String(loaded.failure)}`, "");
-  const defs = loaded.success;
-  const defaults = yield* loadDefaults(env.configDir);
-  const kept: string[] = [];
-  const edits: string[] = [];
-  const own: string[] = [];
-  for (const name of ["implement", "review"] as const) {
-    let wf;
-    try {
-      wf = resolveWorkflow(name, defs, defaults);
-    } catch (cause) {
-      if (cause instanceof DefinitionError) return failed(`${name}: ${cause.message}`, "");
-      throw cause;
-    }
-    if (wf.layer === "baseline") continue;
-    own.push(`${name} (${wf.layer}, ${wf.path})`);
-    if (name === "implement") {
-      const old = wf.steps.filter((step) => OLD_IMPLEMENT_STEPS.has(step.id)).map((s) => s.id);
-      if (old.length > 0) {
-        kept.push(`${name} still runs ${old.join(" and ")}`);
-        edits.push(`remove the ${old.join(" and ")} step(s) from ${wf.path}`);
-      }
-    } else {
-      const review = wf.steps.find((step) => step.id === "review");
-      const reviewers = review ? stepVariants(review, defaults).length : 0;
-      if (reviewers > 1) {
-        kept.push(`${name} still runs ${reviewers} reviewers`);
-        edits.push(`keep one entry under \`parallel:\` of step review in ${wf.path}`);
-      }
-    }
+  const saved = yield* savedModules(env);
+  const own = saved.entries
+    .filter((one) => one.layer !== "shipped")
+    .map((one) => `${one.id} (${one.layer}, ${one.path})`)
+    .sort();
+  if (saved.problems.length > 0) {
+    return noted(
+      saved.problems.map((one) => `${one.id}: ${one.message}`).join("; "),
+      `fix ${saved.problems.map((one) => one.path).join(" and ")}, or delete it to take the workflow below it`,
+    );
   }
-  if (own.length === 0) return passed("implement and review are the bundled ones");
-  if (kept.length === 0) return passed(`overridden here, current flow: ${own.join("; ")}`);
-  return noted(
-    `${kept.join("; ")} — an override keeps the old flow, so the bundled change is not in effect here`,
-    `${edits.join("; ")} (or delete the override to take the bundled definition)`,
-  );
+  return own.length === 0
+    ? passed("every workflow here is the one Collie ships")
+    : passed(`overridden here: ${own.join("; ")}`);
+});
+
+/**
+ * Every persona the layers define, read as a launch reads it: one that will not parse, or
+ * that names anything but a skill, is named with why.
+ */
+const personas = Effect.fn("Doctor.personas")(function* (env: PluginEnv) {
+  const found = yield* loadDefinitions(yield* layers(env));
+  return found.errors.length === 0
+    ? passed(`${found.personas.size} read, each one telling its agent only what it can fill`)
+    : noted(found.errors.join("; "), "fix each file named");
 });
 
 /**
@@ -421,17 +378,15 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
 
   const needs = yield* asked(env);
   const dirs = yield* skillDirs(env);
-  const missing: string[] = [];
-  for (const skill of needs.skills) {
-    if (!(yield* skillInstalled(dirs, skill))) missing.push(skill);
-  }
+  // What a module asks an agent for is decided while it runs, so there is no list to
+  // check against: what this says is whether the store is there at all, and the routine
+  // that fills it. The sources, the global store and the Claude Code target are
+  // `prepare.sh`'s to know.
   checks.push({
     name: "skills",
-    ...(missing.length === 0
-      ? passed(`${needs.skills.length} installed`)
-      : // The routine, not a bare `npx skills add`: the sources, the global store and
-        // the Claude Code target are its to know, and it puts back what is missing.
-        failed(`missing: ${missing.join(", ")}`, `sh ${root}/prepare.sh`)),
+    ...((yield* skillInstalled(dirs, "collie"))
+      ? passed(`the skill store is in place (${dirs.join(", ")})`)
+      : failed("the operator skill is not installed", `sh ${root}/prepare.sh`)),
   });
 
   const absent: string[] = [];
@@ -485,6 +440,7 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
   const glabDir = yield* onPath(search, "glab");
   const auth = glabDir ? yield* answered(run("glab", ["auth", "status"], root)) : null;
   checks.push({ name: "workflows", ...(yield* overrides(env)) });
+  checks.push({ name: "personas", ...(yield* personas(env)) });
 
   checks.push({
     name: "glab",
@@ -500,10 +456,10 @@ export const doctor = Effect.fn("Doctor.doctor")(function* (
           : failed("installed, but not logged in", "glab auth login")),
   });
 
-  // Optional, and only where a loaded Workflow could reach for them: Helle for a step
-  // that waits on it, Linear for an agent Claude Code runs. Absent is a note; set up
-  // and broken is a warning, because that one fails a Run that nobody expected to.
-  if (needs.waits.has("helle")) checks.push({ name: "helle", ...optional(yield* probeHelle(env)) });
+  // Optional, and only where work could reach for them: Helle for a module that waits
+  // on it, Linear for an agent Claude Code runs. Absent is a note; set up and broken is
+  // a warning, because that one fails a Run that nobody expected to.
+  checks.push({ name: "helle", ...optional(yield* probeHelle(env)) });
   if (needs.harnesses.includes("claude"))
     checks.push({ name: "linear mcp", ...optional(yield* probeLinearMcp(env)) });
 

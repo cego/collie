@@ -1,14 +1,13 @@
 // The Control Plane tab: one per workspace, the Session's control surface. It owns
-// no engine state — it reads the run dirs and the live-agent register and draws
-// what it finds, so deleting the tab loses nothing and the next Run recreates it.
+// no engine state — it draws the Runs the host reports and the live-agent register,
+// so deleting the tab loses nothing and the next Run recreates it.
 
 import { Clock, Effect, FileSystem, Option, Path } from "effect";
-import { choiceAnswerable } from "./attention";
 import { behindRemote } from "./doctor";
-import { driverAlive, lastProgress, readChoice, type PendingChoice } from "./driver";
-import { COLLIE_TAB, displayName, GLYPH, runLabel, stepNow } from "./naming";
+import { COLLIE_TAB, displayName, GLYPH, runTitle } from "./naming";
+import { diffTargetOf } from "./strategies";
 import type { Live } from "./live";
-import { boardLines, type TaskView } from "./board";
+import { boardLines, type PendingChoice, type TaskView } from "./board";
 import {
   asText,
   cardLines,
@@ -18,31 +17,18 @@ import {
   ownershipLines,
   type Line,
 } from "./lines";
-import { liveEntries, readRegistry, registryPath, type AgentEntry } from "./registry";
+import { liveEntries, type AgentEntry } from "./registry";
 import { latest, readDispositions } from "./disposition";
-import { REVIEW_FILE } from "./output";
-import {
-  fanoutRepos,
-  needsHuman,
-  RunStore,
-  type FanoutRecord,
-  type Run,
-  type RunRecord,
-  type VariantRecord,
-} from "./run";
-import { stepDuration, took } from "./time";
+import { openFindingsIn } from "./output";
+import { settled, type RunFacts } from "./runs";
+import type { TaskRecord } from "./task";
+import { took } from "./time";
 import { LEADING_GLYPH, type AgentInfo, type WorkspaceInfo } from "./herdr";
 
 /** How many finished runs stay on the screen; the tab must not need scrolling. */
 const RECENT = 5;
 /** Keys 1–9 focus an agent, so that is how many the board can offer. */
 export const MAX_AGENTS = 9;
-/**
- * How long a `running` run with no live agent has to have been quiet before it is
- * called abandoned. A live run always has an agent, except in the seconds between
- * being created and starting its first one.
- */
-const STALE_MS = 60_000;
 /**
  * The fallback for the board's quiet threshold, for a caller with no defaults to hand —
  * a test drawing one board. `board_quiet_ms` is what a human sets.
@@ -126,8 +112,8 @@ export interface RunRow {
    * about it. The board used to say what a run was *doing*; these say what it is *for*
    * and whether it got there, which is the question a human actually has.
    *
-   * All four come from `run.json`, which the row already has: the board must not read a
-   * file per row, and a supervision line nobody can afford to draw is not supervision.
+   * All four come from the Run's facts, which the row already has: the board must not
+   * read a file per row, and a supervision line nobody can afford to draw is not one.
    */
   outcome: string | null;
   gaps: number;
@@ -214,18 +200,10 @@ function collies(group: WideGroup): boolean {
   return group.active.length > 0 || group.agents.length > 0 || group.recent.length > 0;
 }
 
-/**
- * What the group's leading run is doing: the step it is on and the round of the loop
- * where that step has looped, and what it settled on once nothing is running. Off the
- * record, not out of the run row's detail — a detail carries the elapsed time and the
- * last progress line too, and taking the first two of those words dropped exactly the
- * iteration this is for. The rest of the detail belongs on the run's own row, which
- * sits directly under this one.
- */
-function summarise(record: RunRecord): string {
-  const step = stepNow(record);
-  if (!step) return record.awaiting ?? record.status;
-  return [step.id, step.round].filter((part) => part !== null).join(" · ");
+/** What the group's leading run is doing, in the word its row leads with. */
+function summarise(run: RunFacts): string {
+  const asked = run.asking[0];
+  return asked === undefined ? `${run.workflow} · ${run.state}` : `waiting on ${asked.name}`;
 }
 
 function groupGlyph(runs: Pick<WideGroup, "active" | "recent">): string {
@@ -246,118 +224,38 @@ function checkoutName(cwd: string): string {
   );
 }
 
-function variantsOf(record: RunRecord): VariantRecord[] {
-  return record.steps.flatMap((s) => s.variants);
-}
-
-/** The run's own agents that herdr still has, in this workspace. */
-function agentsHere(record: RunRecord, hereNames: Set<string>): VariantRecord[] {
-  return variantsOf(record).filter((v) => hereNames.has(v.agent));
+/** Where a Run lives: a workspace of its own, else its Task's; null where neither says. */
+function workspaceOf(run: RunFacts, tasks: ReadonlyMap<string, TaskRecord>): string | null {
+  return run.workspace ?? (run.task === null ? null : (tasks.get(run.task)?.workspace ?? null));
 }
 
 /**
- * A run recorded against another workspace never belongs here, even for the same
- * repo. One recorded before workspaces were noted belongs here only if one of its
- * agents is alive in this workspace, which is the only proof available for it — and
- * that proof is a Session's own, so a group of the wide scope takes only the runs that
- * name its workspace: an agent herdr reports no workspace for is not proof of any one
- * of them. The run's directory says nothing either way: a mutating Run's checkout is a
- * worktree of its own, and comparing it with the board's directory hid every such run
- * from its tab.
+ * Whether a Run belongs to this workspace: the one it lives in, by id. One that names no
+ * workspace belongs here only if one of its agents is alive here, and never to one group
+ * of the wide scope: an agent herdr reports no workspace for is not proof of any one of
+ * them.
  */
 function belongs(
-  record: RunRecord,
+  where: string | null,
   key: SessionKey,
-  hereNames: Set<string>,
+  agentsHere: ReadonlyArray<AgentEntry>,
   grouped: boolean,
 ): boolean {
-  if (record.session && key.session && record.session !== key.session) return false;
-  if (record.workspace === null) return !grouped && agentsHere(record, hereNames).length > 0;
-  // The id and the label, because ids are reused.
-  return record.workspace === key.workspaceId && sameWorkspace(record, key);
-}
-
-/**
- * Whether the workspace this run was recorded against is still the one wearing that id.
- * Workspace ids compact, so a label recorded and since changed means a different
- * workspace is wearing the same id — and yesterday's runs would otherwise be nested
- * under today's workspace. Unanswerable either way is not a reason to hide a run.
- */
-function sameWorkspace(record: RunRecord, key: SessionKey): boolean {
-  return (
-    !record.workspace_label || !key.workspaceLabel || record.workspace_label === key.workspaceLabel
-  );
-}
-
-/**
- * What an agent is called here: the role it was registered under where it has one
- * — those are the agents a hand-off can name — and otherwise its step, plus its
- * model where that step ran several. Roles label agents; they never filter them.
- */
-function agentTitle(variant: VariantRecord, registered: AgentEntry | undefined): string {
-  if (registered) return displayName(registered.role);
-  const [, step = "", key] = variant.label.split("/");
-  const name = displayName(step.slice(step.lastIndexOf(".") + 1));
-  if (!key) return name;
-  return `${name} · ${displayName(variant.model.slice(variant.model.lastIndexOf("/") + 1))}`;
-}
-
-/**
- * What became of a fan-out, and `null` while it is still in flight: how many
- * repositories it built, or the one that stopped it. A finished row says this and
- * nothing else about the waves — what a run was doing is not what became of it.
- */
-function fanoutOutcome(fan: FanoutRecord): string | null {
-  if (fan.blocked !== null) return `blocked · ${fan.blocked.repo} ${fan.blocked.status}`;
-  return fan.wave === 0 ? `${fanoutRepos(fan).length} repos · done` : null;
-}
-
-/**
- * Which wave a fan-out is on and what it is waiting for, and `null` when no wave is in
- * flight. A live row says this: it is the whole of a waiting parent's state, which is
- * why it stands in for the step it is technically on.
- */
-function fanoutWaiting(fan: FanoutRecord): string | null {
-  // A fan-out one repository stopped is not waiting on anything, whatever wave it had
-  // reached: what became of it outranks what it was doing, on a live row as much as a
-  // finished one.
-  if (fan.blocked !== null) return null;
-  const wave = fan.waves[fan.wave - 1];
-  return wave ? `wave ${fan.wave}/${fan.waves.length} · waiting on ${wave.join(", ")}` : null;
+  if (where === null) return !grouped && agentsHere.length > 0;
+  return where === key.workspaceId;
 }
 
 const activeDetail = Effect.fn("activeDetail")(function* (
-  run: Run,
+  run: RunFacts,
   now: number,
   quietMs: number,
-  /** The question this run has for the human, which is the only thing they can answer. */
-  choice: PendingChoice | null,
 ) {
-  const record = run.record;
-  // Before the reads below, and before the quiet scan: a run waiting on the human is
-  // meant to be quiet, so saying so would be noise on the one row that needs none.
-  // `your turn` only where there is something to answer: `awaiting` is also set for a
-  // gate the run is holding at and for an agent answering in its own pane, and neither
-  // of those is a question this board can put under the row.
-  if (record.awaiting) return choice ? `${record.awaiting} — your turn` : record.awaiting;
-  // A parent waiting on its repository runs is not doing a step of its own worth
-  // naming: which wave it is on and what it is waiting for is the whole of its state.
-  const fan = record.fanout;
-  const fanning = fan && (fanoutWaiting(fan) ?? fanoutOutcome(fan));
-  if (fanning) return fanning;
-  const step = record.steps.find((s) => s.status === "running" || s.status === "blocked");
-  const where = step ? step.id : "starting";
-  const parts = [where];
-  // How long this step has been going: a stuck agent and a slow one look identical
-  // without it, and the step id alone said nothing about either.
-  const elapsed = step ? stepDuration(step, now) : null;
-  if (elapsed) parts.push(elapsed);
-  if (record.max_iterations > 1) {
-    parts.push(`iteration ${record.iteration}/${record.max_iterations}`);
-  }
-  // What the driver last said, which is what the runner pane used to show.
-  const said = yield* lastProgress(run.dir);
-  if (said) parts.push(said);
+  const asked = run.asking[0];
+  // Before the quiet scan: a run waiting on the human is meant to be quiet, so saying
+  // so would be noise on the one row that needs none.
+  if (asked !== undefined) return `waiting on ${asked.name} — your turn`;
+  if (run.state === "waiting") return run.note ?? "parked";
+  const parts = [run.workflow];
   const quiet = yield* quietFor(run.dir, now, quietMs);
   if (quiet) parts.push(quiet);
   return parts.join(" · ");
@@ -377,12 +275,11 @@ const mtimeOf = Effect.fn("mtimeOf")(function* (file: string) {
 });
 
 /**
- * When anything in the run's own directory last changed. A shallow scan: the files a
- * running run writes as it goes — `run.json`, `runner.log`, `progress.jsonl` — are all
- * at the top of it, and walking the steps and their Outputs would be a directory tree
- * per run per tick for the same answer.
+ * When anything in the run's own directory last changed. A shallow scan: what a Run
+ * writes as it goes sits at the top of it, and walking every Output would be a
+ * directory tree per run per tick for the same answer.
  *
- * ponytail: shallow, deepen it only if a run turns up that writes only into `steps/`.
+ * ponytail: shallow, deepen it only if a run turns up that writes only below its top.
  */
 export const touchedDirAt = Effect.fn("touchedDirAt")(function* (dir: string) {
   const fs = yield* FileSystem.FileSystem;
@@ -407,12 +304,6 @@ const quietFor = Effect.fn("quietFor")(function* (dir: string, now: number, quie
   return `quiet for ${took(now - at)}`;
 });
 
-/** The runs a fan-out started, in wave order, and none for a run that never fanned out. */
-function repoRunsOf(record: RunRecord): string[] {
-  const fan = record.fanout;
-  return fan === null ? [] : fanoutRepos(fan).flatMap((entry) => entry.run ?? []);
-}
-
 /** A row with nothing to say about its outcome: the History view, and every fixture. */
 export const NO_OUTCOME = {
   outcome: null,
@@ -422,45 +313,24 @@ export const NO_OUTCOME = {
   delivered: null,
 } as const;
 
-/**
- * What a Run is for, what it has not proved, what is in its way, and the one thing to do
- * about it — from `run.json` alone. The board draws every row on every tick, so a field
- * that cost a file read per row would be a supervision line nobody can afford to draw.
- */
-function outcomeOf(record: RunRecord): Pick<RunRow, "outcome" | "gaps" | "obstacle" | "next"> {
-  const blocked = record.steps.find((step) => step.status === "blocked");
+/** What a Run is for, what is in its way, and the one thing to do about it. */
+function outcomeOf(run: RunFacts): Pick<RunRow, "outcome" | "gaps" | "obstacle" | "next"> {
   return {
-    // Null where nobody classified it: `unspecified` is a real answer and the row says
-    // nothing rather than inventing `feature`.
-    outcome: record.outcome,
-    gaps: record.evidence_gaps.length,
-    // What is identifiably in the way: a command going round, else why it stopped.
-    obstacle: record.obstacle ?? (record.halt === null ? null : (blocked?.note ?? record.halt)),
-    next: nextAction(record),
+    // Null where nobody classified it: the row says nothing rather than inventing one.
+    outcome: run.outcome === "unspecified" ? null : run.outcome,
+    gaps: 0,
+    obstacle: run.state === "failed" || run.state === "waiting" ? run.note : null,
+    next: run.asking.length > 0 ? "answer" : null,
   };
 }
 
 /**
- * The one thing to do next, named as the `run` subcommand that does it. Worked out from
- * the record rather than from `attentionFor`, which may ask herdr whether an agent is
- * still there — a question worth asking about one Run and not about every row of a board.
- */
-function nextAction(record: RunRecord): string | null {
-  if (record.awaiting !== null) return "answer";
-  if (record.status === "running") return null;
-  if (record.halt !== null) return "resume";
-  if (record.status === "blocked" || record.status === "failed") return "resume";
-  return null;
-}
-
-/**
  * What became of a finished Run's work, where someone recorded it. Read only for Runs
- * that did not succeed, and only for the few rows a finished list keeps: those are the
- * rows where a red glyph is standing against work that may well have shipped, and they
- * are the only ones this can change. An active Run has nothing to have become of yet.
+ * that did not succeed: those are the rows where a red glyph is standing against work
+ * that may well have shipped.
  */
-const deliveredOf = Effect.fn("deliveredOf")(function* (run: Run) {
-  if (run.record.status !== "failed" && run.record.status !== "blocked") return null;
+const deliveredOf = Effect.fn("deliveredOf")(function* (run: RunFacts) {
+  if (run.state === "succeeded") return null;
   const line = latest(
     yield* readDispositions(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
   );
@@ -468,75 +338,37 @@ const deliveredOf = Effect.fn("deliveredOf")(function* (run: Run) {
   return line.ref === "" ? line.kind : `${line.kind} ${line.ref}`;
 });
 
-function recentDetail(record: RunRecord, abandoned: boolean): string {
-  const fan = record.fanout;
-  const outcome = fan && fanoutOutcome(fan);
-  const parts: string[] = [abandoned ? "abandoned" : (outcome ?? record.status)];
-  // No outcome on a finished row means the fan-out never got to record one: nothing
-  // writes `wave: 0` when the parent's Driver is stopped or killed mid-wave. So the
-  // run's own status has led, and the wave it was interrupted during follows it —
-  // `fanoutWaiting`'s sentence would describe a wait that has ended.
-  if (fan !== null && outcome === null) parts.push(`in wave ${fan.wave}/${fan.waves.length}`);
-  if (record.outstanding.length > 0) {
-    // Open findings that were handed to another Run's agent are being worked on
-    // somewhere this record cannot see; say so instead of presenting them as untouched.
-    const handedOff = record.handoffs.some((h) => h.direction === "sent");
-    parts.push(`${record.outstanding.length} finding(s) open${handedOff ? " · handed off" : ""}`);
-  }
-  // Why it stopped, which used to be in the runner pane and is now only in the log.
-  const note = record.steps.filter((s) => s.note && s.status !== "done").at(-1)?.note;
-  if (note && record.status !== "done") parts.push(note);
-  // A round that had to be rescued is not the same as one that went cleanly.
-  const repairs = record.steps.flatMap((s) => s.variants).flatMap((v) => v.repairs).length;
-  if (repairs > 0) parts.push(`${repairs} Output(s) rewritten`);
-  if (record.mr_url) parts.push(record.mr_url);
+function recentDetail(run: RunFacts): string {
+  const parts: string[] = [run.state];
+  if (run.state !== "succeeded" && run.note !== null) parts.push(run.note);
+  if (run.mr !== null) parts.push(run.mr);
   return parts.join(" · ");
 }
 
-function glyphFor(record: RunRecord, abandoned: boolean): string {
-  if (abandoned) return GLYPH.waiting;
-  if (record.status === "done") return GLYPH.done;
-  if (record.status === "failed") return GLYPH.failed;
-  if (record.status === "blocked") return GLYPH.waiting;
-  return record.awaiting ? GLYPH.waiting : GLYPH.running;
+function glyphFor(run: RunFacts): string {
+  switch (run.state) {
+    case "succeeded":
+      return GLYPH.done;
+    case "failed":
+    case "stopped":
+      return GLYPH.failed;
+    case "waiting":
+      return GLYPH.waiting;
+    case "running":
+      return GLYPH.running;
+  }
 }
 
 /**
- * Whether a run is something the next one can be built from: a review it wrote, and a
- * finding still open in it. The review is what `implement` reads as its work source; the
- * findings are what make the offer honest — a review that came back clean has a
- * `review.md` and nothing to fix, and used to be offered "fix what is open" anyway.
- * The synthesis writes both at once, so a run that has one has the other.
+ * Whether a run is something the next one can be built from: a review it wrote with a
+ * finding still open in it. A review that came back clean has nothing to fix.
  */
-export const fixableRun = Effect.fn("fixableRun")(function* (run: Run) {
-  if (run.record.outstanding.length === 0) return false;
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  return yield* fs.exists(path.join(run.dir, REVIEW_FILE));
-});
+export const fixableRun = (run: Pick<RunFacts, "dir">) =>
+  openFindingsIn(run.dir).pipe(Effect.map((open) => open > 0));
 
-/** When a run last changed: a run making progress rewrites run.json as it goes. */
-const touchedAt = Effect.fn("touchedAt")(function* (run: Run) {
-  const path = yield* Path.Path;
-  return yield* mtimeOf(path.join(run.dir, "run.json"));
-});
-
-/**
- * A run whose driver is gone: still marked `running`, nothing driving it, no agent
- * of its own left alive, and quiet for long enough that it cannot be one that has
- * just started. Nothing marks such a run — the process that would have is the one
- * that died — so the board says so instead of showing it as work in progress.
- */
-const abandonedRun = Effect.fn("abandonedRun")(function* (
-  run: Run,
-  hereNames: Set<string>,
-  now: number,
-) {
-  if (run.record.status !== "running") return false;
-  if (yield* driverAlive(run.dir)) return false;
-  if (agentsHere(run.record, hereNames).length > 0) return false;
-  return now - (yield* touchedAt(run)) > STALE_MS;
-});
+/** When a run ended, or last changed while it was going. */
+const touchedAt = (run: RunFacts) =>
+  run.finished === null ? touchedDirAt(run.dir) : Effect.succeed(Date.parse(run.finished));
 
 /**
  * Everything the tab shows, from the run dirs and one `agent list`: the runs of
@@ -548,13 +380,15 @@ export const buildView = Effect.fn("buildView")(function* (
   opts: SessionKey & {
     stateDir: string;
     alive: AgentInfo[];
+    /** The Runs, their Tasks and their agents, read once by the caller for every View. */
+    runs: ReadonlyArray<RunFacts>;
+    tasks: ReadonlyArray<TaskRecord>;
+    registered: ReadonlyArray<AgentEntry>;
     now?: number;
     /** What the last prune said; the board reports it rather than deciding it. */
     worktrees?: string[];
     /** The installation, when the caller has one to compare against its remote. */
     pluginRoot?: string;
-    /** The Runs already read, so a caller drawing two Views scans the dir once. */
-    runs?: ReadonlyArray<Run>;
     /** How long a running run may write nothing before its row says so. */
     quietMs?: number;
     /**
@@ -568,41 +402,36 @@ export const buildView = Effect.fn("buildView")(function* (
   const path = yield* Path.Path;
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
   const quietMs = opts.quietMs ?? DEFAULT_QUIET_MS;
-  // Only agents in this workspace count, whatever a run record claims.
+  // Only agents in this workspace count, whatever a run says.
   const here = opts.alive.filter(
     (a) => a.workspaceId === null || a.workspaceId === opts.workspaceId,
   );
-  const hereNames = new Set(here.map((a) => a.name));
   const live = new Map(here.map((a) => [a.name, a]));
+  const alive = liveEntries(opts.registered, here);
+  const tasks = new Map(opts.tasks.map((task) => [task.id, task]));
+  const agentsHere = (run: RunFacts) => alive.filter((entry) => entry.runId === run.id);
 
-  const all = opts.runs ?? (yield* new RunStore(opts.stateDir).list());
-  const runs = all.filter((r) => belongs(r.record, opts, hereNames, opts.grouped ?? false));
-  const regPath = yield* registryPath(opts.stateDir, opts);
-  const registered = new Map(
-    liveEntries(yield* readRegistry(regPath), here).map((e) => [e.agent, e]),
+  const runs = opts.runs.filter((r) =>
+    belongs(workspaceOf(r, tasks), opts, agentsHere(r), opts.grouped ?? false),
   );
 
   const rows: AgentRow[] = [];
   for (const run of runs) {
-    for (const variant of agentsHere(run.record, hereNames)) {
-      if (rows.some((r) => r.agent === variant.agent)) continue;
-      const alive = live.get(variant.agent);
+    for (const entry of agentsHere(run)) {
+      if (rows.some((r) => r.agent === entry.agent)) continue;
+      const agent = live.get(entry.agent);
       rows.push({
         key: "",
-        name: agentTitle(variant, registered.get(variant.agent)),
-        agent: variant.agent,
-        status: alive?.status ?? "unknown",
+        name: displayName(entry.role),
+        agent: entry.agent,
+        status: agent?.status ?? "unknown",
         run: run.id,
-        now: alive?.title ?? null,
+        now: agent?.title ?? null,
       });
     }
   }
-  // The ones a hand-off can name come first; that is mostly what the keys are for.
-  rows.sort((a, b) => Number(registered.has(b.agent)) - Number(registered.has(a.agent)));
   // A group of the wide scope keeps every agent it has and gives none of them a digit:
-  // the digits there are numbered down the whole tree, and a group that had numbered
-  // its own nine would have hidden its tenth row rather than just its tenth digit — on
-  // a board whose whole claim is that it hides nothing.
+  // the digits there are numbered down the whole tree.
   const agents = opts.grouped
     ? rows
     : rows.slice(0, MAX_AGENTS).map((r, i) => ({ ...r, key: String(i + 1) }));
@@ -610,65 +439,47 @@ export const buildView = Effect.fn("buildView")(function* (
   const fixable = new Set<string>();
   for (const r of runs) if (yield* fixableRun(r)) fixable.add(r.id);
 
-  const abandoned = new Set<string>();
-  for (const r of runs) if (yield* abandonedRun(r, hereNames, now)) abandoned.add(r.id);
-  const stopped = runs.filter((r) => r.record.status !== "running" || abandoned.has(r.id));
-
   const active: RunRow[] = [];
-  for (const r of runs.filter((r) => r.record.status === "running" && !abandoned.has(r.id))) {
-    // Whatever the Driver stopped for is not shown as answerable once that Driver has
-    // gone: recovery already classifies a Choice it left behind as stale, and a board
-    // that still offered it would take an answer, report it sent, and have the next
-    // Driver discard it — and an `awaiting` it left behind is the same fact. Asked only
-    // where something has stopped at all, so an ordinary refresh costs no probe.
-    const pending = yield* readChoice(r.dir);
-    const answerable = (pending !== null || needsHuman(r.record)) && (yield* choiceAnswerable(r));
-    const choice = pending && answerable ? pending : null;
+  for (const r of runs.filter((r) => !settled(r))) {
     // herdr's own word for an agent sitting at its harness's dialog: a permission
-    // prompt mid-step, which the Driver never learns about and records nothing for. No
-    // Driver is needed for this one — the pane is there, asking.
+    // prompt mid-step, which nothing records — the pane is there, asking.
     const blocked = rows.some((row) => row.run === r.id && row.status === "blocked");
     active.push({
       id: r.id,
       dir: r.dir,
-      glyph: glyphFor(r.record, false),
-      title: runLabel(r.record),
-      detail: yield* activeDetail(r, now, quietMs, choice),
+      glyph: glyphFor(r),
+      title: runTitle(r),
+      detail: yield* activeDetail(r, now, quietMs),
       at: yield* touchedAt(r),
-      target: r.record.inputs.target ?? null,
-      children: repoRunsOf(r.record),
-      // The same set the finished rows read: this used to stat every active run's dir a
-      // second time, on the 3s poll and on every watch event and command.
+      target: diffTargetOf(r.settled)?.value ?? null,
+      children: [],
       fixable: fixable.has(r.id),
-      choice,
-      // A Choice to answer here, or an agent waiting for one in its own pane: both
-      // stop the run dead, and Enter on the row reaches the pane either way. Only the
-      // inline answer needs a Choice — the header counts what a human has to go to.
-      needsYou: answerable || blocked,
-      ...outcomeOf(r.record),
+      choice: null,
+      // A question to answer, a parked Run or an agent waiting in its own pane: each
+      // stops the run dead, and Enter on the row reaches the pane either way.
+      needsYou: blocked || r.state === "waiting",
+      ...outcomeOf(r),
       // A Run still going has not become anything yet.
       delivered: null,
     });
   }
 
   const recent: RunRow[] = [];
-  for (const r of stopped.slice(0, RECENT)) {
+  for (const r of runs.filter(settled).slice(0, RECENT)) {
     recent.push({
       id: r.id,
       dir: r.dir,
-      glyph: glyphFor(r.record, abandoned.has(r.id)),
-      title: runLabel(r.record),
-      detail: recentDetail(r.record, abandoned.has(r.id)),
-      // The record's own word for when it ended; a run that never recorded one has
-      // only its file's mtime to go on.
-      at: r.record.finished_at ? Date.parse(r.record.finished_at) : 0,
-      target: r.record.inputs.target ?? null,
-      children: repoRunsOf(r.record),
+      glyph: glyphFor(r),
+      title: runTitle(r),
+      detail: recentDetail(r),
+      at: yield* touchedAt(r),
+      target: diffTargetOf(r.settled)?.value ?? null,
+      children: [],
       fixable: fixable.has(r.id),
       choice: null,
-      // A finished run is waiting on nobody, whatever it was awaiting when it stopped.
+      // A finished run is waiting on nobody.
       needsYou: false,
-      ...outcomeOf(r.record),
+      ...outcomeOf(r),
       delivered: yield* deliveredOf(r),
     });
   }
@@ -697,7 +508,9 @@ const groupOf = Effect.fn("groupOf")(function* (
     stateDir: string;
     label: string;
     alive: AgentInfo[];
-    runs: ReadonlyArray<Run>;
+    runs: ReadonlyArray<RunFacts>;
+    tasks: ReadonlyArray<TaskRecord>;
+    registered: ReadonlyArray<AgentEntry>;
     now: number;
     quietMs?: number;
   },
@@ -712,7 +525,7 @@ const groupOf = Effect.fn("groupOf")(function* (
   // The run that speaks for the group, as its record: its step and its round are what
   // the group row says, and a row carries neither.
   const lead = leader(kept);
-  const leading = lead ? (opts.runs.find((r) => r.id === lead.id)?.record ?? null) : null;
+  const leading = lead ? (opts.runs.find((r) => r.id === lead.id) ?? null) : null;
   return {
     workspaceId: opts.workspaceId,
     label: opts.label,
@@ -743,17 +556,22 @@ export const buildWideView = Effect.fn("buildWideView")(function* (opts: {
   stateDir: string;
   workspaces: ReadonlyArray<WorkspaceInfo>;
   alive: AgentInfo[];
-  runs?: ReadonlyArray<Run>;
+  runs: ReadonlyArray<RunFacts>;
+  tasks: ReadonlyArray<TaskRecord>;
+  registered: ReadonlyArray<AgentEntry>;
   now?: number;
   quietMs?: number;
 }) {
   const now = opts.now ?? (yield* Clock.currentTimeMillis);
-  const runs = opts.runs ?? (yield* new RunStore(opts.stateDir).list());
+  const runs = opts.runs;
+  const tasks = new Map(opts.tasks.map((task) => [task.id, task]));
   const shared = {
     session: opts.session,
     stateDir: opts.stateDir,
     alive: opts.alive,
     runs,
+    tasks: opts.tasks,
+    registered: opts.registered,
     now,
     quietMs: opts.quietMs,
   };
@@ -785,15 +603,13 @@ export const buildWideView = Effect.fn("buildWideView")(function* (opts: {
   // workspace for — one that was closed, or another herdr session's. Nothing is hidden;
   // a run still going somewhere this board cannot show is still news.
   const mine = new Set(opts.workspaces.map((w) => w.workspaceId));
+  const living = runs.filter((r) => !settled(r));
   const foreign = new Set(
-    runs
-      .filter((r) => r.record.status === "running" && r.record.workspace !== null)
-      .map((r) => r.record.workspace!)
-      .filter((id) => !mine.has(id)),
+    living.flatMap((r) => workspaceOf(r, tasks) ?? []).filter((id) => !mine.has(id)),
   );
   const away: WideGroup[] = [];
   for (const workspaceId of foreign) {
-    const cwd = runs.find((r) => r.record.workspace === workspaceId)?.record.cwd ?? "";
+    const cwd = living.find((r) => workspaceOf(r, tasks) === workspaceId)?.cwd ?? "";
     away.push(
       yield* groupOf({
         ...shared,

@@ -14,7 +14,7 @@ import {
 } from "./shared";
 
 /** The Persona a `persona` subcommand acts on. */
-const personaArg = Argument.string("persona").pipe(
+const personaArg = Argument.String("persona").pipe(
   Argument.withDescription("Which Persona, as `persona list` names it"),
 );
 

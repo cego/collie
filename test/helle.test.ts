@@ -15,6 +15,7 @@ import {
   type HelleClaim,
   type HelleProject,
 } from "../src/helle";
+import { handOverClaim } from "../src/engine";
 
 const ME = "6b9ba520-user";
 const OTHER = "2dd236ac-other";
@@ -405,4 +406,116 @@ test("a project Helle does not know is a 404 refusal, not silence", () =>
       expect(Result.isFailure(result)).toBe(true);
       expect(String(Result.isFailure(result) && result.failure.message)).toContain("404");
     }),
+  ));
+
+test("adopting a claim stops the Run that held it and its children, waits them out, and closes their agents before taking the claim", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const dir = yield* fs.makeTempDirectoryScoped({ prefix: "collie-handover-" });
+      const hold = (runId: string, slug: string) =>
+        fs
+          .makeDirectory(`${dir}/runs/${runId}`, { recursive: true })
+          .pipe(
+            Effect.andThen(
+              fs.writeFileString(
+                `${dir}/runs/${runId}/helle.json`,
+                `{"slug":"${slug}","claim":"mine"}`,
+              ),
+            ),
+          );
+      const held = (runId: string) =>
+        fs.exists(`${dir}/runs/${runId}/helle.json`).pipe(Effect.orElseSucceed(() => false));
+      /** What the host did, in order, and the record's presence each time it looked. */
+      const said: string[] = [];
+      const host = (over: {
+        readonly children?: ReadonlyArray<string>;
+        readonly stopsAfter?: number;
+        readonly left?: ReadonlyArray<string>;
+        readonly lateLeft?: ReadonlyArray<string>;
+      }) => {
+        let looks = 0;
+        return {
+          stop: (runId: string) =>
+            Effect.sync(() => {
+              said.push(`stop ${runId}`);
+              return { runs: [runId, ...(over.children ?? [])], left: over.left ?? [] };
+            }),
+          stopped: (runId: string) =>
+            Effect.sync(() => {
+              looks += 1;
+              said.push(`looked at ${runId}`);
+              return looks > (over.stopsAfter ?? 0);
+            }),
+          halt: (runId: string) =>
+            held("r-old").pipe(
+              Effect.map((record) => {
+                said.push(`closed ${runId}${record ? "" : " after the claim moved"}`);
+                return { stopped: [], left: over.lateLeft ?? [] };
+              }),
+            ),
+          patience: { everyMs: 10, forMs: 5_000 },
+        };
+      };
+
+      yield* hold("r-old", "project");
+      yield* hold("r-elsewhere", "other");
+      const handed = yield* handOverClaim({
+        dir,
+        slug: "project",
+        to: "r-new",
+        runs: ["r-old", "r-elsewhere", "r-new"],
+        ...host({ children: ["r-child"], stopsAfter: 2 }),
+      });
+      expect(handed).toEqual(["r-old"]);
+      // The Run and its child are stopped as an operator's stop does, both are waited out,
+      // and every agent they have is closed again before the record goes: one started
+      // after the stop would otherwise go on working on what the claim guards.
+      expect(said).toEqual([
+        "stop r-old",
+        "looked at r-old",
+        "looked at r-old",
+        "looked at r-old",
+        "looked at r-child",
+        "closed r-old",
+        "closed r-child",
+      ]);
+      expect(yield* held("r-old")).toBe(false);
+      expect(yield* held("r-elsewhere")).toBe(true);
+
+      // An agent the stop could not close could still change what the claim guards.
+      yield* hold("r-old", "project");
+      const stuck = yield* handOverClaim({
+        dir,
+        slug: "project",
+        to: "r-new",
+        runs: ["r-old"],
+        ...host({ left: ["impl-1's pane would not close"] }),
+      }).pipe(Effect.flip);
+      expect(stuck.message).toContain("impl-1's pane would not close");
+      expect(yield* held("r-old")).toBe(true);
+
+      // Nor one that started before the Run stopped and will not close now.
+      const late = yield* handOverClaim({
+        dir,
+        slug: "project",
+        to: "r-new",
+        runs: ["r-old"],
+        ...host({ lateLeft: ["impl-2's pane would not close"] }),
+      }).pipe(Effect.flip);
+      expect(late.message).toContain("impl-2's pane would not close");
+      expect(yield* held("r-old")).toBe(true);
+
+      // A Run that does not stop keeps the claim, and the adoption says why.
+      const running = yield* handOverClaim({
+        dir,
+        slug: "project",
+        to: "r-new",
+        runs: ["r-old"],
+        ...host({ stopsAfter: Number.POSITIVE_INFINITY }),
+        patience: { everyMs: 10, forMs: 50 },
+      }).pipe(Effect.flip);
+      expect(running.message).toContain("r-old is still running");
+      expect(yield* held("r-old")).toBe(true);
+    }).pipe(Effect.scoped),
   ));

@@ -5,7 +5,7 @@
 // already in the air about this work".
 
 import type { BunServices } from "@effect/platform-bun/BunServices";
-import { Clock, Data, Effect, FileSystem, Path, Result, Schema } from "effect";
+import { Clock, Data, Duration, Effect, FileSystem, Path, Result, Schema } from "effect";
 import { ensureLockDir } from "./lock";
 import { herdrFailureReason, type AgentInfo, type Herdr, type Submission } from "./herdr";
 import { verifyIncarnation, type AgentEntry } from "./registry";
@@ -13,6 +13,7 @@ import {
   appendLine,
   blocked,
   causalKey,
+  deferralsOf,
   ledgerFiles,
   ledgerPath,
   newestById,
@@ -25,7 +26,7 @@ import {
   type Delivery,
 } from "./steering";
 import { gate, interruptKeys } from "./steering-caps";
-import { nowIso } from "./time";
+import { nowIso, took } from "./time";
 
 /** How long a message may sit `reserved` before a later reader calls it `unknown`. */
 export const SUBMIT_TIMEOUT_MS = 60_000;
@@ -46,7 +47,27 @@ export interface DeliveryDraft {
   readonly attempt: number;
   readonly requestId: string;
   readonly note?: string;
+  /**
+   * How long a refusal herdr calls momentary may hold before this sender gives up, from
+   * the first one. Absent, it is not waited out: the refusal fails the delivery at once.
+   */
+  readonly patienceMs?: number;
 }
+
+/**
+ * Refusals that name a pane condition which clears by itself. By herdr's code, never its
+ * prose: a message is for people and can change under a release that keeps the code.
+ */
+const TRANSIENT_REFUSALS: ReadonlySet<string> = new Set(["agent_blocked"]);
+
+type Refusal =
+  | "blocked"
+  | "incarnation_changed"
+  | "failed"
+  | "unknown"
+  | "too_long"
+  | "deferred"
+  | "exhausted";
 
 /**
  * What became of one send. Never a throw: every one of these is a fact the caller has to
@@ -65,8 +86,14 @@ export type SubmitOutcome =
   | {
       readonly ok: false;
       readonly id: string | null;
-      readonly reason: "blocked" | "incarnation_changed" | "failed" | "unknown" | "too_long";
+      /**
+       * `deferred`: herdr said the pane cannot take it yet, and nothing was delivered.
+       * `exhausted`: that stayed true for the draft's whole patience.
+       */
+      readonly reason: Refusal;
       readonly detail: string;
+      /** On `blocked`: the state of the delivery already about this work, where one holds it. */
+      readonly held?: string;
     };
 
 export interface Channel {
@@ -226,11 +253,7 @@ export const transaction = Effect.fn("Dispatcher.transaction")(function* <A, E, 
   ).pipe(Effect.ensuring(Effect.sync(() => open.delete(terminalId))));
 });
 
-function refuse(
-  id: string | null,
-  reason: "blocked" | "incarnation_changed" | "failed" | "unknown" | "too_long",
-  detail: string,
-): SubmitOutcome {
+function refuse(id: string | null, reason: Refusal, detail: string): SubmitOutcome {
   return { ok: false, id, reason, detail };
 }
 
@@ -310,16 +333,18 @@ const send = Effect.fn("Dispatcher.send")(function* (
     );
     return refuse(null, "blocked", `${file} has ${ledger.corrupt} unreadable line(s)`);
   }
-  const inFlight = blocked(ledger.lines, key);
+  const line = deliveryOf(entry, terminalId, text, draft, at, "reserved");
+  const id = line.id;
+  const inFlight = blocked(ledger.lines, key, id);
   if (inFlight) {
     yield* deps.log(
       `not sent to ${entry.agent}: ${inFlight.state} delivery ${inFlight.id} is already about this work`,
     );
-    return refuse(null, "blocked", `${inFlight.id} is ${inFlight.state}`);
+    return {
+      ...refuse(null, "blocked", `${inFlight.id} is ${inFlight.state}`),
+      held: inFlight.state,
+    };
   }
-
-  const line = deliveryOf(entry, terminalId, text, draft, at, "reserved");
-  const id = line.id;
   const reserved: Delivery = draft.note === undefined ? line : { ...line, note: draft.note };
   yield* appendLine(file, reserved);
 
@@ -333,15 +358,64 @@ const send = Effect.fn("Dispatcher.send")(function* (
     return { ok: true as const, id, submission: sent.success };
   }
   // A refusal herdr answered with is a fact; a transport that never answered is not.
-  const failure = {
-    answered: sent.failure.answered === true,
-    why: herdrFailureReason(sent.failure),
-  };
-  // Answered means herdr decided; unanswered means nobody can say whether it arrived,
-  // and Collie never retries out of that on its own.
-  const state = failure.answered ? ("failed" as const) : ("unknown" as const);
-  yield* appendLine(file, { ...reserved, at: settledAt, state, note: failure.why });
-  return refuse(id, state, failure.why);
+  const why = herdrFailureReason(sent.failure);
+  if (sent.failure.answered !== true) {
+    // Nobody can say whether it arrived, and Collie never retries out of that on its own.
+    yield* appendLine(file, { ...reserved, at: settledAt, state: "unknown", note: why });
+    return refuse(id, "unknown", why);
+  }
+  const code = sent.failure.code;
+  const coded = code === undefined ? reserved : { ...reserved, code };
+  if (code === undefined || !TRANSIENT_REFUSALS.has(code) || draft.patienceMs === undefined) {
+    yield* appendLine(file, { ...coded, at: settledAt, state: "failed", note: why });
+    return refuse(id, "failed", why);
+  }
+  // Measured from the ledger rather than this process, so a sender that comes back after
+  // a restart is held to the same deadline rather than a fresh one.
+  const before = deferralsOf(ledger.lines, id);
+  const attempts = before.count + 1;
+  const held =
+    before.since === null ? 0 : (yield* Clock.currentTimeMillis) - Date.parse(before.since);
+  if (held < draft.patienceMs) {
+    if (attempts === 1)
+      yield* deps.log(`${entry.agent} cannot take a prompt yet (${code}); retrying`);
+    yield* appendLine(file, { ...coded, at: settledAt, state: "deferred", note: why });
+    return refuse(id, "deferred", `${code}, attempt ${attempts}`);
+  }
+  const gaveUp = `${code} held for ${took(held)} over ${attempts} attempts`;
+  yield* deps.log(`not sent to ${entry.agent}: ${gaveUp}; gave up`);
+  yield* appendLine(file, { ...coded, at: settledAt, state: "failed", note: gaveUp });
+  return refuse(id, "exhausted", gaveUp);
+});
+
+/** How soon, how often and for how long a pane that refuses for a moment is tried again. */
+export interface Patience {
+  readonly firstMs: number;
+  readonly maxMs: number;
+  /** From the first refusal. */
+  readonly forMs: number;
+}
+
+export const PATIENCE: Patience = { firstMs: 2_000, maxMs: 30_000, forMs: 10 * 60_000 };
+
+/**
+ * One delivery, tried again while herdr says the pane will clear by itself. Each try is a
+ * transaction of its own, so nothing waits holding the agent's ledger lock, and the
+ * incarnation is proven again before every send.
+ */
+export const submitPatiently = Effect.fn("Dispatcher.submitPatiently")(function* (
+  deps: DispatcherDeps,
+  entry: AgentEntry,
+  text: string,
+  draft: DeliveryDraft,
+  patience: Patience = PATIENCE,
+) {
+  const patient = { ...draft, patienceMs: patience.forMs };
+  for (let wait = patience.firstMs; ; wait = Math.min(wait * 2, patience.maxMs)) {
+    const outcome = yield* transaction(deps, entry, (channel) => channel.submit(text, patient));
+    if (outcome.ok || outcome.reason !== "deferred") return outcome;
+    yield* Effect.sleep(Duration.millis(wait));
+  }
 });
 
 /**
@@ -381,14 +455,14 @@ export const settleCollected = Effect.fn("Dispatcher.settleCollected")(function*
 });
 
 /**
- * Every reservation for an incarnation that is no longer the one addressed, settled
- * `failed`. Nothing was sent for them and nothing ever will be: the process they were
- * reserved against is gone.
+ * Every reservation, and every delivery waiting on its pane, for an incarnation that is no
+ * longer the one addressed, settled `failed`. Nothing was sent for them and nothing ever
+ * will be: the process they were reserved against is gone.
  */
 const settlePending = Effect.fn("Dispatcher.settlePending")(function* (file: string, why: string) {
   const at = yield* nowIso();
   for (const delivery of newestById(yield* readLedger(file)).values()) {
-    if (delivery.state !== "reserved") continue;
+    if (delivery.state !== "reserved" && delivery.state !== "deferred") continue;
     yield* appendLine(file, { ...delivery, at, state: "failed", note: why });
   }
 });
@@ -562,7 +636,7 @@ export const entryFromLive = Effect.fn("Dispatcher.entryFromLive")(function* (
     role: about.role,
     agent: about.agent,
     paneId: about.paneId ?? live.paneId,
-    workspaceId: about.workspaceId,
+    workspaceId: about.workspaceId ?? live.workspaceId,
     runId: about.runId,
     workflow: about.workflow,
     at: yield* nowIso(),

@@ -8,14 +8,9 @@
 
 import { Effect, Option } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
-import {
-  carryOutProposal,
-  declineProposal,
-  err,
-  evaluationDeps,
-  steer as steerRun,
-} from "../operations";
-import { RunStore } from "../run";
+import { carryOutProposal, declineProposal, err, steer as steerRun } from "../operations";
+import { evaluationDeps } from "../evaluator";
+import { findRun } from "../runs";
 import { proposalsPath, reconcileStep } from "../proposals";
 import {
   deliveriesOf,
@@ -31,15 +26,15 @@ import { nowIso } from "../time";
 export const steer = Command.make(
   "steer",
   {
-    text: Argument.string("text").pipe(
+    text: Argument.String("text").pipe(
       Argument.withDescription("What you want to say, in your own words"),
     ),
-    target: Flag.string("target").pipe(Flag.withDescription("`run:<id>`: which Run this is about")),
-    from: Flag.string("from").pipe(
+    target: Flag.String("target").pipe(Flag.withDescription("`run:<id>`: which Run this is about")),
+    from: Flag.String("from").pipe(
       Flag.withDescription("The card this is about, so the proposal is bound to its revision"),
       Flag.optional,
     ),
-    dryRun: Flag.boolean("dry-run").pipe(
+    dryRun: Flag.Boolean("dry-run").pipe(
       Flag.withDescription("Print what Collie would propose without recording a proposal"),
       Flag.withDefault(false),
     ),
@@ -66,12 +61,12 @@ export const steer = Command.make(
     ),
 ).pipe(Command.withDescription("Ask Collie to act on a Run; --dry-run previews without acting"));
 
-const hashFlag = Flag.string("hash").pipe(
+const hashFlag = Flag.String("hash").pipe(
   Flag.withDescription("Optionally require this exact proposal content hash"),
   Flag.optional,
 );
 
-const proposalIdArg = Argument.string("proposal-id").pipe(
+const proposalIdArg = Argument.String("proposal-id").pipe(
   Argument.withDescription("The proposal, as `steer` printed it"),
 );
 
@@ -106,11 +101,11 @@ export const runDeliveries = Command.make(
   "deliveries",
   {
     runId: runIdArg,
-    reconcile: Flag.string("reconcile").pipe(
+    reconcile: Flag.String("reconcile").pipe(
       Flag.withDescription("A delivery id to settle, for one nobody can account for"),
       Flag.optional,
     ),
-    as: Flag.string("as").pipe(
+    as: Flag.String("as").pipe(
       Flag.withDescription("`sent` or `not-sent`: what actually happened to it"),
       Flag.optional,
     ),
@@ -119,9 +114,8 @@ export const runDeliveries = Command.make(
   ({ runId, reconcile, as, requestId }) =>
     answering((env) =>
       Effect.gen(function* () {
-        const store = new RunStore(env.stateDir);
-        const run = yield* store.load(runId).pipe(Effect.catch(() => Effect.succeed(null)));
-        if (run === null) return err("run_not_found", `No Run "${runId}".`);
+        if ((yield* findRun(env, runId)) === null)
+          return err("run_not_found", `No Run "${runId}".`);
         const mine = yield* deliveriesOf(env.stateDir, runId);
 
         const settleId = Option.getOrNull(reconcile);
@@ -176,10 +170,10 @@ export const proposal = Command.make("proposal").pipe(
       "reconcile",
       {
         proposalId: proposalIdArg,
-        index: Argument.string("index").pipe(
+        index: Argument.String("index").pipe(
           Argument.withDescription("Which action, by its position in the proposal"),
         ),
-        as: Flag.string("as").pipe(
+        as: Flag.String("as").pipe(
           Flag.withDescription("`applied` or `not-applied`: what actually happened"),
         ),
         requestId: requestIdFlag,

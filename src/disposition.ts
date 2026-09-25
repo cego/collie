@@ -19,8 +19,6 @@ import { appendJournal, readJournal } from "./journal";
  * value meaning "actually it succeeded": the execution record is not editable from here.
  */
 const KindSchema = Schema.Literals(["merged", "abandoned", "superseded"]);
-export type DispositionKind = Schema.Schema.Type<typeof KindSchema>;
-
 const RecordSchema = Schema.Struct({
   at: Schema.String,
   by: Schema.String,

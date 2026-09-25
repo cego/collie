@@ -14,6 +14,7 @@ import {
   steeringSection,
   MAX_DELIVERY_BYTES,
   settleCollected,
+  submitPatiently,
 } from "../src/dispatcher";
 import {
   appendLine,
@@ -82,6 +83,8 @@ function fake(
   options: {
     agents?: AgentInfo[];
     fail?: HerdrError;
+    /** Only the first this many prompts fail; every one after is taken. */
+    failing?: number;
     /** What herdr saw of the submission; `observed` unless a test says otherwise. */
     saw?: "observed" | "unobserved";
     /** Run inside `agentPrompt`, to observe what the ledger says at that instant. */
@@ -108,7 +111,9 @@ function fake(
           Effect.gen(function* () {
             calls.push(`agentPrompt ${target} ${text}`);
             if (options.onPrompt) yield* options.onPrompt;
-            if (options.fail) return yield* Effect.fail(options.fail);
+            const prompted = calls.filter((call) => call.startsWith("agentPrompt")).length;
+            if (options.fail && prompted <= (options.failing ?? Infinity))
+              return yield* Effect.fail(options.fail);
             return options.saw ?? ("observed" as const);
           }),
       },
@@ -290,6 +295,139 @@ test("a herdr that refuses is a failure; one that never answers is unknown", () 
         ),
       ).toMatchObject({ ok: false, reason: "unknown" });
       expect(yield* states()).toContain("req-2-1 unknown");
+    }),
+  ));
+
+/** herdr's answer for a pane showing a dialog: a fact about the pane, not about the prompt. */
+const paneBusy = new HerdrError({
+  message: "herdr agent prompt failed (exit 1)",
+  detail: '{"error":{"code":"agent_blocked","message":"agent impl-1 is blocked"}}',
+  code: "agent_blocked",
+  answered: true,
+});
+
+const quick = { firstMs: 1, maxMs: 4, forMs: 60_000 };
+
+const ledgerLines = Effect.fn("test.ledgerLines")(function* () {
+  const file = yield* ledgerPath(stateDir, "term-1");
+  return (yield* readLedger(file)).filter((line): line is Delivery => "state" in line);
+});
+
+const prompted = (calls: ReadonlyArray<string>) =>
+  calls.filter((call) => call.startsWith("agentPrompt")).length;
+
+test("a pane that refuses while it is busy is retried until it takes the prompt, as one delivery", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const h = fake({ fail: paneBusy, failing: 3 });
+      const outcome = yield* submitPatiently(h.deps, entry, "read the prompt file", draft, quick);
+
+      expect(outcome).toEqual({ ok: true, id: "req-1-1", submission: "observed" });
+      // Four tries and one of them taken: one turn for one prompt.
+      expect(prompted(h.calls)).toBe(4);
+      const lines = yield* ledgerLines();
+      // Every try is on the ledger, under the one identity the first reservation had.
+      expect(new Set(lines.map((line) => line.id))).toEqual(new Set(["req-1-1"]));
+      expect(lines.map((line) => line.state)).toEqual([
+        "reserved",
+        "deferred",
+        "reserved",
+        "deferred",
+        "reserved",
+        "deferred",
+        "reserved",
+        "submitted",
+      ]);
+      expect(lines.filter((line) => line.state === "deferred").map((line) => line.code)).toEqual([
+        "agent_blocked",
+        "agent_blocked",
+        "agent_blocked",
+      ]);
+    }),
+  ));
+
+test("a refusal herdr does not call momentary is not retried, and neither is a send nobody answered", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const refused = fake({
+        fail: new HerdrError({
+          message: "no such agent",
+          detail: "",
+          code: "agent_not_found",
+          answered: true,
+        }),
+      });
+      expect(yield* submitPatiently(refused.deps, entry, "hello", draft, quick)).toMatchObject({
+        ok: false,
+        reason: "failed",
+      });
+      expect(prompted(refused.calls)).toBe(1);
+      expect((yield* ledgerLines()).at(-1)).toMatchObject({
+        state: "failed",
+        code: "agent_not_found",
+      });
+
+      const silent = fake({ fail: new HerdrError({ message: "socket closed", detail: "" }) });
+      expect(
+        yield* submitPatiently(
+          silent.deps,
+          entry,
+          "hello",
+          { ...draft, requestId: "req-2" },
+          quick,
+        ),
+      ).toMatchObject({ ok: false, reason: "unknown" });
+      expect(prompted(silent.calls)).toBe(1);
+      expect(yield* states()).toContain("req-2-1 unknown");
+    }),
+  ));
+
+test("a pane that stays busy past the deadline is given up on, and says what held and for how long", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const h = fake({ fail: paneBusy });
+      const outcome = yield* submitPatiently(h.deps, entry, "hello", draft, {
+        firstMs: 5,
+        maxMs: 10,
+        forMs: 40,
+      });
+
+      expect(outcome).toMatchObject({ ok: false, id: "req-1-1", reason: "exhausted" });
+      const detail = outcome.ok ? "" : outcome.detail;
+      expect(detail).toMatch(/^agent_blocked held for \d+s over \d+ attempts$/);
+      expect(prompted(h.calls)).toBeGreaterThan(1);
+      // Settled, so the same work is free to go out again once somebody resumes it.
+      const last = (yield* ledgerLines()).at(-1);
+      expect(last).toMatchObject({ state: "failed", code: "agent_blocked", note: detail });
+      // Told apart in the Run's log from a refusal that was never retried.
+      expect(h.calls.filter((call) => call.startsWith("log ") && call.includes("gave up"))).toEqual(
+        [`log not sent to impl-1: ${detail}; gave up`],
+      );
+    }),
+  ));
+
+test("a delivery left waiting on a busy pane is picked up under its own id, and no other copy goes out", () =>
+  runEffect(
+    Effect.gen(function* () {
+      // One try and then nobody came back for it: the process went during the wait.
+      const busy = fake({ fail: paneBusy });
+      yield* transaction(busy.deps, entry, (channel) =>
+        channel.submit("hello", { ...draft, patienceMs: 60_000 }),
+      );
+      expect(yield* states()).toEqual(["req-1-1 reserved", "req-1-1 deferred"]);
+
+      const other = fake();
+      expect(
+        yield* submitPatiently(other.deps, entry, "hello", { ...draft, requestId: "req-9" }, quick),
+      ).toMatchObject({ ok: false, reason: "blocked" });
+      expect(prompted(other.calls)).toBe(0);
+
+      const same = fake();
+      expect(yield* submitPatiently(same.deps, entry, "hello", draft, quick)).toMatchObject({
+        ok: true,
+        id: "req-1-1",
+      });
+      expect(prompted(same.calls)).toBe(1);
     }),
   ));
 

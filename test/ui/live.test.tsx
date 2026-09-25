@@ -85,7 +85,7 @@ test("a card says what was asked for, what changed, and what nobody checked", ()
         />
       ));
 
-      expect(said).toContain("slice · build · iteration 2 · abc1234 · try-it");
+      expect(said).toContain("slice · build · abc1234 · try-it");
       expect(said).toContain("the Live region");
       expect(said).toContain("src/live.ts");
       expect(said).toContain("bun test pass");

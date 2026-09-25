@@ -3,6 +3,7 @@
 
 import { DEFAULT_MODEL } from "./harness";
 import { parseMrTarget } from "./mr";
+import { diffTargetOf, type Settled } from "./strategies";
 
 const MAX = 32;
 
@@ -118,12 +119,7 @@ export function runName(workflow: string, slug: string): string {
  * by name, the working tree, or — for the workflows that have no target — the
  * run's own slug without the workflow it already carries.
  */
-export function targetLabel(
-  workflow: string,
-  slug: string,
-  inputs: Record<string, string>,
-): string {
-  const target = inputs.target ?? "";
+export function targetLabel(workflow: string, slug: string, target: string): string {
   if (target === "worktree") return "worktree";
   // An MR target carries its project; only the iid belongs on a label.
   const mr = parseMrTarget(target);
@@ -189,136 +185,10 @@ export function evenRatio(index: number, count: number): number {
   return 1 / (count - index + 1);
 }
 
-/** Tab order: the Session's board, then these, then anything else in start order. */
-export const WORKFLOW_ORDER = ["plan", "implement", "review"] as const;
-
-/** Lower sorts first. An unknown workflow ranks after every known one. */
-export function rankOf(workflow: string): number {
-  const at = WORKFLOW_ORDER.findIndex((known) => known === workflow);
-  return at === -1 ? WORKFLOW_ORDER.length : at;
-}
-
-/** One tab of the workspace, as the placement rule sees it. */
-export interface RankedTab {
-  /** The rank of the Run that owns this tab, or null for a tab Collie does not own. */
-  rank: number | null;
-  /** The Session's board, which is pinned first. */
-  board: boolean;
-}
-
-/**
- * Where a new tab of this rank belongs: after the last tab Collie owns whose rank is
- * no greater, and otherwise directly after the board. One insertion, so every tab
- * Collie does not own keeps its place and its order relative to the others — and ties
- * fall after what is already there, which is start order.
- */
-export function insertIndexFor(tabs: ReadonlyArray<RankedTab>, rank: number): number {
-  let after = -1;
-  for (const [at, tab] of tabs.entries()) {
-    // The board is read from the list rather than assumed to be index 0: its pin can
-    // fail, and the run carries on when it does.
-    if (tab.board || (tab.rank !== null && tab.rank <= rank)) after = at;
-  }
-  return after + 1;
-}
-
-/**
- * As much of a Run's record as its tabs' labels are made of. Structural, so `naming`
- * stays the leaf it is: everything here is a string, and the one caller that has a
- * whole `RunRecord` passes it unchanged.
- */
-export interface LabelledRun {
-  workflow: string;
-  slug: string;
-  inputs: Record<string, string>;
-  /** What the Run recorded itself as pointed at; derived again for an older record. */
-  target_label: string | null;
-  /** The Task this Run belongs to, whose workspace label already names the work. */
-  task: string | null;
-  status: "running" | "done" | "blocked" | "failed";
-  max_iterations: number;
-  steps: ReadonlyArray<{
-    id: string;
-    status: string;
-    /** Which round of the loop this step last ran in; 1 for a step that has not looped. */
-    iteration: number;
-    variants: ReadonlyArray<{ agent: string; tabId: string | null }>;
-  }>;
-}
-
-/** What a Run is called wherever a human reads it: the workflow, and what it is for. */
-export function runLabel(run: {
-  workflow: string;
-  slug: string;
-  inputs: Record<string, string>;
-  target_label: string | null;
-}): string {
-  return disambiguate(
-    displayName(run.workflow),
-    run.target_label ?? targetLabel(run.workflow, run.slug, run.inputs),
-  );
-}
-
-/**
- * The step a Run is on and the round of the loop it is in, or `null` for a Run with no
- * step running. One rule, because two places say it: the tab label and the Control
- * Plane's group row, which must not drift. `round` is `null` until the step has looped —
- * a workflow with no fix loop in it, and every step before one, is named by itself.
- */
-export function stepNow(run: LabelledRun): { id: string; round: string | null } | null {
-  const step = run.steps.find((s) => s.status === "running" || s.status === "blocked");
-  if (!step) return null;
-  return {
-    id: step.id,
-    round: step.iteration > 1 ? `${step.iteration}/${run.max_iterations}` : null,
-  };
-}
-
-/**
- * `⚙ Implement · control-plane-glass · fix 3/5`: the Run, and the step it is on. This
- * is what herdr's sidebar row for the workspace shows, so it says the two things a
- * human used to open the workspace to learn — which step, and how far into the loop.
- *
- * The step and iteration come off the record alone, so the Driver and the board compute
- * the same string and neither has to know which of a workflow's steps the loop covers.
- * A run that is over is what it was — the step it stopped on is the log's business.
- */
-export function runTabLabel(glyph: string, run: LabelledRun, asking: boolean): string {
-  const parts = [tabbedName(run)];
-  if (run.status === "running") {
-    const step = stepNow(run);
-    // A question is worth saying instead of the step it is asked from: it is the one
-    // state where the run is not going to move until someone reads the row.
-    if (asking) parts.push("asks you");
-    else if (step) parts.push([step.id, step.round].filter((part) => part !== null).join(" "));
-  }
-  return `${glyph} ${parts.join(" · ")}`;
-}
-
-/**
- * What a tab calls its Run. Inside a task workspace the workspace label already says
- * what the work is, so repeating it costs the width the step needs — the workflow is
- * what the tab adds. One repository of a fan-out keeps its own name: several of them
- * run in one task workspace and are otherwise the same sentence.
- */
-function tabbedName(run: LabelledRun): string {
-  if (run.task === null) return runLabel(run);
-  return disambiguate(displayName(run.workflow), run.inputs.repo ?? "");
-}
-
-/**
- * Whether a tab's current label is still one Collie wrote for this Run, and so whether
- * renaming it would overwrite a human's own choice. Collie's labels are a status glyph
- * and this Run's own name; anything else on the tab was typed by somebody, and a tab
- * Collie has no label for at all is one it has just made.
- *
- * Stateless on purpose: the Driver and the board both rename these tabs, and a memo
- * only one of them kept would let the other undo a rename the human had made.
- */
-export function collieOwns(current: string | undefined, run: LabelledRun): boolean {
-  if (current === undefined || current.trim() === "") return true;
-  if (current === tabNameOf(current)) return false;
-  return tabNameOf(current).startsWith(tabbedName(run));
+/** A Run's title from its facts: the workflow, and what it was pointed at. */
+export function runTitle(run: { readonly workflow: string; readonly settled: Settled }): string {
+  const target = diffTargetOf(run.settled)?.value ?? "";
+  return disambiguate(displayName(run.workflow), targetLabel(run.workflow, "", target));
 }
 
 /** `Collie | Task workspaces`: a task workspace's own label, from its two halves. */
@@ -339,56 +209,4 @@ export function oneLine(text: string): string {
     .replace(/\p{Cc}/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
-}
-
-/**
- * What one tab's glyph means: the state of what is in it. Anything working in there is
- * ⚙ whatever the run last recorded — which is what a review handed back to a live
- * implementer, or a finished agent prompted again, used to leave stuck at ✓. With
- * nothing working and nobody being asked, the run's own state is what is left to say.
- *
- * `statuses` is herdr's live word for each pane of the tab; an agent herdr no longer
- * has contributes none, so it neither claims work nor denies it.
- */
-export function tabGlyph(
-  statuses: ReadonlyArray<string>,
-  run: { status: LabelledRun["status"] },
-  asking: boolean,
-): string {
-  if (statuses.some((status) => status === "working")) return GLYPH.running;
-  if (statuses.some((status) => status === "blocked")) return GLYPH.waiting;
-  if (asking) return GLYPH.waiting;
-  if (run.status === "done") return GLYPH.done;
-  if (run.status === "failed") return GLYPH.failed;
-  if (run.status === "blocked") return GLYPH.waiting;
-  return GLYPH.running;
-}
-
-/**
- * Every tab this Run has, and what herdr should be calling it: one label for the Run
- * and a glyph per tab. Pure, and the whole of the reconcile — the Driver hands it what
- * it knows about its own agents and the Control Plane hands it `agent list`, so
- * whichever writes last writes the same thing.
- */
-export function tabLabelsFor(
-  run: LabelledRun,
-  statusOf: (agent: string) => string | undefined,
-  asking: boolean,
-): Map<string, string> {
-  const panes = new Map<string, string[]>();
-  for (const step of run.steps) {
-    for (const variant of step.variants) {
-      if (variant.tabId === null) continue;
-      const statuses = panes.get(variant.tabId) ?? [];
-      const status = statusOf(variant.agent);
-      if (status !== undefined) statuses.push(status);
-      panes.set(variant.tabId, statuses);
-    }
-  }
-  return new Map(
-    [...panes].map(([tabId, statuses]) => [
-      tabId,
-      runTabLabel(tabGlyph(statuses, run, asking), run, asking),
-    ]),
-  );
 }

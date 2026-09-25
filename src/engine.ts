@@ -1,5950 +1,4554 @@
-// Executes a Run: one tab per Step, agents started with the right Harness,
-// Model and Persona, gates and loops driven by Output files.
+// Collie's workflow engine: Effect's, run from the compiled binary.
+//
+// A workflow lives in a TypeScript file outside this checkout. This module is what lets
+// the packaged executable load one, give it the binary's own Effect rather than a second
+// copy, and run it on ClusterWorkflowEngine over real SQLite — so a host that dies leaves
+// completed work completed and a pending decision pending. Nothing here interprets a
+// workflow: the module is code, and Effect executes it.
+//
+// `docs/adr/0014-native-workflows-run-on-effects-own-engine.md` records why each of the
+// pieces below is upstream's rather than Collie's.
 
+import * as BunCrypto from "@effect/platform-bun/BunCrypto";
+import * as SqliteClient from "@effect/sql-sqlite-bun/SqliteClient";
 import {
+  Cause,
   Clock,
+  Context,
   Crypto,
-  Deferred,
+  Data,
+  Duration,
   Effect,
   Exit,
   FileSystem,
+  Layer,
   Option,
   Path,
-  Result,
+  Predicate,
+  Random,
+  Schedule,
   Schema,
+  Scope,
+  Semaphore,
   Stream,
 } from "effect";
+import * as ClusterWorkflowEngine from "effect/unstable/cluster/ClusterWorkflowEngine";
+import * as SingleRunner from "effect/unstable/cluster/SingleRunner";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import type { ConfigError } from "effect/Config";
 import type { PlatformError } from "effect/PlatformError";
-import type { ChildProcessSpawner } from "effect/unstable/process";
-import { ago, nowIso } from "./time";
-
-import type {
-  ChoiceDef,
-  Definitions,
-  ResolvedStep,
-  ResolvedWorkflow,
-  RoundDef,
-  StepRequirement,
-  Variant,
-} from "./definitions";
-import { gateSteps, roundVariant, stepSummaries, stepVariants, variantKeys } from "./definitions";
-import type { Defaults } from "./config";
-import { configValue, readConfig, writeConfigValue } from "./config";
-import type { PluginEnv } from "./env";
-import type { PickItem } from "./inputs";
-import { slugify } from "./template";
-import { checkoutFor, repositoryName, runNames } from "./worktree";
+import { FetchHttpClient } from "effect/unstable/http";
+import * as Reactivity from "effect/unstable/reactivity/Reactivity";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as DurableDeferred from "effect/unstable/workflow/DurableDeferred";
+import * as WorkflowModules from "effect/unstable/workflow";
+import * as EffectRoot from "effect";
+import * as AgentsSdk from "./agents";
+import { Agents } from "./agents";
+import * as Sdk from "./sdk";
 import {
-  isYamlMap,
-  YamlMapSchema,
-  YamlValueJsonSchema,
-  type YamlMap,
-  type YamlValue,
-} from "./yaml";
-import type { AgentInfo, AgentStatus, Herdr } from "./herdr";
-import { HerdrError, herdrFailureReason } from "./herdr";
-import { HARNESSES, isPermissionMode, PERMISSION_MODES, personaPrefix, startArgs } from "./harness";
+  Children,
+  Host,
+  RESERVED_INPUTS,
+  AgentScopes,
+  Run,
+  WorkflowAgents,
+  WorkflowError,
+  checkEntry,
+  definitionOf,
+  type WrittenDefinition,
+  describeMetadata,
+  jsonSchemaFor,
+  type ChildAsk,
+  type ChildRun,
+  type ChildrenApi,
+  type ActionFacts,
+  type InputField,
+  type InputFields,
+  type WorkflowMetadata,
+  type AgentPreferences,
+  type HostCodec,
+  type HostPayload,
+  type HostWorkflow,
+  type Registration,
+  type WorkflowDefinition,
+  type WorkflowEntry,
+} from "./sdk";
+import { FALLBACK_DEFAULTS, configValue, loadDefaults, readConfig } from "./config";
+import { foldPreferences, preferencesIn, resolveChoice } from "./harness";
+import { currentEnv } from "./env";
 import {
-  atBoundary,
-  controlDir,
-  installControls,
-  withControlLock,
-  type CompactionPorts,
-  type CompactionSettings,
-} from "./compaction";
-import { compactionFor, externalSubmissions } from "./compactors";
-import {
-  findingKey,
-  formatFindings,
-  isBlocking,
-  parseFindings,
-  parseFixOutput,
-  parseReviewOutput,
-  parseSynthesis,
-  unsubstantiated,
-  renderReview,
-  REVIEW_FILE,
-  settleFinalFix,
-  splitDisputed,
-  type Finding,
-  type Halt,
-  type ReviewOutput,
-} from "./output";
-import {
-  agentName,
-  evenRatio,
-  GLYPH,
-  insertIndexFor,
-  paneLabel,
-  rankOf,
-  runName,
-  runTabLabel,
-  shellQuote,
-  stepLabel,
-  collieOwns,
-  displayName,
-  tabLabelsFor,
-  targetLabel,
-  reason,
-} from "./naming";
-import {
-  deliverable,
-  readRegistry,
-  registerAgent,
-  registryPath,
-  scopeFor,
-  type AgentEntry,
-} from "./registry";
-import {
-  classifyWorkSource,
-  inferInputs,
-  resolveCandidates,
-  shell as shellRun,
-  targetKind,
-  type InputPrompts,
-} from "./inputs";
-import { fanoutRepos, fanoutUnfinished, RunStore, type FanoutRecord } from "./run";
-
-import { propagate, readIntent, seedIntent, writeIntent, type Intent } from "./intent";
-import { withLock } from "./lock";
-import {
-  alignment,
-  appendDrift,
-  askJudgement,
-  alreadyStood,
-  appendElection,
-  findingKey as driftFindingKey,
-  checkRules,
-  correctionCause,
-  correctionText,
-  correctionsSent,
-  decideCorrections,
-  flattenOutput,
-  judge,
-  newReports,
-  NOT_JUDGED,
-  recordSkipped,
-  electionsPath,
-  evaluatedFor,
-  openReports,
-  pendingEvaluation,
-  readDrift,
-  readElections,
-  shouldStand,
-  supersededBy,
-  type Judged,
-  type Judgement,
-  type JudgementDeps,
-  EXTRA_PASSES,
-  staleSince,
-} from "./drift";
-import { capabilitiesOf, gate } from "./steering-caps";
-import {
-  fingerprint,
-  readVerifications,
-  runApproved,
-  staleAgainst,
-  type Verification,
-} from "./verify";
-import { approvedFrom, approvedFor, renderApproved, type VerifySpec } from "./verify-spec";
-import { appendMetric, obstacleOf, readMetrics, repeatedFailure } from "./metrics";
-import {
-  endsWithoutPatch,
-  evidenceGaps,
-  isOutcome,
-  renderEvidence,
-  type Collected,
-  type Outcome,
-} from "./outcome";
-import {
-  appendCard,
-  buildCard,
-  encodeCheckpoint,
-  inspectFor,
-  readCards,
-  readCheckpoints,
-  type Card,
-} from "./cards";
-import { ensureHomeFor } from "./home";
-import { shell } from "./mr";
-import {
-  dropHolds,
-  readChoice,
-  parseGateAnswer,
-  readInboxMidStep,
-  type GateAnswer,
-  type InboxCommandValue,
-} from "./driver";
-import * as dispatch from "./dispatcher";
-import type { SubmitOutcome } from "./dispatcher";
-import {
-  appendLine,
-  budgetPath,
-  causalKey,
-  deliveriesOf,
-  herdOf,
-  ledgerPath,
-  newestById,
-  overrideActive,
-  readLedger,
-  isCauseKind,
-  textHash,
-  type Cause,
-  type Delivery,
-} from "./steering";
-import {
-  pendingFor,
-  proposalsPath,
-  read as readProposals,
-  record as recordProposal,
-} from "./proposals";
-import { DriftReportSchema, type Ref } from "./evaluator";
-import {
-  evaluationDeps,
-  handOver,
-  newRequestId,
-  writeInbox,
-  postReview,
-  resumeRun,
-  runSettled,
-  runStatus,
-} from "./operations";
-import { isSingleRepo, orderedTicketsOf, planReposOf, type PlanRepos, type Slice } from "./plan";
-import { notify as notifyRun, type NotificationKind } from "./notify";
+  HelleClaimSchema,
+  HelleError,
+  credentials,
+  releaseClaim,
+  waitForHelle,
+  type HelleClaim,
+} from "./helle";
+import { currentPid, signalProcess } from "./lock";
+import type { CheckoutKind, InputStrategy } from "./definitions";
+import { noteVerification } from "./metrics";
 import {
   gitlabForProject,
   gitlabReadiness,
   mrFacts,
-  addMrRole,
-  assignedTo,
-  glabLogin,
-  parseMrUrl,
-  resolveAssignee,
-  type MrRef,
-  type MrRole,
   parseMrTarget,
-  repoArgs,
-  type MrFacts,
+  parseMrUrl,
+  postNote,
   projectHere,
-  type Runner,
+  shell as runShell,
 } from "./mr";
-import { credentials, releaseClaim, waitForHelle } from "./helle";
+import { Notifier, SOUND, notificationTitle, wanted, type Sound } from "./notify";
 import {
-  askRoute,
-  liveRole,
-  sendPlanChange,
-  sendReview,
-  type HandoffResult,
-  type Session,
-} from "./handoff";
-import { renderTemplate, skillMention } from "./template";
-import { resolveWorkflow, skillDirs, skillMentions } from "./definitions";
-import type { Run, RunRecord, RunStatus, SliceRecord, StepStatus, VariantRecord } from "./run";
-import { isString } from "./schema";
+  Oversight,
+  cardCheckpoints,
+  checkDrift,
+  grantedToRun,
+  said,
+  settleAtFinish,
+  standForElection,
+  writeCard,
+  type Correcting,
+  type Watched,
+} from "./oversight";
+import { evaluationDeps } from "./evaluator";
+import { budgetPath } from "./steering";
+import type { JudgementDeps } from "./drift";
+import type { Card } from "./cards";
+import { reason } from "./naming";
+import {
+  fromWorkSource,
+  propagate,
+  readIntent,
+  seedIntent,
+  writeIntent,
+  type IntentSeed,
+} from "./intent";
+import { latest, readDispositions, type Disposition } from "./disposition";
+import { openFindingsIn } from "./output";
+import { isSingleRepo, planIssuesIn, planReposOf } from "./plan";
+import { SELF, inputsFor, offersFrom, type Declared, type Offer } from "./offers";
+import { isOutcome } from "./outcome";
+import { RequestConflict, Store, storeLayer, type Admission, type RunRow } from "./store";
+import { TASK_INPUT, checkoutFor, repositoryName } from "./worktree";
+import { Herdr, herdrFailureReason } from "./herdr";
+import type { PluginEnv } from "./env";
+import { WorktreeRecordSchema } from "./run";
+import { newTask, taskOfWorkspace, writeTask } from "./task";
+import { classifyWorkSource } from "./inputs";
+import type { BunServices } from "@effect/platform-bun/BunServices";
+import { approvedFrom, VerifySpecSchema, type VerifySpec } from "./verify-spec";
+import {
+  fingerprint,
+  insideRun,
+  readVerifications,
+  runApproved,
+  type Verification,
+} from "./verify";
+import * as Workflow from "effect/unstable/workflow/Workflow";
+import * as WorkflowEngine from "effect/unstable/workflow/WorkflowEngine";
 
-export const VIEW_SOURCE_PREFIX = "cego.collie:";
+/** A module that cannot be loaded, named by its own file. Schema-backed, so the local
+ *  host can fail a client with the same value rather than a copy of it. */
+export class EntryError extends Schema.TaggedError<EntryError>()("EntryError", {
+  file: Schema.String,
+  message: Schema.String,
+}) {}
+
+/** What a refusal says first where the input is why, which a front door reads back. */
+export const REFUSED_INPUT = "invalid_input";
+
+/** Anything else a host will not do, said in one sentence a caller can show. */
+export class HostRefused extends Schema.TaggedError<HostRefused>()("HostRefused", {
+  reason: Schema.String,
+}) {}
+
+/** A placement that may have changed something outside, which nothing here can prove either way. */
+class PlacementUncertain extends Schema.TaggedError<PlacementUncertain>()("PlacementUncertain", {
+  reason: Schema.String,
+}) {}
+
+export class ToolchainError extends Data.TaggedError("ToolchainError")<{
+  readonly code: "toolchain_unavailable";
+  readonly message: string;
+}> {}
 
 /**
- * Which toast a blocked step has earned, or none. Both kinds fire only after their
- * own recovery has been tried: a repair that worked, or a nudge that was answered, is
- * not worth interrupting anyone for.
+ * The SDK the binary serves to a module it loads. Without this an external file resolves
+ * `effect` from its own directory — a second copy whose `Effect.succeed` builds values
+ * this process's runtime does not recognise, and whose service keys are not the host's.
+ * The directory does hold one, because that is where an author's declarations come from,
+ * which is exactly why serving the bundled namespaces has to win.
+ *
+ * Each index module is expanded into its members, so `effect/Effect` and
+ * `effect/unstable/workflow/Workflow` are the binary's objects as surely as `effect` is.
  */
-function blockedKind(outcome: VariantOutcome): NotificationKind | null {
-  if (outcome.record.repairs.length > 0) return "output-unusable";
-  // Being nudged is not being given up on: an agent can be nudged once and then block
-  // for a human, which is a question, not a quiet step, and has its own toast.
-  if (outcome.stuck) return "step-stuck";
-  return null;
+const NAMESPACES = [
+  ["effect", EffectRoot],
+  ["effect/unstable/workflow", WorkflowModules],
+] as const;
+
+export const sdkModules = (): ReadonlyArray<readonly [string, object]> => {
+  // Two files, one module: `sdk.ts` is what a module declares about itself and `agents.ts`
+  // is what it does with an agent. They are apart because the second reaches for herdr
+  // and the first must not, and an author has no reason to know that.
+  const served: Array<readonly [string, object]> = [["collie", { ...Sdk, ...AgentsSdk }]];
+  for (const [prefix, namespace] of NAMESPACES) {
+    served.push([prefix, namespace]);
+    for (const [name, member] of Object.entries(namespace))
+      served.push([`${prefix}/${name}`, member]);
+  }
+  return served;
+};
+
+/** Kept in step with package.json, which `engine.test.ts` checks: the host and an
+ *  author's declarations have to be the same Effect, or the types are about another one. */
+export const TOOLCHAIN = {
+  effect: "4.0.0-rc.117",
+  typescript: "^7.0.2",
+} as const;
+
+/**
+ * The declarations an author typechecks `collie` against, kept in step with
+ * `src/sdk.ts` by `engine.test.ts` — which typechecks a module using the whole
+ * surface, so a declaration that has drifted fails a test rather than an author's build.
+ */
+export const SDK_DECLARATIONS = `declare module "collie" {
+  import type { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+  import type { Workflow } from "effect/unstable/workflow/Workflow";
+  import type {
+    WorkflowEngine,
+    WorkflowInstance,
+  } from "effect/unstable/workflow/WorkflowEngine";
+
+  /** What this working tree was when a command ran on it. */
+  export interface Snapshot {
+    readonly head_sha: string;
+    readonly fingerprint: string;
+  }
+
+  /** A command Collie watched, bound to the tree it ran on. Never an Output's claim. */
+  export interface Verification {
+    readonly name: string;
+    readonly cwd: string;
+    readonly start: Snapshot;
+    readonly end: Snapshot;
+    readonly exit: number;
+    readonly expect: "pass" | "fail";
+    readonly result: "pass" | "fail" | "unstable";
+    readonly at: string;
+    readonly by: "agent" | "collie";
+  }
+
+  /** What the journal holds and the tree in front of you, for checks to be read against. */
+  export interface CheckEvidence {
+    readonly verifications: ReadonlyArray<Verification>;
+    readonly final: Snapshot;
+  }
+
+  /** A Run as the host admitted it: where it works, where its work belongs, what it was given. */
+  export interface Place {
+    readonly cwd: string;
+    readonly dir: string;
+    /** The host's own launch options — the RESERVED_INPUTS names — as a caller gave them. */
+    readonly options: Readonly<Record<string, string>>;
+    /** The Task this Run belongs to, whose workspace its agents open in; null for none. */
+    readonly task: string | null;
+    /** A workspace of the Run's own, where it asked for one; null lives in its Task's. */
+    readonly workspace: string | null;
+  }
+
+  /** What became of a note: whether it landed, and the sentence a human reads either way. */
+  export interface Posted {
+    readonly ok: boolean;
+    readonly message: string;
+  }
+
+  /** One command a human approved Collie to run for this Run. */
+  export interface VerifySpec {
+    readonly name: string;
+    readonly executable: string;
+    readonly argv: ReadonlyArray<string>;
+    readonly cwd: string;
+  }
+
+  /** What opening a merge request from here needs, and what it would be filled in with. */
+  export interface MrReady {
+    readonly ok: boolean;
+    /** Why it cannot be done here. Empty where it can. */
+    readonly reason: string;
+    /** The configured assignee, else whoever glab is logged in as; empty for neither. */
+    readonly assignee: string;
+    /** The repository's merge request template, relative to the checkout; empty for none. */
+    readonly template: string;
+    readonly issues: ReadonlyArray<string>;
+  }
+
+  /** What the host lends a workflow. Hold and stop are read fresh on every replay. */
+  export interface HostApi {
+    readonly dir: string;
+    /** This Run as the host admitted it; its directory is made as this is answered. */
+    readonly place: (runId: string) => Effect.Effect<Place>;
+    readonly held: (runId: string) => Effect.Effect<boolean>;
+    readonly stopRequested: (runId: string) => Effect.Effect<boolean>;
+    readonly record: (runId: string, event: string) => Effect.Effect<void>;
+    /** Why this Run parked its own work, shown beside its status; null clears it. */
+    readonly parked: (runId: string, why: string | null) => Effect.Effect<void>;
+    readonly asking: (runId: string, question: DecisionSpec) => Effect.Effect<void>;
+    /** What has been verified for this run, and the tree in front of it now. */
+    readonly evidence: (runId: string, cwd: string) => Effect.Effect<CheckEvidence>;
+    /** Runs one approved command and records it. A name nobody approved is refused. */
+    readonly verify: (options: {
+      readonly runId: string;
+      readonly name: string;
+      readonly cwd: string;
+      readonly expect?: "pass" | "fail";
+    }) => Effect.Effect<Verification, WorkflowError>;
+    /**
+     * Puts a file on the merge request a Run was pointed at, as one note Collie sends.
+     * The refusal is the message: not a merge request, no glab for it, or one assigned
+     * to whoever is running this — whose findings are theirs to fix rather than to post.
+     */
+    readonly post: (options: {
+      readonly runId: string;
+      readonly target: string;
+      readonly cwd: string;
+      readonly file: string;
+    }) => Effect.Effect<Posted>;
+    /** What this Run may have Collie run for it; a workflow cannot add to the list. */
+    readonly approved: (runId: string) => Effect.Effect<ReadonlyArray<VerifySpec>>;
+    /** One value from the operator's own configuration, by dotted name; empty for none. */
+    readonly config: (dotted: string) => Effect.Effect<string>;
+    /** Whether a merge request can be opened from here, and what it would carry. */
+    readonly mr: (options: {
+      readonly cwd: string;
+      readonly target?: string;
+      readonly source?: { readonly value: string; readonly kind: string };
+    }) => Effect.Effect<MrReady>;
+    /**
+     * Blocks until this Run holds the shared claim on the repository it works in, and
+     * answers null where that repository has none. Waiting here costs wall clock and no
+     * model tokens. adopting is asked only where the claim was already the operator's.
+     */
+    readonly claim: <E, R>(options: {
+      readonly runId: string;
+      readonly cwd: string;
+      readonly adopting: Effect.Effect<boolean, E, R>;
+      readonly say: (line: string) => Effect.Effect<void, E, R>;
+    }) => Effect.Effect<{ readonly slug: string } | null, WorkflowError | E, R>;
+    /** Gives the claim back. Only a Run that finished its work releases. */
+    readonly release: (runId: string) => Effect.Effect<void>;
+    /** Records the merge request this Run opened, as a fact its card reads. */
+    readonly mergeRequest: (runId: string, url: string) => Effect.Effect<void>;
+  }
+  export const Host: Context.Service<HostApi, HostApi>;
+  export type Host = HostApi;
+
+  /** How every workflow reports a failure. */
+  export class WorkflowError extends Schema.TaggedError<WorkflowError>()(
+    "WorkflowError",
+    { reason: Schema.String },
+  ) {}
+
+  /** The Run a workflow is executing as: supplied by the host, never passed by hand. */
+  export interface RunApi {
+    readonly id: string;
+    /** The public id of the workflow it is a Run of. */
+    readonly workflow: string;
+  }
+  export const Run: Context.Service<RunApi, RunApi>;
+  export type Run = RunApi;
+
+  /** Which agent does the work: each is inherited from the configuration where it is left out. */
+  export interface AgentPreferences {
+    readonly harness?: string;
+    readonly model?: string;
+    readonly effort?: string;
+  }
+
+  /**
+   * Every piece of agent work inside the effect prefers these — through any helper and into
+   * any child — unless something nearer says otherwise. Parallel branches keep their own.
+   */
+  export function withAgents(
+    preferences: AgentPreferences,
+  ): <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+
+  /** What a workflow's own code may use without providing it: the host lends all of it. */
+  export type Lent =
+    | Run
+    | Host
+    | Agents
+    | Children
+    | WorkflowEngine
+    | WorkflowInstance
+    | FileSystem.FileSystem
+    | Path.Path;
+
+  /** What a definition declares about itself beside what it does. None of it is a step. */
+  export interface Declarations {
+    readonly hints?: Readonly<Record<string, string>>;
+    readonly outcome?: OutcomeContract;
+    /** A worktree the host cuts before the Run exists; absent works where it was started. */
+    readonly checkout?: "branch" | "roaming";
+    readonly followUps?: ReadonlyArray<FollowUp>;
+    readonly actions?: ReadonlyArray<ActionProvider>;
+  }
+
+  /** A workflow: its identity, what it takes and gives, what it declares, and what it does. */
+  export interface Definition<
+    Fields extends Schema.Struct.Fields,
+    Output extends Schema.Top,
+    Err extends Schema.Top,
+    Provided,
+  > extends Declarations {
+    readonly id: string;
+    readonly title?: string;
+    readonly description?: string;
+    readonly input?: Schema.Struct<Fields>;
+    readonly output?: Output;
+    /** A typed failure of the workflow's own, beside the WorkflowError every workflow has. */
+    readonly error?: Err;
+    /** The agent every piece of work defaults to, over the operator's configuration. */
+    readonly agents?: AgentPreferences;
+    /** The services run needs that the host does not lend. */
+    readonly layer?: Layer.Layer<Provided, never, Exclude<Lent, Run | WorkflowInstance>>;
+    readonly run: (context: {
+      readonly input: Schema.Struct<Fields>["Type"];
+    }) => Effect.Effect<Output["Type"], WorkflowError | Err["Type"], Lent | Provided>;
+  }
+
+  /**
+   * A workflow, as the one thing its module exports by default. Left out, the title is the
+   * id, the description is empty, it takes nothing and it gives nothing back.
+   */
+  export function defineWorkflow<
+    const Fields extends Schema.Struct.Fields = {},
+    Output extends Schema.Top = typeof Schema.Void,
+    Err extends Schema.Top = typeof Schema.Never,
+    Provided = never,
+  >(
+    definition: Definition<Fields, Output, Err, Provided>,
+  ): Definition<Fields, Output, Err, Provided>;
+
+  /** A question as the host records it: its identity, what it asks, what it takes. */
+  export interface DecisionSpec {
+    readonly name: string;
+    readonly prompt: string;
+    readonly options: ReadonlyArray<string>;
+  }
+
+  /** A question this Run waits on, asked when the work reaches it. The name is its identity. */
+  export function ask(question: {
+    readonly name: string;
+    readonly prompt?: string;
+    /** The answers it takes; none is a question answered in the operator's own words. */
+    readonly options?: ReadonlyArray<string>;
+  }): Effect.Effect<string, never, Run | Host | WorkflowEngine | WorkflowInstance>;
+
+  /**
+   * What this Run may have Collie run to prove its kind of result. With nothing approved
+   * where that kind needs something, the Run parks with the repair; a resume asks again.
+   */
+  export function requireApproved(
+    kind: string,
+  ): Effect.Effect<ReadonlyArray<VerifySpec>, never, Run | Host | WorkflowInstance>;
+
+  /** What a parent asks for when part of its own work is another workflow. */
+  export interface ChildAsk {
+    /** Stable within the parent: the same one twice is the same child. */
+    readonly invocation: string;
+    /** A public id, or "self" for the parent's own. */
+    readonly workflow: string;
+    readonly input: Readonly<Record<string, unknown>>;
+    /** The host's own options for the child; only the host's own names are taken. */
+    readonly options?: Readonly<Record<string, string>>;
+  }
+
+  /** A child as the host admitted it; fresh is false for one already admitted. */
+  export interface ChildRun {
+    readonly runId: string;
+    readonly workflow: string;
+    readonly invocation: string;
+    readonly fresh: boolean;
+  }
+
+  /** What a host lends a workflow that is made of other workflows. */
+  export interface ChildrenApi {
+    readonly start: (ask: ChildAsk) => Effect.Effect<ChildRun, WorkflowError>;
+    readonly result: (child: ChildRun) => Effect.Effect<unknown, WorkflowError>;
+  }
+  export const Children: Context.Service<ChildrenApi, ChildrenApi>;
+  export type Children = ChildrenApi;
+
+  /** One child workflow, started and waited on. */
+  export function child(
+    ask: ChildAsk,
+  ): Effect.Effect<unknown, WorkflowError, Children>;
+
+
+  /** A schema that decodes an agent's Output without services of its own. */
+  export type OutputContract = Schema.Codec<unknown, unknown, never, never>;
+
+  /** One piece of agent work, named so that replaying it finds what it already did. */
+  export interface AgentAsk {
+    readonly runId: string;
+    readonly operation: string;
+    readonly role: string;
+    /** The agent this work goes to; null gives this operation one of its own. */
+    readonly agent: string | null;
+    readonly workflow: string;
+    /** The Run's Task, whose workspace its agents open in; null opens where the host is. */
+    readonly task: string | null;
+    /** The Run's own workspace, where it asked for one; its agents open there instead. */
+    readonly workspace?: string | null;
+    readonly cwd: string;
+    readonly prompt: string;
+    readonly output: string;
+    /** A skill this work is started with, as the human channel invokes one. */
+    readonly skill: string | null;
+    readonly harness: string | null;
+    readonly model: string | null;
+    readonly effort: string | null;
+    readonly permissions: string | null;
+  }
+
+  /** The agent this work is on, as the launch recorded it. */
+  export interface Launched {
+    readonly agent: string;
+    readonly output: string;
+    readonly reused: boolean;
+    readonly runId: string;
+    readonly operation: string;
+    readonly role: string;
+    readonly workflow: string;
+    readonly harness: string;
+    readonly terminalId?: string;
+  }
+
+  /** Nobody can say whether the agent is there, so nothing was started. */
+  export class AgentUncertain extends Schema.TaggedError<AgentUncertain>()(
+    "AgentUncertain",
+    { operation: Schema.String, reason: Schema.String },
+  ) {}
+
+  /** The work cannot go on until something outside the Run changes; a resume picks it up. */
+  export class AgentParked extends Schema.TaggedError<AgentParked>()(
+    "AgentParked",
+    { operation: Schema.String, reason: Schema.String },
+  ) {}
+
+  /** What a host lends a workflow that needs an agent. */
+  export interface AgentsApi {
+    readonly outputFor: (runId: string, operation: string) => string;
+    /** Where each named skill is installed, for the mentions a prompt carries. */
+    readonly skills: (
+      names: ReadonlyArray<string>,
+    ) => Effect.Effect<ReadonlyMap<string, string>>;
+    /**
+     * What an agent is told about asking for a decision its work does not cover: the
+     * pane of whoever is live in that role, and otherwise to stop and ask the human.
+     */
+    readonly askRoute: (role: string, cwd: string) => Effect.Effect<string>;
+    readonly launch: (ask: AgentAsk) => Effect.Effect<Launched, AgentUncertain | AgentParked>;
+    /** This work's agent started again with its prompt, where it is gone and wrote nothing. */
+    readonly revive: (
+      ask: AgentAsk,
+      unless?: string | null,
+    ) => Effect.Effect<void, AgentUncertain | AgentParked>;
+    /** A message to another Run's live agent in this role here; null where there is none. */
+    readonly handOff: (options: {
+      readonly runId: string;
+      readonly role: string;
+      readonly cwd: string;
+      readonly text: string;
+    }) => Effect.Effect<Steered | null, AgentParked>;
+    /** Closes the panes of this run's live agents; \`left\` may still be running. */
+    readonly halt: (
+      runId: string,
+    ) => Effect.Effect<{ readonly stopped: ReadonlyArray<string>; readonly left: ReadonlyArray<string> }>;
+    readonly collect: (
+      launched: Launched,
+      unless?: string | null,
+    ) => Effect.Effect<string | null, AgentUncertain>;
+    readonly repair: (
+      launched: Launched,
+      problem: string,
+      unusable: string,
+    ) => Effect.Effect<boolean, AgentUncertain | AgentParked>;
+    readonly steer: (options: {
+      readonly runId: string;
+      readonly text: string;
+      readonly request: string;
+      readonly operation?: string;
+      /** One of the run's agents by name, which wins over operation. */
+      readonly agent?: string;
+      readonly mode?: DeliveryMode;
+    }) => Effect.Effect<Steered>;
+    readonly pollMs: number;
+  }
+
+  export type DeliveryMode = "boundary" | "now" | "interrupt";
+
+  /** What became of one delivery; delivered is never "it was accepted for sending". */
+  export interface Steered {
+    readonly agent: string;
+    readonly delivered: boolean;
+    readonly detail: string;
+  }
+  export const Agents: Context.Service<AgentsApi, AgentsApi>;
+  export type Agents = AgentsApi;
+
+  /** What you ask for: the work, not the steps it takes. */
+  export type AgentWork<
+    Output extends OutputContract,
+    Input extends Readonly<Record<string, Schema.Json>> = never,
+  > = Doing<Output> & Told<Input>;
+
+  /**
+   * What the agent is told: a template and the input it declares, or text of your own
+   * with input for any "{{name}}" in it. An expression nothing fills is refused before an
+   * agent starts.
+   */
+  export type Told<Input extends Readonly<Record<string, Schema.Json>>> =
+    | { readonly instructions: Template<Input>; readonly input: Input }
+    | { readonly instructions: string; readonly input?: Readonly<Record<string, Schema.Json>> };
+
+  export interface Doing<Output extends OutputContract> {
+    readonly operation: string;
+    /** Where the agent works; the checkout the host placed the Run on where it is left out. */
+    readonly cwd?: string;
+    /** What the Output has to be. Left out, the agent answers in plain text. */
+    readonly output?: Output;
+    readonly role?: string;
+    /** The agent this work goes to, where several operations are one agent's list. */
+    readonly agent?: string;
+    readonly workflow?: string;
+    /** The skill this work is started with, where the work is one a skill describes. */
+    readonly skill?: string;
+    readonly harness?: string;
+    readonly model?: string;
+    readonly effort?: string;
+    readonly permissions?: "auto" | "harness";
+  }
+
+  /** A message handed to another Run's live agent in this role: the agent, or null where none. */
+  export function handOffWork(options: {
+    readonly operation: string;
+    readonly role: string;
+    /** Where the agent to hand to works; the Run's own checkout where it is left out. */
+    readonly cwd?: string;
+    readonly text: string;
+  }): Effect.Effect<
+    string | null,
+    WorkflowError,
+    Run | Agents | Host | WorkflowEngine | WorkflowInstance
+  >;
+
+  /** One agent, once, and its Output as a value of your own type. */
+  export function agentWork<
+    Output extends OutputContract = typeof Schema.String,
+    Input extends Readonly<Record<string, Schema.Json>> = never,
+  >(
+    work: AgentWork<Output, Input>,
+  ): Effect.Effect<
+    Output["Type"],
+    WorkflowError,
+    Run | Agents | Host | WorkflowEngine | WorkflowInstance
+  >;
+
+  /** Everything a prompt is built from, none of which is an Activity. */
+  export interface PromptParts {
+    readonly role: string;
+    readonly instructions: string;
+    readonly output: string;
+    /** What the Output is drawn to; null asks for plain text. */
+    readonly contract: Projection | null;
+    readonly input?: Readonly<Record<string, unknown>>;
+    /** Where each mentioned skill is installed; a mention of one that is not says so. */
+    readonly skills?: ReadonlyMap<string, string>;
+    readonly cwd?: string;
+  }
+
+  /** The ask an agent is sent, built from decoded values and your Markdown. */
+  export function promptFor(parts: PromptParts): string;
+
+  /** An agent's file as your own type, or every reason it could not be used. */
+  export function decodeOutput<Output extends OutputContract>(
+    contract: Output,
+    text: string,
+  ): { readonly ok: true; readonly value: Output["Type"] }
+    | { readonly ok: false; readonly problem: string };
+
+  export type Outcome =
+    | "unspecified" | "feature" | "bug" | "refactor" | "investigation"
+    | "docs" | "migration" | "review" | "plan";
+
+  export type OutcomeContract =
+    | { readonly fixed: Outcome; readonly selectable?: undefined }
+    | { readonly fixed?: undefined; readonly selectable: ReadonlyArray<Outcome> };
+
+  /**
+   * Where an offer's input comes from, as the Run it is offered about knows it. A closed
+   * list: Collie fills these in, and anything else is the caller's to give.
+   */
+  export type Source =
+    | "run-dir"
+    | "plan-dir"
+    | "diff-target"
+    | "branch"
+    | "merge-request"
+    | "started-with";
+
+  export interface FollowUp {
+    readonly id: string;
+    readonly title: string;
+    /** A public workflow id, or "self" for the one declaring it. */
+    readonly workflow: string;
+    readonly when: "succeeded" | "failed" | "always";
+    /** What Collie fills in from the Run itself; the rest is the caller's to give. */
+    readonly inputs?: Readonly<Record<string, Source>>;
+    /** A further condition on the facts, where how it ended is not the whole of it. */
+    readonly eligible?: (facts: ActionFacts) => boolean;
+  }
+
+  /** What an action decides eligibility from: facts, never a workflow's name. */
+  export interface ActionFacts {
+    readonly outcome: Outcome;
+    readonly succeeded: boolean;
+    readonly branch: string | null;
+    readonly mrUrl: string | null;
+    readonly planIssues: number;
+    readonly disposed: boolean;
+    /** Findings it left for somebody to fix, which is what a fix is offered over. */
+    readonly openFindings: number;
+    /** What it was pointed at, where it was pointed at anything. */
+    readonly diffTarget: string | null;
+    /** The shared claim it still holds, by the project it claimed; null where it holds none. */
+    readonly claim: string | null;
+  }
+
+  export interface ActionProvider {
+    readonly id: string;
+    readonly title: string;
+    /** A public workflow id, or "self" for the one declaring it. */
+    readonly workflow: string;
+    readonly arguments: Schema.Struct.Fields;
+    readonly eligible: (facts: ActionFacts) => boolean;
+    /** What Collie fills in from the Run itself; the rest is the caller's to give. */
+    readonly inputs?: Readonly<Record<string, Source>>;
+  }
+
+  /** Names the host supplies at launch; an input of one of these is refused. */
+  export const RESERVED_INPUTS: Readonly<Record<string, string>>;
+  export const EXCLUSIVE_STRATEGIES: ReadonlyArray<string>;
+
+  export interface Finding {
+    file?: string;
+    line?: number;
+    severity: string;
+    title: string;
+    detail?: string;
+    /** A reviewer's answer to the implementer's reason for disputing this finding. */
+    rebuttal?: string;
+    /** Why a synthesis dropped this finding; only a dropped entry carries one. */
+    reason?: string;
+  }
+
+  /**
+   * The one judgement a reviewer gives that nothing else can, named by the kind of result
+   * the change was for. One applies and the rest do not, so all are optional.
+   */
+  export interface Judgement {
+    scope_met?: boolean;
+    behavior_preserved?: boolean;
+    supported?: boolean;
+    accurate?: boolean;
+    compatible?: boolean;
+  }
+
+  export interface ReviewOutput extends Judgement {
+    verdict: "clean" | "findings";
+    findings: Finding[];
+    disputed: Finding[];
+  }
+
+  export interface Fixed {
+    file?: string;
+    title: string;
+    note?: string;
+  }
+
+  export interface Synthesis extends ReviewOutput {
+    summary: string;
+    dropped: Finding[];
+    fixed: Fixed[];
+  }
+
+  /** One check the implementer says it ran. Whether it passed is read from the journal. */
+  export interface Check {
+    name: string;
+    note?: string;
+  }
+
+  export interface FixOutput {
+    verdict: "clean" | "findings";
+    findings: Finding[];
+    fixed: Fixed[];
+    disputed: Finding[];
+    checks: Check[];
+  }
+
+  export type Halt =
+    | "no_progress"
+    | "dispute_unresolved"
+    | "fix_unverified"
+    | "definition_changed"
+    | "evidence_missing";
+
+  /** What a review left for the implementer, and what is the human's call instead. */
+  export interface Split {
+    live: Finding[];
+    settled: Finding[];
+    rebutted: Finding[];
+  }
+
+  /** Where a review/fix rally goes after one review. */
+  export type Rally =
+    | { readonly go: "clean"; readonly remaining: Finding[] }
+    | {
+        readonly go: "fix";
+        readonly live: Finding[];
+        readonly blocking: Finding[];
+        readonly keys: ReadonlyArray<string>;
+      }
+    | {
+        readonly go: "halt";
+        readonly halt: Halt;
+        readonly reason: string;
+        readonly outstanding: Finding[];
+      };
+
+  export type FinalFix =
+    | { ok: true; attestation: string; outstanding: Finding[] }
+    | { ok: false; halt: Halt; reasons: string[]; outstanding: Finding[] };
+
+  /** Minor is the one severity not worth blocking on; anything else fails closed. */
+  export function isBlocking(finding: Finding): boolean;
+  export function findingKey(finding: Pick<Finding, "file" | "title">): string;
+  export function blockingKeys(findings: ReadonlyArray<Finding>): string[];
+  /** Whether a blocking finding says where and why, so it can be acted on. */
+  export function substantiated(finding: Finding): boolean;
+  export function unsubstantiated(findings: ReadonlyArray<Finding>): string | null;
+  /** A finding the implementer already rejected stops driving the loop. */
+  export function splitDisputed(
+    findings: ReadonlyArray<Finding>,
+    disputed: ReadonlyArray<Finding>,
+  ): Split;
+  /** Where one round goes next: another fix, clean, or the human's call. */
+  export function settleRound(round: {
+    readonly live: ReadonlyArray<Finding>;
+    readonly disputed: ReadonlyArray<Finding>;
+    readonly reopened?: ReadonlyArray<Finding>;
+    readonly at: number;
+    readonly seen?: { readonly at: number; readonly keys: ReadonlyArray<string> } | null;
+  }): Rally;
+  /** The last fix has no review after it, so its own account and the journal decide. */
+  /** A fix report as a reader takes one; a decoded Output is one without being copied. */
+  export interface FixReport {
+    readonly verdict: "clean" | "findings";
+    readonly findings: ReadonlyArray<Finding>;
+    readonly fixed: ReadonlyArray<Fixed>;
+    readonly disputed: ReadonlyArray<Finding>;
+    readonly checks: ReadonlyArray<Check>;
+  }
+  export function settleFinalFix(
+    live: ReadonlyArray<Finding>,
+    fix: FixReport,
+    evidence: CheckEvidence,
+  ): FinalFix;
+  export function renderReview(synthesis: Synthesis): string;
+  export function formatFindings(findings: ReadonlyArray<Finding>): string;
+
+  /** The prose a human reads, and the findings a card counts, where both are looked for. */
+  export const REVIEW_FILE: string;
+  export const FINDINGS_FILE: string;
+  export function leaveReview(
+    dir: string,
+    synthesis: SynthesisReport,
+  ): Effect.Effect<void, never, FileSystem.FileSystem>;
+
+  /** How many findings the Run that owns this directory left for somebody to fix. */
+  export function openFindingsIn(
+    dir: string,
+  ): Effect.Effect<number, never, FileSystem.FileSystem>;
+
+  /** The extra axes a human asked for, as a paragraph, or nothing where they asked for none. */
+  export function riskLine(risks: string): string;
+
+  /** A merge request a target names: its project, where it carries one, and its iid. */
+  export interface MrRef {
+    readonly project: string | null;
+    readonly iid: string;
+  }
+  export function parseMrTarget(target: string): MrRef | null;
+
+  /** Which of the three kinds of change a settled diff target names. */
+  export function targetKind(target: string): "mr" | "branch" | "worktree" | "";
+
+  /** The glab arguments that point a command at a project rather than at the cwd. */
+  export function repoArgs(project: string | null): string[];
+
+  /** A decoded review: the lists are the decoder's, not the reader's to change. */
+  export interface ReviewReport extends Judgement {
+    readonly verdict: "clean" | "findings";
+    readonly findings: ReadonlyArray<Finding>;
+    readonly disputed: ReadonlyArray<Finding>;
+  }
+
+  export interface SynthesisReport extends ReviewReport {
+    readonly summary: string;
+    readonly dropped: ReadonlyArray<Finding>;
+    readonly fixed: ReadonlyArray<Fixed>;
+  }
+
+  /**
+   * The shapes the shipped steps write, shared so a step declares one contract. Each is
+   * an ordinary schema: hand one to agentWork and what comes back is its own type.
+   */
+  export const FindingSchema: Schema.Codec<Finding, unknown, never, never>;
+  export const FixedSchema: Schema.Codec<Fixed, unknown, never, never>;
+  export const CheckSchema: Schema.Codec<Check, unknown, never, never>;
+  export const ReviewOutputSchema: Schema.Codec<ReviewReport, unknown, never, never>;
+  export const SynthesisSchema: Schema.Codec<SynthesisReport, unknown, never, never>;
+  export const FixOutputSchema: Schema.Codec<FixReport, unknown, never, never>;
+  export const MrOutputSchema: Schema.Codec<
+    { readonly pushed: boolean; readonly mr_url?: string | null; readonly note?: string },
+    unknown,
+    never,
+    never
+  >;
+  export const PlanOutputSchema: Schema.Codec<
+    { readonly issues_dir: string; readonly spec?: string },
+    unknown,
+    never,
+    never
+  >;
+
+  /**
+   * Instructions whose "{{name}}" expressions read only the input it declares: template
+   * refuses any other when it is made, and agentWork refuses one left unfilled before any
+   * agent starts.
+   */
+  export class Template<Input> {
+    declare readonly input: Input;
+    constructor(text: string);
+    readonly text: string;
+  }
+
+  /**
+   * Instructions, and the input they take. What the text names and fields does not
+   * declare is refused here — role, cwd and output_path are always given — so a template
+   * made where a module loads is checked by every load of it, collie doctor and collie
+   * workflow check among them.
+   */
+  export function template<const Fields extends Schema.Struct.Fields>(
+    text: string,
+    fields: Fields,
+  ): Template<Schema.Struct<Fields>["Type"]>;
+
+  /** What agents are told, read from Markdown. */
+  export interface Content {
+    readonly preamble: string;
+    readonly sections: ReadonlyMap<string, string>;
+    /** A section under the preamble; one the file does not have is refused, never sent empty. */
+    readonly prompt: (section: string) => string;
+    /** A section under the preamble, as a template of what it takes. */
+    readonly template: <const Fields extends Schema.Struct.Fields>(
+      section: string,
+      fields: Fields,
+    ) => Template<Schema.Struct<Fields>["Type"]>;
+  }
+
+  /**
+   * A Markdown file as the content it is: what stands above the first heading, and one
+   * entry per "## name" section below it. Front matter is refused: a workflow's inputs,
+   * steps and questions are its definition's.
+   */
+  export function contentOf(markdown: string): Content;
+
+  /** One item of work that finished, and what it left for the ones after it. */
+  export interface Handed {
+    readonly item: string;
+    readonly title: string;
+    readonly commits: ReadonlyArray<string>;
+    /** What was verified while it ran, as "name: result". */
+    readonly verifications?: ReadonlyArray<string>;
+  }
+
+  /** What the items before this one left behind: their work, commits and evidence. */
+  export function renderProgress(done: ReadonlyArray<Handed>): string;
+
+  /**
+   * Why these identities cannot key a list of work, or null where they can: an identity
+   * is a name of its own, and no two items may share one.
+   */
+  export function identityProblem(keys: ReadonlyArray<string>): string | null;
+
+  /** One ticket of a plan: where it is, what it is called, what it waits for. */
+  export interface Slice {
+    readonly file: string;
+    readonly number: string;
+    readonly title: string;
+    readonly blockedBy: ReadonlyArray<string>;
+    /** The verification names its **Checks:** line promised will prove it. */
+    readonly checks: ReadonlyArray<string>;
+  }
+
+  /** The verification names a ticket's **Checks:** line promises. */
+  export function checksIn(text: string): string[];
+
+  /** A plan's tickets in an order they can be built in, narrowed to one repository. */
+  export function orderedTickets(
+    tickets: ReadonlyArray<{ readonly file: string; readonly text: string }>,
+    repo?: string,
+  ): Slice[];
+
+  /** The same reading, against a plan directory on disk. */
+  export function orderedTicketsOf(
+    planDir: string,
+    repo?: string,
+  ): Effect.Effect<Slice[], never, FileSystem.FileSystem | Path.Path>;
+
+  /** One repository a plan changes, and the tickets that change it, in plan order. */
+  export interface PlanRepo {
+    readonly path: string;
+    readonly tickets: ReadonlyArray<string>;
+  }
+
+  /** Why this plan cannot be fanned out. The message is what the human is shown. */
+  export interface PlanRefusal {
+    readonly kind:
+      | "cycle"
+      | "missing-repo"
+      | "missing-checkout"
+      | "outside-root"
+      | "unknown-blocker"
+      | "duplicate-ticket";
+    readonly message: string;
+  }
+
+  export interface PlanRepos {
+    readonly repos: ReadonlyArray<PlanRepo>;
+    /** Repo paths in the order their runs may start; each wave waits on the one before. */
+    readonly waves: ReadonlyArray<ReadonlyArray<string>>;
+    readonly refusal: PlanRefusal | null;
+  }
+
+  /** What a fan-out would do with a plan: its repositories, its waves, or its refusal. */
+  export function readPlanRepos(
+    tickets: ReadonlyArray<{ readonly file: string; readonly text: string }>,
+    checkouts: ReadonlySet<string>,
+  ): PlanRepos;
+
+  /** The same reading, against a plan directory and the checkouts under a root. */
+  export function planReposOf(
+    planDir: string,
+    root: string,
+  ): Effect.Effect<PlanRepos, never, FileSystem.FileSystem | Path.Path>;
+
+  /** Whether this plan is one repository and that repository is the run's own root. */
+  export function isSingleRepo(plan: PlanRepos): boolean;
+
+  /** The approved commands as a human would type them, for a prompt to name them. */
+  export function renderApproved(approved: ReadonlyArray<VerifySpec>): string;
+
+  /** What was actually collected, and by whom, for a merge request to say what it proved. */
+  export function renderEvidence(
+    got: { readonly verifications: ReadonlyArray<Verification>; readonly final: Snapshot },
+  ): string;
+
+  /**
+   * Everything still missing before this Run may say it proved its kind of result, one
+   * sentence each. Empty means the evidence is there. An Output is a claim whatever it
+   * says; what decides a check is the journal, on the tree in front of it.
+   */
+  /** Whether this is one of the kinds of result a Run can be for. */
+  export function isOutcome(value: string): value is Outcome;
+
+  export function evidenceGapsOf(options: {
+    readonly kind: Outcome;
+    readonly evidence: CheckEvidence;
+    readonly approved: ReadonlyArray<VerifySpec>;
+    /** What each piece of work reported, by the name it was done under. */
+    readonly outputs: Readonly<Record<string, unknown>>;
+    /** Which of those are a reviewer's judgement rather than the implementer's claim. */
+    readonly reviewed: ReadonlyArray<string>;
+    /** The directories this Run owns, which a reference it gives has to point inside. */
+    readonly roots: ReadonlyArray<string>;
+    readonly tickets: ReadonlyArray<{
+      readonly file: string;
+      readonly checks: ReadonlyArray<string>;
+    }>;
+  }): ReadonlyArray<string>;
+
+  /** Where the work to be done was described. */
+  export interface WorkSource {
+    readonly kind: "plan-dir" | "linear" | "text" | "review" | "followup" | "mr" | "branch" | "worktree";
+    readonly value: string;
+    readonly source: string;
+    readonly label?: string;
+  }
+
+  /** What a work source turned out to be: a plan, a review, an issue, a follow-up, text. */
+  export function classifyWorkSource(
+    typed: string,
+  ): Effect.Effect<WorkSource, unknown, FileSystem.FileSystem | Path.Path>;
+
+  /** The JSON Schema for a prompt, and what the drawing does not say. */
+  export interface Projection {
+    readonly document: unknown;
+    readonly limits: ReadonlyArray<string>;
+  }
+  export function jsonSchemaFor(schema: Schema.Top): Projection;
 }
 
-/** Every toast this engine raises: one Run, one settings map, one taxonomy. */
-const notify = (
-  o: EngineOptions,
-  kind: NotificationKind,
-  body: string,
-  about: { step?: string; subject?: string } = {},
-) =>
-  notifyRun(o.herdr, o.run, {
-    kind,
-    body,
-    step: about.step ?? null,
-    subject: about.subject,
-    settings: o.defaults.notifications,
+declare module "*.md" {
+  const text: string;
+  export default text;
+}
+`;
+
+let sdkInstalled = false;
+
+/**
+ * Registers the SDK with Bun's module resolver, once per process. A virtual module per
+ * specifier, so `import "effect"` from anywhere in the author's imports lands here.
+ */
+/** `self` is the workflow that declared the offer, whatever a fork has renamed it to. */
+const itself = (workflow: string) => (workflow === "self" ? SELF : workflow);
+
+/**
+ * What a module declares, as offers. The eligibility functions are the author's own and
+ * are kept as they are: the module is the only thing that can answer for its own actions,
+ * and a projection of one would be a copy that stops agreeing with it.
+ */
+export function declaredByModule(metadata: WorkflowMetadata | undefined): Declared[] {
+  const actions = (metadata?.actions ?? []).map((action) => ({
+    id: action.id,
+    title: action.title,
+    workflow: itself(action.workflow),
+    arguments: jsonSchemaFor(Schema.Struct(action.arguments)).document,
+    kind: "action" as const,
+    inputs: action.inputs ?? {},
+    eligible: action.eligible,
+  }));
+  const followUps = (metadata?.followUps ?? []).map((offer) => ({
+    id: offer.id,
+    title: offer.title,
+    workflow: itself(offer.workflow),
+    arguments: null,
+    kind: "follow-up" as const,
+    inputs: offer.inputs ?? {},
+    eligible: (facts: ActionFacts) =>
+      (offer.when === "always" || (offer.when === "succeeded") === facts.succeeded) &&
+      (offer.eligible?.(facts) ?? true),
+  }));
+  return [...actions, ...followUps];
+}
+
+export function installSdk(): void {
+  if (sdkInstalled) return;
+  sdkInstalled = true;
+  Bun.plugin({
+    name: "collie-sdk",
+    setup(build) {
+      for (const [specifier, namespace] of sdkModules()) {
+        // Spread rather than passed on: Bun's object loader takes a plain object, and
+        // the values in it stay the very functions and keys the binary is running on.
+        build.module(specifier, () => ({ exports: { ...namespace }, loader: "object" }));
+      }
+    },
+  });
+}
+
+/**
+ * Imports a workflow entry file and holds it to the published contract. A module that
+ * does not compile, does not exist, does not export the contract or contradicts itself
+ * fails naming its own file — so one bad entry says which one it is and leaves every
+ * other entry loadable.
+ *
+ * Importing runs the module's top level, which is the author's code. It does not run a
+ * workflow body, acquire an agent or open a worktree; nothing here is a sandbox. What the
+ * definition declares is checked here, at load, which is why a contradiction never
+ * reaches a Run.
+ */
+export const loadEntry: (
+  file: string,
+) => Effect.Effect<WorkflowEntry, EntryError, FileSystem.FileSystem> = Effect.fn(
+  "Engine.loadEntry",
+)(function* (file: string) {
+  installSdk();
+  // Bun's module registry has no invalidation, so an entry or a helper read twice at one
+  // path is the first read both times. Each read is of a copy of what is there now.
+  const staged = yield* stagedEntry(file);
+  const loaded = yield* Effect.tryPromise({
+    try: () => import(staged.file),
+    catch: (cause) => new EntryError({ file, message: String(cause).replaceAll(staged.root, "") }),
+  });
+  const read = readDefinition(loaded.default);
+  if (read._tag === "Failure" || !isWritten(loaded.default)) {
+    return yield* new EntryError({
+      file,
+      message:
+        loaded.default === undefined
+          ? "a workflow module exports its definition by default: export default defineWorkflow({ ... })"
+          : `the default export is not a workflow definition: ${read._tag === "Failure" ? read.failure.message : ""}`,
+    });
+  }
+  const entry = entryOf(definitionOf(loaded.default));
+  const problems = checkEntry(entry);
+  if (problems.length > 0) {
+    return yield* new EntryError({ file, message: problems.join("; ") });
+  }
+  return entry;
+});
+
+const IsSchema = Schema.declare(Schema.isSchema);
+
+/** What a default export has to be before it is read as a definition. */
+const DefinitionContract = Schema.Struct({
+  id: Schema.String,
+  title: Schema.optionalKey(Schema.String),
+  description: Schema.optionalKey(Schema.String),
+  input: Schema.optionalKey(Schema.declare((u) => Schema.isSchema(u) && "fields" in u)),
+  output: Schema.optionalKey(IsSchema),
+  error: Schema.optionalKey(IsSchema),
+  layer: Schema.optionalKey(Schema.declare(Layer.isLayer)),
+  run: Schema.declare(Predicate.isFunction),
+});
+const readDefinition = Schema.decodeUnknownResult(DefinitionContract, { errors: "all" });
+
+/** A module's default export held to the contract a definition is read against. */
+const isWritten = (exported: unknown): exported is WrittenDefinition =>
+  Schema.is(DefinitionContract)(exported);
+
+/** A definition as the entry the rest of the host reads. */
+const entryOf = (definition: WorkflowDefinition): WorkflowEntry => {
+  const { hints, outcome, checkout, followUps, actions } = definition;
+  const declared = Object.fromEntries(
+    Object.entries({ hints, outcome, checkout, followUps, actions }).filter(
+      ([, value]) => value !== undefined,
+    ),
+  );
+  // SAFETY: checkEntry refuses an input field that is not a schema before anything settles one.
+  return {
+    id: definition.id,
+    title: definition.title,
+    description: definition.description,
+    input: definition.input.fields as InputFields,
+    metadata: declared,
+    agents: definition.agents,
+    make: (name) => registrationOf(definition, name),
+  };
+};
+
+/** The envelope a definition is executed with, read where the host hands it over. */
+const readEnvelope = Schema.decodeUnknownSync(Schema.Struct({ runId: Schema.String }));
+
+/**
+ * The Effect workflow a definition is registered as, under the host's own name for this
+ * generation. The Run it executes as is provided here, so no author passes it along.
+ */
+const registrationOf = (definition: WorkflowDefinition, name: string): Registration => {
+  // SAFETY: every workflow is executed with this envelope, and its input is the
+  // definition's own struct, whose fields checkEntry has held to be schemas.
+  const payload = Schema.Struct({ runId: Schema.String, input: definition.input }) as HostPayload;
+  const error: HostCodec =
+    definition.error === undefined
+      ? WorkflowError
+      : Schema.Union([WorkflowError, definition.error]);
+  const workflow: HostWorkflow = Workflow.make(name, {
+    payload,
+    idempotencyKey: (envelope) => readEnvelope(envelope).runId,
+    success: definition.output,
+    error,
+  });
+  const body = workflow.toLayer((envelope) => {
+    // SAFETY: the envelope decoded against the definition's own input struct.
+    const input = envelope.input as never;
+    const run = Run.of({ id: readEnvelope(envelope).runId, workflow: definition.id });
+    return definition.run({ input }).pipe(
+      Effect.provideService(Run, run),
+      Effect.provideService(WorkflowAgents, definition.agents),
+      Effect.onExit((exit) =>
+        Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)
+          ? Effect.void
+          : ended(run.id, exitStatus(exit, definition.id, workflow.successSchema, error)),
+      ),
+    );
+  });
+  const layer = definition.layer === undefined ? body : body.pipe(Layer.provide(definition.layer));
+  return { workflow, layer };
+};
+
+/**
+ * A Run's ending, as the host tells it: what Oversight settles as it finishes, then the
+ * toast. A suspension is not an ending, and a question or a stop says so for itself.
+ */
+const ended = (runId: string, status: typeof RunStatus.Type) =>
+  Effect.serviceOption(Oversight).pipe(
+    Effect.flatMap((found) => (Option.isSome(found) ? found.value.finish(runId) : Effect.void)),
+    Effect.andThen(told(runId, status)),
+  );
+
+/** What an ending says to whoever started the Run, in the words the board reads it in. */
+const told = (runId: string, status: typeof RunStatus.Type) =>
+  Effect.serviceOption(Notifier).pipe(
+    Effect.flatMap((found) => {
+      if (Option.isNone(found)) return Effect.void;
+      if (status.status === "complete") {
+        return found.value.notify(
+          runId,
+          "run-done",
+          isText(status.value) ? status.value : asJsonText(status.value),
+        );
+      }
+      if (status.status !== "failed") return Effect.void;
+      return found.value.notify(
+        runId,
+        status.reason.startsWith("output-unusable:") ? "output-unusable" : "run-failed",
+        status.reason,
+      );
+    }),
+  );
+
+/**
+ * Where entries are staged to be read: this account's own cache, and only while nobody
+ * else can write there, since what is in it is imported as code. A copy is named by its
+ * content, so it is never stale.
+ */
+const entriesRoot = Effect.fn("Engine.entriesRoot")(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const cache = Bun.env.XDG_CACHE_HOME || `${Bun.env.HOME ?? Bun.env.TMPDIR ?? "/tmp"}/.cache`;
+  const entries = `${cache}/collie/entries`;
+  yield* fs.makeDirectory(entries, { recursive: true, mode: 0o700 }).pipe(Effect.ignore);
+  const info = yield* fs.stat(entries).pipe(Effect.option);
+  const mine =
+    Option.isSome(info) &&
+    Option.getOrNull(info.value.uid) === (process.getuid?.() ?? null) &&
+    (info.value.mode & 0o022) === 0;
+  if (!mine) {
+    return yield* new EntryError({
+      file,
+      message: `${entries} is writable by others or is not yours, so nothing is read from it: remove it, or make it yours with \`chmod 700\``,
+    });
+  }
+  return entries;
+});
+
+/**
+ * An entry's directory as it is now, staged once and then shared by every process that
+ * reads it. Staged under a name of its own and renamed into place, so nobody imports a
+ * copy another process is still writing.
+ */
+const stagedEntry = Effect.fn("Engine.stagedEntry")(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const entries = yield* entriesRoot(file);
+  const dir = directoryOf(file);
+  const name = `${Bun.hash(dir).toString(16)}-${yield* revisionOf(dir)}`;
+  const root = `${entries}/generations/${name}`;
+  const staged = { root, file: `${root}${file}` };
+  if (yield* fs.exists(staged.file).pipe(Effect.orElseSucceed(() => false))) return staged;
+  const draft = `${name}.${yield* Random.nextInt}`;
+  yield* stageGeneration({ dir: entries, name: draft, entry: file }).pipe(
+    Effect.provide(Path.layer),
+  );
+  const drafted = `${entries}/generations/${draft}`;
+  // Another process that staged it first is as good as this one.
+  yield* fs
+    .rename(drafted, root)
+    .pipe(Effect.catch(() => fs.remove(drafted, { recursive: true }).pipe(Effect.ignore)));
+  return staged;
+});
+
+/**
+ * What a generation of an entry would be staged from, as one value. A generation is a copy
+ * of the whole directory and of what it imports from outside it, so an edited helper or
+ * Markdown prompt is as much a change as an edited entry — and nothing touched is the same
+ * code to run.
+ */
+export const revisionOf: (dir: string) => Effect.Effect<string, never, FileSystem.FileSystem> =
+  Effect.fn("Engine.revisionOf")(function* (dir: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const names = yield* fs
+      .readDirectory(dir, { recursive: true })
+      .pipe(Effect.orElseSucceed((): Array<string> => []));
+    let read = "";
+    for (const name of names.sort()) {
+      // A directory reads as nothing, and what is inside it is in the list under a name
+      // of its own. An installed dependency counts by its name alone: the toolchain a
+      // module is typechecked against lives here too, and reading all of it would cost
+      // more than every start it is on the way of.
+      const content = name.startsWith("node_modules/")
+        ? ""
+        : yield* fs.readFileString(`${dir}/${name}`).pipe(Effect.orElseSucceed(() => ""));
+      read += `${name}:${Bun.hash(content).toString(16)}\n`;
+    }
+    for (const file of yield* outsideOf(dir)) {
+      const content = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+      read += `${file}:${Bun.hash(content).toString(16)}\n`;
+    }
+    return Bun.hash(read).toString(16);
   });
 
-type PromptServices =
-  | ChildProcessSpawner.ChildProcessSpawner
-  | Crypto.Crypto
+/**
+ * The files outside `dir` its code imports by a relative path or a package import, what
+ * those import in turn, and the `package.json` files above them that such imports resolve by.
+ */
+const outsideOf = Effect.fn("Engine.outsideOf")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const names = yield* fs
+    .readDirectory(dir, { recursive: true })
+    .pipe(Effect.orElseSucceed((): Array<string> => []));
+  const pending = names
+    .filter((name) => !name.startsWith("node_modules/"))
+    .map((name) => `${dir}/${name}`);
+  const outside = new Set<string>();
+  const looked = new Set<string>();
+  for (let file = pending.pop(); file !== undefined; file = pending.pop()) {
+    for (let at = parentOf(file); !looked.has(at); at = parentOf(at)) {
+      looked.add(at);
+      if (at === dir || at.startsWith(`${dir}/`)) continue;
+      const manifest = `${at}/package.json`;
+      if (yield* fs.exists(manifest).pipe(Effect.orElseSucceed(() => false))) {
+        outside.add(manifest);
+      }
+    }
+    const loader = loaderOf(file);
+    if (loader === null) continue;
+    const text = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+    for (const target of importedBy(file, text, loader)) {
+      if (target.startsWith(`${dir}/`) || outside.has(target)) continue;
+      outside.add(target);
+      pending.push(target);
+    }
+  }
+  return [...outside].sort();
+});
+
+const scanners = {
+  ts: new Bun.Transpiler({ loader: "ts" }),
+  tsx: new Bun.Transpiler({ loader: "tsx" }),
+  js: new Bun.Transpiler({ loader: "js" }),
+};
+
+/**
+ * What this code imports by a relative path or a package import, where Bun resolves it.
+ * Unparseable code imports nothing, and an installed package is linked, never copied.
+ */
+const importedBy = (file: string, text: string, loader: "ts" | "tsx" | "js") => {
+  let imports: ReadonlyArray<{ readonly path: string }> = [];
+  try {
+    imports = scanners[loader].scanImports(text);
+  } catch {
+    return [];
+  }
+  return imports.flatMap((one) => {
+    if (!one.path.startsWith(".") && !one.path.startsWith("#")) return [];
+    try {
+      const target = Bun.resolveSync(one.path, directoryOf(file));
+      return target.includes("/node_modules/") ? [] : [target];
+    } catch {
+      return [];
+    }
+  });
+};
+
+/**
+ * A generation's own copy of the directory the entry lives in, so an edited helper reaches
+ * new work without restarting the host. Bun's module registry has no invalidation:
+ * re-importing the entry under a new query re-reads the entry, but its `./helper.ts`
+ * resolves to the path already cached. A copy gives every file a path nothing has
+ * imported yet. The directory and what it imports from outside it are copied to their
+ * absolute paths under the generation, so every relative import names the same file, and
+ * every `node_modules` a package is looked up in is linked where its copy looks.
+ * It is a cache — a host wipes it on start and stages from the module as it is now, so
+ * this is never the code a past run is recovered onto.
+ */
+export const stageGeneration: (options: {
+  readonly dir: string;
+  readonly name: string;
+  readonly entry: string;
+}) => Effect.Effect<string, EntryError, FileSystem.FileSystem | Path.Path> = Effect.fn(
+  "Engine.stageGeneration",
+)(function* (options: { readonly dir: string; readonly name: string; readonly entry: string }) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const from = directoryOf(options.entry);
+  const outside = yield* outsideOf(from);
+  const staged = (file: string) => path.join(options.dir, "generations", options.name, file);
+  const failed = (cause: unknown) =>
+    new EntryError({ file: options.entry, message: String(cause) });
+  yield* fs.makeDirectory(staged(from), { recursive: true }).pipe(Effect.mapError(failed));
+  for (const name of yield* fs.readDirectory(from).pipe(Effect.mapError(failed))) {
+    if (name === "node_modules") continue;
+    yield* fs
+      .copy(path.join(from, name), staged(path.join(from, name)), { overwrite: true })
+      .pipe(Effect.mapError(failed));
+  }
+  for (const file of outside) {
+    yield* fs
+      .makeDirectory(path.dirname(staged(file)), { recursive: true })
+      .pipe(Effect.andThen(fs.copyFile(file, staged(file))), Effect.mapError(failed));
+  }
+  const looked = new Set<string>();
+  for (const start of [from, ...outside.map((file) => path.dirname(file))]) {
+    for (let at = start; !looked.has(at); at = path.dirname(at)) looked.add(at);
+  }
+  for (const at of looked) {
+    const installed = path.join(at, "node_modules");
+    const link = path.join(staged(at), "node_modules");
+    if (!(yield* fs.exists(installed).pipe(Effect.orElseSucceed(() => false)))) continue;
+    if (yield* fs.exists(link).pipe(Effect.orElseSucceed(() => false))) continue;
+    yield* fs
+      .makeDirectory(staged(at), { recursive: true })
+      .pipe(Effect.andThen(fs.symlink(installed, link)), Effect.mapError(failed));
+  }
+  return staged(options.entry);
+});
+
+const loaderOf = (name: string): "ts" | "tsx" | "js" | null => {
+  if (/\.(ts|mts|cts)$/.test(name)) return "ts";
+  if (name.endsWith(".tsx")) return "tsx";
+  return /\.(js|mjs|cjs|jsx)$/.test(name) ? "js" : null;
+};
+
+const directoryOf = (file: string) => file.slice(0, file.lastIndexOf("/"));
+const parentOf = (at: string) => at.slice(0, Math.max(at.lastIndexOf("/"), 1));
+
+/** A file and what was in its directory when it was read, as one value. */
+const sourceOf = (entry: string): Effect.Effect<string, never, FileSystem.FileSystem> =>
+  revisionOf(directoryOf(entry)).pipe(Effect.map((revision) => `${entry}@${revision}`));
+
+/** Every generation a host staged, gone: a new host stages from the sources again. */
+export const clearGenerations = (dir: string): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.remove(`${dir}/generations`, { recursive: true })),
+    Effect.ignore,
+  );
+
+/**
+ * The host's own stack: Bun's SQLite under Effect's single-node cluster under its
+ * workflow engine. Two settings are not the defaults, and both would otherwise turn
+ * recoverable work terminal — the reason each is here is in ADR-0014.
+ */
+export function engineLayer(options: {
+  readonly dir: string;
+}): Layer.Layer<
+  WorkflowEngine.WorkflowEngine | SqlClient.SqlClient | Reactivity.Reactivity,
+  ConfigError
+> {
+  // One connection, two halves: the engine's own tables and the rows Collie keeps beside
+  // them are in the same file, written by the same process.
+  const sql = SqliteClient.layer({ filename: `${options.dir}/host.db` }).pipe(
+    Layer.provideMerge(Reactivity.layer),
+  );
+  const cluster = SingleRunner.layer({
+    shardingConfig: {
+      // A host told to stop must not take a running workflow down with it: the work
+      // finishes its step, and what is left is picked up by the next host.
+      preemptiveShutdown: false,
+      // A workflow whose module is missing has no entity to receive its messages. The
+      // default marks them failed after a minute, which turns "the file is not there
+      // yet" into a terminal result; waiting is what lets a repair recover the work.
+      entityRegistrationTimeout: Duration.infinity,
+    },
+  }).pipe(Layer.provide([sql, BunCrypto.layer]));
+  return ClusterWorkflowEngine.layer.pipe(Layer.provide(cluster), Layer.provideMerge(sql));
+}
+
+export const HOLD = "hold";
+export const STOP = "stop";
+/** Not a control: the Run's own word on why it parked, which only the Run writes. */
+export const PARKED = "parked";
+
+/** What a Run nobody classified proves: the approved set, and no ticket's evidence. */
+const UNSPECIFIED = "unspecified";
+
+/**
+ * What a workflow reads about its own run: the controls an operator has set over it, and
+ * the question it is waiting on.
+ *
+ * A control is one file in the host's own directory, and the host is its only writer —
+ * no client writes one and nothing consumes it as a command. It stays a file rather than
+ * a row because a workflow reads it at its boundaries, from the engine's own fiber:
+ * answering that read out of this process's memory or its database settles the boundary
+ * fast enough to race a resume, and the run parks again before the resume has landed.
+ * `docs/adr/0021-one-host-answers-for-a-run.md` has the measurement.
+ */
+export const controlPath = (dir: string, control: string, runId: string): string =>
+  `${dir}/${control}.${runId}`;
+
+/**
+ * Where one Run's evidence lives: the verification journal `verify.ts` writes and
+ * reads, and the approved set the Run was started under. A directory rather than a table
+ * because the collector is the same one the command line uses — what proves a Run is not
+ * a different thing for being a module's.
+ */
+export const evidenceDir = (dir: string, runId: string): string => `${dir}/evidence/${runId}`;
+
+/**
+ * Where one Run's own work belongs: the plan it wrote, the review it left, and
+ * anything else a card reads back. A directory per Run rather than a column, because what
+ * a Run produces is files and the things that read them are ordinary readers of files.
+ */
+export const runDir = (dir: string, runId: string): string => `${dir}/runs/${runId}`;
+
+/** Where a Run keeps the merge request it opened. */
+const mergeRequestPath = (dir: string, runId: string) => `${runDir(dir, runId)}/merge-request`;
+
+/** The merge request a Run opened, or null where it recorded none. */
+const mergeRequestOf = (fs: FileSystem.FileSystem, dir: string, runId: string) =>
+  fs.readFileString(mergeRequestPath(dir, runId)).pipe(
+    Effect.map((url) => url.trim() || null),
+    Effect.orElseSucceed(() => null),
+  );
+
+const approvedPath = (dir: string, runId: string) => `${evidenceDir(dir, runId)}/approved.json`;
+
+const ApprovedJson = Schema.fromJsonString(Schema.Array(VerifySpecSchema));
+const decodeApproved = Schema.decodeUnknownEffect(ApprovedJson);
+const encodeApproved = Schema.encodeSync(ApprovedJson);
+
+/**
+ * What this Run may have Collie run for it, as it was when the Run started. Frozen at
+ * admission, so editing the file changes the next Run and never a live one.
+ */
+export const freezeApproved = Effect.fn("Engine.freezeApproved")(function* (options: {
+  readonly dir: string;
+  readonly runId: string;
+  readonly project: string;
+  readonly userDir: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = approvedPath(options.dir, options.runId);
+  if (yield* fs.exists(path).pipe(Effect.orElseSucceed(() => false))) return;
+  const approved = yield* approvedFrom({
+    cwd: options.project,
+    userDir: options.userDir,
+  }).pipe(Effect.orElseSucceed((): ReadonlyArray<VerifySpec> => []));
+  yield* fs.makeDirectory(evidenceDir(options.dir, options.runId), { recursive: true });
+  yield* fs.writeFileString(path, encodeApproved(approved));
+});
+
+const approvedOf = Effect.fn("Engine.approvedOf")(function* (dir: string, runId: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const none: ReadonlyArray<VerifySpec> = [];
+  const text = yield* fs
+    .readFileString(approvedPath(dir, runId))
+    .pipe(Effect.orElseSucceed(() => "[]"));
+  return yield* decodeApproved(text).pipe(Effect.orElseSucceed(() => none));
+});
+
+/** Where a host keeps what a Run claimed, so a resume knows whose the claim was. */
+const claimPath = (dir: string, runId: string) => `${runDir(dir, runId)}/helle.json`;
+
+const decodeClaim = Schema.decodeUnknownEffect(Schema.fromJsonString(HelleClaimSchema));
+const encodeClaim = Schema.encodeSync(Schema.fromJsonString(HelleClaimSchema));
+
+/** What this Run already claimed, and null where it has claimed nothing yet. */
+const recordedClaim = (
+  file: string,
+): Effect.Effect<HelleClaim | null, never, FileSystem.FileSystem> =>
+  FileSystem.FileSystem.pipe(
+    Effect.flatMap((fs) => fs.readFileString(file)),
+    Effect.flatMap(decodeClaim),
+    Effect.orElseSucceed((): HelleClaim | null => null),
+  );
+
+/** A Run's execution as the host that runs it can stop it and see it stopped. */
+export class Executions extends Context.Service<
+  Executions,
+  {
+    /**
+     * An operator's stop: the Run and every child it started, flagged, woken and their
+     * agents closed. Answers the Runs it reached and the agents that did not close.
+     */
+    readonly stop: (runId: string) => Effect.Effect<{
+      readonly runs: ReadonlyArray<string>;
+      readonly left: ReadonlyArray<string>;
+    }>;
+    /** Whether its execution has stopped: suspended, finished, or not one this host runs. */
+    readonly stopped: (runId: string) => Effect.Effect<boolean>;
+  }
+>()("collie/Executions") {}
+
+/**
+ * Takes a claim over from this operator's other Runs that recorded it. Each is stopped
+ * with every child it started, as an operator's stop does; their executions are waited
+ * out; and their agents are closed again, for any that started before they stopped. Only
+ * then is its record of the claim removed, so nothing it left running goes on changing
+ * what the claim guards. An agent that will not close, or a Run still in a step when
+ * patience runs out, refuses the adoption. Answers the Runs it was taken from.
+ */
+export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (options: {
+  readonly dir: string;
+  readonly slug: string;
+  readonly to: string;
+  readonly runs: ReadonlyArray<string>;
+  readonly stop: typeof Executions.Service.stop;
+  readonly stopped: typeof Executions.Service.stopped;
+  readonly halt: (runId: string) => Effect.Effect<AgentsSdk.Halted>;
+  readonly patience?: { readonly everyMs: number; readonly forMs: number };
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const patience = options.patience ?? { everyMs: 250, forMs: 60_000 };
+  const handed: string[] = [];
+  for (const runId of options.runs) {
+    if (runId === options.to) continue;
+    const file = claimPath(options.dir, runId);
+    if ((yield* recordedClaim(file))?.slug !== options.slug) continue;
+    const refused = (left: ReadonlyArray<string>) =>
+      new HelleError({
+        message: `the claim on ${options.slug} is ${runId}'s, and its agents did not all close (${left.join("; ")}); close them, then resume ${options.to}`,
+      });
+    const tree = yield* options.stop(runId);
+    if (tree.left.length > 0) return yield* refused(tree.left);
+    const deadline = (yield* Clock.currentTimeMillis) + patience.forMs;
+    for (const one of tree.runs) {
+      while (!(yield* options.stopped(one))) {
+        if ((yield* Clock.currentTimeMillis) >= deadline) {
+          return yield* new HelleError({
+            message: `the claim on ${options.slug} is ${runId}'s, and ${one} is still running a step its stop has not reached; resume ${options.to} once ${one} has stopped`,
+          });
+        }
+        yield* Effect.sleep(Duration.millis(patience.everyMs));
+      }
+    }
+    const late: string[] = [];
+    for (const one of tree.runs) late.push(...(yield* options.halt(one)).left);
+    if (late.length > 0) return yield* refused(late);
+    yield* fs.remove(file, { force: true }).pipe(Effect.orDie);
+    yield* fs
+      .writeFileString(
+        `${options.dir}/events.${runId}.log`,
+        `claim on ${options.slug} taken over by ${options.to}; its agents were closed\n`,
+        { flag: "a" },
+      )
+      .pipe(Effect.orDie);
+    handed.push(runId);
+  }
+  return handed;
+});
+
+export const hostLayer = (options: {
+  readonly dir: string;
+  /** Where a user's own `verify.json` is, for a project that wrote none. */
+  readonly userDir?: string;
+  /** Where a toast goes; left out, nothing is raised. */
+  readonly toast?: Toast;
+  /** The Herd this host works for; left out, nothing is judged or charged to one. */
+  readonly herd?: Herd;
+}): Layer.Layer<Host | Notifier | Oversight, never, Store | BunServices> =>
+  Layer.effectContext(
+    Effect.gen(function* () {
+      const dir = options.dir;
+      const fs = yield* FileSystem.FileSystem;
+      const store = yield* Store;
+      // Captured, so a workflow asks for a verification without asking for a filesystem.
+      type Collecting = FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner;
+      const services = yield* Effect.context<Collecting>();
+      const under = <A, E>(effect: Effect.Effect<A, E, Collecting>) =>
+        Effect.provideContext(effect, services);
+      const set = (control: string, runId: string) =>
+        fs.exists(controlPath(dir, control, runId)).pipe(Effect.orElseSucceed(() => false));
+      yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
+      const toast = options.toast;
+      const notify: Notifier["Service"]["notify"] = (runId, kind, body, about = {}) =>
+        toast === undefined
+          ? Effect.void
+          : under(
+              Effect.gen(function* () {
+                const settings =
+                  options.userDir === undefined
+                    ? {}
+                    : (yield* loadDefaults(options.userDir)).notifications;
+                if (!wanted(settings, kind)) return;
+                // ponytail: one line per toast raised, read whole; a Run raises a handful.
+                const said = `${kind}:${(about.key ?? "").replaceAll("\n", " ")}`;
+                const file = notifiedPath(dir, runId);
+                const before = yield* fs.readFileString(file).pipe(Effect.orElseSucceed(() => ""));
+                if (before.split("\n").includes(said)) return;
+                yield* fs.writeFileString(file, `${said}\n`, { flag: "a" });
+                const row = yield* store.run(runId);
+                const cwd =
+                  row === null
+                    ? dir
+                    : placedOf(
+                        row,
+                        yield* decodeStrings(row.options ?? "{}").pipe(
+                          Effect.orElseSucceed((): Record<string, string> => ({})),
+                        ),
+                      ).cwd;
+                yield* toast(
+                  notificationTitle(kind, cwd, row?.task ?? runId, about.subject),
+                  body,
+                  SOUND[kind],
+                );
+              }),
+            ).pipe(Effect.ignore);
+      const host = Host.of({
+        dir,
+        place: (runId) =>
+          under(
+            store.run(runId).pipe(
+              Effect.flatMap((row) =>
+                row === null
+                  ? Effect.succeed(null)
+                  : decodeStrings(row.options ?? "{}").pipe(
+                      Effect.orElseSucceed((): Record<string, string> => ({})),
+                      Effect.map((options) => ({
+                        options,
+                        task: row.task,
+                        placed: placedOf(row, options),
+                      })),
+                    ),
+              ),
+              // A Run nobody has a row for works nowhere in particular; its own directory
+              // is still its own, so what it writes is not written into somebody else's.
+              // Made for a Run there is one, so a workflow writes what it produces into
+              // its own directory without first asking whether it is there — and asking
+              // about a run that was never started leaves nothing behind.
+              Effect.tap((admitted) =>
+                admitted === null
+                  ? Effect.void
+                  : fs.makeDirectory(runDir(dir, runId), { recursive: true }),
+              ),
+              Effect.map((admitted) => ({
+                cwd: admitted?.placed.cwd ?? dir,
+                dir: runDir(dir, runId),
+                options: admitted?.options ?? {},
+                task: admitted?.task ?? null,
+                workspace: admitted?.placed.workspace ?? null,
+              })),
+              Effect.orElseSucceed(() => ({
+                cwd: dir,
+                dir: runDir(dir, runId),
+                options: {},
+                task: null,
+                workspace: null,
+              })),
+            ),
+          ),
+        held: (runId) => set(HOLD, runId),
+        stopRequested: (runId) => set(STOP, runId),
+        record: (runId, event) =>
+          fs
+            .writeFileString(`${dir}/events.${runId}.log`, `${event}\n`, { flag: "a" })
+            .pipe(Effect.orDie),
+        parked: (runId, why) => {
+          const path = controlPath(dir, PARKED, runId);
+          return why === null
+            ? fs.remove(path, { force: true }).pipe(Effect.orDie)
+            : fs
+                .writeFileString(path, why)
+                .pipe(
+                  Effect.orDie,
+                  Effect.andThen(notify(runId, "needs-you", why, { key: `parked:${why}` })),
+                );
+        },
+        asking: (runId, question) =>
+          store
+            .asking({
+              run: runId,
+              decision: question.name,
+              prompt: question.prompt,
+              options: question.options,
+            })
+            .pipe(
+              Effect.andThen(
+                notify(runId, "needs-you", `${question.name}: ${question.prompt}`, {
+                  key: `ask:${question.name}`,
+                }),
+              ),
+            ),
+        evidence: (runId, cwd) =>
+          under(
+            Effect.all({
+              verifications: readVerifications(evidenceDir(dir, runId)).pipe(
+                Effect.orElseSucceed((): ReadonlyArray<Verification> => []),
+              ),
+              final: fingerprint(cwd),
+            }),
+          ).pipe(Effect.orDie),
+        verify: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const approved = yield* approvedOf(dir, asked.runId);
+              const spec = approved.find((entry) => entry.name === asked.name);
+              if (spec === undefined) {
+                return yield* new WorkflowError({
+                  reason: `"${asked.name}" is not among this Run's approved verifications`,
+                });
+              }
+              // The workflow's checkout has to be the Run's own; the grant's directory is resolved from it.
+              const row = yield* store.run(asked.runId);
+              const placed =
+                row === null
+                  ? null
+                  : placedOf(
+                      row,
+                      yield* decodeStrings(row.options ?? "{}").pipe(
+                        Effect.orElseSucceed((): Record<string, string> => ({})),
+                      ),
+                    );
+              const worktree = placed?.worktree?.path ?? null;
+              const own = { id: asked.runId, cwd: placed?.cwd ?? dir, worktree };
+              if (!(yield* insideRun(asked.cwd, own))) {
+                return yield* new WorkflowError({
+                  reason: `"${asked.cwd}" is not inside run ${asked.runId}`,
+                });
+              }
+              const journal = evidenceDir(dir, asked.runId);
+              return yield* runApproved(
+                journal,
+                { ...own, cwd: asked.cwd },
+                approved,
+                spec,
+                asked.expect ?? "pass",
+              ).pipe(
+                Effect.tap((record) => noteVerification(journal, record)),
+                Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
+              );
+            }),
+          ),
+        approved: (runId) => under(approvedOf(dir, runId)),
+        config: (dotted) =>
+          under(
+            readConfig(options.userDir ?? dir).pipe(
+              Effect.map((raw) => {
+                const value = configValue(raw, dotted);
+                return Schema.is(Schema.String)(value) ? value : "";
+              }),
+              Effect.orElseSucceed(() => ""),
+            ),
+          ),
+        mr: (asked) =>
+          under(
+            Effect.gen(function* () {
+              const project = parseMrTarget(asked.target ?? "")?.project ?? null;
+              const ready = yield* asked.target === undefined
+                ? gitlabReadiness(asked.cwd, runShell)
+                : gitlabForProject(project, asked.cwd, runShell);
+              if (!ready.ok) {
+                return { ok: false, reason: ready.reason, assignee: "", template: "", issues: [] };
+              }
+              const facts = yield* mrFacts(
+                {
+                  cwd: asked.cwd,
+                  inputs: {
+                    source: asked.source?.value ?? "",
+                    source_kind: asked.source?.kind ?? "",
+                  },
+                  strategies: { source: "work-source" },
+                  configuredAssignee: configValue(
+                    yield* readConfig(options.userDir ?? dir),
+                    "gitlab.assignee",
+                  ),
+                },
+                runShell,
+              );
+              return {
+                ok: true,
+                reason: "",
+                assignee: facts.assignee ?? "",
+                template: facts.template ?? "",
+                issues: facts.issues,
+              };
+            }).pipe(
+              Effect.orElseSucceed(() => ({
+                ok: false,
+                reason: "this checkout could not be read",
+                assignee: "",
+                template: "",
+                issues: [],
+              })),
+            ),
+          ),
+        claim: <E, R>(asked: {
+          readonly runId: string;
+          readonly cwd: string;
+          readonly adopting: Effect.Effect<boolean, E, R>;
+          readonly say: (line: string) => Effect.Effect<void, E, R>;
+        }): Effect.Effect<{ readonly slug: string } | null, WorkflowError | E, R> =>
+          Effect.gen(function* () {
+            const env = yield* currentEnv.pipe(Effect.orDie);
+            const file = claimPath(dir, asked.runId);
+            return yield* waitForHelle({
+              home: env.home,
+              envFile: env.raw.HELLE_ENV_FILE ?? null,
+              gitlabPath: yield* projectHere(asked.cwd, runShell),
+              // git's repository, never the checkout's basename: a roaming Run's directory
+              // is named after the workflow, and a Helle project under that name is a
+              // project that does not exist for a repository that has one.
+              repoName:
+                (yield* repositoryName(runShell, asked.cwd)) ??
+                (yield* Path.Path).basename(asked.cwd),
+              claimed: yield* recordedClaim(file),
+              record: (claim) =>
+                Effect.gen(function* () {
+                  if (claim.claim === "adopted") {
+                    const agents = yield* Effect.serviceOption(Agents);
+                    const executions = yield* Effect.serviceOption(Executions);
+                    const from = yield* handOverClaim({
+                      dir,
+                      slug: claim.slug,
+                      to: asked.runId,
+                      runs: (yield* store.runs).map((row) => row.run),
+                      stop: (runId) =>
+                        Option.isSome(executions)
+                          ? executions.value.stop(runId)
+                          : Effect.succeed({ runs: [runId], left: ["nothing here can stop it"] }),
+                      halt: (runId) =>
+                        Option.isSome(agents)
+                          ? agents.value.halt(runId)
+                          : Effect.succeed({ stopped: [], left: ["nothing here can close them"] }),
+                      stopped: (runId) =>
+                        Option.isSome(executions)
+                          ? executions.value.stopped(runId)
+                          : Effect.succeed(false),
+                    });
+                    for (const runId of from) {
+                      yield* asked.say(`took the claim on ${claim.slug} over from ${runId}`);
+                    }
+                  }
+                  yield* fs
+                    .makeDirectory(runDir(dir, asked.runId), { recursive: true })
+                    .pipe(
+                      Effect.andThen(fs.writeFileString(file, encodeClaim(claim))),
+                      Effect.orDie,
+                    );
+                }),
+              out: asked.say,
+              // The question is the workflow's, so it is durable and asked once; this only
+              // turns the answer into the word the gate reads.
+              ask: () => asked.adopting.pipe(Effect.map((yes) => (yes ? "yes" : null))),
+            });
+          }).pipe(
+            Effect.provide(FetchHttpClient.layer),
+            Effect.provideContext(services),
+            // Helle refusing to answer is this Run being unable to take the claim; the
+            // author's own failures pass through untouched.
+            Effect.mapError((cause: HelleError | E) =>
+              cause instanceof HelleError ? new WorkflowError({ reason: cause.message }) : cause,
+            ),
+          ),
+        release: (runId) =>
+          Effect.gen(function* () {
+            const env = yield* currentEnv.pipe(Effect.orDie);
+            const file = claimPath(dir, runId);
+            const held = yield* recordedClaim(file);
+            if (held === null) return;
+            yield* credentials({ home: env.home, envFile: env.raw.HELLE_ENV_FILE ?? null }).pipe(
+              Effect.flatMap((creds) => releaseClaim(creds, held.slug)),
+              Effect.provide(FetchHttpClient.layer),
+            );
+            yield* fs.remove(file, { force: true });
+          }).pipe(Effect.provideContext(services), Effect.ignore),
+        mergeRequest: (runId, url) =>
+          fs.makeDirectory(runDir(dir, runId), { recursive: true }).pipe(
+            Effect.andThen(fs.writeFileString(mergeRequestPath(dir, runId), `${url}\n`)),
+            Effect.andThen(store.announce),
+            Effect.orDie,
+            Effect.andThen(
+              notify(runId, "mr-opened", url, {
+                key: url,
+                subject: Option.fromNullishOr(parseMrUrl(url)).pipe(
+                  Option.map((mr) => `!${mr.iid}`),
+                  Option.getOrUndefined,
+                ),
+              }),
+            ),
+          ),
+        post: (asked) =>
+          under(
+            fs.readFileString(asked.file).pipe(
+              Effect.flatMap((body) =>
+                postNote({ target: asked.target, cwd: asked.cwd, body }, runShell),
+              ),
+              Effect.orElseSucceed(() => ({
+                ok: false,
+                message: `there is no ${asked.file} to post`,
+              })),
+            ),
+          ),
+      });
+      /** A Run as a card sees it: where it works, and where its records are. */
+      const watched = (runId: string): Effect.Effect<Watched> =>
+        Effect.gen(function* () {
+          const row = yield* store.run(runId);
+          const placed =
+            row === null
+              ? null
+              : placedOf(
+                  row,
+                  yield* decodeStrings(row.options ?? "{}").pipe(
+                    Effect.orElseSucceed((): Record<string, string> => ({})),
+                  ),
+                );
+          const worktree = placed?.worktree?.path ?? null;
+          return {
+            runId,
+            stateDir: dir,
+            runDir: runDir(dir, runId),
+            evidenceDir: evidenceDir(dir, runId),
+            agentsDir: `${dir}/agents/${runId}`,
+            cwd: worktree ?? placed?.cwd ?? dir,
+            worktree,
+            mr: yield* mergeRequestOf(fs, dir, runId),
+            asking: (yield* store.asked(runId)).some((one) => one.answer === null),
+            held: yield* set(HOLD, runId),
+            family: row === null ? [runId] : familyOf(yield* store.runs, row),
+            dirOf: (id: string) => runDir(dir, id),
+            socketPath: options.herd?.socketPath ?? null,
+          };
+        });
+      /** A card that is something a human could go and try is worth telling them about. */
+      const told = (runId: string, cards: ReadonlyArray<Card>) =>
+        Effect.forEach(cards, (card) =>
+          card.significance === "try-it"
+            ? notify(runId, "slice-ready", card.readiness, { key: card.id })
+            : Effect.void,
+        );
+      const bun = yield* Effect.context<BunServices>();
+      /** What judging a Run's drift takes, or null where there is no Herd to charge it to. */
+      const judging = (at: Watched) =>
+        Effect.gen(function* () {
+          if (options.herd === undefined) return null;
+          const built = yield* evaluationDeps(options.herd);
+          if (built.herdKey === null) return null;
+          return {
+            evaluator: built.evaluator,
+            budgetFile: yield* budgetPath(dir, built.herdKey),
+            limits: built.limits,
+            newId: Crypto.Crypto.pipe(
+              Effect.flatMap((one) => one.randomUUIDv4),
+              Effect.orDie,
+            ),
+            log: (line: string) => said(at, line).pipe(Effect.provideContext(services)),
+          } satisfies JudgementDeps;
+        }).pipe(Effect.orElseSucceed(() => null));
+      const drift: Oversight["Service"]["drift"] = (runId, where, judged) =>
+        Effect.gen(function* () {
+          const at = yield* watched(runId);
+          const deps =
+            judged === "none" ? null : yield* judging(at).pipe(Effect.provideContext(bun));
+          // Corrected through the caller's own agents: the work that drifted is theirs.
+          // Not at the finish, where there is no next piece of work to bring back.
+          const agents = yield* Effect.serviceOption(Agents);
+          const newest =
+            Option.isNone(agents) || judged === "finish" ? null : yield* agents.value.newest(runId);
+          const to =
+            Option.isNone(agents) || newest === null
+              ? null
+              : {
+                  agent: newest,
+                  send: (correction: Parameters<Correcting["send"]>[0]) =>
+                    agents.value.correct(runId, correction),
+                };
+          const done = yield* checkDrift(at, where, judged, deps, to).pipe(
+            Effect.provideContext(bun),
+          );
+          // The Herd's cross-run check, stood for at every boundary; at the finish the Run
+          // stands as it leaves, which is what writes an unanswered check down as owed.
+          if (judged !== "none")
+            yield* standForElection(at, where, judged === "finish", deps).pipe(
+              Effect.provideContext(bun),
+            );
+          for (const constraint of done.sent)
+            yield* notify(runId, "correction-sent", constraint, {
+              key: `correction:${constraint}`,
+              subject: constraint,
+            });
+          for (const constraint of done.escalated)
+            yield* notify(runId, "drift-unresolved", constraint, {
+              key: `escalated:${constraint}`,
+              subject: constraint,
+            });
+        }).pipe(Effect.ignore);
+      const oversight = Oversight.of({
+        card: (runId, what) =>
+          watched(runId).pipe(
+            Effect.flatMap((at) => under(writeCard(at, what))),
+            Effect.flatMap((card) => told(runId, [card])),
+            Effect.ignore,
+          ),
+        checkpoints: (runId, step) =>
+          watched(runId).pipe(
+            Effect.flatMap((at) => under(cardCheckpoints(at, step))),
+            Effect.flatMap((cards) => told(runId, cards)),
+            Effect.ignore,
+          ),
+        drift,
+        finish: (runId) =>
+          Effect.gen(function* () {
+            const at = yield* watched(runId);
+            // Bounded: an approved command that hangs would hold the Run's ending for ever.
+            for (const name of yield* under(grantedToRun(at))) {
+              const outcome = yield* host.verify({ runId, name, cwd: at.cwd }).pipe(
+                Effect.map((one) => `${one.result} (exit ${one.exit})`),
+                Effect.catch((cause) => Effect.succeed(`refused — ${cause.reason}`)),
+                Effect.timeoutOption(Duration.minutes(10)),
+              );
+              yield* under(
+                said(
+                  at,
+                  `verification ${name}: ${Option.getOrElse(outcome, () => "gave up after 10 minutes")}`,
+                ),
+              );
+            }
+            yield* drift(runId, "finish", "finish");
+            const proposed = yield* settleAtFinish(at).pipe(Effect.provideContext(bun));
+            if (proposed !== null)
+              yield* notify(runId, "proposal-pending", `a follow-up for what is still blocking`, {
+                key: proposed,
+              });
+            const card = yield* under(writeCard(at, { kind: "final", step: "finish", claims: [] }));
+            yield* told(runId, [card]);
+            // Once, here: the finish is the only moment at which nobody is left to make an
+            // owed cross-run check, which is what makes it something a human has to know.
+            if (card.cross_run === "pending")
+              yield* notify(runId, "drift-unresolved", "cross_run_pending", { key: "cross_run" });
+          }).pipe(Effect.ignore),
+      });
+      return Context.make(Host, host).pipe(
+        Context.add(Notifier, Notifier.of({ notify })),
+        Context.add(Oversight, oversight),
+      );
+    }),
+  );
+
+/**
+ * A Run and every Run the cross-run question relates it to: its children, its parent, and
+ * that parent's other children.
+ */
+const familyOf = (rows: ReadonlyArray<RunRow>, row: RunRow): ReadonlyArray<string> => {
+  const related = new Set([row.run]);
+  for (const one of rows) {
+    if (one.parent === row.run) related.add(one.run);
+    if (row.parent !== null && (one.run === row.parent || one.parent === row.parent))
+      related.add(one.run);
+  }
+  return [...related];
+};
+
+/** Where a toast is raised: herdr's, in a host. */
+export type Toast = (title: string, body: string, sound: Sound) => Effect.Effect<void>;
+
+/** The Herd a host works for: whose budget a judgement is charged to, and whose prompts it reads. */
+export interface Herd {
+  readonly socketPath: string | null;
+  readonly pluginRoot: string;
+}
+
+/** Which toasts a Run has raised, so a replay or a second host does not raise them again. */
+const notifiedPath = (dir: string, runId: string) => `${dir}/notified.${runId}`;
+
+/**
+ * The next generation of an entry: opaque, distinct, and never a name already used. A
+ * workflow's registration name is the tag its executions are stored under, so a run
+ * recovers only if the next host registers the module under the name that run started on.
+ * Loading the same file again mints the next name rather than replacing the old one.
+ *
+ * The public workflow id, this registration name and a run id stay three different things;
+ * only the first is what an operator types.
+ */
+export const nextRegistrationName = (
+  known: ReadonlyArray<{ readonly workflow: string }>,
+  id: string,
+): string => `${id}@${known.filter((entry) => entry.workflow === id).length + 1}`;
+
+/** The exit a decision is answered with, encoded by the decision's own schema. */
+export const answerDecision = (
+  registration: Registration,
+  options: { readonly name: string; readonly executionId: string; readonly value: string },
+): Effect.Effect<void, never, WorkflowEngine.WorkflowEngine> => {
+  // A question is its name: one asked as the work reached it is found by that alone.
+  const decision = DurableDeferred.make(options.name, { success: Schema.String });
+  const token = DurableDeferred.tokenFromExecutionId(decision, {
+    workflow: registration.workflow,
+    executionId: options.executionId,
+  });
+  return DurableDeferred.done(decision, { token, exit: Exit.succeed(options.value) });
+};
+
+/**
+ * What a poll says about a run. A failure carries the module it happened in, because a
+ * service the author never provided is invisible until the body asks for it, and the
+ * sentence a human needs names the file to open.
+ */
+export const RunStatus = Schema.Union([
+  Schema.Struct({ status: Schema.Literals(["pending", "suspended"]) }),
+  /** The result as the workflow's own success schema encodes it. */
+  Schema.Struct({ status: Schema.Literal("complete"), value: Schema.Json }),
+  Schema.Struct({
+    status: Schema.Literal("failed"),
+    reason: Schema.String,
+    entry: Schema.String,
+    /** A failure of the workflow's own, as its error schema encodes it. */
+    error: Schema.optionalKey(Schema.Json),
+  }),
+]);
+
+export const pollStatus = (
+  result: Option.Option<Workflow.Result<unknown, unknown>>,
+  entry: string,
+  success?: Schema.Codec<unknown, unknown, never, never>,
+  error?: Schema.Codec<unknown, unknown, never, never>,
+): typeof RunStatus.Type => {
+  if (Option.isNone(result)) return { status: "pending" };
+  const value = result.value;
+  if (value._tag === "Suspended") return { status: "suspended" };
+  return exitStatus(value.exit, entry, success, error);
+};
+
+/** A finished execution as a client reads it. */
+const exitStatus = (
+  exit: Exit.Exit<unknown, unknown>,
+  entry: string,
+  success?: Schema.Codec<unknown, unknown, never, never>,
+  error?: Schema.Codec<unknown, unknown, never, never>,
+): typeof RunStatus.Type => {
+  if (Exit.isSuccess(exit)) {
+    // Encoded by its own schema, so a client can decode it again; as it is where that fails.
+    const result = exit.value;
+    const encoded =
+      success === undefined
+        ? Option.none()
+        : Schema.encodeUnknownOption(Schema.toCodecJson(success))(result);
+    if (Option.isSome(encoded) && isJson(encoded.value)) {
+      return { status: "complete", value: encoded.value };
+    }
+    return { status: "complete", value: isJson(result) ? result : String(result) };
+  }
+  // A failure of the workflow's own is what it says it is, in the words its schema writes.
+  const failure = Cause.findErrorOption(exit.cause);
+  const written =
+    error === undefined || Option.isNone(failure) || isWorkflowError(failure.value)
+      ? Option.none()
+      : Schema.encodeUnknownOption(Schema.toCodecJson(error))(failure.value);
+  if (Option.isSome(written) && isJson(written.value)) {
+    return { status: "failed", reason: asJsonText(written.value), entry, error: written.value };
+  }
+  return { status: "failed", reason: reasonOf(exit.cause), entry };
+};
+
+const isJson = Schema.is(Schema.Json);
+
+const isWorkflowError = Schema.is(WorkflowError);
+
+/**
+ * Why a run failed, in one sentence. A workflow that reported its own failure said it in
+ * `reason`, and that is what an operator is owed — a child refusing input names the field
+ * there. Anything else is a defect, where the first line is the sentence: a service a
+ * module never provided reads as "Service not found: <its key>".
+ */
+const reasonOf = (cause: Cause.Cause<unknown>): string => {
+  const failure = Cause.findErrorOption(cause);
+  if (Option.isSome(failure) && isWorkflowError(failure.value)) return failure.value.reason;
+  const [reason = ""] = Cause.pretty(cause).split("\n");
+  return reason;
+};
+
+/**
+ * What this Run was pointed at, from whichever field carries the diff-target inference.
+ * The field's own name is the author's, so a module that calls it `change` is read the
+ * same as one that calls it `target`.
+ */
+const pointedAt = (
+  generation: Generation,
+  input: Readonly<Record<string, Schema.Json>>,
+): string | null => {
+  const field = Object.entries(generation.hints).find(([, hint]) => hint === "diff-target")?.[0];
+  const value = field === undefined ? undefined : input[field];
+  return isText(value) && value !== "" ? value : null;
+};
+
+const isText = Schema.is(Schema.String);
+
+/** The field a module gives this strategy, if it gives it to one. */
+const fieldWith = (hints: Readonly<Record<string, InputStrategy>>, strategy: InputStrategy) =>
+  Object.entries(hints).find(([, hint]) => hint === strategy)?.[0];
+
+/** Where placement reads a reviewed target the building module has no field for. */
+const REVIEWED = "reviewed";
+
+/** The input a run was admitted with, as the row keeps it. */
+const decodeInput = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json)),
+);
+
+const decodeStrings = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+);
+
+/**
+ * What a caller said, in the two halves a front door keeps apart. `text` is what a human
+ * typed — `--input k=v`, an answer to a prompt — and `json` is what already has a type:
+ * `--inputs-json`, an action's arguments, a chained run's values.
+ */
+export interface Given {
+  readonly json: Readonly<Record<string, Schema.Json>>;
+  readonly text: Readonly<Record<string, string>>;
+}
+
+/** Where a settled value came from: already typed, or as text a human wrote. */
+export const GIVEN = "given";
+export const TYPED = "typed";
+
+/**
+ * The author's input, settled against the author's schemas before anything exists.
+ *
+ * Text is tried as text first and parsed as JSON only where the schema will not take the
+ * text, so `--input ref=12` is the string for a string-or-number union and `--input
+ * count=12` is the number for a number. A typed value is decoded as it came, which is how
+ * `--inputs-json` settles the same tie the other way. A field nobody gave is left out
+ * rather than given an empty string, so an optional one stays absent and a required one is
+ * the schema's own complaint.
+ */
+export const settleInput = (
+  fields: InputFields,
+  given: Given,
+): Effect.Effect<Settled, HostRefused> => {
+  const undeclared = [...Object.keys(given.json), ...Object.keys(given.text)]
+    .filter((name) => !(name in fields))
+    .sort();
+  if (undeclared.length > 0) {
+    const names = undeclared.map((name) => `"${name}"`).join(", ");
+    return refusedInput(
+      `${names} ${undeclared.length === 1 ? "is not an input" : "are not inputs"}`,
+    );
+  }
+  const input: Record<string, Schema.Json> = {};
+  const provenance: Record<string, string> = {};
+  for (const [name, field] of Object.entries(fields)) {
+    const typed = given.json[name];
+    if (typed !== undefined) {
+      input[name] = typed;
+      provenance[name] = GIVEN;
+      continue;
+    }
+    const text = given.text[name];
+    if (text === undefined) continue;
+    const settled = asText(field, text);
+    if (settled === undefined) {
+      return refusedInput(`"${name}" is not ${describe(field)}: ${text}`);
+    }
+    input[name] = settled.value;
+    provenance[name] = TYPED;
+  }
+  return Effect.succeed({ input, provenance });
+};
+
+/**
+ * The author's values as their own schemas settled them, and where each came from. Held
+ * encoded: the payload is decoded from this, and the row keeps the same JSON, so a value
+ * is written down exactly as it was admitted.
+ */
+export interface Settled {
+  readonly input: Record<string, Schema.Json>;
+  readonly provenance: Record<string, string>;
+}
+
+const asParsedJson = Schema.decodeUnknownResult(Schema.fromJsonString(Schema.Json));
+const asJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Json));
+
+/** One field's value from what a human typed: as text, or as the JSON the text spells. */
+const asText = (field: InputField, text: string) => {
+  const decode = Schema.decodeUnknownResult(field);
+  if (decode(text)._tag === "Success") return { value: text };
+  const parsed = asParsedJson(text);
+  if (parsed._tag === "Failure") return undefined;
+  return decode(parsed.success)._tag === "Success" ? { value: parsed.success } : undefined;
+};
+
+/** What a field will take, as short as a refusal can say it. */
+const describe = (field: InputField): string => {
+  const drawn = jsonSchemaFor(field).document;
+  if (!isDrawn(drawn)) return "what this input takes";
+  const options = drawn.enum;
+  if (Array.isArray(options)) return `one of ${options.map(asWord).join(", ")}`;
+  const kind = drawn.type;
+  return isWord(kind) ? `a ${kind}` : "what this input takes";
+};
+
+const isWord = Schema.is(Schema.String);
+const asWord = (value: Schema.Json) => (isWord(value) ? value : asJsonText(value));
+
+const isDrawn = Schema.is(Schema.Record(Schema.String, Schema.Json));
+
+/** A refusal a front door turns into `invalid_input` and exit 2, rather than a failure. */
+const refusedInput = (reason: string) =>
+  Effect.fail(new HostRefused({ reason: `${REFUSED_INPUT}: ${reason}` }));
+
+/**
+ * The host's own launch options, checked against what the module says about itself. An
+ * outcome a workflow fixes is not one a caller may ask to be something else: a Run that
+ * promised evidence it cannot produce finds out at the gate before its merge request.
+ */
+const refuseOptions = (
+  generation: Generation,
+  options: Readonly<Record<string, string>>,
+): Effect.Effect<void, HostRefused> => {
+  const strange = Object.keys(options).filter((name) => !(name in RESERVED_INPUTS));
+  if (strange.length > 0) {
+    return refusedInput(
+      `no host option is called ${strange.map((name) => `"${name}"`).join(", ")}: ` +
+        `the host's own are ${Object.keys(RESERVED_INPUTS).join(", ")}`,
+    );
+  }
+  const asked = options.outcome?.trim();
+  if (asked === undefined || asked === "") return Effect.void;
+  const fixed = generation.fixedOutcome;
+  if (fixed !== null && fixed !== asked) {
+    return refusedInput(
+      `"${generation.id}" always proves ${fixed}, so it cannot be asked for ${asked}`,
+    );
+  }
+  return Effect.void;
+};
+
+/** What a caller asked of the checkout, decoded from the host's own `workspace` option. */
+type CheckoutRequest =
+  /** What the workflow declares: its own worktree where it declares one, else where it started. */
+  | { readonly kind: "declared" }
+  /** A herdr worktree workspace of the Run's own. */
+  | { readonly kind: "separate" }
+  /** The checkout the Run starts from, by its absolute path. */
+  | { readonly kind: "existing"; readonly path: string };
+
+const isSeparate = Schema.is(Schema.Literal("new"));
+
+/** The `workspace` option as the typed request it is, refused naming the field where it is not one. */
+const checkoutRequest = Effect.fn("Engine.checkoutRequest")(function* (
+  generation: Generation,
+  asked: Readonly<Record<string, string>>,
+) {
+  const given = asked.workspace?.trim() ?? "";
+  if (given === "") return { kind: "declared" } satisfies CheckoutRequest;
+  if (isSeparate(given)) {
+    if (generation.checkout === "none") {
+      return yield* refusedInput(
+        `workspace: "new" asks for a worktree workspace, and "${generation.id}" makes no checkout: it works where it was started`,
+      );
+    }
+    return { kind: "separate" } satisfies CheckoutRequest;
+  }
+  if (!given.startsWith("/")) {
+    return yield* refusedInput(
+      `workspace: "${given}" is neither "new" nor the absolute path of a checkout`,
+    );
+  }
+  const fs = yield* FileSystem.FileSystem;
+  const found = yield* fs.stat(given).pipe(Effect.option);
+  if (Option.isNone(found) || found.value.type !== "Directory") {
+    return yield* refusedInput(`workspace: ${given} is not a directory`);
+  }
+  return { kind: "existing", path: given } satisfies CheckoutRequest;
+});
+
+/** Where a Run works, as the host placed it before the Run existed. */
+const Placed = Schema.Struct({
+  cwd: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  /** A workspace of its own, where it asked for one; null lives in its Task's. */
+  workspace: Schema.NullOr(Schema.String),
+  /** The worktree it was given, which says who takes it away again. */
+  worktree: Schema.NullOr(WorktreeRecordSchema),
+});
+type Placed = typeof Placed.Type;
+const PlacedJson = Schema.fromJsonString(Placed);
+const decodePlaced = Schema.decodeUnknownOption(PlacedJson);
+const encodePlaced = Schema.encodeSync(PlacedJson);
+
+const CLAIM_STRIPES = 16;
+const stripeOf = (key: string) => {
+  let hash = 0;
+  for (const char of key) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return hash % CLAIM_STRIPES;
+};
+
+/** A checkout a claimant cut, as its receipt records it. */
+const Cut = Schema.Struct({
+  placed: Placed,
+  opened: Schema.NullOr(Schema.Struct({ id: Schema.String, label: Schema.NullOr(Schema.String) })),
+});
+type Cut = typeof Cut.Type;
+
+/**
+ * What a claimant places a Run from: the checkout it starts in, and a fresh Task's name.
+ * `checkout` and `workspace` are null once asked for, and what was made once it answered.
+ */
+const Placing = Schema.Struct({
+  from: Schema.String,
+  taskLabel: Schema.NullOr(Schema.String),
+  workspace: Schema.optionalKey(Schema.NullOr(Schema.String)),
+  checkout: Schema.optionalKey(Schema.NullOr(Cut)),
+});
+type Placing = typeof Placing.Type;
+const PlacingJson = Schema.fromJsonString(Placing);
+const decodePlacing = Schema.decodeUnknownOption(PlacingJson);
+const encodePlacing = Schema.encodeSync(PlacingJson);
+
+/** A row claimed and not placed yet: nothing hands it to the engine until it is. */
+const unplaced = (row: RunRow) => row.checkout === null && row.placing !== null;
+
+/** Where a Run works: as the host placed it, or for a row from before that, as it started. */
+const placedOf = (row: RunRow, options: Readonly<Record<string, string>>): Placed =>
+  Option.getOrElse(decodePlaced(row.checkout ?? ""), () => ({
+    cwd: options.workspace ?? row.project,
+    branch: null,
+    workspace: null,
+    worktree: null,
+  }));
+
+/** A launch as the branch resolver reads one: its text, each work source's kind, and the task. */
+const branchInputs = Effect.fn("Engine.branchInputs")(function* (
+  generation: Generation,
+  input: Readonly<Record<string, Schema.Json>>,
+  options: Readonly<Record<string, string>>,
+) {
+  const inputs: Record<string, string> = {};
+  for (const [name, value] of Object.entries(input)) if (isText(value)) inputs[name] = value;
+  for (const [name, hint] of Object.entries(generation.hints)) {
+    const value = inputs[name];
+    if (hint !== "work-source" || value === undefined) continue;
+    const source = yield* classifyWorkSource(value).pipe(
+      Effect.orElseSucceed(() => ({ kind: "text" })),
+    );
+    inputs[`${name}_kind`] = source.kind;
+  }
+  if (options.task !== undefined) inputs[TASK_INPUT] = options.task;
+  return inputs;
+});
+
+/**
+ * The plan a Run fans out over: one spanning repositories, where the Run was given no
+ * `repo` share of it. Null for every other Run.
+ */
+const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (
+  generation: Generation,
+  input: Readonly<Record<string, Schema.Json>>,
+  options: Readonly<Record<string, string>>,
+  root: string,
+) {
+  const field = fieldWith(generation.hints, "work-source");
+  const value = field === undefined ? undefined : input[field];
+  if ((options.repo ?? "") !== "" || !isText(value)) return null;
+  const source = yield* classifyWorkSource(value).pipe(Effect.orElseSucceed(() => null));
+  if (source?.kind !== "plan-dir") return null;
+  const plan = yield* planReposOf(source.value, root).pipe(Effect.orElseSucceed(() => null));
+  return plan === null || isSingleRepo(plan) ? null : plan;
+});
+
+/**
+ * A new Run's Intent, version 1: the workspace's defaults and what was named at launch
+ * from the front door, what its work source asks for, and what it may verify. A Run
+ * started from another inherits that one's Intent as it stands. Written once, before the
+ * engine has the work; a retry of the same request finds it written.
+ */
+const seedIntentOf = (options: {
+  readonly dir: string;
+  readonly row: RunRow;
+  readonly generation: Generation;
+  readonly seed: IntentSeed | undefined;
+  readonly parent: RunRow | null;
+}) =>
+  writeSeed(options).pipe(
+    // Said in the Run's own log: a Run without its Intent still runs, and whoever reads
+    // why its drift was never checked is told.
+    Effect.catch((cause) =>
+      said(
+        { runDir: runDir(options.dir, options.row.run) },
+        `intent v1 not written: ${reason(cause)}`,
+      ),
+    ),
+  );
+
+const writeSeed = Effect.fn("Engine.writeSeed")(function* (options: {
+  readonly dir: string;
+  readonly row: RunRow;
+  readonly generation: Generation;
+  readonly seed: IntentSeed | undefined;
+  readonly parent: RunRow | null;
+}) {
+  const at = runDir(options.dir, options.row.run);
+  if ((yield* readIntent(at).pipe(Effect.orElseSucceed(() => null))) !== null) return;
+  const input = yield* decodeInput(options.row.input).pipe(
+    Effect.orElseSucceed((): Readonly<Record<string, Schema.Json>> => ({})),
+  );
+  const textOf = (hint: string) => {
+    const field = fieldWith(options.generation.hints, hint);
+    const value = field === undefined ? undefined : input[field];
+    return isText(value) ? value : "";
+  };
+  const source = textOf("work-source");
+  const kind = yield* classifyWorkSource(source).pipe(
+    Effect.map((found) => found.kind),
+    Effect.orElseSucceed(() => null),
+  );
+  const work = yield* fromWorkSource(kind, source).pipe(
+    Effect.orElseSucceed(() => ({ goal: null, constraints: [] })),
+  );
+  const seeded = seedIntent(options.row.run, {
+    defaults: options.seed?.defaults ?? null,
+    goal: options.seed?.goal ?? (textOf("goal") || work.goal),
+    constraints: [...work.constraints, ...(options.seed?.constraints ?? [])],
+    runVerification: yield* approvedOf(options.dir, options.row.run),
+  });
+  const inherited =
+    options.parent === null
+      ? null
+      : yield* readIntent(runDir(options.dir, options.parent.run)).pipe(
+          Effect.orElseSucceed(() => null),
+        );
+  yield* (yield* FileSystem.FileSystem).makeDirectory(at, { recursive: true });
+  yield* writeIntent(at, inherited === null ? seeded : propagate(inherited, seeded).intent);
+});
+
+/**
+ * What a launch records beside the author's own input: the caller's host options, and the
+ * outcome this Run has to prove — the module's own fixed kind, or the one the caller
+ * selected. A card reads this and never the workflow's id.
+ */
+const launchOptions = (generation: Generation, asked: Readonly<Record<string, string>>) =>
+  generation.fixedOutcome === null ? asked : { ...asked, outcome: generation.fixedOutcome };
+
+/**
+ * A run as a front door shows it: the identities it was admitted under, what it was
+ * started with, and what the engine says about it now. The status is a projection read
+ * from the engine when asked — never a second record of what the work has done.
+ */
+/** A question a run has been asked, as a front door shows it. */
+export const OpenDecision = Schema.Struct({
+  name: Schema.String,
+  prompt: Schema.String,
+  /** The answers it takes; empty is a question answered in the operator's own words. */
+  options: Schema.Array(Schema.String),
+  /** What settled it, or null while it is still open. */
+  answer: Schema.NullOr(Schema.String),
+});
+export type OpenDecision = typeof OpenDecision.Type;
+
+/** What an accepted answer became. `fresh` is false for the same claim arriving twice. */
+export const Answered = Schema.Struct({
+  runId: Schema.String,
+  decision: Schema.String,
+  value: Schema.String,
+  fresh: Schema.Boolean,
+});
+
+/**
+ * What a control did. `applied` is whether the run was actually told: a control recorded
+ * over work no host is running is an intent, and saying otherwise would be a confirmation
+ * nobody can stand behind.
+ */
+export const Controlled = Schema.Struct({
+  runId: Schema.String,
+  control: Schema.String,
+  set: Schema.Boolean,
+  applied: Schema.Boolean,
+  detail: Schema.String,
+  /** The agents a stop could not close, which may still be changing the workspace. */
+  left: Schema.Array(Schema.String),
+});
+
+/** What became of one delivery to a run's agent. */
+export const Steered = Schema.Struct({
+  agent: Schema.String,
+  /** What could be got out of herdr about it, never "it was accepted for sending". */
+  delivered: Schema.Boolean,
+  detail: Schema.String,
+});
+
+/** One offer as a front door shows it, over the wire. */
+export const OfferView = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  /** The workflow it starts, by public id. */
+  workflow: Schema.String,
+  /** What it takes, as JSON Schema; null where it takes nothing. */
+  arguments: Schema.NullOr(Schema.Json),
+  kind: Schema.Literals(["action", "follow-up"]),
+  primary: Schema.Boolean,
+  /** Why it cannot be made now, or null when it can. */
+  unavailable: Schema.NullOr(Schema.String),
+});
+export type OfferView = typeof OfferView.Type;
+
+export const RunView = Schema.Struct({
+  runId: Schema.String,
+  workflow: Schema.String,
+  project: Schema.String,
+  task: Schema.NullOr(Schema.String),
+  parent: Schema.NullOr(Schema.String),
+  registration: Schema.String,
+  /** The module file this run was admitted on, recorded so a deleted one is still named. */
+  entry: Schema.String,
+  input: Schema.Record(Schema.String, Schema.Json),
+  /** Where each of those values came from, and the host options it was launched with. */
+  provenance: Schema.Record(Schema.String, Schema.String),
+  /** Which inference each input carries, as its module declares it now; empty without one. */
+  strategies: Schema.Record(Schema.String, Schema.String),
+  options: Schema.Record(Schema.String, Schema.String),
+  /** Where it works: its own worktree, on `branch`, or the checkout it was started for. */
+  cwd: Schema.String,
+  branch: Schema.NullOr(Schema.String),
+  /** A workspace of its own, where it asked for one; null lives in its Task's. */
+  workspace: Schema.NullOr(Schema.String),
+  /** The worktree it was given, which says who takes it away again. */
+  worktree: Schema.NullOr(WorktreeRecordSchema),
+  /**
+   * What this Run has to prove, as the module fixed it or the caller selected it. A fact
+   * on the Run rather than a reading of its id, so a renamed or user-authored workflow
+   * is held to what it declared and to nothing its name suggests.
+   */
+  outcome: Schema.String,
+  /** When this Run was admitted, which is when it began. */
+  created: Schema.String,
+  status: RunStatus,
+  /** Every question this run has been asked, answered or not, oldest first. */
+  waiting: Schema.Array(OpenDecision),
+  /** The controls an operator has set over it: a hold, a stop, or neither. */
+  controls: Schema.Array(Schema.String),
+  /** Why the engine could not be asked, or null when it was. */
+  diagnostic: Schema.NullOr(Schema.String),
+  /** Why the Run parked its own work and what picks it up again, or null. */
+  parked: Schema.NullOr(Schema.String),
+  /** The merge request the Run opened, as its workflow recorded it, or null. */
+  mr: Schema.NullOr(Schema.String),
+});
+export type RunView = typeof RunView.Type;
+
+/** What a run reads as, for comparing one poll with the last. */
+const encodeView = Schema.encodeSync(Schema.fromJsonString(RunView));
+
+/**
+ * How often a host asks the engine about work it has not finished. One fiber does it for
+ * every client, so watching costs the same whether nobody or the whole board is looking.
+ */
+const SWEEP_INTERVAL = "500 millis";
+
+/** How long a woken run is given to settle before a caller is told it was woken. */
+const WAKE_INTERVAL = "250 millis";
+const WAKE_TRIES = 8;
+
+/** What a host is holding, as a caller may see it: live names and unloadable ones. */
+export const Registrations = Schema.Struct({
+  live: Schema.Array(Schema.String),
+  unavailable: Schema.Array(Schema.String),
+});
+
+/**
+ * One loaded generation of a module: the id an operator types, the opaque name Effect
+ * stores its executions under, and the live registration itself.
+ */
+export interface Generation {
+  readonly id: string;
+  readonly name: string;
+  readonly title: string;
+  readonly entry: string;
+  /** What the module declares it takes, which is what settles a launch. */
+  readonly fields: InputFields;
+  /** Which input carries which inference, as the module attached it. */
+  readonly hints: Readonly<Record<string, InputStrategy>>;
+  /** The outcome this module fixes, so asking it for another is refused. */
+  readonly fixedOutcome: string | null;
+  /** What it needs of the repository, which is what the host places a Run of it on. */
+  readonly checkout: CheckoutKind;
+  /** The file and the revision this was built from: what makes a later start the same code. */
+  readonly source: string;
+  readonly metadata: Schema.Json;
+  /** What a finished Run of this module offers next, with the author's own eligibility. */
+  readonly offers: ReadonlyArray<Declared>;
+  /** What the workflow prefers for its own agents. */
+  readonly agents: AgentPreferences | undefined;
+  readonly registration: Registration;
+}
+
+/** What the registry's own work takes, which is what a host holds already. */
+export type HostServices =
+  | WorkflowEngine.WorkflowEngine
+  | Host
+  | Agents
   | FileSystem.FileSystem
   | Path.Path;
 
-/** How a Choice step reaches the human. The runner pane supplies the picker TUI. */
-export interface EnginePrompts extends InputPrompts<Error | PlatformError, PromptServices> {
+/**
+ * Which modules a host holds and what it does with them, in front of one state directory.
+ * Both hosts run on this, so the rule that a run stays on the generation it started on is
+ * decided once rather than twice.
+ *
+ * Registrations are built in the scope the registry is built in — the host's — so they
+ * outlive whichever client asked for one and are finalized when the host goes.
+ */
+export interface RegistryApi {
+  readonly load: (entry: string) => Effect.Effect<Generation, EntryError, HostServices>;
   /**
-   * The evidence gate, which is a decision rather than a menu: its answer may narrow the
-   * list it is about, so it comes back as what was decided rather than as an item.
+   * The generation new work goes to: the one already built from this file at this
+   * revision, or a new one. An edit is therefore a new generation and an unchanged file is
+   * not, without either being asked for.
    */
-  gate(asked: {
-    readonly run: string;
-    readonly step: string;
-    readonly verifications: ReadonlyArray<string>;
-  }): Effect.Effect<GateAnswer | null, Error | PlatformError, PromptServices>;
+  readonly use: (options: {
+    readonly entry: string;
+    readonly revision: string;
+  }) => Effect.Effect<Generation, EntryError, HostServices>;
+  readonly registrations: Effect.Effect<typeof Registrations.Type>;
+  readonly newest: (id: string) => Effect.Effect<Generation, HostRefused>;
+  /**
+   * The generation a start of this id in this project goes to, through whatever search
+   * path the host was built with. A host with none has only what was loaded into it, so
+   * this is `newest` there.
+   */
+  readonly resolve: (options: {
+    readonly project: string;
+    readonly id: string;
+  }) => Effect.Effect<Generation, HostRefused, HostServices>;
+  /**
+   * Admits work and hands it to the engine. The request id is the claim: the same one
+   * twice is the same run, and one whose arguments have changed is refused rather than
+   * quietly becoming something else. A caller that already has an identity for the work
+   * brings it; otherwise the host mints one.
+   */
+  readonly start: (options: {
+    readonly generation: Generation;
+    readonly request: string;
+    readonly project: string;
+    readonly runId?: string;
+    /** What the caller said, in the two halves a front door keeps apart. */
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly text?: Readonly<Record<string, string>>;
+    /** The host's own launch options, which never reach the author's payload. */
+    readonly options?: Readonly<Record<string, string>>;
+    /** What this work belongs to: a Task, and the run it came out of. */
+    readonly task?: string | null;
+    /** A new Task to open for it, under this label, on the checkout it is given. */
+    readonly taskLabel?: string | undefined;
+    readonly parent?: string | null;
+    /** What the front door knows of the Run's Intent. */
+    readonly intent?: IntentSeed;
+  }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
+  readonly status: (
+    runId: string,
+  ) => Effect.Effect<typeof RunStatus.Type, HostRefused, HostServices>;
+  /**
+   * Settles the question a run is waiting on. A name the run is not asking, one it has
+   * already answered, and a value the question does not take are all refused before
+   * anything is completed — so nothing an operator sends twice becomes work twice.
+   * A null name means the one open question, which is refused where there is not exactly one.
+   */
+  readonly answer: (options: {
+    readonly runId: string;
+    readonly decision: string | null;
+    readonly value: string;
+    /** The caller's claim on this answer, so the same one arriving twice is one answer. */
+    readonly request: string;
+  }) => Effect.Effect<typeof Answered.Type, HostRefused, HostServices>;
+  /** Sets or clears one durable control over one run, and says whether it reached it. */
+  readonly control: (options: {
+    readonly runId: string;
+    readonly control: string;
+    readonly set: boolean;
+  }) => Effect.Effect<typeof Controlled.Type, HostRefused, HostServices>;
+  /**
+   * Grants this run one command Collie may run itself, or withdraws the grant of that
+   * name where the command is null, and answers with what the run may run now.
+   */
+  readonly grant: (options: {
+    readonly runId: string;
+    readonly name: string;
+    readonly command: Omit<VerifySpec, "name"> | null;
+  }) => Effect.Effect<ReadonlyArray<VerifySpec>, HostRefused, HostServices>;
+  /** Says something to the agent this run has, through the one sender. */
+  readonly steer: (options: {
+    readonly runId: string;
+    readonly text: string;
+    /** The caller's claim on the delivery, so the same message twice is one message. */
+    readonly request: string;
+    readonly operation?: string;
+    readonly agent?: string;
+    readonly mode?: AgentsSdk.DeliveryMode;
+  }) => Effect.Effect<typeof Steered.Type, HostRefused, HostServices>;
+  /** Every question this run has been asked, answered or not, oldest first. */
+  readonly waiting: (runId: string) => Effect.Effect<ReadonlyArray<OpenDecision>>;
+  /** One run as a front door shows it, or null where nothing was admitted under that id. */
+  readonly view: (runId: string) => Effect.Effect<RunView | null>;
+  /** Every run this host has rows for, newest last, narrowed to one Task where named. */
+  readonly views: (task: string | null) => Effect.Effect<ReadonlyArray<RunView>>;
+  /** The same run, again, whenever anything about it changes. */
+  readonly watch: (runId: string) => Stream.Stream<RunView | null>;
+  /**
+   * Rebuilds what this host could not register from the modules as they are now and hands
+   * over anything still outstanding. A repaired file is picked up without a restart.
+   */
+  readonly recover: Effect.Effect<typeof Registrations.Type, never, HostServices>;
+  /**
+   * What this Run offers to do next, decided by the module as it is now rather than as it
+   * was when the Run started: an author who edits their actions changes what is offered.
+   * An offer that cannot be made is listed with the reason rather than left out.
+   */
+  readonly offers: (
+    runId: string,
+  ) => Effect.Effect<ReadonlyArray<Offer>, HostRefused, HostServices>;
+  /**
+   * Carries one out. The offer is looked up again, its eligibility asked again and its
+   * arguments decoded again, so one that has gone, stopped being eligible or was given
+   * something it will not take starts nothing at all.
+   */
+  readonly invoke: (options: {
+    readonly runId: string;
+    readonly offer: string;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly request: string;
+  }) => Effect.Effect<Admitted, HostRefused | RequestConflict, HostServices>;
+  /** The generation a run is on and the execution it was admitted as. */
+  readonly routed: (
+    runId: string,
+  ) => Effect.Effect<{ readonly generation: Generation; readonly execution: string }, HostRefused>;
 }
 
-export interface EngineOptions {
-  herdr: Herdr;
-  defs: Definitions;
-  defaults: Defaults;
-  wf: ResolvedWorkflow;
-  run: Run;
-  env: PluginEnv;
-  out: (
-    line: string,
-  ) => Effect.Effect<void, Error | PlatformError, FileSystem.FileSystem | Path.Path>;
-  /** How long to keep waiting for an Output after the agent hands off to the human. */
-  handoffTimeoutMs?: number;
-  outputPollMs?: number;
-  /** Required by any Workflow with a Choice step. */
-  prompts?: EnginePrompts;
-  /**
-   * The harness compaction interfaces, so a test can script one boundary's answers
-   * without an installed harness. Absent means the real four.
-   */
-  compaction?: CompactionPorts;
-  /** The fixed five-minute compaction budget, shortened only by a test. */
-  compactionWaitMs?: number;
+/** What a start records and returns: the run it is, and whether this call is what made it. */
+export interface Admitted {
+  readonly runId: string;
+  readonly registration: string;
+  readonly execution: string;
+  /** False when the request had already been admitted: a retry, not a second run. */
+  readonly fresh: boolean;
 }
 
 /**
- * What this Run knows about compaction that the config file does not: the threshold it
- * was launched with, and the ports and budget a test scripts. Shared with the Session a
- * hand-off carries, so both boundaries answer to the same numbers.
+ * Where a host may be made to die, for the proof that neither window loses work: with the
+ * run recorded and the engine not yet told, and with the engine told and the receipt not
+ * yet written. Only a test sets one, through the host's `COLLIE_HOST_CRASH_AT`.
  */
-function compactionSettings(o: EngineOptions): CompactionSettings {
-  return {
-    configured: o.defaults.compactAtTokens,
-    ports: o.compaction,
-    waitMs: o.compactionWaitMs,
-  };
-}
+export type CrashPoint = "admitted" | "executed" | "answered";
 
 /**
- * The shared compaction policy's dependencies, as this Run supplies them. A warning
- * goes to both front doors — the Run's own channel, which the CLI and the board read,
- * and its audit trail — because a compaction nobody can see is one nobody can explain.
+ * How a host turns a public workflow id into the module this project should run. It is
+ * the host's own search path, passed in rather than reached for: the registry decides
+ * which generation a run is on, and where a module was saved is somebody else's question.
+ *
+ * A parent starting a child asks this too, so a project's override is what its parents'
+ * work gets — rather than whichever generation of that id this host loaded last.
  */
-function compactionDeps(o: EngineOptions) {
-  return compactionFor({
-    herdr: o.herdr,
-    stateDir: o.env.stateDir,
-    configDir: o.env.configDir,
-    log: (line) => o.run.log(line),
-    warn: (line) => o.out(line).pipe(Effect.andThen(o.run.log(line.trim()))),
-    // The one moment a harness says how big an agent's context is, kept as a fact with
-    // a time on it: `run metrics` and the detail panel read their peak from here.
-    sample: (at, tokens) =>
-      Effect.gen(function* () {
-        yield* appendMetric(o.run.dir, {
-          at: yield* nowIso(),
-          kind: "context",
-          subject: at.agent,
-          value: tokens,
-          note: at.step,
-        });
-      }),
-    pollMs: o.outputPollMs,
-    known: compactionSettings(o),
-  });
+export type Locate = (options: {
+  readonly project: string;
+  readonly id: string;
+}) => Effect.Effect<
+  { readonly entry: string; readonly revision: string },
+  HostRefused,
+  FileSystem.FileSystem
+>;
+
+/** The registry a host holds, as a service its handlers ask for. */
+export class Registry extends Context.Service<Registry, RegistryApi>()("collie/Registry") {}
+
+export interface RegistryOptions {
+  readonly crashAt?: CrashPoint;
+  readonly locate?: Locate;
+  /** Where a user's own `verify.json` is, for a project that wrote none. */
+  readonly userDir?: string;
+  /** The herdr checkouts and Task workspaces are made through; the host's own by default. */
+  readonly placing?: { readonly herdr: Herdr; readonly env: PluginEnv };
 }
 
-interface VariantOutcome {
-  record: VariantRecord;
-  output: YamlValue | null;
-  review: ReviewOutput | null;
-  /** Set when the Output itself is what went wrong, which one prompt can fix. */
-  problem?: string;
-  /** True when this agent was given up on for going quiet, not merely nudged. */
-  stuck?: boolean;
-}
-
-const choiceResult = (result: ChoiceResult): ChoiceResult => result;
-const handoffResult = (result: false | HandoffResult, fallback: string): HandoffResult =>
-  result || { ok: false, message: fallback };
-
-const runShell: Runner<ChildProcessSpawner.ChildProcessSpawner> = shellRun;
-
-/** What one execution accumulates as it goes: only this process's panes and agents. */
-type SkillPaths = ReadonlyMap<string, string>;
-
-/** The review this target already had, or empty strings where it had none. */
-interface PreviousReview {
-  review: string;
-  when: string;
-  run: string;
-}
-
-interface RunCtx {
-  outputs: Map<string, VariantOutcome[]>;
-  /** `name → SKILL.md` for every skill this run mentions, resolved once at the start. */
-  skills: SkillPaths;
-  /** The last review of this target, so this one can say what happened to it. */
-  previous: PreviousReview;
-  /** Panes this process created; a resumed run's recorded panes are gone. */
-  panes: string[];
-  ran: Set<string>;
-  /** One agent per `agent:` group, so a resumed run still keeps one implementer. */
-  groups: Map<string, VariantRecord>;
-  viewSource: string;
-  /** The Control Plane tab this run asks its questions in, when there is one. */
-  /**
-   * The Home's tab, where a pending question is put. It may be in another workspace
-   * entirely — one Herd has one board — so it is never used to order anything.
-   */
-  boardTabId: string | null;
-  /**
-   * A tab in *this* Run's own workspace to order against, or null. Ordering is a local
-   * fact about one strip; the board is a Herd-wide one, and conflating them made a Run in
-   * one workspace reorder the tabs of another.
-   */
-  orderAnchorTabId: string | null;
-  /**
-   * What this process last called each of the run's tabs, so a reconcile that learns
-   * nothing new sends no rename. herdr is not asked what a tab is called: the label is
-   * this run's own sentence, and the only other writer is a Control Plane computing
-   * the same one.
-   */
-  tabLabels: Map<string, string>;
-  /** Tabs a human has renamed, which this run never names again. */
-  manualTabs: Set<string>;
-  /**
-   * The ticket a sliced step is on, and what the slices before it left behind. Null for
-   * every step that is not sliced, which is every step of every workflow that has no
-   * `each:`.
-   */
-  slice: { ticket: Slice; progress: string } | null;
-  /** A lone default shell pane the workflow was launched from, consumed at most once. */
-  launchPane: { paneId: string; tabId: string } | null;
-  /** Whether the last pane read failed, so the next failure is not logged twice. */
-  paneReadFailed: boolean;
-  /** What the inbox has said about this Run since the last time anything looked. */
-  steering: Steering;
-  /**
-   * How far the last Judgement got. Carried rather than re-derived, because it is the
-   * difference between `aligned: true` and `unverified`, and a Driver that lost it would
-   * report a Run as unverified for no reason other than having been restarted.
-   */
-  judged: Judged;
-  /**
-   * Blocking findings a human put back in front of the implementer by resuming a run
-   * that stopped on their dispute. Handed to the fix step with the review's findings,
-   * and judged with them; cleared once that fix has run.
-   */
-  reopened: Finding[];
-  /** The plan's tickets as this run last read them; only a told step moves it on. */
-  tickets: Map<string, string> | null;
-}
+export const registryLayer = (
+  dir: string,
+  options?: RegistryOptions,
+): Layer.Layer<
+  Registry,
+  never,
+  HostServices | Store | Crypto.Crypto | ChildProcessSpawner.ChildProcessSpawner | BunServices
+> => Layer.effect(Registry)(makeRegistry(dir, options));
 
 /**
- * The steering state a Driver carries through a Run. Plain arrays and plain values: the
- * inbox is the only way in, the Driver is the only reader, and anything cleverer would
- * be a second place a Run's state lives.
+ * One host's foundation: the engine, the rows beside it, and the run's own view of its
+ * controls and questions. Composed here so there is one SQLite client and one Store
+ * behind all three, rather than a second connection reading what the first wrote.
  */
-interface Steering {
-  /** Messages for this Run's agents, waiting for the ticket that sends them. */
-  deliveries: InboxCommandValue[];
-  /** Why the Run is holding, or null. No new work goes out while this is set. */
-  held: { reason: string; by: string; until: string | null } | null;
-  /** The Intent version this Driver has loaded. */
-  intentVersion: number;
-  /** External submissions already turned into an override, by agent. */
-  externals: Map<string, number>;
-  /** Progress checkpoints already turned into a card, by file. */
-  checkpointed: Set<string>;
-}
-
-export const executeRun = Effect.fn("Engine.executeRun")(function* (o: EngineOptions) {
-  const { run, wf, out } = o;
-  const viewSource = `${VIEW_SOURCE_PREFIX}${run.id}`;
-  const ctx: RunCtx = {
-    outputs: new Map(),
-    skills: yield* resolveSkills(o),
-    previous: yield* previousReviewVars(o),
-    panes: [],
-    ran: new Set(),
-    groups: new Map(),
-    viewSource,
-    boardTabId: null,
-    orderAnchorTabId: null,
-    tabLabels: new Map(),
-    manualTabs: new Set(),
-    slice: null,
-    launchPane: null,
-    paneReadFailed: false,
-    steering: {
-      deliveries: [],
-      held: null,
-      intentVersion: 0,
-      externals: new Map(),
-      checkpointed: new Set(),
-    },
-    judged: NOT_JUDGED,
-    reopened: [],
-    tickets: null,
-  };
-
-  // Read before any step runs, so an edit during an unwatched one is still a change.
-  const issues = yield* planTickets(o);
-  if (issues) ctx.tickets = yield* readTickets(issues);
-
-  run.record.status = "running";
-  run.record.finished_at = null;
-  // A run resumed after a converging loop stopped it: the stop was the loop's verdict
-  // on the evidence, and the resume is the human's word to retry the blocked fix. No
-  // review is started for it; the fix runs against the review that is already there.
-  if (run.record.halt === "no_progress" && run.record.blocking_seen) {
-    run.record.blocking_seen = { ...run.record.blocking_seen, iteration: run.record.iteration };
-    yield* run.log(
-      `resumed after no_progress: fix ${run.record.iteration} runs again against review ${run.record.iteration}'s findings`,
-    );
-  }
-  if (run.record.halt === "dispute_unresolved") {
-    ctx.reopened = run.record.disputed.filter(isBlocking);
-    run.record.disputed = run.record.disputed.filter((d) => !isBlocking(d));
-    yield* run.log(
-      `resumed after dispute_unresolved: ${ctx.reopened.length} disputed blocking finding(s) put back in front of the implementer`,
-    );
-  }
-  run.record.halt = null;
-  // The tab, the toast and the workspace view all name the run the same way.
-  run.record.target_label = runTarget(wf, run.record);
-  yield* run.save();
-
-  // Before anything opens. Two different questions, answered separately: which tab a
-  // question goes to — the Herd's one Home, which may be in another workspace entirely
-  // (ADR-0009) — and which strip this Run's own tabs are ordered in, which is a local
-  // fact about the workspace it runs in.
-  ctx.boardTabId = yield* homeTabOf(o);
-  ctx.launchPane = yield* reusableLaunchPane(o).pipe(
-    Effect.catch((e) => o.run.log(`launch pane: ${reason(e)}`).pipe(Effect.as(null))),
+export const foundationLayer = (options: {
+  readonly dir: string;
+  /** Where a user's own `verify.json` is, for a project that wrote none. */
+  readonly userDir?: string;
+  /** Where a toast goes; left out, nothing is raised. */
+  readonly toast?: Toast;
+  /** The Herd this host works for; left out, nothing is judged or charged to one. */
+  readonly herd?: Herd;
+}): Layer.Layer<
+  | Host
+  | Notifier
+  | Oversight
+  | Store
+  | WorkflowEngine.WorkflowEngine
+  | SqlClient.SqlClient
+  | Reactivity.Reactivity,
+  ConfigError,
+  BunServices
+> =>
+  hostLayer(options).pipe(
+    Layer.provideMerge(storeLayer.pipe(Layer.provideMerge(engineLayer(options)))),
   );
-  yield* ensureTrusted(o);
 
-  const indexOf = (id: string) => wf.steps.findIndex((s) => s.id === id);
-  const repeats = wf.steps
-    .map((s, at) =>
-      s.repeat
-        ? {
-            at,
-            from: indexOf(s.repeat.from),
-            // The gate is `from`; the loop restarts at `back_to`, which may be earlier.
-            back: indexOf(s.repeat.back_to ?? s.repeat.from),
-            max: s.repeat.max ?? wf.maxIterations,
-            converge: s.repeat.converge === true,
-          }
-        : null,
-    )
-    .filter((r): r is Repeat => r !== null);
-
-  let index = 0;
-  while (index < wf.steps.length) {
-    const step = wf.steps[index]!;
-    const record = run.step(step.id);
-
-    if (record.status === "done") {
-      yield* out(`✓ ${step.id} — already done, skipped`);
-      // A converging loop's gate and fix are decisions, not work: a resumed run makes
-      // them again from the Outputs on disk, so a done record cannot carry it past a
-      // verdict it never reached. Evidence that is gone stops it rather than skipping.
-      const decision = repeats.find((r) => r.converge && (r.from === index || r.at === index));
-      if (!decision) {
-        index += 1;
-        continue;
-      }
-      const reloaded = yield* reloadOutcomes(o, step);
-      if (reloaded === null) {
-        return yield* halt(
-          o,
-          ctx,
-          viewSource,
-          decision,
-          "fix_unverified",
-          `cannot re-check ${step.id}: its Output is missing or unreadable`,
-          run.record.outstanding,
-        );
-      }
-      ctx.outputs.set(step.id, reloaded);
-      const next = yield* afterStep(o, ctx, viewSource, repeats, index, reloaded);
-      if (next.kind === "finish") return next.status;
-      index = next.index;
-      continue;
-    }
-
-    // A step that needs something this machine or repo does not have is not a
-    // failure: it is work that cannot be done here, and the run carries on.
-    let extras: YamlMap | undefined;
-    if ((step.requires?.length ?? 0) > 0) {
-      const unmet = yield* unmetRequirement(o, step.requires!);
-      if (step.requires!.includes("gitlab")) {
-        // The merge request is the claim, so this is where the claim is checked. Where
-        // there is no GitLab the step is skipped and nothing is claimed — the gaps are
-        // still recorded, because a human looking at the board should see what this Run
-        // did and did not prove, but they stop nothing.
-        const gated = yield* evidenceGate(o, ctx, viewSource, repeats, index, unmet === null);
-        if (gated !== null) {
-          if (gated.kind === "finish") return gated.status;
-          index = gated.index;
-          continue;
-        }
-      }
-      if (unmet) {
-        yield* run.mark(step.id, "done");
-        record.note = `skipped: ${unmet}`;
-        yield* run.save();
-        yield* out(`◦ ${step.id} — skipped: ${unmet}`);
-        index += 1;
-        continue;
-      }
-      if (step.requires!.includes("gitlab")) {
-        const facts = yield* mrFacts(
-          {
-            cwd: run.record.cwd,
-            inputs: run.record.inputs,
-            configuredAssignee: configValue(yield* readConfig(o.env.configDir), "gitlab.assignee"),
-          },
-          runShell,
-        );
-        extras = mrVars(facts);
-      }
-    }
-
-    // Not a skip: a gate blocks, in the runner, until the Run may have what it asked
-    // for — so a queue of hours costs wall clock and no model tokens at all.
-    if (step.waits?.includes("helle")) {
-      const gated = yield* helleGate(o).pipe(Effect.result);
-      if (Result.isFailure(gated)) {
-        yield* run.mark(step.id, "failed");
-        // A gate that fails after it has claimed leaves the Run holding the project,
-        // and a failed Run never releases. Name the slug, or the operator is left
-        // holding a claim nothing ever told them about.
-        const held = run.record.helle;
-        record.note = held
-          ? `${gated.failure.message} — still holding ${held.slug} in helle`
-          : gated.failure.message;
-        yield* run.save();
-        yield* out(`✗ ${step.id} — ${record.note}`);
-        return yield* finish(o, ctx, "failed", viewSource);
-      }
-    }
-
-    if ((step.choices?.length ?? 0) > 0) {
-      yield* run.mark(step.id, "running");
-      record.iteration = run.record.iteration;
-      record.note = null;
-      record.variants = [];
-      yield* run.save();
-      yield* out(`▶ ${step.id} — over to you`);
-      const choiceResult = yield* runChoiceStep(o, step, ctx).pipe(Effect.result);
-      if (Result.isFailure(choiceResult)) {
-        yield* run.mark(step.id, "failed");
-        record.note = herdrFailureReason(choiceResult.failure);
-        yield* run.save();
-        yield* out(`✗ ${step.id} — ${record.note}`);
-        return yield* finish(o, ctx, "failed", viewSource);
-      }
-      const result: ChoiceResult = choiceResult.success;
-      ctx.ran.add(step.id);
-      yield* run.mark(step.id, result.status);
-      record.note = result.note;
-      yield* run.save();
-      if (result.status !== "done") {
-        // The note where the step wrote one: a fan-out that stopped because a repository
-        // failed knows which, and a toast reading "next needs you" for a plan nobody has
-        // to answer sends the operator looking for a question that is not there.
-        return yield* finish(o, ctx, "blocked", viewSource, result.note ?? `${step.id} needs you`);
-      }
-      // A chained Run takes over from here, so the parent stops where it is.
-      if (result.chained) {
-        for (const s of wf.steps.slice(index + 1)) {
-          const rec = run.step(s.id);
-          if (rec.status === "pending") rec.note = `not run: ${result.note}`;
-        }
-        yield* run.save();
-        return yield* finish(o, ctx, "done", viewSource, result.note ?? undefined);
-      }
-      index += 1;
-      continue;
-    }
-
-    // Nothing to fan in: the one review that was written is already the review, and
-    // `collect` held it to a synthesis's shape and wrote `review.md` from it. Starting a
-    // model here to turn one file into one file is the pass this replaces.
-    if (step.fanIn) {
-      const source = ctx.outputs.get(step.fanIn) ?? [];
-      if (source.length === 1) {
-        const note = "skipped: one review, nothing to reconcile";
-        yield* run.mark(step.id, "done");
-        record.note = note;
-        record.iteration = run.record.iteration;
-        record.variants = [];
-        ctx.outputs.set(step.id, source);
-        yield* run.save();
-        yield* out(`◦ ${step.id} — ${note}`);
-        // Everything the fan-in step did besides run an agent still has to happen: the
-        // review is printed where the human is looking, and asking for a review of a
-        // merge request still makes whoever asked its reviewer.
-        yield* printReview(o);
-        yield* claimMrRole(o, parseMrTarget(run.record.inputs.target ?? ""), "reviewer");
-        const next = yield* afterStep(o, ctx, viewSource, repeats, index, source);
-        if (next.kind === "finish") return next.status;
-        index = next.index;
-        continue;
-      }
-    }
-
-    const variants = stepVariants(step, o.defaults);
-    const keys = variantKeys(variants);
-    yield* run.mark(step.id, "running");
-    record.iteration = run.record.iteration;
-    // A step that failed and is being tried again must not keep the old note.
-    record.note = null;
-    yield* run.save();
-    yield* out(
-      `▶ ${step.id}${variants.length > 1 ? ` (${variants.length} in parallel)` : ""} — iteration ${run.record.iteration}`,
-    );
-
-    // A step that builds a plan builds it a ticket at a time, on the same agent, with a
-    // few lines of fact between slices rather than one transcript that grows all run.
-    if (step.each === "tickets") {
-      const sliced = yield* runSlices(o, step, variants, ctx, extras);
-      if (sliced !== null) {
-        ctx.outputs.set(step.id, sliced.outcomes);
-        ctx.ran.add(step.id);
-        yield* run.mark(step.id, sliced.blocked ? "blocked" : "done");
-        yield* run.save();
-        if (sliced.blocked) {
-          const why = `${step.id}: ${sliced.blocked}`;
-          const announced = yield* notify(o, "output-unusable", why, {
-            step: step.id,
-            subject: step.id,
-          });
-          return yield* finish(o, ctx, "blocked", viewSource, why, announced);
-        }
-        const next = yield* afterStep(o, ctx, viewSource, repeats, index, sliced.outcomes);
-        if (next.kind === "finish") return next.status;
-        index = next.index;
-        continue;
-      }
-    }
-
-    const stepResult = yield* runStep(o, step, variants, keys, ctx, extras).pipe(Effect.result);
-    if (Result.isFailure(stepResult)) {
-      yield* run.mark(step.id, "failed");
-      record.note = herdrFailureReason(stepResult.failure);
-      yield* run.save();
-      yield* out(`✗ ${step.id} — ${record.note}`);
-      return yield* finish(o, ctx, "failed", viewSource);
-    }
-    const outcomes: VariantOutcome[] = stepResult.success;
-    ctx.ran.add(step.id);
-    yield* noteEvidence(o, step.id);
-
-    record.variants = outcomes.map((v) => v.record);
-    ctx.outputs.set(step.id, outcomes);
-
-    const blocked = outcomes.filter((v) => v.record.status !== "done");
-    yield* run.mark(step.id, blocked.length > 0 ? "blocked" : "done");
-    yield* run.save();
-
-    for (const v of outcomes) {
-      const mark = v.record.status === "done" ? "✓" : v.record.status === "failed" ? "✗" : "⚠";
-      yield* out(`  ${mark} ${v.record.label}${v.record.error ? ` — ${v.record.error}` : ""}`);
-    }
-    yield* markTab(
-      o,
-      ctx,
-      outcomes.map((v) => v.record),
-    );
-    // The whole point of a synthesis is that a human can read it here.
-    if (step.fanIn) yield* printReview(o);
-    // A review of a merge request makes whoever asked for it its reviewer.
-    if (step.fanIn && blocked.length === 0)
-      yield* claimMrRole(o, parseMrTarget(run.record.inputs.target ?? ""), "reviewer");
-
-    if (blocked.length > 0) {
-      // The real reason, not "go and look": an unusable Output is often ten seconds
-      // of work for whoever reads the toast, and they cannot know that from "needs you".
-      const first = blocked[0]!.record;
-      const why = first.error
-        ? `${step.id}: ${first.error}${first.repairs.length > 0 ? " (asked once already)" : ""}`
-        : `${step.id} needs you`;
-      // One interrupt: where the step earns a specific toast, the ending must not
-      // announce the same event again under its own key.
-      const kind = blockedKind(blocked[0]!);
-      // Whether it was *said*, not whether one was chosen: a kind turned off in
-      // config must not take the ending's toast down with it and end a run silently.
-      const announced = kind
-        ? yield* notify(o, kind, why, { step: step.id, subject: step.id })
-        : false;
-      return yield* finish(o, ctx, "blocked", viewSource, why, announced);
-    }
-
-    const next = yield* afterStep(o, ctx, viewSource, repeats, index, outcomes);
-    if (next.kind === "finish") return next.status;
-    index = next.index;
-  }
-
-  return yield* finish(o, ctx, "done", viewSource);
-});
-
-interface Repeat {
-  at: number;
-  from: number;
-  back: number;
-  max: number;
-  /** Only blocking findings drive the loop, and the last fix's own account decides. */
-  converge: boolean;
-}
-
-type Next = { kind: "next"; index: number } | { kind: "finish"; status: RunStatus };
-
-/**
- * What a step's Outcome decides about where the run goes next: the gate at a loop's
- * `from` step, and the repeat at its own. Separate from running the step so a resumed
- * run can decide again from Outputs it reloaded.
- */
-const afterStep = Effect.fn("Engine.afterStep")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  viewSource: string,
-  repeats: Repeat[],
-  index: number,
-  outcomes: VariantOutcome[],
-) {
-  const { run, wf, out } = o;
-  const step = wf.steps[index]!;
-  const next = (i: number): Next => ({ kind: "next", index: i });
-  const finished = (status: RunStatus): Next => ({ kind: "finish", status });
-
-  const gate = repeats.find((r) => r.from === index);
-  if (gate) {
-    const verdict = verdictOf(outcomes, run.record.disputed);
-    // A reviewer that answered a dispute reopens it: the argument has moved on.
-    if (verdict.rebutted.length > 0) {
-      const answered = new Set(verdict.rebutted.map(findingKey));
-      run.record.disputed = run.record.disputed.filter((d) => !answered.has(findingKey(d)));
-      yield* run.save();
-      yield* out(`  ${verdict.rebutted.length} disputed finding(s) answered by a reviewer`);
-    }
-    if (verdict.settled.length > 0) {
-      yield* out(
-        `  ${verdict.settled.length} finding(s) already disputed — your call, not the loop's`,
-      );
-    }
-    const skipFix = Effect.fn("Engine.skipFix")(function* (note: string) {
-      for (const s of wf.steps.slice(index + 1, gate.at + 1)) {
-        yield* run.mark(s.id, "done");
-        run.step(s.id).note = `skipped: ${note}`;
-      }
-      yield* run.save();
-      return next(gate.at + 1);
-    });
-    if (!gate.converge) {
-      if (verdict.clean) {
-        yield* out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
-        return yield* skipFix("reviews clean");
-      }
-      yield* out(`  ${verdict.findings.length} finding(s) to fix`);
-    } else {
-      if (!verdict.reviewed) {
-        return finished(
-          yield* halt(
-            o,
-            ctx,
-            viewSource,
-            gate,
-            "fix_unverified",
-            `${step.id} left no review verdict to decide on`,
-            run.record.outstanding,
-          ),
-        );
-      }
-      const blocking = [...verdict.findings.filter(isBlocking), ...ctx.reopened];
-      if (blocking.length === 0) {
-        // A dispute the reviewers did not answer settles nothing serious, whether they
-        // raised it again or left it out: the human decides it, not the merge request.
-        // The record's severities are the reviewers' own — see the fix step below.
-        const disputed = run.record.disputed.filter(isBlocking);
-        if (disputed.length > 0) {
-          return finished(
-            yield* halt(
-              o,
-              ctx,
-              viewSource,
-              gate,
-              "dispute_unresolved",
-              `${disputed.length} disputed blocking finding(s) stand unanswered — your call, not the loop's`,
-              [...disputed, ...verdict.findings],
-            ),
-          );
-        }
-        if (verdict.findings.length === 0) {
-          yield* out(`  reviews clean — skipping ${wf.steps[gate.at]!.id}`);
-          return yield* skipFix("reviews clean");
-        }
-        const remain = `${verdict.findings.length} non-blocking finding(s) remain`;
-        yield* out(`  nothing blocking — ${remain}, skipping ${wf.steps[gate.at]!.id}`);
-        return yield* skipFix(remain);
-      }
-      // The same blocking set as the last review, by identity rather than by count
-      // or line: nothing the fix did reached it, and another round would not either.
-      // A finding a reviewer answered a dispute on is the argument moving, not standing.
-      const keys = [
-        ...new Set(verdict.findings.filter((f) => isBlocking(f) && !f.rebuttal).map(findingKey)),
-      ].sort();
-      const seen = run.record.blocking_seen;
-      if (
-        seen &&
-        seen.iteration < run.record.iteration &&
-        keys.length > 0 &&
-        keys.length === seen.keys.length &&
-        keys.every((k, i) => k === seen.keys[i])
-      ) {
-        return finished(
-          yield* halt(
-            o,
-            ctx,
-            viewSource,
-            gate,
-            "no_progress",
-            `no progress: review ${run.record.iteration} raised the same ${keys.length} blocking finding(s) as review ${seen.iteration}`,
-            verdict.findings,
-          ),
-        );
-      }
-      run.record.blocking_seen = { iteration: run.record.iteration, keys };
-      yield* run.save();
-      yield* out(
-        `  ${verdict.findings.length + ctx.reopened.length} finding(s) to fix, ${blocking.length} blocking`,
-      );
-    }
-  }
-
-  const mine = repeats.find((r) => r.at === index);
-  if (mine) {
-    const from = wf.steps[mine.from]!.id;
-    const live = verdictOf(ctx.outputs.get(from) ?? [], run.record.disputed);
-    if (mine.converge) {
-      // Judged against everything the review raised, not against what is left once
-      // this fix's own disputes are taken out: `collect` has already recorded those,
-      // and a blocker disputed is a blocker unresolved, not one gone.
-      const raised = [
-        ...(ctx.outputs.get(from) ?? [])
-          .map((v) => v.review)
-          .filter((r): r is ReviewOutput => r !== null)
-          .flatMap((r) => r.findings),
-        ...ctx.reopened,
-      ];
-      ctx.reopened = [];
-      if (raised.length === 0 && !live.reviewed) {
-        return finished(
-          yield* halt(
-            o,
-            ctx,
-            viewSource,
-            mine,
-            "fix_unverified",
-            `no review verdict from ${from} to check fix ${run.record.iteration} against`,
-            run.record.outstanding,
-          ),
-        );
-      }
-      // The reviewers' severity is the one a dispute carries from here on: an
-      // implementer cannot make a blocker minor by calling it so.
-      const severity = new Map(raised.map((f) => [findingKey(f), f.severity]));
-      run.record.disputed = run.record.disputed.map((d) => ({
-        ...d,
-        severity: severity.get(findingKey(d)) ?? d.severity,
-      }));
-      yield* run.save();
-      // The fix's own account: read leniently between reviews, where the next review is
-      // the check, and strictly at the end, where nothing else is.
-      const raw = outcomes[0]?.output ?? null;
-      const fix = parseFixOutput(raw, outcomes[0]?.record.output ?? step.id);
-      const blocking = raised.filter(isBlocking);
-      if (fix.ok && blocking.length > 0) {
-        const disputed = new Set(run.record.disputed.map(findingKey));
-        const fixed = new Set(fix.value.fixed.map(findingKey));
-        if (blocking.every((f) => disputed.has(findingKey(f)) && !fixed.has(findingKey(f)))) {
-          return finished(
-            yield* halt(
-              o,
-              ctx,
-              viewSource,
-              mine,
-              "dispute_unresolved",
-              `fix ${run.record.iteration} disputed every blocking finding (${blocking.length}) — your call, not the loop's`,
-              raised,
-            ),
-          );
-        }
-      }
-      if (run.record.iteration >= mine.max) {
-        if (!fix.ok) {
-          return finished(
-            yield* halt(o, ctx, viewSource, mine, "fix_unverified", fix.error, raised),
-          );
-        }
-        // A dispute standing from an earlier round is still a dispute of this fix.
-        const own = new Set(fix.value.disputed.map(findingKey));
-        const standing = run.record.disputed.filter((d) => !own.has(findingKey(d)));
-        const settled = settleFinalFix(
-          raised,
-          { ...fix.value, disputed: [...fix.value.disputed, ...standing] },
-          yield* checkEvidence(o, fix.value.checks),
-        );
-        if (!settled.ok) {
-          return finished(
-            yield* halt(
-              o,
-              ctx,
-              viewSource,
-              mine,
-              settled.halt,
-              `last fix not enough: ${settled.reasons.join("; ")}`,
-              settled.outstanding,
-            ),
-          );
-        }
-        // What the fix reported is what the run reports — not the review before it,
-        // which is history now, and not a review either, which the words say.
-        run.record.outstanding = settled.outstanding;
-        run.record.unreviewed = settled.attestation;
-        run.step(step.id).note = settled.attestation;
-        yield* run.save();
-        yield* out(`  ${settled.attestation}`);
-        return next(index + 1);
-      }
-    }
-    if (run.record.iteration < mine.max) {
-      run.record.iteration += 1;
-      for (const s of wf.steps.slice(mine.back, index + 1)) {
-        yield* run.mark(s.id, "pending");
-        run.step(s.id).note = null;
-      }
-      yield* run.save();
-      yield* appendMetric(run.dir, {
-        at: yield* nowIso(),
-        kind: "round",
-        subject: wf.steps[mine.back]!.id,
-        value: run.record.iteration,
-        note: "looping back",
-      });
-      yield* out(
-        `  looping back to ${wf.steps[mine.back]!.id} (iteration ${run.record.iteration})`,
-      );
-      return next(mine.back);
-    }
-    // Committing work the reviewers still object to would be worse than stopping.
-    run.record.outstanding = live.findings;
-    run.step(step.id).note =
-      `stopped at max_iterations ${mine.max} with ${live.findings.length} finding(s)`;
-    yield* run.save();
-    yield* out(`  max_iterations (${mine.max}) reached with ${live.findings.length} finding(s)`);
-    return finished(
-      yield* finish(o, ctx, "blocked", viewSource, `max_iterations reached with findings`),
-    );
-  }
-
-  return next(index + 1);
-});
-
-/**
- * A converging loop stopping for the human. The loop's own step is what blocks, so a
- * resume runs it again and decides again; the reason is on the record for `attention`
- * and in the note for whoever reads the summary.
- */
-const halt = Effect.fn("Engine.halt")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  viewSource: string,
-  loop: Repeat,
-  why: Halt,
-  note: string,
-  outstanding: Finding[],
-) {
-  const id = o.wf.steps[loop.at]!.id;
-  yield* appendMetric(o.run.dir, {
-    at: yield* nowIso(),
-    kind: "halt",
-    subject: id,
-    value: o.run.record.iteration,
-    note: why,
-  });
-  yield* o.run.mark(id, "blocked");
-  o.run.step(id).note = note;
-  o.run.record.halt = why;
-  o.run.record.outstanding = outstanding;
-  o.run.record.unreviewed = null;
-  yield* o.run.save();
-  yield* o.out(`  ${note}`);
-  return yield* finish(o, ctx, "blocked", viewSource, note);
-});
-
-/**
- * A done step's Outcomes, read back from the Outputs it recorded. Only what a gate
- * needs — the parsed verdict — with none of `collect`'s side effects; null when any
- * variant's Output is gone or no longer parses.
- */
-/** The set this Run may run itself: the Intent's grant, else what was seeded at start. */
-const approvedOf = Effect.fn("Engine.approvedOf")(function* (o: EngineOptions) {
-  return approvedFor(o.run.record.approved_verifications, yield* intentOf(o));
-});
-
-/**
- * Collie's own run of approved commands, now, on this tree. A refusal is recorded as
- * what it is rather than swallowed: a spec that cannot be run is a gap.
- */
-const collectApproved = Effect.fn("Engine.collectApproved")(function* (
-  o: EngineOptions,
-  approved: ReadonlyArray<VerifySpec>,
-  specs: ReadonlyArray<VerifySpec> = approved,
-) {
-  const { run, out } = o;
-  for (const spec of specs) {
-    const collected = yield* runApproved(
-      run.dir,
-      { id: run.id, cwd: run.record.cwd, worktree: run.record.worktree?.path ?? null },
-      approved,
-      spec,
-    ).pipe(
-      Effect.catchTag("VerifyRefused", (cause) =>
-        run.log(`evidence: ${spec.name} refused: ${cause.why}`).pipe(Effect.as(null)),
-      ),
+const makeRegistry: (
+  dir: string,
+  options?: RegistryOptions,
+) => Effect.Effect<
+  RegistryApi,
+  never,
+  | HostServices
+  | Store
+  | Crypto.Crypto
+  | Scope.Scope
+  | ChildProcessSpawner.ChildProcessSpawner
+  | BunServices
+> = Effect.fn("Engine.makeRegistry")(function* (dir: string, options?: RegistryOptions) {
+  const crashAt = options?.crashAt;
+  const locate = options?.locate;
+  const userDir = options?.userDir ?? dir;
+  const engine = yield* WorkflowEngine.WorkflowEngine;
+  const fs = yield* FileSystem.FileSystem;
+  const store = yield* Store;
+  const crypto = yield* Crypto.Crypto;
+  const hostScope = yield* Effect.scope;
+  const placing =
+    options?.placing ??
+    (yield* currentEnv.pipe(
+      Effect.map((env) => ({ herdr: new Herdr(env), env })),
       Effect.orDie,
+    ));
+  // Captured, so placing a Run asks git and herdr without its callers providing either.
+  const bun = yield* Effect.context<BunServices | Crypto.Crypto>();
+  /** Every generation this host is holding, by its registration name. */
+  const live = new Map<string, Generation>();
+  /** Why a recorded generation is not holdable, so a caller hears the file, not a timeout. */
+  const unavailable = new Map<string, string>();
+  /** Which generation of an id new work goes to. */
+  const newestOf = new Map<string, string>();
+  let known = yield* store.generations;
+  // Staged copies last only as long as this host: every generation below is staged from
+  // the module as it is now, never restored.
+  yield* clearGenerations(dir);
+  const register = Effect.fn("Engine.register")(function* (route: {
+    readonly workflow: string;
+    readonly name: string;
+    readonly entry: string;
+  }) {
+    const entry = yield* stageGeneration({ dir, name: route.name, entry: route.entry }).pipe(
+      Effect.flatMap(loadEntry),
     );
-    if (collected !== null) yield* out(`  ${spec.name}: ${collected.result}`);
-  }
-});
-
-/**
- * What the last fix's checks are read against. A check Collie is allowed to run and that
- * has no passing record on this tree is run now, once, rather than taken on the fix's
- * word — and one it may not run is whatever the agent recorded through the collector.
- */
-const checkEvidence = Effect.fn("Engine.checkEvidence")(function* (
-  o: EngineOptions,
-  checks: ReadonlyArray<{ name: string }>,
-) {
-  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
-  const approved = yield* approvedOf(o);
-  const before = yield* verificationsOf(o);
-  const now = yield* fingerprint(cwd);
-  const fresh = (name: string) =>
-    before.some((v) => v.name === name && v.result === "pass" && !staleAgainst(v, now));
-  const wanted = new Set(checks.map((check) => check.name));
-  const due = approved.filter((spec) => wanted.has(spec.name) && !fresh(spec.name));
-  yield* collectApproved(o, approved, due);
-  return { verifications: yield* verificationsOf(o), final: yield* fingerprint(cwd) };
-});
-
-/** What a gate answer is recorded and resumed as, which is also what a launch may decide. */
-function gateWire(answer: GateAnswer): string {
-  if (answer.kind === "skip") return "skip";
-  return answer.verifications === null ? "approve" : `approve:${answer.verifications.join(",")}`;
-}
-
-/**
- * The gate itself. A decision, not a menu: it is written where a question lives, so the
- * board draws it as a card and closing the tab does not lose it, and its answer may cut
- * the list down before anything is run.
- *
- * Approved without asking where there is nothing to hold — a step that will be skipped
- * anyway — or nobody to ask, which is every Run driven without a terminal.
- */
-const askGate = Effect.fn("Engine.askGate")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  step: ResolvedStep,
-  approved: ReadonlyArray<VerifySpec>,
-  blocking: boolean,
-) {
-  const { run, out } = o;
-  const whole: GateAnswer = { kind: "approve", verifications: null };
-  if (!blocking) return whole;
-  const names = approved.map((spec) => spec.name);
-  const prompts = o.prompts;
-  if (!prompts) {
-    yield* run.log(`${step.id}: no terminal to ask, so the evidence gate took the list as it is`);
-    return whole;
-  }
-  const decided = run.record.decisions[step.id];
-  const answer =
-    decided === undefined
-      ? yield* Effect.gen(function* () {
-          yield* callAttention(o, ctx, `${step.id}: approve what proves this run`, step.id);
-          const asked = yield* prompts.gate({ run: run.id, step: step.id, verifications: names });
-          run.record.awaiting = null;
-          yield* run.save();
-          yield* liftHoldOnAnswer(o, ctx);
-          // Off `asks you` the moment it is answered, exactly as a Choice comes off it.
-          yield* reconcileTabs(o, ctx, nothingLive);
-          return asked;
-        })
-      : parseGateAnswer(decided, names);
-  if (answer === null) return null;
-  run.record.choices.push({ step: step.id, title: gateWire(answer), at: yield* nowIso() });
-  yield* run.save();
-  const why = decided === undefined ? "" : " (decided at launch)";
-  yield* out(
-    answer.kind === "skip"
-      ? `  ▸ the evidence gate was skipped${why}`
-      : `  ▸ the evidence gate approved: ${(answer.verifications ?? names).join(", ")}${why}`,
-  );
-  return answer;
-});
-
-/**
- * What the Run has proved, checked before the merge request is opened, by the engine and
- * not by an agent. Collie runs the Run's own approved set itself at the tree as it stands
- * — nothing else, and nothing a prompt suggested — then the outcome table says what is
- * still missing.
- *
- * Null means carry on and open it. Otherwise the Run stops with `evidence_missing` and the
- * gaps on the record, or skips the merge request where an investigation legitimately has
- * no patch to open one for.
- */
-const evidenceGate = Effect.fn("Engine.evidenceGate")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  viewSource: string,
-  repeats: Repeat[],
-  index: number,
-  /** False where the step will be skipped anyway: record the gaps, stop nothing. */
-  blocking: boolean,
-) {
-  const { run, wf, out } = o;
-  const step = wf.steps[index]!;
-  const carryOn = (at: number): Next => ({ kind: "next", index: at });
-  const stop = (status: RunStatus): Next => ({ kind: "finish", status });
-  // Only a workflow that declares an outcome is held to one. A fork with its own last
-  // step is not silently given a gate it never asked for.
-  if (!gateSteps(wf).some((gated) => gated.id === step.id)) return null;
-
-  const kind = outcomeOf(run.record.outcome);
-  const approved = yield* approvedOf(o);
-  const cwd = run.record.worktree?.path ?? run.record.cwd;
-
-  const decided = yield* askGate(o, ctx, step, approved, blocking);
-  if (decided === null) {
-    // Blocked with its note and no halt, exactly as a cancelled menu is: the Run is left
-    // open for whoever comes back to it, and `attention` says which step stopped and why.
-    const note = "the evidence gate was not answered";
-    yield* run.mark(step.id, "blocked");
-    run.step(step.id).note = note;
-    yield* run.save();
-    yield* out(`  ${note}`);
-    return stop(yield* finish(o, ctx, "blocked", viewSource, note));
-  }
-  // Skipped is past the gate, not through it: nothing is collected and no gap is judged,
-  // because the human has said this Run is not held to its list.
-  if (decided.kind === "skip") return null;
-  const held =
-    decided.verifications === null
-      ? approved
-      : approved.filter((spec) => decided.verifications!.includes(spec.name));
-
-  // Collie's own run of every approved command, now, on this tree.
-  yield* collectApproved(o, approved, held);
-
-  // The gate has just collected results of its own, so this is a moment the journal
-  // grew: record them, and say whether anything is identifiably in the way.
-  yield* noteEvidence(o, step.id);
-
-  const final = yield* fingerprint(cwd);
-  const { outputs, reviewed } = outputsOf(o, ctx);
-  const got: Collected = {
-    verifications: yield* verificationsOf(o),
-    final,
-    approved: held,
-    outputs,
-    reviewed,
-    insideRun: (ref) => refInside(o, ref),
-    tickets: yield* ticketsOf(o),
-  };
-
-  const gaps = evidenceGaps(kind, got);
-  run.record.evidence_gaps = gaps;
-  yield* run.save();
-  yield* appendMetric(run.dir, {
-    at: yield* nowIso(),
-    kind: "evidence",
-    subject: kind,
-    value: gaps.length,
-    note: gaps.join("; "),
-  });
-  if (gaps.length > 0 && !blocking) {
-    yield* run.log(`evidence gaps (${step.id} will be skipped anyway): ${gaps.join("; ")}`);
-    return null;
-  }
-
-  if (gaps.length === 0) {
-    // An investigation that concluded there is nothing to change has finished, and a
-    // merge request would be an invention. Recorded as a skip, not as a failure.
-    if (endsWithoutPatch(kind, got)) {
-      const note = "skipped: investigation, no patch";
-      yield* run.mark(step.id, "done");
-      run.step(step.id).note = note;
-      yield* run.save();
-      yield* out(`◦ ${step.id} — ${note}`);
-      return carryOn(index + 1);
-    }
-    return null;
-  }
-
-  const loop = repeats.find((r) => r.at < index) ?? repeats[repeats.length - 1];
-  const note = `evidence missing for outcome ${kind}: ${gaps.join("; ")}`;
-  if (loop) {
-    return stop(
-      yield* halt(o, ctx, viewSource, loop, "evidence_missing", note, run.record.outstanding),
+    const registration = entry.make(route.name);
+    // The composition root, and the only place a host binds anything into a module's
+    // own Layer: explicitly provided to this generation, never a table something looks
+    // itself up in. Everything else the module needs it provides for itself.
+    yield* Layer.buildWithScope(
+      registration.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(Layer.succeed(Children)(children), Layer.succeed(Executions)(executions)),
+        ),
+      ),
+      hostScope,
     );
-  }
-  yield* run.mark(step.id, "blocked");
-  run.step(step.id).note = note;
-  run.record.halt = "evidence_missing";
-  yield* run.save();
-  yield* out(`  ${note}`);
-  return stop(yield* finish(o, ctx, "blocked", viewSource, note));
-});
-
-/**
- * The first Output each step produced, and which of those a reviewer wrote.
- *
- * First rather than last because a step's variants are one answer to one question; a
- * later variant is another reviewer's take, not a correction of the first. "A reviewer
- * wrote it" is the same test the engine already uses to decide what a review is: the
- * synthesis, or the sole reviewer whose Output a fan-in would have reconciled.
- */
-function outputsOf(o: EngineOptions, ctx: RunCtx) {
-  const outputs = new Map<string, YamlValue>();
-  const reviewed = new Set<string>();
-  for (const [id, variants] of ctx.outputs) {
-    for (const variant of variants) {
-      if (variant.output !== null && !outputs.has(id)) outputs.set(id, variant.output);
-    }
-    const step = o.wf.steps.find((other) => other.id === id);
-    if (step && (step.fanIn || soleReview(o, step))) reviewed.add(id);
-  }
-  return { outputs, reviewed };
-}
-
-/**
- * Every verification this Run has collected since the last time this looked, written to
- * the metrics journal, and the obstacle a repeated identical failure is.
- *
- * Called where a step has just produced something, because that is when the journal has
- * grown. It records; it never stops the Run. A command failing three times the same way
- * is a Run going round, and what that earns is a sentence the next prompt gets — not a
- * halt, which would be a limit nobody asked for.
- */
-const noteEvidence = Effect.fn("Engine.noteEvidence")(function* (o: EngineOptions, step: string) {
-  const records = yield* verificationsOf(o);
-  const seen = yield* readMetrics(o.run.dir);
-  const already = new Set(
-    seen.filter((line) => line.kind === "verification").map((line) => line.subject),
-  );
-  for (const record of records) {
-    if (already.has(record.id)) continue;
-    yield* appendMetric(o.run.dir, {
-      at: record.at,
-      kind: "verification",
-      subject: record.id,
-      value: record.by === "collie" ? 1 : 0,
-      note: record.result,
-    });
-  }
-
-  const found = repeatedFailure(records, REPEATED_FAILURE);
-  const obstacle = found === null ? null : obstacleOf(found);
-  if (obstacle !== null && obstacle !== o.run.record.obstacle) {
-    o.run.record.obstacle = obstacle;
-    yield* o.run.save();
-    yield* appendMetric(o.run.dir, {
-      at: yield* nowIso(),
-      kind: "checkpoint",
-      subject: step,
-      value: found!.times,
-      note: obstacle,
-    });
-    yield* o.out(`  ⚠ ${obstacle}`);
-  }
-  // Cleared the moment it stops repeating: an obstacle that outlived its cause would
-  // send the next prompt after a problem that is already gone.
-  if (obstacle === null && o.run.record.obstacle !== null) {
-    o.run.record.obstacle = null;
-    yield* o.run.save();
-  }
-});
-
-/**
- * How many identical failures of one command count as going round rather than working
- * through it. A proposal, not a user decision — and what it produces is a sentence, so
- * being wrong about the number costs a paragraph in a prompt rather than a stopped Run.
- */
-const REPEATED_FAILURE = 3;
-
-/**
- * A `plan` or `review` Run has an outcome it never chose and no merge request to gate, so
- * its row of the table is read here, once, when it has finished: what it left undone is
- * on the record for the board and `run show`, as a gated Run's gaps are. Recorded, not
- * halted — the human's Choice already closed the Run, and a plan that wrote no tickets is
- * a fact about it rather than a reason to stop it again.
- */
-const recordFixedKindEvidence = Effect.fn("Engine.recordFixedKindEvidence")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-) {
-  const kind = outcomeOf(o.run.record.outcome);
-  if (kind !== "plan" && kind !== "review") return;
-  const { outputs, reviewed } = outputsOf(o, ctx);
-  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
-  const gaps = evidenceGaps(kind, {
-    verifications: yield* verificationsOf(o),
-    final: yield* fingerprint(cwd),
-    approved: [],
-    outputs,
-    reviewed,
-    insideRun: (ref) => refInside(o, ref),
-    tickets: [],
-  });
-  o.run.record.evidence_gaps = gaps;
-  yield* appendMetric(o.run.dir, {
-    at: yield* nowIso(),
-    kind: "evidence",
-    subject: kind,
-    value: gaps.length,
-    note: gaps.join("; "),
-  });
-  if (gaps.length > 0) yield* o.run.log(`evidence gaps: ${gaps.join("; ")}`);
-});
-
-/**
- * The tickets this Run built from: the plan directory it was given, or the one its agent
- * wrote under the Run for a text, Linear, review or follow-up source. A source with no
- * tickets is no tickets, not a failure.
- */
-const ticketsOf = Effect.fn("Engine.ticketsOf")(function* (o: EngineOptions) {
-  const path = yield* Path.Path;
-  const { inputs } = o.run.record;
-  const planDir =
-    (inputs.plan_kind ?? "") === "plan-dir" && (inputs.plan ?? "") !== ""
-      ? inputs.plan!
-      : path.join(o.run.dir, "plan");
-  return yield* orderedTicketsOf(planDir, inputs.repo ?? "").pipe(
-    Effect.catch(() => Effect.succeed([])),
-  );
-});
-
-/** A Run's outcome kind, with an unrecorded or unknown one read as `unspecified`. */
-function outcomeOf(recorded: string | null): Outcome {
-  const value = (recorded ?? "").trim();
-  return value !== "" && isOutcome(value) ? value : "unspecified";
-}
-
-/**
- * Whether a reference an agent wrote points inside this Run's own directory or checkout.
- * Lexical, and deliberately so: this decides whether a conclusion's evidence is evidence,
- * and a path that escapes with `..` is refused rather than resolved for it.
- */
-function refInside(o: EngineOptions, ref: string): boolean {
-  const value = ref.trim();
-  if (value === "" || value.includes("..")) return false;
-  if (!value.startsWith("/")) return true;
-  const roots = [o.run.dir, o.run.record.cwd, o.run.record.worktree?.path ?? ""];
-  return roots.some((root) => root !== "" && (value === root || value.startsWith(`${root}/`)));
-}
-
-const reloadOutcomes = Effect.fn("Engine.reloadOutcomes")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  const outcomes: VariantOutcome[] = [];
-  // A fan-in that was skipped because there was only one review ran no agent of its own,
-  // so its verdict is the review's Output. Without this a resumed Run would find the gate
-  // step with no variants to reload and stop as if the evidence were gone.
-  const own = o.run.step(step.id).variants;
-  const variants = step.fanIn && own.length === 0 ? o.run.step(step.fanIn).variants : own;
-  for (const record of variants) {
-    if (!record.output) return null;
-    const text = yield* fs
-      .readFileString(pathService.join(o.run.dir, record.output))
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (text === null) return null;
-    let output: YamlValue;
-    try {
-      output = Schema.decodeUnknownSync(YamlValueJsonSchema)(text);
-    } catch {
-      return null;
-    }
-    let review: ReviewOutput | null = null;
-    if (step.fanIn) {
-      const parsed = parseSynthesis(text, record.output);
-      if (!parsed.ok) return null;
-      review = parsed.value;
-    } else if (isYamlMap(output) && "verdict" in output) {
-      const parsed = parseReviewOutput(text, record.output);
-      if (!parsed.ok) return null;
-      review = parsed.value;
-    }
-    outcomes.push({ record, output, review });
-  }
-  return outcomes.length > 0 ? outcomes : null;
-});
-
-/**
- * One ticket at a time, on one agent, in an order the plan's own `Blocked by` lines allow.
- *
- * The point is the hand-off, not the parallelism: one prompt that carries a whole plan
- * grows a transcript for the length of the run (the steering Run reached 552k tokens
- * before its first compaction), and every later ticket is built by an agent re-reading
- * work it did hours ago. A slice gets its ticket, and a few lines of fact about the ones
- * before it — their commits and their verifications, never their prompts.
- *
- * Null where this Run has no plan to slice: one ticket, or a work source that is a
- * sentence rather than a directory. Then the step runs once, exactly as it always did.
- */
-const runSlices = Effect.fn("Engine.runSlices")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  variants: Variant[],
-  ctx: RunCtx,
-  extras: YamlMap | undefined,
-) {
-  const { run, out } = o;
-  const source = run.record.inputs.plan ?? "";
-  if ((run.record.inputs.plan_kind ?? "") !== "plan-dir" || source === "") return null;
-  const tickets = yield* orderedTicketsOf(source, run.record.inputs.repo ?? "").pipe(
-    Effect.catch(() => Effect.succeed([])),
-  );
-  // One ticket is not a plan to slice: the hand-off would be empty and the loop would be
-  // a longer way of writing what the step already does.
-  if (tickets.length < 2) return null;
-
-  const record = run.step(step.id);
-  const outcomes: VariantOutcome[] = [];
-  let blocked: string | null = null;
-
-  yield* out(`  ${tickets.length} tickets, one at a time`);
-  for (const ticket of tickets) {
-    const already = record.slices.find((entry) => entry.ticket === ticket.file);
-    if (already?.status === "done") {
-      yield* out(`  ✓ ${ticket.file} — already done, skipped`);
-      continue;
-    }
-    const slice: SliceRecord = already ?? {
-      ticket: ticket.file,
-      title: ticket.title,
-      status: "pending",
-      output: null,
-      started_at: null,
-      finished_at: null,
-      commits: [],
-      head: null,
-      verifications: [],
+    const generation: Generation = {
+      id: route.workflow,
+      name: route.name,
+      title: entry.title,
+      entry: route.entry,
+      fields: entry.input,
+      hints: entry.metadata?.hints ?? {},
+      fixedOutcome: entry.metadata?.outcome?.fixed ?? null,
+      checkout: entry.metadata?.checkout ?? "none",
+      source: yield* sourceOf(route.entry),
+      metadata: describeMetadata(entry.metadata),
+      offers: declaredByModule(entry.metadata),
+      agents: entry.agents,
+      registration,
     };
-    if (!already) record.slices.push(slice);
-    slice.status = "running";
-    slice.started_at = yield* nowIso();
-    yield* run.save();
-    yield* writeCheckpoint(o, slice, []);
+    live.set(route.name, generation);
+    unavailable.delete(route.name);
+    newestOf.set(route.workflow, route.name);
+    return generation;
+  });
 
-    ctx.slice = { ticket, progress: renderProgress(record.slices, ticket.file) };
-    yield* out(`  ▶ ${ticket.file} — ${ticket.title}`);
-    // The slice's number keys its directory, so every slice keeps its own prompt and
-    // Output under the step rather than overwriting the one before it.
-    const result = yield* runStep(o, step, variants, [ticket.number], ctx, extras).pipe(
-      Effect.result,
+  /**
+   * The host's own services, under whatever the caller already has. A child is executed
+   * on the parent's fiber, and merging this way is what leaves the parent's workflow
+   * instance and scope in place — which is the whole linkage between the two.
+   */
+  const hostServices = yield* Effect.context<HostServices>();
+  const lending = <A, E>(effect: Effect.Effect<A, E, HostServices>): Effect.Effect<A, E> =>
+    Effect.updateContext(effect, (caller: Context.Context<never>) =>
+      Context.merge(hostServices, caller),
     );
-    ctx.slice = null;
-    slice.finished_at = yield* nowIso();
 
-    if (Result.isFailure(result)) {
-      slice.status = "failed";
-      blocked = `${ticket.file}: ${herdrFailureReason(result.failure)}`;
-      // On the step itself: the summary otherwise shows only the variant records, and
-      // a step that failed before it started an agent has none of its own — it would
-      // repeat whatever the previous attempt's record said.
-      record.note = blocked;
-      yield* out(`  ✗ ${blocked}`);
-      yield* run.save();
-      break;
-    }
-    const [outcome] = result.success;
-    if (outcome === undefined) {
-      slice.status = "failed";
-      blocked = `${ticket.file}: the slice produced no Outcome`;
-      record.note = blocked;
-      yield* out(`  ✗ ${blocked}`);
-      yield* run.save();
-      break;
-    }
-    outcomes.push(outcome);
-    // One agent for the whole plan: the next slice continues this one rather than
-    // starting a process that has to read its way back in. `runStep` reuses the step's
-    // recorded variant once the step counts as having run in this process.
-    record.variants = [outcome.record];
-    ctx.ran.add(step.id);
-    slice.output = outcome.record.output;
-    slice.status = outcome.record.status === "done" ? "done" : "blocked";
-    const since = lastHead(record.slices, ticket.file);
-    slice.head = yield* headOf(o);
-    slice.commits = yield* commitsSince(o, since, slice.head);
-    slice.verifications = verifiedDuring(yield* verificationsOf(o), slice);
-    yield* run.save();
-    yield* writeCheckpoint(o, slice, claimsOf(outcome.output, ticket.title));
-    yield* appendMetric(run.dir, {
-      at: slice.finished_at,
-      kind: "slice",
-      subject: slice.ticket,
-      value: slice.commits.length,
-      note: slice.status,
-    });
-    yield* noteEvidence(o, step.id);
+  /** A child's run id: its parent's, and what the parent called this invocation. */
+  const childRunId = (ask: ChildAsk & { readonly runId: string }) =>
+    `${ask.runId}.${ask.invocation}`;
 
-    if (slice.status !== "done") {
-      // A ticket that did not land stops the plan here: the next one is written against
-      // work that is not there, and building it would be building on nothing.
-      blocked = `${ticket.file}: ${outcome.record.error ?? "the slice needs a human"}`;
-      break;
-    }
-  }
-  return { outcomes, blocked };
-});
-
-/**
- * The slice's checkpoint under `steering/progress/`, in the shape an agent writes its own
- * and the cards read: `started` when the ticket is handed over, its status when it ends.
- * Collie writes it so a slice landing is a card whether or not the agent remembered to;
- * the same file name as the prompt asks the agent for, so the two are one checkpoint.
- */
-const writeCheckpoint = Effect.fn("Engine.writeCheckpoint")(function* (
-  o: EngineOptions,
-  slice: SliceRecord,
-  claims: ReadonlyArray<string>,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const dir = path.join(o.run.dir, "steering", "progress");
-  yield* fs.makeDirectory(dir, { recursive: true });
-  const file = path.join(dir, `${slice.ticket.replace(/\.md$/, "")}.json`);
-  // A slice that did not land is not a checkpoint anyone should read as one: the record
-  // says it is blocked or failed, and a `done` that is not done would be a card.
-  if (slice.status !== "done" && slice.status !== "running") return;
-  yield* fs.writeFileString(
-    file,
-    encodeCheckpoint({
-      ticket: slice.ticket,
-      status: slice.status === "done" ? "done" : "started",
-      claims: [...claims],
-      at: yield* nowIso(),
-    }),
-  );
-});
-
-/** What the slice's Output claims it built, or the ticket's own name where it named nothing. */
-function claimsOf(output: YamlValue | null, title: string): string[] {
-  const done = isYamlMap(output) ? output.tickets_done : undefined;
-  const named = Array.isArray(done) ? done.filter(isString) : [];
-  return named.length > 0 ? named : [title];
-}
-
-/** What the slices before this one left behind: their tickets, commits and evidence. */
-function renderProgress(slices: ReadonlyArray<SliceRecord>, upTo: string): string {
-  const before = slices.slice(
-    0,
-    slices.findIndex((entry) => entry.ticket === upTo),
-  );
-  const done = before.filter((entry) => entry.status === "done");
-  if (done.length === 0) return "(this is the first ticket)";
-  return done
-    .map((entry) => {
-      const commits =
-        entry.commits.length === 0
-          ? "    (no commit)"
-          : entry.commits.map((subject) => `    ${subject}`).join("\n");
-      const verified =
-        entry.verifications.length === 0
-          ? "    verified: nothing"
-          : `    verified: ${entry.verifications.join(", ")}`;
-      return `- ${entry.ticket} — ${entry.title}\n${commits}\n${verified}`;
-    })
-    .join("\n");
-}
-
-/**
- * What was collected while a slice ran, by name and result, newest result per name. The
- * facts a hand-off carries about evidence: not the records, and never the output.
- */
-function verifiedDuring(
-  verifications: ReadonlyArray<Verification>,
-  slice: { started_at: string | null; finished_at: string | null },
-): string[] {
-  const from = slice.started_at === null ? Number.NEGATIVE_INFINITY : Date.parse(slice.started_at);
-  const to = slice.finished_at === null ? Number.POSITIVE_INFINITY : Date.parse(slice.finished_at);
-  const latest = new Map<string, string>();
-  for (const v of verifications) {
-    const at = Date.parse(v.at);
-    if (Number.isNaN(at) || at < from || at > to) continue;
-    latest.set(v.name, v.result);
-  }
-  return [...latest].map(([name, result]) => `${name}: ${result}`);
-}
-
-/** The HEAD the slice before this one left, or empty where this is the first. */
-function lastHead(slices: ReadonlyArray<SliceRecord>, upTo: string): string {
-  const at = slices.findIndex((entry) => entry.ticket === upTo);
-  for (let i = at - 1; i >= 0; i--) {
-    const head = slices[i]!.head;
-    if (head) return head;
-  }
-  return "";
-}
-
-const headOf = Effect.fn("Engine.headOf")(function* (o: EngineOptions) {
-  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
-  const done = yield* shellRun("git", ["rev-parse", "HEAD"], cwd).pipe(
-    Effect.catch(() => Effect.succeed({ code: 1, stdout: "", stderr: "" })),
-  );
-  return done.code === 0 ? done.stdout.trim() : null;
-});
-
-/** Subjects only. A hand-off says what was done, not how much was written to do it. */
-const commitsSince = Effect.fn("Engine.commitsSince")(function* (
-  o: EngineOptions,
-  since: string,
-  head: string | null,
-) {
-  if (since === "" || head === null) return [];
-  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
-  const done = yield* shellRun("git", ["log", "--format=%s", `${since}..${head}`], cwd).pipe(
-    Effect.catch(() => Effect.succeed({ code: 1, stdout: "", stderr: "" })),
-  );
-  if (done.code !== 0) return [];
-  return done.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line !== "")
-    .slice(0, 20);
-});
-
-const runStep = Effect.fn("Engine.runStep")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  variants: Variant[],
-  keys: (string | null)[],
-  ctx: RunCtx,
-  extraVars?: YamlMap,
-) {
-  const { herdr, run } = o;
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  // A step that has not run in this process gets fresh agents: a resumed Run
-  // never reattaches, and the recorded panes may not exist any more.
-  const previous = ctx.ran.has(step.id) ? run.step(step.id).variants : [];
-  const fanIn = fanInPane(step, ctx);
-  const records: VariantRecord[] = [];
-  // Before any tab is created: the contract is that a mode Collie cannot resolve fails
-  // before one opens, and a chained Run and a resumed Driver get here unvalidated.
-  const modes = yield* Effect.forEach(variants, (variant) =>
-    permissionMode(step, variant, o.defaults),
-  );
-  // Which agents this step keeps and which it starts.
-  const priors = variants.map((_, i) => previous[i] ?? borrowedAgent(o, step, ctx));
-  const reuses = priors.map((prior) => prior !== null && !step.fresh);
-
-  // Start (or reuse) every agent first, then prompt them all, so they work at once.
-  for (const [i, variant] of variants.entries()) {
-    const key = keys[i]!;
-    const label = stepLabel(run.record.slug, step.id, key);
-    const prior = priors[i]!;
-    const reuse = reuses[i]!;
-    const record: VariantRecord = {
-      // A step that keeps an earlier agent runs on that agent's model, whatever its
-      // own says: recording its own would name a model this step never ran on.
-      harness: reuse ? prior!.harness : variant.harness,
-      model: reuse ? prior!.model : variant.model,
-      effort: (reuse ? prior!.effort : variant.effort) ?? null,
-      // A continuation whose agent is gone — a Driver resumed after the head died —
-      // starts a new process, and its own mode is unset, so it would otherwise open in
-      // the Run default. The mode its chain was opened in is on the record.
-      permissions: reuse ? prior!.permissions : (chainMode(o, step) ?? modes[i]!),
-      agent: prior?.agent ?? agentName(run.record.slug, step.id, key, run.record.seq),
-      label: prior?.label ?? label,
-      tabId: prior?.tabId ?? null,
-      paneId: prior?.paneId ?? null,
-      status: "running",
-      output: null,
-      error: null,
-      repairs: [],
-      nudges: 0,
+  /**
+   * A Run's own harness, model and effort, checked the way its agents will be given them:
+   * over the operator's configuration and under what the workflow prefers.
+   */
+  const refuseAgent = Effect.fn("Engine.refuseAgent")(function* (
+    generation: Generation,
+    options: Readonly<Record<string, string>>,
+  ) {
+    const asked = preferencesIn(options);
+    if (Object.keys(asked).length === 0) return;
+    const defaults = yield* loadDefaults(userDir).pipe(
+      Effect.orElseSucceed(() => FALLBACK_DEFAULTS),
+    );
+    const configured = {
+      harness: defaults.harness,
+      model: defaults.model,
+      effort: defaults.effort,
     };
-    if (reuse && prior?.incarnation) record.incarnation = prior.incarnation;
+    const resolved = resolveChoice([configured, generation.agents, asked], defaults.models);
+    if (!resolved.ok) return yield* refusedInput(resolved.problem);
+  });
 
-    // A pane says only what its tab cannot; a lone pane in its own tab says nothing.
-    const paneName = paneLabel(variant, step.id, variants.length, !!step.fanIn);
-    if (reuse) {
-      // An `agent:` step opens nothing, and renames nothing: the pane it inherited
-      // is alone in its tab, and the tab already names the run.
-      if (paneName && record.paneId && (yield* paneIsOurs(o, record.paneId)))
-        yield* herdr.paneRename(record.paneId, paneName);
-      if (record.tabId) yield* renameTab(o, ctx, record.tabId, runTab(o, GLYPH.running));
-    } else {
-      // Install optional controls before opening panes, so an installation error
-      // does not leave an empty tab. Unsupported controls fall back to the harness.
-      yield* withControlLock(
-        o.env.stateDir,
-        record.agent,
-        Effect.gen(function* () {
-          const controls = yield* installControls(yield* compactionDeps(o), {
-            agent: record.agent,
-            harness: variant.harness,
-            cwd: run.record.cwd,
-          });
-          if (prior?.paneId) {
-            // fresh: replace the pane so `agent start` sees a shell prompt again. The
-            // replacement inherits the slot, so the step keeps its tab across iterations.
-            const replacement = yield* herdr.paneSplit({
-              paneId: prior.paneId,
-              direction: "right",
-              cwd: run.record.cwd,
-            });
-            yield* herdr.paneClose(prior.paneId);
-            record.paneId = replacement;
-            record.tabId = prior.tabId;
-          } else if (i === 0 && fanIn) {
-            // A fan-in step belongs with the Outputs it reconciles: under the last of
-            // them, in their tab. A third column would only make all three unreadable.
-            const source = fanIn;
-            record.paneId = yield* herdr.paneSplit({
-              paneId: source.paneId!,
-              direction: "down",
-              ratio: 0.5,
-              cwd: run.record.cwd,
-            });
-            record.tabId = source.tabId;
-          } else if (i > 0) {
-            // Variants of one step sit side by side in that step's tab, evenly.
-            record.paneId = yield* herdr.paneSplit({
-              paneId: records[i - 1]!.paneId!,
-              direction: "right",
-              ratio: evenRatio(i, variants.length),
-              cwd: run.record.cwd,
-            });
-            record.tabId = records[i - 1]!.tabId;
-          } else if (ctx.launchPane) {
-            record.paneId = ctx.launchPane.paneId;
-            record.tabId = ctx.launchPane.tabId;
-            ctx.launchPane = null;
-          } else {
-            const label = runTab(o, GLYPH.running);
-            const tab = yield* herdr.tabCreate({ label, cwd: run.record.cwd });
-            record.tabId = tab.tabId;
-            record.paneId = tab.paneId;
-            ctx.tabLabels.set(tab.tabId, label);
-            yield* placeTab(o, ctx, tab.tabId);
-          }
-          if (record.tabId) yield* renameTab(o, ctx, record.tabId, runTab(o, GLYPH.running));
-          if (paneName && record.paneId) yield* herdr.paneRename(record.paneId, paneName);
+  const refused = (reason: string) => new WorkflowError({ reason });
 
-          // herdr 0.7.5 ignores --cwd on tab create and pane split, so cd explicitly.
-          if (record.paneId)
-            yield* herdr.paneRun(record.paneId, `cd ${shellQuote(run.record.cwd)}`);
+  /** What the review Run whose directory this is was pointed at, or null. */
+  const reviewedTarget = Effect.fn("Engine.reviewedTarget")(function* (dirOfRun: string) {
+    const row = yield* store.run(dirOfRun.replace(/\/+$/, "").split("/").at(-1) ?? "");
+    const generation = row === null ? undefined : live.get(row.generation);
+    if (row === null || generation === undefined) return null;
+    return pointedAt(
+      generation,
+      yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
+    );
+  });
 
-          const adapter = HARNESSES[variant.harness]!;
-          // The recorded mode wins where there is one — that is the chain's — and anything a
-          // record cannot vouch for falls back to the mode resolved for this step.
-          const recorded = record.permissions ?? undefined;
-          const permissions = isPermissionMode(recorded) ? recorded : modes[i]!;
-          // The controls are extra arguments to the same launch, so the agent keeps the
-          // ordinary interactive interface in its pane.
-          yield* startAgent(o, step, {
-            name: record.agent,
-            kind: adapter.kind,
-            paneId: record.paneId!,
-            args: [
-              ...startArgs(
-                adapter,
-                variant.model,
-                yield* personaFile(o, step, variant.harness, ctx.skills),
-                variant.effort,
-                permissions,
-              ),
-              ...controls,
-            ],
-          });
-          // Recorded so a transcript full of prompts — or free of them — can be explained.
-          yield* run.log(`${record.agent}: permissions ${permissions}`);
-          if (record.paneId) {
-            ctx.panes.push(record.paneId);
-            yield* setView(o, ctx.viewSource, ctx.panes);
-            // A group's first agent outlives its step, so the Session may hand it work.
-            if (groupHead(o.wf, step.id)) yield* register(o, step, record);
-          }
-          // The first step of an `agent:` group lends its agent to the rest of it.
-          if (step.agent && !ctx.groups.has(step.agent)) ctx.groups.set(step.agent, record);
+  /**
+   * Where a Run will work, settled before it exists. A workflow that declares a checkout is
+   * cut one from the checkout it starts from, and one that cannot be is refused here, while
+   * there is nothing to clean up. A fresh Task's workspace is opened now, on that checkout,
+   * or is the worktree workspace herdr opened for it — never a second one beside it.
+   */
+  const placeRun = Effect.fn("Engine.placeRun")(function* (ask: {
+    readonly generation: Generation;
+    readonly runId: string;
+    readonly from: string;
+    readonly request: CheckoutRequest;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly provenance: Readonly<Record<string, string>>;
+    readonly options: Readonly<Record<string, string>>;
+    readonly task: string | null;
+    readonly taskLabel?: string | undefined;
+    readonly workspace?: string | null | undefined;
+    readonly checkout?: Cut | null | undefined;
+    readonly record: (receipt: Partial<Placing>) => Effect.Effect<void>;
+  }) {
+    const { generation, from } = ask;
+    const failed = (cause: unknown) =>
+      new HostRefused({
+        reason: `"${generation.id}" could not be given a checkout: ${String(cause)}`,
+      });
+    let placed: Placed = { cwd: from, branch: null, workspace: null, worktree: null };
+    let opened: Cut["opened"] = null;
+    // A fan-out has no checkout of its own: each repository's Run cuts its own.
+    const fanOut =
+      ask.checkout === undefined && generation.checkout !== "none"
+        ? yield* fanOutOf(generation, ask.input, ask.options, from)
+        : null;
+    if (fanOut?.refusal) {
+      return yield* new HostRefused({
+        reason: `"${generation.id}" cannot run here: ${fanOut.refusal.message}`,
+      });
+    }
+    if (ask.checkout === null) {
+      return yield* new PlacementUncertain({
+        reason: `a checkout from ${from} may have been cut for ${ask.runId} before the host stopped, and nothing records where. Remove it if it is there, and start again under a new request id.`,
+      });
+    }
+    if (ask.checkout !== undefined) ({ placed, opened } = ask.checkout);
+    else if (generation.checkout !== "none" && fanOut === null) {
+      const inputs = yield* branchInputs(generation, ask.input, ask.options);
+      // A build of a review's findings works on the branch that review was pointed at.
+      const source = fieldWith(generation.hints, "work-source");
+      const reviewed =
+        source !== undefined &&
+        inputs[`${source}_kind`] === "review" &&
+        fieldWith(generation.hints, "diff-target") === undefined
+          ? yield* reviewedTarget(inputs[source] ?? "")
+          : null;
+      if (reviewed !== null) inputs[REVIEWED] = reviewed;
+      if (
+        generation.checkout === "branch" &&
+        (yield* repositoryName(runShell, from).pipe(Effect.mapError(failed))) === null
+      ) {
+        return yield* refusedInput(
+          `"${generation.id}" builds on a worktree of its own, and ${from} is not a git checkout to cut one from. Start it from a checkout, or name one with --input workspace=/path/to/checkout.`,
+        );
+      }
+      yield* ask.record({ checkout: null });
+      const checkout = yield* checkoutFor(placing.herdr, {
+        cwd: from,
+        stateDir: placing.env.stateDir,
+        workflow: generation.id,
+        checkout: generation.checkout,
+        separate: ask.request.kind === "separate",
+        name: ask.runId,
+        inputs,
+        strategies:
+          reviewed === null ? generation.hints : { ...generation.hints, [REVIEWED]: "diff-target" },
+        sources: ask.provenance,
+        openLabel: ask.taskLabel ?? null,
+        explicit: ask.options.branch ?? null,
+        login: placing.env.gitlabLogin,
+        recordedBy: (at) =>
+          store.runs.pipe(
+            Effect.map(
+              (rows) => rows.find((row) => placedOf(row, {}).worktree?.path === at)?.run ?? null,
+            ),
+          ),
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new PlacementUncertain({
+              reason: `"${generation.id}" could not be given a checkout: ${String(cause)}`,
+            }),
+        ),
+      );
+      if (checkout.refused !== null) {
+        return yield* new HostRefused({
+          reason: `"${generation.id}" could not be given a checkout: ${checkout.refused}`,
+        });
+      }
+      const own = checkout.worktree?.managed_by === "herdr" ? checkout.workspaceId : null;
+      opened = own === null ? null : { id: own, label: checkout.workspaceLabel };
+      placed = {
+        cwd: checkout.cwd,
+        branch: checkout.branch,
+        workspace: ask.taskLabel === undefined ? own : null,
+        worktree: checkout.worktree,
+      };
+      yield* ask.record({ checkout: { placed, opened } });
+    }
+    if (ask.taskLabel === undefined) return { placed, task: ask.task };
+    const label = opened?.label ?? ask.taskLabel;
+    const openWorkspace = Effect.gen(function* () {
+      if (ask.workspace === null) {
+        return yield* new PlacementUncertain({
+          reason: `a workspace "${label}" on ${placed.cwd} may have been opened for ${ask.runId} before the host stopped, and nothing records which. Close it if it is there, and start again under a new request id.`,
+        });
+      }
+      yield* ask.record({ workspace: null });
+      const made = yield* placing.herdr.workspaceCreate({ cwd: placed.cwd, label }).pipe(
+        Effect.mapError((cause) => {
+          const reason = `No workspace could be opened for this task: ${herdrFailureReason(cause)}`;
+          return cause.answered === true
+            ? new HostRefused({ reason })
+            : new PlacementUncertain({ reason });
         }),
       );
-    }
+      yield* ask.record({ workspace: made.workspaceId });
+      return made.workspaceId;
+    });
+    const workspace = opened?.id ?? ask.workspace ?? (yield* openWorkspace);
+    // A workspace an earlier attempt recorded may already have its Task.
+    const known =
+      ask.workspace === undefined
+        ? null
+        : yield* taskOfWorkspace(placing.env.stateDir, workspace).pipe(Effect.orDie);
+    const task =
+      known ??
+      (yield* newTask({ workspace, label, cwd: placed.cwd }).pipe(
+        Effect.flatMap((made) => writeTask(placing.env.stateDir, made)),
+        Effect.orDie,
+      ));
+    // Focused, not just created: a human who started work is taken to it.
+    yield* Effect.ignore(placing.herdr.workspaceFocus(workspace));
+    return { placed, task: task.id };
+  }, Effect.provideContext(bun));
 
-    records.push(record);
-  }
+  // One admission of a request at a time: placing is external, and only its claimant places.
+  const claiming = yield* Effect.forEach(Array.from({ length: CLAIM_STRIPES }), () =>
+    Semaphore.make(1),
+  );
+  const claimingOf = (request: string) => claiming[stripeOf(request)]!;
 
-  // Recorded as soon as they exist, not when the step ends: the Control Plane reads
-  // its agents out of the run record, and a step that is still working — or one that
-  // failed on its way — would otherwise have started agents nothing knows about.
-  // Appended, because a Choice step's rounds accumulate here across the whole step.
-  const recorded = run.step(step.id).variants;
-  for (const record of records) if (!recorded.includes(record)) recorded.push(record);
-  yield* run.save();
+  /**
+   * Places a claimed Run, as its claimant only. Refused, a claim this admission made is
+   * withdrawn; one found claimed may have made something already, so it is kept.
+   */
+  const placeClaimed = Effect.fn("Engine.placeClaimed")(function* (row: RunRow, fresh: boolean) {
+    const generation = live.get(row.generation);
+    const placing = decodePlacing(row.placing ?? "");
+    if (!unplaced(row) || generation === undefined || Option.isNone(placing)) return row;
+    let receipt = placing.value;
+    const strings = (text: string | null) =>
+      decodeStrings(text ?? "{}").pipe(Effect.orElseSucceed((): Record<string, string> => ({})));
+    const options = yield* strings(row.options);
+    const placement = yield* Effect.gen(function* () {
+      return yield* placeRun({
+        generation,
+        runId: row.run,
+        from: placing.value.from,
+        request: yield* checkoutRequest(generation, options),
+        input: yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({}))),
+        provenance: yield* strings(row.provenance),
+        options,
+        task: row.task,
+        taskLabel: placing.value.taskLabel ?? undefined,
+        workspace: placing.value.workspace,
+        checkout: placing.value.checkout,
+        record: (change) => {
+          receipt = { ...receipt, ...change };
+          return store.recordPlacing(row.run, encodePlacing(receipt));
+        },
+      });
+    }).pipe(
+      // An uncertain one keeps its claim: the same request again must not open another.
+      Effect.tapErrorTag("HostRefused", () => (fresh ? store.forget(row.run) : Effect.void)),
+      Effect.catchTag("PlacementUncertain", (failure) =>
+        Effect.fail(new HostRefused({ reason: failure.reason })),
+      ),
+    );
+    return yield* store.place(row.run, {
+      checkout: encodePlaced(placement.placed),
+      task: placement.task,
+    });
+  });
 
-  // Only when a body asks: this costs herdr a round trip, and most steps do not.
-  const vars = /\{\{\s*session\./.test(`${step.preamble}\n${step.prompt}`)
-    ? { ...extraVars, session: { ask: yield* askRoute(sessionOf(o)) } }
-    : extraVars;
-
-  // The work boundary for every agent this step reuses, resolved together and before
-  // the prompts go out. Together, because each one can wait out a whole compaction and
-  // a fan-out step's variants would otherwise compact one after another — the same
-  // argument the watch loop below makes for its own phase. A freshly started agent has
-  // no previous work behind it, so its first work is never held up by a threshold check.
-  //
-  // Set where a reused agent's compaction is still unresolved: no prompt goes out for
-  // it, and the step ends blocked with that reason — the Run's existing way of
-  // stopping for the human, in both front doors, rather than a second control plane.
-  // The work boundary is where steering reaches a Run that is between pieces of work:
-  // a hold takes effect here rather than mid-turn, and a message composed into the next
-  // prompt has to arrive before the prompt is built.
-  yield* takeSteering(o, ctx);
-  yield* holdUntilReleased(o, ctx);
-  yield* checkDrift(o, ctx, `boundary before ${step.id}`, "boundary");
-  yield* standForElection(o, `boundary before ${step.id}`);
-
-  const boundaryDeps = yield* compactionDeps(o);
-  // One Dispatcher transaction per agent, holding its ledger lock across the compaction
-  // decision, the composition of anything steering has queued for it, and the send —
-  // so nothing else can slip a message into that pane between the three. Concurrent
-  // across agents, as the boundary already was: the locks are per incarnation.
-  //
-  // The compaction decisions run together — each one can wait out a whole compaction, and
-  // a fan-out step's variants must not do that one after another — but the sends go out in
-  // the order the step declares its variants. A latch per variant buys both: the
-  // transaction stays open across boundary, composition and send, and a log still reads
-  // in the order a human would expect.
-  //
-  // What comes back per variant is why it was not given its work: a compaction of its
-  // own still in the air, or a prompt that could not be delivered. One variant's problem
-  // must not abandon the others, which are working.
-  const sendTurn = yield* Effect.forEach(records, () => Deferred.make<void>());
-  // The incarnation each prompt went to, so its delivery can be settled once the work
-  // it asked for has been collected.
-  const entries: (AgentEntry | undefined)[] = [];
-  const withheld = yield* Effect.forEach(
-    records,
-    (record, i) =>
+  const claimAndPlace = (admission: Admission) =>
+    claimingOf(admission.request).withPermits(1)(
       Effect.gen(function* () {
-        const variant = variants[i]!;
-        const key = keys[i]!;
-        // A multi-line prompt cannot be typed into a harness reliably, so the prompt
-        // goes to a file in the run dir and the agent is pointed at it.
-        const path = pathService.join(
-          yield* run.stepDir(step.id, key),
-          `prompt-${run.record.iteration}.md`,
-        );
-        const addressed = yield* agentEntry(o, record, step.persona ?? step.id);
-        const entry = addressed.entry;
-        if (entry === null) {
-          yield* o.out(`  ⏸ ${addressed.reason}`);
-          yield* run.log(addressed.reason);
-          return addressed.reason;
-        }
-        entries[i] = entry;
-        return yield* dispatch
-          .transaction(dispatcherDeps(o), entry, (channel) =>
-            Effect.gen(function* () {
-              // Held by a compaction of its own that is still in the air: the prompt file
-              // is written, because the step is resumable, but nothing is sent. The
-              // variant's own error is how a blocked step already reaches a human — the
-              // board draws the waiting glyph, the ending raises `needs-you` with this
-              // reason, and `run resume` picks the Run back up. Not `awaiting`: that says
-              // a Run is still going.
-              const boundary = reuses[i]
-                ? yield* atBoundary(
-                    boundaryDeps,
-                    { agent: record.agent, run: run.id, step: step.id },
-                    channel,
-                  )
-                : { dispatch: true as const };
-              const previous = sendTurn[i - 1];
-              if (previous) yield* Deferred.await(previous);
-              // Written whichever way the boundary went, so a held step is resumable.
-              const steering = takeBoundaryFor(ctx, record.agent);
-              const body = yield* buildPrompt(o, step, variant, key, ctx, vars);
-              yield* fs.writeFileString(
-                path,
-                `${dispatch.steeringSection(run.dir, steering)}${body}\n`,
-              );
-              if (!boundary.dispatch) {
-                yield* o.out(`  ⏸ ${boundary.reason}`);
-                yield* run.log(boundary.reason);
-                return boundary.reason;
-              }
-              yield* run.log(`prompt ${record.agent} -> ${pathService.relative(run.dir, path)}`);
-              // A skill marked `disable-model-invocation` refuses an agent that invokes it
-              // itself; `agent prompt` is the human's channel, so a slash command here runs.
-              const command = step.skill
-                ? `${skillCommandFor(variant.harness).call(null, step.skill)} `
-                : "";
-              const outcome = yield* channel.submit(
-                `${command}Your task for this step is in ${path} — read it and follow it.`,
-                {
-                  run: run.id,
-                  cause: stepCause(step, key, run),
-                  mode: "boundary",
-                  intentVersion: ctx.steering.intentVersion,
-                  attempt: run.record.iteration,
-                  requestId: `${run.id}-${step.id}-${key}-${run.record.iteration}`,
-                },
-              );
-              // Each steering item composed into this prompt gets its own line, so the
-              // ledger says which message reached the agent and inside what.
-              for (const item of steering) yield* recordComposed(o, entry, item, outcome);
-              if (outcome.ok) {
-                // Written but unconfirmed is kept apart from delivered: what tells a
-                // prompt that never arrived from one the agent ignored.
-                if (outcome.submission === "unobserved")
-                  yield* run.log(`${record.agent}: prompt written, no turn observed`);
-                return null;
-              }
-              // A send herdr refused, or never answered, withholds this variant the way a
-              // compaction in the air does: the reason reaches the human through the
-              // variant's own error, and `run resume` is the recovery.
-              const why = `${record.agent} was not given its prompt: ${outcome.reason} (${outcome.detail})`;
-              yield* o.out(`  ⚠ ${why}`);
-              yield* run.log(why);
-              return why;
-            }),
-          )
-          .pipe(
-            Effect.ensuring(Deferred.done(sendTurn[i]!, Exit.void)),
-            // A refusal to open the transaction at all — no incarnation, or a different
-            // process in that pane — pauses the step for a human instead: `run resume`
-            // starts a fresh agent, which is the recovery for it.
-            Effect.catchTag("NotDeliverable", (cause) =>
-              run
-                .log(`dispatch to ${record.agent} refused: ${cause.reason}`)
-                .pipe(Effect.as(`${record.agent} could not be sent to: ${cause.reason}`)),
-            ),
-          );
+        const claimed = yield* store.admit(admission);
+        const row = yield* placeClaimed(claimed.row, claimed.fresh);
+        remember(row);
+        return { row, fresh: claimed.fresh };
       }),
-    { concurrency: "unbounded" },
-  );
+    );
 
-  // Watched together, because they were prompted together: a second reviewer that
-  // hangs the moment it starts must not wait out the first one's whole turn before
-  // its own quiet clock even begins. Reading what they wrote stays in order — that
-  // part writes to the Run.
-  const stuckReasons = yield* Effect.forEach(
-    records,
-    (record, i) =>
-      // An agent that was never prompted has nothing to go quiet about.
-      withheld[i] ? Effect.succeed(null) : awaitAgent(o, ctx, step, record),
-    { concurrency: "unbounded" },
-  );
+  const executions: typeof Executions.Service = {
+    stop: (runId) => stopTree(runId).pipe(Effect.provideContext(hostServices)),
+    stopped: (runId) =>
+      routed(runId).pipe(
+        Effect.flatMap((found) =>
+          engine.poll(found.generation.registration.workflow, found.execution),
+        ),
+        Effect.map(Option.isSome),
+        // A Run this host holds no generation for has nothing executing here.
+        Effect.orElseSucceed(() => true),
+      ),
+  };
 
-  const outcomes: VariantOutcome[] = [];
-  for (const [i, record] of records.entries()) {
-    const key = keys[i]!;
-    const why = withheld[i];
-    if (why) {
-      record.status = "blocked";
-      record.error = why;
-      outcomes.push({ record, output: null, review: null });
-      continue;
+  /**
+   * Another workflow, as part of this one. Selected in the parent's own project and
+   * decoded against the child's own schema before a row exists, so input the child will
+   * not take is the parent's failure rather than a half-made Run.
+   */
+  const children: ChildrenApi = {
+    start: (ask: ChildAsk) => lending(admitChild(ask)),
+    result: (child: ChildRun) => lending(runChild(child)),
+  };
+
+  const admitChild = Effect.fn("Engine.children.start")(function* (given: ChildAsk) {
+    const parentId = Option.getOrUndefined(yield* Effect.serviceOption(Run))?.id;
+    if (parentId === undefined) return yield* refused("a child is started from inside a Run");
+    const ask = { ...given, runId: parentId };
+    const parent = yield* store.run(ask.runId);
+    if (parent === null) {
+      return yield* refused(`no run "${ask.runId}" was started here`);
     }
-    const outcome = yield* collectWatched(o, ctx, step, record, key, stuckReasons[i] ?? null);
-    // The agent went quiet and a usable Output was read, so the prompt's work is in the
-    // Run and its delivery is over: a later prompt about this step is a new attempt, not
-    // this one again. Not after a give-up, and not for an Output that is missing or
-    // unusable — neither says the agent did this prompt's work — so the delivery stays
-    // `submitted` and the same work is not sent to that agent twice. The Dispatcher adds
-    // its own condition: a submission herdr never saw a turn come of stays in flight.
-    const terminalId = entries[i]?.incarnation?.terminalId;
-    if (terminalId !== undefined && stuckReasons[i] == null && outcome.problem === undefined) {
-      yield* dispatch
-        .settleCollected(
-          o.env.stateDir,
-          terminalId,
-          causalKey(run.id, stepCause(step, key, run), ctx.steering.intentVersion),
+    const generation = yield* resolve({
+      project: parent.project,
+      id: ask.workflow === "self" ? parent.workflow : ask.workflow,
+    }).pipe(Effect.mapError((failure) => refused(failure.reason)));
+    const runId = childRunId(ask);
+    const parentOptions = yield* decodeStrings(parent.options ?? "{}").pipe(
+      Effect.orElseSucceed((): Record<string, string> => ({})),
+    );
+    // What the parent prefers where it starts the child, as options the child is given:
+    // serializable, so no Context, service or Layer of the parent's crosses over.
+    const inherited = foldPreferences([preferencesIn(parentOptions), ...(yield* AgentScopes)]);
+    // The host's own options, held to the same rule a front door's are: a name that is
+    // not the host's would be a field the child's author never declared.
+    const asked = { ...inherited, ...ask.options };
+    yield* refuseOptions(generation, asked).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    yield* refuseAgent(generation, asked).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    const request = yield* checkoutRequest(generation, asked).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    const settled = yield* settleInput(generation.fields, { json: ask.input, text: {} }).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    const payload = yield* Schema.decodeUnknownEffect(
+      generation.registration.workflow.payloadSchema,
+    )({ runId, input: settled.input }).pipe(
+      Effect.mapError((cause) => refused(`${REFUSED_INPUT}: ${cause.message}`)),
+    );
+    // Where its parent works, unless it named a checkout of its own.
+    const from = request.kind === "existing" ? request.path : placedOf(parent, parentOptions).cwd;
+    const claimed = yield* claimAndPlace({
+      // The invocation is the claim, so replaying the parent admits nothing new and
+      // changing what an invocation is given is refused rather than run twice.
+      request: runId,
+      run: runId,
+      workflow: generation.id,
+      project: parent.project,
+      input: settled.input,
+      provenance: settled.provenance,
+      options: launchOptions(generation, asked),
+      placing: encodePlacing({ from, taskLabel: null }),
+      generation: generation.name,
+      execution: yield* generation.registration.workflow.executionId(payload),
+      task: parent.task,
+      parent: ask.runId,
+    }).pipe(Effect.mapError((failure) => refused(failure.reason)));
+    // A child is a Run, so what it may verify is frozen with it rather than read when
+    // it asks: the same list, and the same moment, as the start of any other. One that
+    // works in a checkout of its own is held to what that checkout approves.
+    yield* freezeApproved({
+      dir,
+      runId: claimed.row.run,
+      project: request.kind === "existing" ? request.path : parent.project,
+      userDir,
+    }).pipe(Effect.ignore);
+    yield* seedIntentOf({ dir, row: claimed.row, generation, seed: undefined, parent }).pipe(
+      Effect.provideContext(bun),
+      Effect.ignore,
+    );
+    // The parent hands its own children over, so the receipt is written here: a host
+    // sweep dispatching one would give the engine a child with no parent to wake.
+    yield* store.accepted(claimed.row.run);
+    return {
+      runId: claimed.row.run,
+      workflow: generation.id,
+      invocation: ask.invocation,
+      fresh: claimed.fresh,
+    };
+  });
+
+  const runChild = Effect.fn("Engine.children.result")(function* (child: ChildRun) {
+    const found = yield* routed(child.runId).pipe(
+      Effect.mapError((failure) => refused(failure.reason)),
+    );
+    const row = yield* store.run(child.runId);
+    if (row === null) return yield* refused(`no run "${child.runId}" was started here`);
+    const payload = yield* payloadOf(found.generation, row).pipe(
+      Effect.mapError(() => refused(`${found.generation.entry} no longer takes ${row.input}`)),
+    );
+    // Executed on the parent's own fiber, which is what links the two: the engine
+    // reads the parent's instance from here, so the child's completion wakes the
+    // parent and interrupting the parent reaches the child.
+    const workflow = found.generation.registration.workflow;
+    const written = Schema.encodeUnknownOption(Schema.toCodecJson(workflow.errorSchema));
+    return yield* workflow.execute(payload).pipe(
+      Effect.mapError((failure) => {
+        if (isWorkflowError(failure)) return failure;
+        // A child's own typed failure, as its error schema writes it.
+        const encoded = written(failure);
+        const text =
+          Option.isSome(encoded) && isJson(encoded.value) ? asJsonText(encoded.value) : "";
+        return refused(`${child.workflow} failed: ${text}`);
+      }),
+    );
+  });
+
+  // What was registered before this host existed, rebuilt from the modules as they are
+  // now. A file that has gone leaves its generation unavailable and every other one
+  // registered, which is what keeps one broken module from stopping the rest.
+  for (const route of known) {
+    yield* register(route).pipe(
+      Effect.catchTag("EntryError", (failure) =>
+        Effect.sync(() => unavailable.set(route.name, `${failure.file}: ${failure.message}`)),
+      ),
+    );
+  }
+
+  /** A host dying where the proof needs one to; nothing else ever sets this. */
+  const crash = (point: CrashPoint) =>
+    crashAt === point
+      ? currentPid.pipe(
+          Effect.flatMap((pid) => signalProcess(pid, "SIGKILL")),
+          Effect.asVoid,
         )
-        .pipe(
-          Effect.catch((cause) =>
-            run.log(`could not settle ${record.agent}'s step delivery: ${reason(cause)}`),
-          ),
-        );
-    }
-    // An agent that was given up on is not going to answer a prompt, so the repair
-    // round is not offered to one.
-    if (stuckReasons[i]) {
-      outcomes.push(outcome);
-      continue;
-    }
-    // A round is worth several minutes and several agents; a write is worth one
-    // prompt. Ask the agent that has the work to write its file again, once.
-    outcomes.push(
-      outcome.problem
-        ? ((yield* repairOutput(o, ctx, step, record, key, outcome.problem)) ?? outcome)
-        : outcome,
+      : Effect.void;
+
+  const payloadOf = (generation: Generation, row: RunRow) =>
+    decodeInput(row.input).pipe(
+      Effect.flatMap((input) =>
+        Schema.decodeUnknownEffect(generation.registration.workflow.payloadSchema)({
+          runId: row.run,
+          input,
+        }),
+      ),
     );
-  }
-  return outcomes;
-});
-
-/**
- * A newly-created workspace starts with one numbered shell tab. When the workflow
- * was launched from that untouched tab, use it for the first agent instead of
- * leaving it behind beside the Control Plane and run tabs.
- *
- * A Run whose worktree Collie created owns a whole workspace herdr just made, and its
- * shell tab is that workspace's — not the launching pane's, which is in whatever
- * workspace the human started from. So the recorded root pane comes first; the checks
- * below are what keep a resumed Run from taking over a pane that now holds an agent.
- */
-const reusableLaunchPane = Effect.fn("Engine.reusableLaunchPane")(function* (o: EngineOptions) {
-  const launchId = o.run.record.worktree?.root_pane_id ?? o.env.paneId;
-  if (!launchId) return null;
-  const [tabs, panes] = yield* Effect.all([o.herdr.tabList(), o.herdr.paneList()]);
-  const pane = panes.find((item) => item.paneId === launchId);
-  if (!pane || pane.agent !== null) return null;
-  const tab = tabs.find((item) => item.tabId === pane.tabId);
-  if (!tab || !/^\d+$/.test(tab.label)) return null;
-  if (panes.filter((item) => item.tabId === pane.tabId).length !== 1) return null;
-  return { paneId: pane.paneId, tabId: pane.tabId };
-});
-
-interface ChoiceResult {
-  status: StepStatus;
-  note: string | null;
-  /** True when a child Run took over, so the parent should stop. */
-  chained?: boolean;
-}
-
-/**
- * A Choice step: a menu in the runner pane instead of an agent. A `prompt` choice
- * runs one agent round and offers the menu again; `run` and `stop` end the step.
- */
-const runChoiceStep = Effect.fn("Engine.runChoiceStep")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  ctx: RunCtx,
-) {
-  const { run, out } = o;
-  const prompts = o.prompts;
-  if (!prompts) {
-    return choiceResult({
-      status: "failed",
-      note: `${step.id} needs a menu, and this run has no terminal`,
-    });
-  }
-  const choices = step.choices ?? [];
-  // Said once, however many times the menu comes back around.
-  const decidedSaid = new Set<string>();
-
-  // A parent resumed mid-fan-out picks its waves back up rather than asking again: the
-  // repositories it already started are the answer to this menu, and asking it a second
-  // time would open a second set of merge requests.
-  const unfinished = run.record.fanout;
-  if (
-    unfinished &&
-    fanoutUnfinished(unfinished) &&
-    (unfinished.step === "" || unfinished.step === step.id)
-  ) {
-    const choice = choices.find((c) => c.title === unfinished.title && c.run);
-    if (choice) {
-      const result = yield* fanOut(o, step, choice, prompts, ctx, {
-        repos: [],
-        waves: unfinished.waves,
-        refusal: null,
-      });
-      return choiceResult({
-        status: result.status,
-        note: `resumed "${choice.title}" — ${result.note}`,
-      });
-    }
-  }
-
-  for (;;) {
-    const taken = (title: string) =>
-      run.record.choices.filter((c) => c.step === step.id && c.title === title).length;
-    // What this Session and this environment can actually offer right now: a
-    // hand-off needs its agent live, `unless:` needs it not to be, and `requires:`
-    // is the same vocabulary a step uses.
-    const offered: ChoiceDef[] = [];
-    for (const choice of choices) {
-      if (choice.max !== undefined && taken(choice.title) >= choice.max) continue;
-      if (choice.handoff && !(yield* liveRole(sessionOf(o), choice.handoff))) continue;
-      if (choice.unless && (yield* liveRole(sessionOf(o), choice.unless))) continue;
-      if (choice.requires && (yield* unmetRequirement(o, choice.requires))) continue;
-      offered.push(choice);
-    }
-    // Everything that could have done something is unavailable, so the only choices
-    // left are endings: that is not a question worth asking. A menu authored as
-    // endings — "stop here" or "carry on" — still is one.
-    const lost = choices.filter((c) => !c.stop && !offered.includes(c));
-    if (offered.every((c) => c.stop) && lost.length > 0) {
-      const why = lost.map((c) => c.title).join(", ");
-      yield* out(`◦ ${step.id} — nothing to decide (not available: ${why})`);
-      return choiceResult({ status: "done", note: `skipped: nothing to decide (${why})` });
-    }
-    const items: PickItem[] = offered.map((c) => ({
-      id: c.title,
-      title: c.title,
-      subtitle: choiceHint(c),
-    }));
-
-    // What the human already said, and what needs no saying. Both are once per step:
-    // a `prompt:` round comes back to this menu, and re-taking itself would never
-    // stop. The lookup runs against `offered`, so a decision can never make a choice
-    // happen that this Session or this environment cannot do.
-    const decided = run.record.decisions[step.id];
-    const untaken = (c: ChoiceDef) => taken(c.title) === 0;
-    const chosen =
-      offered.find((c) => c.title === decided && untaken(c)) ??
-      (offered.length === 1 && untaken(offered[0]!) ? offered[0] : undefined);
-    // `taken(decided) === 0` is the difference between a decision this Session could
-    // not offer and one whose round ran and failed: the second comes back here with
-    // the choice already spent, and saying it was unavailable would send whoever is
-    // called to look for the wrong thing.
-    if (
-      decided !== undefined &&
-      chosen?.title !== decided &&
-      taken(decided) === 0 &&
-      !decidedSaid.has(step.id)
-    ) {
-      decidedSaid.add(step.id);
-      yield* out(`  decided "${decided}", not available here`);
-      yield* run.log(`${step.id}: decided "${decided}", not available here`);
-      // The exact failure a decided, unattended Run has: it is asking after all, and
-      // without this it stalls silently until someone happens to look. Only when it
-      // really is asking, though — where one offered choice is taken instead, nothing
-      // is pending and a `request` toast would call someone to a menu that is not there.
-      if (!chosen) {
-        yield* notify(o, "decision-lost", `${step.id}: "${decided}" was not available here`, {
-          step: step.id,
-        });
-      }
-    }
-
-    const picked = chosen
-      ? { id: chosen.title, title: chosen.title }
-      : yield* Effect.gen(function* () {
-          yield* callAttention(o, ctx, `${step.id}: pick what happens next`, step.id);
-          const answer = yield* prompts.menu(items, {
-            header: `${run.record.slug} — ${step.id}`,
-            footer: "↑↓ move · Enter choose · Esc leave the run open",
-          });
-          run.record.awaiting = null;
-          yield* run.save();
-          yield* liftHoldOnAnswer(o, ctx);
-          // Off `asks you` the moment it is answered: the next step's own rename can
-          // be a hand-off and a whole agent start away.
-          yield* reconcileTabs(o, ctx, nothingLive);
-          return answer;
-        });
-    if (!picked) return choiceResult({ status: "blocked", note: "no choice taken" });
-
-    const choice = offered.find((c) => c.title === picked.id)!;
-    run.record.choices.push({ step: step.id, title: choice.title, at: yield* nowIso() });
-    yield* run.save();
-    const why = !chosen ? "" : decided === chosen.title ? " (decided at launch)" : " (only option)";
-    yield* out(`  ▸ ${choice.title}${why}`);
-
-    if (choice.stop) return choiceResult({ status: "done", note: `chose "${choice.title}"` });
-
-    if (choice.handoff) {
-      const result = yield* handOff(o, choice.handoff);
-      yield* out(`  ${result.message}`);
-      yield* run.log(result.message);
-      // A hand-off that did not land is not an answer, so the menu comes back.
-      if (!result.ok) continue;
-      return choiceResult({ status: "done", note: `chose "${choice.title}" — ${result.message}` });
-    }
-
-    if (choice.post) {
-      const result = yield* postReview(o.run);
-      yield* out(`  ${result.message}`);
-      yield* run.log(result.message);
-      // A note that did not land is not an answer, so the menu comes back.
-      if (!result.ok) continue;
-      return choiceResult({ status: "done", note: `chose "${choice.title}" — ${result.message}` });
-    }
-
-    if (choice.run) {
-      // A plan that spans repositories is one run per repository rather than one run,
-      // and a plan the fan-out cannot honestly run is refused here: the message is
-      // shown, nothing is started, and the menu comes back for the human to pick again.
-      const plan = yield* fanOutOf(o, choice, ctx);
-      if (plan?.refusal) {
-        yield* out(`  ${choice.title} cannot run here: ${plan.refusal.message}`);
-        yield* run.log(`${step.id}: "${choice.title}" refused — ${plan.refusal.message}`);
-        continue;
-      }
-      if (plan) {
-        const result = yield* fanOut(o, step, choice, prompts, ctx, plan);
-        return choiceResult({
-          status: result.status,
-          note: `chose "${choice.title}" — ${result.note}`,
-        });
-      }
-      const child = yield* chain(o, choice, prompts, ctx);
-      if (!child) continue;
-      return choiceResult({
-        status: "done",
-        note: `chose "${choice.title}" → ${choice.run} run ${child}`,
-        chained: true,
-      });
-    }
-
-    if (choice.config) yield* ensureConfig(o, prompts, choice.config);
-
-    const round = choice.round!;
-    const key = `${slugify(choice.title)}-${taken(choice.title)}`;
-    // A round that rewrites the plan has to tell whoever is building from it.
-    const before = yield* snapshotPlan(o, key);
-    const first = yield* runRound(o, step, round, key, ctx);
-    if (first.record.status !== "done") {
-      yield* out(`  ⚠ ${first.record.label} — ${first.record.error ?? "did not finish"}`);
-      continue;
-    }
-    yield* reportPlanChange(o, before, first.output);
-    const findings = first.review?.findings ?? [];
-    if (choice.followUp && findings.length > 0) {
-      const next = yield* runRound(o, step, choice.followUp, `${key}-then`, ctx, {
-        findings: formatFindings(findings),
-      });
-      if (next.record.status !== "done") {
-        yield* out(`  ⚠ ${next.record.label} — ${next.record.error ?? "did not finish"}`);
-      }
-    }
-    // A decided round is the whole answer to this step. Coming back to the menu would
-    // ask the human the question they already answered; a round they picked by hand
-    // still gets it back.
-    if (decided === choice.title) {
-      return choiceResult({ status: "done", note: `decided at launch: "${choice.title}"` });
-    }
-  }
-});
-
-/**
- * What a forwarded Choice input renders against; `CHAIN_SUPPLIED` names its families.
- * One answer, because the fan-out reads the plan a choice names and `chain` forwards
- * that same value to the child — and rendering it two ways is a fan-out that reads one
- * plan directory while its children build another.
- */
-function chainVars(run: Run, ctx: RunCtx) {
-  return {
-    run: { dir: run.dir, id: run.id, slug: run.record.slug },
-    inputs: run.record.inputs,
-    outputs: outputVars(ctx.outputs),
-    cwd: run.record.cwd,
-  };
-}
-
-/** Every Step's Output so far, as a prompt or a Choice's `inputs:` can address it. */
-function outputVars(outputs: Map<string, VariantOutcome[]>): YamlMap {
-  return Schema.decodeUnknownSync(YamlMapSchema)(
-    Object.fromEntries(
-      [...outputs.entries()].map(([id, list]) => [
-        id,
-        list.length === 1 ? list[0]!.output : list.map((v) => v.output),
-      ]),
-    ),
-  );
-}
-
-/**
- * The child's Intent v1: its parent's constraints, re-sourced `parent`, with
- * `parent.applied` recording which version they came from. Authority is deliberately
- * not inherited — a grant is per Run (SPEC §7.1) and a child that silently arrived
- * with `auto_correct` would be a Run nobody granted anything.
- *
- * A parent with no Intent leaves the child with none, and an unreadable one is logged
- * on the child rather than stopping a chain that is otherwise ready to run.
- */
-const inheritIntent = Effect.fn("Engine.inheritIntent")(function* (parent: Run, child: Run) {
-  const intent = yield* readIntent(parent.dir).pipe(
-    Effect.catch((cause) =>
-      child.log(`parent intent unreadable: ${String(cause)}`).pipe(Effect.as(null)),
-    ),
-  );
-  if (!intent) return;
-  const { intent: seeded } = propagate(
-    intent,
-    seedIntent(child.id, { runVerification: child.record.approved_verifications }),
-  );
-  yield* writeIntent(child.dir, seeded).pipe(
-    Effect.matchEffect({
-      onFailure: (cause) => child.log(`intent v1 not written: ${String(cause)}`),
-      onSuccess: () => child.log(`intent v1 written from ${parent.id} v${intent.version}`),
-    }),
-  );
-});
-
-/**
- * Starts the chosen Workflow as a child Run in this workspace and links it to this
- * one. Returns null when the human abandoned it at a question, so the menu comes back.
- */
-const chain = Effect.fn("Engine.chain")(function* (
-  o: EngineOptions,
-  choice: ChoiceDef,
-  prompts: EnginePrompts,
-  ctx: RunCtx,
-  /**
-   * What the fan-out knows and the choice cannot say: which repository of the plan this
-   * child owns, and the checkout to root it at. Absent for every ordinary chain.
-   */
-  override?: { inputs: Record<string, string>; cwd: string },
-) {
-  const { run, out } = o;
-  const child = resolveWorkflow(choice.run!, o.defs, o.defaults);
-  const vars = chainVars(run, ctx);
-  const forwarded: Record<string, string> = {};
-  for (const [key, value] of Object.entries(choice.inputs ?? {})) {
-    forwarded[key] = renderTemplate(value, vars).text;
-  }
-  Object.assign(forwarded, override?.inputs ?? {});
-  const cwd = override?.cwd ?? run.record.cwd;
-
-  const inputs: Record<string, string> = {};
-  const sources: Record<string, string> = {};
-  for (const r of yield* inferInputs(child.inputs, {
-    cwd,
-    stateDir: o.env.stateDir,
-    task: run.record.task,
-  })) {
-    if (forwarded[r.name] !== undefined) {
-      inputs[r.name] = forwarded[r.name]!;
-      sources[r.name] = `chained from ${run.id}`;
-      // A forwarded Input still owes the prompts its kind, exactly as the picker would
-      // have recorded it: the child's own body branches on it.
-      if (r.strategy === "work-source")
-        inputs[`${r.name}_kind`] = (yield* classifyWorkSource(forwarded[r.name]!)).kind;
-      if (r.strategy === "diff-target") inputs[`${r.name}_kind`] = targetKind(forwarded[r.name]!);
-      continue;
-    }
-    if (r.needsAsking) {
-      // A work-source is chosen from what this repo offers; everything else is typed.
-      if (r.candidates) {
-        if (!(yield* resolveCandidates(r, prompts))) {
-          yield* out(`  ${choice.run} needs "${r.name}" — nothing started`);
-          return null;
-        }
-      } else {
-        const answer = yield* prompts.ask(r.question);
-        if (answer === null || answer.trim() === "") {
-          yield* out(`  ${choice.run} needs "${r.name}" — nothing started`);
-          return null;
-        }
-        r.value = answer.trim();
-        r.source = "asked";
-      }
-    }
-    inputs[r.name] = r.value;
-    sources[r.name] = r.source;
-    if (r.kind) {
-      inputs[`${r.name}_kind`] = r.kind;
-      sources[`${r.name}_kind`] = r.source;
-    }
-  }
-
-  // The parent already names the work, so the child inherits its name — the whole of
-  // what the parent was called after where that is recorded, not the slug it was cut
-  // to, because a name that was already clipped cannot be caught by slugging it again.
-  const tail = run.record.named_after ?? runName(run.record.workflow, run.record.slug);
-  // A chained Workflow that changes the repository owns its checkout too — this is
-  // where `plan` and `architecture` get one, by chaining into `implement`. The branch
-  // is resolved from the child's own inputs, so a fix round lands in the checkout the
-  // reviewed branch already has.
-  const where = {
-    cwd,
-    stateDir: o.env.stateDir,
-    workflow: child.name,
-    checkout: child.checkout,
-    name: tail,
-    inputs,
-    sources,
-    // The Task's workspace, as the parent recorded it — not whatever is focused now.
-    workspaceId: run.record.workspace ?? o.env.workspaceId,
-    workspaceLabel: run.record.workspace_label,
-    login: o.env.gitlabLogin,
-  };
-  const checkout = yield* checkoutFor(o.herdr, where);
-  // A child that must not share a checkout is not started at all, and the menu comes
-  // back: sharing one is what swapped two Runs' uncommitted work in the first place.
-  if (checkout.refused) {
-    yield* out(`  ${child.name} has nowhere to work: ${checkout.refused} — nothing started`);
-    return null;
-  }
-  const childRun = yield* new RunStore(o.env.stateDir).create({
-    workflow: child.name,
-    cwd: checkout.cwd,
-    session: o.env.socketPath,
-    workspace: checkout.workspaceId,
-    // A chain is the same Task going on: a plan into its implementation, that into its
-    // review. Inherited rather than resolved again, so no child opens a Task of its own.
-    task: run.record.task,
-    worktree: checkout.worktree,
-    // A child starts where its parent is, so it inherits the workspace it recorded.
-    workspaceLabel: checkout.workspaceLabel,
-    workspaceWorktree: run.record.workspace_worktree,
-    inputs,
-    inputSources: sources,
-    definition: child,
-    approvedVerifications: yield* approvedFrom({ cwd, configDir: o.env.configDir }),
-    stepIds: child.steps.map((s) => s.id),
-    stepSummaries: stepSummaries(child),
-    maxIterations: child.maxIterations,
-    ...runNames(checkout, { value: tail, short: tail }),
-    parent: run.id,
-  });
-  yield* childRun.log(`chained from ${run.id}`);
-  yield* inheritIntent(run, childRun);
-  if (checkout.note) yield* childRun.log(checkout.note);
-  run.record.children.push(childRun.id);
-  yield* run.save();
-  yield* out(`  ▸ ${child.name} run ${childRun.id}`);
-
-  // A Run is driven by a detached Driver with no pane of its own, so a child is handed
-  // over exactly as `run start` hands over. This used to open a `runner` pane, which
-  // herdr-plugin.toml has never declared and main.ts has never routed, so the child
-  // was created, recorded `running`, listed as a child — and driven by nobody.
-  const undriven = yield* handOver({ ...o.env, cwd: childRun.record.cwd }, childRun);
-  if (undriven) yield* out(`  ${child.name} was created but no driver started: ${undriven.why}`);
-  return childRun.id;
-});
-
-/**
- * Waits for another Run to reach a terminal status, and says which one it reached.
- *
- * The Driver's own Choice wait is the shape: events on the run directory invalidate a
- * re-read, and a tick rides alongside them so a watch the platform drops costs latency
- * rather than the answer.
- *
- * No timeout: a repository run takes as long as its work does. A child whose Driver was
- * killed outright leaves the record `running` and so is waited on for ever — the
- * parent's row says which repository it is waiting on, and `run stop` ends it.
- */
-/**
- * The safety net, not the mechanism: the watch below is what makes this wait prompt, and
- * the tick only covers an event the platform dropped. Seconds rather than the Driver's
- * Choice wait's half-second, because that one is open while a human decides and this one
- * is open for the whole life of a repository run — every tick is a read and a schema
- * decode of the child's record.
- */
-const WAIT_TICK_MS = 5000;
-
-const waitOnRun = Effect.fn("Engine.waitOnRun")(function* (stateDir: string, id: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const store = new RunStore(stateDir);
-  const check = Effect.gen(function* () {
-    const child = yield* store.load(id);
-    return { dir: child.dir, status: yield* runStatus(child) };
-  }).pipe(
-    // A child whose record will not read is not something to wait on for ever.
-    Effect.catch(() => Effect.succeed({ dir: null, status: "failed" })),
-  );
-
-  const first = yield* check;
-  if (first.dir === null || runSettled(first.status)) return first.status;
-  const events = Stream.merge(
-    fs.watch(first.dir).pipe(Stream.catchCause(() => Stream.empty)),
-    Stream.tick(`${WAIT_TICK_MS} millis`),
-  );
-  const seen = yield* events.pipe(
-    Stream.mapEffect(() => check),
-    Stream.filter((event) => runSettled(event.status)),
-    Stream.runHead,
-  );
-  return Option.match(seen, { onNone: () => "failed", onSome: (event) => event.status });
-});
-
-/**
- * The repositories a `run:` choice would fan out over, and `null` when it would chain
- * one run exactly as it always has: a plan whose tickets name one repository, and any
- * work source that is not a plan directory at all.
- *
- * Read here rather than trusted from the plan: the refusals are what stop a fan-out
- * that cannot be honest, so they have to be known before anything is started.
- */
-const fanOutOf = Effect.fn("Engine.fanOutOf")(function* (
-  o: EngineOptions,
-  choice: ChoiceDef,
-  ctx: RunCtx,
-) {
-  const template = choice.inputs?.plan;
-  if (template === undefined) return null;
-  // The same rendering `chain` will do with it, so the plan read here is the plan the
-  // children are given.
-  const planDir = renderTemplate(template, chainVars(o.run, ctx)).text;
-  const plan = yield* planReposOf(planDir, o.run.record.cwd);
-  return isSingleRepo(plan) ? null : plan;
-});
-
-/**
- * One `implement` run per repository the plan names, in waves: a repository starts when
- * every repository its tickets are blocked by has succeeded. The parent stays `running`
- * throughout, which is what makes it the one row that says whether the whole plan is
- * built.
- *
- * A child that fails or is stopped starts no further wave. The children already running
- * are left to finish — they are building their own repository and their work is worth
- * having — and the parent ends `blocked` naming the repository that stopped it.
- */
-const fanOut = Effect.fn("Engine.fanOut")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  choice: ChoiceDef,
-  prompts: EnginePrompts,
-  ctx: RunCtx,
-  plan: PlanRepos,
-) {
-  const { run, out } = o;
-  const pathService = yield* Path.Path;
-  const store = new RunStore(o.env.stateDir);
-  const waves = plan.waves.map((wave) => [...wave]);
-  run.record.fanout = {
-    step: step.id,
-    title: choice.title,
-    waves,
-    // A resumed fan-out keeps what it already started, and what those runs opened.
-    runs: run.record.fanout?.runs ?? {},
-    mrs: run.record.fanout?.mrs ?? {},
-    wave: 0,
-    blocked: null,
-  };
-  yield* run.save();
-
-  /** The record as it stands, which is set from here down; `mark` is the only writer. */
-  const fan = () => run.record.fanout!;
-  const mark = (patch: Partial<FanoutRecord>) =>
-    Effect.gen(function* () {
-      run.record.fanout = { ...fan(), ...patch };
-      yield* run.save();
-    });
-
-  // A child is created, given a Driver and pushed onto `children` before this record
-  // learns which repository it is for, and an interrupt in that gap — a stop is a signal
-  // that can land anywhere — would leave a repository run nothing here can see: not
-  // stopped with the plan, not on the parent's row, and started a second time by a
-  // resume, on the same branch. The child records its own `repo`, so a resumed parent
-  // adopts what it already has before deciding what to start.
-  const known = new Set(Object.values(fan().runs));
-  for (const id of run.record.children) {
-    if (known.has(id)) continue;
-    const child = yield* store.load(id).pipe(Effect.catch(() => Effect.succeed(null)));
-    const repo = child?.record.inputs.repo ?? "";
-    if (repo !== "" && waves.flat().includes(repo) && fan().runs[repo] === undefined) {
-      yield* out(`  ${repo} was already started as ${id}`);
-      yield* mark({ runs: { ...fan().runs, [repo]: id } });
-    }
-  }
 
   /**
-   * The merge request a repository's run opened, kept on the parent. Called wherever a
-   * child's end is observed and not only where the fan-out carries on, because the
-   * parent is the one place the sibling merge requests are findable from: a repository
-   * that was built has its merge request listed whatever became of its wave.
+   * Gives the engine work that is recorded and not yet accepted, and writes the receipt.
+   * A start, a retry of one that crashed before the engine heard, and a host that starts
+   * with rows outstanding all come through here — under the identity the row was
+   * admitted with, so the engine's own idempotency makes a repeat a no-op rather than a
+   * second run.
+   *
+   * Nothing happens where it cannot be handed over: the module is not registered here,
+   * or no longer takes what it was started with. The row stays as it is, for a repair.
    */
-  const recordMr = Effect.fn("Engine.fanOut.recordMr")(function* (repo: string, id: string) {
-    const url = yield* store.load(id).pipe(
-      Effect.map((child) => child.record.mr_url),
-      Effect.catch(() => Effect.succeed(null)),
-    );
-    if (url) yield* mark({ mrs: { ...fan().mrs, [repo]: url } });
+  const handOver = Effect.fn("Engine.handOver")(function* (row: RunRow) {
+    const generation = live.get(row.generation);
+    if (generation === undefined || unplaced(row)) return;
+    const payload = yield* payloadOf(generation, row).pipe(Effect.result);
+    if (payload._tag === "Failure") return;
+    yield* crash("admitted");
+    yield* engine
+      .execute(generation.registration.workflow, {
+        executionId: row.execution,
+        payload: payload.success,
+        discard: true,
+      })
+      .pipe(Effect.orDie);
+    yield* crash("executed");
+    yield* store.accepted(row.run);
   });
 
-  for (const [index, wave] of waves.entries()) {
-    yield* mark({ wave: index + 1 });
-    const ids: Array<{ repo: string; id: string }> = [];
-    /**
-     * The repository this wave got no further than, and why. The loop below breaks
-     * rather than returning: the siblings it has already started are building whether
-     * or not this one could, so they are waited on and their merge requests recorded
-     * before the fan-out says what stopped it. Returning here left a child orchestrating
-     * agents with nobody waiting on it and its merge request listed nowhere.
-     */
-    let unstartable: { repo: string; status: string } | null = null;
-    for (const repo of wave) {
-      // A resumed parent does not start a repository twice. What it does with the child
-      // it already has depends on how that child ended: one that succeeded is done with,
-      // one that failed or was stopped is resumed as itself, and one still going is
-      // waited on. This is what keeps a second attempt from opening second merge
-      // requests.
-      const already = fan().runs[repo];
-      if (already !== undefined) {
-        const child = yield* store.load(already).pipe(Effect.catch(() => Effect.succeed(null)));
-        const status = child === null ? "failed" : yield* runStatus(child);
-        if (status === "succeeded") {
-          yield* out(`  ${repo} already succeeded`);
-          // Including the one a previous attempt built while the fan-out was stopping:
-          // this is the only pass that will look at it.
-          yield* recordMr(repo, already);
-          continue;
-        }
-        if (child !== null && (status === "failed" || status === "stopped")) {
-          const requestId = yield* (yield* Crypto.Crypto).randomUUIDv4;
-          const resumed = yield* resumeRun({ ...o.env, cwd: child.record.cwd }, child, requestId);
-          yield* out(
-            `  ${repo} ${resumed.ok ? "resumed" : `not resumed: ${resumed.error.message}`}`,
-          );
-          if (!resumed.ok) {
-            unstartable = { repo, status: "not resumed" };
-            break;
-          }
-        }
-        ids.push({ repo, id: already });
-        continue;
-      }
-      // No branch is named here on purpose: `branchFor` names a chained run after the
-      // work its parent was named for, so every Repo run of one plan is handed the same
-      // branch in its own repository — which is what makes the sibling merge requests
-      // findable by name. Naming one here would be that decision made twice.
-      const child = yield* chain(o, choice, prompts, ctx, {
-        inputs: { repo },
-        cwd: pathService.join(run.record.cwd, repo),
-      });
-      if (child === null) {
-        unstartable = { repo, status: "not started" };
-        break;
-      }
-      yield* mark({ runs: { ...fan().runs, [repo]: child } });
-      ids.push({ repo, id: child });
-    }
+  /** Admitted work a host did not live to place or hand over, finished under its claim. */
+  const recoverAdmission = (row: RunRow) =>
+    claimingOf(row.request).withPermits(1)(
+      placeClaimed(row, false).pipe(
+        Effect.flatMap(handOver),
+        Effect.catchTag("HostRefused", (failure) =>
+          Effect.logWarning(`${row.run} could not be placed: ${failure.reason}`),
+        ),
+      ),
+    );
 
-    yield* out(`  wave ${index + 1}/${waves.length}: ${wave.join(", ")}`);
-    // Every repository of the wave, not up to the first failure: they are all already
-    // started, they are all left to finish, and one that was built has a merge request
-    // the parent has to list. Returning early skipped a sibling's for good.
-    const ended: Array<{ repo: string; status: string }> = [];
-    for (const { repo, id } of ids) {
-      const status = yield* waitOnRun(o.env.stateDir, id);
-      yield* out(`  ${repo} ${status}`);
-      yield* run.log(`${repo}: run ${id} ${status}`);
-      yield* recordMr(repo, id);
-      ended.push({ repo, status });
+  /** Every recorded answer handed again to a run still waiting; the engine keeps one completion. */
+  const reconcileAnswers = Effect.gen(function* () {
+    for (const row of yield* store.runs) {
+      const generation = live.get(row.generation);
+      if (generation === undefined) continue;
+      const answered = (yield* store.asked(row.run)).filter((one) => one.answer !== null);
+      if (answered.length === 0) continue;
+      const state = pollStatus(
+        yield* engine.poll(generation.registration.workflow, row.execution),
+        generation.entry,
+      );
+      if (state.status !== "suspended") continue;
+      for (const one of answered) {
+        yield* answerDecision(generation.registration, {
+          name: one.decision,
+          executionId: row.execution,
+          value: one.answer ?? "",
+        });
+      }
     }
-    // In wave order: what each repository that started ended as, and last the one that
-    // never started, which the loop above broke on.
-    if (unstartable !== null) ended.push(unstartable);
-    // The first that did not succeed, which is the one the parent is blocked on and the
-    // reason the waves after it are not run.
-    const stopped = ended.find((entry) => entry.status !== "succeeded");
-    if (stopped !== undefined) {
-      yield* mark({ wave: 0, blocked: stopped });
+  });
+
+  // What a host admitted and did not live to hand over. Every crash window ends here.
+  for (const row of yield* store.pending) yield* recoverAdmission(row);
+  yield* reconcileAnswers;
+
+  /** The file a generation was built from, which a row keeps naming after it has gone. */
+  const entryOf = (name: string) => known.find((route) => route.name === name)?.entry ?? "";
+
+  const claimOf = (runId: string) =>
+    recordedClaim(claimPath(dir, runId)).pipe(Effect.provideService(FileSystem.FileSystem, fs));
+
+  const viewOf = Effect.fn("Engine.viewOf")(function* (row: RunRow) {
+    const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
+    const admitted = {
+      runId: row.run,
+      workflow: row.workflow,
+      project: row.project,
+      task: row.task,
+      parent: row.parent,
+      registration: row.generation,
+      entry: entryOf(row.generation),
+      input,
+      provenance: yield* decodeStrings(row.provenance ?? "{}").pipe(
+        Effect.orElseSucceed((): Record<string, string> => ({})),
+      ),
+      options: yield* decodeStrings(row.options ?? "{}").pipe(
+        Effect.orElseSucceed((): Record<string, string> => ({})),
+      ),
+    };
+    const { cwd, branch, workspace, worktree } = placedOf(row, admitted.options);
+    const outcome = admitted.options.outcome ?? UNSPECIFIED;
+    const generation = live.get(row.generation);
+    const about = {
+      ...admitted,
+      strategies: generation?.hints ?? {},
+      cwd,
+      branch,
+      workspace,
+      worktree,
+      outcome,
+      created: row.admitted,
+      waiting: yield* asked(row.run),
+      controls: yield* controlsOf(row.run),
+      parked: yield* fs
+        .readFileString(controlPath(dir, PARKED, row.run))
+        .pipe(Effect.orElseSucceed(() => null)),
+      mr: yield* mergeRequestOf(fs, dir, row.run),
+    };
+    // Not registered here is not a verdict on the work: the rows are all still there,
+    // and what is missing is the module, named so somebody can put it back.
+    if (generation === undefined) {
       return {
-        status: "blocked" as const,
-        note: `${stopped.repo} ${stopped.status}; the repositories after it were not run`,
+        ...about,
+        status: { status: "pending" as const },
+        diagnostic:
+          unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
       };
     }
-  }
-
-  yield* mark({ wave: 0 });
-  return {
-    status: "done" as const,
-    note: `${waves.flat().length} repo(s) built in ${waves.length} wave(s)`,
-  };
-});
-
-/** One agent round inside a Choice: a Step in every way except its own id. */
-const runRound = Effect.fn("Engine.runRound")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  round: RoundDef,
-  key: string,
-  ctx: RunCtx,
-  extraVars?: YamlMap,
-) {
-  const synth: ResolvedStep = {
-    ...round,
-    id: step.id,
-    persona: round.persona ?? step.persona,
-    origin: step.origin,
-    preamble: step.preamble,
-    prompt: round.prompt,
-    known: step.known,
-    choices: undefined,
-  };
-  const variant = roundVariant(round, step, o.defaults);
-  const outcomes = yield* runStep(o, synth, [variant], [key], ctx, extraVars);
-  const outcome = outcomes[0]!;
-  // runStep has already recorded it; a second push here would list it twice.
-  ctx.outputs.set(step.id, [outcome]);
-  yield* o.run.save();
-  yield* markTab(o, ctx, [outcome.record]);
-  return outcome;
-});
-
-/** What a choice does, one line, for the menu and for the launch decision. */
-export function choiceHint(choice: ChoiceDef): string {
-  if (choice.run) return `runs ${choice.run}`;
-  if (choice.post) return "one note on the merge request";
-  if (choice.handoff) return `to the ${choice.handoff} already working here`;
-  if (choice.stop) return "ends here";
-  return choice.round?.agent ? `prompts ${choice.round.agent}` : "a fresh agent";
-}
-
-const PLAN_DIR = "plan";
-const PLAN_ISSUES = "issues";
-
-/** The tickets a Run builds from, when its work source is a plan directory. */
-const planTickets = Effect.fn("Engine.planTickets")(function* (o: EngineOptions) {
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  const plan = o.run.record.inputs.plan ?? "";
-  if (o.run.record.inputs.plan_kind !== "plan-dir" || plan === "") return null;
-  const dir = pathService.join(plan, PLAN_ISSUES);
-  const there = yield* fs.exists(dir).pipe(Effect.catch(() => Effect.succeed(false)));
-  return there ? dir : null;
-});
-
-/**
- * Every ticket by file name; null when any of it could not be read — unreadable is
- * not empty, and empty would read as requirements deleted.
- */
-const readTickets = Effect.fn("Engine.readTickets")(function* (dir: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  const names = yield* fs.readDirectory(dir).pipe(Effect.catch(() => Effect.succeed(null)));
-  if (names === null) return null;
-  const tickets = new Map<string, string>();
-  for (const name of names.filter((n) => n.endsWith(".md"))) {
-    const text = yield* fs
-      .readFileString(pathService.join(dir, name))
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (text === null) return null;
-    tickets.set(name, text);
-  }
-  return tickets;
-});
-
-const CHECKBOX = /^[-*] \[[ xX]\]/;
-
-/** A ticket's acceptance criteria: its checkbox lines, as written. */
-function checkboxes(text: string): string[] {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => CHECKBOX.test(line));
-}
-
-/** Which ticket moved, and the acceptance criteria that came and went. */
-function ticketChangeNote(before: Map<string, string>, after: Map<string, string>): string | null {
-  const parts: string[] = [];
-  for (const [name, text] of after) {
-    const old = before.get(name);
-    if (old === text) continue;
-    const was = checkboxes(old ?? "");
-    const now = checkboxes(text);
-    parts.push(
-      [
-        `${name} ${old === undefined ? "is new" : "changed"}:`,
-        ...now.filter((line) => !was.includes(line)).map((line) => `  + ${line}`),
-        ...was.filter((line) => !now.includes(line)).map((line) => `  - ${line}`),
-      ].join("\n"),
+    const result = yield* engine.poll(generation.registration.workflow, row.execution);
+    const status = pollStatus(
+      result,
+      generation.entry,
+      generation.registration.workflow.successSchema,
+      generation.registration.workflow.errorSchema,
     );
-  }
-  for (const name of before.keys()) if (!after.has(name)) parts.push(`${name} is gone.`);
-  if (parts.length === 0) return null;
-  return [
-    [
-      "The tickets you are building from have changed on disk. The files are the authority:",
-      "an answer you were given in a pane is not, and may be narrower than what was written.",
-      "Re-read the ones below.",
-    ].join(" "),
-    parts.join("\n"),
-    [
-      "Reconcile rather than restart: finish what the change does not affect, adjust what it",
-      "does, and where it conflicts with work you have already committed or pushed, say so in",
-      "your Output instead of quietly undoing either side.",
-    ].join(" "),
-  ].join("\n\n");
-}
-
-/**
- * A copy of the plan directory before a round touches it, so a change can be shown
- * as a diff afterwards. Null when this run has no plan of its own to change.
- */
-const snapshotPlan = Effect.fn("Engine.snapshotPlan")(function* (o: EngineOptions, key: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  const plan = pathService.join(o.run.dir, PLAN_DIR);
-  if (!(yield* fs.exists(plan))) return null;
-  const before = pathService.join(o.run.dir, "steps", "plan-before", key);
-  return yield* Effect.gen(function* () {
-    yield* fs.remove(before, { recursive: true, force: true });
-    yield* fs.makeDirectory(before, { recursive: true });
-    yield* fs.copy(plan, before);
-    return before;
-  }).pipe(Effect.catch((e) => o.run.log(`plan snapshot: ${reason(e)}`).pipe(Effect.as(null))));
-});
-
-/**
- * Once per change, and only when someone is building from this plan: the diff of
- * `plan/` and whatever the planner said it did.
- */
-const reportPlanChange = Effect.fn("Engine.reportPlanChange")(function* (
-  o: EngineOptions,
-  before: string | null,
-  output: YamlValue | null,
-) {
-  if (!before) return;
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  const plan = pathService.join(o.run.dir, PLAN_DIR);
-  // `git diff --no-index` exits 1 when the two differ, which is how "changed" is read.
-  const diff = yield* shellRun(
-    "git",
-    ["diff", "--no-index", "--no-color", "--", before, plan],
-    o.run.record.cwd,
-  );
-  if (diff.code === 0 || diff.stdout.trim() === "") return;
-
-  const path = pathService.join(before, "..", `${pathService.basename(before)}.patch`);
-  yield* fs.writeFileString(path, diff.stdout);
-  const changelog = isYamlMap(output) && isString(output.changelog) ? output.changelog : "";
-  const result = handoffResult(
-    yield* sendPlanChange(sessionOf(o), o.run, {
-      planDir: plan,
-      diff: path,
-      changelog,
-    }),
-    "could not send the plan change",
-  );
-  yield* o.run.log(`plan changed: ${result.message}`);
-  if (result.ok) yield* o.out(`  ▸ ${result.message}`);
-  // A hand-off held by the receiver's own compaction is not the quiet "nobody to hand
-  // to": no work went anywhere and the human is the one who decides what happens next,
-  // so it says so here as well as in the audit trail.
-  else if (result.held) yield* o.out(`  ⏸ ${result.message}`);
-});
-
-/** This Run's Session, as the register and the hand-offs key it. */
-function sessionOf(o: EngineOptions): Session {
-  return {
-    herdr: o.herdr,
-    stateDir: o.env.stateDir,
-    // A hand-off is a work boundary too, so the Session carries what the shared
-    // policy needs to read this Run's threshold and warn in its audit trail.
-    configDir: o.env.configDir,
-    compaction: compactionSettings(o),
-    ...scopeFor(o.env, o.run.record.cwd),
-  };
-}
-
-/** Gives this Run's review to the Session's live agent for that role. */
-const handOff = Effect.fn("Engine.handOff")(function* (o: EngineOptions, role: string) {
-  if (role !== "implementer") return { ok: false, message: `nothing to hand to a ${role}` };
-  return handoffResult(yield* sendReview(sessionOf(o), o.run), "could not send the review");
-});
-
-/** A value the human is asked for once and that stays in config.json. */
-const ensureConfig = Effect.fn("Engine.ensureConfig")(function* (
-  o: EngineOptions,
-  prompts: EnginePrompts,
-  cfg: { key: string; question: string },
-) {
-  if (configValue(yield* readConfig(o.env.configDir), cfg.key) !== undefined) return;
-  // The key is in the question, so what is on screen says it is a setting rather than a
-  // menu — a question that reads like one is how a Choice title came to be saved as a
-  // Linear team name.
-  const answer = yield* prompts.ask(`${cfg.question}? (saved as ${cfg.key})`);
-  if (answer === null || answer.trim() === "") return;
-  yield* writeConfigValue(o.env.configDir, cfg.key, answer.trim());
-  yield* o.out(`  saved ${cfg.key} in config.json`);
-});
-
-/** A step some later step continues, i.e. the one that starts a long-lived agent. */
-function groupHead(wf: ResolvedWorkflow, stepId: string): boolean {
-  return wf.steps.some((s) => s.agent === stepId);
-}
-
-/** Puts one long-lived agent on the Session's register, for a later Run to find. */
-const register = Effect.fn("Engine.register")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  record: VariantRecord,
-) {
-  const path = yield* registryPath(o.env.stateDir, scopeFor(o.env, o.run.record.cwd));
-  yield* Effect.gen(function* () {
-    // herdr's own identity for the process that was just started, read back from the
-    // listing rather than assumed: this is what later makes "the agent that was
-    // registered" and "the agent in that pane now" two answerable questions. An agent
-    // herdr does not name a `terminal_id` for is registered without one and is simply
-    // never a delivery target — the entry is still worth having for stop and prune.
-    const live: AgentInfo[] = yield* o.herdr
-      .agentList()
-      .pipe(Effect.catch(() => Effect.succeed([])));
-    const info = live.find((a) => a.name === record.agent && a.paneId === record.paneId);
-    const entry: AgentEntry = {
-      role: step.persona ?? step.id,
-      agent: record.agent,
-      paneId: record.paneId!,
-      workspaceId: o.env.workspaceId,
-      runId: o.run.id,
-      workflow: o.run.record.workflow,
-      at: yield* nowIso(),
-    };
-    if (info?.terminalId) {
-      entry.incarnation = { terminalId: info.terminalId, agentSession: info.agentSession };
-      record.incarnation = entry.incarnation;
-    }
-    yield* registerAgent(path, entry);
-    yield* o.run.log(
-      info?.terminalId
-        ? `registered ${record.agent} as ${step.persona ?? step.id}`
-        : `registered ${record.agent} as ${step.persona ?? step.id} without an incarnation`,
-    );
-  }).pipe(
-    // A register nobody can write is a hand-off nobody gets, not a failed run.
-    Effect.catch((e) => o.run.log(`register ${record.agent} failed: ${reason(e)}`)),
-  );
-});
-
-/**
- * Puts a tab where the strip says it belongs: Collie first, then plan, implement,
- * review, then anything else in start order. Rank comes from the *Run's* workflow —
- * `implement` embeds `review`, and those tabs belong to the implement run. Only a tab
- * Collie just created is placed, and never again, so a tab a human dragged stays
- * dragged. A herdr too old for `tab.move` gets a log line, never a failed Run.
- */
-const placeTab = Effect.fn("Engine.placeTab")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  tabId: string,
-) {
-  // Asked again while there is no answer: the first tab Collie opens in a workspace is
-  // the anchor for the ones after it, and a Run that resolved `null` once at its start
-  // would then never order any of its own tabs. No anchor at all means no strip Collie
-  // has any business reordering — the tab being placed is the only one it owns here.
-  ctx.orderAnchorTabId ??= yield* orderAnchorOf(o);
-  if (!ctx.orderAnchorTabId) return;
-  yield* Effect.gen(function* () {
-    const owners = new Map<string, number>();
-    for (const run of yield* new RunStore(o.env.stateDir).list()) {
-      if (run.record.workspace !== o.run.record.workspace) continue;
-      const rank = rankOf(run.record.workflow);
-      for (const step of run.record.steps) {
-        for (const variant of step.variants) {
-          if (variant.tabId) owners.set(variant.tabId, rank);
-        }
-      }
-    }
-    // This run's newest tabs are in the record already, but the one being placed may
-    // not be saved yet; it is the tab being inserted, not an anchor.
-    const tabs = (yield* o.herdr.tabList())
-      .filter((tab) => tab.tabId !== tabId)
-      .map((tab) => ({
-        rank: owners.get(tab.tabId) ?? null,
-        board: tab.tabId === ctx.orderAnchorTabId,
-      }));
-    yield* o.herdr.tabMove(tabId, insertIndexFor(tabs, rankOf(o.run.record.workflow)));
-  }).pipe(Effect.catch((e) => o.run.log(`tab order: ${reason(e)}`)));
-});
-
-/**
- * The Home's tab, where a pending question goes. Never used to order anything: the Home
- * is one board for the whole Herd, and a Run in another workspace ordering that
- * workspace's strip was the board and the anchor being the same value.
- */
-const homeTabOf = Effect.fn("Engine.homeTabOf")(function* (o: EngineOptions) {
-  const ensured = yield* ensureHomeFor(o.herdr, o.env, (line) =>
-    Effect.ignore(o.run.log(line)),
-  ).pipe(Effect.catch((e) => o.run.log(`home: ${reason(e)}`).pipe(Effect.as(null))));
-  if (ensured === null) return null;
-  if (ensured.kind === "ownership_unknown") {
-    yield* o.run.log(`home: ${ensured.why}; \`collie home reconcile\` settles it`);
-    return null;
-  }
-  // Made but not opened: nothing to settle, and no tab to send a question to yet.
-  if (ensured.kind === "incomplete") return null;
-  return ensured.record.tabId;
-});
-
-/**
- * A tab in *this* Run's own workspace to order against: the first one in the strip that
- * any Run of this workspace opened. Null while Collie owns nothing here, which is a
- * strip it has no business reordering — the one tab it is about to open is the only one
- * there, and where that sits is herdr's answer, not Collie's.
- */
-const orderAnchorOf = Effect.fn("Engine.orderAnchorOf")(function* (o: EngineOptions) {
-  return yield* Effect.gen(function* () {
-    const owned = new Set<string>();
-    for (const run of yield* new RunStore(o.env.stateDir).list()) {
-      if (run.record.workspace !== o.run.record.workspace) continue;
-      for (const step of run.record.steps) {
-        for (const variant of step.variants) if (variant.tabId) owned.add(variant.tabId);
-      }
-    }
-    return (yield* o.herdr.tabList()).find((tab) => owned.has(tab.tabId))?.tabId ?? null;
-  }).pipe(Effect.catch((e) => o.run.log(`tab anchor: ${reason(e)}`).pipe(Effect.as(null))));
-});
-
-/**
- * A question nobody sees is a run that has silently stopped, so it is said
- * twice: a toast, and the Session's tab brought to the front.
- *
- * The tab is the half a human can opt out of with `questions: notify`. The toast, the
- * recorded `awaiting` and the tab's `asks you` are not optional: suppressing the jump
- * must not make the question itself any quieter, or a Run stops in real silence.
- */
-const callAttention = Effect.fn("Engine.callAttention")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  detail: string,
-  stepId: string,
-) {
-  o.run.record.awaiting = stepId;
-  yield* o.run.save();
-  // The tab says what it is now waiting for, so the sidebar row reads `asks you`
-  // rather than the step it stopped in the middle of.
-  yield* reconcileTabs(o, ctx, nothingLive, true);
-  yield* notify(o, "needs-you", detail, { step: stepId });
-  if (o.defaults.questions === "notify" || !ctx.boardTabId) return;
-  // The one thing that still takes focus, and only under `questions: focus`: a question
-  // is the human being waited on. Cards, corrections and proposals never do this.
-  // A tab that will not focus is still a tab the human can reach.
-  yield* Effect.ignore(o.herdr.tabFocus(ctx.boardTabId));
-});
-
-/**
- * Starting the Run selects its working directory. Record that selection for harnesses
- * that need directory trust, without asking the same question again in Collie.
- */
-const ensureTrusted = Effect.fn("Engine.ensureTrusted")(function* (o: EngineOptions) {
-  if (o.defaults.trust === "never") return;
-  const cwd = o.run.record.cwd;
-  const seen = new Set<string>();
-
-  for (const step of o.wf.steps) {
-    for (const variant of stepVariants(step, o.defaults)) {
-      if (seen.has(variant.harness)) continue;
-      seen.add(variant.harness);
-      const trust = HARNESSES[variant.harness]?.trust?.(o.env.home, o.env.stateDir);
-      if (!trust || (yield* trust.state(cwd)) !== "untrusted") continue;
-
-      // A grant that cannot be written is not a reason to stop the run: with nothing
-      // recorded, the harness falls back to asking in its own pane, which is exactly
-      // where the question would have been without this.
-      const result = yield* trust.grant(cwd).pipe(
-        Effect.catch((cause) =>
-          Effect.succeed({
-            ok: false,
-            message: `could not record trust for ${cwd} (${reason(cause)}); ${variant.harness} will ask in its own tab`,
-          }),
-        ),
-      );
-      yield* o.out(`  ${result.message}`);
-      yield* o.run.log(`trust ${variant.harness}: ${result.message}`);
-    }
-  }
-});
-
-/** herdr says this when the harness stopped on a prompt before it was ready to work. */
-function blockedAtStartup(e: HerdrError): boolean {
-  return /agent_not_ready|blocked during startup/.test(e.detail);
-}
-
-/**
- * herdr says this when the pane exists but its shell has not come up yet. A pane
- * split and `cd`-ed a moment ago is sometimes still starting, which killed two live
- * runs at the fan-in step before this was here.
- */
-function paneNotReady(e: HerdrError): boolean {
-  return /agent_pane_busy|not an available shell/.test(e.detail);
-}
-
-/**
- * A harness may stop on a first-run prompt — claude asks before it will work in a
- * directory it has not been trusted with, and the dialog cannot be answered from here:
- * it shuffles its options, so there is no safe key to send. The agent exists and is
- * blocked, so this waits for the human exactly as a Step waits for an Output.
- */
-/**
- * The mode the agent this step continues was started with, from the run record. Absent
- * when the chain's head never ran in this Run, or was recorded before the mode was.
- */
-function chainMode(o: EngineOptions, step: ResolvedStep): string | null {
-  if (!step.agent) return null;
-  const seen = new Set<string>();
-  let id: string | undefined = step.agent;
-  while (id !== undefined && !seen.has(id)) {
-    seen.add(id);
-    const recorded = o.run.record.steps.find((s) => s.id === id)?.variants[0];
-    if (recorded?.permissions) return recorded.permissions;
-    id = o.wf.steps.find((s) => s.id === id)?.agent;
-  }
-  return null;
-}
-
-/**
- * The mode this agent starts in: the Step's own, else the Run's default. An unknown one
- * fails the step rather than falling back, because the fallback would be `bypass` and a
- * typo would then start an agent unattended. Validation normally catches it before a tab
- * opens, but a chained Run and a resumed Driver resolve a Workflow without validating it,
- * so this is the last place that can still refuse.
- */
-const permissionMode = Effect.fn("Engine.permissionMode")(function* (
-  step: ResolvedStep,
-  variant: Variant,
-  defaults: Defaults,
-) {
-  const named = variant.permissions ?? defaults.permissions;
-  if (isPermissionMode(named)) return named;
-  return yield* Effect.fail(
-    new Error(`${step.id}: unknown permissions "${named}" (known: ${PERMISSION_MODES.join(", ")})`),
-  );
-});
-
-const startAgent = Effect.fn("Engine.startAgent")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  opts: { name: string; kind: string; paneId: string; args: string[] },
-) {
-  const startError = yield* startWhenReady(o, opts).pipe(
-    Effect.as(Option.none<HerdrError>()),
-    Effect.catchTag("HerdrError", (error) => Effect.succeed(Option.some(error))),
-  );
-  if (Option.isNone(startError)) return;
-  const error = startError.value;
-  if (!blockedAtStartup(error)) return yield* Effect.fail(error);
-
-  const budget = o.handoffTimeoutMs ?? 0;
-  yield* o.out(`  ⏸ ${opts.name} is waiting for you in its pane — answer the prompt there`);
-  yield* o.run.log(`${opts.name}: blocked at startup, waiting for the human`);
-  o.run.record.awaiting = step.id;
-  yield* o.run.save();
-  yield* notify(o, "needs-you", `${step.id}: answer the prompt in its pane`, { step: step.id });
-
-  const deadline = (yield* Clock.currentTimeMillis) + budget;
-  while ((yield* Clock.currentTimeMillis) < deadline) {
-    yield* Effect.sleep(
-      Math.min(o.outputPollMs ?? 2000, Math.max(1, deadline - (yield* Clock.currentTimeMillis))),
-    );
-    if ((yield* o.herdr.agentStatus(opts.name)) !== "blocked") {
-      yield* o.out(`  ▸ ${opts.name} is ready`);
-      o.run.record.awaiting = null;
-      yield* o.run.save();
-      return;
-    }
-  }
-  return yield* Effect.fail(error);
-});
-
-/** `agent start`, waiting out a pane whose shell is still coming up. */
-const startWhenReady = Effect.fn("Engine.startWhenReady")(function* (
-  o: EngineOptions,
-  opts: { name: string; kind: string; paneId: string; args: string[] },
-) {
-  const tries = 6;
-  for (let attempt = 1; ; attempt++) {
-    const failure = yield* o.herdr.agentStart(opts).pipe(
-      Effect.as(Option.none<HerdrError>()),
-      Effect.catchTag("HerdrError", (error) => Effect.succeed(Option.some(error))),
-    );
-    if (Option.isNone(failure)) return;
-    const error = failure.value;
-    if (!paneNotReady(error) || attempt === tries) return yield* Effect.fail(error);
-    yield* o.run.log(
-      `${opts.name}: pane ${opts.paneId} is not a shell yet, retrying (${attempt}/${tries})`,
-    );
-    yield* Effect.sleep(Math.min(o.outputPollMs ?? 1000, 1000));
-  }
-});
-
-/**
- * A settled agent does not mean a finished Step: an interviewing agent goes idle
- * waiting for the human. The Output file is the completion signal, so keep
- * waiting for it and toast once so the human knows they are needed.
- */
-/**
- * Has the agent written anything? A file that exists but is blank is a write that
- * has not happened — or one caught half-done — not an empty answer.
- */
-const written = Effect.fn("Engine.written")(function* (path: string) {
-  const fs = yield* FileSystem.FileSystem;
-  if (!(yield* fs.exists(path))) return false;
-  return (yield* fs.readFileString(path)).trim() !== "";
-});
-
-const awaitOutput = Effect.fn("Engine.awaitOutput")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  agent: string,
-  stepId: string,
-  path: string,
-) {
-  if (yield* written(path)) return;
-  const budget = o.handoffTimeoutMs ?? 0;
-  if (budget <= 0) return;
-
-  yield* o.out(`  ⏸ ${agent} is waiting for you in its tab`);
-  o.run.record.awaiting = stepId;
-  yield* o.run.save();
-  yield* notify(o, "needs-you", `${stepId}: answer the agent in its tab`, { step: stepId });
-  const poll = o.outputPollMs ?? 2000;
-  const deadline = (yield* Clock.currentTimeMillis) + budget;
-  while (!(yield* written(path)) && (yield* Clock.currentTimeMillis) < deadline) {
-    // An agent waiting on a human is the one most likely to be sent something, and this
-    // wait can be hours: the inbox is read here as it is while the agent works.
-    yield* takeSteering(o, ctx);
-    yield* Effect.sleep(Math.min(poll, Math.max(1, deadline - (yield* Clock.currentTimeMillis))));
-  }
-  if (yield* written(path)) yield* o.out(`  ▸ ${agent} produced its Output`);
-  o.run.record.awaiting = null;
-  yield* o.run.save();
-});
-
-/**
- * One Output the agent could not write correctly, handed back to that same agent with
- * the reason. It is still in its pane holding the work; re-running the step from
- * scratch would throw a whole round away over a write. Once per variant per
- * iteration, and never to a fresh agent — a new one has none of the context and
- * would write a plausible, empty-headed file.
- */
-const repairOutput = Effect.fn("Engine.repairOutput")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  step: ResolvedStep,
-  record: VariantRecord,
-  variantKey: string | null,
-  problem: string,
-) {
-  const pathService = yield* Path.Path;
-  if (!step.output || record.repairs.length > 0) return null;
-  const status = yield* o.herdr
-    .agentStatus(record.agent)
-    .pipe(Effect.catch(() => Effect.succeed("unknown" as const)));
-  if (status !== "idle" && status !== "done") return null;
-
-  const path = pathService.join(yield* o.run.stepDir(step.id, variantKey), step.output);
-  const relative = pathService.relative(o.run.record.cwd, path);
-  yield* o.out(`  ↻ ${record.label} — asking it to write ${step.output} again`);
-  yield* o.run.log(`${step.id}: repairing ${record.output ?? step.output}: ${problem}`);
-  // A prompt that cannot be delivered — the agent is gone, the socket is not there —
-  // is a repair that did not happen, not a Run that failed: the step still has the
-  // Output problem it had, and that is what the human needs to be told about.
-  const asked = yield* sendTo(o, record, {
-    text: `Your Output file is not usable: ${problem}. Write ${relative} again — the JSON your step described, nothing else. Do not redo the work, do not explain, do not write anything outside that file. It is the only thing missing.\nOUTPUT_PATH: ${path}`,
-    cause: { kind: "repair", ref: `${step.id}#${o.run.record.iteration}` },
-    requestId: `${o.run.id}-repair-${step.id}-${variantKey ?? ""}-${o.run.record.iteration}`,
-    attempt: record.repairs.length + 1,
-    intentVersion: ctx.steering.intentVersion,
-  });
-  if (!asked) return null;
-  // Recorded once it has actually been asked: a repair that was never delivered must
-  // not make the summary say the Output was rewritten, or the toast say the agent was
-  // asked already.
-  record.repairs.push(problem);
-  record.status = "running";
-  record.error = null;
-  // An agent that goes quiet writing one file is as stuck as one that goes quiet
-  // doing the work, and the Driver holds it to the same bound.
-  const stuck = yield* awaitAgent(o, ctx, step, record);
-  return yield* collectWatched(o, ctx, step, record, variantKey, stuck);
-});
-
-/**
- * Read what an agent produced, given how its turn ended. An agent can write its Output
- * and then sit on a background process that never returns: the work is done, only the
- * process is stuck. So a give-up still reads what is there — without waiting, since
- * nobody is coming — and blocks only when there is nothing.
- */
-const collectWatched = Effect.fn("Engine.collectWatched")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  step: ResolvedStep,
-  record: VariantRecord,
-  variantKey: string | null,
-  stuck: string | null,
-) {
-  const outcome: VariantOutcome = yield* collect(o, ctx, step, record, variantKey, !stuck);
-  if (stuck && outcome.record.status !== "done") {
-    outcome.record.status = "blocked";
-    outcome.record.error = stuck;
-    outcome.stuck = true;
-  }
-  // The Run has just produced something, which is the moment its rules can be checked
-  // against what is actually there. Rules only: a judgement costs money and belongs at a
-  // boundary, and a fact Collie can check itself is one it should never pay to have judged.
-  yield* checkDrift(o, ctx, `${step.id} collected`);
-  yield* writeCard(o, ctx, {
-    kind: step.id.startsWith("review") ? "review" : "slice",
-    step: step.id,
-    claims: outcome.record.output === null ? [] : [`wrote ${outcome.record.output}`],
-  });
-  return outcome;
-});
-
-/**
- * The review this target already had, for the prompts that are about to look at it
- * again. Read once per run: reviewing is a rally, and the second review's job is to
- * say what happened to the first one's findings, not to write them again.
- */
-const previousReviewVars = Effect.fn("Engine.previousReviewVars")(function* (o: EngineOptions) {
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  // Empty, not "(none)": a first review should not read a heading for a review that
-  // does not exist, and a template has no way to leave the section out itself.
-  const none = { review: "", when: "never", run: "" };
-  const target = o.run.record.inputs.target ?? "";
-  if (target === "") return none;
-  const store = new RunStore(o.env.stateDir);
-  const named = o.run.record.inputs.previous;
-  // `worktree` names no change: every review of this checkout's working tree carries
-  // it, so matching on it would hand this review an unrelated branch's findings. Only
-  // a target that identifies the change is looked up; a run named by hand still is.
-  if (!named && target === "worktree") return none;
-  const previous = named
-    ? yield* store.load(named).pipe(Effect.catch(() => Effect.succeed(null)))
-    : yield* store.previousReview(o.run.record.cwd, target, o.run.id, o.run.record.task);
-  if (!previous) return none;
-  const file = pathService.join(previous.dir, REVIEW_FILE);
-  const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
-  if (text.trim() === "") return none;
-  o.run.record.previous_review = previous.id;
-  yield* o.run.save();
-  const when = ago(
-    previous.record.finished_at ?? previous.record.created_at,
-    yield* Clock.currentTimeMillis,
-  );
-  return {
-    // The heading travels with the review, so the section disappears with it. The
-    // instructions about what to do with it stay in the workflow, where a fork can
-    // change them.
-    review: `Earlier review of this target (${when}):\n\n${text.trim()}`,
-    when,
-    run: previous.id,
-  };
-});
-
-/**
- * The Run's own steering journals, read the way a Driver has to read them: a file it
- * cannot read says nothing, and nothing is not a reason to fail the work. Every caller
- * below wants that, so it is one name rather than a `catch` at each of them.
- */
-const intentOf = (o: EngineOptions) =>
-  readIntent(o.run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
-const driftOf = (o: EngineOptions) =>
-  readDrift(o.run.dir).pipe(Effect.catch(() => Effect.succeed([])));
-const verificationsOf = (o: EngineOptions) =>
-  readVerifications(o.run.dir).pipe(Effect.catch(() => Effect.succeed([])));
-const electionsOf = (file: string) =>
-  readElections(file).pipe(Effect.catch(() => Effect.succeed([])));
-/** The Herd this Run is in, or none: no socket is a Driver with no Herd to write to. */
-const herdKeyOf = (o: EngineOptions) =>
-  herdOf(o.env.socketPath).pipe(Effect.catch(() => Effect.succeed(null)));
-
-/**
- * One message to one of this Run's agents, through its own Dispatcher transaction.
- * `false` where nothing was sent, whatever the reason — the caller records that as its
- * own kind of failure, and none of them is a reason for the Run to end.
- */
-/**
- * What a step prompt is about, for the ledger. The variant as well as the step: a Choice
- * step's rounds are separate pieces of work in one step, and a key that could not tell
- * them apart would read the second round as a repeat of the first.
- */
-const stepCause = (step: ResolvedStep, key: string | null, run: Run): Cause => ({
-  kind: "step",
-  ref: `${step.id}/${key ?? ""}#${run.record.iteration}`,
-});
-
-const sendTo = Effect.fn("Engine.sendTo")(function* (
-  o: EngineOptions,
-  record: VariantRecord,
-  draft: {
-    readonly text: string;
-    readonly cause: Cause;
-    readonly requestId: string;
-    readonly attempt: number;
-    readonly intentVersion: number;
-    /** Default `boundary`; anything else is gated on what this harness has been shown to do. */
-    readonly mode?: "boundary" | "now" | "interrupt";
-  },
-) {
-  const deps = dispatcherDeps(o);
-  const entry = yield* agentEntry(o, record);
-  if (entry.entry === null) {
-    yield* o.run.log(`${draft.cause.kind} to ${record.agent}: ${entry.reason}`);
-    return false;
-  }
-  const addressed = entry.entry;
-  const mode = draft.mode ?? "boundary";
-  const carried = {
-    run: o.run.id,
-    harness: record.harness,
-    cause: draft.cause,
-    mode,
-    intentVersion: draft.intentVersion,
-    attempt: draft.attempt,
-    requestId: draft.requestId,
-  };
-  return yield* dispatch
-    .transaction(deps, addressed, (channel) =>
-      // An interrupt is keys and then the text; the text alone is a `now` under
-      // an interrupt's name.
-      mode === "interrupt"
-        ? dispatch.interrupt(
-            {
-              ...deps,
-              status: (agent) =>
-                o.herdr.agentStatus(agent).pipe(Effect.catch(() => Effect.succeed("unknown"))),
-            },
-            channel,
-            addressed,
-            draft.text,
-            carried,
-          )
-        : channel.submit(draft.text, carried),
-    )
-    .pipe(
-      Effect.flatMap((outcome) =>
-        outcome.ok
-          ? Effect.succeed(true)
-          : o.run
-              .log(`${draft.cause.kind} to ${record.agent} not sent: ${outcome.reason}`)
-              .pipe(Effect.as(false)),
-      ),
-      Effect.catch((cause) =>
-        o.run
-          .log(`${draft.cause.kind} to ${record.agent} refused: ${reason(cause)}`)
-          .pipe(Effect.as(false)),
-      ),
-    );
-});
-
-/**
- * Whether anyone has typed into one of this Run's agents. A submission Collie did not
- * make means a human is steering that pane directly, and automatic corrections to it
- * stop until someone explicitly clears the override — Collie never argues with a human
- * through the same keyboard.
- *
- * The count is compared against what was seen last time rather than the file being
- * consumed: the telemetry belongs to the compaction controls, and two readers deleting
- * from it would be two owners of one journal.
- */
-const noticeOverrides = Effect.fn("Engine.noticeOverrides")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-) {
-  for (const record of ctx.groups.values()) {
-    const dir = yield* controlDir(o.env.stateDir, record.agent);
-    const seen = yield* externalSubmissions(dir).pipe(Effect.catch(() => Effect.succeed(0)));
-    if (seen <= (ctx.steering.externals.get(record.agent) ?? 0)) continue;
-    ctx.steering.externals.set(record.agent, seen);
-    const addressed = yield* agentEntry(o, record);
-    const terminalId = addressed.entry?.incarnation?.terminalId;
-    if (terminalId === undefined) continue;
-    yield* appendLine(yield* ledgerPath(o.env.stateDir, terminalId), {
-      kind: "manual_override",
-      at: yield* nowIso(),
-      incarnation: terminalId,
-      by: "hook:UserPromptSubmit",
-    });
-    yield* o.run.log(`${record.agent}: manual_override — someone typed into its pane`);
-  }
-});
-
-/**
- * Every rule constraint this Run has, checked against what is actually there, and any new
- * breach written down. Called wherever the Run has just produced something and at the
- * boundary before it takes on more, because those are the two moments the answer can
- * change.
- *
- * Never fatal, and never blocking: a check that could not read the tree says nothing,
- * which is what "no evidence" looks like.
- */
-/**
- * What a Judgement is made with, and where its call is written down. `evaluationDeps` is
- * where the execution bounds are decided, so the CLI and the Driver call alike.
- */
-const judgementDeps = Effect.fn("Engine.judgementDeps")(function* (o: EngineOptions) {
-  const key = yield* herdKeyOf(o);
-  if (key === null) return null;
-  const built = yield* evaluationDeps(o.env);
-  return {
-    evaluator: built.evaluator,
-    budgetFile: yield* budgetPath(o.env.stateDir, key),
-    limits: built.limits,
-    newId: newRequestId().pipe(Effect.orDie),
-    // A journal write that will not happen must not be what stops a judgement.
-    log: (line: string) => Effect.ignore(o.run.log(line)),
-  } satisfies JudgementDeps;
-});
-
-/**
- * The semantic half of a drift check: one Judgement at a boundary and at `finish`, never
- * at `collect` (SPEC §7.9). A fact Collie can check itself is never paid for; a judgement
- * that could not be made is recorded as skipped, which keeps the Run `unverified` rather
- * than letting it read as checked.
- */
-const judgeDrift = Effect.fn("Engine.judgeDrift")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  intent: Intent,
-  at: string,
-  final: boolean,
-) {
-  // A goal is judged once, at `finish`. It is what `aligned` needs and there is nothing
-  // to correct from it mid-Run, so judging it at every boundary would spend a Run's whole
-  // grant on the same question. Semantic constraints are different: a correction can go
-  // out about one, so they are judged at every boundary as SPEC §7.9 asks.
-  const semantic = intent.constraints.some((constraint) => constraint.kind === "semantic");
-  if (!final && !semantic) return;
-  const deps = yield* judgementDeps(o);
-  if (deps === null) {
-    yield* recordSkipped(o.run.dir, o.run.id, "there is no Herd to charge a judgement to");
-    return;
-  }
-  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
-  const outcome = yield* judge(deps, intent, {
-    runDir: o.run.dir,
-    worktree: cwd,
-    base: yield* baseOf(cwd),
-    at: yield* nowIso(),
-  }).pipe(
-    // A judgement that fell over is a judgement that did not happen, and no Driver stops
-    // a Run over one (SPEC §9.3). The skipped line is what keeps the Run honest.
-    Effect.catch((cause) =>
-      Effect.gen(function* () {
-        yield* recordSkipped(o.run.dir, o.run.id, `the judgement failed: ${reason(cause)}`);
-        return { judged: NOT_JUDGED, reports: [] } satisfies Judgement;
-      }),
-    ),
-  );
-  ctx.judged = outcome.judged;
-
-  const before = yield* driftOf(o);
-  for (const report of newReports(outcome.reports, before)) {
-    yield* appendDrift(o.run.dir, report);
-    yield* o.run.log(
-      `drift at ${at}: ${report.constraint} (${report.severity}) — judged against ${
-        report.evidence.length
-      } piece(s) of evidence`,
-    );
-  }
-});
-
-const checkDrift = Effect.fn("Engine.checkDrift")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  at: string,
-  /** Whether to judge what Collie cannot check by itself. `collect` never does. */
-  judging: "none" | "boundary" | "finish" = "none",
-) {
-  const intent = yield* intentOf(o);
-  if (intent === null) return;
-  if (judging !== "none") yield* judgeDrift(o, ctx, intent, at, judging === "finish");
-  const rules = intent.constraints.some((constraint) => constraint.kind === "rule");
-  if (rules) yield* checkRuleDrift(o, intent, at);
-  // With no rule to check there may still be something to correct, from the judgement.
-  if (rules || judging !== "none") yield* correctDrift(o, ctx, intent);
-});
-
-/** The half Collie establishes itself: what the rules say about the evidence, recorded. */
-const checkRuleDrift = Effect.fn("Engine.checkRuleDrift")(function* (
-  o: EngineOptions,
-  intent: Intent,
-  at: string,
-) {
-  const facts = yield* ruleFacts(o);
-  const now = yield* nowIso();
-  const found = checkRules(intent, facts, now);
-  const before = yield* driftOf(o);
-  const fresh = newReports(found, before);
-  for (const report of fresh) {
-    yield* appendDrift(o.run.dir, report);
-    yield* o.run.log(
-      `drift at ${at}: ${report.constraint} (${report.severity}) — ${report.evidence
-        .map((ref) => ref.path ?? ref.excerpt ?? ref.kind)
-        .join(", ")}`,
-    );
-  }
-  // A report that was open and is no longer found is one the work came back from — but
-  // only where the check actually found fewer things. Re-checking an unchanged tree finds
-  // the same ones, and calling that a fix would clear a report nobody acted on.
-  for (const report of openReports(before))
-    if (!found.some((still) => still.constraint === report.constraint)) {
-      yield* appendDrift(o.run.dir, { ...report, at: now, resolution: "verified" });
-      yield* o.run.log(`drift ${report.constraint} cleared at ${at}`);
-    }
-});
-
-/**
- * Send what this Run's own authority lets Collie send about its open drift, and give up
- * where it does not. Every refusal is somebody being deferred to: the human at that
- * keyboard, the human who held the Run, the human who never granted this.
- *
- * A correction is `correction_submitted`, never `corrected` and never `verified`. Sending
- * text is not the same as the work changing, and only new evidence settles that.
- */
-const correctDrift = Effect.fn("Engine.correctDrift")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  intent: Intent,
-) {
-  if (!intent.authority.auto_correct) return;
-  const lines = yield* driftOf(o);
-  const open = openReports(lines);
-  if (open.length === 0) return;
-
-  for (const record of ctx.groups.values()) {
-    const addressed = yield* agentEntry(o, record);
-    const entry = addressed.entry;
-    const terminalId = entry?.incarnation?.terminalId;
-    if (!entry || terminalId === undefined) continue;
-
-    const ledger = yield* readLedger(yield* ledgerPath(o.env.stateDir, terminalId));
-    const deliveries = [...newestById(ledger).values()];
-    const sentSoFar = correctionsSent(deliveries);
-    const decided = decideCorrections(intent, open, {
-      overridden: overrideActive(ledger),
-      attributable: capabilitiesOf(record.harness)?.attribution.status === "proven",
-      held: ctx.steering.held !== null,
-      sent: sentSoFar,
-      inFlight: new Set(
-        deliveries
-          .filter((entry) => entry.cause.kind === "correction" && !SETTLED.has(entry.state))
-          .map((entry) => entry.cause.ref),
-      ),
-      nowProven: capabilitiesOf(record.harness)?.now.status === "proven",
-    });
-
-    for (const { report, mode } of decided) {
-      const constraint = intent.constraints.find((entry) => entry.id === report.constraint);
-      if (!constraint) continue;
-      const requestId = `${o.run.id}-correction-${report.constraint}-${intent.version}`;
-      const sent = yield* sendTo(o, record, {
-        text: correctionText(requestId, constraint, report),
-        cause: correctionCause(report),
-        requestId,
-        attempt: (sentSoFar[report.constraint] ?? 0) + 1,
-        intentVersion: intent.version,
-        mode,
-      });
-      if (!sent) continue;
-      yield* appendDrift(o.run.dir, {
-        ...report,
-        at: yield* nowIso(),
-        resolution: "correction_submitted",
-        correction: requestId,
-      });
-      yield* notify(o, "correction-sent", report.constraint, { step: report.constraint });
-      yield* o.run.log(`correction sent for ${report.constraint} (${mode})`);
-    }
-
-    // The bound is spent and it is still open: nothing else Collie can do about it.
-    for (const report of open) {
-      if (report.resolution === "escalated") continue;
-      if ((sentSoFar[report.constraint] ?? 0) < intent.authority.max_corrections_per_constraint)
-        continue;
-      if (decided.some((entry) => entry.report.constraint === report.constraint)) continue;
-      yield* appendDrift(o.run.dir, { ...report, at: yield* nowIso(), resolution: "escalated" });
-      yield* notify(o, "drift-unresolved", report.constraint, { step: report.constraint });
-      yield* o.run.log(`drift ${report.constraint} escalated: the correction bound is spent`);
-    }
-  }
-});
-
-/**
- * What a finished Run leaves behind: nothing queued that will never go out, an honest
- * answer about whether the work is what was asked for, and — where something is still
- * open and blocking — a proposal for the human rather than another prompt to an agent.
- *
- * A finished Run is immutable. Nothing here re-prompts anybody; the follow-up is a
- * proposal for a *child* Run, and it waits for a yes like everything else.
- */
-const settleAtFinish = Effect.fn("Engine.settleAtFinish")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-) {
-  // A boundary delivery is composed into the next piece of work. There is no next piece
-  // of work, so saying so is better than leaving it looking pending for ever.
-  for (const command of ctx.steering.deliveries)
-    yield* recordQueued(
-      o,
-      command,
-      "expired",
-      "the Run finished before there was any work to compose it into",
-    );
-  ctx.steering.deliveries = [];
-
-  const intent = yield* intentOf(o);
-  const lines = yield* driftOf(o);
-  // What the Judgement at `finish` actually got to, not an assumption about it: a
-  // skipped or refused judgement leaves these false and the verdict `unverified`.
-  const verdict = alignment(intent, lines, ctx.judged);
-  yield* o.run.log(`aligned: ${verdict.aligned} — ${verdict.why}`);
-
-  const blocking = openReports(lines).filter((report) => report.severity === "block");
-  if (blocking.length === 0) return;
-  yield* proposeFollowup(o, blocking);
-});
-
-/**
- * A finished Run with open blocking drift, offered as a child Run rather than acted on.
- * `origin: driver`, so every action in it is pending however much authority the Run had:
- * starting work is a decision, and a Run that has ended is not one Collie may extend.
- */
-const proposeFollowup = Effect.fn("Engine.proposeFollowup")(function* (
-  o: EngineOptions,
-  blocking: ReadonlyArray<{ readonly constraint: string; readonly evidence: ReadonlyArray<Ref> }>,
-) {
-  const key = yield* herdKeyOf(o);
-  if (key === null) {
-    yield* o.run.log("no Herd to record a follow-up proposal in; drift is on the Run's journal");
-    return;
-  }
-  const text = blocking
-    .map(
-      (report) =>
-        `${report.constraint}: ${report.evidence.map((ref) => ref.path ?? ref.excerpt ?? ref.kind).join(", ")}`,
-    )
-    .join("\n");
-  yield* recordProposal(yield* proposalsPath(o.env.stateDir, key), {
-    interpretation: `${o.run.id} finished with ${blocking.length} blocking constraint(s) still open`,
-    targets: [{ run: o.run.id }],
-    actions: [{ kind: "followup", run: o.run.id, text }],
-    allowedNow: [],
-    intentVersions: {},
-    by: `driver:${o.run.id}`,
-  }).pipe(
-    Effect.tap((recorded) => notify(o, "proposal-pending", o.run.id, { step: recorded.id })),
-    Effect.catch((cause) => o.run.log(`could not record a follow-up proposal: ${reason(cause)}`)),
-  );
-});
-
-/**
- * Whether this Driver takes the Herd's cross-run check this time. Why the Drivers elect
- * one at all, and what a loser's `dirty` line is for, is in `src/drift.ts`.
- *
- * The wake rule is the last clause: a `pending` evaluation makes *every* Driver in the
- * Herd a candidate, not only ones with siblings. Without it an evaluation nobody could
- * finish would wait for a Driver that may never run again.
- *
- * The judgement itself is a model call and no Driver has a grant to spend on one, so a
- * winner at a boundary can snapshot but not evaluate, and it records nothing: saying an
- * evaluation is owed at every boundary would be a mark no later boundary could clear.
- *
- * `pending` is written at `finish` and only there, by a Driver that is leaving and cannot
- * clear what it stood for — the durable unevaluated state §9.6 defines, which the wake
- * rule, the final card's `cross_run` and the attention all read.
- */
-const standForElection = Effect.fn("Engine.standForElection")(function* (
-  o: EngineOptions,
-  at: string,
-  leaving = false,
-) {
-  const key = yield* herdKeyOf(o);
-  if (key === null) return;
-  const file = yield* electionsPath(o.env.stateDir, key);
-  const intent = yield* intentOf(o);
-  // `?? null` because a Run with no Intent has `undefined` here, and `undefined !== null`
-  // made every Run a candidate for a check about siblings it does not have.
-  const related = (intent?.parent ?? null) !== null || o.run.record.children.length > 0;
-  const standing = yield* electionsOf(file);
-  if (!shouldStand(standing, related)) return;
-  const now = yield* nowIso();
-  // Standing again at every boundary is the wake rule; saying so again is an unbounded
-  // journal. One candidate line per Run per pending.
-  if (!alreadyStood(standing, o.run.id))
-    yield* appendElection(file, { kind: "candidate", at: now, by: at, run: o.run.id }).pipe(
-      Effect.ignore,
-    );
-
-  const lock = `${file}.evaluator.lock`;
-  yield* withLock(
-    lock,
-    // Somebody else is doing it. Saying so is not a formality: it is what tells the
-    // winner that its snapshot was already out of date.
-    appendElection(file, { kind: "dirty", at: now, by: at, run: o.run.id }).pipe(Effect.ignore),
-    Effect.gen(function* () {
-      // Won it, so this Driver is the one caller. The vector is the snapshot the
-      // judgement is made from and written down either way, because an election that
-      // recorded a check without looking would be the worst of both. Standing under a
-      // `pending`, the Runs it names are in the snapshot too — that is what the wake
-      // rule is for — so the Judgement made here is the one the Herd owed.
-      const owed = pendingEvaluation(standing)?.runs ?? [];
-      let snapshotAt = now;
-      let passes = 0;
-      while (true) {
-        const targets = yield* versionVector(o, owed);
-        yield* o.run.log(
-          `cross-run vector at ${snapshotAt}: ${targets.map((t) => t.line).join("; ")}`,
-        );
-        const why = yield* judgeCrossRun(o, targets, snapshotAt).pipe(
-          // A judgement that fell over never stops a worker (SPEC §9.3): it becomes the
-          // reason a `pending` is written instead.
-          Effect.catch((cause) => Effect.succeed(`the judgement failed: ${reason(cause)}`)),
-        );
-        if (why !== null) {
-          yield* o.run.log(`cross-run judgement not made at ${snapshotAt}: ${why}`);
-          // Not leaving: the next boundary stands again, and a mark at every boundary
-          // nobody could pay for would be a mark no later boundary could clear.
-          if (!leaving) return;
-          const pending = pendingEvaluation(yield* readElections(file));
-          if (pending !== null) {
-            yield* o.run.log(`cross-run evaluation still pending since ${pending.since}`);
-            return;
-          }
-          yield* markPending(o, file, now, "nobody could make it");
-          return;
-        }
-        // Answered — for the snapshot it was made from. A loser's `dirty` newer than that
-        // snapshot means something moved while the call was out, so what was judged is
-        // already behind: snapshot again and judge once more, a bounded number of times.
-        const lines = yield* readElections(file);
-        if (!staleSince(lines, snapshotAt)) {
-          if (pendingEvaluation(lines) === null && owed.length > 0)
-            yield* o.run.log(`cross-run evaluation owed for ${owed.join(", ")} was made`);
-          return;
-        }
-        if (passes >= EXTRA_PASSES) {
-          // Still moving after the extra passes: durable, unevaluated state, which the
-          // wake rule hands to the next Driver event anywhere in the Herd.
-          yield* markPending(o, file, yield* nowIso(), "the Herd kept moving through the passes");
-          return;
-        }
-        passes += 1;
-        snapshotAt = yield* nowIso();
-        yield* o.run.log(`cross-run snapshot went stale; judging again (extra pass ${passes})`);
-      }
-    }),
-  ).pipe(Effect.ignore);
-});
-
-/**
- * The `pending` line §9.6 defines. Everything the relationship spans is named, not just
- * this Run's own side of it: a parent that only named its children would leave each
- * sibling's final card saying nothing is owed.
- */
-const markPending = Effect.fn("Engine.markPending")(function* (
-  o: EngineOptions,
-  file: string,
-  since: string,
-  why: string,
-) {
-  const runs = yield* relatedRuns(o);
-  yield* appendElection(file, { kind: "pending", since, runs }).pipe(Effect.ignore);
-  yield* o.run.log(`cross-run evaluation pending for ${runs.join(", ")}: ${why}`);
-});
-
-/**
- * Every Run the cross-run question is about: this one, its children, its parent and that
- * parent's other children. A relationship has more than one side, and a `pending` naming
- * one side leaves the others reporting that nothing is owed.
- */
-const relatedRuns = Effect.fn("Engine.relatedRuns")(function* (o: EngineOptions) {
-  const store = new RunStore(o.env.stateDir);
-  const ids = new Set([o.run.id, ...o.run.record.children]);
-  const parentId = o.run.record.parent;
-  if (parentId !== null) {
-    ids.add(parentId);
-    const parent = yield* store.load(parentId).pipe(Effect.catch(() => Effect.succeed(null)));
-    for (const sibling of parent?.record.children ?? []) ids.add(sibling);
-  }
-  return [...ids];
-});
-
-/** What one approved verification may take before the finish stops waiting for it. */
-const VERIFICATION_TIMEOUT_MS = 10 * 60 * 1000;
-
-/** One related Run as the cross-run question sees it: the vector, and what it is about. */
-interface CrossRunTarget {
-  readonly id: string;
-  readonly dir: string;
-  readonly intentVersion: number;
-  readonly cardId: string | null;
-  readonly goal: string | null;
-  readonly constraints: ReadonlyArray<string>;
-  readonly open: number;
-  /** The vector as one line, which is what the log and the pack both show. */
-  readonly line: string;
-}
-
-/**
- * What a Judgement is given: every related Run's current Intent version, its newest card
- * and how much drift is open on it. Read whether or not anyone can judge it, because the
- * alternative is an election that says a check happened without ever looking.
- */
-const versionVector = Effect.fn("Engine.versionVector")(function* (
-  o: EngineOptions,
-  /** Runs a `pending` evaluation named, which this snapshot is answering for as well. */
-  owed: ReadonlyArray<string> = [],
-) {
-  const store = new RunStore(o.env.stateDir);
-  const targets: CrossRunTarget[] = [];
-  for (const id of new Set([...(yield* relatedRuns(o)), ...owed])) {
-    const run = yield* store.load(id).pipe(Effect.catch(() => Effect.succeed(null)));
-    if (run === null) continue;
-    const intent = yield* readIntent(run.dir).pipe(Effect.catch(() => Effect.succeed(null)));
-    const cards = yield* readCards(run.dir).pipe(Effect.catch(() => Effect.succeed([])));
-    const open = openReports(
-      yield* readDrift(run.dir).pipe(Effect.catch(() => Effect.succeed([]))),
-    );
-    const card = cards.at(-1);
-    targets.push({
-      id,
-      dir: run.dir,
-      intentVersion: intent?.version ?? 0,
-      cardId: card?.id ?? null,
-      goal: intent?.goal ?? null,
-      constraints: (intent?.constraints ?? []).map(
-        (constraint) =>
-          `${constraint.id} (${constraint.kind}/${constraint.severity}): ${constraint.text}`,
-      ),
-      open: open.length,
-      line: `${id} v${intent?.version ?? 0} ${card === undefined ? "no card" : `${card.id}@${card.revision.head_sha.slice(0, 8)}`} drift ${open.length}`,
-    });
-  }
-  return targets;
-});
-
-/**
- * The cross-run question, as the one thing the model is asked: what each related Run was
- * for, what bounds it, and where each has got to. No diff and no transcript — this is a
- * judgement about how Runs relate, not about anybody's code.
- */
-function crossRunPack(targets: ReadonlyArray<CrossRunTarget>): string {
-  return [
-    "These Runs are related — a parent and its children, or siblings of one parent.",
-    "Report only where one Run's work breaks what another Run was told to respect.",
-    "",
-    ...targets.flatMap((target) => [
-      `run: ${target.id}`,
-      `  vector: ${target.line}`,
-      `  goal: ${target.goal ?? "(none stated)"}`,
-      ...target.constraints.map((constraint) => `  constraint: ${constraint}`),
-    ]),
-  ].join("\n");
-}
-
-/**
- * The Judgement the election exists to make: one call over the version vector, and a
- * `drift_report` into each target Run's **own** inbox, because that Run's Driver is the
- * only writer of its drift journal and the only thing that can revalidate the vector the
- * report was judged against (SPEC §9.6).
- *
- * Recorded against the electing Run rather than the Herd alone: the Run whose boundary
- * triggered this is the one the call was for, and usage is shown per Run.
- */
-const judgeCrossRun = Effect.fn("Engine.judgeCrossRun")(function* (
-  o: EngineOptions,
-  targets: ReadonlyArray<CrossRunTarget>,
-  at: string,
-) {
-  const intent = yield* intentOf(o);
-  if (intent === null) return "no Intent to charge a cross-run judgement to";
-  const key = yield* herdKeyOf(o);
-  const deps = key === null ? null : yield* judgementDeps(o);
-  if (key === null || deps === null) return "no Herd to charge a cross-run judgement to";
-
-  const asked = yield* askJudgement(deps, o.run.id, crossRunPack(targets));
-  if (asked.refused !== null) return asked.refused;
-
-  const byId = new Map(targets.map((target) => [target.id, target]));
-  let written = 0;
-  for (const report of asked.reports) {
-    // Only a Run this question was actually about: a report naming anything else is a
-    // model reaching outside what it was shown, and it is dropped rather than delivered.
-    const target = byId.get(report.run);
-    if (target === undefined) {
-      yield* o.run.log(`cross-run report about "${report.run}", which is not related; dropped`);
-      continue;
-    }
-    yield* writeInbox(target.dir, {
-      type: "drift_report",
-      requestId: yield* newRequestId().pipe(Effect.orDie),
-      report: { ...report, at, intent_version: target.intentVersion, resolution: "open" },
-      vector: { intentVersion: target.intentVersion, cardId: target.cardId },
-    }).pipe(Effect.ignore);
-    written += 1;
-  }
-  yield* o.run.log(`cross-run judged at ${at}: ${written} report(s) delivered`);
-  // Written down, so every target's final card can say the question was answered rather
-  // than that there never was one. A later `dirty` makes it stale again.
-  const elections = yield* electionsPath(o.env.stateDir, key);
-  yield* appendElection(elections, {
-    kind: "evaluated",
-    at,
-    by: o.run.id,
-    runs: targets.map((target) => target.id),
-  }).pipe(Effect.ignore);
-  return null;
-});
-
-/**
- * The verifications the human granted, run once at the end for the rules that need one.
- * At finish and nowhere else: a `command_exit` rule is checked at every boundary, and
- * running a test suite each time would be a Run that spends its life verifying itself.
- */
-const runGrantedVerifications = Effect.fn("Engine.runGrantedVerifications")(function* (
-  o: EngineOptions,
-) {
-  const intent = yield* intentOf(o);
-  const approved = intent?.authority.run_verification ?? [];
-  if (approved.length === 0) return;
-  const wanted = new Set(
-    (intent?.constraints ?? []).flatMap((constraint) =>
-      constraint.rule?.kind === "command_exit" ? [constraint.rule.name] : [],
-    ),
-  );
-  const already = new Set((yield* verificationsOf(o)).map((record) => record.name));
-  const run = {
-    id: o.run.id,
-    cwd: o.run.record.cwd,
-    worktree: o.run.record.worktree?.path ?? null,
-  };
-  for (const spec of approved) {
-    if (!wanted.has(spec.name) || already.has(spec.name)) continue;
-    // Bounded, because this runs while the Run is finishing: an approved command that
-    // hangs would hold the final card, the status and the worktree release behind it for
-    // ever, and one permitted verification cannot be allowed to do that.
-    const outcome = yield* runApproved(o.run.dir, run, approved, spec).pipe(
-      Effect.map((record) => `${record.result} (exit ${record.exit})`),
-      Effect.catch((cause) => Effect.succeed(`refused — ${cause.why}`)),
-      Effect.timeoutOption(VERIFICATION_TIMEOUT_MS),
-    );
-    yield* o.run.log(
-      `verification ${spec.name}: ${
-        outcome._tag === "Some" ? outcome.value : `gave up after ${VERIFICATION_TIMEOUT_MS / 1000}s`
-      }`,
-    );
-  }
-});
-
-/**
- * What the Herd's elections say about this Run: `pending` when an evaluation names it and
- * nobody has made it, `evaluated` only where a Judgement was actually written down —
- * being elected is not a check, which is the claim §9.6 exists to avoid.
- *
- * The final card only. A slice written mid-run is about work in progress, and a Run whose
- * Driver is still going has not yet failed to make the check.
- */
-const crossRunState = Effect.fn("Engine.crossRunState")(function* (
-  o: EngineOptions,
-  kind: Card["kind"],
-) {
-  if (kind !== "final") return "none";
-  const key = yield* herdKeyOf(o);
-  if (key === null) return "none";
-  const file = yield* electionsPath(o.env.stateDir, key);
-  const lines = yield* electionsOf(file);
-  const pending = pendingEvaluation(lines);
-  if (pending !== null && pending.runs.includes(o.run.id)) return "pending" as const;
-  // `none` is "there was nothing to check", so a Judgement that was made has to say so.
-  return evaluatedFor(lines, o.run.id) ? ("evaluated" as const) : ("none" as const);
-});
-
-/**
- * One card for one slice of work, from what is already recorded. Everything here is a
- * view of evidence that exists: a card that said something nothing else recorded would be
- * a claim nobody can check.
- *
- * Never fatal. A card is how a human learns what happened; failing a Run because it could
- * not be written would be losing the work to protect the report of it.
- */
-const writeCard = Effect.fn("Engine.writeCard")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  what: {
-    readonly kind: Card["kind"];
-    readonly step: string;
-    readonly claims: ReadonlyArray<string>;
-  },
-) {
-  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
-  const base = yield* baseOf(cwd);
-  const crossRun = yield* crossRunState(o, what.kind);
-  const snapshot = yield* fingerprint(cwd);
-  const intent = yield* intentOf(o);
-  const lines = yield* driftOf(o);
-  const open = openReports(lines);
-  const files = yield* shell("git", ["diff", "--name-only", `${base}..HEAD`], cwd);
-  const commits = yield* shell("git", ["log", "--oneline", `${base}..HEAD`], cwd);
-  const dirty = yield* shell("git", ["status", "--porcelain"], cwd);
-  const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
-  const verifications = yield* verificationsOf(o);
-
-  const revision = {
-    branch: branch.code === 0 ? branch.stdout.trim() : null,
-    head_sha: snapshot.head_sha,
-    fingerprint: snapshot.fingerprint,
-    dirty: dirty.stdout.trim() !== "",
-  };
-  const links: Card["links"] = o.run.record.mr_url === null ? {} : { mr: o.run.record.mr_url };
-  const missing: string[] = [];
-  for (const constraint of intent?.constraints ?? []) {
-    const rule = constraint.rule;
-    if (rule?.kind !== "command_exit") continue;
-    if (!verifications.some((entry) => entry.name === rule.name))
-      missing.push(`no verification named ${rule.name}`);
-  }
-  for (const step of o.run.record.steps)
-    if (step.status === "done" && step.variants.every((variant) => variant.output === null))
-      missing.push(`${step.id} wrote no Output`);
-  for (const line of lines)
-    if (line.kind === "skipped") missing.push(`a judgement was skipped: ${line.reason}`);
-
-  const card = buildCard({
-    run: o.run.id,
-    kind: what.kind,
-    step: what.step,
-    iteration: o.run.record.iteration,
-    at: yield* nowIso(),
-    intentVersion: intent?.version ?? 0,
-    revision,
-    changes: {
-      files: files.stdout.split("\n").filter((line) => line.trim() !== ""),
-      commits: commits.stdout.split("\n").filter((line) => line.trim() !== ""),
-    },
-    requested: {
-      goal: intent?.goal ?? null,
-      constraints: (intent?.constraints ?? []).map((constraint) => constraint.text),
-    },
-    verifications,
-    claims: what.claims.map((text) => ({ text, ref: `${o.run.id}:${what.step}` })),
-    missing,
-    inspect: inspectFor({
-      worktree: o.run.record.worktree?.path ?? null,
-      base,
-      mr: o.run.record.mr_url,
-    }),
-    links,
-    drift: open.map((report) => report.id),
-    deliveries: (yield* deliveriesOf(o.env.stateDir, o.run.id).pipe(
-      Effect.catch(() => Effect.succeed([])),
-    )).map((entry) => entry.delivery.id),
-    aligned: alignment(intent, lines, ctx.judged).aligned,
-    crossRun,
-    significance: {
-      readiness: "claimed",
-      mrTouched: what.kind === "mr",
-      pendingChoice:
-        (yield* readChoice(o.run.dir).pipe(Effect.catch(() => Effect.succeed(null)))) !== null,
-      driftUnresolved: open.some((report) => report.resolution === "escalated"),
-      pendingProposal: (yield* pendingProposalsFor(o)).length > 0,
-      correctionUnacknowledged: open.some((r) => r.resolution === "correction_submitted"),
-      blockingDrift: open.some((report) => report.severity === "block"),
-      correctionSent: open.some((report) => report.correction !== undefined),
-      intentChanged: (intent?.version ?? 1) > 1,
-      ended: null,
-    },
-    narrative: null,
-  });
-  yield* appendCard(o.run.dir, card).pipe(Effect.ignore);
-  // Only something a human could act on: a routine card is the ordinary case, and a toast
-  // for every one of those is a toast nobody reads.
-  if (card.significance === "try-it")
-    yield* notify(o, "slice-ready", card.readiness, { step: card.id });
-  void ctx;
-  return card;
-});
-
-/** Proposals about this Run nobody has answered: a card written now is a `decision`. */
-const pendingProposalsFor = Effect.fn("Engine.pendingProposalsFor")(function* (o: EngineOptions) {
-  const key = yield* herdKeyOf(o);
-  if (key === null) return [];
-  const file = yield* proposalsPath(o.env.stateDir, key);
-  const lines = yield* readProposals(file).pipe(Effect.catch(() => Effect.succeed([])));
-  return pendingFor(lines, o.run.id, yield* Clock.currentTimeMillis);
-});
-
-/**
- * A card per finished ticket, while the step is still running. That is the point of the
- * checkpoint: a human sees a slice land without waiting for the whole step, and the
- * agent's own words for it are carried as claims and labelled as claims.
- */
-const cardsForCheckpoints = Effect.fn("Engine.cardsForCheckpoints")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  step: string,
-) {
-  for (const { file, checkpoint } of yield* readCheckpoints(o.run.dir).pipe(
-    Effect.catch(() => Effect.succeed([])),
-  )) {
-    if (checkpoint.status !== "done") continue;
-    if (ctx.steering.checkpointed.has(file)) continue;
-    ctx.steering.checkpointed.add(file);
-    yield* writeCard(o, ctx, { kind: "slice", step, claims: checkpoint.claims });
-    yield* o.run.log(`card for ${checkpoint.ticket} (${checkpoint.claims.length} claim(s))`);
-  }
-});
-
-/** Delivery states nothing follows, so a correction with one is not in flight. */
-const SETTLED: ReadonlySet<string> = new Set(["verified", "failed", "superseded", "expired"]);
-
-/** What a rule check compares against: the tree, the record, and what has been verified. */
-const ruleFacts = Effect.fn("Engine.ruleFacts")(function* (o: EngineOptions) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const cwd = o.run.record.worktree?.path ?? o.run.record.cwd;
-  // What the change is measured against. A worktree Collie made records no base of its
-  // own, so the merge-base with the default branch is what "since this work started"
-  // means; a repository that cannot answer leaves the comparison at HEAD, which reports
-  // only what is uncommitted rather than reporting nothing.
-  const base = yield* baseOf(cwd);
-  const committed = yield* shell("git", ["diff", "--name-only", `${base}..HEAD`], cwd);
-  const dirty = yield* shell("git", ["diff", "--name-only", "HEAD"], cwd);
-  // Untracked too: a file an agent created is exactly the case a `protected_paths` rule
-  // exists for, and it is in no diff until somebody commits it.
-  const untracked = yield* shell("git", ["ls-files", "--others", "--exclude-standard"], cwd);
-  const branch = yield* shell("git", ["rev-parse", "--abbrev-ref", "HEAD"], cwd);
-
-  const outputs: Record<string, Record<string, string>> = {};
-  for (const step of o.run.record.steps)
-    for (const variant of step.variants) {
-      if (!variant.output) continue;
-      const file = path.resolve(o.run.dir, variant.output);
-      const text = yield* fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")));
-      if (text !== "") outputs[step.id] = flattenOutput(text);
-    }
-
-  const verifications: Record<string, { exit: number; ref: string }> = {};
-  for (const record of yield* verificationsOf(o))
-    verifications[record.name] = { exit: record.exit, ref: record.id };
-
-  return {
-    changedFiles: [
-      ...new Set(
-        `${committed.stdout}\n${dirty.stdout}\n${untracked.stdout}`
-          .split("\n")
-          .map((line) => line.trim())
-          .filter((line) => line !== ""),
-      ),
-    ],
-    branch: branch.code === 0 ? branch.stdout.trim() : null,
-    mrTarget: mrTargetOf(o.run.record.mr_url),
-    outputs,
-    verifications,
-  };
-});
-
-/** The commit this Run's changes are measured from, or HEAD where nothing else answers. */
-const baseOf = Effect.fn("Engine.baseOf")(function* (cwd: string) {
-  const head = yield* shell("git", ["symbolic-ref", "refs/remotes/origin/HEAD", "--short"], cwd);
-  const upstream = head.code === 0 ? head.stdout.trim() : "origin/main";
-  const merged = yield* shell("git", ["merge-base", upstream, "HEAD"], cwd);
-  return merged.code === 0 && merged.stdout.trim() !== "" ? merged.stdout.trim() : "HEAD";
-});
-
-/** A recorded merge request URL as the project and iid a rule compares against. */
-function mrTargetOf(url: string | null): { project: string; iid: string | null } | null {
-  if (url === null) return null;
-  const found = /https?:\/\/[^/]+\/(.+?)\/-\/merge_requests\/(\d+)/.exec(url);
-  return found ? { project: found[1]!, iid: found[2]! } : null;
-}
-
-/** What every send from this Driver is made with. One shape, one place it is built. */
-function dispatcherDeps(o: EngineOptions): dispatch.DispatcherDeps {
-  return {
-    stateDir: o.env.stateDir,
-    herdr: o.herdr,
-    log: (line: string) => o.run.log(line).pipe(Effect.ignore),
-  };
-}
-
-/**
- * The saved binding for one of this Run's agents wins over the role registry, which
- * another Run can replace. Without either, capture the initial named incarnation:
- * rederiving it on every delivery would compare a restarted agent with itself.
- *
- * An entry with no incarnation is not an answer — herdr had not named a `terminal_id`
- * yet when the agent started, and taking that as final would make a moment's gap in one
- * listing an unsteerable Run for ever. That one is read live and written back, so the
- * next delivery has something to check a restart against. Fan-out variants are never
- * registered and take the same live path.
- */
-const agentEntry = Effect.fn("Engine.agentEntry")(function* (
-  o: EngineOptions,
-  record: VariantRecord,
-  role = record.label,
-) {
-  // A different Run can replace this role's registry entry while this agent is working.
-  if (record.incarnation && record.paneId) {
+    // A failed Run keeps a claim it may have left shared work half-done under.
+    const kept = status.status === "failed" ? yield* claimOf(row.run) : null;
     return {
-      entry: {
-        role,
-        agent: record.agent,
-        paneId: record.paneId,
-        workspaceId: o.env.workspaceId,
-        runId: o.run.id,
-        workflow: o.run.record.workflow,
-        at: yield* nowIso(),
-        incarnation: record.incarnation,
-      } satisfies AgentEntry,
-      reason: null,
+      ...about,
+      status,
+      diagnostic:
+        kept === null
+          ? null
+          : `claim on ${kept.slug} retained; recovery required: a new Run of ${row.workflow} takes it over and closes this Run's agents`,
     };
-  }
-  const file = yield* registryPath(o.env.stateDir, scopeFor(o.env, o.run.record.cwd)).pipe(
-    Effect.catch(() => Effect.succeed(null)),
-  );
-  const registered =
-    file === null
-      ? null
-      : yield* readRegistry(file).pipe(
-          Effect.map((entries) => entries.find((entry) => entry.agent === record.agent) ?? null),
-          Effect.catch(() => Effect.succeed(null)),
-        );
-  if (registered !== null && deliverable(registered)) {
-    record.incarnation = registered.incarnation;
-    yield* o.run.save();
-    return { entry: registered, reason: null };
-  }
-
-  const live = yield* dispatch.entryFromLive(dispatcherDeps(o), {
-    role,
-    agent: record.agent,
-    paneId: record.paneId,
-    workspaceId: o.env.workspaceId,
-    runId: o.run.id,
-    workflow: o.run.record.workflow,
   });
-  if (live.entry?.incarnation) {
-    record.incarnation = live.entry.incarnation;
-    yield* o.run.save();
-  }
-  // Healed on the register, so the incarnation this delivery goes to is the one the next
-  // one is checked against.
-  if (registered !== null && live.entry !== null && file !== null)
-    yield* registerAgent(file, live.entry).pipe(Effect.ignore);
-  return live;
-});
 
-/**
- * The inbox carries a cause's kind as a plain string; the ledger wants one it knows. A
- * kind this build does not know is recorded as a steer — the nearest true thing.
- */
-function causeOf(deliver: NonNullable<InboxCommandValue["deliver"]>): Cause {
-  const kind = deliver.cause.kind;
-  return isCauseKind(kind)
-    ? { kind, ref: deliver.cause.ref }
-    : { kind: "steer", ref: deliver.deliveryId };
-}
-
-/** The boundary deliveries queued for this agent, taken off the queue as they are used. */
-function takeBoundaryFor(ctx: RunCtx, agent: string) {
-  const mine = ctx.steering.deliveries.filter(
-    (command) => command.deliver?.agent === agent && command.deliver.mode === "boundary",
-  );
-  ctx.steering.deliveries = ctx.steering.deliveries.filter((command) => !mine.includes(command));
-  // By the ordering rule, not by when the inbox happened to receive them: two messages
-  // due for one agent go into the prompt worst-waited first (SPEC §7.4).
-  return dispatch
-    .dispatchOrder(mine.flatMap((command) => (command.deliver ? [command.deliver] : [])))
-    .map((deliver) => ({
-      id: deliver.deliveryId,
-      text: deliver.text,
-      cause: causeOf(deliver),
-      intentVersion: deliver.intentVersion,
-      attempt: deliver.attempt,
-    }));
-}
-
-/**
- * A delivery that does not wait for the next prompt. Queuing one would leave it pending
- * until `finish` expired it, which is neither the delivery the human confirmed nor the
- * capability refusal that would have told them why it could not go.
- */
-const deliverOutOfBand = Effect.fn("Engine.deliverOutOfBand")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  command: InboxCommandValue & { deliver: NonNullable<InboxCommandValue["deliver"]> },
-) {
-  const { deliver, requestId } = command;
-  const record = [...ctx.groups.values()].find((entry) => entry.agent === deliver.agent);
-  if (record === undefined) {
-    yield* o.run.log(
-      `${deliver.mode} delivery for ${deliver.agent}, which this Run is not driving`,
+  const setControl = Effect.fn("Engine.setControl")(function* (
+    runId: string,
+    control: string,
+    set: boolean,
+  ) {
+    const path = controlPath(dir, control, runId);
+    yield* (set ? fs.writeFileString(path, "") : fs.remove(path).pipe(Effect.ignore)).pipe(
+      Effect.orDie,
     );
-    return;
-  }
-  // A harness never shown to take a message mid-turn gets it the way every harness does
-  // — in front of its next prompt — rather than the steer being refused and lost.
-  const ungated = yield* gate(record.harness, deliver.mode).pipe(
-    Effect.as(null),
-    Effect.catch((cause) => Effect.succeed(cause.reason)),
-  );
-  if (ungated !== null) {
-    yield* o.run.log(`${deliver.mode} delivery ${deliver.deliveryId}: ${ungated}, queued instead`);
-    yield* queueDelivery(o, ctx, { ...command, deliver: { ...deliver, mode: "boundary" } });
-    return;
-  }
-  const sent = yield* sendTo(o, record, {
-    text: deliver.text,
-    cause: { kind: "steer", ref: deliver.deliveryId },
-    requestId,
-    attempt: deliver.attempt,
-    intentVersion: deliver.intentVersion,
-    mode: deliver.mode,
   });
-  yield* o.run.log(`${deliver.mode} delivery ${deliver.deliveryId}: ${sent ? "sent" : "not sent"}`);
-});
 
-/**
- * A boundary delivery held for the next prompt. On the ledger as `queued` the moment it
- * is: `collie_receipts` is where a human asks what became of their steer, and a message
- * that waits out a forty-minute step with no line there reads as one that was dropped.
- */
-const queueDelivery = Effect.fn("Engine.queueDelivery")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  command: InboxCommandValue & { deliver: NonNullable<InboxCommandValue["deliver"]> },
-) {
-  ctx.steering.deliveries.push(command);
-  yield* o.run.log(`delivery ${command.deliver.deliveryId} queued for ${command.deliver.agent}`);
-  yield* recordQueued(o, command, "queued", "waiting for the agent's next prompt");
-});
-
-/** One ledger line about a delivery the Driver holds rather than sends. */
-const recordQueued = Effect.fn("Engine.recordQueued")(function* (
-  o: EngineOptions,
-  command: InboxCommandValue,
-  state: "queued" | "expired",
-  note: string,
-) {
-  const deliver = command.deliver;
-  if (!deliver) return;
-  yield* recordHeld(
-    o,
-    {
-      id: deliver.deliveryId,
-      incarnation: deliver.incarnation,
-      agent: deliver.agent,
-      cause: causeOf(deliver),
-      mode: deliver.mode,
-      text: deliver.text,
-      intentVersion: deliver.intentVersion,
-      attempt: deliver.attempt,
-      requestId: command.requestId,
-    },
-    state,
-    note,
-  );
-});
-
-/**
- * A ledger line the Driver writes about a delivery it did not send through a channel:
- * one it holds, one it let expire, or one a prompt carried. The Dispatcher writes every
- * other line, and this is the same shape it writes.
- */
-const recordHeld = Effect.fn("Engine.recordHeld")(function* (
-  o: EngineOptions,
-  about: {
-    readonly id: string;
-    readonly incarnation: string;
-    readonly agent: string;
-    readonly cause: Cause;
-    readonly mode: Delivery["mode"];
-    readonly text: string;
-    readonly intentVersion: number;
-    readonly attempt: number;
-    readonly requestId: string;
-  },
-  state: Delivery["state"],
-  note: string,
-) {
-  yield* appendLine(yield* ledgerPath(o.env.stateDir, about.incarnation), {
-    id: about.id,
-    at: yield* nowIso(),
-    run: o.run.id,
-    incarnation: about.incarnation,
-    agent: about.agent,
-    // The key the Dispatcher would compute: a held line cannot block a dispatched entry
-    // about the same work.
-    causal_key: causalKey(o.run.id, about.cause, about.intentVersion),
-    request_id: about.requestId,
-    cause: about.cause,
-    mode: about.mode,
-    text_hash: textHash(about.text),
-    intent_version: about.intentVersion,
-    attempt: about.attempt,
-    state,
-    note,
-  }).pipe(Effect.ignore);
-});
-
-/**
- * A steering item that travelled inside a step's prompt. It is its own delivery — it has
- * its own id, its own acknowledgement and its own place in the ledger — and the note
- * says which prompt carried it, because "sent" for a composed item means that prompt
- * went out.
- */
-const recordComposed = Effect.fn("Engine.recordComposed")(function* (
-  o: EngineOptions,
-  entry: AgentEntry,
-  item: {
-    readonly id: string;
-    readonly text: string;
-    readonly cause: Cause;
-    readonly intentVersion: number;
-    readonly attempt: number;
-  },
-  carriedBy: SubmitOutcome,
-) {
-  const terminalId = entry.incarnation?.terminalId;
-  if (terminalId === undefined) return;
-  yield* recordHeld(
-    o,
-    {
-      id: item.id,
-      incarnation: terminalId,
-      agent: entry.agent,
-      cause: item.cause,
-      mode: "boundary",
-      text: item.text,
-      intentVersion: item.intentVersion,
-      attempt: item.attempt,
-      requestId: item.id,
-    },
-    carriedBy.ok ? "submitted" : "failed",
-    // What is known of the carrier is all that is known of this: a prompt herdr saw no
-    // turn come of carried this item into the same uncertainty.
-    !carriedBy.ok
-      ? "the prompt it was composed into was not sent"
-      : carriedBy.submission === "unobserved"
-        ? `composed into ${carriedBy.id}; unobserved`
-        : `composed into ${carriedBy.id}`,
-  );
-});
-
-/**
- * Everything the inbox has to say, folded into the Run's steering state. Called at the
- * work boundary and once per poll while an agent works; a `stop` has already raised its
- * own signal by the time this returns.
- */
-const takeSteering = Effect.fn("Engine.takeSteering")(function* (o: EngineOptions, ctx: RunCtx) {
-  // What the agents have said they understood, before what anyone else has asked of
-  // them: an ack is about a delivery that has already gone, and reading it first keeps
-  // the ledger's account of one message in order.
-  yield* dispatch.readAcks(o.env.stateDir, o.run.dir, (line) =>
-    o.run.log(`ack: ${line}`).pipe(Effect.ignore),
-  );
-  yield* noticeOverrides(o, ctx);
-  const { taken, unreadable } = yield* readInboxMidStep(o.run.dir);
-  for (const file of unreadable) yield* o.run.log(`inbox: unreadable command ${file}`);
-  for (const command of taken) {
-    switch (command.type) {
-      case "hold": {
-        const why = command.reason ?? "no reason given";
-        const until = command.until ?? null;
-        ctx.steering.held = { reason: why, by: command.by ?? "you", until };
-        // On the record here rather than only at the boundary: a board reads a record,
-        // and a hold taken during a long step is not invisible until that step ends.
-        o.run.record.held = { ...ctx.steering.held };
-        yield* o.run.save();
-        const ends = until === null ? "" : ` until ${until}`;
-        yield* o.run.log(`held${ends}: ${why}`);
-        yield* o.out(`  ⏸ held${ends}: ${why}`);
-        break;
-      }
-      case "release": {
-        ctx.steering.held = null;
-        o.run.record.held = null;
-        yield* o.run.save();
-        yield* o.run.log(`released: ${command.reason ?? "no reason given"}`);
-        yield* o.out(`  ▶ released`);
-        break;
-      }
-      case "intent_changed": {
-        const intent = yield* intentOf(o);
-        ctx.steering.intentVersion = intent?.version ?? command.version ?? 0;
-        yield* o.run.log(`intent v${ctx.steering.intentVersion} loaded`);
-        yield* supersedeOlderDrift(o, intent);
-        // Silent, but said: the board may not be open. Keyed by version, so a later
-        // change says so again.
-        yield* notify(o, "intent-changed", `now at v${ctx.steering.intentVersion}`, {
-          step: `v${ctx.steering.intentVersion}`,
-        });
-        break;
-      }
-      case "deliver": {
-        const deliver = command.deliver;
-        if (!deliver) break;
-        // Queued, not sent: the Dispatcher is the only thing that sends.
-        if (deliver.mode === "boundary") yield* queueDelivery(o, ctx, { ...command, deliver });
-        else yield* deliverOutOfBand(o, ctx, { ...command, deliver });
-        break;
-      }
-      case "drift_report":
-        yield* recordDriftReport(o, ctx, command);
-        break;
-      default:
-        break;
+  /** Which controls an operator has set over this run. */
+  const controlsOf = Effect.fn("Engine.controlsOf")(function* (runId: string) {
+    const set: string[] = [];
+    for (const control of [HOLD, STOP]) {
+      const on = yield* fs
+        .exists(controlPath(dir, control, runId))
+        .pipe(Effect.orElseSucceed(() => false));
+      if (on) set.push(control);
     }
-  }
-});
-
-/** Settles what `supersededBy` names: the Driver is the only writer of its own journal. */
-const supersedeOlderDrift = Effect.fn("Engine.supersedeOlderDrift")(function* (
-  o: EngineOptions,
-  intent: Intent | null,
-) {
-  if (intent === null) return;
-  const at = yield* nowIso();
-  for (const report of supersededBy(openReports(yield* driftOf(o)), intent)) {
-    yield* appendDrift(o.run.dir, { ...report, at, resolution: "superseded" }).pipe(Effect.ignore);
-    yield* o.run.log(
-      `drift ${report.constraint} superseded: judged at v${report.intent_version}, intent is v${intent.version}`,
-    );
-  }
-});
-
-/**
- * A report another process judged, appended to this Run's drift journal — but only if it
- * is still about this Run as it is now. The Driver is the only writer of its own drift
- * journal precisely so that this check happens somewhere: a report judged against an
- * older Intent or an older card is evidence about work that has moved on.
- */
-const recordDriftReport = Effect.fn("Engine.recordDriftReport")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  command: InboxCommandValue,
-) {
-  const vector = command.vector;
-  if (!vector || command.report === undefined) {
-    yield* o.run.log("drift_report without a report or a vector, ignored");
-    return;
-  }
-  const intent = yield* intentOf(o);
-  const version = intent?.version ?? ctx.steering.intentVersion;
-  if (vector.intentVersion !== version) {
-    yield* o.run.log(
-      `drift_report_stale: judged at intent v${vector.intentVersion}, now v${version}`,
-    );
-    return;
-  }
-  // A report about an earlier card is evidence about work this Run has moved past.
-  if (vector.cardId !== null) {
-    const newest = (yield* readCards(o.run.dir).pipe(Effect.catch(() => Effect.succeed([])))).at(
-      -1,
-    );
-    if (newest?.id !== vector.cardId) {
-      yield* o.run.log(
-        `drift_report_stale: judged against card ${vector.cardId}, now ${newest?.id ?? "none"}`,
-      );
-      return;
-    }
-  }
-  const decoded = Schema.decodeUnknownOption(DriftReportSchema)(command.report);
-  if (decoded._tag === "None") {
-    yield* o.run.log("drift_report that is not a report, ignored");
-    return;
-  }
-  const report = decoded.value;
-  const lines = yield* driftOf(o);
-  const already = new Set(
-    openReports(lines).map((entry) => driftFindingKey(entry.constraint, entry.evidence)),
-  );
-  if (already.has(driftFindingKey(report.constraint, report.evidence))) {
-    yield* o.run.log(`drift_report duplicate of an open finding on ${report.constraint}, ignored`);
-    return;
-  }
-  yield* appendDrift(o.run.dir, report);
-  yield* o.run.log(`drift report recorded at intent v${version}`);
-});
-
-/**
- * Answering is the human coming back, so the Run they left held carries on — this one and
- * no other, because each Run holds through an inbox of its own. Both halves: the hold
- * this Driver has already read, and one still in the inbox from before the answer.
- */
-const liftHoldOnAnswer = Effect.fn("Engine.liftHoldOnAnswer")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-) {
-  const dropped = yield* dropHolds(o.run.dir).pipe(Effect.catch(() => Effect.succeed(0)));
-  if (ctx.steering.held === null && dropped === 0) return;
-  ctx.steering.held = null;
-  o.run.record.held = null;
-  yield* o.run.save();
-  yield* o.run.log("hold lifted: answered");
-});
-
-/**
- * Nothing new goes out while a Run is held. The current step's agents have already been
- * waited on by the time this is reached, so what is held is the *next* piece of work —
- * the Driver is not interrupting anyone, it is declining to start anything.
- */
-const holdUntilReleased = Effect.fn("Engine.holdUntilReleased")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-) {
-  if (!ctx.steering.held) return;
-  o.run.record.awaiting = "hold";
-  // On the record rather than only in this fiber: the board reads a record, and
-  // `awaiting` alone says a Run is held without saying by whom or until when.
-  o.run.record.held = { ...ctx.steering.held };
-  yield* o.run.save();
-  let lifted = false;
-  while (ctx.steering.held) {
-    const until = ctx.steering.held.until;
-    if (until !== null && Date.parse(until) <= (yield* Clock.currentTimeMillis)) {
-      ctx.steering.held = null;
-      lifted = true;
-      yield* o.run.log(`hold lifted: ${until} passed`);
-      yield* o.out(`  ▶ hold lifted`);
-      break;
-    }
-    yield* Effect.sleep(o.outputPollMs ?? 2000);
-    yield* takeSteering(o, ctx);
-  }
-  o.run.record.awaiting = null;
-  o.run.record.held = null;
-  yield* o.run.save();
-  // A hold that ended by itself is the one nobody was there for, so it is the one worth
-  // writing down: the human who left is not watching the log.
-  if (lifted) {
-    yield* writeCard(o, ctx, {
-      kind: "hold",
-      step: "hold",
-      claims: ["The hold ran out and this run is taking on work again."],
-    });
-  }
-});
-
-/**
- * Waits for an agent by watching it, not by blocking on it. Quiet — neither its
- * status nor its pane's tail changing for `quiet_ms` — earns a nudge, a second at
- * double, and is given up on at triple, which is what this returns. A step that is
- * still producing output is never nudged, however long it takes: quiet is the
- * signal, duration never is.
- */
-const awaitAgent = Effect.fn("Engine.awaitAgent")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  step: ResolvedStep,
-  record: VariantRecord,
-) {
-  const over: AgentStatus[] = ["idle", "done", "blocked"];
-  // ponytail: the whole `issues/` dir, not the one ticket this step is on — knowing
-  // which would need the implementer to say so. A fresh agent is skipped: it started
-  // after the edit and read the new ticket already.
-  const tickets = step.fresh ? null : yield* planTickets(o);
-  const budget = o.defaults.quietMs;
-  // Nothing to give up on and nothing to watch: wait, rather than poll for nothing.
-  if (budget <= 0 && !tickets) {
-    yield* o.herdr.agentWait(record.agent, { until: over });
-    return null;
-  }
-  // No budget is no nudge and no giving up, but a step with tickets still has to poll,
-  // so the deadlines go out of reach rather than away.
-  const quiet = budget > 0 ? budget : Infinity;
-
-  // Liveness is sampled against a budget measured in minutes, so there is nothing to
-  // learn every two seconds — and each sample costs two herdr subprocesses per agent.
-  // Never slower than a tenth of the budget, so the give-up stays close to its time.
-  const poll = o.outputPollMs ?? 2000;
-  const beat = Math.max(poll, Math.min(quiet / 10, 30_000));
-  const minutes = (ms: number) => Math.round(ms / 60_000);
-  let sample = "";
-  let quietSince = yield* Clock.currentTimeMillis;
-  // Nudges within the current quiet spell; `record.nudges` counts them for the whole
-  // turn, and two is all an agent gets however often it stirs in between.
-  let spell = 0;
-  let silentSince: number | null = null;
-  let tail = "";
-  let sampled = 0;
-  for (;;) {
-    // Told apart on purpose: herdr answering "I do not have that agent" is the answer
-    // — a closed tab, a killed pane — and waiting out a quiet budget it will never
-    // break is half an hour of nothing. Herdr not answering at all is a hiccup, and
-    // discarding a live step over a few seconds of socket noise is worse than waiting.
-    const status = yield* o.herdr
-      .agentStatus(record.agent)
-      .pipe(
-        Effect.catch((cause) =>
-          cause.code === "agent_not_found" ? Effect.succeed("gone" as const) : Effect.succeed(null),
-        ),
-      );
-    const now = yield* Clock.currentTimeMillis;
-    // Once per poll, so a hold or a message written while an agent works is seen within
-    // seconds rather than at the next question. It is two directory reads against the
-    // Run's own inbox — cheaper than the herdr round trip already made above.
-    yield* takeSteering(o, ctx);
-    // A slice a human can look at, while the step is still running. That is the whole
-    // point of a checkpoint: without this they wait for the step, which can be an hour.
-    yield* cardsForCheckpoints(o, ctx, record.label);
-    if (status === "gone") return `${record.agent} is gone — herdr no longer has it`;
-    if (status === null) {
-      silentSince ??= now;
-      // A whole quiet period of herdr saying nothing at all is its own answer.
-      if (now - silentSince >= quiet) {
-        return `${record.agent} could not be reached for ${minutes(now - silentSince)} minutes`;
-      }
-      yield* Effect.sleep(poll);
-      continue;
-    }
-    silentSince = null;
-    // What this poll learned, on the tab: an agent herdr calls `blocked` is a human
-    // being waited on, and until this the tab still said ⚙ and the sidebar with it.
-    yield* reconcileTabs(o, ctx, (agent) => (agent === record.agent ? status : undefined));
-    // `blocked` is herdr saying a human is needed; that path has its own wait and its
-    // own toast, and a nudge there would answer a permission dialog with prose.
-    if (over.includes(status)) return null;
-
-    // Status is what says the turn is over, so it is asked at the polling cadence;
-    // the pane is only the quiet signal, and it is the expensive half.
-    if (now - sampled >= beat) {
-      sampled = now;
-      tail = yield* paneTail(o, ctx, record);
-      if (tickets) {
-        const current = yield* readTickets(tickets);
-        const note = current && ctx.tickets ? ticketChangeNote(ctx.tickets, current) : null;
-        // A change nobody was told about is not one to move the baseline past. The hash
-        // is the cause's own name: two different edits are two pieces of work, and the
-        // same edit re-read is not.
-        const told =
-          note === null ||
-          (yield* sendTo(o, record, {
-            text: note,
-            cause: { kind: "steer", ref: `tickets#${textHash(note)}` },
-            requestId: `${o.run.id}-tickets-${record.agent}-${textHash(note)}`,
-            attempt: 1,
-            intentVersion: ctx.steering.intentVersion,
-          }));
-        if (current && told) ctx.tickets = current;
-        if (note !== null && told) {
-          // Re-baselined on our own writing, as a nudge is: only the agent's next
-          // output counts as it having stirred.
-          tail = yield* paneTail(o, ctx, record);
-          sample = `${status}\n${tail}`;
-          yield* o.out(`  ▸ ${record.label} — the plan's tickets changed, told it to reconcile`);
-          yield* o.run.log(`${record.label}: the plan's tickets changed under it`);
-        }
-      }
-    }
-    const next = `${status}\n${tail}`;
-    if (next !== sample) {
-      sample = next;
-      quietSince = now;
-      spell = 0;
-    }
-    const quietFor = now - quietSince;
-    if (quietFor >= quiet * 3) {
-      return `${record.agent} produced no output for ${minutes(quietFor)} minutes and did not respond to two nudges`;
-    }
-    // An agent that answers each nudge with a line and then goes quiet again would
-    // otherwise reset the clock forever and never be given up on. Two nudges is what
-    // a step gets for its whole turn; stirring and then going quiet again once both
-    // are spent — `spell` back to nothing — is the same answer as never moving.
-    if (record.nudges >= 2 && spell === 0 && quietFor >= quiet) {
-      return `${record.agent} went quiet again after two nudges and produced nothing usable`;
-    }
-    // Whole quiet periods elapsed, and so how many nudges are owed: 0, 1 or 2, since
-    // the third is the give-up above.
-    const due = Math.floor(quietFor / quiet);
-    if (due > spell && record.nudges < 2) {
-      spell = due;
-      yield* sendTo(o, record, {
-        text: nudgeText(record.harness, minutes(quietFor), record.nudges >= 1),
-        cause: { kind: "nudge", ref: `${record.agent}#${record.nudges + 1}` },
-        requestId: `${o.run.id}-nudge-${record.agent}-${record.nudges + 1}`,
-        attempt: record.nudges + 1,
-        intentVersion: ctx.steering.intentVersion,
-      });
-      // The nudge is typed into the agent's own pane, so the next poll would read it
-      // as activity, reset the deadline it is counting against, and nudge forever.
-      // Re-baseline on our own writing; only the agent's next output counts.
-      sample = `${status}\n${yield* paneTail(o, ctx, record)}`;
-      record.nudges += 1;
-      yield* o.out(`  ⏱ ${record.label} — quiet for ${minutes(quietFor)} minutes, nudged`);
-      yield* o.run.log(`${record.label}: quiet for ${minutes(quietFor)} minutes, nudged`);
-      yield* o.run.save();
-    }
-    yield* Effect.sleep(poll);
-  }
-});
-
-/**
- * What a quiet agent is told. "Do not restart the task" is not politeness: an agent
- * that re-runs its whole step after a nudge is a worse outcome than the hang, because
- * it looks like progress.
- */
-function nudgeText(harness: string, minutes: number, last: boolean): string {
-  const hint = HARNESSES[harness]?.stuckHint;
-  return [
-    `You have produced no output for ${minutes} minutes. If you are waiting on something`,
-    ` that will never finish, stop waiting and carry on${hint ? `: ${hint}` : "."}`,
-    last ? " This is the last nudge before this step is given up on." : "",
-    "\n\nIf you are working normally, ignore this and continue. Do not restart the task",
-    " and do not redo work you have already done.",
-  ].join("");
-}
-
-/** The pane's tail, or nothing: a herdr that will not read it is not a failure. */
-const paneTail = Effect.fn("Engine.paneTail")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  record: VariantRecord,
-) {
-  if (!record.paneId) return "";
-  const tail = yield* o.herdr
-    .paneRead(record.paneId)
-    .pipe(Effect.catch(() => Effect.succeed(null)));
-  if (tail === null) {
-    // Said once, not latched: a read that failed on one poll says nothing about the
-    // next one, and treating a transient failure as permanent would leave every later
-    // agent judged on its status alone — nudged and given up on while its pane is
-    // still filling.
-    if (!ctx.paneReadFailed) {
-      ctx.paneReadFailed = true;
-      yield* o.run.log(`pane read failed; liveness is agent status alone until it answers`);
-    }
-    return "";
-  }
-  ctx.paneReadFailed = false;
-  return tail;
-});
-
-/**
- * Whether the tickets this Output points at could actually be handed out, or the reason
- * they could not. Keyed on `issues_dir` rather than on a step id, because what makes this
- * check apply is that the step wrote a plan — a fork that renames the step still gets it,
- * and one that writes no plan is never asked.
- *
- * The same reading the fan-out does, and deliberately not a second copy of it: a plan the
- * planner is told is fine here and refused there would be worse than no check at all.
- */
-/**
- * Whether this step is the only review of the change: one variant, and a later step that
- * fans in on it. Then there is nothing to reconcile, and the fan-in step is skipped — a
- * model rewriting one file into one file adds no judgement, and every Run was paying for
- * it. A layer that keeps two reviewers keeps the fan-in exactly as it was.
- */
-function soleReview(o: EngineOptions, step: ResolvedStep): boolean {
-  if (step.fanIn) return false;
-  if (!feedsFanIn(o, step)) return false;
-  return stepVariants(step, o.defaults).length === 1;
-}
-
-/** Whether a later step reconciles this one's Outputs — i.e. whether this step reviews. */
-function feedsFanIn(o: EngineOptions, step: ResolvedStep): boolean {
-  return o.wf.steps.some((other) => other.fanIn === step.id);
-}
-
-const planRefusal = Effect.fn("Engine.planRefusal")(function* (
-  o: EngineOptions,
-  parsed: YamlValue,
-) {
-  const pathService = yield* Path.Path;
-  if (!isYamlMap(parsed)) return null;
-  const dir = parsed.issues_dir;
-  if (!isString(dir) || dir.trim() === "") return null;
-  // The prompt asks for `{{run.dir}}/plan/issues`; a planner that wrote it relative
-  // meant the same place, and refusing to look would be reading the Output pedantically
-  // rather than reading the plan.
-  const issues = pathService.resolve(o.run.dir, dir.trim());
-  const plan = yield* planReposOf(pathService.dirname(issues), o.run.record.cwd).pipe(
-    Effect.catch(() => Effect.succeed(null)),
-  );
-  return plan?.refusal?.message ?? null;
-});
-
-const collect = Effect.fn("Engine.collect")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  step: ResolvedStep,
-  record: VariantRecord,
-  variantKey: string | null,
-  /** False after a give-up: read what is there, do not wait on an agent that is gone. */
-  wait = true,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  if (!step.output) {
-    const status = yield* o.herdr.agentStatus(record.agent);
-    record.status = status === "blocked" ? "blocked" : "done";
-    if (record.status === "blocked") record.error = "agent is blocked and needs input";
-    return { record, output: null, review: null };
-  }
-
-  const path = yield* o.run.outputPath(step.id, variantKey, step.output);
-  record.output = pathService.relative(o.run.dir, path);
-  if (wait) yield* awaitOutput(o, ctx, record.agent, step.id, path);
-  if (!(yield* written(path))) {
-    record.status = "blocked";
-    record.error = `no Output at ${record.output}`;
-    return { record, output: null, review: null, problem: record.error };
-  }
-
-  const text = yield* fs.readFileString(path);
-  let parsed: YamlValue;
-  try {
-    parsed = Schema.decodeUnknownSync(YamlValueJsonSchema)(text);
-  } catch (e) {
-    record.status = "failed";
-    record.error = `${record.output}: not valid JSON (${reason(e)})`;
-    return { record, output: null, review: null, problem: record.error };
-  }
-
-  // A plan whose tickets nobody can run is not a finished plan. These refusals used to
-  // run only when someone picked "Implement now", so a `plan` Run could end `done` with
-  // tickets that name a repository nobody checked out, or block each other in a cycle —
-  // and the human found out a workflow later, from a hand-off that would not start.
-  const refusal = yield* planRefusal(o, parsed);
-  if (refusal !== null) {
-    record.status = "failed";
-    record.error = refusal;
-    return { record, output: parsed, review: null, problem: refusal };
-  }
-
-  const hasVerdict = isYamlMap(parsed) && "verdict" in parsed;
-  if (step.fanIn && !hasVerdict) {
-    record.status = "failed";
-    record.error = `${record.output}: a fan-in Output needs a verdict`;
-    return { record, output: parsed, review: null, problem: record.error };
-  }
-
-  // A review nobody else is reviewing beside is already the review the human reads, so
-  // it is held to the shape of one — a `summary`, and nothing dropped silently. Asking
-  // for that here rather than at the fan-in is what lets the reviewer itself be sent
-  // back to fix its Output; a model rewriting the file afterwards is the ceremony this
-  // is replacing, not a way of getting a summary.
-  const sole = soleReview(o, step);
-  let review: ReviewOutput | null = null;
-  if (hasVerdict && (step.fanIn || sole)) {
-    const result = parseSynthesis(text, record.output);
-    if (!result.ok) {
-      record.status = "failed";
-      record.error = result.error;
-      return { record, output: parsed, review: null, problem: result.error };
-    }
-    const vague = unsubstantiated(result.value.findings);
-    if (vague !== null) {
-      record.status = "failed";
-      record.error = `${record.output}: ${vague}`;
-      return { record, output: parsed, review: null, problem: record.error };
-    }
-    review = result.value;
-    yield* fs.writeFileString(pathService.join(o.run.dir, REVIEW_FILE), renderReview(result.value));
-    // A hand-off gives the implementer both the prose and the findings it came from.
-    o.run.record.synthesis = record.output;
-    // What this review leaves open, and what it found already fixed, so a Run that
-    // ends here says so. A loop that runs out of iterations narrows `outstanding` to
-    // what is still disputed; a standalone review has no such step, and used to
-    // finish announcing itself as clean whatever the review said.
-    o.run.record.outstanding = result.value.findings;
-    o.run.record.fixed = result.value.fixed.length;
-    // This verdict supersedes the previous review of the same target, so that run
-    // stops reporting findings this one no longer holds open. Best-effort: the old
-    // record staying stale must not fail the step that produced a good synthesis.
-    const superseded = o.run.record.previous_review;
-    if (superseded) {
-      yield* new RunStore(o.env.stateDir)
-        .supersedeOutstanding(superseded, result.value.findings)
-        .pipe(
-          Effect.tap(() =>
-            o.run.log(
-              `narrowed run ${superseded}'s outstanding to ${result.value.findings.length} finding(s), superseded by this review`,
-            ),
-          ),
-          Effect.catch((e) => o.run.log(`could not narrow run ${superseded}: ${String(e)}`)),
-        );
-    }
-  } else if (hasVerdict) {
-    const result = parseReviewOutput(text, record.output);
-    if (!result.ok) {
-      record.status = "failed";
-      record.error = result.error;
-      return { record, output: parsed, review: null, problem: result.error };
-    }
-    // Only a step that reviews: these are the findings that drive a fix loop and land in
-    // front of an implementer. A build's Output has a verdict too, and so does a plan
-    // round's — holding those to a reviewer's standard would refuse work for the wrong
-    // reason, and a plan finding has no file to point at.
-    if (feedsFanIn(o, step)) {
-      const vague = unsubstantiated(result.value.findings);
-      if (vague !== null) {
-        record.status = "failed";
-        record.error = `${record.output}: ${vague}`;
-        return { record, output: parsed, review: null, problem: record.error };
-      }
-    }
-    review = result.value;
-  }
-  if (review) {
-    // The shape of a review is the engine's to decide, so every one reads alike.
-    collectList(o, "deferred", parsed);
-    const hadMr = o.run.record.mr_url;
-    collectMr(o, parsed);
-    // The merge request is the thing the human was waiting for; the Run finishing is
-    // only how they find out about it, and that can be a step or two later.
-    if (o.run.record.mr_url && o.run.record.mr_url !== hadMr) {
-      const iid = /\/merge_requests\/(\d+)/.exec(o.run.record.mr_url)?.[1];
-      yield* notify(o, "mr-opened", o.run.record.mr_url, { subject: iid ? `!${iid}` : undefined });
-      yield* claimMrRole(o, parseMrUrl(o.run.record.mr_url), "assignee");
-    }
-    // A re-run step must not double-report what it disputed last time.
-    for (const finding of review.disputed) {
-      const key = findingKey(finding);
-      if (!o.run.record.disputed.some((d) => findingKey(d) === key)) {
-        o.run.record.disputed.push(finding);
-      }
-    }
-  }
-
-  record.status = "done";
-  return { record, output: parsed, review };
-});
-
-/**
- * Every tab of this run says the same thing: which run it is and which step it is on.
- * The glyph is the caller's, because that is the one part that is about the tab rather
- * than about the run — see `tabGlyph`.
- */
-function runTab(o: EngineOptions, glyph: string): string {
-  return runTabLabel(glyph, o.run.record, false);
-}
-
-/**
- * Every name Collie could have put on one of this Run's panes: the step each pane is
- * for, and the model or harness a parallel variant is named by.
- */
-function ourPaneNames(record: RunRecord): Set<string> {
-  const names = new Set<string>();
-  for (const step of record.steps) {
-    names.add(displayName(step.id.slice(step.id.lastIndexOf(".") + 1)));
-    for (const variant of step.variants) names.add(paneLabel(variant, step.id, 2, true)!);
-  }
-  return names;
-}
-
-/**
- * Whether a pane is still Collie's to rename. A pane nobody has named is, and so is one
- * wearing a name Collie itself wrote — a step that continues an agent renames its pane
- * from `Build` to `Simplify`. Anything else was typed by a human and stays theirs.
- */
-const paneIsOurs = Effect.fn("Engine.paneIsOurs")(function* (o: EngineOptions, paneId: string) {
-  const current = (yield* o.herdr.paneList()).find((pane) => pane.paneId === paneId)?.label ?? null;
-  if (current === null || current.trim() === "") return true;
-  return ourPaneNames(o.run.record).has(current);
-});
-
-/**
- * One tab renamed, and remembered. Nothing is sent for a label herdr already has: the
- * reconcile below runs on every status poll, and a rename per poll per tab would be
- * herdr redrawing its sidebar a few times a second for no news at all.
- */
-const renameTab = Effect.fn("Engine.renameTab")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  tabId: string,
-  label: string,
-) {
-  if (ctx.tabLabels.get(tabId) === label || ctx.manualTabs.has(tabId)) return;
-  // Asked only when the label has actually moved on, which is rare: a human who renamed
-  // this tab keeps their name, through every later update and every continuation.
-  const current = (yield* o.herdr.tabList()).find((tab) => tab.tabId === tabId)?.label;
-  if (!collieOwns(current, o.run.record)) {
-    ctx.manualTabs.add(tabId);
-    return;
-  }
-  // Remembered before the call, not after it: the variants of a parallel step poll at
-  // the same time, and two fibers that both read an empty memo before either wrote it
-  // sent the same rename twice. A rename that fails is not retried — a tab that will
-  // not take one has almost always been closed.
-  ctx.tabLabels.set(tabId, label);
-  yield* o.herdr.tabRename(tabId, label);
-});
-
-/**
- * Nothing live is known about any agent, so the label comes off the record alone: what
- * a step start, a Choice and the run's end each know about their own tabs.
- */
-const nothingLive = () => undefined;
-
-/**
- * The run's tabs, brought up to date. Called where the Driver already learns something
- * about a pane — the status poll while it waits on an agent — so a tab that goes
- * `blocked` says so without the engine renaming anything by hand. Only what changed:
- * the poll is every couple of seconds and the label is the same string nearly always.
- */
-const reconcileTabs = Effect.fn("Engine.reconcileTabs")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  live: (agent: string) => string | undefined,
-  asking = false,
-) {
-  // A tab that will not rename is not worth failing a live step over.
-  for (const [tabId, label] of tabLabelsFor(o.run.record, live, asking)) {
-    yield* Effect.ignore(renameTab(o, ctx, tabId, label));
-  }
-});
-
-/**
- * A target names the run only where the workflow owns it. `implement` inherits
- * `target` from the review it embeds, and is not "implement · worktree" — it is
- * whatever it is building.
- */
-export function runTarget(
-  wf: { name: string; embeddedInputs: string[] },
-  record: { workflow: string; slug: string; inputs: Record<string, string> },
-): string {
-  const own = !wf.embeddedInputs.includes("target");
-  return targetLabel(record.workflow, record.slug, own ? record.inputs : {});
-}
-
-/** The MR step reports what it opened; the summary is where the human looks for it. */
-function collectMr(o: EngineOptions, parsed: YamlValue): void {
-  if (!isYamlMap(parsed)) return;
-  // A step that committed and deliberately did not push — `review`'s fix round works
-  // on someone else's branch — has to be able to say so at the end. A result that
-  // looks like it landed and did not is worse than either outcome.
-  if (parsed.pushed === false && isString(parsed.branch) && parsed.branch.trim() !== "") {
-    o.run.record.unpushed = parsed.branch.trim();
-  } else if (parsed.pushed === true) {
-    o.run.record.unpushed = null;
-  }
-  if (isString(parsed.mr_url) && parsed.mr_url.trim() !== "")
-    o.run.record.mr_url = parsed.mr_url.trim();
-  if (Array.isArray(parsed.linear_issues)) {
-    for (const id of parsed.linear_issues) {
-      if (isString(id) && id !== "" && !o.run.record.linear_issues.includes(id)) {
-        o.run.record.linear_issues.push(id);
-      }
-    }
-  }
-}
-
-/**
- * The human on the merge request in that role: `gitlab.assignee` from config for the
- * assignee, else whoever glab is logged in as. Nothing to do where glab or the login is
- * missing — the step that got this far said what it could not do already.
- *
- * A merge request already assigned to that person is left alone. One name in both roles
- * is one person reviewing their own change, and GitLab shows it as a review that has
- * happened; what actually happened is that Collie read it and the human has the findings.
- */
-const claimMrRole = Effect.fn("Engine.claimMrRole")(function* (
-  o: EngineOptions,
-  mr: MrRef | null,
-  role: MrRole,
-) {
-  if (!mr) return;
-  const cwd = o.run.record.cwd;
-  const configured =
-    role === "assignee"
-      ? configValue(yield* readConfig(o.env.configDir), "gitlab.assignee")
-      : undefined;
-  const who = yield* resolveAssignee(cwd, configured, runShell);
-  if (!who) return;
-  if (role === "reviewer" && (yield* assignedTo(mr, who, cwd, runShell))) {
-    yield* o.out(`  ▸ ${who} already has ${mr.project ? `${mr.project}!` : "!"}${mr.iid}`);
-    return;
-  }
-  const res = yield* addMrRole(mr, role, who, cwd, runShell);
-  const where = mr.project ? `${mr.project}!${mr.iid}` : `!${mr.iid}`;
-  yield* o.out(
-    res.code === 0
-      ? `  ▸ ${who} is ${role} on ${where}`
-      : `  glab mr update ${where} --${role} failed (exit ${res.code})`,
-  );
-});
-
-/** What the MR prompt is given: never null, so a missing value reads as a gap, not "undefined". */
-function mrVars(facts: MrFacts): YamlMap {
-  return {
-    mr: {
-      assignee: facts.assignee ?? "",
-      template: facts.template ?? "",
-      issues: facts.issues.join(", "),
-      has_issues: facts.issues.length > 0 ? "yes" : "no",
-    },
-  };
-}
-
-/** Appends an Output's `deferred` entries to the run, without repeating one. */
-function collectList(o: EngineOptions, key: "deferred", parsed: YamlValue): void {
-  if (!isYamlMap(parsed)) return;
-  const raw = parsed[key];
-  if (!Array.isArray(raw)) return;
-  const result = parseFindings(raw, `${key}`);
-  if (!result.ok) return;
-  for (const finding of result.value) {
-    const id = findingKey(finding);
-    if (!o.run.record[key].some((f) => findingKey(f) === id)) o.run.record[key].push(finding);
-  }
-}
-
-/** Whether this run can give a step what it declared it needs, and why not. */
-/**
- * Why a Step or a Choice cannot be done here, or null. Takes the run's facts rather
- * than the run, so the launch menu can ask about exactly the steps that will run.
- */
-export const unmetRequirementFor = Effect.fn("Engine.unmetRequirementFor")(function* (
-  where: { cwd: string; inputs: Record<string, string> },
-  requires: StepRequirement[],
-) {
-  const target = where.inputs.target ?? "";
-  for (const need of requires) {
-    if (need === "gitlab") {
-      // A step pointed at a merge request needs glab for that project; a step that
-      // pushes needs this directory to be the checkout. `mr-target` says which.
-      const mr = requires.includes("mr-target") ? parseMrTarget(target) : null;
-      const ready = yield* mr
-        ? gitlabForProject(mr.project, where.cwd, runShell)
-        : gitlabReadiness(where.cwd, runShell);
-      if (!ready.ok) return ready.reason;
-    }
-    if (need === "mr-target" && where.inputs.target_kind !== "mr") {
-      return `${target || "this run"} is not a merge request`;
-    }
-    if (need === "someone-elses-mr") {
-      const mr = parseMrTarget(target);
-      const me = mr ? yield* glabLogin(where.cwd, runShell) : null;
-      if (mr && me && (yield* assignedTo(mr, me, where.cwd, runShell))) {
-        return `${target} is assigned to you, so its findings are yours to fix rather than to post`;
-      }
-    }
-  }
-  return null;
-});
-
-const unmetRequirement = (o: EngineOptions, requires: StepRequirement[]) =>
-  unmetRequirementFor({ cwd: o.run.record.cwd, inputs: o.run.record.inputs }, requires);
-
-/** Where Helle's credentials are read from, when a machine keeps them off the default. */
-const helleEnvFile = (o: EngineOptions) => o.env.raw.HELLE_ENV_FILE ?? null;
-
-/**
- * Blocks until this Run holds the Helle project of the repository it is working in.
- * A repository with no Helle project is not a gate at all; anything that stops Helle
- * from answering fails, and the step that declared the wait says so.
- */
-const helleGate = Effect.fn("Engine.helleGate")(function* (o: EngineOptions) {
-  const { run } = o;
-  const pathService = yield* Path.Path;
-  const gitlabPath = yield* projectHere(run.record.cwd, runShell);
-  return yield* waitForHelle({
-    home: o.env.home,
-    envFile: helleEnvFile(o),
-    gitlabPath,
-    // git's repository, never the cwd's basename: a Run's checkout is named after its
-    // branch, and a roaming one after nothing but `renovate`, so the fallback slug
-    // match would look for a Helle project called "renovate" and find none — which
-    // reads as "no Helle project" for a repository that has one.
-    repoName:
-      gitlabPath?.split("/").at(-1) ??
-      (yield* repositoryName(runShell, run.record.cwd)) ??
-      pathService.basename(run.record.cwd),
-    claimed: run.record.helle,
-    record: (claim) =>
-      Effect.gen(function* () {
-        run.record.helle = claim;
-        yield* run.save();
-      }),
-    out: o.out,
-    ask: (question) => (o.prompts ? o.prompts.ask(question) : Effect.succeed(null)),
+    return set;
   });
-});
 
-/**
- * Gives the Helle claim back, once and only once the Run has succeeded. A Run that
- * failed or is waiting on the operator keeps it: that is the whole point of holding it
- * across a consultation, and nobody may deploy on top of a half-finished renovation.
- */
-const releaseHelle = Effect.fn("Engine.releaseHelle")(function* (o: EngineOptions) {
-  const claim = o.run.record.helle;
-  if (!claim) return;
-  const released = yield* credentials({ home: o.env.home, envFile: helleEnvFile(o) }).pipe(
-    Effect.flatMap((creds) => releaseClaim(creds, claim.slug)),
-    Effect.result,
-  );
-  if (Result.isFailure(released)) {
-    yield* o.out(`  helle: ${claim.slug} could not be released — ${released.failure.message}`);
-    return;
-  }
-  o.run.record.helle = null;
-  yield* o.out(`  helle: released ${claim.slug}`);
-});
-
-/** The pane a fan-in step splits from: the last of the Outputs it reconciles. */
-function fanInPane(step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
-  if (!step.fanIn) return null;
-  const source = ctx.outputs.get(step.fanIn)?.at(-1)?.record;
-  return source?.paneId ? source : null;
-}
-
-/** The Output files a fan-in step reconciles, for its own prompt to read. */
-const fanInFiles = Effect.fn("Engine.fanInFiles")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  outputs: Map<string, VariantOutcome[]>,
-) {
-  if (!step.fanIn) return "";
-  const pathService = yield* Path.Path;
-  return (outputs.get(step.fanIn) ?? [])
-    .map((v) => (v.record.output ? `- ${pathService.join(o.run.dir, v.record.output)}` : null))
-    .filter((line): line is string => line !== null)
-    .join("\n");
-});
-
-/** The synthesised review, in the run's own pane, where the human is already looking. */
-const printReview = Effect.fn("Engine.printReview")(function* (o: EngineOptions) {
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  const path = pathService.join(o.run.dir, REVIEW_FILE);
-  if (!(yield* fs.exists(path))) return;
-  yield* o.out("");
-  yield* o.out((yield* fs.readFileString(path)).trimEnd());
-  yield* o.out("");
-});
-
-/** The agent of an earlier step, but only one this process actually started. */
-function borrowedAgent(o: EngineOptions, step: ResolvedStep, ctx: RunCtx): VariantRecord | null {
-  if (!step.agent) return null;
-  if (ctx.ran.has(step.agent)) return o.run.step(step.agent).variants[0] ?? null;
-  // On a resumed run the named step is long gone; the group's first agent stands in.
-  return ctx.groups.get(step.agent) ?? null;
-}
-
-/** A Persona as the harness that will read it sees it, skills and all. */
-function personaBody(o: EngineOptions, step: ResolvedStep, skills: SkillPaths): string {
-  const raw = step.persona ? (o.defs.personas.get(step.persona)?.body ?? "") : "";
-  if (raw === "") return "";
-  return renderTemplate(raw, {}, { skill: skillMention(skills) }).text;
-}
-
-/**
- * The Persona as a file, since herdr will not pass multi-line agent arguments. One
- * file per harness: the same persona asks for its skills in that harness's syntax,
- * and the run dir should show what each agent was actually given.
- */
-const personaFile = Effect.fn("Engine.personaFile")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  harness: string,
-  skills: SkillPaths,
-) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* o.run.personaPath(step.persona ?? "none", harness);
-  yield* fs.writeFileString(path, `${personaBody(o, step, skills)}\n`);
-  return path;
-});
-
-/**
- * What the human channel types to start a Step's `skill:`; unknown harnesses fall
- * back to claude's. A skill *mentioned* in a body is a path, not a command — see
- * `skillMention`.
- */
-function skillCommandFor(harness: string): (name: string) => string {
-  const adapter = HARNESSES[harness];
-  return (name) => (adapter ? adapter.skillCommand(name) : `/${name}`);
-}
-
-/**
- * Where each skill this run mentions lives, resolved once. A mention renders the
- * path validation found rather than a guess, and a skill that is not installed is
- * said so once in the log instead of on every render.
- */
-const resolveSkills = Effect.fn("Engine.resolveSkills")(function* (o: EngineOptions) {
-  const fs = yield* FileSystem.FileSystem;
-  const pathService = yield* Path.Path;
-  const dirs = yield* skillDirs(o.env);
-  const found = new Map<string, string>();
-  const missing: string[] = [];
-  for (const name of skillMentions(o.wf, o.defs).keys()) {
-    let file: string | null = null;
-    for (const dir of dirs) {
-      const candidate = pathService.join(dir, name, "SKILL.md");
-      if (yield* fs.exists(candidate)) {
-        file = candidate;
-        break;
-      }
-    }
-    if (file) found.set(name, file);
-    else missing.push(name);
-  }
-  if (missing.length > 0) yield* o.run.log(`skills not installed here: ${missing.join(", ")}`);
-  return found;
-});
-
-/**
- * What `chain` renders a forwarded Choice input with — and nothing else. A value
- * naming anything outside this renders empty and is then forwarded as a settled
- * input, so the child never asks for what it needed.
- *
- * `outputs` among them: a child is handed what its parent worked out, which is how the
- * short name of the task reaches the branch the child builds.
- */
-export const CHAIN_SUPPLIED: ReadonlySet<string> = new Set(["run", "cwd", "outputs"]);
-
-/**
- * The variable families `buildPrompt` supplies at step time, named where they are
- * built. A checker rendering a step ahead of a Run cannot know these and must not
- * report them as unresolvable — and it can only stay right about that if the list
- * lives beside the code that decides it.
- */
-export const ENGINE_SUPPLIED: ReadonlySet<string> = new Set([
-  "outputs",
-  "findings",
-  "fan_in",
-  "disputed",
-  "previous",
-  "session",
-  "config",
-  "mr",
-  "run",
-  "cwd",
-  "step",
-  "harness",
-  "model",
-  "effort",
-  "iteration",
-  "max_iterations",
-  "output_path",
-  "target_repo",
-  "unreviewed",
-  "verify",
-  "risks",
-  "evidence",
-  "ticket",
-  "progress",
-  "obstacle",
-]);
-
-/** The extra axes a human asked for, as a paragraph, or nothing where they asked for none. */
-function riskLine(risks: string): string {
-  const asked = risks.trim();
-  if (asked === "") return "";
-  return (
-    `Additional axes requested for this change: ${asked}. Apply the matching skill where ` +
-    `one is installed (\`security-and-hardening\`, \`performance-optimization\`) and say in ` +
-    `your review which of them you applied. These are on top of the complete review, not ` +
-    `instead of it.`
-  );
-}
-
-const buildPrompt = Effect.fn("Engine.buildPrompt")(function* (
-  o: EngineOptions,
-  step: ResolvedStep,
-  variant: Variant,
-  variantKey: string | null,
-  ctx: RunCtx,
-  extraVars?: YamlMap,
-) {
-  const { outputs, skills, previous } = ctx;
-  const adapter = HARNESSES[variant.harness]!;
-  const outputPath = step.output ? yield* o.run.outputPath(step.id, variantKey, step.output) : "";
-  const vars: YamlMap = {
-    inputs: o.run.record.inputs,
-    outputs: outputVars(outputs),
-    findings: formatFindings(lastFindings(o, step, ctx)),
-    // `--repo <project>` for an MR target, so a prompt can be followed from anywhere.
-    target_repo: repoArgs(parseMrTarget(o.run.record.inputs.target ?? "")?.project ?? null).join(
-      " ",
-    ),
-    fan_in: yield* fanInFiles(o, step, outputs),
-    disputed: formatFindings(o.run.record.disputed),
-    previous: { ...previous },
-    run: { dir: o.run.dir, id: o.run.id, slug: o.run.record.slug },
-    output_path: outputPath,
-    iteration: String(o.run.record.iteration),
-    max_iterations: String(o.run.record.max_iterations),
-    // Empty until a last fix went unreviewed; the mr prompt says it where it is not.
-    unreviewed: o.run.record.unreviewed ?? "",
-    // What Collie will run itself at the gate, named so an agent knows what its work is
-    // going to be held to rather than guessing which commands count.
-    verify: renderApproved(approvedFor(o.run.record.approved_verifications, yield* intentOf(o))),
-    // Empty unless the human asked for an extra axis, so an ordinary review renders
-    // nothing at all rather than a paragraph saying no specialist was wanted.
-    risks: riskLine(o.run.record.inputs.risks ?? ""),
-    // The one ticket this slice is for, and what the slices before it left behind. Empty
-    // for every step that is not sliced, so a prompt that names them renders nothing.
-    ticket: ctx.slice
-      ? {
-          file: ctx.slice.ticket.file,
-          number: ctx.slice.ticket.number,
-          title: ctx.slice.ticket.title,
-        }
-      : { file: "", number: "", title: "" },
-    progress: ctx.slice?.progress ?? "",
-    // Empty until something is identifiably in the way, so an ordinary prompt says
-    // nothing about obstacles at all.
-    obstacle: o.run.record.obstacle ?? "",
-    // What was actually collected, so the merge request says what was proved rather than
-    // what an Output claimed. Rendered from the journal, never from a step's own words.
-    evidence: renderEvidence({
-      verifications: yield* verificationsOf(o),
-      final: yield* fingerprint(o.run.record.worktree?.path ?? o.run.record.cwd),
-    }),
-    cwd: o.run.record.cwd,
-    step: step.id,
-    harness: variant.harness,
-    model: variant.model,
-    effort: variant.effort ?? "",
-    config: yield* readConfig(o.env.configDir),
-    ...extraVars,
-  };
-
-  const parts: string[] = [];
-  const prefix = personaPrefix(adapter, personaBody(o, step, skills));
-  if (prefix) parts.push(prefix);
-  const rendered = renderTemplate(
-    [step.preamble, step.prompt].filter((p) => p.trim()).join("\n\n"),
-    vars,
-    { skill: skillMention(skills) },
-  );
-  if (rendered.missing.length > 0) {
-    yield* o.run.log(`unknown template keys in ${step.id}: ${rendered.missing.join(", ")}`);
-  }
-  parts.push(rendered.text);
-  if (outputPath) {
-    parts.push(
-      `When you are done, write your result as JSON to the path below. Nothing else may go in that file.\nOUTPUT_PATH: ${outputPath}`,
-    );
-  }
-  return parts.join("\n\n");
-});
-
-function lastFindings(o: EngineOptions, step: ResolvedStep, ctx: RunCtx): Finding[] {
-  const from = step.repeat?.from;
-  const source = from ? ctx.outputs.get(from) : undefined;
-  if (!source) return [];
-  const findings = verdictOf(source, o.run.record.disputed).findings;
-  return step.repeat?.converge ? [...findings, ...ctx.reopened] : findings;
-}
-
-interface Verdict {
-  /** False when no variant wrote a review at all — which is not the same as clean. */
-  reviewed: boolean;
-  clean: boolean;
-  /** What the fix step gets: everything except what is already settled. */
-  findings: Finding[];
-  settled: Finding[];
-  rebutted: Finding[];
-}
-
-function verdictOf(outcomes: VariantOutcome[], disputed: Finding[]): Verdict {
-  const reviews = outcomes.map((v) => v.review).filter((r): r is ReviewOutput => r !== null);
-  // The gate reads one synthesised review: reconciling several reviewers is the
-  // synthesiser's job now, not a union taken here.
-  const split = splitDisputed(
-    reviews.flatMap((r) => r.findings),
-    disputed,
-  );
-  // Clean means "nothing left for the implementer", not "nobody said anything":
-  // a finding the implementer already rejected with a reason is the human's call.
-  return {
-    reviewed: reviews.length > 0,
-    clean: reviews.length > 0 && split.live.length === 0,
-    findings: split.live,
-    settled: split.settled,
-    rebutted: split.rebutted,
-  };
-}
-
-/**
- * A step that has just stopped, on the tabs of the run. One glyph rule, `tabGlyph`'s:
- * a step's own tab used to go ✓ the moment its variants were done, and the next
- * reconcile put it back to ⚙ because the run was still going — the flicker was the
- * two writers disagreeing about what ✓ means. It means nothing is working.
- */
-const markTab = Effect.fn("Engine.markTab")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  records: VariantRecord[],
-) {
-  yield* reconcileTabs(o, ctx, (agent) => {
-    const record = records.find((r) => r.agent === agent);
-    if (!record) return undefined;
-    // A variant's own word for itself, as herdr would have put it.
-    if (record.status === "running") return "working";
-    return record.status === "blocked" ? "blocked" : "idle";
-  });
-});
-
-const setView = Effect.fn("Engine.setView")(function* (
-  o: EngineOptions,
-  source: string,
-  panes: string[],
-) {
-  // A filtered sidebar is a nicety; losing it must not fail the run.
-  yield* o.herdr
-    .agentViewSet(source, o.run.record.slug, panes)
-    .pipe(Effect.catch((e) => o.run.log(`agent.view.set failed: ${reason(e)}`)));
-});
-
-const finish = Effect.fn("Engine.finish")(function* (
-  o: EngineOptions,
-  ctx: RunCtx,
-  status: RunStatus,
-  viewSource: string,
-  detail?: string,
-  /** True when this ending has already been announced by the step that caused it. */
-  announced = false,
-) {
-  const { run, out } = o;
-  // Before the Run is closed: whatever it ended up doing is what it will be read as
-  // having done, and this is the last moment the rules can be checked against it. The
-  // granted verifications run first, so a rule about one is checked against a result.
-  yield* runGrantedVerifications(o).pipe(Effect.ignore);
-  yield* checkDrift(o, ctx, "finish", "finish");
-  yield* standForElection(o, "finish", true);
-  yield* settleAtFinish(o, ctx);
-  if (status === "done") yield* recordFixedKindEvidence(o, ctx);
-  const final = yield* writeCard(o, ctx, { kind: "final", step: "finish", claims: [] });
-  // Once, here: the finish is the only moment at which nobody is left to make it, which
-  // is what turns an owed evaluation into something a human has to know about (§9.6).
-  if (final?.cross_run === "pending")
-    yield* notify(o, "drift-unresolved", "cross_run_pending", { step: "cross_run" }).pipe(
+  /**
+   * Wakes a run and waits for it to settle where it is going next.
+   *
+   * A woken run runs before it parks again, and a completion that arrives inside that
+   * window is delivered to a run that is not waiting on anything yet — so it is lost,
+   * and resuming afterwards does not bring it back. Returning only once the run has
+   * settled is what makes the next thing an operator does land on it.
+   */
+  const wake = Effect.fn("Engine.wake")(function* (found: {
+    readonly generation: Generation;
+    readonly execution: string;
+  }) {
+    const workflow = found.generation.registration.workflow;
+    yield* engine.resume(workflow, found.execution);
+    yield* engine.poll(workflow, found.execution).pipe(
+      Effect.map((result) => pollStatus(result, found.generation.entry).status),
+      Effect.flatMap((status) =>
+        status === "pending" ? Effect.fail(new Error("still running")) : Effect.void,
+      ),
+      Effect.retry({ times: WAKE_TRIES, schedule: Schedule.spaced(WAKE_INTERVAL) }),
       Effect.ignore,
     );
-  // Last, and only on success: the claim is what stops anyone deploying on top of a
-  // half-finished renovation, so it outlives every check above it.
-  if (status === "done") yield* releaseHelle(o);
-  run.record.status = status;
-  run.record.finished_at = yield* nowIso();
-  run.record.awaiting = null;
-  // A hold holds back work, and there is none left: the last step has no boundary after
-  // it to release one, and no Driver remains to let it expire.
-  run.record.held = null;
-  run.record.summary = summarise(o, status);
-  yield* run.save();
-  // Every tab of it, once, now that there is no step to name and nothing of this run's
-  // is going to work again: a tab left saying `⚙ … · review 2/5` outlives the run.
-  yield* reconcileTabs(o, ctx, nothingLive);
-  yield* out("");
-  yield* out(run.record.summary);
-  // The sidebar filter is a nicety.
-  yield* Effect.ignore(o.herdr.agentViewClear(viewSource));
-  if (!announced) {
-    yield* notify(o, endingKind(o, status), detail ?? outcomeLine(o.run.record, status));
-  }
-  return status;
-});
+  });
 
-/** Which of the three endings this is, so the toast's sound and title fit it. */
-function endingKind(o: EngineOptions, status: RunStatus): NotificationKind {
-  if (status === "done") return "run-done";
-  if (status === "blocked" && o.run.record.outstanding.length > 0) return "run-stuck";
-  return status === "failed" ? "run-failed" : "needs-you";
-}
-
-/**
- * The one line an unattended human gets: what came of the Run, not that it ended.
- * The same information `summarise` writes at length, in the shape a toast can hold.
- */
-export function outcomeLine(record: RunRecord, status: RunStatus): string {
-  // Whatever else came of it, work that did not land is said: a result that looks
-  // like it shipped and did not is worse than either outcome.
-  const local = record.unpushed ? ` — commits on ${record.unpushed} are not pushed` : "";
-  if (record.mr_url) return `merge request: ${record.mr_url}${local}`;
-  const open = record.outstanding.length;
-  // A last fix nobody reviewed is not "clean": it is what the implementer said, and
-  // the line says exactly that, plus what it left open.
-  if (status === "done" && record.unreviewed) {
-    return `${record.unreviewed}${open > 0 ? `; ${open} non-blocking finding(s) open` : ""}${local}`;
-  }
-  if (open > 0) {
-    const counts = new Map<string, number>();
-    for (const finding of record.outstanding) {
-      counts.set(finding.severity, (counts.get(finding.severity) ?? 0) + 1);
-    }
-    const bySeverity = [...counts].map(([severity, n]) => `${n} ${severity}`).join(", ");
-    return `${record.iteration} iteration(s), ${open} finding(s) still open — ${bySeverity}${local}`;
-  }
-  // "clean" alone undersells the rally: a re-review that found the last round's
-  // findings gone is the good ending, and the count is what says so.
-  if (status === "done") {
-    return `${record.fixed > 0 ? `clean — ${record.fixed} fixed` : "clean"}${local}`;
-  }
-  return `${record.summary?.split("\n")[0] ?? status}${local}`;
-}
-
-export function summarise(o: EngineOptions, status: RunStatus): string {
-  const { run } = o;
-  const lines = [`Run ${run.id} — ${status} after ${run.record.iteration} iteration(s)`];
-  for (const step of run.record.steps) {
-    const marks = {
-      pending: "·",
-      running: "…",
-      done: "✓",
-      blocked: "⚠",
-      failed: "✗",
-    } satisfies Record<StepStatus, string>;
-    const detail = step.note ? ` (${step.note})` : "";
-    const errors = step.variants
-      .filter((v) => v.error)
-      .map((v) => `\n    ${v.label}: ${v.error}`)
-      .join("");
-    // One line per ticket for a sliced step: which landed, and what each left.
-    const slices = step.slices
-      .map(
-        (slice) =>
-          `\n    ${marks[slice.status]} ${slice.ticket} — ${slice.title}` +
-          (slice.status === "done"
-            ? ` (${slice.commits.length} commit(s), verified: ${slice.verifications.join(", ") || "nothing"})`
-            : ""),
-      )
-      .join("");
-    lines.push(`  ${marks[step.status]} ${step.id}${detail}${errors}${slices}`);
-  }
-  if (run.record.unreviewed) {
-    lines.push("", `Not re-reviewed: ${run.record.unreviewed}`);
-  }
-  if (run.record.outstanding.length > 0) {
-    lines.push("", "Findings still open:", formatFindings(run.record.outstanding));
-  }
-  if (run.record.choices.length > 0) {
-    lines.push("", "Choices:", ...run.record.choices.map((c) => `  ${c.step}: ${c.title}`));
-  }
-  if (run.record.fanout) {
-    const blocked = run.record.fanout.blocked?.repo ?? "an earlier repo";
-    lines.push(
-      "",
-      "Repository runs:",
-      ...fanoutRepos(run.record.fanout).map((entry) =>
-        entry.run === null
-          ? `  ${entry.repo}: not run: waiting on ${blocked}`
-          : `  ${entry.repo}: ${entry.run}${entry.mr ? ` — ${entry.mr}` : ""}`,
+  /** Every question this run has been asked, with the answers its options allow. */
+  const asked = Effect.fn("Engine.asked")(function* (runId: string) {
+    const rows = yield* store.asked(runId);
+    const none: ReadonlyArray<string> = [];
+    return yield* Effect.forEach(rows, (row) =>
+      decodeOptions(row.options).pipe(
+        Effect.orElseSucceed(() => none),
+        Effect.map((options) => ({
+          name: row.decision,
+          prompt: row.prompt,
+          options,
+          answer: row.answer,
+        })),
       ),
     );
-  } else if (run.record.children.length > 0) {
-    lines.push("", `Chained: ${run.record.children.join(", ")}`);
-  }
-  if (run.record.unpushed) {
-    lines.push("", `Committed on ${run.record.unpushed}, not pushed.`);
-  }
-  if (run.record.mr_url) {
-    const tickets =
-      run.record.linear_issues.length > 0 ? ` (${run.record.linear_issues.join(", ")})` : "";
-    lines.push("", `Merge request: ${run.record.mr_url}${tickets}`);
-  }
-  if (run.record.deferred.length > 0) {
-    lines.push(
-      "",
-      "Deferred (the architect did not apply these):",
-      formatFindings(run.record.deferred),
+  });
+
+  const view = (runId: string) =>
+    store
+      .run(runId)
+      .pipe(Effect.flatMap((row) => (row === null ? Effect.succeed(null) : viewOf(row))));
+
+  /**
+   * What the engine last said about each run it may still change. Upstream's tables are
+   * upstream's: a write there invalidates nothing of Collie's, so one fiber asks on a
+   * schedule every client shares and says so once — rather than each client looping.
+   */
+  const watched = new Map<string, { readonly row: RunRow; said: string }>();
+  const remember = (row: RunRow) => watched.set(row.run, { row, said: "" });
+  for (const row of yield* store.runs) remember(row);
+  /** How many clients are listening. A host nobody is watching asks nothing at all. */
+  let watchers = 0;
+
+  const sweep = Effect.gen(function* () {
+    if (watchers === 0) return;
+    let changed = false;
+    for (const [runId, entry] of watched) {
+      const view = yield* viewOf(entry.row);
+      const said = encodeView(view);
+      if (said === entry.said) continue;
+      entry.said = said;
+      changed = true;
+      // A run the engine has finished with cannot change again, so nothing asks after.
+      if (view.status.status === "complete" || view.status.status === "failed") {
+        watched.delete(runId);
+      }
+    }
+    if (changed) yield* store.announce;
+  });
+  yield* Effect.forkScoped(sweep.pipe(Effect.repeat(Schedule.spaced(SWEEP_INTERVAL))));
+
+  /** What this host is holding, as a caller may see it. */
+  const held = Effect.sync(() => ({
+    live: [...live.keys()].sort(),
+    unavailable: [...unavailable.entries()].map(([name, why]) => `${name}: ${why}`).sort(),
+  }));
+
+  const newest = Effect.fn("Engine.newest")(function* (id: string) {
+    const generation = live.get(newestOf.get(id) ?? "");
+    if (!generation) {
+      return yield* new HostRefused({ reason: `no workflow "${id}" is loaded here` });
+    }
+    return generation;
+  });
+
+  const routed = Effect.fn("Engine.routed")(function* (runId: string) {
+    const row = yield* store.run(runId);
+    if (row === null) {
+      return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
+    }
+    const generation = live.get(row.generation);
+    if (!generation) {
+      return yield* new HostRefused({
+        reason:
+          unavailable.get(row.generation) ?? `${row.generation} is not registered in this host`,
+      });
+    }
+    return { generation, execution: row.execution };
+  });
+
+  /** Sets a control, and a stop over every child the Run started, then wakes what must look again. */
+  const applyControl = Effect.fn("Engine.applyControl")(function* (
+    runId: string,
+    control: string,
+    set: boolean,
+  ) {
+    // A stop reaches the children a Run started: they are its work too.
+    const runs = control === STOP ? [runId, ...descendantsOf(yield* store.runs, runId)] : [runId];
+    // Written before anything is woken, so a run that wakes up never finds the request
+    // that stopped it still there.
+    for (const one of runs) yield* setControl(one, control, set);
+    // A file, not a row: nothing tells a watcher about it unless this does.
+    yield* store.announce;
+    // A hold is read at the next boundary and needs no waking. Everything else does: a
+    // run parked on its question has nothing that would make it look again.
+    if (!(control === HOLD && set)) {
+      for (const one of runs) {
+        const found = yield* routed(one).pipe(Effect.option);
+        if (Option.isSome(found)) yield* wake(found.value);
+      }
+    }
+    return runs;
+  });
+
+  /** A stop, and the agents of every Run it reached closed: the Runs, and what did not close. */
+  const stopTree = Effect.fn("Engine.stopTree")(function* (runId: string) {
+    const runs = yield* applyControl(runId, STOP, true);
+    // Closing their panes is what stops the agents; the Run only stops looking.
+    const agents = yield* Agents;
+    const left: string[] = [];
+    for (const one of runs) left.push(...(yield* agents.halt(one)).left);
+    return { runs, left };
+  });
+
+  // One registration at a time. Two clients starting different modules of one id at the
+  // same moment would otherwise mint one name for both and stage over each other.
+  const registering = yield* Semaphore.make(1);
+  // A grant is a read and a write of one file: two at once would each drop the other's.
+  const granting = yield* Semaphore.make(1);
+
+  const mint = Effect.fn("Engine.Registry.mint")(function* (file: string) {
+    // Read as it is now to learn the id this file claims, then register the next
+    // generation of that id.
+    const described = yield* loadEntry(file);
+    const route = {
+      workflow: described.id,
+      name: nextRegistrationName(known, described.id),
+      entry: file,
+    };
+    const generation = yield* register(route);
+    known = [...known, route];
+    yield* store.remember(route);
+    return generation;
+  });
+
+  const useEntry = (options: { readonly entry: string; readonly revision: string }) =>
+    registering.withPermits(1)(
+      Effect.gen(function* () {
+        const source = `${options.entry}@${options.revision}`;
+        for (const generation of live.values()) {
+          if (generation.source === source) return generation;
+        }
+        return yield* mint(options.entry);
+      }),
     );
-  }
-  if (run.record.disputed.length > 0) {
-    lines.push(
-      "",
-      "Disputed findings (the implementer did not apply these; the loop stopped arguing about them):",
-      formatFindings(run.record.disputed),
+
+  const resolve = Effect.fn("Engine.Registry.resolve")(function* (options: {
+    readonly project: string;
+    readonly id: string;
+  }) {
+    if (locate === undefined) return yield* newest(options.id);
+    const found = yield* locate(options);
+    return yield* useEntry(found).pipe(
+      Effect.mapError(
+        (failure) => new HostRefused({ reason: `${failure.file}: ${failure.message}` }),
+      ),
     );
-  }
-  return lines.join("\n");
+  });
+
+  /**
+   * A Run, the module it would be offered from now, and the facts those offers are
+   * decided on. The generation is resolved in the Run's own project rather than taken
+   * from the row: what is offered is the current code's to say, and a module that has
+   * been edited away leaves the Run readable and its offers refused with the reason.
+   */
+  /** A follow-up takes what its workflow needs and the offer does not fill, so a front door asks for it. */
+  const unfilled = (offer: Offer, project: string, filled: Readonly<Record<string, Schema.Json>>) =>
+    resolve({ project, id: offer.workflow }).pipe(
+      Effect.map((target) => {
+        const rest = Object.entries(target.fields).filter(([name]) => !(name in filled));
+        if (rest.length === 0) return offer;
+        return {
+          ...offer,
+          arguments: jsonSchemaFor(Schema.Struct(Object.fromEntries(rest))).document,
+        };
+      }),
+      Effect.orElseSucceed(() => offer),
+    );
+
+  const offeredBy = Effect.fn("Engine.Registry.offeredBy")(function* (runId: string) {
+    const row = yield* store.run(runId);
+    if (row === null) {
+      return yield* new HostRefused({ reason: `no run "${runId}" was started here` });
+    }
+    const generation = yield* resolve({ project: row.project, id: row.workflow });
+    const options = yield* decodeStrings(row.options ?? "{}").pipe(
+      Effect.orElseSucceed((): Record<string, string> => ({})),
+    );
+    const found = yield* routed(runId);
+    const state = pollStatus(
+      yield* engine.poll(found.generation.registration.workflow, found.execution),
+      found.generation.entry,
+    );
+    const asked = options.outcome ?? UNSPECIFIED;
+    const where = runDir(dir, runId);
+    // The facts a host has about a Run. What it was launched with and how it
+    // ended are the row's; the tickets it wrote and the findings it left are read from
+    // its own directory, because producing them is the only way a Run can have them.
+    const disposition = latest(
+      yield* readDispositions(where).pipe(Effect.orElseSucceed((): Array<Disposition> => [])),
+    );
+    const input = yield* decodeInput(row.input).pipe(Effect.orElseSucceed(() => ({})));
+    const facts: ActionFacts = {
+      outcome: isOutcome(asked) ? asked : "unspecified",
+      succeeded: state.status === "complete",
+      // Where the host placed it: a branch it inferred is as much the Run's as one named.
+      branch: placedOf(row, options).branch,
+      mrUrl: yield* mergeRequestOf(fs, dir, runId),
+      planIssues: yield* planIssuesIn(where),
+      disposed: disposition !== null,
+      openFindings: yield* openFindingsIn(where),
+      diffTarget: pointedAt(generation, input),
+      claim: (yield* claimOf(runId))?.slug ?? null,
+    };
+    // A plan spanning repositories is a fan-out, which an offer does not start.
+    const refused = new Map<string, string>();
+    for (const offer of generation.offers) {
+      const field = Object.entries(offer.inputs).find(([, source]) => source === "plan-dir")?.[0];
+      if (field === undefined) continue;
+      const read = yield* planReposOf(`${where}/plan`, placedOf(row, options).cwd).pipe(
+        Effect.provideContext(bun),
+        Effect.result,
+      );
+      if (read._tag === "Failure") {
+        refused.set(offer.id, `its plan could not be read: ${read.failure.message}`);
+      } else if (!isSingleRepo(read.success)) {
+        refused.set(
+          offer.id,
+          read.success.refusal?.message ??
+            `its plan spans repositories (${read.success.repos.map((one) => one.path).join(", ")}), which a card does not fan out. \`collie run start ${offer.workflow === SELF ? row.workflow : offer.workflow} --input ${field}=${where}/plan\` does, one Run per repository.`,
+        );
+      }
+    }
+    return { row, generation, facts, where, refused, input };
+  });
+
+  const startWork = Effect.fn("Engine.Registry.start")(function* (options: {
+    readonly generation: Generation;
+    readonly request: string;
+    readonly project: string;
+    readonly runId?: string;
+    readonly input: Readonly<Record<string, Schema.Json>>;
+    readonly text?: Readonly<Record<string, string>>;
+    readonly options?: Readonly<Record<string, string>>;
+    readonly task?: string | null;
+    readonly taskLabel?: string | undefined;
+    readonly parent?: string | null;
+    readonly intent?: IntentSeed;
+  }) {
+    const generation = options.generation;
+    const runId =
+      options.runId ?? `run-${(yield* crypto.randomUUIDv4.pipe(Effect.orDie)).slice(0, 8)}`;
+    const asked = options.options ?? {};
+    yield* refuseOptions(generation, asked);
+    yield* refuseAgent(generation, asked);
+    const request = yield* checkoutRequest(generation, asked);
+    const launch = launchOptions(generation, asked);
+    // Settled before anything exists to clean up: an input the workflow's own schema
+    // rejects names its field here, and no row, claim or execution is created.
+    const settled = yield* settleInput(generation.fields, {
+      json: options.input,
+      text: options.text ?? {},
+    });
+    const payload = yield* Schema.decodeUnknownEffect(
+      generation.registration.workflow.payloadSchema,
+    )({ runId, input: settled.input }).pipe(
+      Effect.mapError((cause) => new HostRefused({ reason: `${REFUSED_INPUT}: ${cause.message}` })),
+    );
+    const claimed = yield* claimAndPlace({
+      request: options.request,
+      run: runId,
+      workflow: generation.id,
+      project: options.project,
+      input: settled.input,
+      provenance: settled.provenance,
+      options: launch,
+      placing: encodePlacing({
+        from: request.kind === "existing" ? request.path : options.project,
+        taskLabel: options.taskLabel ?? null,
+      }),
+      generation: generation.name,
+      execution: yield* generation.registration.workflow.executionId(payload),
+      task: options.task ?? null,
+      parent: options.parent ?? null,
+    });
+    // Frozen with the Run, so editing the project's list changes the next one.
+    yield* freezeApproved({
+      dir,
+      runId: claimed.row.run,
+      project: options.project,
+      userDir,
+    }).pipe(Effect.ignore);
+    yield* seedIntentOf({
+      dir,
+      row: claimed.row,
+      generation,
+      seed: options.intent,
+      parent: options.parent ? yield* store.run(options.parent) : null,
+    }).pipe(Effect.provideContext(bun), Effect.ignore);
+    // A retry of work the engine already has is nothing more to do; one that crashed
+    // before it heard is handed over now, under the identity it was admitted with.
+    if (claimed.row.accepted === null) yield* handOver(claimed.row);
+    return {
+      runId: claimed.row.run,
+      registration: claimed.row.generation,
+      execution: claimed.row.execution,
+      fresh: claimed.fresh,
+    };
+  });
+
+  return {
+    load: (file: string) => registering.withPermits(1)(mint(file)),
+
+    use: useEntry,
+    resolve,
+
+    registrations: held,
+
+    waiting: asked,
+    view,
+    views: (task: string | null) =>
+      store.runs.pipe(
+        Effect.flatMap((rows) =>
+          Effect.forEach(task === null ? rows : rows.filter((row) => row.task === task), viewOf),
+        ),
+      ),
+    watch: (runId: string) =>
+      store
+        .watching(view(runId))
+        .pipe(
+          Stream.onStart(Effect.sync(() => (watchers += 1))),
+          Stream.ensuring(Effect.sync(() => (watchers -= 1))),
+        ),
+
+    recover: Effect.gen(function* () {
+      yield* registering.withPermits(1)(
+        Effect.forEach(known, (route) =>
+          live.has(route.name)
+            ? Effect.void
+            : register(route).pipe(
+                Effect.catchTag("EntryError", (failure) =>
+                  Effect.sync(() =>
+                    unavailable.set(route.name, `${failure.file}: ${failure.message}`),
+                  ),
+                ),
+              ),
+        ),
+      );
+      for (const row of yield* store.pending) yield* recoverAdmission(row);
+      yield* reconcileAnswers;
+      return yield* held;
+    }),
+
+    newest,
+    routed,
+
+    offers: (runId: string) =>
+      offeredBy(runId).pipe(
+        Effect.flatMap(({ row, generation, facts, where, refused, input }) =>
+          Effect.forEach(
+            offersFrom(generation.offers, facts, {
+              self: generation.id,
+              keepUnavailable: true,
+              refused,
+            }),
+            (offer) =>
+              offer.kind === "follow-up"
+                ? unfilled(offer, row.project, inputsFor(offer, { runDir: where, facts, input }))
+                : Effect.succeed(offer),
+          ),
+        ),
+      ),
+
+    invoke: Effect.fn("Engine.Registry.invoke")(function* (options: {
+      readonly runId: string;
+      readonly offer: string;
+      readonly input: Readonly<Record<string, Schema.Json>>;
+      readonly request: string;
+    }) {
+      const { row, generation, facts, where, refused, input } = yield* offeredBy(options.runId);
+      // Asked again here, of the module as it is now: the card this was read from may
+      // have been drawn before the file was edited, and a card is not authority.
+      const offer = offersFrom(generation.offers, facts, {
+        self: generation.id,
+        keepUnavailable: true,
+        refused,
+      }).find((one) => one.id === options.offer);
+      if (offer === undefined || offer.unavailable !== null) {
+        const why = offer?.unavailable ? `: ${offer.unavailable}` : " now";
+        return yield* new HostRefused({
+          reason: `run "${options.runId}" does not offer "${options.offer}"${why}`,
+        });
+      }
+      const starting = yield* resolve({ project: row.project, id: offer.workflow });
+      // What the offer said Collie fills in, filled from the Run it is about. The
+      // caller's own values win: an offer names where a value comes from, and a caller
+      // that has a better one for the same field is not overruled by a default.
+      const filled = { ...inputsFor(offer, { runDir: where, facts, input }), ...options.input };
+      // The offer's own workflow settles what it was given, so arguments it will not
+      // take are refused here and nothing is started.
+      return yield* startWork({
+        generation: starting,
+        request: options.request,
+        project: row.project,
+        input: filled,
+        task: row.task,
+        parent: row.run,
+      });
+    }),
+
+    start: startWork,
+
+    status: Effect.fn("Engine.Registry.status")(function* (runId: string) {
+      const found = yield* routed(runId);
+      const workflow = found.generation.registration.workflow;
+      const result = yield* engine.poll(workflow, found.execution);
+      return pollStatus(
+        result,
+        found.generation.entry,
+        workflow.successSchema,
+        workflow.errorSchema,
+      );
+    }),
+
+    answer: Effect.fn("Engine.Registry.answer")(function* (options: {
+      readonly runId: string;
+      readonly decision: string | null;
+      readonly value: string;
+      readonly request: string;
+    }) {
+      const found = yield* routed(options.runId);
+      const asks = yield* asked(options.runId);
+      const open = asks.filter((one) => one.answer === null);
+      const sole = options.decision === null ? soleOpen(options.runId, open) : null;
+      if (sole !== null) return yield* sole;
+      const name = options.decision ?? open[0]?.name ?? "";
+      // Every question, not only the open ones: one already answered and one never
+      // asked are different refusals, and an operator is owed the difference.
+      const question = asks.find((one) => one.name === name);
+      if (question === undefined) {
+        return yield* new HostRefused({
+          reason: `run "${options.runId}" is not waiting on a decision called "${name}"`,
+        });
+      }
+      // An option is its own title: taken in any case, kept as declared.
+      const named = question.options.find(
+        (option) => option.toLowerCase() === options.value.toLowerCase(),
+      );
+      if (question.options.length > 0 && named === undefined) {
+        return yield* new HostRefused({
+          reason: `"${options.value}" is not one of ${question.options.join(", ")}`,
+        });
+      }
+      const value = named ?? options.value;
+      // Recorded first, and only the caller the write hands the row to completes the
+      // deferred: two answers racing are separated by the database, not by timing.
+      const settled = yield* store.settle({
+        run: options.runId,
+        decision: name,
+        value,
+        request: options.request,
+      });
+      if (settled._tag === "refused") {
+        return yield* new HostRefused({ reason: settled.reason });
+      }
+      if (settled._tag === "accepted") yield* crash("answered");
+      // Completed again on a repeat: the recording host may have died before the run was told.
+      yield* answerDecision(found.generation.registration, {
+        name,
+        executionId: found.execution,
+        value,
+      });
+
+      return { runId: options.runId, decision: name, value, fresh: settled._tag === "accepted" };
+    }),
+
+    control: Effect.fn("Engine.Registry.control")(function* (options: {
+      readonly runId: string;
+      readonly control: string;
+      readonly set: boolean;
+    }) {
+      const found = yield* routed(options.runId).pipe(Effect.result);
+      const left =
+        options.control === STOP && options.set
+          ? (yield* stopTree(options.runId)).left
+          : yield* applyControl(options.runId, options.control, options.set).pipe(Effect.as([]));
+      const recorded = { runId: options.runId, control: options.control, set: options.set, left };
+      if (found._tag === "Failure") {
+        return { ...recorded, applied: false, detail: found.failure.reason };
+      }
+      return { ...recorded, applied: true, detail: "" };
+    }),
+
+    grant: Effect.fn("Engine.Registry.grant")(function* (options: {
+      readonly runId: string;
+      readonly name: string;
+      readonly command: Omit<VerifySpec, "name"> | null;
+    }) {
+      if ((yield* store.run(options.runId)) === null) {
+        return yield* new HostRefused({ reason: `no run "${options.runId}" was started here` });
+      }
+      return yield* granting.withPermits(1)(
+        Effect.gen(function* () {
+          const kept = (yield* approvedOf(dir, options.runId)).filter(
+            (spec) => spec.name !== options.name,
+          );
+          const next =
+            options.command === null ? kept : [...kept, { name: options.name, ...options.command }];
+          yield* fs.makeDirectory(evidenceDir(dir, options.runId), { recursive: true });
+          yield* fs.writeFileString(approvedPath(dir, options.runId), encodeApproved(next));
+          return next;
+        }).pipe(Effect.orDie),
+      );
+    }),
+
+    steer: Effect.fn("Engine.Registry.steer")(function* (options: {
+      readonly runId: string;
+      readonly text: string;
+      readonly request: string;
+      readonly operation?: string;
+      readonly agent?: string;
+      readonly mode?: AgentsSdk.DeliveryMode;
+    }) {
+      // Routed first: a run this host is not holding has no agent it can vouch for.
+      yield* routed(options.runId);
+      const agents = yield* Agents;
+      return yield* agents.steer(options);
+    }),
+  } satisfies RegistryApi;
+});
+
+const decodeOptions = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Array(Schema.String)),
+);
+
+/** Every child this Run started, however deep; an offer's Run has a request of its own. */
+const descendantsOf = (rows: ReadonlyArray<RunRow>, runId: string): ReadonlyArray<string> => {
+  const children = rows
+    .filter((row) => row.parent === runId && row.request === row.run)
+    .map((row) => row.run);
+  return children.flatMap((child) => [child, ...descendantsOf(rows, child)]);
+};
+
+/**
+ * Why a caller who named no question cannot be given one, or null where exactly one is
+ * open. Nothing is guessed at: an answer landing on the wrong question is the mistake
+ * this exists to prevent.
+ */
+const soleOpen = (runId: string, open: ReadonlyArray<OpenDecision>): HostRefused | null => {
+  if (open.length === 1) return null;
+  return new HostRefused({
+    reason:
+      open.length === 0
+        ? `run "${runId}" is not waiting on a decision`
+        : `run "${runId}" is waiting on ${open.map((one) => `"${one.name}"`).join(", ")}: say which`,
+  });
+};
+
+const encodeCheckProject = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({ extends: Schema.String, files: Schema.Array(Schema.String) }),
+  ),
+);
+
+/**
+ * The authoring setup, written as the files an author opens and edits rather than encoded
+ * from a value: `paths` is what makes `collie` resolve to the declarations beside
+ * it, and `effect` is pinned to the host's so the types are about the Effect that runs.
+ */
+const TOOLCHAIN_FILES = {
+  "package.json": `{
+  "name": "collie-workflows",
+  "private": true,
+  "type": "module",
+  "dependencies": { "effect": "${TOOLCHAIN.effect}" },
+  "devDependencies": { "typescript": "${TOOLCHAIN.typescript}" }
 }
+`,
+  "tsconfig.json": `{
+  "compilerOptions": {
+    "lib": ["ESNext"],
+    "target": "ESNext",
+    "module": "Preserve",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "types": [],
+    "paths": { "collie": ["./collie.d.ts"] }
+  }
+}
+`,
+} as const;
+
+const JsonObject = Schema.Record(Schema.String, Schema.Json);
+const isJsonObject = Schema.is(JsonObject);
+const readJsonObject = Schema.decodeUnknownOption(Schema.fromJsonString(JsonObject));
+const writeJsonObject = Schema.encodeSync(Schema.fromJsonString(JsonObject, { space: 2 }));
+const objectIn = (value: Schema.Json | undefined) => (isJsonObject(value) ? value : {});
+
+/**
+ * An author's package.json with what a module is typechecked against added where it is
+ * missing, and the host's own Effect over any other: two Effects are two sets of types.
+ */
+const mergedPackage = (pkg: Readonly<Record<string, Schema.Json>>) => {
+  const dependencies = objectIn(pkg.dependencies);
+  const devDependencies = objectIn(pkg.devDependencies);
+  return {
+    ...pkg,
+    dependencies: { ...dependencies, effect: TOOLCHAIN.effect },
+    devDependencies:
+      "typescript" in dependencies
+        ? devDependencies
+        : { typescript: TOOLCHAIN.typescript, ...devDependencies },
+  };
+};
+
+/** An author's tsconfig.json with `collie` mapped to the declarations beside it. */
+const mergedCompiler = (dir: string, tsconfig: Readonly<Record<string, Schema.Json>>) => {
+  const options = objectIn(tsconfig.compilerOptions);
+  const paths = objectIn(options.paths);
+  // Paths resolve from baseUrl where one is set, so the mapping cannot be relative to it.
+  const declarations = isText(options.baseUrl) ? `${dir}/collie.d.ts` : "./collie.d.ts";
+  return {
+    ...tsconfig,
+    compilerOptions: { ...options, paths: { collie: [declarations], ...paths } },
+  };
+};
+
+/**
+ * Writes the authoring setup beside a workflow directory and installs its toolchain with
+ * the embedded Bun, so a machine with neither Bun nor Node on it can still typecheck a
+ * module. An existing package.json or tsconfig.json is the author's: what the setup needs
+ * is merged into it and nothing of theirs is replaced.
+ */
+export const provisionToolchain: (
+  dir: string,
+) => Effect.Effect<
+  void,
+  ToolchainError,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+> = Effect.fn("Engine.provisionToolchain")(function* (dir: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const unavailable = (message: string) =>
+    new ToolchainError({ code: "toolchain_unavailable", message });
+  yield* fs.makeDirectory(dir, { recursive: true }).pipe(Effect.orDie);
+  // Collie's own, so an upgraded installation's declarations replace the last one's.
+  yield* fs.writeFileString(`${dir}/collie.d.ts`, SDK_DECLARATIONS).pipe(Effect.orDie);
+  const unmerged: string[] = [];
+  for (const [name, merge] of [
+    ["package.json", mergedPackage],
+    ["tsconfig.json", (read: Readonly<Record<string, Schema.Json>>) => mergedCompiler(dir, read)],
+  ] as const) {
+    const path = `${dir}/${name}`;
+    const existing = yield* fs.readFileString(path).pipe(Effect.option);
+    if (Option.isNone(existing)) {
+      yield* fs.writeFileString(path, TOOLCHAIN_FILES[name]).pipe(Effect.orDie);
+      continue;
+    }
+    const read = readJsonObject(existing.value);
+    if (Option.isNone(read)) {
+      unmerged.push(name);
+      continue;
+    }
+    const merged = `${writeJsonObject(merge(read.value))}\n`;
+    if (merged !== existing.value) yield* fs.writeFileString(path, merged).pipe(Effect.orDie);
+  }
+  const installed = yield* runBun(dir, ["install"]).pipe(Effect.mapError(unavailable));
+  if (installed.code !== 0) {
+    return yield* unavailable(
+      `cannot install the workflow toolchain in ${dir}: ${installed.output}`,
+    );
+  }
+  if (unmerged.length > 0) {
+    return yield* unavailable(
+      `${unmerged.join(" and ")} in ${dir} is not plain JSON, so nothing was merged into it: add "effect" and "typescript" to package.json and map "collie" to ./collie.d.ts under compilerOptions.paths`,
+    );
+  }
+});
+
+/**
+ * Typechecks one entry file against the provisioned toolchain and reports every
+ * diagnostic with the source it is in. Errors in one file say nothing about another, so
+ * a host checking several reports each on its own.
+ */
+export const typecheckEntry: (options: {
+  readonly dir: string;
+  readonly file: string;
+}) => Effect.Effect<
+  ReadonlyArray<string>,
+  ToolchainError,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+> = Effect.fn("Engine.typecheckEntry")(function* (options: {
+  readonly dir: string;
+  readonly file: string;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const compiler = `${options.dir}/node_modules/typescript/lib/tsc.js`;
+  if (!(yield* fs.exists(compiler).pipe(Effect.orElseSucceed(() => false)))) {
+    return yield* new ToolchainError({
+      code: "toolchain_unavailable",
+      message: `no typechecker in ${options.dir}; provision it while you have a network`,
+    });
+  }
+  // One file at a time, through a project that extends the author's settings. Naming a
+  // file on tsc's command line makes it ignore the tsconfig beside it, which would check
+  // the module against defaults nobody wrote and report nothing useful.
+  const project = `${options.dir}/.collie-check.json`;
+  yield* fs
+    .writeFileString(
+      project,
+      encodeCheckProject({ extends: "./tsconfig.json", files: [options.file] }),
+    )
+    .pipe(Effect.orDie);
+  const unavailable = (message: string) =>
+    new ToolchainError({ code: "toolchain_unavailable", message });
+  const ran = yield* runBun(options.dir, [
+    "run",
+    compiler,
+    "--pretty",
+    "false",
+    "-p",
+    project,
+  ]).pipe(Effect.mapError(unavailable));
+  if (ran.code === 0) return [];
+  const diagnostics = ran.output.split("\n").filter((line) => /\(\d+,\d+\): error /.test(line));
+  // tsc exits non-zero for the diagnostics it printed; a failure that printed none is the
+  // toolchain's problem, not the module's, and must not read as a clean module.
+  if (diagnostics.length === 0) {
+    return yield* unavailable(
+      `the typechecker exited ${ran.code} without checking: ${ran.output.trim()}`,
+    );
+  }
+  return diagnostics;
+});
+
+/**
+ * The embedded Bun. A compiled executable with `BUN_BE_BUN` set is the `bun` CLI, so
+ * installing a package and running a compiler need neither Bun nor Node on the machine;
+ * running from source, `execPath` is already Bun and the variable changes nothing.
+ */
+const runBun = (
+  cwd: string,
+  args: ReadonlyArray<string>,
+): Effect.Effect<
+  { readonly code: number; readonly output: string },
+  string,
+  ChildProcessSpawner.ChildProcessSpawner
+> =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const child = yield* spawner.spawn(
+      ChildProcess.make(process.execPath, args, {
+        cwd,
+        env: { BUN_BE_BUN: "1", PATH: "/usr/bin:/bin" },
+        stdout: "pipe",
+        stderr: "pipe",
+      }),
+    );
+    const output = yield* collect(child.stdout).pipe(
+      Effect.zipWith(collect(child.stderr), (out, err) => out + err),
+    );
+    return { code: Number(yield* child.exitCode), output };
+  }).pipe(
+    Effect.scoped,
+    Effect.catch((cause) => Effect.fail(String(cause))),
+  );
+
+const collect = (stream: Stream.Stream<Uint8Array, PlatformError>) =>
+  stream.pipe(
+    Stream.decodeText(),
+    Stream.runFold(
+      (): string => "",
+      (all, chunk) => all + chunk,
+    ),
+  );

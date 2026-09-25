@@ -1,5 +1,9 @@
 import { expect, test } from "bun:test";
+import { Effect, FileSystem } from "effect";
 import {
+  claudeForbidsBypass,
+  foldPreferences,
+  resolveChoice,
   DEFAULT_MODEL,
   HARNESSES,
   knownModel,
@@ -8,6 +12,7 @@ import {
   startArgs,
 } from "../src/harness";
 import { renderTemplate, skillMention, skillsIn } from "../src/template";
+import { runEffect } from "./support/effect";
 
 test("the adapter table covers claude, codex and opencode with model flags", () => {
   expect(HARNESSES.claude!.modelArgs("sonnet")).toEqual(["--model", "sonnet"]);
@@ -134,38 +139,123 @@ test("a body names a skill and every harness is pointed at the same file", () =>
   expect(plain.text).toBe("{{skill:tdd}} and g");
 });
 
-test("every harness that prompts is started with its unattended switch, unless `harness`", () => {
-  expect(startArgs(HARNESSES.claude!, "opus", "/p/i.md")).toEqual([
-    "--model",
-    "opus",
-    "--append-system-prompt-file",
-    "/p/i.md",
+test("every harness starts in its auto mode, and past its prompts only when bypass is asked for", () => {
+  // The permission switch comes last, after everything `harness` passes too.
+  const permissionsOf = (adapter: string, model: string, mode?: "auto" | "bypass") => {
+    const plain = startArgs(HARNESSES[adapter]!, model, "/p/i.md", undefined, "harness");
+    return startArgs(HARNESSES[adapter]!, model, "/p/i.md", undefined, mode).slice(plain.length);
+  };
+
+  expect(permissionsOf("claude", "opus")).toEqual(["--permission-mode", "auto"]);
+  expect(permissionsOf("claude", "opus", "bypass")).toEqual([
     "--permission-mode",
     "bypassPermissions",
   ]);
-  expect(startArgs(HARNESSES.codex!, "gpt-5", "/p/i.md")).toEqual([
-    "-m",
-    "gpt-5",
+  expect(permissionsOf("codex", "gpt-5")).toEqual(["--approve-for-me"]);
+  expect(permissionsOf("codex", "gpt-5", "bypass")).toEqual([
     "--dangerously-bypass-approvals-and-sandbox",
   ]);
-  expect(startArgs(HARNESSES.opencode!, "anthropic/claude-sonnet-4", "/p/i.md")).toEqual([
-    "--model",
-    "anthropic/claude-sonnet-4",
-    "--auto",
-  ]);
-  // pi has no tool-approval prompt, so bypass is the same start as `harness`.
-  expect(startArgs(HARNESSES.pi!, "openai-codex/gpt-5.6-sol", "/p/i.md")).toEqual(
-    startArgs(HARNESSES.pi!, "openai-codex/gpt-5.6-sol", "/p/i.md", undefined, "harness"),
-  );
+  // opencode's `--auto` approves every call rather than reviewing it, so it has no auto mode.
+  expect(permissionsOf("opencode", "anthropic/claude-sonnet-4")).toEqual([]);
+  expect(permissionsOf("opencode", "anthropic/claude-sonnet-4", "bypass")).toEqual(["--auto"]);
+  // pi has no tool-approval prompt, so every mode is the same start.
+  for (const mode of ["auto", "bypass"] as const)
+    expect(permissionsOf("pi", "openai-codex/gpt-5.6-sol", mode)).toEqual([]);
 
-  // Whichever harness a step names, `harness` passes none of the switches above.
+  // `harness` passes no switch at all, whichever harness a step names.
   for (const adapter of Object.values(HARNESSES)) {
     const asked = startArgs(adapter, DEFAULT_MODEL, "/p/i.md", undefined, "harness");
     for (const flag of [
       "--permission-mode",
+      "--approve-for-me",
       "--dangerously-bypass-approvals-and-sandbox",
       "--auto",
     ])
       expect(asked).not.toContain(flag);
   }
+});
+
+test("Claude Code's managed settings forbid bypass where the file or a drop-in disables it", () =>
+  runEffect(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const managed = yield* fs.makeTempDirectoryScoped();
+      const forbidden = () => claudeForbidsBypass(`${managed}/claude-code`);
+
+      expect(yield* forbidden()).toBe(false);
+
+      yield* fs.makeDirectory(`${managed}/claude-code/managed-settings.d`, {
+        recursive: true,
+      });
+      yield* fs.writeFileString(
+        `${managed}/claude-code/managed-settings.json`,
+        `{ "permissions": { "deny": ["WebFetch"] }, "env": {} }`,
+      );
+      yield* fs.writeFileString(`${managed}/claude-code/managed-settings.d/10-broken.json`, "{");
+      expect(yield* forbidden()).toBe(false);
+
+      yield* fs.writeFileString(
+        `${managed}/claude-code/managed-settings.d/20-org.json`,
+        `{ "permissions": { "disableBypassPermissionsMode": "disable" } }`,
+      );
+      expect(yield* forbidden()).toBe(true);
+    }).pipe(Effect.scoped),
+  ));
+
+const configured = { harness: "claude", model: "opus", effort: "high" };
+
+test("the agent is decided layer over layer, and the nearest one that names a field wins", () => {
+  expect(resolveChoice([configured, { model: "sonnet" }, undefined, { effort: "low" }])).toEqual({
+    ok: true,
+    choice: { harness: "claude", model: "sonnet", effort: "low" },
+  });
+  expect(resolveChoice([configured])).toEqual({
+    ok: true,
+    choice: { harness: "claude", model: "opus", effort: "high" },
+  });
+});
+
+test("switching harness keeps nothing chosen for the one below, and falls back to its default", () => {
+  // Opus and a high effort were Claude's; codex takes neither, so neither comes along.
+  expect(resolveChoice([configured, { harness: "codex" }])).toEqual({
+    ok: true,
+    choice: { harness: "codex", model: "default", effort: null },
+  });
+  expect(resolveChoice([configured, { harness: "codex", model: "gpt-5" }])).toEqual({
+    ok: true,
+    choice: { harness: "codex", model: "gpt-5", effort: null },
+  });
+  // Naming the harness already in force is not a switch.
+  expect(resolveChoice([configured, { harness: "claude" }])).toEqual({
+    ok: true,
+    choice: { harness: "claude", model: "opus", effort: "high" },
+  });
+});
+
+test("a combination no harness takes is refused with what would be taken instead", () => {
+  const model = resolveChoice([configured, { model: "gpt-5" }]);
+  expect(model.ok).toBe(false);
+  expect(!model.ok && model.problem).toContain('"gpt-5" is not a model claude takes');
+  expect(!model.ok && model.problem).toContain("sonnet");
+
+  const effort = resolveChoice([configured, { harness: "codex", effort: "high" }]);
+  expect(!effort.ok && effort.problem).toContain("codex takes no effort");
+
+  const harness = resolveChoice([configured, { harness: "gemini" }]);
+  expect(!harness.ok && harness.problem).toContain('no harness called "gemini"');
+
+  // A model the operator added for a harness is one it takes.
+  expect(
+    resolveChoice([configured, { model: "claude-next" }], { claude: ["claude-next"] }).ok,
+  ).toBe(true);
+});
+
+test("preferences fold the same way without a harness to check them against", () => {
+  expect(foldPreferences([{ harness: "claude", model: "opus" }, { harness: "codex" }])).toEqual({
+    harness: "codex",
+  });
+  expect(foldPreferences([{ model: "opus" }, undefined, { effort: "low" }])).toEqual({
+    model: "opus",
+    effort: "low",
+  });
 });

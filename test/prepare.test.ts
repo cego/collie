@@ -466,7 +466,11 @@ test("setup configures Claude Code's status line; prepare never touches it", () 
       // runner. The runner is what edits the file, so the step is a call rather than a
       // shell script writing JSON.
       prepare();
-      expect(yield* exists(`${home}/collie-calls`)).toBe(false);
+      // Whatever else prepare asks of the runner, it never asks for this.
+      const afterPrepare = (yield* exists(`${home}/collie-calls`))
+        ? yield* read(`${home}/collie-calls`)
+        : "";
+      expect(afterPrepare).not.toContain("chat status-line");
 
       setup();
 

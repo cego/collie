@@ -7,7 +7,6 @@ import { Herdr, herdrFailureReason } from "./herdr";
 import {
   boardFlow,
   continueFlow,
-  driveFlow,
   forkFlow,
   openPicker,
   pickFlow,
@@ -40,7 +39,7 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
   Effect.fn("main.herdr")(function* (command: string, mode?: string) {
     const env = yield* currentEnv;
     const client = new Herdr(env);
-    const configuredMode = yield* Config.option(Config.string("COLLIE_MODE"));
+    const configuredMode = yield* Config.option(Config.String("COLLIE_MODE"));
     const selected = mode ?? (configuredMode._tag === "Some" ? configuredMode.value : "pick");
     const code = yield* (() => {
       switch (command) {
@@ -53,8 +52,6 @@ const herdr: (command: string, mode?: string) => Effect.Effect<void, MainError, 
           return popup(client, env, selected);
         case "board":
           return boardFlow(client, env);
-        case "drive":
-          return driveFlow(client, env);
         case "workspace":
           return workspaceFlow(client, env);
         default:

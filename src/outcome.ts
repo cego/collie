@@ -99,17 +99,28 @@ function anyPassAtFinal(got: Collected, name: string): boolean {
   );
 }
 
+/** Whether this kind of result is proved by Collie's own run of the approved set. */
+export function needsApproved(kind: Outcome): boolean {
+  return kind !== "investigation" && kind !== "plan" && kind !== "review";
+}
+
+/** Why a Run that needs the approved set cannot be proved, and both ways to repair it. */
+export function nothingApproved(run = "<run>"): string {
+  return (
+    "nothing is approved for Collie to run, so no command can prove this Run. " +
+    `Grant it one with \`collie run intent verification ${run} --name <name> -- <command>\` ` +
+    `and \`collie run resume ${run}\`; for Runs started later, add .collie/verify.json, ` +
+    "or verify.json in your Collie config — a Run reads that file only when it starts"
+  );
+}
+
 /**
  * Every approved command, passing, on this exact tree. A Run with nothing approved is
  * reported rather than passed: an empty set would make this gate say yes to anything, and
  * "nobody wrote down what proves this" is the useful thing to tell a human.
  */
 function approvedSetGaps(got: Collected): string[] {
-  if (got.approved.length === 0) {
-    return [
-      "nothing is approved for Collie to run, so no command can prove this Run: add .herdr/verify.json",
-    ];
-  }
+  if (got.approved.length === 0) return [nothingApproved()];
   const gaps: string[] = [];
   for (const spec of got.approved) {
     if (passedAtFinal(got, spec.name)) continue;
@@ -155,13 +166,24 @@ function names(value: YamlValue | undefined): string[] {
 }
 
 /**
+ * Whether a reference an Output gives points inside the work this Run owns. A relative
+ * one does by construction; an absolute one has to be under a root the Run holds, and a
+ * `..` in either is a path nobody can answer for.
+ */
+export function refInside(roots: ReadonlyArray<string>, ref: string): boolean {
+  const value = ref.trim();
+  if (value === "" || value.includes("..")) return false;
+  if (!value.startsWith("/")) return true;
+  return roots.some((root) => root !== "" && (value === root || value.startsWith(`${root}/`)));
+}
+
+/**
  * What is missing before this Run can claim its outcome. Empty means the evidence is
  * there; every entry is one sentence a human can act on.
  */
 export function evidenceGaps(kind: Outcome, got: Collected): string[] {
   const gaps: string[] = [];
-  const needsApproved = kind !== "investigation" && kind !== "plan" && kind !== "review";
-  if (needsApproved) gaps.push(...approvedSetGaps(got));
+  if (needsApproved(kind)) gaps.push(...approvedSetGaps(got));
 
   switch (kind) {
     case "unspecified":

@@ -88,19 +88,19 @@ test("Claude Code is what opens, whatever the workers are on", () =>
   runEffect(
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const configDir = yield* fs.makeTempDirectory({ prefix: "hw-chat-config-" });
+      const userDir = yield* fs.makeTempDirectory({ prefix: "hw-chat-config-" });
       // An existing installation: workers on another harness, and a `scope` from before
       // any of this existed. Neither says anything about which chat opens.
-      yield* writeConfigValue(configDir, "harness", "codex");
-      yield* writeConfigValue(configDir, "scope", "local");
-      expect(yield* chatHarnessOf(configDir)).toBe(DEFAULT_CHAT_HARNESS);
+      yield* writeConfigValue(userDir, "harness", "codex");
+      yield* writeConfigValue(userDir, "scope", "local");
+      expect(yield* chatHarnessOf(userDir)).toBe(DEFAULT_CHAT_HARNESS);
       expect(DEFAULT_CHAT_HARNESS).toBe("claude");
 
-      yield* writeConfigValue(configDir, CHAT_HARNESS_KEY, "pi");
-      expect(yield* chatHarnessOf(configDir)).toBe("pi");
+      yield* writeConfigValue(userDir, CHAT_HARNESS_KEY, "pi");
+      expect(yield* chatHarnessOf(userDir)).toBe("pi");
       // A value nobody meant still has to open something.
-      yield* writeConfigValue(configDir, CHAT_HARNESS_KEY, "nonesuch");
-      expect(yield* chatHarnessOf(configDir)).toBe("claude");
+      yield* writeConfigValue(userDir, CHAT_HARNESS_KEY, "nonesuch");
+      expect(yield* chatHarnessOf(userDir)).toBe("claude");
       expect(preferredHarness(undefined)).toBe("claude");
     }),
   ));
@@ -303,7 +303,7 @@ test("both adapters are told about the same Collie, in one place", () =>
       const dir = yield* fs.makeTempDirectory({ prefix: "hw-chat-launch-" });
       const serverEnv = {
         HERDR_PLUGIN_STATE_DIR: "/state",
-        HERDR_PLUGIN_CONFIG_DIR: "/config",
+        COLLIE_USER_DIR: "/config",
         HERDR_SOCKET_PATH: "/herdr.sock",
         COLLIE_CWD: "/state/herd/abc",
       };

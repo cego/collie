@@ -1,63 +1,3 @@
----
-name: renovate
-title: renovate — merge the month's dependency updates, tag, release and record it
-description: Assesses every Renovate Bot merge request, gathers an application's into one batch branch proven on stage under the Helle claim and approved by a teammate, merges, tags and watches the release, then checks the repository off the team's shared Renovate issue in Linear.
-# Detached at the default branch and roaming across the Renovate branches it merges,
-# so no branch of the repository is bound to this Run's worktree.
-checkout: roaming
-inputs:
-  # Paste a GitLab URL or enter an existing local checkout.
-  # Collie caches a URL clone, then cuts the Run's own detached checkout from it.
-  repository: gitlab-repository
-  # The Linear team whose shared Renovate issue this Run records itself on. Empty falls
-  # back to `linear.team` in your config, so nothing team-specific lives in the baseline.
-  team: optional
-  # The team's shared Renovate issue when the operator already knows it, so track never
-  # has to ask which of several it is.
-  issue: optional
-steps:
-  - id: track
-    persona: renovate
-    # One agent for the whole run, so its model is named once, here.
-    model: default
-    effort: medium
-    # Keep Claude Code's configured auto mode; this agent is reused by every later step.
-    permissions: harness
-    output: track.json
-  - id: assess
-    persona: renovate
-    agent: track
-    output: assess.json
-  # An application's updates land together: one batch branch, one merge request.
-  - id: batch
-    persona: renovate
-    agent: track
-    output: batch.json
-  # The first step that touches anything shared, so the claim is taken here. Waited for
-  # in the runner, so a queue of hours costs no tokens.
-  - id: stage
-    persona: renovate
-    agent: track
-    waits: helle
-    output: stage.json
-  - id: approval
-    persona: renovate
-    agent: track
-    output: approval.json
-  - id: merge
-    persona: renovate
-    agent: track
-    output: merge.json
-  - id: release
-    persona: renovate
-    agent: track
-    output: release.json
-  - id: record
-    persona: renovate
-    agent: track
-    output: record.json
----
-
 Repository checkout or GitLab URL (empty means the workspace this run started from): {{inputs.repository}}
 Linear team (empty means `{{config.linear.team}}`): {{inputs.team}}
 Linear Renovate issue (empty means find it): {{inputs.issue}}
@@ -72,8 +12,7 @@ step makes for an application, which is the one branch this checkout may hold.
 A **package** publishes from its tag pipeline and is deployed by nobody; an
 **application** has deploy jobs or GitLab environments (stage, prod) of its own. `assess`
 decides which this repository is, and the `batch`, `stage` and `approval` steps are for
-applications only: for a package each of them writes its Output with `"skipped":
-"package"` and does nothing else.
+applications only: a package never reaches them, and the Run's own record says why.
 
 ## track
 
@@ -95,14 +34,13 @@ Then append this repository to the issue's checklist, unchecked, as
 `- [ ] <repository name>` — read the description, add your line, write it back. Never
 rewrite a line you did not add: other Runs are appending to the same description.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "issue": "<id>",
-"issue_url": "<url>", "team": "<team>", "repository": "<name>", "created_issue": true or
-false}`.
+Then write your Output, naming the issue you bound this Run to.
 
 ## assess
 
 Nothing shared is touched yet: no Helle claim is held, so read only. Merging, deploying
-and tagging wait for the claim that `stage` takes.
+and tagging wait for the claim this Run takes once you have said there is something to
+land.
 
 Decide first whether this repository is a package or an application: read its
 `.gitlab-ci.yml` and `glab api projects/<id>/environments`. Deploy jobs or a `staging` or
@@ -123,18 +61,15 @@ first — I hear about it before half of it is already on the default branch.
 An empty batch is a finished Run in waiting: report the repository up to date, and
 expect `release` to create no tag at all.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "issue":
-"{{outputs.track}}'s issue", "merge_requests": [{"iid": 1, "title": "...", "bumps":
-"pkg 1 -> 2", "needs": "nothing | what it needs", "risk": "routine | migration"}],
-"consulted": ["what I decided", ...], "up_to_date": true or false, "is_package": true or
-false, "kind_evidence": "what said so"}`.
+Then write your Output. `is_package` and `up_to_date` are the two judgements everything
+after this branches on, so say them plainly and say what the evidence was.
 
 ## batch
 
-For a package, or an empty batch, write `{"verdict": "clean", "findings": [], "skipped":
-"package" or "up to date"}` and stop.
+This step runs for an application with something to land; a package and a repository
+that is already up to date never reach it.
 
-For an application, gather every relevant merge request into **one batch branch**, so the
+Gather every relevant merge request into **one batch branch**, so the
 whole month's change is proven on stage once and reviewed once, instead of landing on the
 default branch one bump at a time.
 
@@ -149,17 +84,15 @@ default branch one bump at a time.
   consultation.
 - Run the repository's own install, lint, typecheck and tests on the batch branch before
   you push it. Push with `git push -u origin renovate/batch-<date>`.
-- Open one merge request from the batch branch to the default branch with `glab mr create --assignee mk`,
-  assigned to yourself, titled `Renovate batch <YYYY-MM-DD>`, whose description lists every
-  Renovate merge request it carries as `- <what it bumps> (!<iid>)` and every one it left
-  out with why. Wait for its pipeline's required checks and fix failures on the batch
-  branch. Never force-push it.
+- Open one merge request from the batch branch to the default branch with
+  `glab mr create --assignee {{mr.assignee}}`, titled `Renovate batch <YYYY-MM-DD>`, whose
+  description lists every Renovate merge request it carries as `- <what it bumps> (!<iid>)`
+  and every one it left out with why. Wait for its pipeline's required checks and fix
+  failures on the batch branch. Never force-push it.
 - Leave the individual Renovate merge requests open: Renovate closes them itself once the
   batch is on the default branch, and `merge` accounts for any that stay open.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "mr_url": "<batch merge
-request url>", "branch": "renovate/batch-<date>", "included": [1, 2], "left_out": [{"iid":
-3, "why": "held by <checkout>"}], "consulted": ["what I decided", ...]}`.
+Then write your Output, naming the batch merge request and everything it left out.
 
 ## stage
 
@@ -167,9 +100,7 @@ This Run now holds the repository in Helle — Collie claimed it and waited for 
 before this step started — or the repository has no Helle project. Either way the shared
 things are yours until the Run ends: stage, the default branch, the tag.
 
-For a package, write `{"verdict": "clean", "findings": [], "skipped": "package"}` and stop.
-
-For an application, prove the batch branch deploys to stage without issue:
+Prove the batch branch deploys to stage without issue:
 
 - Run the stage deploy of the batch merge request's pipeline — the manual `stage` deploy
   job, played with `glab api -X POST projects/<id>/jobs/<job id>/play` — and watch it to
@@ -183,9 +114,10 @@ For an application, prove the batch branch deploys to stage without issue:
 projects/<id>/deployments?environment=<prod>&status=success&order_by=created_at&sort=desc&per_page=1`
      names its ref — and its pipeline's `stage` job, played or retried. Watch the rollback
      to success and say in your log what stage is running now.
-  2. **Debug from the logs**: read stage's application and pipeline logs in Kibana with the
-     `cego:searching-production-logs` skill, or `kibana.cego.dk` directly, for the window of
-     the failed deploy — the error, the dependency it names, the request that failed.
+  2. **Debug from the logs**: read the failed deploy's own pipeline job logs for the window
+     it failed in — the error, the dependency it names, the request that failed. Where this
+     installation keeps application logs somewhere else, that is `{{config.renovate.logs}}`;
+     empty means the pipeline's logs are all there is to read.
   3. **Fix on the batch branch**, push, wait for the merge request's checks, and deploy to
      stage again, from step one of this list.
      Loop until stage runs the batch branch and its checks pass. The loop is bounded by
@@ -195,15 +127,12 @@ projects/<id>/deployments?environment=<prod>&status=success&order_by=created_at&
      you wait for me.
 - Never deploy the batch branch to production, and never merge here.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "deploy_job": "<url>",
-"verified_by": "e2e-stage | smoke | manual check", "verified": true or false, "attempts": 1,
-"rollbacks": [{"to": "<tag>", "why": "<what failed>", "fixed_by": "<commit>"}]}`.
+Then write your Output. `verified` is what decides whether anything is merged, so it is
+true only where you watched the check pass.
 
 ## approval
 
-For a package, write `{"verdict": "clean", "findings": [], "skipped": "package"}` and stop.
-
-For an application, the batch merge request must be approved by **another team member**;
+The batch merge request must be approved by **another team member**;
 you never approve it yourself, and its author cannot. Ask me, once, in this pane: name the
 batch merge request, say it is on stage and how it was verified, and that it needs an
 approval from someone else on the team — then wait for my answer. On the answer, read
@@ -212,8 +141,7 @@ approval from someone else on the team — then wait for my answer. On the answe
 is asked about again, three times at most; then it is a report of no progress. A push to
 the batch branch after approval resets it — say so and start this step's check over.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "approved_by":
-["<username>"], "head_sha": "<sha approved>"}`.
+Then write your Output, naming who approved and the head they approved.
 
 ## merge
 
@@ -265,10 +193,8 @@ Every relevant merge request ends with exactly one outcome:
 Attempts per merge request are bounded: three. Reaching the bound is not another attempt,
 it is a report of no progress and a consultation.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "outcomes": [{"iid": 1,
-"url": "...", "outcome": "merged | closed | deferred", "reason": "...", "replacement":
-"<url or empty>"}], "held_branches": [{"branch": "...", "held_by": "<checkout>"}],
-"consulted": ["what I decided", ...]}`.
+Then write your Output. Every relevant merge request is in `outcomes` exactly once, with
+the one outcome it ended on and the reason for it.
 
 ## release
 
@@ -302,9 +228,7 @@ Otherwise:
   succeeding is what makes this a finished renovation. A failing or blocked job is a
   consultation with the Helle claim still held — never a Run that calls itself done.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "version": "<tag or
-empty>", "tagged": true or false, "release_url": "<url or empty>", "is_package": true or
-false, "pipeline": "succeeded | not run", "up_to_date": true or false}`.
+Then write your Output, naming the tag where you made one.
 
 ## record
 
@@ -325,6 +249,4 @@ Where deferrals were approved and everything else succeeded, this Run is
 **renovated with exceptions** — say so on the entry and in your Output. An unresolved
 blocker is not an exception: leave the entry unchecked and report it as a finding.
 
-Then write the Output JSON: `{"verdict": "clean", "findings": [], "issue": "<id>",
-"issue_url": "<url>", "checked_off": true or false, "status": "renovated | renovated with
-exceptions | up to date", "exceptions": ["what was deferred and why", ...]}`.
+Then write your Output, with the status this Run ended on.
