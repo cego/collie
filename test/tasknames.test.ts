@@ -45,6 +45,25 @@ test("the project a person already uses for a repository is the one reused", () 
   expect(establishedProject(live(["collie"]), "collie")).toBeNull();
 });
 
+test("a model's answer never borrows the prefix another repository's workspaces carry", () => {
+  const busy = live(["Collie | Steering ledger", "Collie | Panels", "Collie | Task names"]);
+  const review = work({ cwd: "/home/dana/work/spilnu/rule-engine", named: "MR !865" });
+  // The most common prefix is not this repository's project, however common it is.
+  expect(cleanName({ project: "Collie", title: "Review MR !865" }, review, busy)).toEqual({
+    project: "Rule engine",
+    title: "Review MR !865",
+  });
+  // The same prefix for its own repository is exactly what reuse is for, from a worktree
+  // of it too, whose last directory is its branch's.
+  expect(cleanName({ project: "Collie", title: "Panels" }, work(), busy).project).toBe("Collie");
+  const worktree = work({ cwd: "/home/dana/.herdr/worktrees/.collie/dana/panels" });
+  expect(cleanName({ project: "Collie", title: "Panels" }, worktree, busy).project).toBe("Collie");
+  // And a project the person has no workspace for yet is the model's to name.
+  expect(cleanName({ project: "Rules", title: "Review MR !865" }, review, busy).project).toBe(
+    "Rules",
+  );
+});
+
 test("a name is inferred without asking anybody, and reuses a live prefix where there is one", () => {
   expect(fallbackName(work(), live(["Collie | Steering ledger"]))).toEqual({
     project: "Collie",
