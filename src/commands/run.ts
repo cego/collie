@@ -1161,32 +1161,40 @@ function intentChange(
         const resolved = yield* resolveCommandRun(global, runId);
         if (resolved._tag === "RunFailure") return resolved.result;
         const hosted = options.hosted;
-        if (hosted !== undefined)
-          return yield* mutation(resolved.env, operation, requestId, () => hosted(resolved.env));
         const dir = resolved.dir;
+        // Read, decide and write as one act. Two amendments that both read v1 would
+        // otherwise both report v2 and the later rename would erase the earlier one.
+        const amendHeld = (id: string) =>
+          withDirLock<
+            Failure | Intent,
+            Error | PlatformError.PlatformError,
+            FileSystem.FileSystem | Path.Path | BunServices
+          >(
+            dir,
+            Effect.gen(function* () {
+              const intent = yield* readIntent(dir).pipe(
+                Effect.mapError((cause) => new Error(String(cause))),
+              );
+              if (intent === null)
+                return err("invalid_state", `Run "${runId}" has no Intent to amend.`);
+              const wanted = change(intent);
+              if ("ok" in wanted) return wanted;
+              const next = amend(intent, wanted, actorName(actorNow(id)), yield* nowIso());
+              if (next !== intent) yield* writeIntentHeld(dir, next);
+              return next;
+            }),
+          );
+        if (hosted !== undefined)
+          return yield* mutation(resolved.env, operation, requestId, (id) =>
+            hosted(resolved.env).pipe(
+              // The host keeps what it acts on; the Intent says the same, so what `intent
+              // show` and oversight read is what the gate will run, not an empty list.
+              Effect.tap((result) => (result.ok ? amendHeld(id).pipe(Effect.ignore) : Effect.void)),
+            ),
+          );
         return yield* mutation(resolved.env, operation, requestId, (id) =>
           Effect.gen(function* () {
-            // Read, decide and write as one act. Two amendments that both read v1 would
-            // otherwise both report v2 and the later rename would erase the earlier one.
-            const amended = yield* withDirLock<
-              Failure | Intent,
-              Error | PlatformError.PlatformError,
-              FileSystem.FileSystem | Path.Path | BunServices
-            >(
-              dir,
-              Effect.gen(function* () {
-                const intent = yield* readIntent(dir).pipe(
-                  Effect.mapError((cause) => new Error(String(cause))),
-                );
-                if (intent === null)
-                  return err("invalid_state", `Run "${runId}" has no Intent to amend.`);
-                const wanted = change(intent);
-                if ("ok" in wanted) return wanted;
-                const next = amend(intent, wanted, actorName(actorNow(id)), yield* nowIso());
-                if (next !== intent) yield* writeIntentHeld(dir, next);
-                return next;
-              }),
-            );
+            const amended = yield* amendHeld(id);
             if ("ok" in amended) return amended;
             // Nothing is told: a Run reads its Intent at its next boundary, from the file
             // it has just been written to, which is what makes this one write rather than

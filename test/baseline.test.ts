@@ -718,7 +718,7 @@ scenario(
         });
 
         expect(started).toEqual([]);
-        expect(yield* fs.readFileString(`${dir}/events.r-plan-gone.log`)).toContain(
+        expect(yield* fs.readFileString(`${runDir(dir, "r-plan-gone")}/log.txt`)).toContain(
           "Implement now cannot run here: These repositories are named by a ticket but not checked out",
         );
       }),
@@ -1592,6 +1592,39 @@ scenario(
 );
 
 scenario(
+  "a review with only minor findings ends the rally, and the record says what it carried",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        yield* approve("r-impl-minor", ["unit"]);
+        const minor = { severity: "minor", title: "the test depends on test order", file: "a.ts" };
+        yield* rig.queueOutputs([
+          BUILT,
+          { ...CLEAN_SYNTHESIS, verdict: "findings", findings: [minor] },
+          OPENED,
+        ]);
+
+        yield* ran({ entry: shipped("implement"), runId: "r-impl-minor", input: { plan } });
+        yield* bin.restore();
+
+        // No fix round for a minor finding, by design; but not silently either.
+        expect(yield* prompts()).toHaveLength(3);
+        const log = yield* (yield* FileSystem.FileSystem).readFileString(
+          `${runDir(dir, "r-impl-minor")}/log.txt`,
+        );
+        expect(log).toContain(
+          "carried 1 non-blocking finding(s) unfixed: the test depends on test order",
+        );
+      }),
+    ),
+  120_000,
+);
+
+scenario(
   "a blocking finding goes back to the agent that built it, and the next review ends the rally",
   () =>
     runEffect(
@@ -2009,7 +2042,7 @@ scenario(
         expect(yield* prompts()).toHaveLength(5);
         const fs = yield* FileSystem.FileSystem;
         expect(yield* fs.exists(`${dir}/agents/r-pkg/batch.prompt.md`)).toBe(false);
-        expect(yield* fs.readFileString(`${dir}/events.r-pkg.log`)).toContain(
+        expect(yield* fs.readFileString(`${runDir(dir, "r-pkg")}/log.txt`)).toContain(
           "a package has no batch branch: skipped batch, stage, approval",
         );
       }),

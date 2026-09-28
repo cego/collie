@@ -580,7 +580,17 @@ const rally = (ask: {
       if (round.go === "halt") {
         return { halted: `${round.halt}: ${round.reason}`, unreviewed: "", reviewed: synthesis };
       }
-      if (round.go === "clean") return { halted: null, unreviewed: "", reviewed: synthesis };
+      if (round.go === "clean") {
+        // Nothing blocking is not nothing found: what is left is carried to the merge
+        // request unfixed, and the record says so rather than the loop going quiet.
+        if (synthesis.findings.length > 0) {
+          yield* host.record(
+            runId,
+            `carried ${synthesis.findings.length} non-blocking finding(s) unfixed: ${synthesis.findings.map((one) => one.title).join("; ")}`,
+          );
+        }
+        return { halted: null, unreviewed: "", reviewed: synthesis };
+      }
       seen = { at, keys: round.keys };
 
       const fixed = yield* agentWork({

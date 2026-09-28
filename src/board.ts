@@ -20,7 +20,7 @@ import type { PluginEnv } from "./env";
 import { herdOf } from "./steering";
 import { listTasks, type TaskRecord } from "./task";
 import { ago, agoShort, spanned } from "./time";
-import { readVerifications, type Verification } from "./verify";
+import { readVerifications, verifyingIn, type Verification } from "./verify";
 import { readMrStates } from "./merges";
 import { filed, standingOf } from "./standing";
 import { offersOf } from "./lifecycle";
@@ -261,6 +261,9 @@ const VERBS = new Map(
     record: "Recording what happened",
   }),
 );
+
+/** What a card says while Collie runs one of the Run's checks itself. */
+const checkingOf = (name: string) => (name === "" ? null : `Running the ${name} check`);
 
 /** An embedded workflow's step is that workflow's: `review.synthesize` is a synthesis. */
 function verbOf(facts: Sentence): string {
@@ -807,7 +810,10 @@ export const buildBoard = Effect.fn("Board.build")(function* (opts: {
         state,
         decision,
         step: null,
-        verb: agents.find((agent) => agent.run === leader.id)?.now ?? null,
+        verb:
+          checkingOf(yield* verifyingIn(leader.dir)) ??
+          agents.find((agent) => agent.run === leader.id)?.now ??
+          null,
         silent,
         wave: null,
         failure,

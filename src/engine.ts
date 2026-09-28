@@ -144,6 +144,7 @@ import {
   insideRun,
   readVerifications,
   runApproved,
+  VERIFYING_FILE,
   type Verification,
 } from "./verify";
 import * as Workflow from "effect/unstable/workflow/Workflow";
@@ -1768,7 +1769,7 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
     yield* fs.remove(file, { force: true }).pipe(Effect.orDie);
     yield* fs
       .writeFileString(
-        `${options.dir}/events.${runId}.log`,
+        `${runDir(options.dir, runId)}/log.txt`,
         `claim on ${options.slug} taken over by ${options.to}; its agents were closed\n`,
         { flag: "a" },
       )
@@ -1879,10 +1880,17 @@ export const hostLayer = (options: {
           ),
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),
+        // The Run's own log, which its detail shows: a record written anywhere else was a
+        // line nobody could read — why a fix went where it went, what a rally carried.
         record: (runId, event) =>
           fs
-            .writeFileString(`${dir}/events.${runId}.log`, `${event}\n`, { flag: "a" })
-            .pipe(Effect.orDie),
+            .makeDirectory(runDir(dir, runId), { recursive: true })
+            .pipe(
+              Effect.andThen(
+                fs.writeFileString(`${runDir(dir, runId)}/log.txt`, `${event}\n`, { flag: "a" }),
+              ),
+              Effect.orDie,
+            ),
         parked: (runId, why) => {
           const path = controlPath(dir, PARKED, runId);
           return why === null
@@ -1947,6 +1955,9 @@ export const hostLayer = (options: {
                 });
               }
               const journal = evidenceDir(dir, asked.runId);
+              const marker = `${runDir(dir, asked.runId)}/${VERIFYING_FILE}`;
+              const fs = yield* FileSystem.FileSystem;
+              yield* fs.writeFileString(marker, spec.name).pipe(Effect.ignore);
               return yield* runApproved(
                 journal,
                 { ...own, cwd: asked.cwd },
@@ -1956,6 +1967,7 @@ export const hostLayer = (options: {
               ).pipe(
                 Effect.tap((record) => noteVerification(journal, record)),
                 Effect.mapError((refused) => new WorkflowError({ reason: refused.why })),
+                Effect.ensuring(fs.remove(marker).pipe(Effect.ignore)),
               );
             }),
           ),

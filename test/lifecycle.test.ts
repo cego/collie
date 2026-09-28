@@ -385,6 +385,12 @@ test(
           // Withdrawn by name, as a human who granted the wrong thing would.
           const withdrawn = yield* grant("--name", "lint", "--remove");
           expect(withdrawn.envelope.data).toMatchObject({ approved: [{ name: "unit" }] });
+          // The Intent says what the gate will run: an empty list here read as nothing
+          // granted, while the host held the grant and was running it.
+          const shown = yield* collie(world, ["run", "intent", "show", runId]);
+          expect(JSON.stringify(shown.envelope.data)).toContain(
+            '"run_verification":[{"name":"unit"',
+          );
           yield* collie(world, ["run", "resume", runId]);
           const finished = yield* collie(world, ["run", "wait", runId]);
           expect((yield* payloadOf(finished.envelope)).run?.status).toEqual({
