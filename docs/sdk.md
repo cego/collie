@@ -455,7 +455,7 @@ export default defineWorkflow({
     roles: {
       ...review.agents?.roles,
       reviewer: [
-        { harness: "claude", model: "opus", effort: "medium" },
+        { harness: "claude", model: "opus", effort: "xhigh" },
         { name: "pi", harness: "pi", model: "openai-codex/gpt-6-astra", effort: "max" },
       ],
     },

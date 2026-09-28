@@ -26,7 +26,7 @@ import {
   targetKind,
 } from "collie";
 import { Effect, FileSystem, Schema } from "effect";
-import { FIX_PROMPT, REVIEWER, reviewPass } from "./reviewing.ts";
+import { FIX_PROMPT, IMPLEMENTER, REVIEWER, reviewPass } from "./reviewing.ts";
 
 const FIX = "Fix findings";
 const IMPLEMENT = "Fix findings in a full implement run";
@@ -53,7 +53,7 @@ export default defineWorkflow({
     proves: Schema.optionalKey(Schema.String),
   }),
   output: Schema.String,
-  agents: { roles: { reviewer: REVIEWER } },
+  agents: { roles: { implementer: IMPLEMENTER, reviewer: REVIEWER } },
   hints: { target: "diff-target" },
   // A review proves it wrote a review a human can read; nobody chooses that.
   outcome: { fixed: "review" },
