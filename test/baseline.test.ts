@@ -1368,7 +1368,7 @@ scenario(
                 .map((call) => call.argv?.[(call.argv?.indexOf("--label") ?? -2) + 1]),
             ),
           );
-        expect(tabs).toEqual(["implementer", "reviewer", "reviewer"]);
+        expect(tabs).toEqual(["Implementer", "Reviewer · review-1", "Reviewer · synthesize"]);
         // The second ticket is handed what the first left, not the whole transcript.
         const second = yield* asked("r-impl", "02-second.md");
         expect(second).toContain("Ticket: 02-second.md — the second one");

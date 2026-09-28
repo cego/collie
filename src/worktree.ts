@@ -20,7 +20,7 @@ import {
 } from "./herdr";
 import type { CheckoutKind } from "./definitions";
 import { diffTargetOf, gitlabRepositoryOf, workSourceOf } from "./strategies";
-import { defaultBase } from "./inputs";
+import { defaultBase, linearIssueOf } from "./inputs";
 import { disambiguate, GLYPH, tabLabel } from "./naming";
 import {
   branchTargetHead,
@@ -335,7 +335,9 @@ const branchName = Effect.fn("worktree.branchName")(function* (
   // work itself, and the confirm line saying "from the run name" for it would name the
   // wrong thing as what decided.
   const described = work !== null && said(opts, work.name);
-  if (described) return generated(work.value, "from the work");
+  // An issue's URL names the same work as its id, and slugging the URL names a branch after linear.app.
+  const issue = work?.kind === "linear" ? linearIssueOf(work.value) : null;
+  if (described) return generated(issue ?? work.value, "from the work");
   // The Run's own name, told apart by the work behind it: a Workflow that declares no
   // Input naming the work — `architecture` — is called nothing at all, and two of those
   // sharing a name would share a branch, a checkout, an index and a stash stack. The

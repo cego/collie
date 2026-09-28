@@ -56,7 +56,7 @@ import {
   type Preferences,
 } from "./harness";
 import { Herdr, herdrFailureReason, type HerdrError, type PaneInfo } from "./herdr";
-import { agentName, reason, shellQuote, unsafePathComponent } from "./naming";
+import { agentName, agentTabLabel, reason, shellQuote, unsafePathComponent } from "./naming";
 import { askRouteTo } from "./handoff";
 import { liveAgent, registerAgent, registryPath, scopeFor, verifyIncarnation } from "./registry";
 import {
@@ -1062,9 +1062,9 @@ const makeAgents = (host: AgentHost, under: Under): AgentsApi => {
         });
         const workspace = ask.workspace ?? (yield* taskWorkspace(ask));
         const reused = ask.workspace ? null : yield* rootPane(ask);
-        if (reused !== null) yield* Effect.ignore(host.herdr.tabRename(reused.tabId, ask.role));
-        const tab =
-          reused ?? (yield* host.herdr.tabCreate({ label: ask.role, cwd: ask.cwd, workspace }));
+        const label = agentTabLabel(ask);
+        if (reused !== null) yield* Effect.ignore(host.herdr.tabRename(reused.tabId, label));
+        const tab = reused ?? (yield* host.herdr.tabCreate({ label, cwd: ask.cwd, workspace }));
         // herdr ignores --cwd on tab create, so the pane is told where it is explicitly.
         yield* host.herdr.paneRun(tab.paneId, `cd ${shellQuote(ask.cwd)}`);
         yield* host.herdr
