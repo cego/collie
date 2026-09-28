@@ -2,7 +2,19 @@
 // interactive work happens in the pane entrypoints. Every question a human answers goes
 // through `InputPrompts`, so the same flow draws in a popup pane and inline in the tab.
 
-import { Cause, Clock, Config, Console, Effect, FileSystem, Option, Path, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Config,
+  Console,
+  type Duration,
+  Effect,
+  FileSystem,
+  Option,
+  Path,
+  Schedule,
+  Schema,
+} from "effect";
 import { currentReports, readDrift } from "./drift";
 import { diffTargetOf } from "./strategies";
 import { buildBoard, type MrState, type TaskView } from "./board";
@@ -821,6 +833,34 @@ const whyNoRenderer = Effect.fn("Flows.whyNoRenderer")(function* () {
  * OpenTUI arrives through a dynamic import, so the `collie` CLI — `--json`, the receipts
  * path, CI — neither loads the native renderer nor depends on it being there.
  */
+/** The board's exit when its binary was rebuilt: the pane's command starts the new one. */
+export const RELAUNCH = 75;
+
+/**
+ * Completes once `file` is a different file than it was: a build renames a new binary
+ * over the old one, so an upgrade is a new inode under the same path. Never completes
+ * where the file cannot be read, as under `bun src/main.ts`.
+ */
+export const replacedOnDisk = (
+  file: string,
+  every: Duration.Input = "2 seconds",
+): Effect.Effect<void, never, FileSystem.FileSystem> =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const inode = fs.stat(file).pipe(
+      Effect.map((info) => Option.getOrNull(info.ino)),
+      Effect.orElseSucceed(() => null),
+    );
+    const start = yield* inode;
+    if (start === null) return yield* Effect.never;
+    yield* inode.pipe(
+      Effect.repeat({
+        schedule: Schedule.spaced(every),
+        until: (now) => now !== null && now !== start,
+      }),
+    );
+  });
+
 export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
   herdr: Herdr,
   env: PluginEnv,
@@ -870,6 +910,9 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
     noted?.filter === "all"
       ? ({ kind: "all" } as const)
       : openingFilter((yield* loadDefaults(env.userDir)).scope, origin);
+  // An upgrade that leaves this board drawing the old build is an upgrade the human
+  // believes happened and did not, so a rebuilt binary closes it for the new one.
+  let replaced = false;
   const why =
     (yield* whyNoRenderer()) ??
     (yield* Effect.gen(function* () {
@@ -909,7 +952,17 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
                 Effect.flatMap(selectionPath(env.stateDir, key), (file) =>
                   writeSelection(file, on),
                 ),
-      });
+      }).pipe(
+        Effect.raceFirst(
+          replacedOnDisk(process.execPath).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                replaced = true;
+              }),
+            ),
+          ),
+        ),
+      );
       return null;
     }).pipe(
       // A renderer that will not start must not take the tab down with it: say why and
@@ -922,7 +975,7 @@ export const workspaceFlow = Effect.fn("Flows.workspaceFlow")(function* (
           : Effect.succeed(reason(cause).split("\n")[0]!),
       ),
     ));
-  if (why === null) return 0;
+  if (why === null) return replaced ? RELAUNCH : 0;
   return yield* textBoard(session, herdr, env, why);
 });
 
