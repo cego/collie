@@ -489,9 +489,7 @@ const reviewedBranch = Effect.fn("worktree.reviewedBranch")(function* (
       ? { branch: head, reviewed: true }
       : { refused: `${head} is not a branch, so there is nothing to fix on it` };
   }
-  // Only the working tree is the caller's own branch. A target of any other shape was
-  // never normalised, and guessing the checkout it was typed in is how a fix of one
-  // merge request landed on another's branch.
+  // Only the working tree is the caller's own branch; any other shape is refused, not guessed.
   if (target === "") return { refused: "the review names no target, so no branch holds its work" };
   if (target.trim() !== "worktree") {
     return { refused: `${target} is not a target Collie can find a branch for` };

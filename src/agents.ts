@@ -482,9 +482,7 @@ export const agentWork = <
             ),
           }).pipe(Effect.as(value));
 
-    // Nothing in the time allowed is not nothing done: an agent past its budget may still
-    // be working, so the Run parks for a resume that reads what it writes, rather than
-    // recording a null that every replay fails on again.
+    // An agent past its budget may still be working: park for a resume, never record null.
     const written = (text: string | null) =>
       text !== null
         ? Effect.succeed(text)

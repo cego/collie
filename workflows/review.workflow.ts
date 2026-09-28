@@ -25,6 +25,8 @@ import {
   repoArgs,
   riskLine,
   findingKey,
+  settleRound,
+  splitDisputed,
   targetKind,
   type Finding,
 } from "collie";
@@ -37,7 +39,7 @@ const POST = "Post to MR";
 const DONE = "Don't post";
 const AGAIN = "Review again";
 
-/** How often the menu may come back. A post that did not land asks again; not for ever. */
+/** How many fix rounds one "Fix findings" may run before the human is asked again. */
 const ROUNDS = 4;
 
 export default defineWorkflow({
@@ -157,32 +159,54 @@ export default defineWorkflow({
       let handed = false;
       // Reviews are numbered by how many there have been, not by how often the menu came.
       let reviews = 1;
-      // Set by the human's "Fix findings": the rally then goes on by itself until a review
-      // is clean, a round changes nothing, or the rounds run out, and only then asks again.
+      let fixes = 0;
+      let asks = 0;
+      // Set by the human's "Fix findings": the rally then goes on by itself, through the
+      // same `settleRound` implement's does, and asks again once it settles or runs out.
       let fixing = false;
-      let lastKeys = "";
+      let rallied = 0;
+      let seen: { readonly at: number; readonly keys: ReadonlyArray<string> } | null = null;
+      let settled = "";
       // A dispute is carried into the next review rather than re-argued, as in implement.
       let disputed: ReadonlyArray<Finding> = [];
-      for (let round = 1; round <= ROUNDS; round++) {
+      for (;;) {
+        const split = splitDisputed(synthesis.findings, disputed);
+        const round = settleRound({ live: split.live, disputed, at: reviews, seen });
+        let chosen: string = FIX;
+        if (fixing) {
+          if (round.go !== "fix" || rallied >= ROUNDS) {
+            fixing = false;
+            settled =
+              round.go === "halt"
+                ? `${round.halt}: ${round.reason}`
+                : round.go === "clean"
+                  ? "nothing blocking is left"
+                  : `the rally ran ${ROUNDS} rounds and findings remain`;
+            yield* host.record(run.id, `rally settled: ${settled}`);
+          }
+        }
         // Posting is offered for a merge request and nothing else; whether this is one to
         // post to is decided when it is invoked, by whoever can actually see GitLab.
-        const keys = synthesis.findings.map(findingKey).sort().join("\n");
-        const progressing = keys !== lastKeys;
-        lastKeys = keys;
-        const chosen: string =
-          fixing && synthesis.findings.length > 0 && progressing
-            ? FIX
-            : yield* ask({
-                name: `post-${round}`,
-                prompt: "What next?",
-                options: [
-                  ...(handed ? [AGAIN] : synthesis.findings.length > 0 ? [FIX] : []),
-                  IMPLEMENT,
-                  ...(kind === "mr" ? [POST] : []),
-                  DONE,
-                ],
-              });
-        fixing = chosen === FIX;
+        if (!fixing) {
+          chosen = yield* ask({
+            name: `post-${(asks += 1)}`,
+            prompt: settled === "" ? "What next?" : `What next? The rally stopped: ${settled}.`,
+            options: [
+              ...(handed ? [AGAIN] : split.live.length > 0 ? [FIX] : []),
+              IMPLEMENT,
+              ...(kind === "mr" ? [POST] : []),
+              DONE,
+            ],
+          });
+          settled = "";
+          if (chosen === FIX) {
+            fixing = true;
+            rallied = 0;
+            seen = null;
+          }
+        }
+        // What this fix is for, so a review that raises the same blockers again halts.
+        if (chosen === FIX && round.go === "fix") seen = { at: reviews, keys: round.keys };
         if (chosen === DONE) return `${synthesis.findings.length} finding(s), not posted`;
 
         if (chosen === POST) {
@@ -218,7 +242,9 @@ export default defineWorkflow({
         // An implementer already live here is building this work, so it is the one to
         // fix it: a second agent on the same checkout would be two hands on one index.
         // Recorded, so a replay takes the same road rather than asking again.
-        const operation = round === 1 ? "fix" : `fix-${round}`;
+        fixes += 1;
+        rallied += 1;
+        const operation = fixes === 1 ? "fix" : `fix-${fixes}`;
         const to = yield* handOffWork({
           operation,
           role: "implementer",
@@ -237,7 +263,7 @@ export default defineWorkflow({
           input: {
             inputs,
             ...input,
-            iteration: String(round),
+            iteration: String(rallied),
             max_iterations: String(ROUNDS),
             disputed: formatFindings(disputed),
           },
@@ -247,10 +273,10 @@ export default defineWorkflow({
           run.id,
           `fixed ${fixed.fixed.length}, disputed ${fixed.disputed.length}`,
         );
-        disputed = [...disputed, ...fixed.disputed];
+        const known = new Set(disputed.map(findingKey));
+        disputed = [...disputed, ...fixed.disputed.filter((one) => !known.has(findingKey(one)))];
         synthesis = yield* reviewedAgain((reviews += 1), agents.outputFor(run.id, operation));
       }
-      return `${synthesis.findings.length} finding(s), asked ${ROUNDS} times what to do next`;
     }),
 });
 

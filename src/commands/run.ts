@@ -1190,7 +1190,20 @@ function intentChange(
             hosted(resolved.env).pipe(
               // The host keeps what it acts on; the Intent says the same, so what `intent
               // show` and oversight read is what the gate will run, not an empty list.
-              Effect.tap((result) => (result.ok ? amendHeld(id).pipe(Effect.ignore) : Effect.void)),
+              Effect.flatMap((result): Effect.Effect<Result, CollieError, BunServices> =>
+                Effect.gen(function* () {
+                  if (!result.ok) return result;
+                  const failed = yield* amendHeld(id).pipe(
+                    Effect.map((amended) => ("ok" in amended ? amended.error.message : "")),
+                    Effect.catch((cause) => Effect.succeed(String(cause))),
+                  );
+                  if (failed === "") return result;
+                  return {
+                    ...result,
+                    human: `${result.human}\nThe grant holds, but intent show will not list it: ${failed}`,
+                  };
+                }),
+              ),
             ),
           );
         return yield* mutation(resolved.env, operation, requestId, (id) =>

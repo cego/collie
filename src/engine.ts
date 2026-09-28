@@ -1729,6 +1729,16 @@ export class Executions extends Context.Service<
  * what the claim guards. An agent that will not close, or a Run still in a step when
  * patience runs out, refuses the adoption. Answers the Runs it was taken from.
  */
+/** One line of the Run's own log, the file its detail shows. */
+const logLine = (dir: string, runId: string, line: string) =>
+  FileSystem.FileSystem.pipe(
+    Effect.tap((fs) => fs.makeDirectory(runDir(dir, runId), { recursive: true })),
+    Effect.flatMap((fs) =>
+      fs.writeFileString(`${runDir(dir, runId)}/log.txt`, `${line}\n`, { flag: "a" }),
+    ),
+    Effect.orDie,
+  );
+
 export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (options: {
   readonly dir: string;
   readonly slug: string;
@@ -1767,13 +1777,11 @@ export const handOverClaim = Effect.fn("Engine.handOverClaim")(function* (option
     for (const one of tree.runs) late.push(...(yield* options.halt(one)).left);
     if (late.length > 0) return yield* refused(late);
     yield* fs.remove(file, { force: true }).pipe(Effect.orDie);
-    yield* fs
-      .writeFileString(
-        `${runDir(options.dir, runId)}/log.txt`,
-        `claim on ${options.slug} taken over by ${options.to}; its agents were closed\n`,
-        { flag: "a" },
-      )
-      .pipe(Effect.orDie);
+    yield* logLine(
+      options.dir,
+      runId,
+      `claim on ${options.slug} taken over by ${options.to}; its agents were closed`,
+    );
     handed.push(runId);
   }
   return handed;
@@ -1880,17 +1888,8 @@ export const hostLayer = (options: {
           ),
         held: (runId) => set(HOLD, runId),
         stopRequested: (runId) => set(STOP, runId),
-        // The Run's own log, which its detail shows: a record written anywhere else was a
-        // line nobody could read — why a fix went where it went, what a rally carried.
         record: (runId, event) =>
-          fs
-            .makeDirectory(runDir(dir, runId), { recursive: true })
-            .pipe(
-              Effect.andThen(
-                fs.writeFileString(`${runDir(dir, runId)}/log.txt`, `${event}\n`, { flag: "a" }),
-              ),
-              Effect.orDie,
-            ),
+          logLine(dir, runId, event).pipe(Effect.provideService(FileSystem.FileSystem, fs)),
         parked: (runId, why) => {
           const path = controlPath(dir, PARKED, runId);
           return why === null
@@ -1956,7 +1955,6 @@ export const hostLayer = (options: {
               }
               const journal = evidenceDir(dir, asked.runId);
               const marker = `${runDir(dir, asked.runId)}/${VERIFYING_FILE}`;
-              const fs = yield* FileSystem.FileSystem;
               yield* fs.writeFileString(marker, spec.name).pipe(Effect.ignore);
               return yield* runApproved(
                 journal,
@@ -3179,10 +3177,8 @@ const makeRegistry: (
   const bun = yield* Effect.context<BunServices | Crypto.Crypto>();
 
   /**
-   * Every `diff-target` as `mr:`, `branch:` or `worktree`, however it was given. Every
-   * reader downstream — the target's kind, the post offer, the branch a fix builds on —
-   * decides from that shape, so a value in any other one is refused here, where nothing
-   * exists yet, rather than read as the working tree later.
+   * Every `diff-target` as `mr:`, `branch:` or `worktree`, since every reader decides from
+   * that shape; any other is refused here, before anything exists.
    */
   const settleTargets = Effect.fn("Engine.settleTargets")(function* (
     generation: Generation,

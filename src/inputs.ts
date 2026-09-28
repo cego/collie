@@ -535,8 +535,7 @@ export function classifyGivenTarget(
     const run = ctx.run ?? shell;
     const baseRef = (yield* defaultBase(run, ctx.cwd)) ?? "";
     const project = yield* projectHere(ctx.cwd, run);
-    // Null, not a guess: a shape nothing here recognises used to become `worktree`,
-    // and every reader after that decided the wrong change was under review.
+    // Null for a shape nothing here recognises: the caller refuses it rather than guess.
     return classifyTarget(typed, baseRef, project);
   });
 }

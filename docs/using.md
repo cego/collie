@@ -947,7 +947,9 @@ session.
 
 - **Fix findings** — the implementer already live in this workspace is handed them, where
   there is one; otherwise an implementer on this review's own run applies them as a fix
-  round, `disputed` and all. It is offered once.
+  round, `disputed` and all, and the fix is reviewed again at once. The rally goes on by
+  itself until nothing blocking is left, it stops making progress, or four rounds have run,
+  and then asks again. A hand-off offers **Review again** for when the implementer is done.
 - **Fix findings in a full implement run** — starts `implement` with the review itself as
   the work source: `review.md` is the spec, the findings are the tickets, and the
   implementer works where the review was pointed — checking out the branch, or `glab mr

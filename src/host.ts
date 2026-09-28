@@ -459,9 +459,7 @@ export const connect = (
   Effect.gen(function* () {
     const build = options?.build ?? BUILD;
     let who = yield* ensureRunning(dir);
-    // Only a newer copy of the same installation upgrades the host. A checkout under
-    // development is newer by its version and serves other workflows, and replacing the
-    // installed host with it cut off every wait and board attached to the real one.
+    // Only a newer copy of the same installation upgrades the host; a dev checkout is not one.
     const install = (yield* currentEnv.pipe(Effect.orDie)).pluginRoot;
     const ours = who.root === undefined || who.root === install;
     const replaced = ours && who.build !== build && Bun.semver.order(build, who.build) === 1;

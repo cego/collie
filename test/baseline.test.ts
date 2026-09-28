@@ -1097,13 +1097,52 @@ scenario(
           input: { target },
           decision: "post-1",
           value: "Fix findings",
-          until: "post-3",
+          until: "post-2",
         });
         // Review, fix, review, fix, review: the second fix nobody was asked about.
         expect(yield* prompts()).toHaveLength(5);
         // Pointed at the review it follows, which is where the second round's finding is.
         expect(yield* asked("r-rally", "fix-2")).toContain(`${runDir(dir, "r-rally")}/review.md`);
-        expect(rows.some((row) => row.decision === "post-2")).toBe(false);
+        // A clean review still asks, so a merge request review can still be posted.
+        expect(optionsOf(rows, "post-2")).not.toContain("Fix findings");
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a rally that runs out of rounds asks, with every option still on the menu",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const fixed = { verdict: "clean", findings: [], fixed: [], disputed: [], checks: [] };
+        const raising = (title: string) => ({
+          ...SYNTHESIS,
+          findings: [{ severity: "major", title, file: "src/a.ts" }],
+        });
+        const target = "branch:main...HEAD";
+        yield* rig.queueOutputs([
+          SYNTHESIS,
+          ...["a", "b", "c", "d"].flatMap((title) => [fixed, raising(title)]),
+        ]);
+        yield* parked({
+          entry: shipped("review"),
+          runId: "r-out",
+          input: { target },
+          decision: "post-1",
+        });
+        const rows = yield* answeredThen({
+          entry: shipped("review"),
+          runId: "r-out",
+          input: { target },
+          decision: "post-1",
+          value: "Fix findings",
+          until: "post-2",
+        });
+        // Four fixes, each reviewed, and then the human: not the Run ending on its own.
+        expect(yield* prompts()).toHaveLength(9);
+        expect(optionsOf(rows, "post-2")).toContain("Fix findings");
+        expect(optionsOf(rows, "post-2")).toContain("Don't post");
       }),
     ),
   120_000,
@@ -1760,6 +1799,65 @@ scenario(
         expect(said(result)).not.toContain("scope_met");
         // Nothing was opened, so nobody was asked to open it.
         expect(yield* prompts()).toHaveLength(2);
+      }),
+    ),
+  120_000,
+);
+
+scenario(
+  "a gate fix reaches the merge request as not re-reviewed",
+  () =>
+    runEffect(
+      Effect.gen(function* () {
+        const bin = yield* FakeBin.make(`${rig.root}/bin`);
+        yield* bin.add("glab", `exit 0`);
+        yield* repository();
+        const plan = yield* planOf([{ file: "01-only.md", title: "the only one", checks: "unit" }]);
+        // Fails until its fifth run: twice before the question, twice more when the Run
+        // resumes to it, and passes once the fix has run.
+        const count = `${rig.root}/runs`;
+        yield* approve("r-gate-fix", ["unit"]);
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.writeFileString(
+          `${evidenceDir(dir, "r-gate-fix")}/approved.json`,
+          asApproved([
+            {
+              name: "unit",
+              executable: "sh",
+              argv: [
+                "-c",
+                `n=$(($(cat ${count} 2>/dev/null || echo 0) + 1)); echo $n > ${count}; [ $n -ge 5 ]`,
+              ],
+              cwd: rig.projectDir,
+            },
+          ]),
+        );
+        const fix = {
+          verdict: "clean",
+          findings: [],
+          fixed: [],
+          disputed: [],
+          checks: [{ name: "unit" }],
+        };
+        yield* rig.queueOutputs([BUILT, CLEAN_SYNTHESIS, fix, OPENED]);
+        yield* parked({
+          entry: shipped("implement"),
+          runId: "r-gate-fix",
+          input: { plan },
+          options: { outcome: "feature" },
+          decision: "gate-1",
+        });
+        const result = yield* answered({
+          entry: shipped("implement"),
+          runId: "r-gate-fix",
+          input: { plan },
+          decision: "gate-1",
+          value: "Hand it to the implementer",
+        });
+        yield* bin.restore();
+
+        expect(said(result)).toBe(OPENED.mr_url);
+        expect(yield* asked("r-gate-fix", "mr")).toContain("gate fix 1");
       }),
     ),
   120_000,

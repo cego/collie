@@ -336,9 +336,13 @@ export default defineWorkflow({
       // this kind of result still has no evidence for. An Output saying the tests pass is
       // a claim; a record in the journal, bound to this tree, is not.
       const granted = yield* requireApproved(kind);
+      // What passed on this tree needs no second run; a change to the tree clears it.
+      const passed = new Set<string>();
       const gapsNow = Effect.gen(function* () {
         for (const spec of granted) {
-          yield* host.verify({ runId, name: spec.name, cwd });
+          if (passed.has(spec.name)) continue;
+          const ran = yield* host.verify({ runId, name: spec.name, cwd });
+          if (ran.result === "pass") passed.add(spec.name);
         }
         return evidenceGapsOf({
           kind: isOutcome(kind) ? kind : "unspecified",
@@ -356,6 +360,8 @@ export default defineWorkflow({
       // Once more before anyone is asked: a check that fails and then passes on the same
       // tree is a flake, and a Run that ends on one has proved nothing about the change.
       if (gaps.length > 0) gaps = yield* gapsNow;
+      // A gate fix lands after the last review, so the merge request says it was not re-reviewed.
+      let unreviewed = rallied.unreviewed;
       // Then the human decides, rather than the Run ending with the work one step short
       // of its merge request. Bounded like the rally, so it cannot go round for ever.
       for (let at = 1; gaps.length > 0 && at <= ROUNDS; at++) {
@@ -365,8 +371,15 @@ export default defineWorkflow({
           options: [VERIFY_AGAIN, FIX_GAPS, NO_MR],
         });
         if (chosen === NO_MR) break;
+        passed.clear();
         if (chosen === FIX_GAPS) {
-          yield* agentWork({
+          const findings = gaps.map((gap) => ({
+            severity: "blocker",
+            title: gap,
+            detail:
+              "Collie ran the approved checks on this tree, and this is what they did not prove.",
+          }));
+          const fixed = yield* agentWork({
             operation: `gate-fix-${at}`,
             agent: BUILDER,
             role: "implementer",
@@ -375,17 +388,21 @@ export default defineWorkflow({
               ...input,
               iteration: String(at),
               max_iterations: String(ROUNDS),
-              findings: formatFindings(
-                gaps.map((gap) => ({
-                  severity: "blocker",
-                  title: gap,
-                  detail:
-                    "Collie ran the approved checks on this tree, and this is what they did not prove.",
-                })),
-              ),
+              findings: formatFindings(findings),
             },
             output: FixOutputSchema,
           });
+          gaps = yield* gapsNow;
+          const settled = settleFinalFix(findings, fixed, yield* host.evidence(runId, cwd));
+          unreviewed = [
+            unreviewed,
+            settled.ok
+              ? `gate fix ${at}: ${settled.attestation}`
+              : `gate fix ${at}, not re-reviewed: ${settled.reasons.join("; ")}`,
+          ]
+            .filter((line) => line !== "")
+            .join("\n");
+          continue;
         }
         gaps = yield* gapsNow;
       }
@@ -411,7 +428,7 @@ export default defineWorkflow({
           ...input,
           // Read after the gate settled, so the merge request cites the passing runs.
           evidence: renderEvidence(yield* host.evidence(runId, cwd)),
-          unreviewed: rallied.unreviewed,
+          unreviewed,
           mr: {
             assignee: gitlab.assignee,
             template: gitlab.template,
